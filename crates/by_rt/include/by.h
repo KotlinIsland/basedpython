@@ -1172,7 +1172,135 @@ static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
     return 0;
 }
 
-/* `warnings.warn(message, category)` written out with the context supplied
+/* whether `warn` walks past a file rather than blaming it
+ *
+ * `setup_context` never reports a warning against the import machinery: while counting
+ * `stacklevel` frames it steps over every frame whose file name holds both "importlib"
+ * and "_bootstrap", so a module warned about during its own import is blamed on
+ * whoever asked for the import. the test is on the file name alone, so a file named
+ * anything else that happens to hold both words is walked past too — python's rule
+ * reproduced, not improved on.
+ *
+ * checked against 3.11 through 3.15: a file holding only one of the two words is
+ * blamed like any other */
+static inline int By_WarnWalksPast(PyObject *filename) {
+    PyObject *needle;
+    int held;
+
+    if (filename == NULL || !PyUnicode_Check(filename)) return 0;
+    needle = By_InternedStr("importlib", 9);
+    if (needle == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    held = PyUnicode_Contains(filename, needle);
+    Py_DECREF(needle);
+    if (held <= 0) {
+        if (held < 0) PyErr_Clear();
+        return 0;
+    }
+    needle = By_InternedStr("_bootstrap", 10);
+    if (needle == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    held = PyUnicode_Contains(filename, needle);
+    Py_DECREF(needle);
+    if (held < 0) {
+        PyErr_Clear();
+        return 0;
+    }
+    return held > 0;
+}
+
+static inline int By_WarnWalksPastFrame(PyFrameObject *frame) {
+    PyCodeObject *code;
+    int past;
+
+    if (frame == NULL) return 0;
+    code = PyFrame_GetCode(frame);
+    if (code == NULL) return 0;
+    past = By_WarnWalksPast(code->co_filename);
+    Py_DECREF(code);
+    return past;
+}
+
+/* what the code object of a published forwarder says its file is
+ *
+ * kept in step with `by_irbuild::shims::SHIM_FILE`, which is what writes it — a
+ * test in `by_build` fails if the two ever disagree */
+#define BY_FORWARDER_FILE "<by native forwarder>"
+
+/* the frame `warn` would have blamed at a stack level above one, as a new reference
+ *
+ * python starts the count at the frame the warning is written in and steps back
+ * `stacklevel - 1` times. that first frame is the compiled function's own and does not
+ * exist — but every frame below it does, and it is exactly the frame the interpreted
+ * definition's own would have sat on, which is what `PyEval_GetFrame` answers with. so
+ * the walk starts with its first step already taken, and takes `stacklevel - 2` more.
+ *
+ * `plain` is python's own branch, decided by the frame the count starts from: a
+ * warning written in the import machinery counts plain frames, and one written
+ * anywhere else walks past the machinery. the frame it starts from is the compiled
+ * function's, so which branch applies is settled by the module's own file name.
+ *
+ * NULL for a walk that ran off the end, which python reports against `sys` rather than
+ * treating as an error */
+static inline PyFrameObject *By_WarnFrame(int stacklevel, int plain) {
+    PyFrameObject *frame = PyEval_GetFrame();
+    int step;
+
+    Py_XINCREF(frame);
+    /* the forwarder a module publishes under this function's name *is* a python
+     * frame, and it stands exactly where the compiled function's own frame would
+     * have stood — so the walk above has already counted it, and it has to be
+     * stepped over for the count to start from the caller the way it says it does.
+     * only the topmost one: a forwarder further down stands for a compiled frame
+     * that is genuinely between here and the caller */
+    if (frame != NULL) {
+        PyCodeObject *code = PyFrame_GetCode(frame);
+        if (code != NULL) {
+            int forwarder = PyUnicode_CompareWithASCIIString(code->co_filename,
+                                                             BY_FORWARDER_FILE) == 0;
+            Py_DECREF(code);
+            if (forwarder) {
+                PyFrameObject *back = PyFrame_GetBack(frame);
+                Py_DECREF(frame);
+                frame = back;
+            }
+        }
+    }
+    for (step = 1;; step++) {
+        if (!plain) {
+            while (frame != NULL && By_WarnWalksPastFrame(frame)) {
+                PyFrameObject *back = PyFrame_GetBack(frame);
+                Py_DECREF(frame);
+                frame = back;
+            }
+        }
+        if (step >= stacklevel - 1 || frame == NULL) return frame;
+        {
+            PyFrameObject *back = PyFrame_GetBack(frame);
+            Py_DECREF(frame);
+            frame = back;
+        }
+    }
+}
+
+/* what `warn` reports a warning against once it has run out of frames
+ *
+ * the wording moved in 3.13: the file was `sys` at line 1 and is now `<sys>` at line
+ * zero. the namespace stayed `sys`'s own either way, so the blamed module is `sys` on
+ * every version */
+#if PY_VERSION_HEX >= 0x030D0000
+#define BY_WARN_OFF_THE_END_FILE "<sys>"
+#define BY_WARN_OFF_THE_END_LINE 0
+#else
+#define BY_WARN_OFF_THE_END_FILE "sys"
+#define BY_WARN_OFF_THE_END_LINE 1
+#endif
+
+/* `warnings.warn(message, category, stacklevel)` written out with the context supplied
  *
  * `warn` decides which module a warning is blamed on by counting frames back from its
  * own caller, and a compiled function pushes none — so the frame it lands on belongs
@@ -1181,27 +1309,41 @@ static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
  * all: `urllib.request.URLopener.__init__` warned and the compiled leg printed nothing
  * where python printed a `DeprecationWarning`.
  *
- * for the default stack level of one there is nothing to count: the frame `warn` would
- * have blamed is the compiled function's own, and every field it would have read off
- * that frame is either known when the module is built — the file and the line — or
- * sitting in the module namespace at the moment of the call: `__name__`, and the
- * `__warningregistry__` that records what has already been shown. so the call is made
- * to `warn_explicit`, which takes all of them, and no frame is involved.
+ * the missing frame is the *only* difference, and it is the one this fills in. at the
+ * default stack level the frame `warn` would have blamed is the compiled function's
+ * own, and every field it would have read off it is either known when the module is
+ * built — the file and the line — or sitting in the module namespace at the moment of
+ * the call: `__name__`, and the `__warningregistry__` that records what has already
+ * been shown. above the default level the blamed frame is further out, and every frame
+ * out there is a real one: the interpreted definition's frame would have sat directly
+ * on `PyEval_GetFrame`, so counting from there with the first step taken reaches the
+ * frame python reaches. either way the call is made to `warn_explicit`, which takes
+ * the context, and no frame of this function's is needed.
+ *
+ * what a compiled function *below* this one would have contributed is still missing,
+ * and no context filled in here can supply it. a caller in the same module is turned
+ * down by the compiler for that reason; one reached through a value or from another
+ * module is a frame neither side can see, and an interpreted definition of this
+ * function would lose it just the same.
  *
  * what follows is `warn`'s own preamble, which has to be reproduced exactly or the
- * lowering is distinguishable. every branch was read off cpython 3.11 through 3.14
+ * lowering is distinguishable. every branch was read off cpython 3.11 through 3.15
  * rather than off `warnings.py`, because the module that actually answers is the C
  * accelerator `_warnings` and the two differ:
  *
  *   - a `Warning` *instance* supplies the category, overriding whatever was written.
- *     the test is `PyObject_IsInstance`, which honours a `__class__` property, but the
- *     category taken is `Py_TYPE(message)` — the real type. an object that lies about
- *     its class therefore reaches the subclass test as its true type and is refused
+ *     the test was `PyObject_IsInstance`, which honours a `__class__` property, but the
+ *     category taken is `Py_TYPE(message)` — the real type. an object that lied about
+ *     its class therefore reached the subclass test as its true type and was refused.
+ *     3.15 made this a type check too, so such an object is now warned about as an
+ *     ordinary message under the category the call wrote
  *   - a failure inside that instance test propagates, where a failure inside the
- *     subclass test below is swallowed and reworded
- *   - the subclass test is `PyObject_IsSubclass` rather than a type check, so a
- *     non-type with a `__bases__` naming `Warning` passes it and fails later at the
- *     call, exactly as it does in python
+ *     subclass test below is swallowed and reworded. from 3.15 neither test asks
+ *     anything that can fail
+ *   - the subclass test was `PyObject_IsSubclass` rather than a type check, so a
+ *     non-type with a `__bases__` naming `Warning` passed it and failed later at the
+ *     call. 3.15 turned that into a type check, and reworded the refusal at the same
+ *     time — both are gated below
  *   - `module_globals` is left out. `warnings.py` passes the namespace there, but the
  *     C `warn` passes nothing, and the difference is visible: the namespace reaches
  *     `linecache`, which warns about a module without a `__spec__.loader`
@@ -1210,31 +1352,106 @@ static inline char By_DeleteGlobal(PyObject *dict, PyObject *name) {
  * `source`, so a call that writes one is left to its interpreted definition */
 static inline PyObject *By_Warn(PyObject *message, PyObject *category,
                                 PyObject *module_dict, const char *filename,
-                                int lineno) {
+                                int lineno, int stacklevel) {
     PyObject *chosen = category;
+    PyObject *globals = NULL;
     PyObject *key;
     PyObject *name;
     PyObject *module;
     PyObject *registry;
-    PyObject *path;
+    PyObject *path = NULL;
     int rc;
 
+    /* 3.15 made this a real type check as well, so a message whose `__class__` claims
+     * to be a warning stops supplying the category — and a `__class__` that raises
+     * stops being asked at all */
+#if PY_VERSION_HEX >= 0x030F0000
+    rc = PyObject_TypeCheck(message, (PyTypeObject *)PyExc_Warning);
+#else
     rc = PyObject_IsInstance(message, PyExc_Warning);
     if (rc < 0) return NULL;
+#endif
     if (rc > 0) {
         chosen = (PyObject *)Py_TYPE(message);
     } else if (chosen == NULL || chosen == Py_None) {
         chosen = PyExc_UserWarning;
     }
+    /* 3.15 stopped honouring a `__bases__` naming `Warning` on something that is not a
+     * class: a category has to be a real type there, where before one of these passed
+     * this test and failed later at the call */
+#if PY_VERSION_HEX >= 0x030F0000
+    rc = PyType_Check(chosen) ? PyObject_IsSubclass(chosen, PyExc_Warning) : 0;
+#else
     rc = PyObject_IsSubclass(chosen, PyExc_Warning);
+#endif
     if (rc < 0) {
         PyErr_Clear();
         rc = 0;
     }
     if (rc == 0) {
+        /* 3.15 rewrote this wording, and rewrote it in two directions: a category that
+         * is a class is named as one rather than as `type`, and either way the name is
+         * the fully qualified one — the module and the qualified name, with `builtins`
+         * and `__main__` left off, which is what `%N` and `%T` spell */
+#if PY_VERSION_HEX >= 0x030F0000
+        if (PyType_Check(chosen)) {
+            PyErr_Format(PyExc_TypeError,
+                         "category must be a Warning subclass, not class '%N'", chosen);
+        } else {
+            PyErr_Format(PyExc_TypeError,
+                         "category must be a Warning subclass, not '%T'", chosen);
+        }
+#else
         PyErr_Format(PyExc_TypeError,
                      "category must be a Warning subclass, not '%s'",
                      Py_TYPE(chosen)->tp_name);
+#endif
+        return NULL;
+    }
+
+    if (stacklevel <= 1) {
+        if (module_dict == NULL) {
+            PyErr_SetString(PyExc_SystemError, "a warning has no module namespace");
+            return NULL;
+        }
+        globals = Py_NewRef(module_dict);
+        path = PyUnicode_DecodeUTF8(filename, (Py_ssize_t)strlen(filename), "replace");
+    } else {
+        PyObject *written = PyUnicode_DecodeUTF8(filename, (Py_ssize_t)strlen(filename),
+                                                 "replace");
+        PyFrameObject *frame;
+        if (written == NULL) return NULL;
+        frame = By_WarnFrame(stacklevel, By_WarnWalksPast(written));
+        Py_DECREF(written);
+        if (frame == NULL) {
+            /* python reads the namespace off the interpreter's own `sys` here, which
+             * is `sys.__dict__` and holds the `__name__` the blamed module is taken
+             * from */
+            PyObject *sys = PyImport_ImportModule("sys");
+            if (sys != NULL) {
+                PyObject *dict = PyModule_GetDict(sys);
+                globals = Py_XNewRef(dict);
+                Py_DECREF(sys);
+            }
+            path = PyUnicode_FromString(BY_WARN_OFF_THE_END_FILE);
+            lineno = BY_WARN_OFF_THE_END_LINE;
+        } else {
+            PyCodeObject *code = PyFrame_GetCode(frame);
+            globals = PyFrame_GetGlobals(frame);
+            if (code != NULL) {
+                path = Py_NewRef(code->co_filename);
+                Py_DECREF(code);
+            }
+            lineno = PyFrame_GetLineNumber(frame);
+            Py_DECREF(frame);
+        }
+    }
+    if (globals == NULL || path == NULL) {
+        Py_XDECREF(globals);
+        Py_XDECREF(path);
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_SystemError, "a warning has no module namespace");
+        }
         return NULL;
     }
 
@@ -1243,51 +1460,57 @@ static inline PyObject *By_Warn(PyObject *message, PyObject *category,
      * else, a missing name included. `None` is deliberately passed through rather than
      * replaced — a `module` filter matches neither, but leaving it out of the call
      * entirely would make `warn_explicit` derive one from the file name instead */
-    if (module_dict == NULL) {
-        PyErr_SetString(PyExc_SystemError, "a warning has no module namespace");
+    key = By_InternedStr("__name__", 8);
+    if (key == NULL) {
+        Py_DECREF(globals);
+        Py_DECREF(path);
         return NULL;
     }
-    key = By_InternedStr("__name__", 8);
-    if (key == NULL) return NULL;
-    name = PyDict_GetItemWithError(module_dict, key);
+    name = PyDict_GetItemWithError(globals, key);
     Py_DECREF(key);
-    if (name == NULL && PyErr_Occurred()) return NULL;
+    if (name == NULL && PyErr_Occurred()) {
+        Py_DECREF(globals);
+        Py_DECREF(path);
+        return NULL;
+    }
     if (name == Py_None || (name != NULL && PyUnicode_Check(name))) {
         module = Py_NewRef(name);
     } else {
         module = PyUnicode_FromString("<string>");
-        if (module == NULL) return NULL;
+        if (module == NULL) {
+            Py_DECREF(globals);
+            Py_DECREF(path);
+            return NULL;
+        }
     }
 
-    /* the registry is the module's own, created on first use the way `warn` creates
-     * it. whatever is already bound is passed on untouched, non-dicts included, so a
-     * module that has bound something else there raises what python raises */
+    /* the registry is the blamed module's own, created on first use the way `warn`
+     * creates it. whatever is already bound is passed on untouched, non-dicts included,
+     * so a module that has bound something else there raises what python raises */
     key = By_InternedStr("__warningregistry__", 19);
     if (key == NULL) {
         Py_DECREF(module);
+        Py_DECREF(globals);
+        Py_DECREF(path);
         return NULL;
     }
-    registry = PyDict_GetItemWithError(module_dict, key);
+    registry = PyDict_GetItemWithError(globals, key);
     if (registry == NULL && !PyErr_Occurred()) {
         registry = PyDict_New();
-        if (registry != NULL && PyDict_SetItem(module_dict, key, registry) < 0) {
+        if (registry != NULL && PyDict_SetItem(globals, key, registry) < 0) {
             Py_CLEAR(registry);
         }
     } else {
         Py_XINCREF(registry);
     }
     Py_DECREF(key);
+    Py_DECREF(globals);
     if (registry == NULL) {
         Py_DECREF(module);
+        Py_DECREF(path);
         return NULL;
     }
 
-    path = PyUnicode_DecodeUTF8(filename, (Py_ssize_t)strlen(filename), "replace");
-    if (path == NULL) {
-        Py_DECREF(registry);
-        Py_DECREF(module);
-        return NULL;
-    }
     rc = PyErr_WarnExplicitObject(chosen, message, path, lineno, module, registry);
     Py_DECREF(path);
     Py_DECREF(registry);
@@ -4067,6 +4290,37 @@ static inline int By_OptimizeLevel(void) {
     return (int)value;
 }
 
+/* pick the spelling of a docstring this interpreter would have produced itself
+ *
+ * from 3.13 the compiler cleans a docstring on its way into `__doc__`: tabs expanded to
+ * eight-column stops, the first line's leading spaces gone, and the indentation shared by
+ * the lines below it gone with them. 3.12 and earlier store the literal untouched. so the
+ * two are different strings for almost every docstring written across more than one line,
+ * and only the version compiling this file can say which one belongs here */
+#if PY_VERSION_HEX >= 0x030D0000
+#define BY_DOC(raw, cleaned) (cleaned)
+#else
+#define BY_DOC(raw, cleaned) (raw)
+#endif
+
+/* drop the docstrings out of a method table when this interpreter is running at `-OO`
+ *
+ * a docstring is baked into the artefact at build time, but the level the artefact is
+ * *run* at is not settled until the import — and under `-OO` python compiles a function
+ * with no docstring at all, so a compiled definition still answering with one would
+ * disagree with the interpreted definition of the same source in the same process.
+ *
+ * clearing `ml_doc` is enough for both surfaces: a `builtin_function_or_method` and a
+ * `method_descriptor` each read `__doc__` off the `PyMethodDef` they point at rather than
+ * copying it, so this reaches every object built from the table, before or after.
+ *
+ * `sys.flags.optimize` cannot change once the interpreter is up, so this is a single
+ * decision taken at module init rather than a test on every read */
+static inline void By_StripDocsAtOO(PyMethodDef *methods) {
+    if (By_OptimizeLevel() < 2) return;
+    for (; methods->ml_name != NULL; methods++) methods->ml_doc = NULL;
+}
+
 /* the twin's code object, where this interpreter may use the one the artefact carries
  *
  * hands back a new reference, or NULL. NULL with no exception set means there is nothing
@@ -4650,6 +4904,533 @@ static inline int By_HoldFieldDefault(PyTypeObject *type, const char *name, PyOb
     return 0;
 }
 
+/* ── an emitted instance's `__dict__` ─────────────────────────────────────────
+ *
+ * an emitted instance keeps its attributes in two places. the ones the class itself
+ * writes are the layout, at a fixed offset and with no name to look up; anything else
+ * put on the object afterwards goes into the dict beside them, which is what makes
+ * `obj.extra = 3` work the way the interpreted twin does.
+ *
+ * python's `__dict__` is one mapping over the whole of an object's state, so handing
+ * back the second of those alone would name the *extra* attributes and none of the real
+ * ones — an empty answer where the interpreted class gives a full one. that is a quiet
+ * wrong answer, and worse than the refusal it would replace. a class whose whole state
+ * is the dict has no such gap and answers with the dict itself.
+ *
+ * every other class answers with this: a `dict` **subclass** holding the whole mapping,
+ * filled from the object when it is handed out, whose writes go back through the object
+ * so that a name the layout knows reaches the layout.
+ *
+ * it has to be a real `dict`, and it has to carry the entries in the base's own storage.
+ * `isinstance(obj.__dict__, dict)` gates a great deal of library code, and every reader
+ * the C api offers — `json.dumps`, `==`, `copy()`, `PyDict_Next` — reads that storage and
+ * ignores an override completely: a subclass answering out of a side table serialises as
+ * `{}`, silently. so the entries are really there, and every inherited operation is
+ * exactly `dict`'s.
+ *
+ * what that costs is liveness in one direction. the mapping is filled when `__dict__` is
+ * read and refilled after every write through it, so anything that takes it and uses it
+ * sees the object as it stands — but a *held* mapping does not see an attribute written
+ * afterwards by some other means. keeping it live would mean the object telling it, and
+ * the object writes its fields at a compile-time offset with nothing to hang that on
+ */
+typedef struct {
+    const char *name;
+    /* the field's own presence predicate, and NULL for every field that does not need
+     * one. it is needed exactly where a class-level value stands beside the field:
+     * reading the attribute then answers with the *class's* value when the instance
+     * never wrote one, and python's `__dict__` does not name a class attribute. every
+     * other field reports its own absence by raising, which the read below reads */
+    By_FieldPresent present;
+} By_DictField;
+
+typedef struct {
+    /* the base's own storage, and it must come first: everything reading this as a
+     * `dict` reads from here */
+    PyDictObject by_base;
+    /* the object this mapping stands for, **borrowed**, and NULL once that object has
+     * gone. it is borrowed because the object holds the mapping — it is the object's own
+     * dict word — so a strong reference back would be a cycle nothing but the collector
+     * could break. an object on its way out detaches the mapping first, and what is left
+     * is an ordinary dict holding the state that stood at the end: which is exactly what
+     * python leaves behind for `d = r.__dict__; del r` */
+    PyObject *owner;
+    /* static, and outlives every instance: it is the table the module emitted beside
+     * the type */
+    const By_DictField *fields;
+} ByInstanceDictObject;
+
+/* where an emitted instance keeps its dict, or NULL for a class whose instances keep
+ * none. the word is written to as well as read: a published `__dict__` is installed here
+ * and becomes the instance's own dict from then on */
+static PyObject **By_InstanceDictSlot(PyObject *owner) {
+    Py_ssize_t offset = Py_TYPE(owner)->tp_dictoffset;
+    if (offset <= 0) return NULL;
+    return (PyObject **)((char *)owner + offset);
+}
+
+/* the dict an emitted instance keeps beside its layout, borrowed, or NULL
+ *
+ * read rather than asked for, for the reason [`By_DictShadowsAt`] gives, and because
+ * `PyObject_GenericGetDict` *creates* one — an instance that was only ever looked at
+ * would come away carrying an empty dict it never needed */
+static PyObject *By_InstanceExtras(PyObject *owner) {
+    PyObject **slot = By_InstanceDictSlot(owner);
+    return slot == NULL ? NULL : *slot;
+}
+
+/* one layout field's value: 1 with a new reference, 0 when the instance has none, and
+ * -1 with an exception set
+ *
+ * the value comes from the attribute rather than from the field's getter, because the
+ * attribute is where python's own precedence is applied — a class publishing no setters
+ * leaves its fields as non-data descriptors, and a name written onto such an instance
+ * goes to the dict and shadows the layout from then on */
+static int By_InstanceDictField(PyObject *owner, const By_DictField *field, PyObject **out) {
+    PyObject *value;
+    *out = NULL;
+    if (field->present != NULL && !field->present(owner)) return 0;
+    value = PyObject_GetAttrString(owner, field->name);
+    if (value == NULL) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return -1;
+        PyErr_Clear();
+        return 0;
+    }
+    *out = value;
+    return 1;
+}
+
+/* the whole of an instance's state as a plain dict, built fresh
+ *
+ * the layout first and the extras after, because that is the order the object acquired
+ * them: `__init__` writes the fields and anything else is put on afterwards. an extra
+ * standing under a field's own name is already the answer the read above gave, so it is
+ * not written twice and the field keeps its position */
+static PyObject *By_InstanceMapping(PyObject *owner, const By_DictField *fields) {
+    PyObject *out = PyDict_New();
+    PyObject *extras;
+    const By_DictField *field;
+    if (out == NULL) return NULL;
+    for (field = fields; field->name != NULL; field++) {
+        PyObject *value;
+        int failed;
+        int held = By_InstanceDictField(owner, field, &value);
+        if (held < 0) {
+            Py_DECREF(out);
+            return NULL;
+        }
+        if (held == 0) continue;
+        failed = PyDict_SetItemString(out, field->name, value);
+        Py_DECREF(value);
+        if (failed < 0) {
+            Py_DECREF(out);
+            return NULL;
+        }
+    }
+    extras = By_InstanceExtras(owner);
+    if (extras != NULL) {
+        Py_ssize_t pos = 0;
+        PyObject *key, *value;
+        Py_INCREF(extras);
+        while (PyDict_Next(extras, &pos, &key, &value)) {
+            int found = PyDict_Contains(out, key);
+            if (found < 0 || (found == 0 && PyDict_SetItem(out, key, value) < 0)) {
+                Py_DECREF(extras);
+                Py_DECREF(out);
+                return NULL;
+            }
+        }
+        Py_DECREF(extras);
+    }
+    return out;
+}
+
+static PyTypeObject By_InstanceDictType;
+
+/* what an emitted class answers `__dict__` with, and what it keeps in its dict word from
+ * then on
+ *
+ * the mapping is *installed*, replacing whatever plain dict the extra attributes were
+ * living in — which is what makes it the object's storage for everything the layout does
+ * not name, so a name written on the object afterwards lands in this mapping with nothing
+ * having to be told. the layout half is told: every write to a field publishes into here,
+ * which is what a *held* mapping needs to keep answering with what the object holds now.
+ *
+ * asked twice it answers with the same object, exactly as python's own `__dict__` does */
+static inline PyObject *By_InstanceDict(PyObject *owner, const By_DictField *fields) {
+    PyObject **slot = By_InstanceDictSlot(owner);
+    PyObject *standing;
+    ByInstanceDictObject *self;
+    if (slot != NULL && *slot != NULL && Py_IS_TYPE(*slot, &By_InstanceDictType)) {
+        return By_NewRef(*slot);
+    }
+    if (By_InstanceDictType.tp_base == NULL) By_InstanceDictType.tp_base = &PyDict_Type;
+    if (PyType_Ready(&By_InstanceDictType) < 0) return NULL;
+    /* read before the mapping is installed, while the extras are still where they were */
+    standing = By_InstanceMapping(owner, fields);
+    if (standing == NULL) return NULL;
+    self = (ByInstanceDictObject *)PyObject_CallNoArgs((PyObject *)&By_InstanceDictType);
+    if (self == NULL) {
+        Py_DECREF(standing);
+        return NULL;
+    }
+    self->owner = owner;
+    self->fields = fields;
+    if (PyDict_Update((PyObject *)self, standing) < 0) {
+        Py_DECREF(standing);
+        Py_DECREF(self);
+        return NULL;
+    }
+    Py_DECREF(standing);
+    if (slot != NULL) {
+        PyObject *previous = *slot;
+        *slot = By_NewRef((PyObject *)self);
+        Py_XDECREF(previous);
+    } else {
+        /* nowhere to install it, so nothing will tell it about a later write. a class
+         * publishing a view always has the word, so this is the shape that never occurs */
+        self->owner = NULL;
+    }
+    return (PyObject *)self;
+}
+
+static void By_InstanceDict_dealloc(PyObject *selfobj) {
+    PyObject_GC_UnTrack(selfobj);
+    PyDict_Type.tp_dealloc(selfobj);
+}
+
+static int By_InstanceDict_traverse(PyObject *selfobj, visitproc visit, void *arg) {
+    /* the owner is borrowed, so it is not visited: the reference runs the other way */
+    return PyDict_Type.tp_traverse(selfobj, visit, arg);
+}
+
+static int By_InstanceDict_clear(PyObject *selfobj) {
+    return PyDict_Type.tp_clear(selfobj);
+}
+
+/* a write goes through the attribute, which is what keeps the two halves one mapping: a
+ * name the layout knows lands in the layout and every other name lands in this mapping
+ * itself, which *is* the object's dict word — exactly as an assignment through the object
+ * would put it there, because that is what this does.
+ *
+ * nothing is patched into the storage here. the layout half publishes back on its own
+ * from the field write, which is what keeps a mapping right when the object is written to
+ * some other way, and it publishes what the layout *stored* rather than what it was
+ * handed — an unboxed field takes a representation of its own */
+static int By_InstanceDict_assign(PyObject *selfobj, PyObject *key, PyObject *value) {
+    ByInstanceDictObject *self = (ByInstanceDictObject *)selfobj;
+    int failed;
+    /* detached, so there is no object to write back to and this is a plain dict */
+    if (self->owner == NULL) {
+        return value == NULL ? PyDict_DelItem(selfobj, key)
+                             : PyDict_SetItem(selfobj, key, value);
+    }
+    failed = value == NULL ? PyObject_DelAttr(self->owner, key)
+                           : PyObject_SetAttr(self->owner, key, value);
+    return failed < 0 ? -1 : 0;
+}
+
+/* every write through the attribute, one at a time, so that a name the layout knows
+ * reaches the layout — which is the whole point of the mapping writing back */
+static int By_InstanceDictWriteAll(ByInstanceDictObject *self, PyObject *source) {
+    PyObject *items;
+    Py_ssize_t index;
+    Py_ssize_t count;
+    if (self->owner == NULL) return PyDict_Update((PyObject *)self, source);
+    items = PyMapping_Items(source);
+    if (items == NULL) {
+        PyErr_Clear();
+        items = PySequence_List(source);
+        if (items == NULL) return -1;
+    }
+    count = PySequence_Size(items);
+    if (count < 0) {
+        Py_DECREF(items);
+        return -1;
+    }
+    for (index = 0; index < count; index++) {
+        PyObject *pair = PySequence_GetItem(items, index);
+        PyObject *key;
+        PyObject *value;
+        int failed;
+        if (pair == NULL) {
+            Py_DECREF(items);
+            return -1;
+        }
+        key = PySequence_GetItem(pair, 0);
+        value = PySequence_GetItem(pair, 1);
+        Py_DECREF(pair);
+        if (key == NULL || value == NULL) {
+            Py_XDECREF(key);
+            Py_XDECREF(value);
+            Py_DECREF(items);
+            return -1;
+        }
+        failed = PyObject_SetAttr(self->owner, key, value) < 0;
+        Py_DECREF(key);
+        Py_DECREF(value);
+        if (failed) {
+            Py_DECREF(items);
+            return -1;
+        }
+    }
+    Py_DECREF(items);
+    return 0;
+}
+
+static PyObject *By_InstanceDict_update(PyObject *selfobj, PyObject *const *args,
+                                        Py_ssize_t nargs) {
+    if (nargs != 1) {
+        PyErr_SetString(PyExc_TypeError, "update() takes exactly one argument");
+        return NULL;
+    }
+    if (By_InstanceDictWriteAll((ByInstanceDictObject *)selfobj, args[0]) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyObject *By_InstanceDict_ior(PyObject *selfobj, PyObject *other) {
+    if (!PyDict_Check(other)) Py_RETURN_NOTIMPLEMENTED;
+    if (By_InstanceDictWriteAll((ByInstanceDictObject *)selfobj, other) < 0) return NULL;
+    return By_NewRef(selfobj);
+}
+
+/* every name the object has, removed one at a time. a field the layout treats as always
+ * defined refuses, which is what an emitted instance being its layout means — and it
+ * refuses loudly rather than leaving half a mapping behind */
+static PyObject *By_InstanceDict_clearmethod(PyObject *selfobj, PyObject *unused) {
+    PyObject *keys;
+    Py_ssize_t index;
+    Py_ssize_t count;
+    (void)unused;
+    if (((ByInstanceDictObject *)selfobj)->owner == NULL) {
+        PyDict_Clear(selfobj);
+        Py_RETURN_NONE;
+    }
+    keys = PyDict_Keys(selfobj);
+    if (keys == NULL) return NULL;
+    count = PyList_GET_SIZE(keys);
+    for (index = 0; index < count; index++) {
+        if (PyObject_DelAttr(((ByInstanceDictObject *)selfobj)->owner,
+                             PyList_GET_ITEM(keys, index)) < 0) {
+            Py_DECREF(keys);
+            return NULL;
+        }
+    }
+    Py_DECREF(keys);
+    Py_RETURN_NONE;
+}
+
+static PyObject *By_InstanceDict_pop(PyObject *selfobj, PyObject *const *args,
+                                     Py_ssize_t nargs) {
+    PyObject *value;
+    if (nargs < 1 || nargs > 2) {
+        PyErr_SetString(PyExc_TypeError, "pop expected 1 or 2 arguments");
+        return NULL;
+    }
+    value = PyDict_GetItemWithError(selfobj, args[0]);
+    if (value == NULL) {
+        if (PyErr_Occurred()) return NULL;
+        if (nargs == 2) return By_NewRef(args[1]);
+        PyErr_SetObject(PyExc_KeyError, args[0]);
+        return NULL;
+    }
+    Py_INCREF(value);
+    if (By_InstanceDict_assign(selfobj, args[0], NULL) < 0) {
+        Py_DECREF(value);
+        return NULL;
+    }
+    return value;
+}
+
+static PyObject *By_InstanceDict_popitem(PyObject *selfobj, PyObject *unused) {
+    PyObject *items = PyDict_Items(selfobj);
+    PyObject *last;
+    Py_ssize_t count;
+    (void)unused;
+    if (items == NULL) return NULL;
+    count = PyList_GET_SIZE(items);
+    if (count == 0) {
+        Py_DECREF(items);
+        PyErr_SetString(PyExc_KeyError, "popitem(): dictionary is empty");
+        return NULL;
+    }
+    last = By_NewRef(PyList_GET_ITEM(items, count - 1));
+    Py_DECREF(items);
+    if (By_InstanceDict_assign(selfobj, PyTuple_GET_ITEM(last, 0), NULL) < 0) {
+        Py_DECREF(last);
+        return NULL;
+    }
+    return last;
+}
+
+static PyObject *By_InstanceDict_setdefault(PyObject *selfobj, PyObject *const *args,
+                                            Py_ssize_t nargs) {
+    PyObject *value;
+    PyObject *fallback;
+    if (nargs < 1 || nargs > 2) {
+        PyErr_SetString(PyExc_TypeError, "setdefault expected 1 or 2 arguments");
+        return NULL;
+    }
+    value = PyDict_GetItemWithError(selfobj, args[0]);
+    if (value != NULL) return By_NewRef(value);
+    if (PyErr_Occurred()) return NULL;
+    fallback = nargs == 2 ? args[1] : Py_None;
+    if (By_InstanceDict_assign(selfobj, args[0], fallback) < 0) return NULL;
+    return By_NewRef(fallback);
+}
+
+/* only the operations that *change* the mapping are written here. every reader is the
+ * one `dict` already has, reading the storage this keeps filled — which is the whole
+ * reason for being a `dict` at all */
+static PyMethodDef By_InstanceDict_methods[] = {
+    {"update", (PyCFunction)(void (*)(void))By_InstanceDict_update, METH_FASTCALL, NULL},
+    {"clear", By_InstanceDict_clearmethod, METH_NOARGS, NULL},
+    {"pop", (PyCFunction)(void (*)(void))By_InstanceDict_pop, METH_FASTCALL, NULL},
+    {"popitem", By_InstanceDict_popitem, METH_NOARGS, NULL},
+    {"setdefault", (PyCFunction)(void (*)(void))By_InstanceDict_setdefault, METH_FASTCALL, NULL},
+    {NULL, NULL, 0, NULL},
+};
+
+/* only the subscript that assigns: `mp_length` and `mp_subscript` are left NULL and
+ * inherited, which is what python's slot inheritance does with a half-filled table */
+static PyMappingMethods By_InstanceDict_mapping = {
+    .mp_ass_subscript = By_InstanceDict_assign,
+};
+
+static PyNumberMethods By_InstanceDict_number = {
+    .nb_inplace_or = By_InstanceDict_ior,
+};
+
+static PyTypeObject By_InstanceDictType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "by.instance_dict",
+    .tp_basicsize = sizeof(ByInstanceDictObject),
+    .tp_itemsize = 0,
+    .tp_dealloc = By_InstanceDict_dealloc,
+    .tp_as_number = &By_InstanceDict_number,
+    .tp_as_mapping = &By_InstanceDict_mapping,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
+    .tp_traverse = By_InstanceDict_traverse,
+    .tp_clear = By_InstanceDict_clear,
+    .tp_methods = By_InstanceDict_methods,
+};
+
+/* whether an instance's dict word holds a mapping that was handed out and so has to be
+ * kept saying what the object says
+ *
+ * the word is NULL for an instance nobody has asked for a `__dict__` or written a stray
+ * attribute on, which is nearly every instance, so the common answer costs one load and a
+ * comparison — and the boxing a publish needs sits past this, so an unboxed field pays
+ * nothing at all for a mapping that was never taken */
+static inline int By_HasPublishedDict(PyObject *dict) {
+    return dict != NULL && Py_IS_TYPE(dict, &By_InstanceDictType);
+}
+
+/* name in a published mapping what a layout field now holds, taking the reference it is
+ * handed
+ *
+ * an emitted instance's storage is its layout and stays its layout: a field read is a
+ * load at a compile-time offset, with nothing in front of it. what this keeps right is a
+ * mapping somebody is *holding* — `__dict__` hands one out and installs it as the
+ * object's dict word, and every reader the C api offers reads that mapping's own storage,
+ * so a field written afterwards has to reach it.
+ *
+ * the value is the one the layout now holds rather than the one the write was handed: an
+ * unboxed field keeps a representation of its own, and `x = 3` on a float field is `3.0`.
+ *
+ * a failure is not raised. the write this follows has already happened, so the object is
+ * correct and only the mapping is behind — and a field write is not something the
+ * exception model gives an edge to: a body the checker proved cannot raise has no error
+ * path to jump to at all. the one thing here that can fail is an allocation, so it is
+ * reported the way python reports a failing `__del__` — unraisably, on stderr, where it
+ * cannot be read as the program's own answer */
+static void By_PublishedField(PyObject *dict, const char *name, PyObject *value) {
+    int failed = value == NULL || PyDict_SetItemString(dict, name, value) < 0;
+    Py_XDECREF(value);
+    if (failed) PyErr_WriteUnraisable(dict);
+}
+
+/* take a layout field out of a published mapping, for a `del` that put it back into the
+ * state `tp_alloc` left it in
+ *
+ * a delete that is not published is the write's mistake read backwards: the mapping goes
+ * on naming an attribute the object no longer has. a missing key is not a failure here */
+static void By_UnpublishedField(PyObject *dict, const char *name) {
+    if (PyDict_DelItemString(dict, name) < 0) PyErr_Clear();
+}
+
+/* let go of an instance's dict word, detaching a published mapping first
+ *
+ * a mapping somebody still holds outlives the object it stood for, and its pointer back
+ * would dangle. cleared here, it goes on as an ordinary dict holding the last state the
+ * object had — which is what python leaves behind in the same situation */
+static void By_ReleaseInstanceDict(PyObject **slot) {
+    PyObject *dict = *slot;
+    if (dict == NULL) return;
+    if (Py_IS_TYPE(dict, &By_InstanceDictType)) {
+        ((ByInstanceDictObject *)dict)->owner = NULL;
+    }
+    *slot = NULL;
+    Py_DECREF(dict);
+}
+
+/* `object.__getstate__`, over the whole of an instance's state
+ *
+ * python's own reads the dict word straight out of the instance, which on an emitted one
+ * is the half holding the *extra* attributes — so `copy` and `pickle` are handed a state
+ * naming none of the class's own fields, and handed it quietly. `None` is python's own
+ * answer where there is nothing in it */
+static inline PyObject *By_InstanceState(PyObject *owner, const By_DictField *fields) {
+    PyObject *state = By_InstanceMapping(owner, fields);
+    if (state == NULL) return NULL;
+    if (PyDict_Size(state) == 0) {
+        Py_DECREF(state);
+        Py_RETURN_NONE;
+    }
+    return state;
+}
+
+/* `obj.__dict__ = mapping`, which python takes as replacing the whole of an object's
+ * state — so every name the object has and the mapping does not is removed first. a
+ * field the layout treats as always defined cannot be removed and says so */
+static inline int By_InstanceDictReplace(PyObject *owner, const By_DictField *fields,
+                                         PyObject *value) {
+    PyObject *standing;
+    PyObject *keys;
+    Py_ssize_t index;
+    Py_ssize_t count;
+    int failed = 0;
+    if (value == NULL) {
+        PyErr_Format(PyExc_TypeError, "cannot delete __dict__ of a '%s' object",
+                     Py_TYPE(owner)->tp_name);
+        return -1;
+    }
+    if (!PyMapping_Check(value)) {
+        PyErr_Format(PyExc_TypeError, "__dict__ must be set to a mapping, not '%s'",
+                     Py_TYPE(value)->tp_name);
+        return -1;
+    }
+    standing = By_InstanceMapping(owner, fields);
+    if (standing == NULL) return -1;
+    keys = PyDict_Keys(standing);
+    Py_DECREF(standing);
+    if (keys == NULL) return -1;
+    count = PyList_GET_SIZE(keys);
+    for (index = 0; index < count && !failed; index++) {
+        PyObject *key = PyList_GET_ITEM(keys, index);
+        int held = PySequence_Contains(value, key);
+        if (held < 0 || (held == 0 && PyObject_DelAttr(owner, key) < 0)) failed = 1;
+    }
+    Py_DECREF(keys);
+    if (!failed) {
+        PyObject *view = By_InstanceDict(owner, fields);
+        if (view == NULL) return -1;
+        failed = By_InstanceDictWriteAll((ByInstanceDictObject *)view, value) < 0;
+        Py_DECREF(view);
+    }
+    return failed ? -1 : 0;
+}
+
 /* the `Py_hash_t` python makes of what a written `__hash__` answered
  *
  * `slot_tp_hash`'s own conversion, and pointedly not `PyObject_Hash`. a value that fits a
@@ -4771,6 +5552,66 @@ static inline int By_PublishProperty(PyObject *type, const char *name, PyMethodD
     Py_DECREF(published);
     PyType_Modified((PyTypeObject *)type);
     return stored;
+}
+
+/* the comparison this class did not write, answered where python would have answered it
+ *
+ * one `tp_richcompare` backs all six comparisons, so a class writing `__lt__` takes the
+ * slot over from its base for the other five as well — and the base's is not empty.
+ * `object`'s is what gives `!=` its default meaning: call `__eq__` and negate the answer.
+ * returning `NotImplemented` for the five a body did not write threw that away, and
+ * `Ordered(1) != Ordered(1)` answered `True` compiled where the interpreted class
+ * answers `False`.
+ *
+ * the base is taken from the type the slot was emitted for rather than from
+ * `Py_TYPE(self)`: a subclass that writes no comparison of its own inherits this very
+ * function, and what it has to fall back to is the step up from *here* — reading the
+ * instance's own type would hand it straight back to itself.
+ *
+ * `object_richcompare` answers `!=` by calling `Py_TYPE(self)->tp_richcompare` again with
+ * `Py_EQ`, which is this function once more. that terminates: `Py_EQ` is either one this
+ * class wrote, or another step up, and the walk is strictly upwards */
+static inline PyObject *By_BaseRichCompare(PyObject *type, PyObject *self, PyObject *other,
+                                           int op) {
+    PyTypeObject *base = ((PyTypeObject *)type)->tp_base;
+    if (base == NULL || base->tp_richcompare == NULL) Py_RETURN_NOTIMPLEMENTED;
+    return base->tp_richcompare(self, other, op);
+}
+
+/* drop the names a filled slot published that the class body never wrote
+ *
+ * `PyType_Ready` adds a wrapper descriptor for *every* name a filled slot backs, so a
+ * class writing `__lt__` publishes all six comparisons and one writing `__add__`
+ * publishes `__radd__` alongside it. what reads a class by name then sees methods the
+ * `class` statement never wrote. `functools.total_ordering` is the shape that shows what
+ * that costs: it looks for the comparisons a class is missing, found none missing, filled
+ * none in, and said nothing — and the first `<=` raised.
+ *
+ * this removes behaviour from nothing. python reaches a comparison through the slot,
+ * which is untouched, and the name an attribute lookup now finds is the one an
+ * interpreted class of the same body would have found */
+static inline int By_UnpublishSlotNames(PyObject *type, const char *const *names) {
+    PyObject *dict = ((PyTypeObject *)type)->tp_dict;
+    Py_ssize_t at;
+    if (dict == NULL) {
+        PyErr_Format(PyExc_SystemError, "type '%s' has no dict to unpublish from",
+                     ((PyTypeObject *)type)->tp_name);
+        return -1;
+    }
+    for (at = 0; names[at] != NULL; at++) {
+        PyObject *key = PyUnicode_FromString(names[at]);
+        int held;
+        if (key == NULL) return -1;
+        held = PyDict_Contains(dict, key);
+        if (held < 0 || (held && PyDict_DelItem(dict, key) < 0)) {
+            Py_DECREF(key);
+            return -1;
+        }
+        Py_DECREF(key);
+    }
+    /* the attribute cache would otherwise go on serving the wrappers just removed */
+    PyType_Modified((PyTypeObject *)type);
+    return 0;
 }
 
 /* a `tp_call` slot is handed a tuple and a dict where a method wrapper wants a
@@ -4944,6 +5785,7 @@ BY_COLD PyObject *By_ItemSlow(PyObject *container, ByTagged index) {
             PyErr_SetString(PyExc_IndexError, "tuple index out of range");
             return NULL;
         }
+        if (PyUnicode_CheckExact(container)) return By_StrCharAt(container, i);
     }
     PyObject *boxed = By_BoxInt(index);
     if (boxed == NULL) return NULL;
@@ -4952,34 +5794,73 @@ BY_COLD PyObject *By_ItemSlow(PyObject *container, ByTagged index) {
     return result;
 }
 
+/* the element of an exact `list`, or NULL for everything else
+ *
+ * a `list` may have been subclassed and the subclass may have overridden
+ * `__getitem__`, so it is the exact type that licenses reading the array
+ * directly. every other answer — a subclass, another container, an index out of
+ * range, an index that is not an integer at all — comes back NULL and is the
+ * caller's to take somewhere slower. NULL is free to mean that here because this
+ * never raises: a read that would have raised has not been attempted yet
+ *
+ * the index is an `int64_t` rather than a `Py_ssize_t` because that is what an
+ * unboxed counter is. it is narrowed only after `i < n` has proved it is a
+ * position in this list */
+static inline PyObject *By_ListItemAt(PyObject *container, int64_t i) {
+    if (BY_LIKELY(container != NULL && PyList_CheckExact(container))) {
+        int64_t n = (int64_t)PyList_GET_SIZE(container);
+        if (i < 0) i += n;
+        if (BY_LIKELY(i >= 0 && i < n)) {
+            return By_NewRef(PyList_GET_ITEM(container, (Py_ssize_t)i));
+        }
+    }
+    return NULL;
+}
+
 /* `container[index]` where the index is already an integer register
  *
  * boxing one to look up a list element allocates a `PyLongObject` per iteration
  * that nothing ever sees. on the fast path the index never leaves its register;
  * everything else boxes it and takes the ordinary protocol.
  *
- * only the read itself is written here. an out-of-range index sets an error with
- * a message, and a container that is none of these three takes the protocol —
- * both are several times the size of what they guard, and inlining them into
- * every subscript in a loop is what a scan over a list was paying for. moving
- * them out of line is three per cent of the inheritance benchmark, and the three
- * that stay are the three the suite indexes */
+ * only the *list* read is written here. the tuple and `str` reads that used to
+ * sit beside it answer from `By_ItemSlow` now, which had the tuple already and
+ * has gained the `str`. three arms plus their bounds arithmetic is more than a C
+ * compiler will inline: it emitted this as an ordinary function, and every `a[i]`
+ * in a loop paid a call to it. dropping to one arm is 1.14x of the inheritance
+ * benchmark and 1.04x of the dot product, and the tuple that now pays a call for
+ * it measures unchanged — `tuples` reads 0.996-1.000 against a 0.4% floor */
 static inline PyObject *By_GetItemTagged(PyObject *container, ByTagged index) {
-    if (BY_LIKELY(container != NULL && By_IsShort(index))) {
-        Py_ssize_t i = By_ShortValue(index);
-        if (PyList_CheckExact(container)) {
-            Py_ssize_t n = PyList_GET_SIZE(container);
-            if (i < 0) i += n;
-            if (BY_LIKELY(i >= 0 && i < n)) return By_NewRef(PyList_GET_ITEM(container, i));
-        } else if (PyTuple_CheckExact(container)) {
-            Py_ssize_t n = PyTuple_GET_SIZE(container);
-            if (i < 0) i += n;
-            if (BY_LIKELY(i >= 0 && i < n)) return By_NewRef(PyTuple_GET_ITEM(container, i));
-        } else if (PyUnicode_CheckExact(container)) {
-            return By_StrCharAt(container, i);
-        }
+    if (BY_LIKELY(By_IsShort(index))) {
+        PyObject *item = By_ListItemAt(container, (int64_t)By_ShortValue(index));
+        if (BY_LIKELY(item != NULL)) return item;
     }
     return By_ItemSlow(container, index);
+}
+
+/* everything `By_GetItemI64` does not do itself, once the index has its tagged
+ * representation back */
+BY_COLD PyObject *By_ItemSlowI64(PyObject *container, int64_t i) {
+    ByTagged index = By_IntFromI64(i);
+    if (index == BY_INT_ERROR) return NULL;
+    PyObject *result = By_ItemSlow(container, index);
+    By_DecRefTagged(index);
+    return result;
+}
+
+/* `container[i]` where the index is a machine integer
+ *
+ * a counter that `unbox_counters` has given a machine representation is boxed
+ * back to a tagged `int` at every use that wants one, and a subscript does not:
+ * the element it names is at an offset, and the offset is the number already in
+ * the register. the box is a shift out and a shift straight back in, once per
+ * element, along with the error edge that boxing an arbitrary `int` needs —
+ * boxing is what allocates, so it is what can fail. what is left here is the
+ * failure the read itself can have, which the caller was checking anyway */
+static inline PyObject *By_GetItemI64(PyObject *container, int64_t i) {
+    PyObject *item = By_ListItemAt(container, i);
+    if (BY_LIKELY(item != NULL)) return item;
+    return By_ItemSlowI64(container, i);
 }
 
 /* `s[i]` where the static type says `s` is a `str` and `i` an integer
@@ -5728,6 +6609,77 @@ static inline int By_ApplyDecorator(PyObject *dict, const char *name, const char
     int failed = PyDict_SetItemString(dict, name, wrapped) < 0;
     Py_DECREF(wrapped);
     return failed ? -1 : 0;
+}
+
+/* take a name back out of the module namespace, where it is still there
+ *
+ * used for the forwarder installer, which is a name the twin binds only so that
+ * module init has something to call. an exit that never calls it has to unbind it
+ * anyway: python's own module does not have that name, and a `dir()` that showed it
+ * would be this compiler's namespace rather than the program's */
+static inline void By_DropName(PyObject *dict, const char *name) {
+    if (PyDict_DelItemString(dict, name) < 0) PyErr_Clear();
+}
+
+/* publish a real `function` under each name in `methods`, forwarding to the native
+ *
+ * a `PyCFunction` is not a descriptor, so a module that publishes one under its own
+ * function name hands out a callable that never receives a receiver: `Cls.method =
+ * mod.fn` — which is what `functools.total_ordering` does to every class it
+ * decorates — installs something that drops slot zero. cpython has no supported way
+ * to make one bind: it has no `tp_descr_get`, `staticmethod(len)` does not bind
+ * either, and `PyDescr_NewMethod` refuses to be called without a receiver at all, so
+ * it cannot stand where a module-level function stands.
+ *
+ * so the module publishes what python itself publishes: a `function`. the twin
+ * carries one per exported definition, written by `by_irbuild::shims` and compiled
+ * by the interpreter along with the rest of the twin, and `installer` names the
+ * function that closes each of them over its native object and binds it in the
+ * module namespace. the natives themselves never go into that namespace — the only
+ * thing holding them is the closure cell of the forwarder that calls them */
+static inline int By_PublishForwarders(PyObject *module, PyObject *dict, PyMethodDef *methods,
+                                       Py_ssize_t count, const char *installer) {
+    PyObject *modname, *natives, *install, *result;
+    Py_ssize_t at;
+    modname = PyModule_GetNameObject(module);
+    if (modname == NULL) return -1;
+    natives = PyTuple_New(count);
+    if (natives == NULL) {
+        Py_DECREF(modname);
+        return -1;
+    }
+    for (at = 0; at < count; at++) {
+        /* the same construction `PyModule_AddFunctions` would have used, module and
+         * all, so a forwarder calls exactly the object that used to stand here */
+        PyObject *native = PyCFunction_NewEx(&methods[at], module, modname);
+        if (native == NULL) {
+            Py_DECREF(natives);
+            Py_DECREF(modname);
+            return -1;
+        }
+        PyTuple_SET_ITEM(natives, at, native);
+    }
+    Py_DECREF(modname);
+    install = PyDict_GetItemString(dict, installer); /* borrowed */
+    if (install == NULL) {
+        Py_DECREF(natives);
+        PyErr_Format(PyExc_ImportError,
+                     "this module's interpreted definitions did not define '%s'", installer);
+        return -1;
+    }
+    Py_INCREF(install);
+    {
+        /* the namespace is handed in rather than taken with `globals()`, because a
+         * module that defines a function called `globals` would have made that name
+         * a local of the installer before the installer ever ran */
+        PyObject *args[2] = {natives, dict};
+        result = PyObject_Vectorcall(install, args, 2, NULL);
+    }
+    Py_DECREF(install);
+    Py_DECREF(natives);
+    if (result == NULL) return -1;
+    Py_DECREF(result);
+    return 0;
 }
 
 /* ── iteration ────────────────────────────────────────────────────────────── */

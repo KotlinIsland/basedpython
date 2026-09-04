@@ -127,6 +127,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         }
     }
 

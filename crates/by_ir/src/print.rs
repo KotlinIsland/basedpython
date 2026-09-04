@@ -475,9 +475,10 @@ fn print_op(function: &Function, op: &Op) -> String {
             dest,
             message,
             category,
+            stacklevel,
             offset,
         } => format!(
-            "{} = warn {}{} at {offset}",
+            "{} = warn {}{} up {stacklevel} at {offset}",
             name(*dest),
             value(message),
             category
@@ -778,6 +779,8 @@ mod tests {
             defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
+            doc: None,
+            takes_a_weak_reference: false,
         }
     }
 
@@ -816,6 +819,7 @@ b2:
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         };
         let text = print_module(&module);
         assert!(text.starts_with("module app\n"));
@@ -847,6 +851,8 @@ b2:
             defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
+            doc: None,
+            takes_a_weak_reference: false,
         };
         assert!(print_function(&function).contains("return 1.0"));
     }

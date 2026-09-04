@@ -6,6 +6,31 @@
 //! only ever used as the receiver of another field read, and it cannot go away in
 //! between.
 //!
+//! ## arithmetic that holds what it is lent
+//!
+//! the same pair is pure overhead again in the smallest body object code has, the
+//! `self.base + k` a method reached through an instance runs. here the field's
+//! value is not a receiver but an *operand*, and an operand's consumer can in
+//! general do anything at all — so the rule above turns the borrow down.
+//!
+//! tagged integer arithmetic can be asked for more than that. every such operation
+//! lowers to one of the `By_Int*` helpers, and each of those either stays on a fast
+//! path over two tagged shorts, which hold no reference to keep alive, or hands
+//! both operands to `By_BoxInt` before anything else — and `By_BoxInt` retains a
+//! value that lives behind a pointer. so the helper owns what it was lent before it
+//! can allocate, call out or release, which is the same guarantee a field read
+//! gives, stated about the operand instead of the receiver.
+//!
+//! it differs in one way that matters: the helper lets go again on the way back,
+//! and that release can be the last one. a field read cannot drop anything, so a
+//! borrowed value may feed several of them; this may feed exactly one, and the pass
+//! checks that the operation it feeds is the value's last read.
+//!
+//! this is worth more than the pair it removes. the retain and the release are a
+//! handful of instructions, but the release carries an edge to `__del__` that the C
+//! compiler cannot see through, and that edge alone is enough to stop it inlining
+//! the method body into a caller's loop.
+//!
 //! ## why "in between" is the whole question
 //!
 //! a borrow is unsound the moment anything can drop the last owning reference to
@@ -496,16 +521,39 @@ fn borrow_is_safe(
         return false;
     }
 
+    // where the value is read for the last time, which is what separates the two
+    // kinds of safe use below
+    let last_read = block.ops[read_at + 1..]
+        .iter()
+        .rposition(|op| op.operands().iter().any(|operand| reads(operand, register)))
+        .map(|offset| read_at + 1 + offset);
+
     let mut used = false;
-    for op in &block.ops[read_at + 1..] {
+    for (index, op) in block.ops.iter().enumerate().skip(read_at + 1) {
         let reads_it = op.operands().iter().any(|operand| reads(operand, register));
         if reads_it {
-            // the only safe use is as the receiver of a *read*. a read takes the
-            // field's value before releasing anything, so nothing can run in
-            // between — where a `SetField` releases the old field value first, and
-            // that `__del__` could free the very object being written through
+            // a safe use is one that takes what it needs from the value before
+            // anything it does can release a reference
             match op {
+                // a read takes the field's value before releasing anything, so
+                // nothing can run in between — where a `SetField` releases the old
+                // field value first, and that `__del__` could free the very object
+                // being written through
                 Op::GetField { receiver, .. } if reads(receiver, register) => {}
+                // tagged integer arithmetic lowers to one of the `By_Int*` helpers,
+                // and each of those either stays on a fast path over two tagged
+                // shorts — which hold no reference to keep alive — or hands both
+                // operands straight to `By_BoxInt`, whose first act on a value
+                // behind a pointer is to retain it. so the helper owns what it was
+                // lent before it can allocate, call out or release.
+                //
+                // it releases again on the way back, though, and that release can
+                // be the last one. so unlike a field read this has to be the value's
+                // final use: a second one would read what the first let go of
+                Op::IntBinary { lhs, rhs, .. }
+                    if Some(index) == last_read
+                        && is_tagged_int(function, lhs)
+                        && is_tagged_int(function, rhs) => {}
                 _ => return false,
             }
             used = true;
@@ -545,6 +593,15 @@ fn reads(operand: &Value, register: RegisterId) -> bool {
     matches!(operand, Value::Register(id) if *id == register)
 }
 
+/// whether a value is one of the tagged integers the `By_Int*` helpers take
+///
+/// the helper a lowered [`Op::IntBinary`] reaches depends on the representation:
+/// a fixed-width operand is plain machine arithmetic, and only the tagged form
+/// goes through the family that retains what it is handed
+fn is_tagged_int(function: &Function, value: &Value) -> bool {
+    function.value_type(value) == Some(RType::INT)
+}
+
 /// whether an operation can neither allocate, call out, nor release a reference
 ///
 /// anything not named here is assumed to be able to do all three. the ones that
@@ -574,7 +631,7 @@ mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
     use by_ir::ops::{BinOp, Terminator};
-    use by_ir::rtype::RType;
+    use by_ir::rtype::{IntWidth, RType};
     use by_ir::verify::verify;
 
     fn module(function: Function) -> ModuleIr {
@@ -630,6 +687,84 @@ mod tests {
         // the value that leaves the function must still be owned
         assert!(!function.registers[2].borrowed);
         assert_eq!(verify(function), Ok(()));
+    }
+
+    /// `self.base + k`, the body of a method reached through an instance
+    fn field_plus(uses: usize) -> Function {
+        let mut builder = FunctionBuilder::new("step", RType::INT);
+        let receiver = builder.param("self", nested());
+        let k = builder.param("k", RType::INT);
+        let field = builder.temp(RType::INT);
+        builder.push(Op::GetField {
+            dest: field,
+            receiver: Value::Register(receiver),
+            class: "Holder".to_string(),
+            field: "base".to_string(),
+        });
+        let mut sum = field;
+        for _ in 0..uses {
+            let dest = builder.temp(RType::INT);
+            builder.push(Op::IntBinary {
+                dest,
+                op: BinOp::Add,
+                lhs: Value::Register(field),
+                rhs: Value::Register(k),
+            });
+            sum = dest;
+        }
+        builder.terminate(Terminator::Return(Value::Register(sum)));
+        builder.finish()
+    }
+
+    #[test]
+    fn a_field_read_consumed_by_tagged_arithmetic_borrows() {
+        let mut m = module(field_plus(1));
+        run(&mut m);
+        let function = &m.functions[0];
+        assert!(
+            function.registers[2].borrowed,
+            "the field read is handed to `By_IntAdd`, which retains it before it can \
+             allocate"
+        );
+        // what the arithmetic produced is this frame's own, and leaves it
+        assert!(!function.registers[3].borrowed);
+        assert_eq!(verify(function), Ok(()));
+    }
+
+    #[test]
+    fn a_field_read_read_twice_by_tagged_arithmetic_does_not_borrow() {
+        // the first `By_IntAdd` releases what it was lent on the way out, and that
+        // release can be the last one — so the second would read freed memory
+        let mut m = module(field_plus(2));
+        run(&mut m);
+        assert!(!m.functions[0].registers[2].borrowed);
+    }
+
+    #[test]
+    fn a_field_read_consumed_by_untagged_arithmetic_does_not_borrow() {
+        // a fixed-width operand is machine arithmetic rather than the `By_Int*`
+        // family, so nothing here promises to retain what it was lent
+        let mut builder = FunctionBuilder::new("step", RType::INT);
+        let receiver = builder.param("self", nested());
+        let k = builder.param("k", RType::Primitive(Primitive::Fixed(IntWidth::I64)));
+        let field = builder.temp(RType::INT);
+        let sum = builder.temp(RType::INT);
+        builder.push(Op::GetField {
+            dest: field,
+            receiver: Value::Register(receiver),
+            class: "Holder".to_string(),
+            field: "base".to_string(),
+        });
+        builder.push(Op::IntBinary {
+            dest: sum,
+            op: BinOp::Add,
+            lhs: Value::Register(field),
+            rhs: Value::Register(k),
+        });
+        builder.terminate(Terminator::Return(Value::Register(sum)));
+        let mut m = module(builder.finish());
+        run(&mut m);
+        assert!(!m.functions[0].registers[2].borrowed);
     }
 
     #[test]

@@ -238,6 +238,11 @@ impl Binding {
 
 /// a compiled function
 #[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the lint guards against confusable positional arguments, and every one of \
+              these is written by name"
+)]
 pub struct Function {
     /// the name as written in source, used for the python-visible surface
     pub name: String,
@@ -329,6 +334,33 @@ pub struct Function {
     ///   do the same on its way out, or an `except StopIteration` around the `await`
     ///   would start catching what it never caught
     pub coroutine_body: Option<String>,
+    /// the docstring, where the definition opens with one.
+    ///
+    /// python answers `f.__doc__` with the leading string literal of the body, and
+    /// `typing._SpecialForm` is one of the callers that reads another function's:
+    /// it takes `__doc__` off the `__getitem__` it is handed and makes it the form's.
+    /// so this is not only documentation — a definition that loses it can change what
+    /// a program computes.
+    ///
+    /// never holds a NUL. `ml_doc` is a `const char *` and python builds the string from
+    /// it with `PyUnicode_FromString`, which stops at the first NUL, so a docstring with
+    /// one in it has no faithful spelling in a method table — neither the truncation nor
+    /// the `None` that stands in for an absent docstring is what the definition says. the
+    /// frontend declines such a function outright rather than compile it to either
+    pub doc: Option<String>,
+    /// whether the body takes a weak reference of a value it cannot see the origin of
+    ///
+    /// an emitted instance *is* its layout and a type spec adds no `__weakref__`, so a
+    /// weak reference of one raises `TypeError` where python hands back a reference. the
+    /// frontend refuses that outright wherever the argument is one this module lays out,
+    /// and sets this wherever it is not — `logging`'s `_addHandlerRef(handler)` is handed
+    /// its target by whoever called it, and the `weakref.ref` is a whole function away
+    /// from the `Handler.__init__` that would raise.
+    ///
+    /// so what one frame cannot settle is settled across the module's call graph
+    /// instead: a frame that hands one of these an instance of a class this module lays
+    /// out is the frame that declines, and declining it takes its class with it
+    pub takes_a_weak_reference: bool,
 }
 
 impl Function {
@@ -480,18 +512,29 @@ pub struct FieldDecl {
 }
 
 impl FieldDecl {
-    /// the C member name
+    /// whether this field is one the compiler made up rather than one the source wrote
     ///
-    /// a generated field is named with a `$` so it cannot collide with a source
-    /// name, and `$` is not a portable C identifier character — msvc rejects it
+    /// every generated field carries a `$` — `$state`, `$outer`, `$park4` — and no python
+    /// identifier can, which is what makes the question answerable from the name alone
+    fn generated(&self) -> bool {
+        self.name.contains('$')
+    }
+
     /// the C struct member this field is stored in
     ///
     /// prefixed, and unconditionally: a python attribute may be called `int`, `const`
     /// or `default`, and a struct member of that name is not C at all. a list of the
     /// reserved words would have to be kept correct against every C version and
     /// compiler extension forever; a prefix cannot collide with any of them
+    ///
+    /// the prefix also says whether the name was [generated](Self::generated), and it has
+    /// to. `$` is not a portable C identifier character — msvc rejects it — so [`mangle`]
+    /// turns it into `_`, which is exactly the character a source name may hold: `$state`
+    /// and a local called `_state` both came out as `by_f__state`, and a generator taking
+    /// a parameter of that name declared one struct member twice and failed the *build*.
+    /// separating the two prefixes is what the `$` was already meant to be doing
     pub fn member(&self) -> String {
-        format!("by_f_{}", mangle(&self.name))
+        format!("{}{}", self.member_prefix("f"), mangle(&self.name))
     }
 
     /// the C struct member holding whether this field has been written
@@ -499,7 +542,12 @@ impl FieldDecl {
     /// only an [optional](Self::optional) field has one. zero means absent, and
     /// `tp_alloc` zeroes the instance, so "never written" needs no constructor work
     pub fn presence(&self) -> String {
-        format!("by_p_{}", mangle(&self.name))
+        format!("{}{}", self.member_prefix("p"), mangle(&self.name))
+    }
+
+    fn member_prefix(&self, kind: &str) -> String {
+        let generated = if self.generated() { "g" } else { "" };
+        format!("by_{generated}{kind}_")
     }
 }
 
@@ -871,6 +919,30 @@ pub struct ModuleIr {
     /// replacement for it — see [`FallbackCode`] for what an interpreter has to
     /// match before it may use one
     pub fallback_code: Option<FallbackCode>,
+    /// the python forwarders this module publishes under its function names, when
+    /// the build wrote any.
+    ///
+    /// a `PyCFunction` is not a descriptor, so a module publishing one hands out a
+    /// callable that never receives a receiver when it is installed on a class —
+    /// which is what `functools.total_ordering` does. the forwarders are real
+    /// `function` objects, written into the interpreted twin's source so that the
+    /// interpreter compiles them, and installed over the native objects at init
+    pub shims: Option<ShimInstall>,
+}
+
+/// what the artefact has to do to publish a module's forwarders
+///
+/// the source that defines them is part of [`ModuleIr::fallback_source`] — this is
+/// only the handle: the name module init calls, and the functions whose native
+/// objects it is handed, in order
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShimInstall {
+    /// the module-level name the installer is bound to while init runs. it is
+    /// deleted again immediately, so nothing outside the import ever sees it
+    pub installer: String,
+    /// the module-level functions the installer publishes a forwarder for, in the
+    /// order it expects their native objects
+    pub functions: Vec<String>,
 }
 
 /// a module body compiled to a code object, and what an interpreter has to match
@@ -927,6 +999,72 @@ pub struct Declined {
     /// a decline is the compiler's main output for the code it did *not* take, so
     /// it should point at that code the way any other diagnostic does
     pub range: Option<(u32, u32)>,
+}
+
+/// the docstring as python 3.13 and later store it, which is not the literal as written
+///
+/// from 3.13 the compiler *cleans* a docstring before it becomes `__doc__`: tabs are
+/// expanded to eight-column stops, the first line loses its leading spaces outright, and
+/// every line below it loses the indentation they all share. so the string the source
+/// holds and the string `__doc__` answers with are two different strings, and a compiled
+/// definition emitting the literal would disagree with its own interpreted twin about
+/// every docstring written the way docstrings are usually written.
+///
+/// python 3.12 and earlier store the literal untouched, which is why codegen carries both
+/// spellings and lets the interpreter's own version pick — see `BY_DOC` in `by.h`
+pub fn cleaned_doc(raw: &str) -> String {
+    let expanded = expand_tabs(raw);
+    let mut lines = expanded.split('\n');
+    // the first line is where the definition's own indentation is not, because the
+    // opening quotes stand in front of it — so all of its leading spaces go, rather than
+    // the shared amount
+    let first = lines.next().unwrap_or_default().trim_start_matches(' ');
+    let rest: Vec<&str> = lines.collect();
+
+    // a line of nothing but spaces says nothing about the indentation the others share,
+    // and counting it would drag the margin down to its own length
+    let margin = rest
+        .iter()
+        .filter(|line| !line.chars().all(|ch| ch == ' '))
+        .map(|line| line.len() - line.trim_start_matches(' ').len())
+        .min()
+        .unwrap_or(0);
+
+    let mut out = String::with_capacity(expanded.len());
+    out.push_str(first);
+    for line in rest {
+        out.push('\n');
+        // *up to* the margin: a blank line with less indentation than it simply loses
+        // what it has
+        let leading = line.len() - line.trim_start_matches(' ').len();
+        out.push_str(&line[leading.min(margin)..]);
+    }
+    out
+}
+
+/// `str.expandtabs()`, at python's default width of eight
+///
+/// the column is counted in characters and restarts at either `\n` or `\r`, which is
+/// what python's own does — a docstring holding a lone `\r` is rare but it is not the
+/// same string if the count carries across one
+fn expand_tabs(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut column = 0usize;
+    for ch in text.chars() {
+        if ch == '\t' {
+            let width = 8 - column % 8;
+            out.extend(std::iter::repeat_n(' ', width));
+            column += width;
+        } else {
+            out.push(ch);
+            column = if ch == '\n' || ch == '\r' {
+                0
+            } else {
+                column + 1
+            };
+        }
+    }
+    out
 }
 
 /// the qualified name a `CallNative` target resolves to
@@ -1025,6 +1163,7 @@ impl ModuleIr {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         }
     }
 
@@ -1195,6 +1334,8 @@ mod tests {
             defaults_held_by: DefaultsHeldBy::Twin,
             binding: Binding::Instance,
             coroutine_body: None,
+            doc: None,
+            takes_a_weak_reference: false,
         }
     }
 
@@ -1325,6 +1466,65 @@ mod tests {
     fn only_the_fallible_convention_can_fail() {
         assert!(CallConvention::Native.can_fail());
         assert!(!CallConvention::NativeInfallible.can_fail());
+    }
+
+    /// every pair here was read off cpython, by compiling a `def` whose body is the
+    /// literal on the left and printing the `__doc__` it produced. 3.13, 3.14 and 3.15
+    /// all answer the right-hand side; 3.12 answers the left-hand side unchanged, which
+    /// is the whole reason both spellings are carried
+    #[test]
+    fn a_docstring_is_cleaned_the_way_python_cleans_one() {
+        for (raw, cleaned) in [
+            ("plain", "plain"),
+            ("", ""),
+            ("   ", ""),
+            ("\n", "\n"),
+            ("one\n", "one\n"),
+            // tabs go to eight-column stops, counted from the start of the line
+            ("a\tb", "a       b"),
+            ("\ttabfirst", "tabfirst"),
+            // the first line loses every leading space, the rest lose what they share
+            (
+                "  leading spaces on first line\n    second",
+                "leading spaces on first line\nsecond",
+            ),
+            ("first\n    second\n    third", "first\nsecond\nthird"),
+            ("first\n  two\n      six\n", "first\ntwo\n    six\n"),
+            (
+                "first\nnomargin\n    indented",
+                "first\nnomargin\n    indented",
+            ),
+            // a line of nothing but spaces says nothing about the shared indentation,
+            // and is emptied rather than counted
+            ("first\n\n    second", "first\n\nsecond"),
+            ("first\n   \n    second", "first\n\nsecond"),
+            (
+                "\n    leading newline\n    more\n    ",
+                "\nleading newline\nmore\n",
+            ),
+            // the tab expansion happens first, so a tab-indented line has eight spaces
+            // to compare against a space-indented one
+            ("first\n\tsecond\n\tthird", "first\nsecond\nthird"),
+            (
+                "first\n    second\n\ttab-indented",
+                "first\nsecond\n    tab-indented",
+            ),
+            // trailing spaces are nobody's indentation and stay
+            (
+                "trailing spaces   \n    second   ",
+                "trailing spaces   \nsecond   ",
+            ),
+            // lines are separated by `\n` alone, so a `\r` is content the line before
+            // it keeps — it only resets the column the tabs are counted in
+            ("first\r\n    second", "first\r\nsecond"),
+            // only an ascii space is indentation
+            (
+                "first\n \u{a0} nbsp indent\n  plain",
+                "first\n\u{a0} nbsp indent\n plain",
+            ),
+        ] {
+            assert_eq!(cleaned_doc(raw), cleaned, "cleaning {raw:?}");
+        }
     }
 }
 

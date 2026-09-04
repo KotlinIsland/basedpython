@@ -22,13 +22,13 @@
 //! the caller receives an owned reference. this is not the code an optimizer would
 //! produce; it is code whose correctness can be read off locally.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write;
 use std::ptr;
 
 use by_ir::function::{
     Binding, ClassBase, ClassIr, Function, KeywordValue, ModuleIr, PropertyIr, RegisterDecl,
-    SlotAlias, Surface,
+    SlotAlias, Surface, cleaned_doc,
 };
 use by_ir::ops::{BinOp, BlockId, CmpOp, Mutation, Op, RegisterId, Terminator, UnaryOp, Value};
 use by_ir::rtype::{Primitive, RType, tuple_mangle};
@@ -166,8 +166,21 @@ pub fn emit_module(module: &ModuleIr) -> String {
         out.push('\n');
     }
 
-    for tuple in collect_tuples(module) {
-        out.push_str(&emit_tuple_struct(module, &tuple));
+    // the names of the instance structs, ahead of everything that spells one. an
+    // instance is only ever a *pointer* to its struct, so a name is all any of them
+    // needs, and the definitions cannot come first: a tuple struct may hold an
+    // instance in a slot and a class field may be a tuple, so neither group can be
+    // written before the other
+    for class in &module.classes {
+        let name = class.struct_name(module.name.dotted());
+        let _ = writeln!(out, "typedef struct {name} {name};");
+    }
+    if !module.classes.is_empty() {
+        out.push('\n');
+    }
+
+    for tuple in collect_tuples(module).values() {
+        out.push_str(&emit_tuple_struct(module, tuple));
     }
 
     // a string literal is interned once at module init and read as a *borrowed*
@@ -305,11 +318,16 @@ pub fn emit_module(module: &ModuleIr) -> String {
 
 /// every distinct fixed-length tuple layout the module mentions, so each gets one
 /// struct definition
-fn collect_tuples(module: &ModuleIr) -> BTreeSet<Vec<RType>> {
-    let mut tuples = BTreeSet::new();
-    let visit = |ty: &RType, tuples: &mut BTreeSet<Vec<RType>>| {
+///
+/// keyed by the name the struct will carry rather than by the slot types, because one
+/// name can only be defined once. the two part company at an instance slot, which is
+/// the same pointer to the same struct whether or not the register type it came from
+/// was the exact one — a set of slot types would ask for that struct twice
+fn collect_tuples(module: &ModuleIr) -> BTreeMap<String, Vec<RType>> {
+    let mut tuples = BTreeMap::new();
+    let visit = |ty: &RType, tuples: &mut BTreeMap<String, Vec<RType>>| {
         if let RType::Tuple(items) = ty {
-            tuples.insert(items.to_vec());
+            tuples.insert(tuple_mangle(items), items.to_vec());
         }
     };
     // every function, methods included: a struct the emitter never declares is a
@@ -478,7 +496,7 @@ fn emit_collected_instance(module: &ModuleIr, class: &ClassIr) -> String {
          \x20   return 0;\n}}\n\n\
          static int {type_name}_clear({struct_name} *self) {{\n\
          {clears}\
-         \x20   Py_CLEAR(self->{BY_DICT_MEMBER});\n\
+         \x20   By_ReleaseInstanceDict(&self->{BY_DICT_MEMBER});\n\
          \x20   return 0;\n}}\n\n"
     )
 }
@@ -619,8 +637,10 @@ fn emit_class_struct(module: &ModuleIr, class: &ClassIr) -> String {
     } else {
         "    PyObject_HEAD\n"
     };
+    // the tag only — the typedef of the same name was written ahead of the tuple
+    // structs, and repeating it is not something every C dialect accepts
     let mut out = format!(
-        "typedef struct {} {{\n{header}",
+        "struct {} {{\n{header}",
         class.struct_name(module.name.dotted())
     );
     // before the fields, so that every class in one chain agrees on where they start:
@@ -647,7 +667,7 @@ fn emit_class_struct(module: &ModuleIr, class: &ClassIr) -> String {
             let _ = writeln!(out, "    char {};", field.presence());
         }
     }
-    let _ = writeln!(out, "}} {};", class.struct_name(module.name.dotted()));
+    out.push_str("};\n");
     out
 }
 
@@ -695,7 +715,7 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
             );
         }
         if keeps_a_dict {
-            let _ = writeln!(out, "    Py_CLEAR(self->{BY_DICT_MEMBER});");
+            let _ = writeln!(out, "    By_ReleaseInstanceDict(&self->{BY_DICT_MEMBER});");
         }
         // a return nobody asked for still owns its value: a generator dropped between
         // its frame finishing and the finish being read leaves one here
@@ -828,6 +848,15 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
         if field.optional {
             let _ = writeln!(out, "      {storage}->{} = 1;", field.presence());
         }
+        // a fresh instance has published nothing, but `o.__init__(...)` runs this a
+        // second time over an object that may have handed a mapping out
+        out.push_str(&publish_field(
+            module,
+            class,
+            "self",
+            field,
+            &format!("{storage}->{}", field.member()),
+        ));
         out.push_str("    }\n");
     }
     out.push_str("    return 0;\n}\n\n");
@@ -1090,7 +1119,12 @@ fn mark_present(field: &by_ir::function::FieldDecl, storage: &str) -> String {
 /// deallocation safe — it releases every field unconditionally, relying on the zero
 /// `tp_alloc` left being harmless for each representation, and a member left dangling
 /// behind a cleared byte would be released a second time there
-fn delete_field(module: &ModuleIr, field: &by_ir::function::FieldDecl, storage: &str) -> String {
+fn delete_field(
+    module: &ModuleIr,
+    owner: &ClassIr,
+    field: &by_ir::function::FieldDecl,
+    storage: &str,
+) -> String {
     if !field.optional {
         return "\x20   if (by_value == NULL) {\n\
                 \x20       PyErr_SetString(PyExc_AttributeError, \"cannot delete an attribute\");\n\
@@ -1108,12 +1142,25 @@ fn delete_field(module: &ModuleIr, field: &by_ir::function::FieldDecl, storage: 
          \x20       {ty} by_old = {storage}->{member};\n\
          \x20       memset(&{storage}->{member}, 0, sizeof({storage}->{member}));\n\
          \x20       {storage}->{presence} = 0;\n\
+         {unpublish}\
          {release}\
          \x20       return 0;\n\
          \x20   }}\n",
         presence = field.presence(),
         name = c_string(&field.name),
         ty = ctype(module, &field.ty),
+        // before the release, for the reason the order above is what it is: a `__del__`
+        // the release runs can read this instance, and it must not find the mapping
+        // still naming an attribute the object has already given up
+        unpublish = if reserves_dict_word(module, owner) {
+            format!(
+                "\x20       if (BY_UNLIKELY(By_HasPublishedDict({storage}->{BY_DICT_MEMBER})))\n\
+                 \x20           By_UnpublishedField({storage}->{BY_DICT_MEMBER}, {});\n",
+                c_string(&field.name)
+            )
+        } else {
+            String::new()
+        },
     )
 }
 
@@ -1219,16 +1266,29 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20   {}\n\
              \x20   self->{} = by_v;\n\
              {}\
+             {}\
              \x20   return 0;\n}}\n",
             field.name,
             bind_self(module, field_owner(module, class, &field.name), "selfobj"),
-            delete_field(module, field, "self"),
+            delete_field(
+                module,
+                field_owner(module, class, &field.name),
+                field,
+                "self"
+            ),
             ctype(module, &field.ty),
             unbox_checked(module, &field.ty, "by_value"),
             error_check(&field.ty, "by_v"),
             release_old(field, "self"),
             field.member(),
-            mark_present(field, "self")
+            mark_present(field, "self"),
+            publish_field(
+                module,
+                field_owner(module, class, &field.name),
+                "self",
+                field,
+                &format!("self->{}", field.member())
+            )
         );
     }
     // the halves of a `@property`, as the two or three callables python builds one
@@ -1248,6 +1308,46 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                  \x20   {{{}, (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS, NULL}};",
                 c_string(&property.name),
                 function.wrapper_symbol(module.name.dotted())
+            );
+        }
+    }
+    // the layout names an instance's `__dict__` has to answer with, and how to ask each
+    // whether the instance has one of its own. a field standing beside a class-level value
+    // carries its own presence predicate, because reading such an attribute answers with
+    // the *class's* value where the instance never wrote one and python's `__dict__` names
+    // no class attribute; every other field reports its absence by raising
+    if publishes_a_dict_view(module, class) {
+        let _ = writeln!(
+            out,
+            "static const By_DictField {type_name}_dictfields[] = {{"
+        );
+        for field in &class.fields {
+            let present = if field_default(module, class, field).is_some() {
+                format!("{type_name}_has_{}", field.name)
+            } else {
+                "NULL".to_string()
+            };
+            let _ = writeln!(out, "    {{{}, {present}}},", c_string(&field.name));
+        }
+        let _ = write!(
+            out,
+            "    {{NULL, NULL}}\n}};\n\
+             static PyObject *{type_name}_get___dict__(PyObject *selfobj, void *closure) {{\n\
+             \x20   (void)closure;\n\
+             \x20   return By_InstanceDict(selfobj, {type_name}_dictfields);\n}}\n\
+             static int {type_name}_set___dict__(PyObject *selfobj, PyObject *by_value, void *closure) {{\n\
+             \x20   (void)closure;\n\
+             \x20   return By_InstanceDictReplace(selfobj, {type_name}_dictfields, by_value);\n}}\n"
+        );
+        // python's own `__getstate__` reads the dict word directly, which on an emitted
+        // instance names the extra attributes and none of the class's own — so `copy` and
+        // `pickle` would be handed half an object's state, quietly
+        if publishes_a_state_method(module, class) {
+            let _ = write!(
+                out,
+                "static PyObject *{type_name}_getstate(PyObject *selfobj, PyObject *by_unused) {{\n\
+                 \x20   (void)by_unused;\n\
+                 \x20   return By_InstanceState(selfobj, {type_name}_dictfields);\n}}\n"
             );
         }
     }
@@ -1274,15 +1374,22 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             field.name, field.name
         );
     }
-    // a class keeping an instance dict answers `__dict__` with it — but only where the
-    // dict is the whole of an instance's state. a class with fields of its own keeps
-    // them in its layout, and a mapping that named none of them would be an *empty*
-    // answer where the interpreted class gives a full one: quiet, and wrong. the
-    // refusal such a class already gives is at least loud
-    if instance_dict(module, class) && class.fields.is_empty() {
-        out.push_str(
-            "    {\"__dict__\", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},\n",
-        );
+    // a class whose whole state is the dict answers `__dict__` with the dict itself,
+    // which is exactly what python answers with. a class with fields of its own keeps
+    // them in its layout, where that dict names none of them — so it answers with a view
+    // over both halves instead. handing back the dict there would be an *empty* mapping
+    // where the interpreted class gives a full one: quiet, and wrong
+    if instance_dict(module, class) {
+        if class.fields.is_empty() {
+            out.push_str(
+                "    {\"__dict__\", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},\n",
+            );
+        } else {
+            let _ = writeln!(
+                out,
+                "    {{\"__dict__\", {type_name}_get___dict__, {type_name}_set___dict__, NULL, NULL}},"
+            );
+        }
     }
     out.push_str("    {NULL, NULL, NULL, NULL, NULL}\n};\n\n");
 
@@ -1418,33 +1525,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         );
     }
     let _ = writeln!(out, "static PyMethodDef {type_name}_methods[] = {{");
-    if class.generic {
-        let _ = writeln!(
-            out,
-            "    {{\"__class_getitem__\", (PyCFunction){type_name}_class_getitem, METH_O | METH_CLASS, NULL}},"
-        );
-    }
-    if class.resume.is_some() {
-        let _ = writeln!(
-            out,
-            "    {{\"send\", (PyCFunction)(void(*)(void)){type_name}_send, METH_FASTCALL, NULL}},\n\
-             \x20   {{\"throw\", (PyCFunction)(void(*)(void)){type_name}_throw, METH_FASTCALL, NULL}},\n\
-             \x20   {{\"close\", (PyCFunction)(void(*)(void)){type_name}_close, METH_FASTCALL, NULL}},"
-        );
-    }
-    // an async generator's cleanup is asked for through an *awaitable*, which is the
-    // same shape `__anext__` hands back
-    if class
-        .resume
-        .as_ref()
-        .is_some_and(|resume| resume.surface == Surface::AsyncGenerator)
-    {
-        let _ = writeln!(
-            out,
-            "    {{\"aclose\", (PyCFunction)(void(*)(void)){type_name}_aclose, METH_FASTCALL, NULL}},\n\
-             \x20   {{\"asend\", (PyCFunction)(void(*)(void)){type_name}_do_asend, METH_FASTCALL, NULL}},\n\
-             \x20   {{\"athrow\", (PyCFunction)(void(*)(void)){type_name}_do_athrow, METH_FASTCALL, NULL}},"
-        );
+    for entry in synthetic_table_entries(class, &type_name) {
+        let _ = writeln!(out, "{entry}");
     }
     for method in class.table_methods() {
         // `METH_STATIC` and `METH_CLASS` are masked off before the calling convention
@@ -1453,14 +1535,23 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         // `classmethod_descriptor` rather than a plain `method_descriptor`
         let _ = writeln!(
             out,
-            "    {{\"{}\", (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS{}, NULL}},",
+            "    {{\"{}\", (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS{}, {}}},",
             method.name,
             method.wrapper_symbol(module.name.dotted()),
             method
                 .binding
                 .method_flag()
                 .map(|flag| format!(" | {flag}"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            method_doc(method)
+        );
+    }
+    // after the class's own, so that nothing counting entries in the table moves —
+    // `MakeClosure` takes the address of one
+    if publishes_a_state_method(module, class) {
+        let _ = writeln!(
+            out,
+            "    {{\"__getstate__\", (PyCFunction){type_name}_getstate, METH_NOARGS, NULL}},"
         );
     }
     out.push_str("    {NULL, NULL, 0, NULL}\n};\n\n");
@@ -1908,8 +1999,65 @@ fn instance_dict(module: &ModuleIr, class: &ClassIr) -> bool {
         && (decorated_chain(module, class) || !slots_declared_throughout(module, class))
 }
 
+/// whether this class answers `__dict__` with a view over its layout as well as its dict
+///
+/// a class keeping a dict and no fields has nothing outside that dict, so python's own
+/// answer — the dict — is the whole of the mapping. every other class keeps its attributes
+/// in two places at once, and only a view over both is the mapping python promises
+fn publishes_a_dict_view(module: &ModuleIr, class: &ClassIr) -> bool {
+    instance_dict(module, class) && !class.fields.is_empty()
+}
+
+/// whether this class answers `__getstate__` over the whole of an instance's state
+///
+/// only where the object keeps state outside the dict python's own answer reads, and only
+/// where the source wrote no answer of its own
+fn publishes_a_state_method(module: &ModuleIr, class: &ClassIr) -> bool {
+    publishes_a_dict_view(module, class)
+        && !class
+            .methods
+            .iter()
+            .any(|method| method.name == "__getstate__")
+}
+
 /// the struct member holding an instance's dict
 const BY_DICT_MEMBER: &str = "by_dict";
+
+/// tell a published `__dict__` what a layout field now holds
+///
+/// an emitted instance's storage is its layout, and this changes nothing about that: a
+/// field read is still a load at a compile-time offset with no test in front of it. what
+/// this keeps right is a mapping somebody is *holding* — `__dict__` hands one out and
+/// installs it as the object's dict word, and a field written afterwards has to reach it
+/// or the mapping goes on naming what the field held before. that is a wrong answer
+/// nothing marks, which is worse than any refusal.
+///
+/// the word is NULL for an instance nobody has asked for a `__dict__` or written a stray
+/// attribute on, which is nearly every instance, so what a write pays there is one load
+/// and a branch that is never taken. nothing at all is added to a field *read*.
+///
+/// `storage` is a pointer to a struct in the receiver's chain, and every rung of a chain
+/// puts the word at the same offset — see [`reserves_dict_word`] — so any of them reaches
+/// it. `held` is the member expression the write has just filled, read back rather than
+/// reused: an unboxed field keeps a representation of its own, and `x = 3` on a float
+/// field is `3.0`
+fn publish_field(
+    module: &ModuleIr,
+    owner: &ClassIr,
+    storage: &str,
+    field: &by_ir::function::FieldDecl,
+    held: &str,
+) -> String {
+    if !reserves_dict_word(module, owner) {
+        return String::new();
+    }
+    format!(
+        "    if (BY_UNLIKELY(By_HasPublishedDict({storage}->{BY_DICT_MEMBER})))\n\
+         \x20       By_PublishedField({storage}->{BY_DICT_MEMBER}, {}, {});\n",
+        c_string(&field.name),
+        box_borrowed(&field.ty, held),
+    )
+}
 
 /// the table naming what an instance of this class keeps, or `None` for a class whose
 /// instances cannot be moved onto the emitted type
@@ -3204,6 +3352,48 @@ fn fills_slot(class: &ClassIr, name: &str) -> bool {
         || slot_companion(name).is_some_and(|other| answers_slot(class, other))
 }
 
+/// the names an emitted type publishes that the class body never wrote
+///
+/// `PyType_Ready` adds a wrapper descriptor for every name a filled slot backs, and three
+/// slots back more than one name: `tp_richcompare` backs all six comparisons, each binary
+/// number slot backs an operator and its reflection, and `mp_ass_subscript` backs
+/// `__setitem__` along with `__delitem__`. so a class writing `__lt__` is published as
+/// having all six, and anything reading the class *by name* is told about methods the
+/// `class` statement never wrote — which is not what an interpreted class of the same
+/// body would have said
+fn published_beyond_the_body(class: &ClassIr) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    if COMPARISONS
+        .iter()
+        .any(|(name, _)| answers_slot(class, name))
+    {
+        names.extend(
+            COMPARISONS
+                .iter()
+                .map(|(name, _)| *name)
+                .filter(|name| !answers_slot(class, name)),
+        );
+    }
+    for (name, reflected, _, _) in ARITHMETIC.iter().copied().chain([POWER]) {
+        for (written, published) in [(name, reflected), (reflected, name)] {
+            if answers_slot(class, written) && !answers_slot(class, published) {
+                names.push(published);
+            }
+        }
+    }
+    for name in ["__setitem__"] {
+        let Some(companion) = slot_companion(name) else {
+            continue;
+        };
+        if answers_slot(class, name) && !answers_slot(class, companion) {
+            names.push(companion);
+        } else if answers_slot(class, companion) && !answers_slot(class, name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
 /// `mp_ass_subscript`, which `__setitem__` and `__delitem__` share
 ///
 /// a NULL value is `del obj[key]`. a class with only one of the two still fills
@@ -3418,9 +3608,15 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
                 filler.call(module, "self", "by_argv", 1)
             );
         }
-        // a comparison the class does not define is not an error: answering
-        // `NotImplemented` is what lets the other operand's type try
-        out.push_str("    }\n    Py_RETURN_NOTIMPLEMENTED;\n}\n");
+        // a comparison the class does not define belongs to whatever the base would have
+        // answered it with, because this slot took the whole group over from the base by
+        // being filled at all. `object`'s is where `!=` gets its meaning — negate
+        // `__eq__` — so a class writing only `__eq__` answered `x != x` as `True` here
+        // while the interpreted one answered `False`
+        let _ = write!(
+            out,
+            "    }}\n    return By_BaseRichCompare({type_name}_OBJ, self, other, op);\n}}\n"
+        );
     }
 
     for (name, reflected, _, field) in ARITHMETIC {
@@ -4157,8 +4353,75 @@ fn object_expr(function: &Function, value: &Value) -> String {
     }
 }
 
+/// the entries the emitted method table carries *before* the class's own methods
+///
+/// the table is these followed by [`ClassIr::table_methods`], which drops `__new__` and the
+/// halves of a property. anything that wants to *point* at an entry has to count the same
+/// way — `MakeClosure` takes the address of one — so both the emission and the index read
+/// this one list rather than each deriving the shape from the class. they did not, and the
+/// index was taken from the unfiltered `methods` with no prefix at all: right only for a
+/// class that is neither generic nor resumable and whose methods are all in the table, which
+/// is every closure environment built so far and is not a rule anything states
+fn synthetic_table_entries(class: &by_ir::function::ClassIr, type_name: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    if class.generic {
+        out.push(format!(
+            "    {{\"__class_getitem__\", (PyCFunction){type_name}_class_getitem, METH_O | METH_CLASS, NULL}},"
+        ));
+    }
+    if class.resume.is_some() {
+        for (name, symbol) in [("send", "send"), ("throw", "throw"), ("close", "close")] {
+            out.push(format!(
+                "    {{\"{name}\", (PyCFunction)(void(*)(void)){type_name}_{symbol}, METH_FASTCALL, NULL}},"
+            ));
+        }
+    }
+    // an async generator's cleanup is asked for through an *awaitable*, which is the same
+    // shape `__anext__` hands back
+    if class
+        .resume
+        .as_ref()
+        .is_some_and(|resume| resume.surface == Surface::AsyncGenerator)
+    {
+        for (name, symbol) in [
+            ("aclose", "aclose"),
+            ("asend", "do_asend"),
+            ("athrow", "do_athrow"),
+        ] {
+            out.push(format!(
+                "    {{\"{name}\", (PyCFunction)(void(*)(void)){type_name}_{symbol}, METH_FASTCALL, NULL}},"
+            ));
+        }
+    }
+    out
+}
+
 fn c_string(text: &str) -> String {
     c_byte_string(text.as_bytes())
+}
+
+/// a method table entry's `ml_doc`, which is `NULL` where the definition had no
+/// docstring
+///
+/// both spellings where the two differ, because what `__doc__` holds is the literal on
+/// python 3.12 and the cleaned form from 3.13 — the emitted C says the same thing
+/// whichever interpreter builds it, and `BY_DOC` is where the version chooses.
+///
+/// chunked, because a docstring is the one piece of text here with no bound on its
+/// length and MSVC stops a single literal at 16380 bytes
+fn method_doc(function: &Function) -> String {
+    let Some(raw) = &function.doc else {
+        return "NULL".to_string();
+    };
+    let cleaned = cleaned_doc(raw);
+    if cleaned == *raw {
+        return c_string_chunked(raw);
+    }
+    format!(
+        "BY_DOC({},\n{})",
+        c_string_chunked(raw),
+        c_string_chunked(&cleaned)
+    )
 }
 
 /// a C string literal *and* the byte count it stands for, as one argument pair
@@ -5434,10 +5697,17 @@ fn emit_op(
             else {
                 return String::new();
             };
+            // the index has to be into the *emitted* table, which is the synthetic
+            // entries followed by `table_methods` — not into `methods`, which still
+            // holds the `__new__` and property halves the table leaves out
             let Some(index) = owner
-                .methods
-                .iter()
+                .table_methods()
                 .position(|candidate| candidate.name == *method)
+                .map(|position| {
+                    position
+                        + synthetic_table_entries(owner, &owner.type_name(module.name.dotted()))
+                            .len()
+                })
             else {
                 return String::new();
             };
@@ -5832,6 +6102,11 @@ fn emit_op(
             {
                 let _ = writeln!(out, "    {}->{} = 1;", fields, decl.presence());
             }
+            if let Some(owner) = class_named(module, class)
+                && let Some(decl) = field_decl(module, class, field)
+            {
+                out.push_str(&publish_field(module, owner, &fields, decl, &target));
+            }
             out
         }
         Op::GetAttr {
@@ -5925,6 +6200,10 @@ fn emit_op(
         } => {
             let call = match function.value_type(index) {
                 Some(RType::INT) => "By_GetItemTagged",
+                // an unboxed counter names the element by the number already in
+                // its register, so it does not have to become a tagged `int`
+                // first — see `By_GetItemI64`
+                Some(RType::Primitive(Primitive::Fixed(_))) => "By_GetItemI64",
                 _ => "By_GetItem",
             };
             let expr = format!("{call}({}, {})", value_expr(container), value_expr(index));
@@ -6104,13 +6383,14 @@ fn emit_op(
             dest,
             message,
             category,
+            stacklevel,
             offset,
         } => {
             let (path, line) = module.lines.as_ref().map_or((String::new(), 0), |lines| {
                 (lines.path.clone(), lines.line(*offset))
             });
             let expr = format!(
-                "By_Warn({}, {}, by_module_dict, {}, {line})",
+                "By_Warn({}, {}, by_module_dict, {}, {line}, {stacklevel})",
                 value_expr(message),
                 category.as_ref().map_or("NULL".to_string(), value_expr),
                 c_string(&path),
@@ -6787,18 +7067,49 @@ fn emit_module_init(module: &ModuleIr) -> String {
         }
     }
 
+    // a function the twin publishes a forwarder for is *not* in `by_methods`: its
+    // native object never goes into the module namespace under its own name, and is
+    // reached only through the `function` the forwarder installs there. see
+    // `by_irbuild::shims` for why a module cannot publish the native object itself
+    let forwarded: Vec<&str> = module
+        .shims
+        .as_ref()
+        .map(|shims| shims.functions.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let entry = |function: &Function| {
+        format!(
+            "    {{\"{}\", (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS, {}}},\n",
+            function.name,
+            function.wrapper_symbol(module.name.dotted()),
+            method_doc(function)
+        )
+    };
     out.push_str("static PyMethodDef by_methods[] = {\n");
     for function in &module.functions {
-        if function.exported {
-            let _ = writeln!(
-                out,
-                "    {{\"{}\", (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS, NULL}},",
-                function.name,
-                function.wrapper_symbol(module.name.dotted())
-            );
+        if function.exported && !forwarded.contains(&function.name.as_str()) {
+            out.push_str(&entry(function));
         }
     }
     out.push_str("    {NULL, NULL, 0, NULL}\n};\n\n");
+    // and the forwarded ones. both this table and the installer walk the module's
+    // own function order, which is what keeps slot `n` here the native the `n`th
+    // forwarder calls
+    let mut forwarded_entries = 0;
+    if !forwarded.is_empty() {
+        out.push_str("static PyMethodDef by_forwarded[] = {\n");
+        for function in &module.functions {
+            if function.exported && forwarded.contains(&function.name.as_str()) {
+                out.push_str(&entry(function));
+                forwarded_entries += 1;
+            }
+        }
+        out.push_str("    {NULL, NULL, 0, NULL}\n};\n\n");
+    }
+    debug_assert_eq!(
+        forwarded_entries,
+        forwarded.len(),
+        "every forwarder the twin defines needs the native it calls"
+    );
 
     // the `PyModuleDef`'s `m_name`, which is not where a module's `__name__` comes
     // from: this is a multi-phase init, so python builds the module from the
@@ -6864,6 +7175,13 @@ fn emit_module_init(module: &ModuleIr) -> String {
     } else {
         ""
     };
+    // an exit that leaves the module interpreted never installs a native, so the
+    // installer the twin defined has nothing to do — and it must not be left standing
+    // in the namespace, where it would be a name python's own module never has
+    let drop_installer = match &module.shims {
+        Some(shims) => format!("    By_DropName(dict, {});\n", c_string(&shims.installer)),
+        None => String::new(),
+    };
     let mut layout_guard = String::new();
     if !conditions.is_empty() {
         // the twin's source no longer carries the decorators init applies, so leaving
@@ -6871,7 +7189,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // definitions, which is where python would have run them
         let _ = write!(
             layout_guard,
-            "    if ({}) {{\n{}{release_bodies}    return 0;\n    }}\n",
+            "    if ({}) {{\n{}{drop_installer}{release_bodies}    return 0;\n    }}\n",
             conditions.join(" || "),
             twin_decorators(module)
         );
@@ -6907,7 +7225,10 @@ fn emit_module_init(module: &ModuleIr) -> String {
             // decorators have been taken out of the source that built them — so this
             // exit has to run them for the same reason the guard above does. a module
             // with nothing to run keeps the plain one-line refusal
-            let unwind = format!("{}{release_bodies}", twin_decorators(module));
+            let unwind = format!(
+                "{}{drop_installer}{release_bodies}",
+                twin_decorators(module)
+            );
             let refusal = if unwind.is_empty() {
                 "return 0;".to_string()
             } else {
@@ -7147,6 +7468,22 @@ fn emit_module_init(module: &ModuleIr) -> String {
         let mut installed = String::new();
         if !ready.is_empty() {
             let _ = writeln!(installed, "{ready}");
+        }
+        // the wrappers python published for the *rest* of a shared slot's group come off
+        // first, so everything below — a decorator above all — is handed a class whose
+        // surface is the body the `class` statement wrote
+        let unpublished = published_beyond_the_body(class);
+        if !unpublished.is_empty() {
+            let listed = unpublished
+                .iter()
+                .map(|name| c_string(name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(
+                installed,
+                "    {{ static const char *const by_unpublished[] = {{{listed}, NULL}};\n\
+                 \x20     if (By_UnpublishSlotNames({type_name}_OBJ, by_unpublished) < 0) return -1; }}"
+            );
         }
         // before anything else asks the type to build an instance: the assignment is what
         // gives the class its `tp_new`, and until it has run the type still allocates the
@@ -7407,12 +7744,41 @@ fn emit_module_init(module: &ModuleIr) -> String {
             ))
         })
         .collect();
+    // every method table this module owns, so the docstrings baked into them can be
+    // taken back out where the *running* interpreter is one that compiles without
+    // docstrings — see `By_StripDocsAtOO`
+    let mut strip_docs = String::from("    By_StripDocsAtOO(by_methods);\n");
+    if module.shims.is_some() {
+        strip_docs.push_str("    By_StripDocsAtOO(by_forwarded);\n");
+    }
+    for class in &module.classes {
+        let _ = writeln!(
+            strip_docs,
+            "    By_StripDocsAtOO({}_methods);",
+            class.type_name(module.name.dotted())
+        );
+    }
+    // the forwarders go in before the natives, and before the decorators: a decorator
+    // in python is handed the `function` the `def` made, and the forwarder is what
+    // stands in for that here
+    let publish_forwarders = match &module.shims {
+        Some(shims) => format!(
+            "    if (By_PublishForwarders(module, dict, by_forwarded, {}, {}) < 0) return -1;\n",
+            shims.functions.len(),
+            c_string(&shims.installer)
+        ),
+        None => String::new(),
+    };
     let _ = write!(
         out,
         "static int by_exec(PyObject *module) {{\n\
          \x20   PyObject *dict = PyModule_GetDict(module);\n\
          \x20   if (dict == NULL) return -1;\n\
          \x20   by_module_dict = dict;\n\
+         \x20   /* before a type is built off one of these tables, or a function\n\
+         \x20    * installed from one: what `__doc__` may say depends on the level\n\
+         \x20    * this interpreter is running at, not the one the build saw */\n\
+         {strip_docs}\
          \x20   /* before the body below can read a global, and before it can write\n\
          \x20    * `__builtins__` itself: what this module resolves builtins through\n\
          \x20    * is settled by the import, the way an interpreted module's is */\n\
@@ -7432,6 +7798,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
          {class_decorate}\
          {twin_remap}\
          {release_bodies}\
+         {publish_forwarders}\
          \x20   if (PyModule_AddFunctions(module, by_methods) < 0) return -1;\n\
          {decorators}\
          {arm_dispatch}\
@@ -7488,6 +7855,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         }
     }
 
@@ -8022,7 +8390,7 @@ mod tests {
 
         assert!(
             c.contains(
-                "typedef struct By_app_Tight {\n\
+                "struct By_app_Tight {\n\
                  \x20   PyObject_HEAD\n\
                  \x20   PyObject *by_dict;"
             ),
@@ -8030,7 +8398,7 @@ mod tests {
         );
         assert!(
             c.contains(
-                "typedef struct By_app_Loose {\n\
+                "struct By_app_Loose {\n\
                  \x20   PyObject_HEAD\n\
                  \x20   PyObject *by_dict;"
             ),
@@ -8284,9 +8652,9 @@ mod tests {
         let c = emit_module(&module);
 
         let declaration = c
-            .split("typedef struct By_app_Deeper {")
+            .split("struct By_app_Deeper {")
             .nth(1)
-            .and_then(|rest| rest.split_once("} By_app_Deeper;"))
+            .and_then(|rest| rest.split_once("};"))
             .map(|(body, _)| body.to_string())
             .expect("the subclass declares a struct");
         assert!(declaration.contains("by_f_depth;"), "{declaration}");
@@ -8545,6 +8913,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         };
         let c = emit_module(&module);
         // the forward declaration precedes the body, so take the last split
@@ -8781,6 +9150,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         };
         let c = emit_module(&module);
         assert!(c.contains("PyMODINIT_FUNC PyInit_app(void)"));
@@ -8844,6 +9214,40 @@ mod tests {
         let c = emit_module(&module);
         assert!(c.contains("\"pkg.app.Point\""), "{c}");
         assert!(!c.contains("\"app.Point\""), "{c}");
+    }
+
+    #[test]
+    fn a_docstring_that_python_would_clean_is_emitted_both_ways() {
+        // the emitted C is a function of the source alone — the same bytes whichever
+        // interpreter builds them — so a docstring the versions disagree about has to
+        // carry both spellings and let the preprocessor choose
+        let mut function = add();
+        function.doc = Some("summary\n    body\n".to_string());
+        let c = emit_module(&module_with(function));
+        assert!(
+            c.contains("BY_DOC(\"summary\\n    body\\n\",\n\"summary\\nbody\\n\")"),
+            "{c}"
+        );
+    }
+
+    #[test]
+    fn a_docstring_python_leaves_alone_is_emitted_once() {
+        // no version disagrees about a single line with no indentation to take out, and
+        // spelling it twice would double what the artefact carries for nothing
+        let mut function = add();
+        function.doc = Some("summary".to_string());
+        let c = emit_module(&module_with(function));
+        assert!(
+            c.contains("METH_FASTCALL | METH_KEYWORDS, \"summary\""),
+            "{c}"
+        );
+        assert!(!c.contains("BY_DOC"), "{c}");
+    }
+
+    #[test]
+    fn a_definition_with_no_docstring_leaves_the_entry_null() {
+        let c = emit_module(&module_with(add()));
+        assert!(c.contains("METH_FASTCALL | METH_KEYWORDS, NULL}"), "{c}");
     }
 
     #[test]
@@ -9210,6 +9614,82 @@ mod tests {
     }
 
     #[test]
+    fn a_tuple_slot_naming_an_instance_has_the_name_ahead_of_it() {
+        // neither group can be defined first — a tuple slot may be an instance and a
+        // class field may be a tuple — so the instance structs are *named* ahead of
+        // both, and a slot holding one is a pointer to a name that is already there
+        let point = RType::Instance {
+            class: "Point".to_string(),
+            exact: false,
+        };
+        let tuple_ty = RType::Tuple(Box::new([point.clone(), RType::INT]));
+        let mut builder = FunctionBuilder::new("placed", tuple_ty.clone());
+        let n = builder.param("n", RType::INT);
+        let made = builder.param("made", point);
+        let out = builder.temp(tuple_ty);
+        builder.push(Op::TupleBuild {
+            dest: out,
+            items: vec![Value::Register(made), Value::Register(n)],
+        });
+        builder.terminate(Terminator::Return(Value::Register(out)));
+        let mut module = module_with(builder.finish());
+        let mut class = appending_class();
+        class.name = "Point".to_string();
+        class.base = None;
+        module.classes.push(class);
+        let c = emit_module(&module);
+
+        let named = c
+            .find("typedef struct By_app_Point By_app_Point;")
+            .expect("the instance struct is named");
+        let slot = c
+            .find("typedef struct { By_app_Point * f0; ByTagged f1; } ByTuple_iPoint_int;")
+            .expect("the slot is a pointer to it");
+        assert!(named < slot, "{c}");
+        let defined = c
+            .find("struct By_app_Point {\n")
+            .expect("and defined after both");
+        assert!(slot < defined, "{c}");
+    }
+
+    #[test]
+    fn two_instance_slots_that_differ_only_in_exactness_share_one_struct() {
+        // an exact register type licenses a direct method call and an inexact one does
+        // not, which is a real difference to the lowering. it is no difference at all
+        // to the C, where both are the same pointer to the same struct — so the name
+        // the two agree on has to be defined once, however many register types reach it
+        let instance = |exact| RType::Instance {
+            class: "Point".to_string(),
+            exact,
+        };
+        let pair = |exact| RType::Tuple(Box::new([instance(exact), RType::INT]));
+        let returning_a_pair = |name: &str, exact| {
+            let mut builder = FunctionBuilder::new(name, pair(exact));
+            let n = builder.param("n", RType::INT);
+            let point = builder.param("point", instance(exact));
+            let out = builder.temp(pair(exact));
+            builder.push(Op::TupleBuild {
+                dest: out,
+                items: vec![Value::Register(point), Value::Register(n)],
+            });
+            builder.terminate(Terminator::Return(Value::Register(out)));
+            builder.finish()
+        };
+        let mut module = module_with(returning_a_pair("made", true));
+        module.functions.push(returning_a_pair("passed", false));
+        let mut class = appending_class();
+        class.name = "Point".to_string();
+        class.base = None;
+        module.classes.push(class);
+        for function in &module.functions {
+            assert_eq!(verify(function), Ok(()), "{}", function.name);
+        }
+        let c = emit_module(&module);
+
+        assert_eq!(c.matches("} ByTuple_iPoint_int;").count(), 1, "{c}");
+    }
+
+    #[test]
     fn emitted_functions_verify_first() {
         // codegen is only correct for verified input, so the fixtures must verify
         assert_eq!(verify(&add()), Ok(()));
@@ -9548,7 +10028,7 @@ mod tests {
             "{wrapper}"
         );
         assert!(
-            wrapper.contains("By_ReadCell(a0->by_f__default_cb_name, \"name\", 0)"),
+            wrapper.contains("By_ReadCell(a0->by_gf__default_cb_name, \"name\", 0)"),
             "{wrapper}"
         );
         // and no edge to a definition that was never bound under a name
@@ -9696,5 +10176,72 @@ mod tests {
                 .contains("By_StrItemCompareCharI64(r0, r1, 32, Py_EQ)"),
             "a machine index reads through the machine helper"
         );
+    }
+
+    /// a closure takes the *address* of a table entry, so the index has to be into the
+    /// table as emitted — past the synthetic entries a generic or resumable class carries,
+    /// and not counting the `__new__` the table leaves out. it used to be read off the
+    /// unfiltered method list with no prefix, which is right only for a class that has
+    /// neither, and every closure environment built so far happens to be one.
+    ///
+    /// the two effects are asserted apart because together they cancel: a `__new__`
+    /// dropped and a `__class_getitem__` added land on the number the old reading gave
+    #[test]
+    fn a_closure_points_at_the_entry_the_table_actually_holds() {
+        let index_of_call = |generic: bool, with_new: bool| {
+            let entry = |name: &str| {
+                let mut builder = FunctionBuilder::new(name, RType::OBJECT);
+                builder.param("self", RType::OBJECT);
+                builder.terminate(Terminator::Return(Value::None));
+                let mut method = builder.finish();
+                method.owner = Some("Env".to_string());
+                method
+            };
+            let mut class = appending_class();
+            class.name = "Env".to_string();
+            class.base = None;
+            class.generic = generic;
+            class.methods = if with_new {
+                vec![entry("__new__"), entry("call")]
+            } else {
+                vec![entry("call")]
+            };
+
+            let mut builder = FunctionBuilder::new("make", RType::OBJECT);
+            let env = builder.param("env", RType::OBJECT);
+            let closure = builder.temp(RType::OBJECT);
+            builder.push(Op::MakeClosure {
+                dest: closure,
+                class: "Env".to_string(),
+                method: "call".to_string(),
+                env: Value::Register(env),
+            });
+            builder.terminate(Terminator::Return(Value::Register(closure)));
+
+            let mut module = module_with(builder.finish());
+            module.classes = vec![class];
+            emit_module(&module)
+        };
+
+        // a `__new__` is not in the table, so the method after it is still entry zero.
+        // the unfiltered reading said one, which is the entry past the end here
+        let dropped = index_of_call(false, true);
+        assert!(
+            dropped.contains("By_MakeClosure(&By_app_Env_Type_methods[0],"),
+            "{dropped}"
+        );
+
+        // and a generic class opens with `__class_getitem__`, so its own first method is
+        // entry one. the unfiltered reading said zero, which is `__class_getitem__`
+        let shifted = index_of_call(true, false);
+        assert!(
+            shifted.contains("By_MakeClosure(&By_app_Env_Type_methods[1],"),
+            "{shifted}"
+        );
+        let table = &shifted[shifted
+            .find("static PyMethodDef By_app_Env_Type_methods[]")
+            .expect("a table")..];
+        let table = &table[..table.find("};").expect("a table end")];
+        assert!(table.contains("__class_getitem__"), "{table}");
     }
 }

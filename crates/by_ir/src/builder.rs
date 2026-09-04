@@ -10,6 +10,11 @@ use crate::ops::{BlockId, Op, RegisterId, Terminator, Value};
 use crate::rtype::RType;
 
 /// builds one function
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "the lint guards against confusable positional arguments, and every one of \
+              these is written by name"
+)]
 pub struct FunctionBuilder {
     name: String,
     param_count: usize,
@@ -38,6 +43,8 @@ pub struct FunctionBuilder {
     kwonly: usize,
     /// per-block `.by` spans, parallel to `blocks`
     block_ranges: Vec<Option<(u32, u32)>>,
+    doc: Option<String>,
+    takes_a_weak_reference: bool,
 }
 
 impl FunctionBuilder {
@@ -66,7 +73,16 @@ impl FunctionBuilder {
             posonly: 0,
             kwonly: 0,
             block_ranges: vec![None],
+            doc: None,
+            takes_a_weak_reference: false,
         }
+    }
+
+    /// record that the body takes a weak reference of a value it did not make itself —
+    /// see [`Function::takes_a_weak_reference`]
+    pub fn takes_a_weak_reference(&mut self) -> &mut Self {
+        self.takes_a_weak_reference = true;
+        self
     }
 
     pub fn convention(&mut self, convention: CallConvention) -> &mut Self {
@@ -82,6 +98,14 @@ impl FunctionBuilder {
     /// decorators to apply at module init, outermost first
     pub fn decorators(&mut self, decorators: Vec<Decorator>) -> &mut Self {
         self.decorators = decorators;
+        self
+    }
+
+    /// the docstring the definition opens with, where it has one
+    ///
+    /// must hold no NUL, which is the frontend's to establish — see [`Function::doc`]
+    pub fn doc(&mut self, doc: Option<String>) -> &mut Self {
+        self.doc = doc;
         self
     }
 
@@ -322,6 +346,8 @@ impl FunctionBuilder {
             defaults_held_by: self.defaults_held_by,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
+            doc: self.doc,
+            takes_a_weak_reference: self.takes_a_weak_reference,
         }
     }
 }

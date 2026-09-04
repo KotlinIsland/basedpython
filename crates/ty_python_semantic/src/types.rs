@@ -8493,6 +8493,21 @@ impl<'db> Type<'db> {
         }
     }
 
+    /// basedpython: the instance type of the class this type is a literal of.
+    ///
+    /// The native compiler holds the `class` statements a module writes and needs to
+    /// ask what a value of one could stand in for: an emitted instance is its layout,
+    /// so a place one could be standing in is a place a `weakref.ref` cannot be taken
+    /// from. The answer is deliberately an over-approximation — the question is
+    /// whether such a value could be there at all, not whether it must be.
+    pub fn basedpython_instance_of(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
+        self.to_instance_approximation(db, env)
+    }
+
     /// The type `NoneType` / `None`
     pub fn none(db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         KnownClass::NoneType.to_instance(db, env)

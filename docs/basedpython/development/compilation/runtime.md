@@ -100,10 +100,22 @@ dict is present whatever is running. that is also why a decline never rests on t
 widened dict: a refusal that held on 3.12 and not on 3.13 would be a wrong answer
 on one of them.
 
-`__dict__` itself stays unpublished on a class that has fields. a mapping naming
-only what the layout had no room for would be an empty answer where the
-interpreted class gives a full one, and that is quiet and wrong where the
-refusal is at least loud. `vars(o)` is the visible consequence.
+`__dict__` names the whole of an instance's state, layout fields included. a
+mapping naming only what the layout had no room for would be an empty answer where
+the interpreted class gives a full one, so publishing one is what the refusal used
+to protect against — and it is why the published mapping is not merely the overflow
+dict.
+
+the layout stays the storage and a published `__dict__` is a real `dict` that every
+write to the instance updates, so a reference held across a later write cannot go
+stale, and `isinstance(vars(o), dict)` holds for the code that tests it. the mapping
+is installed in the instance's dict word, which is what lets python's own attribute
+machinery put a stray name straight into it. a field read pays nothing for any of
+this; a field write pays one test of that word.
+
+two differences remain, both loud: `type(vars(o))` names the mapping rather than
+`dict`, and `del o.__dict__[f]` for a *field* raises where python removes it,
+because a layout field has no unbound state to return to.
 
 the invariant is checked once more where every attribute write passes, rather
 than only where the fields are worked out: a write of a name nothing in the

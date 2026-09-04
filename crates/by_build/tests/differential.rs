@@ -212,6 +212,48 @@ def _blamed_module(module, fn, name=_no_name):
     finally:
         module.__dict__['__name__'] = saved
 
+# a chain of interpreted frames for a warning to be blamed on, `depth` of them between
+# the caller and the call
+#
+# a warning above the default stack level blames a frame further out than the function
+# that wrote it, and the frames out there have to be *these*: one in the module under
+# test would be a frame the interpreted leg pushes and the compiled leg does not, which
+# is a question about the missing frame rather than about the walk
+def _under(depth, fn, *args):
+    if depth > 0:
+        return _under(depth - 1, fn, *args)
+    return fn(*args)
+
+# a frame `warn` walks past rather than blames
+#
+# it steps over every frame whose file name holds both 'importlib' and '_bootstrap', so
+# a warning raised under the import machinery is blamed on whoever asked for the import.
+# the file name is the whole of that rule, so a function compiled under one stands in
+# for the loader here
+_machinery = {}
+exec(compile('def hop(fn, *args):\\n    return fn(*args)\\n',
+             'importlib/_bootstrap.py', 'exec'), _machinery)
+_walked_past = _machinery['hop']
+
+# how often a repeated warning is shown, and what the blamed module recorded
+#
+# the registry that suppresses a repeat belongs to the frame the warning was blamed on,
+# so above the default level it is *this* module's rather than the one under test's. a
+# lowering that wrote the registry it knows instead of the one it walked to would keep
+# printing
+def _registry_of_the_blamed(fn, times=3):
+    globals().pop('__warningregistry__', None)
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.resetwarnings()
+        warnings.simplefilter('default')
+        for _ in range(times):
+            fn()
+        shown = len(seen)
+    recorded = sorted(key[0] for key in globals().get('__warningregistry__', {})
+                      if isinstance(key, tuple))
+    globals().pop('__warningregistry__', None)
+    return (shown, recorded)
+
 # the registry carries a version, and changing the filters invalidates it: a warning
 # already shown is shown again rather than stayed silent about
 def _registry_after_a_filter_change(module):
@@ -2449,7 +2491,7 @@ def raw_ender() -> bytes:
 #[test]
 fn the_compiled_build_is_the_one_that_answers_for_a_nul_literal() {
     // `agree` cannot say which build answered — a declined function answers the same.
-    // `builtin_function_or_method` is what says the compiled leg is under these calls
+    // the forwarder's own code object is what says the compiled leg is under these calls
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -2474,9 +2516,10 @@ fn the_compiled_build_is_the_one_that_answers_for_a_nul_literal() {
         &python,
         &dir,
         "import by_diff_nulstr_which as m\n\
-         print(type(m.whole).__name__, m.length(), m.equals_prefix(), ascii(m.whole()))\n",
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+         print(_leg(m.whole), m.length(), m.equals_prefix(), ascii(m.whole()))\n",
     );
-    assert_eq!(out, "builtin_function_or_method 3 False 'a\\x00b'");
+    assert_eq!(out, "native 3 False 'a\\x00b'");
 }
 
 #[test]
@@ -4195,14 +4238,15 @@ class Held:
         &python,
         &dir,
         "import by_diff_pathdecolive as m\n\
-         print(type(m.cached).__name__, type(m.cached.__wrapped__).__name__)\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+         print(type(m.cached).__name__, _leg(m.cached.__wrapped__))\n\
          print(type(m.Marks.area).__name__, type(m.Marks.sized).__name__,\n\
          \x20     type(m.Held.read).__name__)\n\
          print(m.cached(4), m.Marks.area.__isabstractmethod__, m.Held.tag)\n",
     );
     assert_eq!(
         out,
-        "_lru_cache_wrapper builtin_function_or_method\n\
+        "_lru_cache_wrapper native\n\
          function method_descriptor method_descriptor\n\
          8 True seen"
     );
@@ -4361,17 +4405,18 @@ class Rooted:
     assert_eq!(out, "7 property method_descriptor 3");
 }
 
-/// a class whose type slots publish more than its body wrote keeps its decorator's
-/// decline
+/// a decorator that fills in the comparisons a class left out is handed the gaps it
+/// expects
 ///
-/// python reaches `<=` through `tp_richcompare`, one slot behind all six comparisons —
-/// so an emitted type that writes `__lt__` publishes `__le__` as well, answering
-/// `NotImplemented`. `functools.total_ordering` reads exactly that: it saw `__le__`
-/// already there, filled in nothing, and `a <= b` raised where the interpreted class
-/// answered `True`. that was a live wrong answer for the plain-name spelling before the
-/// path spelling could reach it at all
+/// python reaches `<=` through `tp_richcompare`, one slot behind all six comparisons, and
+/// publishes a wrapper for every name a filled slot backs — so an emitted type that
+/// writes `__lt__` used to publish `__le__` as well. `functools.total_ordering` reads
+/// exactly those names: it saw `__le__` already there, filled in nothing, and `a <= b`
+/// raised where the interpreted class answered `True`. the class declined its whole
+/// compilation to stay out of that. now that the type publishes only what the body wrote,
+/// the decorator finds the three gaps, fills them, and the class compiles
 #[test]
-fn a_class_decorator_over_a_partly_filled_slot_declines() {
+fn a_class_decorator_over_a_partly_filled_slot_fills_it_in() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -4409,22 +4454,145 @@ class Ranked:
             return;
         }
     };
-    assert!(
-        built
-            .declined
-            .iter()
-            .any(|declined| declined.reason.contains("publishes `__le__`")),
-        "declined: {:?}",
-        built.declined
-    );
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    // `wrapper_descriptor` rather than `function` is the whole point: the class compiled
+    // and `tp_init` is a real slot, where it used to hand its whole definition back to
+    // the interpreter
     let out = run(
         &python,
         &dir,
         "import by_diff_partialslot as m\n\
-         print(m.Ranked(1) <= m.Ranked(2), m.Ranked(3) > m.Ranked(2))\n\
+         print(m.Ranked(1) <= m.Ranked(2), m.Ranked(3) > m.Ranked(2), m.Ranked(1) != m.Ranked(1))\n\
          print(type(m.Ranked.__init__).__name__)\n",
     );
-    assert_eq!(out, "True True\nfunction");
+    assert_eq!(out, "True True False\nwrapper_descriptor");
+}
+
+/// the same decorator applied from *another* module refuses out loud
+///
+/// nothing in this module says the class will be decorated, so its type is the sealed one
+/// every undecorated class gets, and `total_ordering`'s `setattr` cannot land on it. what
+/// matters is *when* that is said. while the type published all six comparisons the
+/// decorator found nothing missing, set nothing, raised nothing — and the first `<=`
+/// raised instead, a long way from the decoration that caused it. publishing only the
+/// body's own names puts the refusal back where the decision is made
+#[test]
+fn a_class_decorator_applied_from_another_module_refuses_at_decoration() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_outsideslot");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Ordered:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Ordered) and self.n == other.n
+
+    def __lt__(self, other: object) -> bool:
+        return self.n < other.n
+";
+    let built = match build_source(
+        source,
+        "by_diff_outsideslot",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import functools, by_diff_outsideslot as m\n\
+         try:\n\
+        \x20   functools.total_ordering(m.Ordered)\n\
+        \x20   print('applied')\n\
+         except TypeError as error:\n\
+        \x20   print(type(error).__name__, 'immutable' in str(error))\n",
+    );
+    assert_eq!(out, "TypeError True");
+}
+
+/// a class that declines for its decorator takes no other class down with it
+///
+/// a written decorator has to be applied at module init rather than where the `class`
+/// statement stands, so a class the module body goes on running below declines. that was
+/// settled at the end of the class's lowering — by which point it had a layout, and every
+/// other class had been lowered against it. `Holder` then declined too, for a layout that
+/// was no longer there, and anything holding a `Holder` after it.
+///
+/// nothing showed while a decorated class with a half-filled slot group declined earlier,
+/// where the layout is decided, and got there first. with that decline gone, `tracemalloc`
+/// fell from 50 compiled functions to 26 — 24 of them to this cascade, for a class that
+/// was always going to decline
+#[test]
+fn a_class_declining_for_its_decorator_leaves_no_layout_behind() {
+    let Some((_, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_decorlayout");
+    let _ = std::fs::remove_dir_all(&dir);
+    // `Holder` names a base, so evaluating its header reaches the module — which is what
+    // leaves `Held` visible, undecorated, in the window a moved decorator opens
+    let source = "\
+from collections.abc import Sequence
+
+
+def mark(cls):
+    return cls
+
+
+@mark
+class Held:
+    def __init__(self, n):
+        self._n = n
+
+
+class Holder(Sequence):
+    def __init__(self, ns):
+        self._ns = ns
+
+    def __len__(self):
+        return len(self._ns)
+
+    def __getitem__(self, index):
+        return Held(self._ns[index])
+";
+    let built = match build_source(
+        source,
+        "by_diff_decorlayout",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    let declined: Vec<_> = built
+        .declined
+        .iter()
+        .map(|declined| declined.name.as_str())
+        .collect();
+    assert_eq!(declined, ["Held"], "declined: {:?}", built.declined);
 }
 
 #[test]
@@ -5349,9 +5517,9 @@ def replaces_itself() -> int:
 fn a_compiled_frame_is_what_reaches_the_module_namespace() {
     // the differential tests above compare two legs, and a leg that fell back to its
     // interpreted definition answers exactly as the interpreted leg does — so they
-    // cannot say *which* build wrote the global. this one can: a module-level function
-    // python calls through `PyModule_AddFunctions` is a `builtin_function_or_method`,
-    // and one that fell back is a `function`
+    // cannot say *which* build wrote the global. this one can: what a compiled module
+    // publishes is a forwarder onto the native, and its code object says so where a
+    // definition that fell back names the module's own file
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -5395,12 +5563,13 @@ def init() -> None:
         &python,
         &dir,
         "import by_diff_globalidentity as m\n\
-         print(type(m.init).__name__, m.C().x, m.inited)\n",
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+         print(_leg(m.init), m.C().x, m.inited)\n",
     );
     // and `m.inited` read from out here is the module's own binding, which a register
     // write never touched. before there was an op for it, `C()` inside `init` saw the
     // old `False` and called `init` again until the stack ran out
-    assert_eq!(out, "builtin_function_or_method 1 True");
+    assert_eq!(out, "native 1 True");
 }
 
 #[test]
@@ -5470,10 +5639,11 @@ def declines_and_reads() -> str:
         &python,
         &dir,
         "import by_diff_globaltwin as m\n\
-         print(type(m.writes).__name__, type(m.declines_and_reads).__name__,\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+         print(_leg(m.writes), _leg(m.declines_and_reads),\n\
          \x20     m.declines_and_reads(), m.writes(42), m.declines_and_reads(), m.flag)\n",
     );
-    assert_eq!(out, "builtin_function_or_method function 0 42 42 42");
+    assert_eq!(out, "native function 0 42 42 42");
 }
 
 #[test]
@@ -5720,19 +5890,26 @@ data class Point:
         return;
     }
     // a declared field is the *layout*: a descriptor on the type, read at an offset,
-    // never an entry in an instance dict. and `__dict__` itself is refused however the
-    // instance is built — a mapping naming only what the layout has no room for would
-    // be an empty answer where the interpreted class gives a full one, which is quiet
-    // and wrong where the refusal is at least loud
+    // never an entry in an instance dict. `__dict__` still names it, because python's
+    // `__dict__` is one mapping over the whole of an object's state — a mapping naming
+    // only what the layout has no room for would be an empty answer where the
+    // interpreted class gives a full one, which is quiet and wrong
     let out = run(
         &python,
         &dir,
         "import by_diff_layout as m\n\
          p = m.Point(1, 2)\n\
          print(type(vars(m.Point)['x']).__name__)\n\
-         print(hasattr(p, '__dict__'))\n",
+         print(hasattr(p, '__dict__'), vars(p))\n\
+         p.extra = 3\n\
+         print(vars(p), p.__dict__['x'])\n",
     );
-    assert_eq!(out, "getset_descriptor\nFalse");
+    assert_eq!(
+        out,
+        "getset_descriptor\n\
+         True {'x': 1, 'y': 2}\n\
+         {'x': 1, 'y': 2, 'extra': 3} 1"
+    );
 }
 
 /// the source both of the instance-dict tests build
@@ -6303,6 +6480,213 @@ def took(obj, name):
     );
 }
 
+/// a class keeping its state in a layout, an attribute put on an instance from outside
+/// it, and a name the class body binds beside a field its `__init__` writes on only one
+/// path — which between them are every kind of entry an instance's `__dict__` can hold
+const A_CLASS_WHOSE_DICT_IS_READ: &str = "\
+class Record:
+    tag = 'none'
+
+    def __init__(self, msg):
+        self.msg = msg
+        if msg:
+            self.tag = 'set'
+
+    def rename(self, msg):
+        self.msg = msg
+
+
+def render(r):
+    return '%(msg)s/%(tag)s' % r.__dict__
+
+
+def state(r):
+    return sorted(r.__dict__.items(), key=str)
+";
+
+#[test]
+fn an_emitted_instance_agrees_with_its_twin_about_its_dict() {
+    // an emitted instance keeps its attributes in two places — the class's own in the
+    // layout and anything put on it afterwards in the dict beside them — so the dict
+    // alone names the *extra* attributes and none of the real ones. answering `__dict__`
+    // with it would be an empty mapping where the interpreted class gives a full one, and
+    // the refusal that stood here instead broke a compiled `logging`: `Formatter.format`
+    // reads `record.__dict__`, and the read declines to a function that is then handed an
+    // object with no `__dict__` at all. a decline protects the function, not the class
+    agree_python_with_declines(
+        "instdict",
+        A_CLASS_WHOSE_DICT_IS_READ,
+        &[
+            "m.render(m.Record('hello'))",
+            "m.state(m.Record('hello'))",
+            // the class body's value is not the instance's, so `__dict__` does not name it
+            "m.state(m.Record(''))",
+            "m.Record('a').__dict__['msg']",
+            "'msg' in m.Record('a').__dict__",
+            "'nothing' in m.Record('a').__dict__",
+            "len(vars(m.Record('a')))",
+            "sorted(vars(m.Record('a')).keys())",
+            "sorted(vars(m.Record('a')).values(), key=str)",
+            "vars(m.Record('a')).get('msg')",
+            "vars(m.Record('a')).get('nothing', 'fallback')",
+            "vars(m.Record('a')) == {'msg': 'a', 'tag': 'set'}",
+            "dict(vars(m.Record('a')))",
+            "{**vars(m.Record('a'))}",
+            "repr(vars(m.Record('a')))",
+            "'{msg}'.format_map(vars(m.Record('a')))",
+            "[k for k in vars(m.Record('a'))]",
+            // a name put on the instance from outside the class joins the same mapping
+            "(lambda r: [setattr(r, 'extra', 3), m.state(r), r.__dict__['extra']])(m.Record('a'))",
+            // and a write *through* the mapping reaches the layout, which is the whole
+            // point of it being a view rather than a copy
+            "(lambda r: [r.__dict__.__setitem__('msg', 'bye'), r.msg, m.state(r)])(m.Record('a'))",
+            "(lambda r: [r.__dict__.update({'msg': 'z', 'fresh': 1}), r.msg, r.fresh])(m.Record('a'))",
+            "(lambda r: [r.__dict__.pop('tag'), m.state(r), r.tag])(m.Record('a'))",
+            "(lambda r: [r.__dict__.setdefault('msg', 'no'), r.__dict__.setdefault('new', 5), r.new])(m.Record('a'))",
+            "(lambda r: [r.__dict__.__delitem__('tag'), m.state(r)])(m.Record('a'))",
+            // and replacing the whole mapping replaces the whole of the object's state
+            "(lambda r: [setattr(r, '__dict__', {'msg': 'fresh', 'other': 2}), m.state(r), r.msg, r.other])(m.Record('a'))",
+            "vars(m.Record('a')).copy()",
+            "type(vars(m.Record('a')).copy()).__name__",
+            // and it has to *be* a dict, not merely read like one. `isinstance(x, dict)`
+            // gates a great deal of library code, and every reader the C api offers reads
+            // the base's own storage and ignores an override — a mapping answering out of
+            // a side table serialises as `{}`, silently
+            "isinstance(vars(m.Record('a')), dict)",
+            "__import__('json').dumps(vars(m.Record('a')))",
+            "vars(m.Record('a')).keys()",
+            // a write through the mapping has to reach the storage as well as the
+            // object, or every reader that goes straight to the storage answers with
+            // what stood there before
+            "(lambda d: [d.__setitem__('msg', 'bye'), __import__('json').dumps(d)])(vars(m.Record('a')))",
+            "(lambda r: [r.__dict__.popitem(), m.state(r)])(m.Record('a'))",
+            "(lambda r: [r.__dict__.__ior__({'msg': 'or'}), r.msg])(m.Record('a'))",
+            // the type's own name is the one thing left that differs, so the refusal is
+            // asked for by its kind rather than by its wording
+            "[type(e).__name__ for e in [_capture(hash, vars(m.Record('a')))]]",
+            // and a mapping taken and *held* has to see what the object does next.
+            // answering with what stood there when it was handed out is a wrong answer
+            // nothing marks — no exception, no missing key, just the old value
+            "(lambda r: (lambda d: [setattr(r, 'msg', 'three'), d['msg'], d.get('msg'), sorted(d.items(), key=str)])(r.__dict__))(m.Record('two'))",
+            "(lambda r: (lambda d: [r.rename('three'), d['msg'], sorted(d.items(), key=str)])(r.__dict__))(m.Record('two'))",
+            "(lambda r: (lambda d: [setattr(r, 'extra', 3), sorted(d.items(), key=str)])(r.__dict__))(m.Record('two'))",
+            // including through every reader that goes straight to the storage
+            "(lambda r: (lambda d: [setattr(r, 'msg', 'three'), __import__('json').dumps(d)])(r.__dict__))(m.Record('two'))",
+            // asked twice it is the same mapping, which is what makes the one somebody
+            // holds the one the object goes on writing to
+            "(lambda r: r.__dict__ is r.__dict__)(m.Record('a'))",
+            "(lambda r: [setattr(r, 'extra', 3), r.__dict__ is vars(r)])(m.Record('a'))",
+            // a mapping outliving the object it stood for is an ordinary dict holding the
+            // state that stood at the end, and writing to it reaches nothing
+            "sorted((lambda r: r.__dict__)(m.Record('two')).items(), key=str)",
+            "(lambda d: [d.__setitem__('msg', 'after'), sorted(d.items(), key=str)])((lambda r: r.__dict__)(m.Record('two')))",
+            "(lambda d: [d.update({'late': 1}), sorted(d.items(), key=str)])((lambda r: r.__dict__)(m.Record('two')))",
+            // and a field the object gives up leaves the mapping with it
+            "(lambda r: (lambda d: [delattr(r, 'tag'), sorted(d.items(), key=str), 'tag' in d])(r.__dict__))(m.Record('a'))",
+        ],
+    );
+}
+
+#[test]
+fn the_class_that_answered_the_dict_is_the_compiled_one() {
+    // the legs agree whichever class answered, so this is where the compiled one is
+    // pinned: with the codegen path off, `Record` is the interpreted definition and every
+    // assertion above passes for the wrong reason
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_instdictlive");
+    let _ = std::fs::remove_dir_all(&dir);
+    if build_source(
+        A_CLASS_WHOSE_DICT_IS_READ,
+        "by_diff_instdictlive",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_instdictlive as m\n\
+         r = m.Record('a')\n\
+         print(type(m.Record.__init__).__name__, hasattr(r, '__dict__'))\n\
+         print(type(r).__dict__['msg'].__class__.__name__)\n\
+         print(m.render(r))\n",
+    );
+    // `msg` reaching python through a `getset_descriptor` is what says the attribute is
+    // the *layout's* and not an entry in a dict — an interpreted `Record` has no such
+    // descriptor at all
+    assert_eq!(
+        out,
+        "wrapper_descriptor True\n\
+         getset_descriptor\n\
+         a/set"
+    );
+}
+
+#[test]
+fn an_emitted_instance_agrees_with_its_twin_about_its_state() {
+    // `object.__getstate__` reads the dict word straight out of the instance, and on an
+    // emitted one that word holds the *extra* attributes and none of the class's own — so
+    // whatever asks an object for its state was handed half of it, and handed it quietly.
+    // that is the same hole as the `__dict__` one, through a door a decline never reaches
+    agree_python_with_declines(
+        "inststate",
+        A_CLASS_WHOSE_DICT_IS_READ,
+        &[
+            "m.Record('hello').__getstate__()",
+            "m.Record('').__getstate__()",
+            "(lambda r: [setattr(r, 'extra', 3), r.__getstate__()])(m.Record('a'))",
+        ],
+    );
+}
+
+#[test]
+fn a_formatter_reading_a_record_dict_agrees() {
+    // the shape that motivated the view, reduced to the two classes `logging` uses: a
+    // record whose state is its layout, and a formatter in the same module that reads
+    // `record.__dict__` off a parameter it knows nothing about. the read declines, so the
+    // formatter runs interpreted — against the *emitted* record, which is exactly the
+    // case a decline cannot cover on its own
+    agree_python_with_declines(
+        "recorddict",
+        "\
+class LogRecord:
+    def __init__(self, name, level, message):
+        self.name = name
+        self.levelname = level
+        self.message = message
+
+
+class Style:
+    def __init__(self, fmt):
+        self.fmt = fmt
+
+    def format(self, record):
+        return self.fmt % record.__dict__
+
+
+def emit(fmt, name, level, message):
+    return Style(fmt).format(LogRecord(name, level, message))
+",
+        &[
+            "m.emit('%(levelname)s:%(name)s:%(message)s', 'root', 'WARNING', 'hello')",
+            "m.emit('%(message)s', 'x', 'INFO', 'quiet')",
+            // the extra a caller attaches to a record, which `logging` puts there through
+            // the mapping itself
+            "(lambda r: [r.__dict__.__setitem__('zz', 1), '%(name)s %(zz)s' % r.__dict__])(m.LogRecord('n', 'W', 'm'))",
+        ],
+    );
+}
+
 #[test]
 fn a_native_class_instance_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
@@ -6427,9 +6811,11 @@ fn a_compiled_function_is_a_c_function_object() {
     let out = run(
         &python,
         &dir,
-        "import by_diff_cfunc as m\nprint(type(m.f).__name__)\n",
+        "import by_diff_cfunc as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+         print(type(m.f).__name__, _leg(m.f))\n",
     );
-    assert_eq!(out, "builtin_function_or_method");
+    assert_eq!(out, "function native");
 }
 
 #[test]
@@ -7369,14 +7755,12 @@ fn the_shadowed_calls_are_answered_by_compiled_bodies() {
         &python,
         &dir,
         "import by_diff_aloneshadowkind as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
          print(type(m.Alone.double).__name__)\n\
          print(type(m.Slotted.double).__name__)\n\
-         print(type(m.alone).__name__)\n",
+         print(_leg(m.alone))\n",
     );
-    assert_eq!(
-        out,
-        "method_descriptor\nmethod_descriptor\nbuiltin_function_or_method"
-    );
+    assert_eq!(out, "method_descriptor\nmethod_descriptor\nnative");
 }
 
 /// a builtin whose entry point wants the defining class, which no call site can supply
@@ -7754,6 +8138,40 @@ class Loud(Quiet):
             "m.Loud().say('a', 3)",
             "m.Quiet().say()",
         ],
+    );
+}
+
+#[test]
+fn a_class_a_helper_takes_a_weak_reference_of_is_declined() {
+    // `logging.Handler.__init__`'s shape: it writes no `weakref.ref` at all, it calls
+    // `_addHandlerRef(self)` and the reference is taken a whole function away. nothing
+    // about `__init__`'s own body says it raises, so the refusal has to travel back along
+    // the call — and if it does not, constructing the class raises `TypeError` rather
+    // than answering
+    agree_python_with_declines(
+        "weakhelper",
+        "\
+import weakref
+
+registry = []
+
+
+def registers(thing):
+    registry.append(weakref.ref(thing))
+
+
+def forwards(thing):
+    registers(thing)
+
+
+class Handler:
+    def __init__(self):
+        forwards(self)
+
+    def alive(self):
+        return registry[-1]() is self
+",
+        &["m.Handler().alive()", "len(m.registry)"],
     );
 }
 
@@ -9129,15 +9547,13 @@ async def finishing(v: object) -> object:
         &dir,
         "import asyncio\n\
          import by_diff_sendslot_pin as m\n\
-         print(type(m.counting).__name__)\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+         print(_leg(m.counting))\n\
          print(type(m.counting(0)).__name__)\n\
          print(asyncio.run(m.finishing((1, 2))))\n",
     );
     // a declined function would be a plain `function` and its state a `generator`
-    assert_eq!(
-        out, "builtin_function_or_method\ncounting$gen\n(1, 2)",
-        "{out}"
-    );
+    assert_eq!(out, "native\ncounting$gen\n(1, 2)", "{out}");
 }
 
 /// a `StopIteration` the body *raised* leaves the frame as a `RuntimeError`, and one
@@ -12287,16 +12703,17 @@ fn only_the_class_no_spec_can_build_is_left_interpreted() {
         &python,
         &dir,
         "import by_diff_perclassheld_t as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
          print(type(m.Held.__dict__['read']).__name__,\n\
          \x20     type(m.Kept.__dict__['note']).__name__,\n\
          \x20     type(m.Deeper.__dict__['down']).__name__,\n\
-         \x20     type(m.add).__name__)\n\
+         \x20     _leg(m.add))\n\
          # a spec has no code object to write one from, so its absence is the emitted type\n\
          print('__firstlineno__' in vars(m.Held), '__firstlineno__' in vars(m.Kept))\n",
     );
     assert_eq!(
         out,
-        "function method_descriptor method_descriptor builtin_function_or_method\n\
+        "function method_descriptor method_descriptor native\n\
          True False"
     );
 }
@@ -14863,9 +15280,9 @@ fn a_class_attribute_naming_a_module_function_keeps_the_definition_that_binds() 
     // `PyCFunction` in a class dict is not a descriptor, so `Reducer().dump()` would call
     // `_dump` with no `self` at all.
     //
-    // `function` against `builtin_function_or_method` is the whole assertion. the class
-    // answers the same *value* either way, so nothing but the type of what sits in the
-    // slot says which definition is standing there
+    // `function` against the forwarder is the whole assertion. the class answers the
+    // same *value* either way, so nothing but what sits in the slot says which
+    // definition is standing there
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -14904,8 +15321,9 @@ class Reducer:
         &python,
         &dir,
         "import by_diff_fntwinbind as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
          print(m.Reducer().dump(), m.Reducer().kind())\n\
-         print(type(m._dump).__name__, type(m.Reducer.__dict__['dump']).__name__)\n\
+         print(_leg(m._dump), type(m.Reducer.__dict__['dump']).__name__)\n\
          print(type(m.Reducer.kind).__name__)\n",
     );
     // `method_descriptor` says the emitted type answered rather than a class that fell
@@ -14913,7 +15331,7 @@ class Reducer:
     assert_eq!(
         out,
         "dumped reducer\n\
-         builtin_function_or_method function\n\
+         native function\n\
          method_descriptor"
     );
 }
@@ -14979,8 +15397,9 @@ Option.__ge__ = lambda self, other: True
         &python,
         &dir,
         "import by_diff_fntwindunder as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
          print(repr(m.Option()), m.Option().kind())\n\
-         print(type(m._repr).__name__, type(m.Option.__dict__['__repr__']).__name__)\n\
+         print(_leg(m._repr), type(m.Option.__dict__['__repr__']).__name__)\n\
          print(type(m.Option.kind).__name__)\n",
     );
     // `function` on the last line is the class itself confirming it stayed interpreted,
@@ -14988,7 +15407,7 @@ Option.__ge__ = lambda self, other: True
     assert_eq!(
         out,
         "<option> option\n\
-         builtin_function_or_method function\n\
+         native function\n\
          function"
     );
 }
@@ -15062,9 +15481,10 @@ Ordered.__le__ = lambda self, other: True
         &python,
         &dir,
         "import by_diff_fntwinconvert as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
          m.total_ordering(m.Ordered)\n\
          print(m.Ordered() > m.Ordered())\n\
-         print(type(m._gt_from_lt).__name__, type(m._convert['__gt__']).__name__)\n\
+         print(_leg(m._gt_from_lt), type(m._convert['__gt__']).__name__)\n\
          print(type(m.Ordered.__dict__['__gt__']).__name__)\n",
     );
     // the module's name answers the compiled function while the table keeps the twin,
@@ -15072,7 +15492,7 @@ Ordered.__le__ = lambda self, other: True
     assert_eq!(
         out,
         "gt\n\
-         builtin_function_or_method function\n\
+         native function\n\
          function"
     );
 }
@@ -15137,9 +15557,10 @@ def alias_answers() -> int:
         &python,
         &dir,
         "import by_diff_fntwinalias as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
          print(m.alias_is_proxy(), m.table_is_proxy())\n\
          print(m.alias_answers(), m.ALIAS())\n\
-         print(type(m.proxy).__name__, type(m.ALIAS).__name__)\n",
+         print(_leg(m.proxy), _leg(m.ALIAS))\n",
     );
     // python answers `True True` on the first line. the second is why that is tolerable:
     // the captured definition computes exactly what the compiled one computes, so the
@@ -15148,8 +15569,75 @@ def alias_answers() -> int:
         out,
         "False False\n\
          7 7\n\
-         builtin_function_or_method function"
+         native function"
     );
+}
+
+/// a module function read from its **own module-level name** and installed on a class
+///
+/// the three tests above leave a captured function where it stands because moving it
+/// would put a non-binding callable into a descriptor position. that reasoning reads as
+/// though the hazard belonged to the move — and it did not. it belonged to what the
+/// module published: cpython gives a `PyCFunction` no `tp_descr_get` at all, so the
+/// comparison that followed arrived short of its first argument, and no twin was
+/// involved in it. `functools` is the case both ways round — `total_ordering` reaches
+/// its comparisons through `_convert`, a module-level dict of captured twins, and
+/// written the other way, as this is, it failed.
+///
+/// a compiled module now publishes a `function` of its own, which does bind, so this
+/// answers what python answers. the captured twins are still left where they stand: the
+/// tests above are about `is`, and this one no longer needs them to be
+#[test]
+fn a_module_function_installed_on_a_class_after_import_binds() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_fnnobind");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def _gt_from_lt(this: object, other: object) -> str:
+    return \"gt\"
+
+
+def install(cls: type) -> type:
+    setattr(cls, \"__gt__\", _gt_from_lt)
+    return cls
+";
+    let built = match build_source(
+        source,
+        "by_diff_fnnobind",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_fnnobind as m\n\
+         class Ordered: pass\n\
+         m.install(Ordered)\n\
+         print(type(Ordered.__dict__['__gt__']).__name__)\n\
+         try:\n\
+        \x20   print(Ordered() > Ordered())\n\
+         except TypeError as error:\n\
+        \x20   print('TypeError:', error)\n",
+    );
+    // the receiver arrives in slot zero, so the comparison has both its operands. it used
+    // to take the *other* operand into the first parameter and leave the second with
+    // nothing, and a function whose receiver was its only parameter answered quietly
+    // instead — which was the worse half of the same divergence
+    assert_eq!(out, "function\ngt");
 }
 
 #[test]
@@ -16087,8 +16575,8 @@ fn fields_past_a_python_base_leave_that_class_to_its_interpreted_definition() {
     // built it. what that refusal costs is only `Wrapped`: nothing here reads one of its
     // instances, so `Stored` and `stays` are compiled beside it, where the refusal used
     // to be the whole module's. `type(m.Wrapped.get)` and `type(m.stays)` are what say
-    // which is which — `function` for the class left behind, and
-    // `builtin_function_or_method` for the module that went on being compiled
+    // which is which — `function` for the class left behind, and a forwarder onto the
+    // native for the module that went on being compiled
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -16148,13 +16636,14 @@ def stays() -> int:
          print(w.get(), w.decoder, gc.collect() >= 0)\n\
          del w\n\
          print(gc.collect() >= 0)\n\
-         print(m.Stored(4).bumped(), type(m.stays).__name__, type(m.Wrapped.get).__name__)\n",
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+         print(m.Stored(4).bumped(), _leg(m.stays), type(m.Wrapped.get).__name__)\n",
     );
     assert_eq!(
         out,
         "7 7 True\n\
          True\n\
-         5 builtin_function_or_method function"
+         5 native function"
     );
 }
 
@@ -16172,7 +16661,7 @@ fn a_spec_that_cannot_place_the_dict_leaves_the_module_to_its_interpreted_defini
     // type would have had — eight bytes past the end of the object, which a guard page
     // catches and an ordinary run corrupts silently.
     //
-    // `stays` is the proof: a compiled module answers `builtin_function_or_method` there
+    // `stays` is the proof: a compiled module publishes a forwarder onto the native there
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -16220,12 +16709,16 @@ def stays() -> int:
         &dir,
         "import by_diff_specdictplacement as m\n\
          print(m.made(), m.stays(), m.Wrapped().get())\n\
-         print(type(m.stays).__name__, type(m.Wrapped.get).__name__)\n",
+         print(type(m.stays).__name__, type(m.Wrapped.get).__name__)\n\
+         # the exit that leaves the module interpreted still has to unbind the\n\
+         # installer the twin defined for the forwarders it never published\n\
+         print([n for n in dir(m) if n.startswith('_by')])\n",
     );
     assert_eq!(
         out,
         "1 2 1\n\
-         function function"
+         function function\n\
+         []"
     );
 }
 
@@ -19458,6 +19951,132 @@ def falls_through(v: int) -> str:
 }
 
 #[test]
+fn a_case_body_binds_in_the_frame_the_match_stands_in() {
+    // a `case` body is a body like any other, and everything the frame's passes ask of a
+    // body has to be asked of one. the walk they share used to stop at a `match`, and
+    // every one of them inherited that silently: `capture` compiled with no decline at
+    // all and raised `NameError`, because the write to `n` never reached the closure
+    // analysis, so `read` captured nothing and looked `n` up in the module namespace.
+    // `promote` is the same blindness reaching a different pass — a `global` inside a
+    // case was not read as a declaration, so the write stayed in a register and the
+    // module never saw it. both answered wrongly in silence, which is worse than any
+    // decline, so these assert agreement *and* that nothing declines
+    agree_python(
+        "case_bindings",
+        "def capture(v: int) -> object:
+    match v:
+        case 1:
+            n = 10
+        case _:
+            n = 20
+    def read() -> int:
+        return n
+    return read
+
+
+counter = 0
+
+
+def promote(v: int) -> None:
+    match v:
+        case 1:
+            global counter
+            counter = 99
+
+
+def from_a_pattern(v: object) -> object:
+    match v:
+        case [a]:
+            def read() -> object:
+                return a
+            return read
+    return None
+
+
+def a_lambda_in_a_case(v: object) -> object:
+    match v:
+        case [x]:
+            return lambda: x
+    return None
+
+
+def suspends_in_a_case(v: object) -> object:
+    match v:
+        case str(one):
+            yield one
+        case [*rest]:
+            for item in rest:
+                yield item
+        case _:
+            yield 'other'
+",
+        &[
+            "[m.capture(v)() for v in [1, 2]]",
+            // the capture is a cell rather than a copy, so the two closures a repeated
+            // call makes must not share one
+            "[m.capture(1)(), m.capture(2)()]",
+            "[(m.promote(1), m.counter)[1], (m.promote(0), m.counter)[1]]",
+            "m.from_a_pattern([7])()",
+            "m.from_a_pattern(3)",
+            "m.a_lambda_in_a_case(['ab'])()",
+            "m.a_lambda_in_a_case(3)",
+            // every `yield` here is inside a case, which is what used to make the
+            // function read as no generator at all — it declined with "a suspension
+            // outside a generator" rather than suspending
+            "[list(m.suspends_in_a_case(v)) for v in ['ab', [1, 2], 7]]",
+            // and it suspends rather than running to the end, which is the half a
+            // list of the whole thing cannot tell apart from a function returning one
+            "[next(m.suspends_in_a_case([1, 2])), next(m.suspends_in_a_case('a'))]",
+        ],
+    );
+}
+
+#[test]
+fn a_source_name_that_mangles_like_a_generated_one_is_still_its_own_field() {
+    // `$` is not a portable C identifier character, so a generated field's name reaches
+    // the struct with it turned into `_` — which is the character a source name may hold.
+    // `$state` and a parameter called `_state` both came out as `by_f__state` and the C
+    // compiler rejected the duplicate member, so a legal program failed the *build* rather
+    // than declining. every generated name this could happen to is exercised here
+    agree_python(
+        "shadowed_fields",
+        "\
+def suspends(_state: int, _sent: int, _kind: int, _thrown: int) -> object:
+    yield _state
+    yield _sent
+    yield _kind
+    yield _thrown
+
+
+def walks(_iter0: object) -> object:
+    for item in _iter0:
+        yield item
+
+
+def captures(_outer: int) -> object:
+    def read() -> int:
+        return _outer
+    return read
+
+
+def empty_environment(_empty: int) -> object:
+    def read() -> int:
+        return _empty
+    return read
+",
+        &[
+            "list(m.suspends(1, 2, 3, 4))",
+            "list(m.walks([7, 8, 9]))",
+            "m.captures(5)()",
+            "m.empty_environment(6)()",
+            // the generated field still works alongside the source one it shadows: a
+            // generator whose state field collided would resume from the wrong value
+            "[next(m.suspends(1, 2, 3, 4)), list(m.suspends(9, 9, 9, 9))]",
+        ],
+    );
+}
+
+#[test]
 fn identity_is_not_equality() {
     agree_python(
         "identity",
@@ -20375,10 +20994,19 @@ class Loose:
 #[test]
 fn the_comparison_dunders_share_one_slot() {
     // python does not look these up by name: it calls `tp_richcompare` with an
-    // opcode. so all six are one function, one the class does not define answers
-    // `NotImplemented` — which is what lets `a > b` reach the *other* operand's
-    // `__lt__` — and defining `__eq__` without `__hash__` makes the class
-    // unhashable, which a type built from a spec has to do for itself
+    // opcode. so all six are one function, one the class does not define hands the
+    // question on to the base — which is what lets `a > b` reach the *other* operand's
+    // `__lt__`, and what gives `!=` the meaning `object` gives it: negate `__eq__`.
+    // answering `NotImplemented` there instead threw that away, and `Money(5) !=
+    // Money(5)` was `True` compiled against `False` interpreted.
+    //
+    // filling one comparison fills the slot for all six, and python publishes a wrapper
+    // under every name a filled slot backs — so the type held a `__le__` this body never
+    // wrote. the names the body did not write come back off, which is what leaves a class
+    // reading the way an interpreted one of the same body reads.
+    //
+    // defining `__eq__` without `__hash__` makes the class unhashable, which a type built
+    // from a spec has to do for itself
     agree_python(
         "richcmp",
         "\
@@ -20414,6 +21042,13 @@ class Hashed:
             "m.Money(5) == m.Money(5)",
             "m.Money(5) == m.Money(7)",
             "m.Money(5) != m.Money(7)",
+            // no `__ne__` is written, so this is `object`'s: call `__eq__` and negate
+            "m.Money(5) != m.Money(5)",
+            "m.Hashed(3) != m.Hashed(3)",
+            // and the names the body never wrote are not the class's own
+            "[n for n in ('__lt__', '__le__', '__eq__', '__ne__', '__gt__', '__ge__') if n in vars(m.Money)]",
+            "m.Money.__le__ is object.__le__",
+            "m.Money.__ne__ is object.__ne__",
             "m.Money(5) < m.Money(7)",
             "m.Money(7) < m.Money(5)",
             // the reflected direction: there is no `__gt__`, so python swaps and
@@ -22069,7 +22704,7 @@ fn a_slots_declaration_is_storage_the_emitted_type_owns() {
     let generated =
         std::fs::read_to_string(built.artifact.source).expect("the generated c is there");
     let (_, tail) = generated
-        .split_once("typedef struct By_by_diff_slotsowned_Link {")
+        .split_once("struct By_by_diff_slotsowned_Link {")
         .expect("`Link` has an instance struct");
     let (fields, _) = tail.split_once('}').expect("the struct ends");
     assert!(
@@ -24281,14 +24916,16 @@ fn the_compiled_types_are_what_answer_for_every_write_shape() {
          \x20   (m.Pipe, 'ends'), (m.Tree, 'parts'), (m.Swapped, 'swap'),\n\
          \x20   (m.Late, 'read'), (m.Counted, 'bump'), (m.Bound, 'read'),\n\
          \x20   (m.Managed, 'read'), (m.Chained, 'both'), (m.Renamed, 'more'))))\n\
-         # the fields are storage of the instance's own, with no namespace behind them\n\
-         print(hasattr(m.Pipe((1, 2)), '__dict__'))\n",
+         # the fields are storage of the instance's own, and `__dict__` is the mapping\n\
+         # over that storage rather than a namespace standing behind it\n\
+         print(type(m.Pipe.__dict__['reader']).__name__, m.Pipe((1, 2)).__dict__)\n",
     );
     assert_eq!(
         out,
         "method_descriptor method_descriptor method_descriptor method_descriptor \
          method_descriptor method_descriptor method_descriptor method_descriptor \
-         method_descriptor\nFalse"
+         method_descriptor\n\
+         getset_descriptor {'reader': 1, 'writer': 2}"
     );
 }
 
@@ -24899,16 +25536,17 @@ fn the_class_an_assigned_dunder_fills_a_slot_on_is_compiled() {
         &python,
         &dir,
         "import by_diff_assigneddunder_t as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
          print(type(m.Assigned.__dict__['__init__']).__name__,\n\
          \x20     type(m.Unhashable.__dict__['__init__']).__name__)\n\
          print(m.Assigned.__dict__['__repr__'] is m.Assigned.__dict__['__str__'],\n\
          \x20     type(m.Assigned.__dict__['__repr__']).__name__,\n\
-         \x20     type(m._describe).__name__)\n",
+         \x20     _leg(m._describe))\n",
     );
     assert_eq!(
         out,
         "wrapper_descriptor wrapper_descriptor\n\
-         True function builtin_function_or_method"
+         True function native"
     );
 }
 
@@ -25147,9 +25785,8 @@ fn a_returned_pair_holds_each_slot_in_its_own_representation() {
     // way. `.by` rather than `.py` because python's `float` annotation admits an
     // `int`, which puts the slot back on the object protocol and so tests nothing.
     //
-    // an instance of a class this module emits is refused and stays on the heap —
-    // the tuple structs are written before the class structs, so a slot naming one
-    // would name a type the C does not have yet
+    // an instance of a class this module emits is a slot like any other: it rides as
+    // a pointer to that class's struct, which the C names ahead of the tuple structs
     agree(
         "pairslots",
         "\
@@ -25520,6 +26157,11 @@ class Liar:
     def __class__(self) -> type:
         return Mine
 
+    # from 3.15 this object reaches the record as the message rather than being
+    # refused, and the default `repr` of one carries its address
+    def __repr__(self) -> str:
+        return '<liar>'
+
 
 def instance() -> None:
     warnings.warn(Mine('inst'))
@@ -25561,10 +26203,11 @@ def liar() -> None:
             "_warnings_from(m.given, UserWarning('x'))",
             "_warnings_from(m.given, None)",
             // a non-type that names `Warning` among its bases: `issubclass` says yes
-            // where a type check says no, and python's own test is `issubclass` — so
-            // this reaches the *call* and fails there instead. built out of
-            // `SimpleNamespace` rather than a class of the module's own, because the
-            // refusal names a type through `tp_name`
+            // where a type check says no, and python's own test was `issubclass` — so
+            // before 3.15 this reaches the *call* and fails there instead, and from
+            // 3.15 it is refused as a category. built out of `SimpleNamespace` rather
+            // than a class of the module's own, because the older refusal names a type
+            // through `tp_name`
             "_warnings_from(m.given, _types.SimpleNamespace(__bases__=(Warning,)))",
             "_warnings_from(m.message, 5)",
             "_warnings_from(m.message, None)",
@@ -25574,17 +26217,18 @@ def liar() -> None:
 }
 
 #[test]
-fn a_warning_that_walks_frames_answers_from_the_interpreted_definition() {
-    // above the default stack level the frame to blame is the *caller's*, and how many
-    // frames are missing under a compiled function is not a static question: a compiled
-    // function calling another compiled one loses both, so nothing at the call site can
-    // say how far out the real caller is. each of these is left to its interpreted
-    // definition, which is why the answers still match.
+fn a_warning_above_the_default_level_lands_where_python_lands_it() {
+    // above the default stack level the frame to blame is further out than the function
+    // that wrote it, and every frame out there is a real one: the interpreted
+    // definition's own frame would have sat directly on the frame `PyEval_GetFrame`
+    // answers with, so counting from there with the first step already taken reaches
+    // the frame python reaches.
     //
-    // asked through `_warned_into` rather than `_warnings_from`, because a declined
-    // function's frames are named `<string>`: the compiled leg reaches its interpreted
-    // definition through `PyRun_String`, which has no file to name
-    agree_python_with_declines(
+    // the frames counted through are all in *this* snippet rather than in the module
+    // under test, so that both legs push the same ones and nothing here declines. a
+    // caller in the module under test is the other half of the question, and it has a
+    // test of its own below
+    agree_python(
         "warnstack",
         "\
 import warnings
@@ -25596,6 +26240,164 @@ def far() -> None:
 
 def further() -> None:
     warnings.warn('further', DeprecationWarning, stacklevel=3)
+
+
+def further_still() -> None:
+    warnings.warn('further still', DeprecationWarning, stacklevel=4)
+
+
+def off_the_end() -> None:
+    warnings.warn('nobody', DeprecationWarning, stacklevel=500)
+",
+        &[
+            // the immediate caller, and then one, two and three frames past it
+            "_warnings_from(m.far)",
+            "_warnings_from(_under, 0, m.far)",
+            "_warnings_from(_under, 2, m.far)",
+            "_warnings_from(_under, 2, m.further)",
+            "_warnings_from(_under, 2, m.further_still)",
+            // a walk that runs out of frames is reported against `sys`, and what that
+            // is spelled as moved in 3.13
+            "_warnings_from(m.off_the_end)",
+            // the import machinery is walked past rather than blamed, first as the
+            // frame the count lands on and then as one it passes through
+            "_warnings_from(_walked_past, m.far)",
+            "_warnings_from(_under, 1, _walked_past, m.further)",
+            // the registry that suppresses a repeat is the blamed frame's, which is
+            // this snippet's namespace rather than the module's
+            "_registry_of_the_blamed(m.far)",
+            "_warned_into(m, m.far)",
+        ],
+    );
+}
+
+#[test]
+fn a_warning_above_the_default_level_written_in_a_method_lands_where_python_lands_it() {
+    // the same walk, written where a class body used to refuse it. the refusal there was
+    // never about frames: a method's decline is what keeps its class interpreted, so
+    // lowering one puts a whole class under the compiler for the first time and that was
+    // held back for its own re-costing.
+    //
+    // `agree_python` refuses a decline, which is what says the method was compiled at
+    // all — a class kept back over one method would answer every one of these
+    // identically from its interpreted definition
+    agree_python(
+        "warnstackmethod",
+        "\
+import warnings
+
+
+class Talker:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def far(self) -> None:
+        warnings.warn(self.name, DeprecationWarning, stacklevel=2)
+
+    def further(self) -> None:
+        warnings.warn(self.name, DeprecationWarning, stacklevel=3)
+",
+        &[
+            "_warnings_from(m.Talker('far').far)",
+            "_warnings_from(_under, 0, m.Talker('far').far)",
+            "_warnings_from(_under, 2, m.Talker('further').further)",
+            // the registry a repeat is suppressed through is the blamed frame's, which
+            // is this snippet's namespace rather than the module's
+            "_registry_of_the_blamed(m.Talker('far').far)",
+            "_warned_into(m, m.Talker('far').far)",
+        ],
+    );
+}
+
+#[test]
+fn a_warning_written_in_the_import_machinery_counts_plain_frames() {
+    // which walk python takes is decided by the frame the count *starts* from: a
+    // warning written in a file that holds both "importlib" and "_bootstrap" counts
+    // plain frames, and one written anywhere else walks past every file that does. the
+    // starting frame is the compiled function's own, so the module's file name settles
+    // it — and this module's name is spelled to hold both words.
+    //
+    // the same call through the same machinery frame is blamed on that frame here and
+    // walked past it in the test above, which is the whole of the difference
+    agree_python(
+        "warnimportlib_bootstrap",
+        "\
+import warnings
+
+
+def far() -> None:
+    warnings.warn('far', DeprecationWarning, stacklevel=2)
+
+
+def further() -> None:
+    warnings.warn('further', DeprecationWarning, stacklevel=3)
+",
+        &[
+            "_warnings_from(_walked_past, m.far)",
+            "_warnings_from(_under, 1, _walked_past, m.further)",
+        ],
+    );
+}
+
+#[test]
+fn a_caller_a_warning_would_name_keeps_its_own_frame() {
+    // the frame a warning above the default level names is the caller's, and a compiled
+    // caller pushes none — so the blame would land outside the module altogether. the
+    // caller is therefore the definition that has to stay interpreted, and for a level
+    // above two the caller's caller follows it down.
+    //
+    // asked through `_warned_into`, which answers *which module* was blamed: a declined
+    // function reaches its interpreted definition through `PyRun_String` in the compiled
+    // leg, so its frames are named `<string>` and the file names cannot be compared
+    agree_python_with_declines(
+        "warnblamed",
+        "\
+import warnings
+
+
+def far() -> None:
+    warnings.warn('far', DeprecationWarning, stacklevel=2)
+
+
+def calls_far() -> None:
+    far()
+
+
+def further() -> None:
+    warnings.warn('further', DeprecationWarning, stacklevel=3)
+
+
+def calls_further() -> None:
+    further()
+
+
+def calls_calls_further() -> None:
+    calls_further()
+",
+        &[
+            "_warned_into(m, m.calls_far)",
+            "_warned_into(m, m.calls_calls_further)",
+            // and the ones reached from here still land here, which is what the caller
+            // rule costs nothing for
+            "_warnings_from(m.far)",
+            "_warnings_from(_under, 0, m.further)",
+        ],
+    );
+}
+
+#[test]
+fn a_warning_the_compiler_cannot_place_answers_from_the_interpreted_definition() {
+    // what is left is the shapes whose walk or whose context the compiler cannot
+    // supply: a level it cannot read, a second rule for walking past files, a `source`
+    // the public `warn_explicit` does not take, and the shapes python refuses outright.
+    //
+    // asked through `_warned_into` rather than `_warnings_from`, because a declined
+    // function's frames are named `<string>`: the compiled leg reaches its interpreted
+    // definition through `PyRun_String`, which has no file to name
+    agree_python_with_declines(
+        "warnrefused",
+        "\
+import warnings
 
 
 def computed(level: int) -> None:
@@ -25626,8 +26428,6 @@ def unknown_keyword() -> None:
     warnings.warn('odd', DeprecationWarning, nonsense=1)
 ",
         &[
-            "_warned_into(m, m.far)",
-            "_warned_into(m, m.further)",
             "_warned_into(m, m.computed, 1)",
             "_warned_into(m, m.computed, 2)",
             "_warned_into(m, m.spread, (DeprecationWarning, 2))",
@@ -26407,6 +27207,88 @@ class Widened(list):
 }
 
 #[test]
+fn an_unboxed_counter_indexes_every_container_and_every_edge() {
+    // a counter a loop steps by one gets a machine representation, and a subscript
+    // now reads the element at that number directly rather than making it a tagged
+    // `int` first. that is a second entry point into the indexed read, so it owes
+    // the same answers as the tagged one: the containers it does not know go
+    // through the protocol, a `list` subclass may have overridden `__getitem__`
+    // and so is not the container the fast path reads, and an index off either end
+    // raises the message the interpreter raises
+    agree_python(
+        "unboxedindex",
+        "\
+def walk(xs: object, n: int) -> str:
+    out = ''
+    i = 0
+    while i < n:
+        out = out + repr(xs[i]) + '|'
+        i = i + 1
+    return out
+
+
+def backwards(xs: object, n: int) -> str:
+    out = ''
+    i = -1
+    while i >= -n:
+        out = out + repr(xs[i]) + '|'
+        i = i - 1
+    return out
+
+
+def last_of(xs: object, n: int) -> object:
+    last = None
+    i = 0
+    while i < n:
+        last = xs[i]
+        i = i + 1
+    return last
+
+
+class Overridden(list):
+    def __getitem__(self, i: int) -> object:
+        return ('own', i)
+
+
+class Counting:
+    def __init__(self) -> None:
+        self.asked = ''
+
+    def __getitem__(self, i: int) -> int:
+        self.asked = self.asked + str(i) + ','
+        return i * 10
+",
+        &[
+            // the containers the fast path knows, and the ones it does not
+            "m.walk([10, 20, 30], 3)",
+            "m.walk((10, 20, 30), 3)",
+            "m.walk('abc', 3)",
+            "m.walk({0: 'zero', 1: 'one'}, 2)",
+            "m.walk(m.Counting(), 3)",
+            // a `list` subclass answers from its own `__getitem__`, not the array
+            "m.walk(m.Overridden([1, 2, 3]), 3)",
+            // a negative counter counts from the end, on the fast path and off it
+            "m.backwards([10, 20, 30], 3)",
+            "m.backwards((10, 20, 30), 3)",
+            "m.backwards(m.Overridden([1, 2, 3]), 2)",
+            // one step past the end, where the message is what has to match
+            "[(type(e).__name__, str(e)) for e in [_capture(m.last_of, [1, 2], 3)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.last_of, (1, 2), 3)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.last_of, 'ab', 3)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.last_of, {0: 'a'}, 2)]]",
+            // an empty list has no element at zero
+            "[(type(e).__name__, str(e)) for e in [_capture(m.last_of, [], 1)]]",
+            // the container is asked for exactly the indices the loop walked
+            "[_c := m.Counting(), m.walk(_c, 4), _c.asked][2]",
+            // the element comes back as itself, and reading it many times neither
+            // drops nor doubles the reference the list still holds
+            "[_xs := [object(), object()], m.last_of(_xs, 2) is _xs[1]][1]",
+            "[_xs := [object()], [m.last_of(_xs, 1) for _ in range(200)][-1] is _xs[0]][1]",
+        ],
+    );
+}
+
+#[test]
 fn a_returned_value_outlives_the_releases_that_follow_it() {
     // a `return` now hands the caller the reference the frame already held rather
     // than taking a second one, so the frame must not release that register on the
@@ -26749,5 +27631,242 @@ def hashes(values):
             "m.hashes([2**70, -(2**70), 2**200])",
             "hash(m.Cached(3010437511937009226))",
         ],
+    );
+}
+
+/// the source both docstring tests below compile
+///
+/// a plain one; the indented multi-line shape almost every real docstring has, which
+/// python 3.13 and later *clean* on the way into `__doc__`; one holding every character a
+/// C string literal has to escape; one on a method; and definitions with none at all,
+/// which have to answer `None` rather than pick up a neighbour's
+const DOCUMENTED: &str = "\
+def plain() -> int:
+    \"the plain one\"
+    return 1
+
+
+def indented() -> int:
+    '''the summary line.
+
+    a second paragraph, indented to the `def` — which python takes back out
+    again, along with the blank line's own spaces:
+       and a deeper line, which keeps what it has beyond the shared amount
+    '''
+    return 2
+
+
+def awkward() -> int:
+    '''holds a \"quote\", a backslash \\\\, a tab\\there,
+a newline, and ends in a backslash \\\\'''
+    return 3
+
+
+def bare() -> int:
+    return 4
+
+
+class Described:
+    def described(self) -> int:
+        '''on a method.
+
+        with a body of its own, indented one level deeper than the module's
+        '''
+        return 5
+
+    def undescribed(self) -> int:
+        return 6
+";
+
+#[test]
+fn a_docstring_agrees() {
+    // `__doc__` is read as data, not only shown: `typing._SpecialForm` takes the
+    // `__getitem__` it is handed and makes that function's docstring the form's own, so a
+    // definition that lost one changes what a program computes
+    agree_python(
+        "docstring",
+        DOCUMENTED,
+        &[
+            "m.plain.__doc__",
+            "m.indented.__doc__",
+            "m.awkward.__doc__",
+            "m.bare.__doc__",
+            "m.Described.described.__doc__",
+            "m.Described.undescribed.__doc__",
+            "m.Described().described.__doc__",
+        ],
+    );
+}
+
+/// that the docstrings above came off compiled definitions rather than off the fallback
+///
+/// an interpreted definition carries its docstring for free, so the comparison alone
+/// passes with nothing compiled. a module-level definition is published as a forwarder
+/// onto the native and an emitted method is a `method_descriptor`, where either
+/// interpreted one is a plain `function` of the module's own file
+#[test]
+fn the_docstrings_are_read_off_compiled_definitions() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_docstringkind");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        DOCUMENTED,
+        "by_diff_docstringkind",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_docstringkind as m\n\
+         _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+         print(_leg(m.plain), _leg(m.indented), _leg(m.bare))\n\
+         print(type(m.Described.__dict__['described']).__name__)\n\
+         print(m.plain.__doc__)\n",
+    );
+    assert_eq!(
+        out,
+        "native native native\n\
+         method_descriptor\n\
+         the plain one"
+    );
+}
+
+/// a module-level function is installed on a class and called through an instance
+///
+/// python's `function` is a descriptor, so a lookup through the class binds the
+/// receiver into slot zero. a `PyCFunction` is not one, and a compiled module that
+/// published the native object under its own name therefore handed out a callable
+/// that dropped the receiver. `functools.total_ordering` is exactly this shape:
+/// `setattr(cls, '__gt__', _convert[...])` on every class it decorates
+#[test]
+fn a_module_function_installed_on_a_class_binds_the_receiver() {
+    agree_python(
+        "bindsreceiver",
+        "\
+def gt(self: object, other: object) -> str:
+    return \"gt\"
+",
+        &[
+            "(lambda C: (setattr(C, '__gt__', m.gt), C() > C())[1])(type('T', (), {}))",
+            "(lambda C: (setattr(C, 'named', m.gt), C().named(1))[1])(type('T', (), {}))",
+        ],
+    );
+}
+
+/// the same install where the receiver has a default, which is the shape that used
+/// to answer *quietly*
+///
+/// with nothing to raise about — the call is legal with no arguments at all — the
+/// dropped receiver was not an error, only a different answer. that is the worst
+/// rung of this compiler's ladder, and it was reachable from ordinary code
+#[test]
+fn a_receiver_with_a_default_is_still_passed_to_a_module_function() {
+    agree_python(
+        "bindsdefaulted",
+        "\
+def label(self: object = None) -> str:
+    return \"bound\" if self is not None else \"UNBOUND\"
+",
+        &[
+            "(lambda C: (setattr(C, 'label', m.label), C().label())[1])(type('T', (), {}))",
+            "m.label()",
+            "m.label(1)",
+        ],
+    );
+}
+
+/// what a compiled module publishes under a function name, and what it does not
+///
+/// the forwarder is a real `function` — that is the whole point, since nothing else
+/// binds — so `type(f)` can no longer say which leg answered. its `__code__` can:
+/// a forwarder's frame comes from the compiler rather than from the module's source.
+/// everything else it is asked about is the interpreted definition's own
+#[test]
+fn a_published_forwarder_answers_as_the_definition_it_stands_for() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_forwardersurface");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+import inspect
+
+
+def described(a: int, b: str = \"x\", *rest: int, k: int = 3, **kw: int) -> str:
+    \"what it does\"
+    return f\"{a}{b}{len(rest)}{k}{len(kw)}\"
+";
+    let built = match build_source(
+        source,
+        "by_diff_forwardersurface",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import inspect\n\
+         import by_diff_forwardersurface as m\n\
+         print(type(m.described).__name__, m.described.__code__.co_filename)\n\
+         print(inspect.signature(m.described))\n\
+         print(m.described.__name__, m.described.__qualname__, m.described.__module__)\n\
+         print(m.described.__doc__, m.described.__defaults__, m.described.__kwdefaults__)\n\
+         print(m.described(1))\n\
+         print([n for n in dir(m) if n.startswith('_by')])\n",
+    );
+    assert_eq!(
+        out,
+        format!(
+            "function {}\n\
+             (a: int, b: str = 'x', *rest: int, k: int = 3, **kw: int) -> str\n\
+             described described by_diff_forwardersurface\n\
+             what it does ('x',) {{'k': 3}}\n\
+             1x030\n\
+             []",
+            by_irbuild::shims::SHIM_FILE
+        )
+    );
+}
+
+/// the runtime has to recognise a forwarder's frame, and it spells the file itself
+///
+/// the warning machinery counts frames back from the compiled function's own, which
+/// a forwarder now stands in for — so it steps over one, and a name it spelled
+/// differently from the writer would step over nothing at all
+#[test]
+fn the_runtime_and_the_writer_spell_a_forwarders_file_the_same_way() {
+    assert!(
+        by_rt::BY_H.contains(&format!(
+            "#define BY_FORWARDER_FILE \"{}\"",
+            by_irbuild::shims::SHIM_FILE
+        )),
+        "the header does not define the file the forwarders are written with"
     );
 }
