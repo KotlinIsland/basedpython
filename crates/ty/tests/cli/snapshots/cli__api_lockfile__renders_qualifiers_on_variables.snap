@@ -10,7 +10,7 @@ success: true
 exit_code: 0
 ----- stdout -----
 #api-lock:v=1
-#tool:by=0.0.8
+#tool:by=0.0.12
 #python:default
 #modules:1
 q.C.a:v[classvar]=builtins.int

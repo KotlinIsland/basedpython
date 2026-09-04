@@ -38,7 +38,13 @@ mod tests {
     #[test_case(Rule::ManualModifier, Path::new("BY022.by"))]
     #[test_case(Rule::RedundantNoneCoalesce, Path::new("BY101.by"))]
     fn rules(rule_code: Rule, path: &Path) -> Result<()> {
-        let snapshot = format!("{}_{}", rule_code.noqa_code(), path.to_string_lossy());
+        let snapshot = format!(
+            "{}_{}",
+            rule_code
+                .noqa_code()
+                .expect("a basedpython rule always has a noqa code"),
+            path.to_string_lossy()
+        );
         let diagnostics = test_path(
             Path::new("basedpython").join(path).as_path(),
             &settings::LinterSettings::for_rule(rule_code),

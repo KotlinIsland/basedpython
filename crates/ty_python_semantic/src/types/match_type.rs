@@ -251,11 +251,11 @@ fn subject_type<'db>(
         return Some(unpacked);
     }
     let bound_typevar = unpacked.as_typevar()?;
-    Some(Type::tuple(Some(TupleType::unpacked_typevartuple(
+    Some(Type::tuple(TupleType::unpacked_typevartuple(
         db,
         env,
         bound_typevar,
-    ))))
+    )))
 }
 
 /// The outcome of matching one pattern against one subject type.

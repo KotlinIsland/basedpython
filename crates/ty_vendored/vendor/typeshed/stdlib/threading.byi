@@ -368,7 +368,7 @@ class Thread:
 
         """
 
-    def join(self, timeout: int | float | None = None):
+    def join(self, timeout: (int | float)? = None):
         """Wait until the thread terminates.
 
         This blocks the calling thread until the thread whose join() method is
@@ -531,7 +531,7 @@ class Condition:
         def locked(self) -> bool
 
     @ignorable_return_value
-    def wait(self, timeout: int | float | None = None) -> bool:
+    def wait(self, timeout: (int | float)? = None) -> bool:
         """Wait until notified or until a timeout occurs.
 
         If the calling thread has not acquired the lock when this method is
@@ -555,7 +555,7 @@ class Condition:
 
         """
 
-    def wait_for[Element](self, predicate: () -> Element, timeout: int | float | None = None) -> Element:
+    def wait_for[Element](self, predicate: () -> Element, timeout: (int | float)? = None) -> Element:
         """Wait until a condition evaluates to True.
 
         predicate should be a callable which result will be interpreted as a
@@ -605,7 +605,7 @@ class Semaphore:
     init(self, value: int = 1)
     def __exit__(self, t: type[BaseException]?, v: BaseException?, tb: TracebackType?)
     @ignorable_return_value
-    def acquire(self, blocking: bool = True, timeout: int | float | None = None) -> bool:
+    def acquire(self, blocking: bool = True, timeout: (int | float)? = None) -> bool:
         """Acquire a semaphore, decrementing the internal counter by one.
 
         When invoked without arguments: if the internal counter is larger than
@@ -630,7 +630,7 @@ class Semaphore:
 
         """
 
-    def __enter__(self, blocking: bool = True, timeout: int | float | None = None) -> bool:
+    def __enter__(self, blocking: bool = True, timeout: (int | float)? = None) -> bool:
         """Acquire a semaphore, decrementing the internal counter by one.
 
         When invoked without arguments: if the internal counter is larger than
@@ -717,7 +717,7 @@ class Event:
         """
 
     @ignorable_return_value
-    def wait(self, timeout: int | float | None = None) -> bool:
+    def wait(self, timeout: (int | float)? = None) -> bool:
         """Block until the internal flag is true.
 
         If the internal flag is true on entry, return immediately. Otherwise,
@@ -778,7 +778,7 @@ class Barrier:
 
     let broken: bool
 
-    init(self, parties: int, action: (() -> None)? = None, timeout: int | float | None = None):
+    init(self, parties: int, action: (() -> None)? = None, timeout: (int | float)? = None):
         """Create a barrier, initialised to 'parties' threads.
 
         'action' is a callable which, when supplied, will be called by one of
@@ -788,7 +788,7 @@ class Barrier:
 
         """
 
-    def wait(self, timeout: int | float | None = None) -> int:
+    def wait(self, timeout: (int | float)? = None) -> int:
         """Wait for the barrier.
 
         When the specified number of threads have started waiting, they are all

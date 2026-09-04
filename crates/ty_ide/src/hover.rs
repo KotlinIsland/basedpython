@@ -9,8 +9,7 @@ use ruff_python_ast::{self as ast, AnyNodeRef};
 use ruff_python_literal::format::FormatSpec;
 use ruff_python_literal::strftime;
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{self, Display, Formatter};
 use ty_python_core::ProgramFile;
 use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::types::ide_support::{resolved_call_signature, typed_dict_key_hover};
@@ -372,12 +371,21 @@ pub struct Hover<'db> {
 
 impl<'db> Hover<'db> {
     /// Renders the hover to a string using the specified markup kind.
-    pub const fn display<'a>(&'a self, db: &'db dyn Db, kind: MarkupKind) -> DisplayHover<'db, 'a> {
-        DisplayHover {
-            db,
-            hover: self,
-            kind,
-        }
+    pub const fn display<'a>(&'a self, db: &'db dyn Db, kind: MarkupKind) -> impl Display {
+        std::fmt::from_fn(move |f| {
+            let mut first = true;
+            let env = ProgramEnvironment::from_file(self.program_file);
+            for content in &self.contents {
+                if !first {
+                    kind.horizontal_line().fmt(f)?;
+                }
+
+                content.display(db, &env, kind).fmt(f)?;
+                first = false;
+            }
+
+            Ok(())
+        })
     }
 
     fn iter(&self) -> std::slice::Iter<'_, HoverContent<'db>> {

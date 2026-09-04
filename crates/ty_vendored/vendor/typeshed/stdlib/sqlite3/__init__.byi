@@ -254,7 +254,7 @@ private type AdaptedInputData = SqliteData | dynamic
 # The Mapping must really be a dict, but making it invariant is too annoying.
 type _Parameters = SupportsLenAndGetItem[AdaptedInputData] | Mapping[str, AdaptedInputData]
 # Controls the legacy transaction handling mode of sqlite3.
-type _IsolationLevel = "DEFERRED" | "EXCLUSIVE" | "IMMEDIATE" | None
+type _IsolationLevel = "DEFERRED" | "EXCLUSIVE" | "IMMEDIATE"?
 private type RowFactoryOptions = type[Row] | ((Cursor, (*: dynamic)) -> object) | None
 
 @type_check_only
@@ -491,7 +491,7 @@ class Connection:
         ) -> None:
             """Set authorizer callback."""
 
-        def set_progress_handler(self, progress_handler: (() -> (int?))?, /, n: int) -> None:
+        def set_progress_handler(self, progress_handler: (() -> int?)?, /, n: int) -> None:
             """Set progress handler callback.
 
               progress_handler
@@ -520,7 +520,7 @@ class Connection:
             'authorizer_callback' will become positional-only in Python 3.15.
             """
 
-        def set_progress_handler(self, progress_handler: (() -> (int?))?, n: int) -> None:
+        def set_progress_handler(self, progress_handler: (() -> int?)?, n: int) -> None:
             """Set progress handler callback.
 
               progress_handler

@@ -142,7 +142,7 @@ private type PCTRTT = (*: (str, str))
 private type PCTRTTT = (*: PCTRTT)
 private type PeerCertRetDictType = dict[str, str | PCTRTTT | PCTRTT]
 private type PeerCertRetType = PeerCertRetDictType | bytes | None
-private type SrvnmeCbType = (SSLSocket | SSLObject, str?, SSLSocket) -> (int?)
+private type SrvnmeCbType = (SSLSocket | SSLObject, str?, SSLSocket) -> int?
 
 socket_error = OSError
 

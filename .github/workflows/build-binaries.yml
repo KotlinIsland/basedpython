@@ -32,6 +32,8 @@ concurrency:
 permissions: {}
 
 env:
+  UV_LOCKED: 1
+  ACTIONS_CACHE_MODE: none
   PACKAGE_NAME: basedpython
   PYTHON_VERSION: "3.13"
   CARGO_INCREMENTAL: 0
@@ -50,12 +52,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
         run: python scripts/transform_readme.py --target pypi
       - name: "Build sdist"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           command: sdist
           args: --out dist
@@ -75,6 +79,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Prep README.md"
@@ -82,6 +87,7 @@ jobs:
       - name: "Build wheels - x86_64"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: x86_64
           args: --release --locked --out dist --compatibility pypi
@@ -109,6 +115,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: arm64
       - name: "Install LLVM profiling tools"
@@ -124,6 +131,7 @@ jobs:
       - name: "Build wheels - aarch64"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: aarch64
           args: --release --locked --out dist --compatibility pypi
@@ -157,6 +165,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: ${{ matrix.platform.arch }}
       - name: "Install LLVM profiling tools"
@@ -179,6 +188,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           args: --release --locked --out dist --compatibility pypi
@@ -220,6 +230,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Install LLVM profiling tools"
@@ -239,6 +250,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
           manylinux: 2_17
@@ -327,22 +339,26 @@ jobs:
       matrix:
         platform:
           - target: armv7-unknown-linux-gnueabihf
-            arch: armv7
+            test_image: arm32v7/ubuntu:20.04@sha256:d9a6ab6baaf86907ea1d46f0cbc87547920077c9c6017721faed6eeb51e9aa7e
+            test_platform: linux/arm/v7
             manylinux: 2_17
           - target: s390x-unknown-linux-gnu
-            arch: s390x
+            test_image: s390x/ubuntu:20.04@sha256:221f5f8e28d896556d0e55605cd6936450e6231544e9d83d687beae2d0e71afd
+            test_platform: linux/s390x
             manylinux: 2_17
+            maturin_docker_options: -e CFLAGS_s390x_unknown_linux_gnu=-march=z10
           - target: powerpc64le-unknown-linux-gnu
-            arch: ppc64le
             manylinux: 2_17
             # see https://github.com/astral-sh/ruff/issues/10073
             maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
           - target: arm-unknown-linux-musleabihf
             # Use the cross container, but tag as `linux_armv6l`
             manylinux: auto
-            arch: arm
+            test_image: balenalib/rpi-raspbian:bullseye@sha256:851cfc48b26f6413a72a7f6873a7624ba2a427048976f6ab4483f72fe165d4f1
+            test_platform: linux/arm/v6
           - target: riscv64gc-unknown-linux-gnu
-            arch: riscv64
+            test_image: riscv64/ubuntu:20.04@sha256:610bedb0c5d9aeae4b45e9064e820c4e0b0f6c1d2843116b0a1ae754890951ac
+            test_platform: linux/riscv64
             # Minimum manylinux target for riscv64
             manylinux: 2_31
 
@@ -353,12 +369,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
         run: python scripts/transform_readme.py --target pypi
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: ${{ matrix.platform.manylinux }}
@@ -385,6 +403,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: x64
       - name: "Prep README.md"
@@ -392,6 +411,7 @@ jobs:
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
           manylinux: musllinux_1_2
@@ -409,10 +429,10 @@ jobs:
       matrix:
         platform:
           - target: aarch64-unknown-linux-musl
-            arch: aarch64
+            test_platform: linux/arm64
             maturin_docker_options: -e JEMALLOC_SYS_WITH_LG_PAGE=16
           - target: armv7-unknown-linux-musleabihf
-            arch: armv7
+            test_platform: linux/arm/v7
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -421,12 +441,14 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
+          cache: ""
           python-version: ${{ env.PYTHON_VERSION }}
       - name: "Prep README.md"
         run: python scripts/transform_readme.py --target pypi
       - name: "Build wheels"
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          sccache: false
           maturin-version: v1.14.1
           target: ${{ matrix.platform.target }}
           manylinux: musllinux_1_2

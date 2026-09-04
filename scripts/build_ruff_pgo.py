@@ -3,6 +3,19 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = []
+#
+# [tool.ty.rules]
+# blanket-ignore-comment = "warn"
+# missing-type-argument = "warn"
+# possibly-unresolved-reference = "warn"
+# unsound-return-statement = "warn"
+# unsound-yield = "warn"
+# unsupported-dynamic-base = "warn"
+# division-by-zero = "warn"
+#
+# [tool.uv]
+# no-build = true
+# exclude-newer = "P7D"
 # ///
 
 from __future__ import annotations
@@ -131,6 +144,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", help="Host-native Rust target triple")
     parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Use debug builds to validate the complete PGO pipeline",
+    )
+    parser.add_argument(
         "--target-dir",
         type=Path,
         help="Cargo target directory (default: CARGO_TARGET_DIR or target/ruff-pgo)",
@@ -203,11 +221,12 @@ def main():
             environment.get("RUSTFLAGS"), f"-Cprofile-generate={profile_dir}"
         ),
     }
-    print("Building instrumented release Ruff", flush=True)
-    run(cargo_command(target), environment=instrumented_environment)
+    profile = "debug" if args.debug else "release"
+    print(f"Building instrumented {profile} Ruff", flush=True)
+    run(cargo_command(target, debug=args.debug), environment=instrumented_environment)
 
     binary_name = f"{BINARY_STEM}.exe" if "windows" in target else BINARY_STEM
-    instrumented_binary = instrumented_target_dir / target / "release" / binary_name
+    instrumented_binary = instrumented_target_dir / target / profile / binary_name
     if not instrumented_binary.is_file():
         raise RuntimeError(f"Instrumented Ruff binary not found: {instrumented_binary}")
 
@@ -229,10 +248,11 @@ def main():
             environment.get("RUSTFLAGS"), f"-Cprofile-use={merged_profile}"
         ),
     }
-    print("Building optimized release Ruff", flush=True)
-    run(cargo_command(target), environment=optimized_environment)
+    print(f"Building profile-guided {profile} Ruff", flush=True)
+    run(cargo_command(target, debug=args.debug), environment=optimized_environment)
     print(
-        f"Optimized Ruff: {target_dir / target / 'release' / binary_name}", flush=True
+        f"Profile-guided Ruff: {target_dir / target / profile / binary_name}",
+        flush=True,
     )
 
 
@@ -506,11 +526,11 @@ def write_corpus_arguments(target_directory: Path, corpus: list[str]) -> Path:
     return arguments
 
 
-def cargo_command(target: str) -> list[str]:
+def cargo_command(target: str, *, debug: bool = False) -> list[str]:
     return [
         "cargo",
         "rustc",
-        "--release",
+        *(() if debug else ("--release",)),
         "--locked",
         "--package",
         "ruff",

@@ -60,7 +60,7 @@ class Queue[in out Element]:
         qsize() can be used.
         """
 
-    def get(self, block: bool = True, timeout: int | float | None = None) -> Element:
+    def get(self, block: bool = True, timeout: (int | float)? = None) -> Element:
         """Remove and return an item from the queue.
 
         If optional args 'block' is true and 'timeout' is None (the default),
@@ -97,7 +97,7 @@ class Queue[in out Element]:
             """
 
     def _get(self) -> Element
-    def put(self, item: Element, block: bool = True, timeout: int | float | None = None):
+    def put(self, item: Element, block: bool = True, timeout: (int | float)? = None):
         """Put an item into the queue.
 
         If optional args 'block' is true and 'timeout' is None (the default),

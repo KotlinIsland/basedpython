@@ -85,6 +85,8 @@ pub enum KnownClass {
     MethodType,
     MethodWrapperType,
     WrapperDescriptorType,
+    MemberDescriptorType,
+    GetSetDescriptorType,
     UnionType,
     GeneratorType,
     AsyncGeneratorType,
@@ -114,6 +116,7 @@ pub enum KnownClass {
     TypeVarTuple,
     ExtensionsTypeVarTuple, // must be distinct from typing.TypeVarTuple, backports new features
     TypeAliasType,
+    ExtensionsTypeAliasType, // may be distinct from typing.TypeAliasType
     NoDefaultType,
     NewType,
     Hashable,
@@ -152,6 +155,9 @@ pub enum KnownClass {
     // re
     ReMatch,
     RePattern,
+    // unittest
+    /// The standard-library `unittest.case.TestCase` class.
+    UnittestTestCase,
     // ty_extensions
     Character,
     ConstraintSet,
@@ -182,9 +188,151 @@ pub enum KnownClass {
     SqlalchemyDeclarativeBase,
     SqlalchemyMappedAsDataclass,
     SqlalchemyMapped,
+    // Pytest
+    PytestParametrizeMarkDecorator,
 }
 
 impl KnownClass {
+    /// Return whether this class is known to have `type` as its runtime metaclass.
+    ///
+    /// Built-in and extension types can inherit from collection ABCs only in their stubs. Those
+    /// bases must not give the runtime class an inferred protocol metaclass.
+    pub(super) fn has_known_type_metaclass(self, python_version: PythonVersion) -> bool {
+        match self {
+            Self::Bool
+            | Self::Object
+            | Self::Bytes
+            | Self::Bytearray
+            | Self::Memoryview
+            | Self::Type
+            | Self::Int
+            | Self::Float
+            | Self::Complex
+            | Self::Str
+            | Self::List
+            | Self::Tuple
+            | Self::Range
+            | Self::Set
+            | Self::FrozenSet
+            | Self::Dict
+            | Self::Slice
+            | Self::Property
+            | Self::BaseException
+            | Self::Exception
+            | Self::Warning
+            | Self::BaseExceptionGroup
+            | Self::ExceptionGroup
+            | Self::Staticmethod
+            | Self::Classmethod
+            | Self::Super
+            | Self::NotImplementedError
+            | Self::GenericAlias
+            | Self::ModuleType
+            | Self::FunctionType
+            | Self::MethodType
+            | Self::MethodWrapperType
+            | Self::WrapperDescriptorType
+            | Self::MemberDescriptorType
+            | Self::GetSetDescriptorType
+            | Self::UnionType
+            | Self::GeneratorType
+            | Self::AsyncGeneratorType
+            | Self::CoroutineType
+            | Self::NotImplementedType
+            | Self::BuiltinFunctionType
+            | Self::EllipsisType
+            | Self::Deque => true,
+
+            Self::Sentinel => python_version >= PythonVersion::PY315,
+
+            Self::Enum
+            | Self::EnumProperty
+            | Self::EnumType
+            | Self::Auto
+            | Self::Member
+            | Self::Nonmember
+            | Self::StrEnum
+            | Self::IntEnum
+            | Self::Flag
+            | Self::IntFlag
+            | Self::ABCMeta
+            | Self::NoneType
+            | Self::SupportsKeysAndGetItem
+            | Self::Awaitable
+            | Self::Generator
+            | Self::AsyncGenerator
+            | Self::Deprecated
+            | Self::StdlibAlias
+            | Self::SpecialForm
+            | Self::TypeVar
+            | Self::ParamSpec
+            | Self::ExtensionsParamSpec
+            | Self::ParamSpecArgs
+            | Self::ParamSpecKwargs
+            | Self::ProtocolMeta
+            | Self::TypeVarTuple
+            | Self::ExtensionsTypeVarTuple
+            | Self::TypeAliasType
+            | Self::ExtensionsTypeAliasType
+            | Self::NoDefaultType
+            | Self::NewType
+            | Self::Hashable
+            | Self::SupportsIndex
+            | Self::Iterable
+            | Self::Iterator
+            | Self::AsyncIterator
+            | Self::Sequence
+            | Self::Mapping
+            | Self::MutableMapping
+            | Self::ExtensionsTypeVar
+            | Self::ExtensionTypedDictFallback
+            | Self::ChainMap
+            | Self::Counter
+            | Self::DefaultDict
+            | Self::OrderedDict
+            | Self::VersionInfo
+            | Self::Field
+            | Self::KwOnly
+            | Self::NamedTupleFallback
+            | Self::NamedTupleLike
+            | Self::TypedDictFallback
+            | Self::Template
+            | Self::Path
+            | Self::FunctoolsPartial
+            | Self::ConstraintSet
+            | Self::ConstraintSetSolution
+            | Self::GenericContext
+            | Self::Specialization
+            | Self::TyExtensionsAsyncIterable
+            | Self::TyExtensionsAsyncIterator
+            | Self::TyExtensionsIterable
+            | Self::TyExtensionsIterator
+            | Self::UnittestTestCase
+            | Self::PydanticBaseModel
+            | Self::PydanticBaseSettings
+            | Self::PydanticConfigDict
+            | Self::PydanticRootModel
+            | Self::PydanticStrict
+            | Self::PytestParametrizeMarkDecorator
+            | Self::AssertionError
+            | Self::RuntimeError
+            | Self::ReMatch
+            | Self::RePattern
+            | Self::ByStaticProperty
+            | Self::DjangoModel
+            | Self::DjangoField
+            | Self::DjangoForeignKey
+            | Self::DjangoOneToOneField
+            | Self::DjangoManyToManyField
+            | Self::DjangoManager
+            | Self::DjangoQuerySet
+            | Self::SqlalchemyDeclarativeBase
+            | Self::SqlalchemyMappedAsDataclass
+            | Self::SqlalchemyMapped
+            | Self::Character => false,
+        }
+    }
+
     pub(crate) const fn is_bool(self) -> bool {
         matches!(self, Self::Bool)
     }
@@ -213,6 +361,7 @@ impl KnownClass {
             | Self::FunctionType
             | Self::VersionInfo
             | Self::TypeAliasType
+            | Self::ExtensionsTypeAliasType
             | Self::TypeVar
             | Self::ExtensionsTypeVar
             | Self::ParamSpec
@@ -223,6 +372,8 @@ impl KnownClass {
             | Self::ExtensionsTypeVarTuple
             | Self::Sentinel
             | Self::WrapperDescriptorType
+            | Self::MemberDescriptorType
+            | Self::GetSetDescriptorType
             | Self::UnionType
             | Self::GeneratorType
             | Self::AsyncGeneratorType
@@ -314,6 +465,7 @@ impl KnownClass {
             | Self::Path
             | Self::ExtensionTypedDictFallback
             | Self::TypedDictFallback
+            | Self::UnittestTestCase
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
@@ -329,7 +481,8 @@ impl KnownClass {
             | Self::SqlalchemyDeclarativeBase
             | Self::SqlalchemyMappedAsDataclass
             | Self::SqlalchemyMapped
-            | Self::ByStaticProperty => Some(Truthiness::Ambiguous),
+            | Self::ByStaticProperty
+            | Self::PytestParametrizeMarkDecorator => Some(Truthiness::Ambiguous),
 
             // Evaluating `NotImplementedType` in a boolean context was deprecated in Python 3.9
             // and raises a `TypeError` in Python >=3.14
@@ -394,6 +547,8 @@ impl KnownClass {
             | KnownClass::MethodType
             | KnownClass::MethodWrapperType
             | KnownClass::WrapperDescriptorType
+            | KnownClass::MemberDescriptorType
+            | KnownClass::GetSetDescriptorType
             | KnownClass::UnionType
             | KnownClass::GeneratorType
             | KnownClass::AsyncGeneratorType
@@ -411,6 +566,7 @@ impl KnownClass {
             | KnownClass::ExtensionsTypeVarTuple
             | KnownClass::Sentinel
             | KnownClass::TypeAliasType
+            | KnownClass::ExtensionsTypeAliasType
             | KnownClass::NoDefaultType
             | KnownClass::NewType
             | KnownClass::Hashable
@@ -452,6 +608,7 @@ impl KnownClass {
             | KnownClass::FunctoolsPartial
             | KnownClass::ReMatch
             | KnownClass::RePattern
+            | KnownClass::UnittestTestCase
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
@@ -467,7 +624,8 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
-            | KnownClass::ByStaticProperty => false,
+            | KnownClass::ByStaticProperty
+            | KnownClass::PytestParametrizeMarkDecorator => false,
         }
     }
 
@@ -524,6 +682,8 @@ impl KnownClass {
             | KnownClass::MethodType
             | KnownClass::MethodWrapperType
             | KnownClass::WrapperDescriptorType
+            | KnownClass::MemberDescriptorType
+            | KnownClass::GetSetDescriptorType
             | KnownClass::UnionType
             | KnownClass::GeneratorType
             | KnownClass::AsyncGeneratorType
@@ -541,6 +701,7 @@ impl KnownClass {
             | KnownClass::ExtensionsTypeVarTuple
             | KnownClass::Sentinel
             | KnownClass::TypeAliasType
+            | KnownClass::ExtensionsTypeAliasType
             | KnownClass::NoDefaultType
             | KnownClass::NewType
             | KnownClass::Hashable
@@ -582,6 +743,7 @@ impl KnownClass {
             | KnownClass::FunctoolsPartial
             | KnownClass::ReMatch
             | KnownClass::RePattern
+            | KnownClass::UnittestTestCase
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticRootModel
@@ -596,7 +758,8 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
-            | KnownClass::ByStaticProperty => false,
+            | KnownClass::ByStaticProperty
+            | KnownClass::PytestParametrizeMarkDecorator => false,
 
             KnownClass::PydanticConfigDict => true,
         }
@@ -655,6 +818,8 @@ impl KnownClass {
             | KnownClass::MethodType
             | KnownClass::MethodWrapperType
             | KnownClass::WrapperDescriptorType
+            | KnownClass::MemberDescriptorType
+            | KnownClass::GetSetDescriptorType
             | KnownClass::UnionType
             | KnownClass::GeneratorType
             | KnownClass::AsyncGeneratorType
@@ -672,6 +837,7 @@ impl KnownClass {
             | KnownClass::ExtensionsTypeVarTuple
             | KnownClass::Sentinel
             | KnownClass::TypeAliasType
+            | KnownClass::ExtensionsTypeAliasType
             | KnownClass::NoDefaultType
             | KnownClass::NewType
             | KnownClass::Hashable
@@ -712,6 +878,7 @@ impl KnownClass {
             | KnownClass::FunctoolsPartial
             | KnownClass::ReMatch
             | KnownClass::RePattern
+            | KnownClass::UnittestTestCase
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
@@ -727,7 +894,8 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
-            | KnownClass::ByStaticProperty => false,
+            | KnownClass::ByStaticProperty
+            | KnownClass::PytestParametrizeMarkDecorator => false,
         }
     }
 
@@ -798,6 +966,8 @@ impl KnownClass {
             | Self::MethodType
             | Self::MethodWrapperType
             | Self::WrapperDescriptorType
+            | Self::MemberDescriptorType
+            | Self::GetSetDescriptorType
             | Self::NoneType
             | Self::SpecialForm
             | Self::TypeVar
@@ -810,6 +980,7 @@ impl KnownClass {
             | Self::ExtensionsTypeVarTuple
             | Self::Sentinel
             | Self::TypeAliasType
+            | Self::ExtensionsTypeAliasType
             | Self::NoDefaultType
             | Self::NewType
             | Self::ChainMap
@@ -854,6 +1025,7 @@ impl KnownClass {
             | Self::Mapping
             | Self::MutableMapping
             | Self::Sequence
+            | Self::UnittestTestCase
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
@@ -869,7 +1041,8 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
-            | KnownClass::ByStaticProperty => false,
+            | KnownClass::ByStaticProperty
+            | Self::PytestParametrizeMarkDecorator => false,
         }
     }
 
@@ -926,6 +1099,8 @@ impl KnownClass {
             | KnownClass::MethodType
             | KnownClass::MethodWrapperType
             | KnownClass::WrapperDescriptorType
+            | KnownClass::MemberDescriptorType
+            | KnownClass::GetSetDescriptorType
             | KnownClass::UnionType
             | KnownClass::GeneratorType
             | KnownClass::AsyncGeneratorType
@@ -951,6 +1126,7 @@ impl KnownClass {
             | KnownClass::ExtensionsTypeVarTuple
             | KnownClass::Sentinel
             | KnownClass::TypeAliasType
+            | KnownClass::ExtensionsTypeAliasType
             | KnownClass::NoDefaultType
             | KnownClass::NewType
             | KnownClass::Hashable
@@ -985,6 +1161,7 @@ impl KnownClass {
             | KnownClass::ConstraintSetSolution
             | KnownClass::GenericContext
             | KnownClass::Specialization
+            | KnownClass::UnittestTestCase
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
@@ -1000,7 +1177,8 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
-            | KnownClass::ByStaticProperty => false,
+            | KnownClass::ByStaticProperty
+            | KnownClass::PytestParametrizeMarkDecorator => false,
             KnownClass::NamedTupleFallback
             | KnownClass::TypedDictFallback
             | KnownClass::ExtensionTypedDictFallback => true,
@@ -1048,6 +1226,8 @@ impl KnownClass {
             Self::UnionType => "UnionType",
             Self::MethodWrapperType => "MethodWrapperType",
             Self::WrapperDescriptorType => "WrapperDescriptorType",
+            Self::MemberDescriptorType => "MemberDescriptorType",
+            Self::GetSetDescriptorType => "GetSetDescriptorType",
             Self::BuiltinFunctionType => "BuiltinFunctionType",
             Self::GeneratorType => "GeneratorType",
             Self::AsyncGeneratorType => "AsyncGeneratorType",
@@ -1064,7 +1244,7 @@ impl KnownClass {
             Self::TypeVarTuple => "TypeVarTuple",
             Self::ExtensionsTypeVarTuple => "TypeVarTuple",
             Self::Sentinel => "sentinel",
-            Self::TypeAliasType => "TypeAliasType",
+            Self::TypeAliasType | Self::ExtensionsTypeAliasType => "TypeAliasType",
             Self::NoDefaultType => "_NoDefaultType",
             Self::NewType => "NewType",
             Self::Hashable => "Hashable",
@@ -1130,6 +1310,7 @@ impl KnownClass {
             Self::ReMatch => "Match",
             Self::RePattern => "Pattern",
             Self::ProtocolMeta => "_ProtocolMeta",
+            Self::UnittestTestCase => "TestCase",
             Self::PydanticBaseModel => "BaseModel",
             Self::PydanticBaseSettings => "BaseSettings",
             Self::PydanticConfigDict => "ConfigDict",
@@ -1145,34 +1326,19 @@ impl KnownClass {
             Self::SqlalchemyDeclarativeBase => "DeclarativeBase",
             Self::SqlalchemyMappedAsDataclass => "MappedAsDataclass",
             Self::SqlalchemyMapped => "Mapped",
+            Self::PytestParametrizeMarkDecorator => "_ParametrizeMarkDecorator",
         }
     }
 
     pub(crate) fn display(self, python_version: PythonVersion) -> impl std::fmt::Display {
-        struct KnownClassDisplay {
-            class: KnownClass,
-            python_version: PythonVersion,
-        }
-
-        impl std::fmt::Display for KnownClassDisplay {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                let KnownClassDisplay {
-                    class: known_class,
-                    python_version,
-                } = *self;
-                write!(
-                    f,
-                    "{module}.{class}",
-                    module = known_class.canonical_module(python_version),
-                    class = known_class.name(python_version)
-                )
-            }
-        }
-
-        KnownClassDisplay {
-            class: self,
-            python_version,
-        }
+        std::fmt::from_fn(move |f| {
+            write!(
+                f,
+                "{module}.{class}",
+                module = self.canonical_module(python_version),
+                class = self.name(python_version)
+            )
+        })
     }
 
     /// Look up a [`KnownClass`] in its canonical module and return a [`Type`] representing all
@@ -1197,7 +1363,11 @@ impl KnownClass {
         // or salsa aborts the whole run
         #[salsa::tracked(
             returns(copy),
-            cycle_initial=|_, _, _| Type::unknown(),
+            cycle_initial=|_, id, _| Type::divergent(id),
+            cycle_fn=|db, cycle, previous: &Type<'db>, result: Type<'db>, argument: KnownClassArgument<'db>| {
+                let env = ProgramEnvironment::from_program(argument.program(db));
+                result.cycle_normalized(db, &env, *previous, cycle)
+            },
             heap_size=ruff_memory_usage::heap_size,
         )]
         fn known_class_to_instance<'db>(
@@ -1517,7 +1687,9 @@ impl KnownClass {
             | Self::BuiltinFunctionType
             | Self::EllipsisType
             | Self::NotImplementedType
-            | Self::WrapperDescriptorType => KnownModule::Types,
+            | Self::WrapperDescriptorType
+            | Self::MemberDescriptorType
+            | Self::GetSetDescriptorType => KnownModule::Types,
             Self::NoneType | Self::SupportsKeysAndGetItem => KnownModule::Typeshed,
             Self::SpecialForm
             | Self::TypeVar
@@ -1537,7 +1709,7 @@ impl KnownClass {
             | Self::Mapping
             | Self::MutableMapping
             | Self::Hashable => KnownModule::CollectionsAbcInternal,
-            Self::TypeAliasType
+            Self::ExtensionsTypeAliasType
             | Self::ExtensionsTypeVar
             | Self::ExtensionsTypeVarTuple
             | Self::ExtensionsParamSpec
@@ -1546,6 +1718,13 @@ impl KnownClass {
             | Self::Deprecated
             | Self::ExtensionTypedDictFallback
             | Self::NewType => KnownModule::TypingExtensions,
+            Self::TypeAliasType => {
+                if python_version >= PythonVersion::PY312 {
+                    KnownModule::Typing
+                } else {
+                    KnownModule::TypingExtensions
+                }
+            }
             Self::TypeVarTuple => {
                 if python_version >= PythonVersion::PY311 {
                     KnownModule::Typing
@@ -1591,6 +1770,7 @@ impl KnownClass {
             Self::Path => KnownModule::Pathlib,
             Self::FunctoolsPartial => KnownModule::Functools,
             Self::ReMatch | Self::RePattern => KnownModule::Re,
+            Self::UnittestTestCase => KnownModule::UnittestCase,
             Self::PydanticBaseModel => KnownModule::PydanticMain,
             Self::PydanticBaseSettings => KnownModule::PydanticSettingsMain,
             Self::PydanticConfigDict => KnownModule::PydanticConfig,
@@ -1607,6 +1787,7 @@ impl KnownClass {
                 KnownModule::SqlalchemyOrmDeclApi
             }
             Self::SqlalchemyMapped => KnownModule::SqlalchemyOrmBase,
+            Self::PytestParametrizeMarkDecorator => KnownModule::PytestMarkStructures,
         }
     }
 
@@ -1642,6 +1823,8 @@ impl KnownClass {
             | Self::MethodType
             | Self::MethodWrapperType
             | Self::WrapperDescriptorType
+            | Self::MemberDescriptorType
+            | Self::GetSetDescriptorType
             | Self::GeneratorType
             | Self::AsyncGeneratorType
             | Self::CoroutineType
@@ -1669,6 +1852,7 @@ impl KnownClass {
             | Self::AsyncGenerator
             | Self::Deprecated
             | Self::TypeAliasType
+            | Self::ExtensionsTypeAliasType
             | Self::TypeVar
             | Self::ExtensionsTypeVar
             | Self::ParamSpec
@@ -1721,6 +1905,7 @@ impl KnownClass {
             | Self::FunctoolsPartial
             | Self::ReMatch
             | Self::RePattern
+            | Self::UnittestTestCase
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
@@ -1736,7 +1921,8 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
-            | KnownClass::ByStaticProperty => false,
+            | KnownClass::ByStaticProperty
+            | Self::PytestParametrizeMarkDecorator => false,
         }
     }
 
@@ -1792,9 +1978,11 @@ impl KnownClass {
             "UnionType" => &[Self::UnionType],
             "MethodWrapperType" => &[Self::MethodWrapperType],
             "WrapperDescriptorType" => &[Self::WrapperDescriptorType],
+            "MemberDescriptorType" => &[Self::MemberDescriptorType],
+            "GetSetDescriptorType" => &[Self::GetSetDescriptorType],
             "BuiltinFunctionType" => &[Self::BuiltinFunctionType],
             "NewType" => &[Self::NewType],
-            "TypeAliasType" => &[Self::TypeAliasType],
+            "TypeAliasType" => &[Self::TypeAliasType, Self::ExtensionsTypeAliasType],
             "TypeVar" => &[Self::TypeVar, Self::ExtensionsTypeVar],
             "Iterable" => &[Self::Iterable, Self::TyExtensionsIterable],
             "Iterator" => &[Self::Iterator, Self::TyExtensionsIterator],
@@ -1853,6 +2041,7 @@ impl KnownClass {
             "Pattern" => &[Self::RePattern],
             "_ProtocolMeta" => &[Self::ProtocolMeta],
             "_TypedDict" => &[Self::ExtensionTypedDictFallback],
+            "TestCase" => &[Self::UnittestTestCase],
             "BaseModel" => &[Self::PydanticBaseModel],
             "BaseSettings" => &[Self::PydanticBaseSettings],
             "ConfigDict" => &[Self::PydanticConfigDict],
@@ -1867,6 +2056,7 @@ impl KnownClass {
             "DeclarativeBase" => &[Self::SqlalchemyDeclarativeBase],
             "MappedAsDataclass" => &[Self::SqlalchemyMappedAsDataclass],
             "Mapped" => &[Self::SqlalchemyMapped],
+            "_ParametrizeMarkDecorator" => &[Self::PytestParametrizeMarkDecorator],
             _ => return None,
         };
 
@@ -1939,6 +2129,8 @@ impl KnownClass {
             | Self::AsyncGeneratorType
             | Self::CoroutineType
             | Self::WrapperDescriptorType
+            | Self::MemberDescriptorType
+            | Self::GetSetDescriptorType
             | Self::BuiltinFunctionType
             | Self::Field
             | Self::KwOnly
@@ -1952,6 +2144,8 @@ impl KnownClass {
             | Self::ExtensionsParamSpec
             | Self::TypeVarTuple
             | Self::ExtensionsTypeVarTuple
+            | Self::TypeAliasType
+            | Self::ExtensionsTypeAliasType
             | Self::Sentinel
             | Self::NamedTupleLike
             | Self::Character
@@ -1966,6 +2160,8 @@ impl KnownClass {
             | Self::Awaitable
             | Self::Generator
             | Self::AsyncGenerator
+            | Self::UnittestTestCase
+            | Self::PytestParametrizeMarkDecorator
             | Self::Hashable
             | Self::Iterable
             | Self::Iterator
@@ -2000,7 +2196,6 @@ impl KnownClass {
             Self::NoneType => matches!(module, KnownModule::Typeshed | KnownModule::Types),
 
             Self::SpecialForm
-            | Self::TypeAliasType
             | Self::NoDefaultType
             | Self::SupportsIndex
             | Self::ParamSpecArgs
@@ -2210,62 +2405,42 @@ impl<'db> KnownClassLookupError<'db> {
     }
 
     fn display<'env>(
-        &self,
+        self,
         db: &'db dyn Db,
         env: &'env ProgramEnvironment<'db>,
         class: KnownClass,
     ) -> impl std::fmt::Display + 'env {
-        struct ErrorDisplay<'env, 'db> {
-            db: &'db dyn Db,
-            env: &'env ProgramEnvironment<'db>,
-            class: KnownClass,
-            error: KnownClassLookupError<'db>,
-        }
+        std::fmt::from_fn(move |f| {
+            let python_version = env.python_version(db);
+            let class = class.display(python_version);
+            let location = if self.is_third_party() {
+                ""
+            } else {
+                " in typeshed"
+            };
 
-        impl std::fmt::Display for ErrorDisplay<'_, '_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                let db = self.db;
-                let ErrorDisplay {
-                    db: _,
-                    env,
-                    class,
-                    error,
-                } = self;
-
-                let python_version = env.python_version(db);
-                let class = class.display(python_version);
-                let location = if error.is_third_party() {
-                    ""
-                } else {
-                    " in typeshed"
-                };
-
-                match error {
-                    KnownClassLookupError::ClassNotFound { .. } => write!(
-                        f,
-                        "Could not find class `{class}`{location} on Python {python_version}",
-                    ),
-                    KnownClassLookupError::SymbolNotAClass { found_type, .. } => write!(
-                        f,
-                        "Error looking up `{class}`{location}: expected to find a class definition \
-                        on Python {python_version}, but found a symbol of type `{found_type}` instead",
-                        found_type = found_type.display(db, env),
-                    ),
-                    KnownClassLookupError::ClassPossiblyUnbound { .. } => write!(
-                        f,
-                        "Error looking up `{class}`{location} on Python {python_version}: expected \
-                        to find a fully bound symbol, but found one that is possibly unbound",
-                    ),
-                }
+            match self {
+                KnownClassLookupError::ClassNotFound { .. } => write!(
+                    f,
+                    "Could not find class `{class}`{location} on Python {python_version}",
+                ),
+                KnownClassLookupError::SymbolNotAClass { found_type, .. } => write!(
+                    f,
+                    "Error looking up `{class}`{location}: \
+                    expected to find a class definition \
+                    on Python {python_version}, \
+                    but found a symbol of type `{found_type}` instead",
+                    found_type = found_type.display(db, env),
+                ),
+                KnownClassLookupError::ClassPossiblyUnbound { .. } => write!(
+                    f,
+                    "Error looking up `{class}`{location} \
+                    on Python {python_version}: expected \
+                    to find a fully bound symbol, \
+                    but found one that is possibly unbound",
+                ),
             }
-        }
-
-        ErrorDisplay {
-            db,
-            env,
-            class,
-            error: *self,
-        }
+        })
     }
 }
 
@@ -2387,7 +2562,7 @@ mod tests {
                     python_platform: python_platform.clone(),
                     search_paths: search_paths.clone(),
                 };
-                program = Program::from_settings(&db, settings);
+                program = Program::from_settings(&db, &settings);
                 current_version = version_added;
             }
 

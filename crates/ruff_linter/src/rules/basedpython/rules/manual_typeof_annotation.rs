@@ -2,6 +2,7 @@ use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::{self as ast, Expr};
 use ruff_text_size::Ranged;
 
+use crate::codes::Category;
 use crate::checkers::ast::Checker;
 use crate::{AlwaysFixableViolation, Applicability, Edit, Fix};
 
@@ -37,7 +38,7 @@ use crate::{AlwaysFixableViolation, Applicability, Edit, Fix};
 /// ## References
 /// - [basedpython documentation: typeof](https://docs.basedpython.org/features/typeof)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.0.1-a10")]
+#[violation_metadata(stable_since = "0.0.1-a10", category = Category::Style)]
 pub(crate) struct ManualTypeofAnnotation;
 
 impl AlwaysFixableViolation for ManualTypeofAnnotation {

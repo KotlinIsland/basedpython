@@ -15,19 +15,22 @@ use crate::registry::{Linter, Rule, RuleNamespace};
 /// rule with documentation and one without read as the same kind of document.
 pub fn rule_documentation(rule: Rule) -> String {
     let mut output = String::new();
-    let _ = write!(&mut output, "# {} ({})", rule.name(), rule.noqa_code());
+    let _ = write!(&mut output, "# {}", rule.name_and_code());
     output.push('\n');
     output.push('\n');
 
-    let (linter, _) = Linter::parse_code(&rule.noqa_code().to_string())
-        .expect("a rule's own noqa code is one its linter parses");
-    let _ = write!(
-        &mut output,
-        "Derived from the **{}** linter.",
-        linter.name()
-    );
-    output.push('\n');
-    output.push('\n');
+    if let Some(linter) = rule
+        .noqa_code()
+        .and_then(|code| Linter::parse_code(&code.to_string()).map(|(linter, _)| linter))
+    {
+        let _ = write!(
+            &mut output,
+            "Derived from the **{}** linter.",
+            linter.name()
+        );
+        output.push('\n');
+        output.push('\n');
+    }
 
     let fix_availability = rule.fixable();
     if matches!(
@@ -71,12 +74,12 @@ mod tests {
         for rule in Rule::iter() {
             let doc = rule_documentation(rule);
             assert!(
-                doc.starts_with(&format!("# {} ({})", rule.name(), rule.noqa_code())),
+                doc.starts_with(&format!("# {}", rule.name_and_code())),
                 "{} did not lead with its own name and code",
                 rule.name()
             );
             assert!(
-                doc.contains("linter."),
+                rule.noqa_code().is_none() || doc.contains("linter."),
                 "{} did not say which linter it came from",
                 rule.name()
             );

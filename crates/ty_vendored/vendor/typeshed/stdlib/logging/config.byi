@@ -92,7 +92,7 @@ def fileConfig(
     """
 
 def valid_ident(s: str) -> True  # undocumented
-def listen(port: int = 9030, verify: ((bytes) -> (bytes?))? = None) -> Thread:
+def listen(port: int = 9030, verify: ((bytes) -> bytes?)? = None) -> Thread:
     """
     Start up a socket server on the specified port, and listen for new
     configurations.
@@ -150,7 +150,7 @@ else:
     class ConvertingTuple((*: dynamic), ConvertingMixin):  # undocumented
         """A converting tuple wrapper."""
 
-        def __getitem__(self, key: SupportsIndex) -> dynamic
+        override def __getitem__(self, key: SupportsIndex) -> dynamic
         def __getitem__(self, key: slice[SupportsIndex?]) -> dynamic
 
 class BaseConfigurator:

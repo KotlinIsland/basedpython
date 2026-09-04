@@ -64,11 +64,14 @@ class NamedTupleFallback((*: dynamic)):
     if sys.version_info >= (3, 12):
         __orig_bases__: ClassVar[(*: dynamic)]
 
-    init(self, typename: str, fields: Iterable[(str, dynamic)], /)
-    @typing_extensions.deprecated(
-        "Creating a typing.NamedTuple using keyword arguments is deprecated and support will be removed in Python 3.15"
-    )
-    def __init__(self, typename: str, fields: None = None, /, **kwargs: dynamic) -> None
+    if sys.version_info >= (3, 15):
+        def __init__(self, typename: str, fields: Iterable[(str, dynamic)], /) -> None
+    else:
+        def __init__(self, typename: str, fields: Iterable[(str, dynamic)], /) -> None
+        @typing_extensions.deprecated(
+            "Creating a typing.NamedTuple using keyword arguments is deprecated; support removed in Python 3.15"
+        )
+        def __init__(self, typename: str, fields: None = None, /, **kwargs: dynamic) -> None
 
     class def _make(cls, iterable: Iterable[dynamic]) -> typing_extensions.Self
     def _asdict(self) -> dict[str, dynamic]

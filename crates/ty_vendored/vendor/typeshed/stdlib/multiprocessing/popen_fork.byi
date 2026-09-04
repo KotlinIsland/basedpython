@@ -17,7 +17,7 @@ if sys.platform != "win32":
         init(self, process_obj: BaseProcess)
         def duplicate_for_child(self, fd: int) -> int
         def poll(self, flag: int = 1) -> int?
-        def wait(self, timeout: int | float | None = None) -> int?
+        def wait(self, timeout: (int | float)? = None) -> int?
         if sys.version_info >= (3, 14):
             def interrupt(self)
 

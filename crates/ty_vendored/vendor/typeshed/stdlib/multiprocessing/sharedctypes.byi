@@ -82,7 +82,7 @@ def synchronized[CT: _CData](obj: CT, lock: _LockLike? = None, ctx: dynamic? = N
 
 @type_check_only
 private protocol AcquireFunc:
-    def __call__(self, block: bool = ..., timeout: int | float | None = ..., /) -> bool
+    def __call__(self, block: bool = ..., timeout: (int | float)? = ..., /) -> bool
 
 class SynchronizedBase[in out CT: _CData]:
     acquire: AcquireFunc

@@ -540,7 +540,7 @@ class Differ:
         """
 
 if sys.version_info >= (3, 14):
-    def IS_LINE_JUNK(line: str, pat: ((str) -> (re.Match[str]?))? = None) -> bool:
+    def IS_LINE_JUNK(line: str, pat: ((str) -> re.Match[str]?)? = None) -> bool:
         """
         Return True for ignorable line: if `line` is blank or contains a single '#'.
 
@@ -555,7 +555,7 @@ if sys.version_info >= (3, 14):
         """
 
 else:
-    def IS_LINE_JUNK(line: str, pat: (str) -> (re.Match[str]?) = ...) -> bool:
+    def IS_LINE_JUNK(line: str, pat: (str) -> re.Match[str]? = ...) -> bool:
         """
         Return True for ignorable line: iff `line` is blank or contains a single '#'.
 

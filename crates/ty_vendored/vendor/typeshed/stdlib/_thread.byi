@@ -59,7 +59,9 @@ final class RLock:
     __enter__ = acquire
     """Lock the lock."""
 
-    def __exit__(self, t: type[BaseException]?, v: BaseException?, tb: TracebackType?):
+    def __exit__(
+        self, exc_type: type[BaseException]?, exc_value: BaseException?, exc_tb: TracebackType?, /
+    ):
         """Release the lock."""
 
     if sys.version_info >= (3, 14):
@@ -70,7 +72,7 @@ if sys.version_info >= (3, 13):
     final class _ThreadHandle:
         ident: int
 
-        def join(self, timeout: int | float | None = None, /)
+        def join(self, timeout: (int | float)? = None, /)
         def is_done(self) -> bool
         def _set_done(self)
 
@@ -140,7 +142,7 @@ if sys.version_info >= (3, 13):
             """Lock the lock."""
 
         def __exit__(
-            self, type: type[BaseException]?, value: BaseException?, traceback: TracebackType?
+            self, exc_type: type[BaseException]?, exc_value: BaseException?, exc_tb: TracebackType?, /
         ):
             """Release the lock."""
 

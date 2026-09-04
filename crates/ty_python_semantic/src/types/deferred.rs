@@ -40,8 +40,10 @@ use ruff_python_ast::name::Name;
 
 use super::Type;
 use super::infer::{
-    deferred_comparison, fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
+    deferred_comparison, fold_tuple_concat, fold_tuple_repeat, literal_binary_op,
+    literal_unary_op,
 };
+use super::infer::builder::binary_expressions::BinaryInferenceState;
 use super::visitor::{self, any_over_type};
 use crate::types::ProgramEnvironment;
 use crate::types::call::CallArguments;
@@ -508,7 +510,17 @@ fn evaluate<'db>(
     match *operation {
         DeferredOperation::Binary(op) => {
             let [left, right] = operands else { return None };
-            literal_binary_op(db, env, *left, *right, op, true)
+            // a deferred fold has no expression to hang a deprecation diagnostic on, so
+            // whatever the dunder fallback records here is discarded
+            literal_binary_op(
+                db,
+                env,
+                *left,
+                *right,
+                op,
+                true,
+                &mut BinaryInferenceState::default(),
+            )
                 // the same tuple folds the value inferrer applies: without them
                 // `(X,) * Dim` would re-evaluate through typeshed's `tuple.__mul__` and
                 // widen to `tuple[X, ...]`, throwing away the length the fold just learned
@@ -518,7 +530,7 @@ fn evaluate<'db>(
                     ast::Operator::Add => fold_tuple_concat(db, env, *left, *right),
                     _ => None,
                 })
-                .or_else(|| Type::try_call_bin_op_return_type(db, env, *left, op, *right))
+                .or_else(|| Type::try_call_bin_op_result(db, env, *left, op, *right).map(|result| result.return_type))
         }
         DeferredOperation::Attribute(ref name) => {
             let [receiver] = operands else { return None };

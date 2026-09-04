@@ -60,6 +60,12 @@ impl NameInterner {
     }
 }
 
+// Stack probes access thread-local state, so avoid them while recursive parser calls remain
+// shallow. `STACK_RED_ZONE` must cover the stack used before the first deferred probe.
+const STACK_RED_ZONE: usize = 100 * 1024;
+const STACK_SIZE: usize = 1024 * 1024;
+const MAX_UNCHECKED_RECURSION_DEPTH: usize = 20;
+
 #[derive(Debug)]
 pub(crate) struct Parser<'src> {
     source: &'src str,
@@ -125,11 +131,8 @@ pub(crate) struct Parser<'src> {
     /// reformat, and rewinding restores the count with everything else
     destructure_binders: u32,
 
-    /// Current parser recursion depth remaining before the depth limit is exceeded.
-    depth_remaining: u16,
-
-    /// Maximum lexer nesting depth before postfix calls and subscripts should stop recursing.
-    max_nesting_depth: u32,
+    /// Number of active recursive statement, expression, and pattern parsing operations.
+    recursion_depth: usize,
 
     /// Reusable, nesting-safe scratch storage for expression lists.
     expr_scratch: ScratchBuffer<Expr>,
@@ -163,8 +166,6 @@ impl<'src> Parser<'src> {
         options: ParseOptions,
     ) -> Self {
         let tokens = TokenSource::from_source(source, options.mode, start_offset);
-        let depth_remaining = options.max_recursion_depth;
-        let max_nesting_depth = u32::from(options.max_recursion_depth.saturating_sub(2));
 
         Parser {
             options,
@@ -177,14 +178,13 @@ impl<'src> Parser<'src> {
             recovery_context: RecoveryContext::empty(),
             prev_token_end: TextSize::new(0),
             start_offset,
+            recursion_depth: 0,
             current_token_id: TokenId::default(),
             class_body_depth: 0,
             pending_members: Vec::new(),
             pending_narrow_props: Vec::new(),
             expr_consumed_suite: false,
             destructure_binders: 0,
-            depth_remaining,
-            max_nesting_depth,
             expr_scratch: ScratchBuffer::with_capacity(16),
             keyword_scratch: ScratchBuffer::new(),
             parameter_scratch: ScratchBuffer::new(),
@@ -194,44 +194,34 @@ impl<'src> Parser<'src> {
         }
     }
 
-    /// Runs `f` if the recursive parser depth limit has not been hit.
-    ///
-    /// # Note
-    ///
-    /// This recursion guard is a temporary fix for #22930.
-    #[must_use]
+    /// Grows the stack for recursive parser calls only after shallow nesting is exceeded.
     #[inline]
-    fn with_recursion<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> Option<T> {
-        if self.depth_remaining == 0 {
-            return None;
-        }
+    fn with_recursion<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.recursion_depth += 1;
 
-        self.depth_remaining -= 1;
-        let result = f(self);
-        self.depth_remaining += 1;
-        Some(result)
+        let result = if self.recursion_depth > MAX_UNCHECKED_RECURSION_DEPTH {
+            self.grow_stack(f)
+        } else {
+            f(self)
+        };
+
+        self.recursion_depth -= 1;
+        result
     }
 
     #[cold]
-    #[inline(never)]
-    fn report_recursion_limit_exceeded<R: Ranged>(&mut self, ranged: R) {
-        self.add_error(ParseErrorType::RecursionLimitExceeded, ranged);
-        // Skip to end-of-file so outer parser frames unwind quickly and our
-        // `ParserProgress` infinite-loop guards don't fire when they see the
-        // same `(` / `[` etc. that this frame failed to consume.
-        while self.current_token_kind() != TokenKind::EndOfFile {
-            self.bump_any();
-        }
+    fn grow_stack<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, || f(self))
     }
 
     /// Consumes the [`Parser`] and returns the parsed [`Parsed`].
     pub(crate) fn parse(mut self) -> Parsed<Mod> {
-        let syntax = match self.options.mode {
+        let syntax = stacker::maybe_grow(STACK_RED_ZONE, STACK_SIZE, || match self.options.mode {
             Mode::Expression | Mode::ParenthesizedExpression => {
                 Mod::Expression(self.parse_single_expression())
             }
             Mode::Module | Mode::Ipython => Mod::Module(self.parse_module()),
-        };
+        });
 
         self.finish(syntax)
     }
@@ -1572,10 +1562,7 @@ impl RecoveryContextKind {
             | RecoveryContextKind::SetElements
             | RecoveryContextKind::TupleElements(_) => p.at_expr(),
             RecoveryContextKind::DictElements => p.at(TokenKind::DoubleStar) || p.at_expr(),
-            RecoveryContextKind::SequenceMatchPattern(_) => {
-                // `+` doesn't start any pattern but is here for better error recovery.
-                p.at(TokenKind::Plus) || p.at_pattern_start()
-            }
+            RecoveryContextKind::SequenceMatchPattern(_) => p.at_pattern_start(),
             RecoveryContextKind::MatchPatternMapping => {
                 // A star pattern is invalid as a mapping key and is here only for
                 // better error recovery.

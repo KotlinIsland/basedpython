@@ -1,0 +1,21 @@
+---
+source: crates/ruff_linter/src/rules/ruff/mod.rs
+---
+RUF012 Mutable default value for class attribute
+  --> RUF012_basedpython.by:18:28
+   |
+17 | class Plain:
+18 |     var items: list[int] = []  # RUF012
+   |                            ^^
+19 |     let names: list[str] = []  # RUF012
+   |
+help: Consider initializing in `__init__` or annotating with `typing.ClassVar`
+
+RUF012 Mutable default value for class attribute
+  --> RUF012_basedpython.by:19:28
+   |
+17 | class Plain:
+18 |     var items: list[int] = []  # RUF012
+19 |     let names: list[str] = []  # RUF012
+   |                            ^^
+help: Consider initializing in `__init__` or annotating with `typing.ClassVar`

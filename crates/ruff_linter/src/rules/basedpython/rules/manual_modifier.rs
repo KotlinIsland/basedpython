@@ -4,6 +4,7 @@ use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{Decorator, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
+use crate::codes::Category;
 use crate::checkers::ast::Checker;
 use crate::{AlwaysFixableViolation, Edit, Fix};
 
@@ -54,7 +55,7 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 /// ## References
 /// - [basedpython documentation: modifiers](https://docs.basedpython.org/features/modifiers)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.0.1-a10")]
+#[violation_metadata(stable_since = "0.0.1-a10", category = Category::Style)]
 pub(crate) struct ManualModifier {
     decorator: String,
     modifier: &'static str,

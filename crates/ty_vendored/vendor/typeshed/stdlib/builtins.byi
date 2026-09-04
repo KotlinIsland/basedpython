@@ -218,7 +218,7 @@ class type:
     def __call__(self, *args: dynamic, **kwds: dynamic) -> dynamic:
         """Call self as a function."""
 
-    def __subclasses__(self: _typeshed.Self) -> list[_typeshed.Self]:
+    def __subclasses__[Element](self: type[Element]) -> list[type[Element]]:
         """Return a list of immediate subclasses."""
 
     # Note: the documentation doesn't specify what the return type is, the standard
@@ -2427,7 +2427,7 @@ final class memoryview[in out I = int](Sequence[I]):
         """Set self[key] to value."""
     def __setitem__(self, key: SupportsIndex | (*: SupportsIndex), value: I, /) -> None
 
-    def tobytes(self, order: "C" | "F" | "A" | None = "C") -> bytes:
+    def tobytes(self, order: "C" | "F" | "A"? = "C") -> bytes:
         """Return the data in the buffer as a byte string.
 
         Order can be {'C', 'F', 'A'}.  When order is 'C' or 'F', the data of
@@ -2824,7 +2824,7 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     def get[Element](self, key: Overlapping[Key], default: Element, /) -> Value | Element
 
     @ignorable_return_value
-    override def pop(self, key: Key, /) -> Value:
+    def pop(self, key: Key, /) -> Value:
         """D.pop(k[,d]) -> v, remove specified key and return the corresponding value.
 
         If the key is not found, return the default if given; otherwise,
@@ -2833,7 +2833,7 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     @ignorable_return_value
     def pop(self, key: object, default: Value, /) -> Value
     @ignorable_return_value
-    def pop[Element](self, key: object, default: Element, /) -> Value | Element
+    override def pop[Element](self, key: object, default: Element, /) -> Value | Element
 
     override def __len__(self) -> int:
         """Return len(self)."""

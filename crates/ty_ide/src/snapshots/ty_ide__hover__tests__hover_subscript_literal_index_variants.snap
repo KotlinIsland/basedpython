@@ -3,10 +3,10 @@ source: crates/ty_ide/src/hover.rs
 expression: output
 ---
 case 0:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -21,10 +21,10 @@ info[hover]: Hovered content is
 
 
 case 1:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -39,10 +39,10 @@ info[hover]: Hovered content is
 
 
 case 2:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -57,10 +57,10 @@ info[hover]: Hovered content is
 
 
 case 3:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -75,10 +75,10 @@ info[hover]: Hovered content is
 
 
 case 4:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -93,10 +93,10 @@ info[hover]: Hovered content is
 
 
 case 5:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -111,10 +111,10 @@ info[hover]: Hovered content is
 
 
 case 6:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -129,10 +129,10 @@ info[hover]: Hovered content is
 
 
 case 7:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -147,10 +147,10 @@ info[hover]: Hovered content is
 
 
 case 8:
-str
+Unknown
 ---------------------------------------------
 ```python
-str
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is

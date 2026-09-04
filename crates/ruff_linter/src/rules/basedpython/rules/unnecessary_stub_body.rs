@@ -3,6 +3,7 @@ use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
+use crate::codes::Category;
 use crate::checkers::ast::Checker;
 use crate::{AlwaysFixableViolation, Edit, Fix};
 
@@ -38,7 +39,7 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 /// ## References
 /// - [basedpython documentation: empty declarations](https://docs.basedpython.org/features/empty-declarations)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.0.1-a10")]
+#[violation_metadata(stable_since = "0.0.1-a10", category = Category::Style)]
 pub(crate) struct UnnecessaryStubBody;
 
 impl AlwaysFixableViolation for UnnecessaryStubBody {

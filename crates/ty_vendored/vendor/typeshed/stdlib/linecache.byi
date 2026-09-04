@@ -13,7 +13,7 @@ __all__ = ["getline", "clearcache", "checkcache", "lazycache"]
 type _ModuleGlobals = dict[str, dynamic]
 private type ModuleMetadata = (int, float?, list[str], str)
 
-private type SourceLoader = (() -> (str?),)
+private type SourceLoader = (() -> str?,)
 
 cache: dict[str, SourceLoader | ModuleMetadata]  # undocumented
 

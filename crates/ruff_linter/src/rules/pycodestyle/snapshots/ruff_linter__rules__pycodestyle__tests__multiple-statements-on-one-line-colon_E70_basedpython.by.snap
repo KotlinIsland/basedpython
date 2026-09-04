@@ -1,0 +1,9 @@
+---
+source: crates/ruff_linter/src/rules/pycodestyle/mod.rs
+---
+E701 Multiple statements on one line (colon)
+  --> E70_basedpython.by:16:15
+   |
+15 | # a class definition written on one line is still reported
+16 | class OneLiner: x = 1
+   |               ^

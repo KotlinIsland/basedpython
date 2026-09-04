@@ -204,7 +204,7 @@ class BaseServer:
     """
 
     server_address: _Address
-    timeout: int | float | None
+    timeout: (int | float)?
     RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler
     init(
         self, server_address: _Address, RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler
@@ -410,7 +410,7 @@ if sys.platform != "win32":
     class ForkingMixIn:
         """Mix-in class to handle each request in a new process."""
 
-        timeout: int | float | None  # undocumented
+        timeout: (int | float)?  # undocumented
         active_children: set[int]?  # undocumented
         max_children: int  # undocumented
         block_on_close: bool
@@ -501,7 +501,7 @@ class StreamRequestHandler(BaseRequestHandler):
 
     rbufsize: ClassVar[int]  # undocumented
     wbufsize: ClassVar[int]  # undocumented
-    timeout: ClassVar[int | float | None]  # undocumented
+    timeout: ClassVar[(int | float)?]  # undocumented
     disable_nagle_algorithm: ClassVar[bool]  # undocumented
     connection: dynamic  # undocumented
     rfile: BufferedIOBase

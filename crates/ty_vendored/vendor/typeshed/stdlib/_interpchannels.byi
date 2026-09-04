@@ -112,14 +112,14 @@ def list_interpreters(cid: SupportsIndex, *, send: bool) -> list[int]:
     receive end.
     """
 
-def send(cid: SupportsIndex, obj: object, *, blocking: bool = True, timeout: int | float | None = None):
+def send(cid: SupportsIndex, obj: object, *, blocking: bool = True, timeout: (int | float)? = None):
     """channel_send(cid, obj, *, blocking=True, timeout=None)
 
     Add the object's data to the channel's queue.
     By default this waits for the object to be received.
     """
 
-def send_buffer(cid: SupportsIndex, obj: Buffer, *, blocking: bool = True, timeout: int | float | None = None):
+def send_buffer(cid: SupportsIndex, obj: Buffer, *, blocking: bool = True, timeout: (int | float)? = None):
     """channel_send_buffer(cid, obj, *, blocking=True, timeout=None)
 
     Add the object's buffer to the channel's queue.

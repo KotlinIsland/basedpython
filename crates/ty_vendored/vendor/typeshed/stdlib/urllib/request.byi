@@ -129,7 +129,7 @@ private type DataType = ReadableBuffer | SupportsRead[bytes] | Iterable[bytes] |
 
 if sys.version_info >= (3, 13):
     def urlopen(
-        url: str | Request, data: DataType? = None, timeout: int | float | None = ..., *, context: ssl.SSLContext? = None
+        url: str | Request, data: DataType? = None, timeout: (int | float)? = ..., *, context: ssl.SSLContext? = None
     ) -> UrlopenRet:
         """Open the URL url, which can be either a string or a Request object.
 
@@ -176,7 +176,7 @@ else:
     def urlopen(
         url: str | Request,
         data: DataType? = None,
-        timeout: int | float | None = ...,
+        timeout: (int | float)? = ...,
         *,
         cafile: None = None,
         capath: None = None,
@@ -239,7 +239,7 @@ else:
     def urlopen(
         url: str | Request,
         data: DataType? = None,
-        timeout: int | float | None = ...,
+        timeout: (int | float)? = ...,
         *,
         cafile: StrOrBytesPath? = None,
         capath: StrOrBytesPath? = None,
@@ -352,7 +352,7 @@ class Request:
     unredirected_hdrs: dict[str, str]
     unverifiable: bool
     method: str?
-    timeout: int | float | None  # Undocumented, only set after __init__() by OpenerDirector.open()
+    timeout: (int | float)?  # Undocumented, only set after __init__() by OpenerDirector.open()
     init(
         self,
         url: str,
@@ -381,7 +381,7 @@ class Request:
 class OpenerDirector:
     addheaders: list[(str, str)]
     def add_handler(self, handler: BaseHandler)
-    def open(self, fullurl: str | Request, data: DataType = None, timeout: int | float | None = ...) -> UrlopenRet
+    def open(self, fullurl: str | Request, data: DataType = None, timeout: (int | float)? = ...) -> UrlopenRet
     def error(self, proto: str, *args: dynamic) -> UrlopenRet
     def close(self)
 
@@ -560,7 +560,7 @@ class ftpwrapper:  # undocumented
     """Class used by open_ftp() for cache of open FTP connections."""
 
     init(
-        self, user: str, passwd: str, host: str, port: int, dirs: str, timeout: int | float | None = None, persistent: bool = True
+        self, user: str, passwd: str, host: str, port: int, dirs: str, timeout: (int | float)? = None, persistent: bool = True
     )
     def close(self)
     def endtransfer(self)

@@ -320,8 +320,8 @@ if sys.platform != "win32":
                 sock: socket? = None,
                 backlog: int = 100,
                 ssl: _SSLContext = None,
-                ssl_handshake_timeout: int | float | None = None,
-                ssl_shutdown_timeout: int | float | None = None,
+                ssl_handshake_timeout: (int | float)? = None,
+                ssl_shutdown_timeout: (int | float)? = None,
                 start_serving: bool = True,
                 cleanup_socket: bool = True,
             ) -> Server

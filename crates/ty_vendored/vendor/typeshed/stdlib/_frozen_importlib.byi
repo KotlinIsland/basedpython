@@ -36,6 +36,7 @@ def __import__(
 
     """
 
+# TODO: Revise the protocol for 'loader' param
 def spec_from_loader(
     name: str, loader: LoaderProtocol?, *, origin: str? = None, is_package: bool? = None
 ) -> importlib.machinery.ModuleSpec?:
@@ -133,18 +134,21 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
     override class def is_package(cls, fullname: str) -> bool:
         """Return False as built-in modules are never packages."""
 
-    class def load_module(cls, fullname: str) -> types.ModuleType:
-        """Load the specified module into sys.modules and return it.
-
-        This method is deprecated.  Use loader.exec_module() instead.
-
-        """
-
     override class def get_code(cls, fullname: str):
         """Return None as built-in modules do not have code objects."""
 
     override class def get_source(cls, fullname: str):
         """Return None as built-in modules do not have source code."""
+
+    if sys.version_info < (3, 15):
+        @classmethod
+        @deprecated("Deprecated since Python 3.10; removed in Python 3.15. Use `exec_module()` instead.")
+        def load_module(cls, fullname: str) -> types.ModuleType:
+            """Load the specified module into sys.modules and return it.
+
+            This method is deprecated.  Use loader.exec_module() instead.
+
+            """
 
     # Loader
     if sys.version_info < (3, 12):
@@ -192,18 +196,21 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
     override class def is_package(cls, fullname: str) -> bool:
         """Return True if the frozen module is a package."""
 
-    class def load_module(cls, fullname: str) -> types.ModuleType:
-        """Load a frozen module.
-
-        This method is deprecated.  Use exec_module() instead.
-
-        """
-
     override class def get_code(cls, fullname: str):
         """Return the code object for the frozen module."""
 
     override class def get_source(cls, fullname: str):
         """Return None as frozen modules do not have source code."""
+
+    if sys.version_info < (3, 15):
+        @classmethod
+        @deprecated("Deprecated since Python 3.10; removed in Python 3.15. Use `exec_module()` instead.")
+        def load_module(cls, fullname: str) -> types.ModuleType:
+            """Load a frozen module.
+
+            This method is deprecated.  Use exec_module() instead.
+
+            """
 
     # Loader
     if sys.version_info < (3, 12):

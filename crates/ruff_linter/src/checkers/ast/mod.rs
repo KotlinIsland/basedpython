@@ -720,6 +720,19 @@ impl SemanticSyntaxContext for Checker<'_> {
     }
 
     fn report_semantic_error(&self, error: SemanticSyntaxError) {
+        // F722
+        if self.semantic.in_string_type_definition() {
+            if self.is_rule_enabled(Rule::ForwardAnnotationSyntaxError) {
+                self.report_type_diagnostic(
+                    pyflakes::rules::ForwardAnnotationSyntaxError {
+                        parse_error: error.to_string(),
+                    },
+                    error.range,
+                );
+            }
+            return;
+        }
+
         match error.kind {
             SemanticSyntaxErrorKind::LateFutureImport => {
                 // F404
@@ -825,11 +838,13 @@ impl SemanticSyntaxContext for Checker<'_> {
             | SemanticSyntaxErrorKind::DifferentMatchPatternBindings
             | SemanticSyntaxErrorKind::InvalidExpression(..)
             | SemanticSyntaxErrorKind::GlobalParameter(_)
+            | SemanticSyntaxErrorKind::NonlocalParameter(_)
             | SemanticSyntaxErrorKind::DuplicateMatchKey(_)
             | SemanticSyntaxErrorKind::DuplicateMatchClassAttribute(_)
             | SemanticSyntaxErrorKind::InvalidStarExpression
             | SemanticSyntaxErrorKind::AsyncComprehensionInSyncComprehension(_)
             | SemanticSyntaxErrorKind::DuplicateParameter(_)
+            | SemanticSyntaxErrorKind::DuplicateKeywordArgument(_)
             | SemanticSyntaxErrorKind::NonlocalDeclarationAtModuleLevel
             | SemanticSyntaxErrorKind::LoadBeforeNonlocalDeclaration { .. }
             | SemanticSyntaxErrorKind::NonlocalAndGlobal(_)

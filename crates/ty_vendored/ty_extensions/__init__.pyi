@@ -1,4 +1,4 @@
-# ruff: noqa: PYI021
+# ruff: file-ignore[docstring-in-stub]
 """Experimental ty APIs intended to be exposed to end users."""
 
 import collections.abc
@@ -11,7 +11,7 @@ from typing import (
     _SpecialForm,
 )
 
-from typing_extensions import LiteralString, Self  # noqa: UP035
+from typing_extensions import LiteralString, Self  # ruff: ignore[deprecated-import]
 
 # basedpython: `Unknown` is part of the language a user reads and writes, not an
 # internal of the checker, so it stays on the public module. upstream moved its

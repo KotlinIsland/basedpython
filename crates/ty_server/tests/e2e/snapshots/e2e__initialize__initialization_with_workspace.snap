@@ -94,7 +94,8 @@ expression: initialization_result
           "builtinConstant",
           "typeParameter",
           "comment",
-          "operator"
+          "operator",
+          "regexp"
         ],
         "tokenModifiers": [
           "definition",

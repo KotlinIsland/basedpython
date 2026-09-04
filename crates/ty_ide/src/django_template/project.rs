@@ -3793,7 +3793,7 @@ fn project_uses_django(db: &dyn Db, project: Project) -> bool {
     project
         .files(db)
         .iter()
-        .any(|file| file_names_django(db, *file))
+        .any(|file| file_names_django(db, file))
 }
 
 #[salsa::tracked(returns(copy))]

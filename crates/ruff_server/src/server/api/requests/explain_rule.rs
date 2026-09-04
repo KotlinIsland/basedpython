@@ -72,7 +72,7 @@ impl BackgroundRequestHandler for ExplainRule {
 fn explanation_of(code: &str) -> Option<RuleExplanation> {
     resolve(code).map(|rule| RuleExplanation {
         name: rule.name().as_str().to_string(),
-        code: rule.noqa_code().to_string(),
+        code: rule.noqa_code().map(|code| code.to_string()).unwrap_or_default(),
         documentation: rule_documentation(rule),
     })
 }
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn a_code_resolves_to_its_rule() {
         let rule = resolve("F401").expect("F401 is this linter's");
-        assert_eq!(rule.noqa_code().to_string(), "F401");
+        assert_eq!(rule.noqa_code().map(|code| code.to_string()).as_deref(), Some("F401"));
     }
 
     /// A reader who has the name rather than the code is asking the same question.

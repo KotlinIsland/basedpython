@@ -1,0 +1,13 @@
+---
+source: crates/ruff_linter/src/rules/flake8_bugbear/mod.rs
+---
+B024 `NoAbstract` is an abstract base class, but it has no abstract methods or properties
+  --> B024_basedpython.by:12:7
+   |
+10 | # Not OK: a basedpython ABC with no abstract methods or properties still
+11 | # triggers B024, matching pure-Python behaviour.
+12 | class NoAbstract(ABC):
+   |       ^^^^^^^^^^
+13 |     def regular(self) -> int:
+14 |         return 0
+   |

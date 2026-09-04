@@ -21,7 +21,7 @@
 use ruff_python_ast::helpers::TypeModifier;
 
 use super::class::ClassType;
-use super::variance::VarianceInferable;
+use super::variance::{VarianceInferable, VarianceTerm};
 use super::{BoundTypeVarIdentity, KnownClass, Type, TypeVarVariance, visitor};
 use crate::Db;
 use crate::types::ProgramEnvironment;
@@ -275,7 +275,7 @@ impl<'db> VarianceInferable<'db> for RestrictedType<'db> {
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         typevar: BoundTypeVarIdentity<'db>,
-    ) -> TypeVarVariance {
+    ) -> VarianceTerm<'db> {
         self.type_argument(db).variance_of(db, env, typevar)
     }
 }

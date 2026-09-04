@@ -18,7 +18,7 @@
 //! `SafeVariance`: they share the two-faced structure and differ only in the
 //! call-site relation (overlap vs. subtype)
 
-use super::variance::VarianceInferable;
+use super::variance::{VarianceInferable, VarianceTerm};
 use super::{BoundTypeVarIdentity, Type, TypeVarVariance, visitor};
 use crate::Db;
 use crate::types::ProgramEnvironment;
@@ -88,7 +88,7 @@ impl<'db> VarianceInferable<'db> for OverlappingType<'db> {
         _db: &'db dyn Db,
         _env: &ProgramEnvironment<'db>,
         _typevar: BoundTypeVarIdentity<'db>,
-    ) -> TypeVarVariance {
-        TypeVarVariance::Bivariant
+    ) -> VarianceTerm<'db> {
+        VarianceTerm::BIVARIANT
     }
 }

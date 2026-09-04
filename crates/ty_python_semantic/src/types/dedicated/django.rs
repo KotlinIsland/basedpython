@@ -477,7 +477,7 @@ fn attname_type<'db>(
         return None;
     }
     let target = field_get_type(db, env, field.declared_ty)?
-        .filter_union(db, |element| !element.is_none(db));
+        .filter_union(db, env, |element| !element.is_none(db));
     let target_class = instance_static_class(db, env, target)?;
     if !is_model(db, target_class) {
         return None;
@@ -621,7 +621,7 @@ pub(in crate::types) fn reverse_accessors<'db>(
             } else {
                 match field_get_type(db, env, field.declared_ty) {
                     Some(target) => (
-                        target.filter_union(db, |element| !element.is_none(db)),
+                        target.filter_union(db, env, |element| !element.is_none(db)),
                         None,
                     ),
                     None => continue,
@@ -919,7 +919,7 @@ fn field_ref<'db>(
     if let Some(field) = fields.get(name) {
         if is_relation_field_instance(db, env, field.declared_ty) {
             let target = field_get_type(db, env, field.declared_ty)
-                .map(|ty| ty.filter_union(db, |element| !element.is_none(db)));
+                .map(|ty| ty.filter_union(db, env, |element| !element.is_none(db)));
             let relation_model = target
                 .and_then(|target| instance_static_class(db, env, target))
                 .filter(|target| is_model(db, *target));

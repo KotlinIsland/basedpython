@@ -10,8 +10,10 @@ use ty_module_resolver::KnownModule;
 
 use crate::place::PlaceAndQualifiers;
 use crate::place::known_module_symbol;
-use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
-use crate::types::class::{DynamicClassHeaderAnchor, dynamic_class_header_range};
+use crate::types::callable::CallableTypeKind;
+use crate::types::class::{
+    DynamicClassHeaderAnchor, DynamicClassScopeOffset, dynamic_class_header_range,
+};
 use crate::types::generics::GenericContext;
 use crate::types::member::Member;
 use crate::types::mro::Mro;
@@ -24,7 +26,7 @@ use crate::types::typed_dict::{
 use crate::types::{
     ApplyTypeMappingVisitor, BoundTypeVarInstance, CallableType, ClassBase, ClassLiteral,
     ClassType, KnownClass, MemberLookupPolicy, Type, TypeContext, TypeMapping, TypeVarVariance,
-    TypedDictModule, TypedDictType, UnionType, determine_upper_bound,
+    TypedDictType, TypingModule, UnionType, determine_upper_bound,
 };
 use crate::{Db, FxIndexMap};
 use ty_python_core::definition::Definition;
@@ -219,7 +221,6 @@ fn synthesize_typed_dict_init<'db>(
         db,
         CallableSignature::from_overloads([map_overload, keyword_overload]),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     ))
 }
 
@@ -261,7 +262,6 @@ fn synthesize_typed_dict_getitem<'db>(
         db,
         CallableSignature::from_overloads(overloads),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     ))
 }
 
@@ -321,7 +321,6 @@ fn synthesize_typed_dict_setitem<'db>(
         db,
         CallableSignature::from_overloads(overloads),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     ))
 }
 
@@ -375,7 +374,6 @@ fn synthesize_typed_dict_delitem<'db>(
         db,
         CallableSignature::from_overloads(overloads),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     ))
 }
 
@@ -503,7 +501,6 @@ fn synthesize_typed_dict_get<'db>(
         db,
         CallableSignature::from_overloads(overloads),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     ))
 }
 
@@ -653,7 +650,6 @@ fn synthesize_typed_dict_pop<'db>(
         db,
         CallableSignature::from_overloads(overloads),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     ))
 }
 
@@ -704,7 +700,6 @@ fn synthesize_typed_dict_setdefault<'db>(
         db,
         CallableSignature::from_overloads(overloads),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     ))
 }
 
@@ -825,7 +820,6 @@ fn synthesize_typed_dict_merge<'db>(
         db,
         CallableSignature::from_overloads(overloads),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     ))
 }
 
@@ -848,12 +842,12 @@ pub enum DynamicTypedDictAnchor<'db> {
 
     /// The `TypedDict()` call is "dangling" (not assigned to a variable).
     ///
-    /// The offset is relative to the enclosing scope's anchor node index. The eagerly
-    /// computed `spec` preserves field types for inline uses like
+    /// The [`DynamicClassScopeOffset`] locates the call relative to the enclosing scope.
+    /// The eagerly computed `spec` preserves field types for inline uses like
     /// `TypedDict("Point", {"x": int})(x=1)`.
     ScopeOffset {
         scope: ScopeId<'db>,
-        offset: u32,
+        offset: DynamicClassScopeOffset,
         schema: TypedDictSchema<'db>,
         openness: TypedDictOpenness<'db>,
     },
@@ -923,14 +917,13 @@ pub struct DynamicTypedDictLiteral<'db> {
     ///
     /// - `Definition`: The call is assigned to a variable. The definition
     ///   uniquely identifies this TypedDict and can be used to find the call.
-    /// - `ScopeOffset`: The call is "dangling" (not assigned). The offset
-    ///   is relative to the enclosing scope's anchor node index, and the
-    ///   eagerly computed spec is stored on the anchor.
+    /// - `ScopeOffset`: The call is "dangling" (not assigned). Its location
+    ///   is relative to the enclosing scope, and the eagerly computed spec is stored on the anchor.
     #[returns(ref)]
     pub(crate) anchor: DynamicTypedDictAnchor<'db>,
 
     #[returns(copy)]
-    pub(crate) typed_dict_module: TypedDictModule,
+    pub(crate) typed_dict_module: TypingModule,
 }
 
 impl get_size2::GetSize for DynamicTypedDictLiteral<'_> {}
@@ -1186,7 +1179,7 @@ pub(in crate::types) fn synthesized_typed_dict_class_member<'db>(
         db,
         env,
         typed_dict,
-        TypedDictModule::Typing,
+        TypingModule::Typing,
         lookup_policy,
         name,
         || Type::TypedDict(typed_dict),
@@ -1196,13 +1189,13 @@ pub(in crate::types) fn synthesized_typed_dict_class_member<'db>(
 pub(super) fn typed_dict_fallback_class_member<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
-    module: TypedDictModule,
+    module: TypingModule,
     lookup_policy: MemberLookupPolicy,
     name: &str,
 ) -> PlaceAndQualifiers<'db> {
     let fallback = match module {
-        TypedDictModule::Typing => KnownClass::TypedDictFallback,
-        TypedDictModule::TypingExtensions => KnownClass::ExtensionTypedDictFallback,
+        TypingModule::Typing => KnownClass::TypedDictFallback,
+        TypingModule::TypingExtensions => KnownClass::ExtensionTypedDictFallback,
     };
 
     fallback
@@ -1215,12 +1208,10 @@ pub(super) fn typed_dict_class_member<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     class: ClassType<'db>,
-    module: TypedDictModule,
+    module: TypingModule,
     lookup_policy: MemberLookupPolicy,
     name: &str,
 ) -> PlaceAndQualifiers<'db> {
-    let self_class = class.class_literal(db);
-
     typed_dict_inherited_class_member(
         db,
         env,
@@ -1228,7 +1219,7 @@ pub(super) fn typed_dict_class_member<'db>(
         module,
         lookup_policy,
         name,
-        || determine_upper_bound(db, env, self_class, ClassBase::is_typed_dict),
+        || determine_upper_bound(db, env, class, ClassBase::is_typed_dict),
     )
 }
 
@@ -1236,7 +1227,7 @@ fn typed_dict_inherited_class_member<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     typed_dict: TypedDictType<'db>,
-    module: TypedDictModule,
+    module: TypingModule,
     lookup_policy: MemberLookupPolicy,
     name: &str,
     new_upper_bound: impl FnOnce() -> Type<'db>,

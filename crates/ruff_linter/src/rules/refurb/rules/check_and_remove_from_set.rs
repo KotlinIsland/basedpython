@@ -7,6 +7,7 @@ use ruff_python_semantic::analyze::typing::is_set;
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::checkers::ast::Checker;
+use crate::codes::Category;
 use crate::fix::snippet::SourceCodeSnippet;
 use crate::{AlwaysFixableViolation, Edit, Fix};
 
@@ -38,9 +39,9 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 /// ```
 ///
 /// ## References
-/// - [Python documentation: `set.discard()`](https://docs.python.org/3/library/stdtypes.html?highlight=list#frozenset.discard)
+/// - [Python documentation: `set.discard()`](https://docs.python.org/3/library/stdtypes.html#set.discard)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.12.0")]
+#[violation_metadata(stable_since = "0.12.0", category = Category::Complexity)]
 pub(crate) struct CheckAndRemoveFromSet {
     element: SourceCodeSnippet,
     set: String,

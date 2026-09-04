@@ -5,6 +5,7 @@ use ruff_python_ast::helpers::contains_effect;
 use ruff_python_ast::{self as ast, Operator};
 use ruff_text_size::Ranged;
 
+use crate::codes::Category;
 use crate::checkers::ast::Checker;
 use crate::{AlwaysFixableViolation, Edit, Fix};
 
@@ -33,7 +34,7 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 /// ## References
 /// - [basedpython documentation: none-coalesce operator](https://docs.basedpython.org/features/none-coalesce)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.0.1-a10")]
+#[violation_metadata(stable_since = "0.0.1-a10", category = Category::Style)]
 pub(crate) struct RedundantNoneCoalesce;
 
 impl AlwaysFixableViolation for RedundantNoneCoalesce {

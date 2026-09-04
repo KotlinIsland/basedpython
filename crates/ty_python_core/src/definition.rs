@@ -554,6 +554,7 @@ pub(crate) struct AssignmentDefinitionNodeRef<'ast, 'db> {
     pub(crate) value: &'ast ast::Expr,
     pub(crate) target: &'ast ast::Expr,
     pub(crate) sole_target: bool,
+    pub(crate) owner: BindingsOwner,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -728,17 +729,20 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
                 value,
                 target,
                 sole_target,
+                owner,
             }) => DefinitionKind::Assignment(AssignmentDefinitionKind {
                 unpack,
                 node: AstNodeRef::new(parsed, node),
                 value: AstNodeRef::new(parsed, value),
                 target: AstNodeRef::new(parsed, target),
                 sole_target,
+                owner,
             }),
             DefinitionNodeRef::AnnotatedAssignment(AnnotatedAssignmentDefinitionNodeRef {
                 node,
             }) => DefinitionKind::AnnotatedAssignment(AnnotatedAssignmentDefinitionKind {
                 node: AstNodeRef::new(parsed, node),
+                has_value: node.value.is_some(),
             }),
             DefinitionNodeRef::AugmentedAssignment(augmented_assignment) => {
                 DefinitionKind::AugmentedAssignment(AstNodeRef::new(parsed, augmented_assignment))
@@ -889,6 +893,7 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
                 unpack: _,
                 target,
                 sole_target: _,
+                owner: _,
             }) => DefinitionNodeKey(NodeKey::from_node(target)),
             Self::AnnotatedAssignment(ann_assign) => ann_assign.node.into(),
             Self::AugmentedAssignment(node) => node.into(),
@@ -1226,11 +1231,11 @@ impl<'db> DefinitionKind<'db> {
                 // assignments only in shape — the annotation is a marker for the
                 // keyword prefix and states no type, so they bind without
                 // declaring, exactly like the `a = 1` they lower to
-                if ann_assign.value(module).is_some()
+                if ann_assign.has_value()
                     && is_untyped_declaration_marker(ann_assign.annotation(module))
                 {
                     DefinitionCategory::Binding
-                } else if in_stub || ann_assign.value(module).is_some() {
+                } else if in_stub || ann_assign.has_value() {
                     DefinitionCategory::DeclarationAndBinding
                 } else {
                     DefinitionCategory::Declaration
@@ -1535,6 +1540,15 @@ impl ImportFromSubmoduleDefinitionKind {
     }
 }
 
+/// The inference region that owns bindings created while evaluating an assignment's value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
+pub enum BindingsOwner {
+    /// A simple-name assignment is represented by its definition.
+    Definition,
+    /// An assignment with multiple, unpacking, or non-name targets is represented by its statement.
+    Statement,
+}
+
 #[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub struct AssignmentDefinitionKind<'db> {
     unpack: Option<Unpack<'db>>,
@@ -1542,6 +1556,7 @@ pub struct AssignmentDefinitionKind<'db> {
     value: AstNodeRef<ast::Expr>,
     target: AstNodeRef<ast::Expr>,
     sole_target: bool,
+    owner: BindingsOwner,
 }
 
 impl<'db> AssignmentDefinitionKind<'db> {
@@ -1571,11 +1586,16 @@ impl<'db> AssignmentDefinitionKind<'db> {
     pub fn is_sole_target(&self) -> bool {
         self.sole_target
     }
+
+    pub fn owner(&self) -> BindingsOwner {
+        self.owner
+    }
 }
 
 #[derive(Clone, Debug, get_size2::GetSize)]
 pub struct AnnotatedAssignmentDefinitionKind {
     node: AstNodeRef<ast::StmtAnnAssign>,
+    has_value: bool,
 }
 
 impl AnnotatedAssignmentDefinitionKind {
@@ -1585,6 +1605,11 @@ impl AnnotatedAssignmentDefinitionKind {
 
     pub fn value<'ast>(&self, module: &'ast ParsedModuleRef) -> Option<&'ast ast::Expr> {
         self.node(module).value.as_deref()
+    }
+
+    /// Returns whether this annotated assignment has a right-hand-side value.
+    pub const fn has_value(&self) -> bool {
+        self.has_value
     }
 
     pub fn annotation<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast ast::Expr {

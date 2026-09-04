@@ -35,7 +35,7 @@ final class Interpolation[in out Element]:
     expression: str
     """Expression"""
 
-    conversion: "a" | "r" | "s" | None
+    conversion: "a" | "r" | "s"?
     """Conversion"""
 
     format_spec: str
@@ -44,7 +44,7 @@ final class Interpolation[in out Element]:
     __match_args__ = ("value", "expression", "conversion", "format_spec")
 
     def __new__(
-        cls, value: Element, expression: str = "", conversion: "a" | "r" | "s" | None = None, format_spec: str = ""
+        cls, value: Element, expression: str = "", conversion: "a" | "r" | "s"? = None, format_spec: str = ""
     ) -> Interpolation[Element]
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Interpolations are generic over the types of their values"""

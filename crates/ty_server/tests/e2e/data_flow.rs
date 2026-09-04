@@ -43,7 +43,7 @@ fn an_observation_sent_as_json_settles_a_branch() -> Result<()> {
     let foo = SystemPath::new("src/foo.py");
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(foo, CONTENT)?
         .build()
@@ -88,7 +88,7 @@ fn the_same_request_with_nothing_observed_settles_nothing() -> Result<()> {
     let foo = SystemPath::new("src/foo.py");
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(foo, CONTENT)?
         .build()
@@ -133,7 +133,7 @@ fn the_value_a_name_will_hold_crosses_the_wire_with_its_own_kind() -> Result<()>
     let foo = SystemPath::new("src/foo.by");
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(foo, PRICE)?
         .build()

@@ -28,7 +28,7 @@ use crate::place::{
 };
 use crate::types::ProgramEnvironment;
 use crate::types::set_theoretic::UnionType;
-use crate::types::variance::VarianceInferable;
+use crate::types::variance::{VarianceInferable, VarianceTerm};
 use crate::types::{
     BoundTypeVarIdentity, InstanceProjection, Type, TypeQualifiers, TypeVarVariance, visitor,
 };
@@ -335,12 +335,14 @@ impl<'db> VarianceInferable<'db> for UnsafeUnionType<'db> {
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         typevar: BoundTypeVarIdentity<'db>,
-    ) -> TypeVarVariance {
-        self.elements(db)
-            .iter()
-            .map(|element| {
-                TypeVarVariance::Invariant.compose(element.variance_of(db, env, typevar))
-            })
-            .collect()
+    ) -> VarianceTerm<'db> {
+        VarianceTerm::join(
+            db,
+            self.elements(db).iter().map(|element| {
+                element
+                    .with_polarity(TypeVarVariance::Invariant)
+                    .variance_of(db, env, typevar)
+            }),
+        )
     }
 }

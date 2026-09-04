@@ -101,7 +101,7 @@ protocol Generator[out Yield, in Send = None, out Return = None](Iterator[Yield]
     abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType? = None, /) -> Yield
 
     if sys.version_info >= (3, 13):
-        def close(self) -> Return | None:
+        def close(self) -> Return?:
             """Raise GeneratorExit inside generator."""
 
     else:
@@ -393,7 +393,7 @@ class Mapping[out Key, out Value](Collection[Key]):
     abstract def __getitem__(self, key: Overlapping[Key], /) -> Value
 
     # Mixin methods
-    def get(self, key: Overlapping[Key], /) -> Value | None:
+    def get(self, key: Overlapping[Key], /) -> Value?:
         """D.get(k[,d]) -> D[k] if k in D, else d.  d defaults to None."""
     def get(self, key: Overlapping[Key], default: Value, /) -> Value
     def get[Element](self, key: Overlapping[Key], default: Element, /) -> Value | Element
@@ -447,7 +447,7 @@ class MutableMapping[in out Key, in out Value](Mapping[Key, Value]):
     # -- collections.ChainMap.setdefault
     # -- weakref.WeakKeyDictionary.setdefault
     @ignorable_return_value
-    def setdefault[Element](self: MutableMapping[Key, Element | None], key: Key, default: None = None, /) -> Element | None:
+    def setdefault[Element](self: MutableMapping[Key, Element?], key: Key, default: None = None, /) -> Element?:
         """D.setdefault(k[,d]) -> D.get(k,d), also set D[k]=d if k not in D"""
     @ignorable_return_value
     def setdefault(self, key: Key, default: Value, /) -> Value

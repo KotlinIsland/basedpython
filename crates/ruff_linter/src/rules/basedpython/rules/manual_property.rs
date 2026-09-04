@@ -6,6 +6,7 @@ use ruff_python_trivia::{indentation_at_offset, textwrap};
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange};
 
+use crate::codes::Category;
 use crate::checkers::ast::Checker;
 use crate::{Edit, Fix, FixAvailability, Violation};
 
@@ -64,7 +65,7 @@ use crate::{Edit, Fix, FixAvailability, Violation};
 /// ## References
 /// - [basedpython documentation: properties](https://docs.basedpython.org/features/properties)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.0.1-a10")]
+#[violation_metadata(stable_since = "0.0.1-a10", category = Category::Style)]
 pub(crate) struct ManualProperty {
     name: String,
     keyword: &'static str,

@@ -77,7 +77,7 @@ fn injections_in(content: &str) -> Result<Vec<Fragment>> {
     let main = SystemPath::new("src/main.by");
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(main, content)?
         .build()
@@ -215,7 +215,7 @@ fn a_fragment_opened_as_its_own_document_is_checked_like_any_other() -> Result<(
     let host = "# language=basedpython\nsnippet = \"\"\"\nx: int = \"no\"\n\"\"\"\n";
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(main, host)?
         .build()
@@ -337,7 +337,7 @@ def build():
 ";
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(main, host)?
         .build()

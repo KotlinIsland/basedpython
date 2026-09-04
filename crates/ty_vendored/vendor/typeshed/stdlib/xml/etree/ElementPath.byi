@@ -18,7 +18,7 @@ def prepare_descendant(next: Next, token: Token) -> Callback?
 def prepare_parent(next: Next, token: Token) -> Callback
 def prepare_predicate(next: Next, token: Token) -> Callback?
 
-final ops: dict[str, (Next, Token) -> (Callback?)]
+final ops: dict[str, (Next, Token) -> Callback?]
 
 class _SelectorContext:
     parent_map: dict[Element, Element]?

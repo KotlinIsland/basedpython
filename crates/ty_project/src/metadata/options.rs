@@ -4,25 +4,26 @@ use crate::glob::{
     AbsolutePortableGlobPattern, ExcludeFilter, IncludeExcludeFilter, IncludeFilter,
     PortableGlobKind,
 };
+use crate::metadata::pyproject::{ResolveRequiresPythonError, resolve_requires_python_lower_bound};
 use crate::metadata::python_version::SupportedPythonVersion;
 use crate::metadata::settings::{BuildSettings, OverrideSettings, SrcSettings};
 
 use super::settings::{EditorSettings, Override, Settings, TerminalSettings};
 use crate::metadata::value::{RelativeGlobPattern, RelativePathBuf};
-use anyhow::Context;
 use ordermap::OrderMap;
+use pep440_rs::VersionSpecifiers;
 use ruff_db::RustDoc;
 use ruff_db::diagnostic::{
     Annotation, Diagnostic, DiagnosticFormat, DiagnosticId, DisplayDiagnosticConfig, Severity,
     Span, SubDiagnostic, SubDiagnosticSeverity,
 };
-use ruff_db::files::system_path_to_file;
 use ruff_db::system::{System, SystemPath, SystemPathBuf};
 use ruff_db::vendored::VendoredFileSystem;
 use ruff_macros::{Combine, OptionsMetadata, RustDoc};
 use ruff_options_metadata::{OptionSet, OptionsMetadata, Visit};
 use ruff_python_ast::PythonVersion;
 use ruff_ranged_value::{RangedValue, ValueSource, ValueSourceGuard};
+use ruff_text_size::TextRange;
 use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -43,8 +44,8 @@ use ty_python_core::program::{MisconfigurationStrategy, ProgramSettings};
 use ty_python_semantic::lint::{Level, LintSource, RuleSelection};
 use ty_python_semantic::{
     AnalysisSettings, ExperimentalSettings, PythonEnvironment, PythonVersionFileSource,
-    PythonVersionSource, PythonVersionWithSource, SitePackagesPaths, SysPrefixPathOrigin,
-    TypeCheckingPreset, inferred_python_version_source_annotation,
+    PythonVersionSource, PythonVersionWithSource, SitePackagesDiscoveryError, SitePackagesPaths,
+    SysPrefixPathOrigin, TypeCheckingPreset, inferred_python_version_source_annotation,
 };
 use ty_static::EnvVars;
 
@@ -179,6 +180,28 @@ impl Options {
         Ok(options)
     }
 
+    /// Infers the Python version from `requires-python` unless it was configured explicitly.
+    pub(crate) fn apply_requires_python(
+        &mut self,
+        requires_python: Option<&RangedValue<VersionSpecifiers>>,
+    ) -> Result<(), ResolveRequiresPythonError> {
+        if self
+            .environment
+            .as_ref()
+            .is_some_and(|environment| environment.python_version.is_some())
+        {
+            return Ok(());
+        }
+
+        if let Some(requires_python) = requires_python
+            && let Some(python_version) = resolve_requires_python_lower_bound(requires_python)?
+        {
+            self.environment.get_or_insert_default().python_version = Some(python_version);
+        }
+
+        Ok(())
+    }
+
     /// Ensures that the `all` selector is applied before per-rule selectors
     /// in all rule tables (top-level and overrides).
     ///
@@ -218,15 +241,18 @@ impl Options {
         Self::deserialize(deserializer)
     }
 
+    /// Resolve configured paths and discover defaults according to the project or script context.
     pub(crate) fn to_program_settings<Strategy: MisconfigurationStrategy>(
         &self,
-        project_root: &SystemPath,
+        context: OptionsContext<'_>,
         project_name: &str,
         system: &dyn System,
         vendored: &VendoredFileSystem,
         strategy: &Strategy,
-    ) -> Result<(ProgramSettings, Vec<ProgramSettingsDiagnostic>), Strategy::Error<anyhow::Error>>
-    {
+    ) -> Result<
+        (ProgramSettings, Vec<ProgramSettingsDiagnostic>),
+        Strategy::Error<ToProgramSettingsError>,
+    > {
         let mut diagnostics = Vec::new();
         let environment = self.environment.or_default();
 
@@ -244,22 +270,11 @@ impl Options {
                 default
             });
 
-        let python_environment = if let Some(python_path) = environment.python.as_ref() {
-            let origin = match python_path.source() {
-                ValueSource::Cli => SysPrefixPathOrigin::PythonCliFlag,
-                ValueSource::File(path) => {
-                    SysPrefixPathOrigin::ConfigFileSetting(path.clone(), python_path.range())
-                }
-                ValueSource::Editor => SysPrefixPathOrigin::Editor,
-                ValueSource::UvWorkspace => SysPrefixPathOrigin::UvWorkspace,
-            };
-
-            PythonEnvironment::new(python_path.absolute(project_root, system), origin, system)
-                .map_err(anyhow::Error::from)
-                .map(Some)
-        } else {
-            PythonEnvironment::discover(project_root, system)
-                .context("Failed to discover local Python environment")
+        let python_environment = match self.python_environment(context.configuration_root(), system)
+        {
+            Ok(None) => PythonEnvironment::discover(context.project_root(), system)
+                .map_err(ToProgramSettingsError::PythonEnvironmentDiscovery),
+            configured => configured.map_err(ToProgramSettingsError::PythonEnvironment),
         };
 
         // If in safe-mode, fallback to None if this fails instead of erroring.
@@ -280,7 +295,7 @@ impl Options {
         let site_packages_paths = if let Some(python_environment) = python_environment.as_ref() {
             let site_packages_paths = python_environment
                 .site_packages_paths(system)
-                .context("Failed to discover the site-packages directory");
+                .map_err(ToProgramSettingsError::SitePackagesDiscovery);
             let site_packages_paths = strategy.fallback(site_packages_paths, |_| {
                 tracing::debug!("Default settings failed to discover site-packages directory");
                 SitePackagesPaths::default()
@@ -329,16 +344,18 @@ impl Options {
             .and_then(|resolution| resolution.into_program_version(&mut diagnostics))
             .unwrap_or_default();
 
-        // Safe mode is handled inside this function, so we just assume this can't fail
-        let search_paths = strategy.to_anyhow(self.to_search_paths(
-            project_root,
-            project_name,
-            site_packages_paths,
-            real_stdlib_path,
-            system,
-            vendored,
-            strategy,
-        ))?;
+        let search_paths = strategy.map_err(
+            self.to_search_paths(
+                context,
+                project_name,
+                site_packages_paths,
+                real_stdlib_path,
+                system,
+                vendored,
+                strategy,
+            ),
+            ToProgramSettingsError::SearchPaths,
+        )?;
 
         tracing::info!(
             "Python version: Python {python_version}, platform: {python_platform}",
@@ -355,10 +372,39 @@ impl Options {
         ))
     }
 
+    /// Resolve the configured Python environment. Return `None` if no path was configured.
+    pub(crate) fn python_environment(
+        &self,
+        configuration_root: &SystemPath,
+        system: &dyn System,
+    ) -> Result<Option<PythonEnvironment>, SitePackagesDiscoveryError> {
+        let environment = self.environment.or_default();
+        let Some(python_path) = environment.python.as_ref() else {
+            return Ok(None);
+        };
+
+        let origin = match python_path.source() {
+            ValueSource::Cli => SysPrefixPathOrigin::PythonCliFlag,
+            ValueSource::File(path) => {
+                SysPrefixPathOrigin::ConfigFileSetting(path.clone(), python_path.range())
+            }
+            ValueSource::ScriptMetadata(_) => SysPrefixPathOrigin::ScriptMetadataSetting,
+            ValueSource::Editor => SysPrefixPathOrigin::Editor,
+            ValueSource::UvMetadata => SysPrefixPathOrigin::UvMetadata,
+        };
+
+        PythonEnvironment::new(
+            python_path.absolute(configuration_root, system),
+            origin,
+            system,
+        )
+        .map(Some)
+    }
+
     #[expect(clippy::too_many_arguments)]
     fn to_search_paths<Strategy: MisconfigurationStrategy>(
         &self,
-        project_root: &SystemPath,
+        context: OptionsContext<'_>,
         project_name: &str,
         site_packages_paths: SitePackagesPaths,
         real_stdlib_path: Option<SystemPathBuf>,
@@ -371,9 +417,10 @@ impl Options {
         let environment_roots = if let Some(roots) = environment.root.as_deref() {
             roots
                 .iter()
-                .map(|root| root.absolute(project_root, system))
+                .map(|root| root.absolute(context.configuration_root(), system))
                 .collect()
         } else {
+            let project_root = context.configuration_root();
             let mut roots = vec![];
             let is_package = |dir: &SystemPath| {
                 system.is_file(&dir.join("__init__.py"))
@@ -431,7 +478,7 @@ impl Options {
             .as_deref()
             .unwrap_or_default()
             .iter()
-            .map(|path| path.absolute(project_root, system))
+            .map(|path| path.absolute(context.configuration_root(), system))
             .collect();
 
         // read all the paths off the PYTHONPATH environment variable, check
@@ -477,7 +524,7 @@ impl Options {
             custom_typeshed: environment
                 .typeshed
                 .as_ref()
-                .map(|path| path.absolute(project_root, system)),
+                .map(|path| path.absolute(context.configuration_root(), system)),
             site_packages_paths: site_packages_paths.into_vec(),
             real_stdlib_path,
         };
@@ -488,7 +535,7 @@ impl Options {
     pub(crate) fn to_settings<Strategy: MisconfigurationStrategy>(
         &self,
         db: &dyn Db,
-        project_root: &SystemPath,
+        context: OptionsContext<'_>,
         strategy: &Strategy,
     ) -> Result<(Settings, Vec<OptionDiagnostic>), Strategy::Error<ToSettingsError>> {
         let mut diagnostics = Vec::new();
@@ -508,7 +555,7 @@ impl Options {
         let src_options = self.src.or_default();
 
         let src = src_options
-            .to_settings(db, project_root, &mut diagnostics)
+            .to_settings(db, context.configuration_root(), &mut diagnostics)
             .map_err(|err| ToSettingsError {
                 diagnostic: err,
                 output_format: terminal.output_format,
@@ -519,7 +566,7 @@ impl Options {
         let build = self
             .build
             .or_default()
-            .to_settings(db, project_root, &mut diagnostics)
+            .to_settings(db, context.configuration_root(), &mut diagnostics)
             .map_err(|err| ToSettingsError {
                 diagnostic: err,
                 output_format: terminal.output_format,
@@ -549,7 +596,7 @@ impl Options {
         let experimental = self.experimental.or_default().to_settings();
 
         let overrides = self
-            .to_overrides_settings(db, project_root, preset, &mut diagnostics)
+            .to_overrides_settings(db, context.configuration_root(), preset, &mut diagnostics)
             .map_err(|err| ToSettingsError {
                 diagnostic: err,
                 output_format: terminal.output_format,
@@ -631,6 +678,29 @@ impl Options {
     }
 }
 
+/// The project or standalone script whose options are being resolved.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OptionsContext<'a> {
+    Project(&'a SystemPath),
+    /// The directory containing a standalone script, or the working directory for a virtual script.
+    Script(&'a SystemPath),
+}
+
+impl<'a> OptionsContext<'a> {
+    fn configuration_root(self) -> &'a SystemPath {
+        match self {
+            Self::Project(root) | Self::Script(root) => root,
+        }
+    }
+
+    fn project_root(self) -> Option<&'a SystemPath> {
+        match self {
+            Self::Project(root) => Some(root),
+            Self::Script(_) => None,
+        }
+    }
+}
+
 fn python_version_from_config(
     ranged_version: &RangedValue<SupportedPythonVersion>,
 ) -> PythonVersionWithSource {
@@ -641,8 +711,11 @@ fn python_version_from_config(
             ValueSource::File(path) => PythonVersionSource::ConfigFile(
                 PythonVersionFileSource::new(path.clone(), ranged_version.range()),
             ),
+            ValueSource::ScriptMetadata(file) => PythonVersionSource::ScriptMetadata(
+                Span::from(*file).with_optional_range(ranged_version.range()),
+            ),
             ValueSource::Editor => PythonVersionSource::Editor,
-            ValueSource::UvWorkspace => PythonVersionSource::UvWorkspace,
+            ValueSource::UvMetadata => PythonVersionSource::UvMetadata,
         },
     }
 }
@@ -734,6 +807,12 @@ fn unsupported_inferred_python_version_diagnostic(
                 SubDiagnosticSeverity::Info,
                 "The version was inferred from a configuration file.",
             )),
+        source @ PythonVersionSource::ScriptMetadata(_) => diagnostic
+            .with_annotation(inferred_python_version_source_annotation(db, source))
+            .sub(SubDiagnostic::new(
+                SubDiagnosticSeverity::Info,
+                "The version was inferred from script metadata.",
+            )),
         source @ PythonVersionSource::PyvenvCfgFile(_) => diagnostic
             .with_annotation(inferred_python_version_source_annotation(db, source))
             .sub(SubDiagnostic::new(
@@ -766,9 +845,9 @@ fn unsupported_inferred_python_version_diagnostic(
             SubDiagnosticSeverity::Info,
             "The version was inferred from your editor.",
         )),
-        PythonVersionSource::UvWorkspace => diagnostic.sub(SubDiagnostic::new(
+        PythonVersionSource::UvMetadata => diagnostic.sub(SubDiagnostic::new(
             SubDiagnosticSeverity::Info,
-            "The version was provided by uv workspace metadata.",
+            "The version was provided by uv metadata.",
         )),
         PythonVersionSource::Default => diagnostic.sub(SubDiagnostic::new(
             SubDiagnosticSeverity::Info,
@@ -848,6 +927,9 @@ pub struct EnvironmentOptions {
     /// * `./src`
     /// * `./<project-name>` (if a `./<project-name>/<project-name>` directory exists)
     /// * `./python`
+    ///
+    /// Scripts with inline metadata have no first-party roots by default because they are
+    /// single-file programs. Set `root = ["."]` to allow importing local modules.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option(
         default = r#"null"#,
@@ -876,6 +958,9 @@ pub struct EnvironmentOptions {
     /// 2. Check for an activated or configured Python environment
     ///    and attempt to infer the Python version of that environment
     /// 3. Fall back to the default value (see below)
+    ///
+    /// Scripts with inline metadata use their `requires-python` field instead of
+    /// `project.requires-python`. They do not inherit the Python version of the enclosing project.
     ///
     /// For some language features, ty can also understand conditionals based on comparisons
     /// with `sys.version_info`. These are commonly found in typeshed, for example,
@@ -960,6 +1045,10 @@ pub struct EnvironmentOptions {
     /// your environment from an activated Conda environment, and will look for a `.venv` directory
     /// in the project root if none of the above apply. Failing that, ty will look for a `python3`
     /// or `python` binary available in `PATH`.
+    ///
+    /// Scripts with inline metadata use their own Python environment. They can use an explicitly
+    /// configured environment, an activated environment, or an environment selected by the editor.
+    /// Unlike projects, they do not automatically use a `.venv` directory.
     ///
     /// [`sys.prefix`]: https://docs.python.org/3/library/sys.html#sys.prefix
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1184,9 +1273,10 @@ impl Rules {
             let source = rule_name.source();
             let lint_source = match source {
                 ValueSource::File(_) => LintSource::File,
+                ValueSource::ScriptMetadata(_) => LintSource::ScriptMetadata,
                 ValueSource::Cli => LintSource::Cli,
                 ValueSource::Editor => LintSource::Editor,
-                ValueSource::UvWorkspace => LintSource::UvWorkspace,
+                ValueSource::UvMetadata => LintSource::UvMetadata,
             };
 
             let mut set_lint_level = |lint| {
@@ -1219,12 +1309,9 @@ impl Rules {
             };
 
             if let Some(message) = unknown {
-                // `system_path_to_file` can return `Err` if the file was deleted since the configuration
-                // was read. This should be rare and it should be okay to default to not showing a configuration
-                // file in that case.
-                let file = source
-                    .file()
-                    .and_then(|path| system_path_to_file(db, path).ok());
+                // The file may have been deleted since its configuration was read. In that
+                // case, report the diagnostic without a configuration-file annotation.
+                let file = source.file(db);
 
                 // TODO: Add a note if the value was configured on the CLI
                 let diagnostic =
@@ -1297,14 +1384,12 @@ fn build_include_filter(
             ));
 
             // Add source annotation if we have source information
-            if let Some(source_file) = include_patterns.source().file() {
-                if let Ok(file) = system_path_to_file(db, source_file) {
-                    let annotation = Annotation::primary(
-                        Span::from(file).with_optional_range(include_patterns.range()),
-                    )
-                    .message("This `include` list is empty");
-                    diagnostic = diagnostic.with_annotation(Some(annotation));
-                }
+            if let Some(file) = include_patterns.source().file(db) {
+                let annotation = Annotation::primary(
+                    Span::from(file).with_optional_range(include_patterns.range()),
+                )
+                .message("This `include` list is empty");
+                diagnostic = diagnostic.with_annotation(Some(annotation));
             }
 
             diagnostics.push(diagnostic);
@@ -1455,9 +1540,7 @@ fn build_exclude_filter(
             ));
         }
 
-        if let Some(source_file) = exclude.value().source().file()
-            && let Ok(file) = system_path_to_file(db, source_file)
-        {
+        if let Some(file) = exclude.value().source().file(db) {
             diagnostic = diagnostic.with_annotation(Some(
                 Annotation::primary(Span::from(file).with_optional_range(exclude.value().range()))
                     .message("This pattern can never match"),
@@ -3037,13 +3120,11 @@ impl ToOverride for RangedValue<OverrideOptions> {
             ));
 
             // Add source annotation if we have source information
-            if let Some(source_file) = self.source().file() {
-                if let Ok(file) = system_path_to_file(db, source_file) {
-                    let annotation =
-                        Annotation::primary(Span::from(file).with_optional_range(self.range()))
-                            .message("This overrides section overrides no settings");
-                    diagnostic = diagnostic.with_annotation(Some(annotation));
-                }
+            if let Some(file) = self.source().file(db) {
+                let annotation =
+                    Annotation::primary(Span::from(file).with_optional_range(self.range()))
+                        .message("This overrides section overrides no settings");
+                diagnostic = diagnostic.with_annotation(Some(annotation));
             }
 
             diagnostics.push(diagnostic);
@@ -3090,13 +3171,11 @@ impl ToOverride for RangedValue<OverrideOptions> {
             ));
 
             // Add source annotation if we have source information
-            if let Some(source_file) = self.source().file() {
-                if let Ok(file) = system_path_to_file(db, source_file) {
-                    let annotation =
-                        Annotation::primary(Span::from(file).with_optional_range(self.range()))
-                            .message("This overrides section applies to all files");
-                    diagnostic = diagnostic.with_annotation(Some(annotation));
-                }
+            if let Some(file) = self.source().file(db) {
+                let annotation =
+                    Annotation::primary(Span::from(file).with_optional_range(self.range()))
+                        .message("This overrides section applies to all files");
+                diagnostic = diagnostic.with_annotation(Some(annotation));
             }
 
             diagnostics.push(diagnostic);
@@ -3167,6 +3246,26 @@ pub(super) struct InnerOverrideOptions {
     pub(super) analysis: Option<AnalysisOptions>,
 }
 
+/// A failure to resolve a project's or standalone script's program settings.
+#[derive(Debug, Error)]
+pub enum ToProgramSettingsError {
+    /// The explicitly configured Python environment could not be resolved.
+    #[error(transparent)]
+    PythonEnvironment(SitePackagesDiscoveryError),
+
+    /// No explicitly configured Python environment was available, and discovery failed.
+    #[error("Failed to discover local Python environment")]
+    PythonEnvironmentDiscovery(#[source] SitePackagesDiscoveryError),
+
+    /// The resolved Python environment did not contain usable site-packages directories.
+    #[error("Failed to discover the site-packages directory")]
+    SitePackagesDiscovery(#[source] SitePackagesDiscoveryError),
+
+    /// One of the configured Python module search paths could not be resolved.
+    #[error(transparent)]
+    SearchPaths(#[from] SearchPathSettingsError),
+}
+
 /// The settings that can vary between individual files.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Combine, get_size2::GetSize)]
 pub(super) struct FileOptions {
@@ -3176,6 +3275,46 @@ pub(super) struct FileOptions {
     pub(super) rules: Option<Rules>,
 
     pub(super) analysis: Option<AnalysisOptions>,
+}
+
+impl ToProgramSettingsError {
+    /// Returns the program-settings error without its optional diagnostic detail.
+    pub(crate) fn message(&self) -> String {
+        self.to_string()
+    }
+
+    /// Returns details for failures whose message only identifies the failed operation.
+    pub(crate) fn hint(&self) -> Option<String> {
+        match self {
+            Self::PythonEnvironmentDiscovery(error) | Self::SitePackagesDiscovery(error) => {
+                Some(error.to_string())
+            }
+            Self::PythonEnvironment(_) | Self::SearchPaths(_) => None,
+        }
+    }
+
+    pub(crate) fn setting_source<'a>(
+        &self,
+        options: &'a Options,
+    ) -> Option<(&'a ValueSource, Option<TextRange>)> {
+        let environment = options.environment.as_ref()?;
+
+        match self {
+            Self::PythonEnvironment(_) | Self::SitePackagesDiscovery(_) => environment
+                .python
+                .as_ref()
+                .map(|setting| (setting.source(), setting.range())),
+            Self::SearchPaths(
+                SearchPathSettingsError::FailedToReadVersionsFile { .. }
+                | SearchPathSettingsError::VersionsParseError(_),
+            ) => environment
+                .typeshed
+                .as_ref()
+                .map(|setting| (setting.source(), setting.range())),
+            Self::PythonEnvironmentDiscovery(_)
+            | Self::SearchPaths(SearchPathSettingsError::InvalidSearchPath(_)) => None,
+        }
+    }
 }
 
 /// Error returned when the settings can't be resolved because of a hard error.
@@ -3365,8 +3504,8 @@ impl OptionDiagnostic {
         err: impl Display,
     ) -> Self {
         match value.source() {
-            ValueSource::File(file_path) => {
-                if let Ok(file) = system_path_to_file(db, &**file_path) {
+            ValueSource::File(_) | ValueSource::ScriptMetadata(_) => {
+                if let Some(file) = value.source().file(db) {
                     let concise_message = std::mem::take(&mut self.message);
                     self.with_concise_message(concise_message)
                         .with_message(format_args!("Invalid {value_label}"))
@@ -3394,9 +3533,9 @@ impl OptionDiagnostic {
                 SubDiagnosticSeverity::Info,
                 "The {value_label} was specified in the editor settings.",
             )),
-            ValueSource::UvWorkspace => self.sub(SubDiagnostic::new(
+            ValueSource::UvMetadata => self.sub(SubDiagnostic::new(
                 SubDiagnosticSeverity::Info,
-                format!("The {value_label} was provided by uv workspace metadata."),
+                format!("The {value_label} was provided by uv metadata."),
             )),
         }
     }

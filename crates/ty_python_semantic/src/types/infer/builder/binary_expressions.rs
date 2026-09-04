@@ -12,6 +12,7 @@ use crate::types::diagnostic::{
     DIVISION_BY_ZERO, report_unsupported_augmented_assignment, report_unsupported_binary_operation,
 };
 use crate::types::inferred_signature::gradual_hole;
+use crate::types::function::OverloadLiteral;
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarConstraints;
@@ -29,6 +30,13 @@ enum BinaryExpressionOperandTypes<'db> {
 
 type BinaryExpressionVisitor<'db> =
     CycleDetector<'db, ast::Operator, (Type<'db>, ast::Operator, Type<'db>), Option<Type<'db>>, 1>;
+
+/// Diagnostic state shared across the alternatives of one binary or augmented operation.
+#[derive(Default)]
+pub(crate) struct BinaryInferenceState<'db> {
+    pub(super) emitted_division_by_zero_diagnostic: bool,
+    pub(super) deprecated_functions: Vec<OverloadLiteral<'db>>,
+}
 
 impl<'db> TypeInferenceBuilder<'db, '_> {
     pub(super) fn infer_binary_expression(
@@ -82,14 +90,17 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 BinaryExpressionOperandTypes::Inferred(left_ty, right_ty) => (left_ty, right_ty),
             };
 
-        self.infer_binary_expression_type(binary.into(), false, left_ty, right_ty, *op, tcx)
+        let mut state = BinaryInferenceState::default();
+        let return_type = self
+            .infer_binary_expression_type(binary.into(), left_ty, right_ty, *op, tcx, &mut state)
             // basedpython: an applicable extension may supply the left
             // operand's dunder, or the right operand's reflected one
-            .or_else(|| self.try_binary_extension_operator(left_ty, *op, right_ty))
-            .unwrap_or_else(|| {
-                report_unsupported_binary_operation(&self.context, binary, left_ty, right_ty, *op);
-                Type::unknown()
-            })
+            .or_else(|| self.try_binary_extension_operator(left_ty, *op, right_ty));
+        self.report_deprecated_functions(binary, state.deprecated_functions);
+        return_type.unwrap_or_else(|| {
+            report_unsupported_binary_operation(&self.context, binary, left_ty, right_ty, *op);
+            Type::unknown()
+        })
     }
 
     fn infer_pep_604_union_type_alias(
@@ -319,23 +330,48 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         })
     }
 
+    /// Collect deprecations from the selected operator methods while reusing cached resolution.
+    fn infer_binary_dunder(
+        &self,
+        state: &mut BinaryInferenceState<'db>,
+        left_ty: Type<'db>,
+        op: ast::Operator,
+        right_ty: Type<'db>,
+        tcx: TypeContext<'db>,
+    ) -> Option<Type<'db>> {
+        let result = Type::try_call_bin_op_result_with_tcx(
+            self.db(),
+            self.program_environment(),
+            left_ty,
+            op,
+            right_ty,
+            tcx,
+        )?;
+        state
+            .deprecated_functions
+            .extend(&result.deprecated_functions);
+        Some(result.return_type)
+    }
+
+    /// Infer the result type and collect deprecated methods for the enclosing operation.
+    /// The caller reports them together after expanding union operands and in-place fallbacks.
     pub(super) fn infer_binary_expression_type(
         &mut self,
         node: AnyNodeRef<'_>,
-        emitted_division_by_zero_diagnostic: bool,
         left_ty: Type<'db>,
         right_ty: Type<'db>,
         op: ast::Operator,
         tcx: TypeContext<'db>,
+        state: &mut BinaryInferenceState<'db>,
     ) -> Option<Type<'db>> {
         self.infer_binary_expression_type_impl(
             node,
-            emitted_division_by_zero_diagnostic,
             left_ty,
             right_ty,
             op,
             &BinaryExpressionVisitor::new(Some(Type::Never)),
             tcx,
+            state,
         )
     }
 
@@ -343,19 +379,19 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     fn infer_binary_expression_type_impl(
         &mut self,
         node: AnyNodeRef<'_>,
-        mut emitted_division_by_zero_diagnostic: bool,
         left_ty: Type<'db>,
         right_ty: Type<'db>,
         op: ast::Operator,
         visitor: &BinaryExpressionVisitor<'db>,
         tcx: TypeContext<'db>,
+        state: &mut BinaryInferenceState<'db>,
     ) -> Option<Type<'db>> {
         let env = self.program_environment();
         let db = self.db();
 
         // Check for division by zero; this doesn't change the inferred type for the expression, but
         // may emit a diagnostic
-        if !emitted_division_by_zero_diagnostic
+        if !state.emitted_division_by_zero_diagnostic
             && matches!(
                 op,
                 ast::Operator::Div | ast::Operator::FloorDiv | ast::Operator::Mod
@@ -364,7 +400,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 literal.as_bool() == Some(false) || literal.as_int() == Some(0)
             })
         {
-            emitted_division_by_zero_diagnostic = self.check_division_by_zero(node, op, left_ty);
+            state.emitted_division_by_zero_diagnostic =
+                self.check_division_by_zero(node, op, left_ty);
         }
 
         match (left_ty, right_ty, op) {
@@ -373,12 +410,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
-                        emitted_division_by_zero_diagnostic,
                         overlapping.value_type(db, env),
                         right_ty,
                         op,
                         visitor,
                         tcx,
+                        state,
                     )
                 })
             }
@@ -387,12 +424,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
-                        emitted_division_by_zero_diagnostic,
                         restricted.value_type(db),
                         right_ty,
                         op,
                         visitor,
                         tcx,
+                        state,
                     )
                 })
             }
@@ -400,12 +437,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
-                        emitted_division_by_zero_diagnostic,
                         left_ty,
                         restricted.value_type(db),
                         op,
                         visitor,
                         tcx,
+                        state,
                     )
                 })
             }
@@ -413,12 +450,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
-                        emitted_division_by_zero_diagnostic,
                         left_ty,
                         overlapping.value_type(db, env),
                         op,
                         visitor,
                         tcx,
+                        state,
                     )
                 })
             }
@@ -433,12 +470,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
-                        emitted_division_by_zero_diagnostic,
                         gradual_hole(db, env, left).unwrap_or(left),
                         gradual_hole(db, env, right).unwrap_or(right),
                         op,
                         visitor,
                         tcx,
+                        state,
                     )
                 })
             }
@@ -464,45 +501,45 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             (Type::Deferred(deferred), _, _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(
                     node,
-                    emitted_division_by_zero_diagnostic,
                     deferred.reduced(db, env),
                     right_ty,
                     op,
                     visitor,
                     tcx,
+                    state,
                 )
             }),
             (_, Type::Deferred(deferred), _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(
                     node,
-                    emitted_division_by_zero_diagnostic,
                     left_ty,
                     deferred.reduced(db, env),
                     op,
                     visitor,
                     tcx,
+                    state,
                 )
             }),
             (Type::Union(lhs_union), rhs, _) => lhs_union.try_map(db, env, |lhs_element| {
                 self.infer_binary_expression_type_impl(
                     node,
-                    emitted_division_by_zero_diagnostic,
                     *lhs_element,
                     rhs,
                     op,
                     visitor,
                     tcx,
+                    state,
                 )
             }),
             (lhs, Type::Union(rhs_union), _) => rhs_union.try_map(db, env, |rhs_element| {
                 self.infer_binary_expression_type_impl(
                     node,
-                    emitted_division_by_zero_diagnostic,
                     lhs,
                     *rhs_element,
                     op,
                     visitor,
                     tcx,
+                    state,
                 )
             }),
 
@@ -516,12 +553,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     .filter_map(|lhs_element| {
                         self.infer_binary_expression_type_impl(
                             node,
-                            emitted_division_by_zero_diagnostic,
                             *lhs_element,
                             rhs,
                             op,
                             visitor,
                             tcx,
+                            state,
                         )
                     })
                     .collect();
@@ -535,12 +572,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     .filter_map(|rhs_element| {
                         self.infer_binary_expression_type_impl(
                             node,
-                            emitted_division_by_zero_diagnostic,
                             lhs,
                             *rhs_element,
                             op,
                             visitor,
                             tcx,
+                            state,
                         )
                     })
                     .collect();
@@ -551,24 +588,24 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             (Type::TypeAlias(alias), rhs, _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(
                     node,
-                    emitted_division_by_zero_diagnostic,
                     alias.value_type(db),
                     rhs,
                     op,
                     visitor,
                     tcx,
+                    state,
                 )
             }),
 
             (lhs, Type::TypeAlias(alias), _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(
                     node,
-                    emitted_division_by_zero_diagnostic,
                     lhs,
                     alias.value_type(db),
                     op,
                     visitor,
                     tcx,
+                    state,
                 )
             }),
 
@@ -605,8 +642,20 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             (unknown @ Type::Dynamic(DynamicType::UnknownGeneric(_)), _, _)
             | (_, unknown @ Type::Dynamic(DynamicType::UnknownGeneric(_)), _) => Some(unknown),
 
-            (typevar @ Type::Dynamic(DynamicType::UnspecializedTypeVar), _, _)
-            | (_, typevar @ Type::Dynamic(DynamicType::UnspecializedTypeVar), _) => Some(typevar),
+            (
+                placeholder @ Type::Dynamic(
+                    DynamicType::UnspecializedTypeVar | DynamicType::UnknownLambdaParameter,
+                ),
+                _,
+                _,
+            )
+            | (
+                _,
+                placeholder @ Type::Dynamic(
+                    DynamicType::UnspecializedTypeVar | DynamicType::UnknownLambdaParameter,
+                ),
+                _,
+            ) => Some(placeholder),
 
             // When both operands are the same constrained TypeVar (e.g., `T: (int, str)`),
             // we check if the operation is valid for each constraint paired with itself.
@@ -632,18 +681,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             constraints,
                             |constraint| {
                                 self.infer_binary_expression_type(
-                                    node,
-                                    emitted_division_by_zero_diagnostic,
-                                    constraint,
-                                    constraint,
-                                    op,
-                                    tcx,
+                                    node, constraint, constraint, op, tcx, state,
                                 )
                             },
                         )
                     }
                     // For bounded TypeVars or unconstrained TypeVars, fall through to the default handling.
-                    _ => Type::try_call_bin_op_return_type(db, env, left_ty, op, right_ty),
+                    _ => self.infer_binary_dunder(state, left_ty, op, right_ty, tcx),
                 }
             }
 
@@ -664,19 +708,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             constraints,
                             |constraint| {
                                 self.infer_binary_expression_type_impl(
-                                    node,
-                                    emitted_division_by_zero_diagnostic,
-                                    constraint,
-                                    rhs,
-                                    op,
-                                    visitor,
-                                    tcx,
+                                    node, constraint, rhs, op, visitor, tcx, state,
                                 )
                             },
                         )
                     }
                     // For bounded TypeVars or unconstrained TypeVars, fall through to the default handling.
-                    _ => Type::try_call_bin_op_return_type(db, env, left_ty, op, right_ty),
+                    _ => self.infer_binary_dunder(state, left_ty, op, right_ty, tcx),
                 }
             }
 
@@ -692,19 +730,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             constraints,
                             |constraint| {
                                 self.infer_binary_expression_type_impl(
-                                    node,
-                                    emitted_division_by_zero_diagnostic,
-                                    lhs,
-                                    constraint,
-                                    op,
-                                    visitor,
-                                    tcx,
+                                    node, lhs, constraint, op, visitor, tcx, state,
                                 )
                             },
                         )
                     }
                     // For bounded TypeVars or unconstrained TypeVars, fall through to the default handling.
-                    _ => Type::try_call_bin_op_return_type(db, env, left_ty, op, right_ty),
+                    _ => self.infer_binary_dunder(state, left_ty, op, right_ty, tcx),
                 }
             }
 
@@ -714,32 +746,32 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // get the same `int | float` and `int | float | complex` special treatment that the
             // positional arguments get. In those cases we need to explicitly delegate to the base
             // type, so that it hits the `Type::Union` branches above.
-            (Type::NewTypeInstance(newtype), rhs, _) => {
-                Type::try_call_bin_op_return_type(db, env, left_ty, op, right_ty).or_else(|| {
+            (Type::NewTypeInstance(newtype), rhs, _) => self
+                .infer_binary_dunder(state, left_ty, op, right_ty, tcx)
+                .or_else(|| {
                     self.infer_binary_expression_type_impl(
                         node,
-                        emitted_division_by_zero_diagnostic,
                         newtype.concrete_base_type(db),
                         rhs,
                         op,
                         visitor,
                         tcx,
+                        state,
                     )
-                })
-            }
-            (lhs, Type::NewTypeInstance(newtype), _) => {
-                Type::try_call_bin_op_return_type(db, env, left_ty, op, right_ty).or_else(|| {
+                }),
+            (lhs, Type::NewTypeInstance(newtype), _) => self
+                .infer_binary_dunder(state, left_ty, op, right_ty, tcx)
+                .or_else(|| {
                     self.infer_binary_expression_type_impl(
                         node,
-                        emitted_division_by_zero_diagnostic,
                         lhs,
                         newtype.concrete_base_type(db),
                         op,
                         visitor,
                         tcx,
+                        state,
                     )
-                })
-            }
+                }),
 
             (todo @ Type::Dynamic(DynamicType::Todo(_)), _, _)
             | (_, todo @ Type::Dynamic(DynamicType::Todo(_)), _) => Some(todo),
@@ -754,8 +786,15 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 } else {
                     RecursivelyDefined::No
                 };
-                let result =
-                    literal_binary_op(db, env, left_ty, right_ty, op, self.is_basedpython_file());
+                let result = literal_binary_op(
+                    db,
+                    env,
+                    left_ty,
+                    right_ty,
+                    op,
+                    self.is_basedpython_file(),
+                    state,
+                );
 
                 result.map(|result| match result {
                     Type::LiteralValue(literal) => {
@@ -894,7 +933,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 MemberLookupPolicy::META_CLASS_NO_TYPE_FALLBACK,
             )
             .ok()
-            .map(|binding| binding.return_type(db, env)),
+            .map(|binding| {
+                state.deprecated_functions.extend(
+                    binding
+                        .deprecated_functions(db)
+                        .map(|(_, function)| function),
+                );
+                binding.return_type(db, env)
+            }),
 
             // fold `(a, b) * n` (and `n * (a, b)`) into a fixed-length tuple with the
             // elements repeated `n` times, matching the runtime behaviour of
@@ -904,14 +950,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 if right_ty.as_int_like_literal().is_some() =>
             {
                 fold_tuple_repeat(db, env, left_ty, right_ty).or_else(|| {
-                    Type::try_call_bin_op_return_type_with_tcx(db, env, left_ty, op, right_ty, tcx)
+                    self.infer_binary_dunder(state, left_ty, op, right_ty, tcx)
                 })
             }
             (_, Type::NominalInstance(_), ast::Operator::Mult)
                 if left_ty.as_int_like_literal().is_some() =>
             {
                 fold_tuple_repeat(db, env, right_ty, left_ty).or_else(|| {
-                    Type::try_call_bin_op_return_type_with_tcx(db, env, left_ty, op, right_ty, tcx)
+                    self.infer_binary_dunder(state, left_ty, op, right_ty, tcx)
                 })
             }
 
@@ -919,7 +965,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // otherwise widens the concatenation to `tuple[T, ...]`
             (Type::NominalInstance(_), Type::NominalInstance(_), ast::Operator::Add) => {
                 fold_tuple_concat(db, env, left_ty, right_ty).or_else(|| {
-                    Type::try_call_bin_op_return_type_with_tcx(db, env, left_ty, op, right_ty, tcx)
+                    self.infer_binary_dunder(state, left_ty, op, right_ty, tcx)
                 })
             }
 
@@ -942,6 +988,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 | Type::SpecialForm(_)
                 | Type::KnownInstance(_)
                 | Type::PropertyInstance(_)
+                | Type::SlotDescriptor(_)
                 | Type::Intersection(_)
                 | Type::EnumComplement(_)
                 | Type::AlwaysTruthy
@@ -969,6 +1016,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 | Type::SpecialForm(_)
                 | Type::KnownInstance(_)
                 | Type::PropertyInstance(_)
+                | Type::SlotDescriptor(_)
                 | Type::Intersection(_)
                 | Type::EnumComplement(_)
                 | Type::AlwaysTruthy
@@ -981,7 +1029,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 | Type::TypeForm(_)
                 | Type::TypedDict(_),
                 op,
-            ) => Type::try_call_bin_op_return_type_with_tcx(db, env, left_ty, op, right_ty, tcx),
+            ) => self.infer_binary_dunder(state, left_ty, op, right_ty, tcx),
         }
     }
 
@@ -1253,6 +1301,7 @@ pub(crate) fn literal_binary_op<'db>(
     right_ty: Type<'db>,
     op: ast::Operator,
     is_basedpython: bool,
+    state: &mut BinaryInferenceState<'db>,
 ) -> Option<Type<'db>> {
     let (Type::LiteralValue(left), Type::LiteralValue(right)) = (left_ty, right_ty) else {
         return None;
@@ -1435,6 +1484,7 @@ pub(crate) fn literal_binary_op<'db>(
             right_ty,
             op,
             is_basedpython,
+            state,
         ),
 
         (LiteralValueTypeKind::Int(_), LiteralValueTypeKind::Bool(b2), op) => literal_binary_op(
@@ -1444,6 +1494,7 @@ pub(crate) fn literal_binary_op<'db>(
             Type::int_literal(i64::from(b2)),
             op,
             is_basedpython,
+            state,
         ),
 
         (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::LShift)
@@ -1534,7 +1585,11 @@ pub(crate) fn literal_binary_op<'db>(
                     Some(widened)
                 }
                 Some(LiteralArithOutcome::Unsupported) | None => {
-                    Type::try_call_bin_op_return_type(db, env, left_ty, op, right_ty)
+                    let result = Type::try_call_bin_op_result(db, env, left_ty, op, right_ty)?;
+                    state
+                        .deprecated_functions
+                        .extend(&result.deprecated_functions);
+                    Some(result.return_type)
                 }
             }
         }

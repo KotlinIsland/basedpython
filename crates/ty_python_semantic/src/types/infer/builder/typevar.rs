@@ -231,7 +231,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let is_by = self.is_basedpython_file();
         let previous_deferred_state =
-            std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);
+            self.replace_deferred_state(DeferredExpressionState::Deferred);
         let bound_node = bound.as_deref();
         let bound_or_constraints = if let Some(constraints) = constraint_set_nodes(node, is_by) {
             let constraint_tys: Box<[Type<'_>]> = constraints
@@ -808,7 +808,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             is_reified: _,
         } = node;
         let previous_deferred_state =
-            std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);
+            self.replace_deferred_state(DeferredExpressionState::Deferred);
         // basedpython: `**Kwargs: int` / `**Kwargs: **{"a": int}` — evaluated here so that
         // `lazy_bound` can read it back
         if let Some(bound) = bound.as_deref() {
@@ -1013,7 +1013,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             is_reified: _,
         } = node;
         let previous_deferred_state =
-            std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);
+            self.replace_deferred_state(DeferredExpressionState::Deferred);
         // basedpython: `*Ts: int` / `*Ts: *(int, str)` — evaluated here so that `lazy_bound`
         // can read it back
         if let Some(bound) = bound.as_deref() {

@@ -323,7 +323,7 @@ fn wheel_versions(cwd: &Path) -> anyhow::Result<Vec<String>> {
 fn find_uv(cwd: &Path) -> anyhow::Result<PathBuf> {
     if let Some(sys_cwd) = SystemPath::from_std_path(cwd) {
         let system = OsSystem::new(sys_cwd);
-        if let Ok(Some(environment)) = PythonEnvironment::discover(sys_cwd, &system) {
+        if let Ok(Some(environment)) = PythonEnvironment::discover(Some(sys_cwd), &system) {
             let binaries = if cfg!(windows) {
                 environment.sys_prefix().join("Scripts")
             } else {

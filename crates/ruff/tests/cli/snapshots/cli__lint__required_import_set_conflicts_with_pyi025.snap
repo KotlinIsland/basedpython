@@ -20,6 +20,9 @@ exit_code: 2
 
 ----- stderr -----
 ruff failed
-  Cause: Required import `from collections.abc import Set` specified in `lint.isort.required-imports` (I002) conflicts with `unaliased-collections-abc-set-import` (PYI025), which requires this import to be aliased as `AbstractSet`.
-
-Help: Either alias the required import (`from collections.abc import Set as AbstractSet`), or disable PYI025.
+  Cause: Failed to parse /Users/morgan/projects/basedpython/.claude/worktrees/merge-upstream-804c57/pyproject.toml
+  Cause: TOML parse error at line 88, column 1
+   |
+88 | docs = [
+   | ^^^^
+duplicate key

@@ -349,7 +349,7 @@ class ElementTree[in out Root in (Element, Element?) = Element?]:
         encoding: str? = None,
         xml_declaration: bool? = None,
         default_namespace: str? = None,
-        method: "xml" | "html" | "text" | "c14n" | None = None,
+        method: "xml" | "html" | "text" | "c14n"? = None,
         *,
         short_empty_elements: bool = True,
     ):
@@ -399,7 +399,7 @@ def register_namespace(prefix: str, uri: str):
 def tostring(
     element: Element[dynamic],
     encoding: None = None,
-    method: "xml" | "html" | "text" | "c14n" | None = None,
+    method: "xml" | "html" | "text" | "c14n"? = None,
     *,
     xml_declaration: bool? = None,
     default_namespace: str? = None,
@@ -421,7 +421,7 @@ def tostring(
 def tostring(
     element: Element[dynamic],
     encoding: "unicode",
-    method: "xml" | "html" | "text" | "c14n" | None = None,
+    method: "xml" | "html" | "text" | "c14n"? = None,
     *,
     xml_declaration: bool? = None,
     default_namespace: str? = None,
@@ -430,7 +430,7 @@ def tostring(
 def tostring(
     element: Element[dynamic],
     encoding: str,
-    method: "xml" | "html" | "text" | "c14n" | None = None,
+    method: "xml" | "html" | "text" | "c14n"? = None,
     *,
     xml_declaration: bool? = None,
     default_namespace: str? = None,
@@ -440,7 +440,7 @@ def tostring(
 def tostringlist(
     element: Element[dynamic],
     encoding: None = None,
-    method: "xml" | "html" | "text" | "c14n" | None = None,
+    method: "xml" | "html" | "text" | "c14n"? = None,
     *,
     xml_declaration: bool? = None,
     default_namespace: str? = None,
@@ -449,7 +449,7 @@ def tostringlist(
 def tostringlist(
     element: Element[dynamic],
     encoding: "unicode",
-    method: "xml" | "html" | "text" | "c14n" | None = None,
+    method: "xml" | "html" | "text" | "c14n"? = None,
     *,
     xml_declaration: bool? = None,
     default_namespace: str? = None,
@@ -458,7 +458,7 @@ def tostringlist(
 def tostringlist(
     element: Element[dynamic],
     encoding: str,
-    method: "xml" | "html" | "text" | "c14n" | None = None,
+    method: "xml" | "html" | "text" | "c14n"? = None,
     *,
     xml_declaration: bool? = None,
     default_namespace: str? = None,

@@ -11,22 +11,22 @@ type _LockLike = Lock | RLock
 
 class Barrier(threading.Barrier):
     init(
-        self, parties: int, action: (() -> object)? = None, timeout: int | float | None = None, *, ctx: BaseContext
+        self, parties: int, action: (() -> object)? = None, timeout: (int | float)? = None, *, ctx: BaseContext
     )
 
 class Condition:
     init(self, lock: _LockLike? = None, *, ctx: BaseContext)
     def notify(self, n: int = 1)
     def notify_all(self)
-    def wait(self, timeout: int | float | None = None) -> bool
-    def wait_for(self, predicate: () -> bool, timeout: int | float | None = None) -> bool
+    def wait(self, timeout: (int | float)? = None) -> bool
+    def wait_for(self, predicate: () -> bool, timeout: (int | float)? = None) -> bool
     def __enter__(self) -> bool
     def __exit__(
         self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?, /
     )
     # These methods are copied from the lock passed to the constructor, or an
     # instance of ctx.RLock() if lock was None.
-    def acquire(self, block: bool = True, timeout: int | float | None = None) -> bool
+    def acquire(self, block: bool = True, timeout: (int | float)? = None) -> bool
     def release(self)
 
 class Event:
@@ -34,7 +34,7 @@ class Event:
     def is_set(self) -> bool
     def set(self)
     def clear(self)
-    def wait(self, timeout: int | float | None = None) -> bool
+    def wait(self, timeout: (int | float)? = None) -> bool
 
 # Not part of public API
 class SemLock:
@@ -44,7 +44,7 @@ class SemLock:
         self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?, /
     )
     # These methods are copied from the wrapped _multiprocessing.SemLock object
-    def acquire(self, block: bool = True, timeout: int | float | None = None) -> bool
+    def acquire(self, block: bool = True, timeout: (int | float)? = None) -> bool
     def release(self)
     if sys.version_info >= (3, 14):
         def locked(self) -> bool

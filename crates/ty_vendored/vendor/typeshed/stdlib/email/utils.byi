@@ -90,7 +90,7 @@ def parsedate_to_datetime(data: str) -> datetime.datetime
 def mktime_tz(data: PDTZ) -> int:
     """Turn a 10-tuple as returned by parsedate_tz() into a POSIX timestamp."""
 
-def formatdate(timeval: int | float | None = None, localtime: bool = False, usegmt: bool = False) -> str:
+def formatdate(timeval: (int | float)? = None, localtime: bool = False, usegmt: bool = False) -> str:
     """Returns a date string as specified by RFC 2822, e.g.:
 
     Fri, 09 Nov 2001 01:08:47 -0000
@@ -137,7 +137,7 @@ elif sys.version_info >= (3, 12):
         The isdst parameter is ignored.
 
         """
-    @deprecated("The `isdst` parameter does nothing and will be removed in Python 3.14.")
+    @deprecated("The `isdst` parameter is ignored; removed in Python 3.14.")
     def localtime(dt: datetime.datetime? = None, isdst: Unused = None) -> datetime.datetime
 
 else:

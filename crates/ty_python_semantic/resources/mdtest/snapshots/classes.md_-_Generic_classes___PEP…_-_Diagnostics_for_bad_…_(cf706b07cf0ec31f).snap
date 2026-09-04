@@ -44,17 +44,3 @@ error[invalid-type-arguments]: Type `int` is not assignable to upper bound `str`
   |               - Type variable defined here
 
 ```
-
-```
-error[invalid-type-arguments]: Type `str` does not satisfy constraints `int`, `bytes` of type variable `U@Constrained`
- --> src/main.py:4:16
-  |
-4 | y: Constrained[str]  # error: [invalid-type-arguments]
-  |                ^^^
-  |
- ::: src/library.py:4:19
-  |
-4 | class Constrained[U: (int, bytes)]:
-  |                   - Type variable defined here
-
-```

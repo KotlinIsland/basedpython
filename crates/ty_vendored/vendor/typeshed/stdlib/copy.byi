@@ -63,18 +63,26 @@ private protocol SupportsReplace[out RT]:
 # None in CPython but non-None in Jython
 PyStringMap: dynamic
 
-# Note: memo and _nil are internal kwargs.
-def deepcopy[Element](x: Element, memo: dict[int, dynamic]? = None, _nil: dynamic = []) -> Element:
-    """Deep copy operation on arbitrary Python objects.
-
-    See the module's __doc__ string for more info.
-    """
-
 def copy[Element](x: Element) -> Element:
     """Shallow copy operation on arbitrary Python objects.
 
     See the module's __doc__ string for more info.
     """
+
+if sys.version_info >= (3, 15):
+    def deepcopy[Element](x: Element, memo: dict[int, dynamic]? = None) -> Element:
+        """Deep copy operation on arbitrary Python objects.
+
+        See the module's __doc__ string for more info.
+        """
+
+else:
+    # Note: memo and _nil are internal kwargs.
+    def deepcopy[Element](x: Element, memo: dict[int, dynamic]? = None, _nil: dynamic = []) -> Element:
+        """Deep copy operation on arbitrary Python objects.
+
+        See the module's __doc__ string for more info.
+        """
 
 if sys.version_info >= (3, 13):
     __all__ += ["replace"]

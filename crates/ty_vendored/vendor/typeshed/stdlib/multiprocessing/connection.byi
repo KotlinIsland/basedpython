@@ -47,7 +47,7 @@ class _ConnectionBase[in Send = dynamic, out RecvT = dynamic]:
     def recv(self) -> RecvT:
         """Receive a (picklable) object"""
 
-    def poll(self, timeout: int | float | None = 0.0) -> bool:
+    def poll(self, timeout: (int | float)? = 0.0) -> bool:
         """Whether there is any input available to be read"""
 
     def __enter__(self) -> Self
@@ -118,7 +118,7 @@ else:
 
 def answer_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes)
 def wait[Send = dynamic, RecvT = dynamic](
-    object_list: Iterable[_ConnectionBase[Send, RecvT] | socket.socket | int], timeout: int | float | None = None
+    object_list: Iterable[_ConnectionBase[Send, RecvT] | socket.socket | int], timeout: (int | float)? = None
 ) -> list[_ConnectionBase[Send, RecvT] | socket.socket | int]:
     """
     Wait till an object in object_list is ready/readable.

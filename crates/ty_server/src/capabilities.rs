@@ -39,6 +39,7 @@ bitflags::bitflags! {
         const IMPLEMENTATION_LINK_SUPPORT = 1 << 21;
         const TRIGGER_SIGNATURE_HELP_COMMAND = 1 << 22;
         const LANGUAGE_INJECTION = 1 << 23;
+        const SEMANTIC_TOKENS_REFRESH = 1 << 24;
     }
 }
 
@@ -115,6 +116,11 @@ impl ResolvedClientCapabilities {
     /// Returns `true` if the client supports inlay hint refresh.
     pub(crate) const fn supports_inlay_hint_refresh(self) -> bool {
         self.contains(Self::INLAY_HINT_REFRESH)
+    }
+
+    /// Returns `true` if the client supports refreshing semantic tokens.
+    pub(crate) const fn supports_semantic_tokens_refresh(self) -> bool {
+        self.contains(Self::SEMANTIC_TOKENS_REFRESH)
     }
 
     /// Returns `true` if the client supports pull diagnostics.
@@ -257,6 +263,13 @@ impl ResolvedClientCapabilities {
             .unwrap_or_default()
         {
             flags |= Self::INLAY_HINT_REFRESH;
+        }
+
+        if workspace
+            .and_then(|workspace| workspace.semantic_tokens.as_ref()?.refresh_support)
+            .unwrap_or_default()
+        {
+            flags |= Self::SEMANTIC_TOKENS_REFRESH;
         }
 
         if let Some(capabilities) =

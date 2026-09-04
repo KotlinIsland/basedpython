@@ -2,6 +2,7 @@ use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast as ast;
 use ruff_text_size::Ranged;
 
+use crate::codes::Category;
 use crate::checkers::ast::Checker;
 use crate::{AlwaysFixableViolation, Applicability, Fix, fix};
 
@@ -40,7 +41,7 @@ use crate::{AlwaysFixableViolation, Applicability, Fix, fix};
 /// ## References
 /// - [basedpython documentation: implicit typing imports](https://docs.basedpython.org/features/implicit-typing)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.0.1-a10")]
+#[violation_metadata(stable_since = "0.0.1-a10", category = Category::Style)]
 pub(crate) struct RedundantTypingImport;
 
 impl AlwaysFixableViolation for RedundantTypingImport {

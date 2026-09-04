@@ -755,7 +755,7 @@ impl ResolvedProject {
 fn discovered_environment(root: &Path) -> Option<Interpreter> {
     let sys_root = SystemPath::from_std_path(root)?;
     let system = OsSystem::new(sys_root);
-    let environment = PythonEnvironment::discover(sys_root, &system).ok()??;
+    let environment = PythonEnvironment::discover(Some(sys_root), &system).ok()??;
     let interpreter = environment.interpreter(&system)?;
     // discovery ends by falling back to whatever python is on `PATH`, which is
     // an interpreter but not a *project* environment — the difference is what

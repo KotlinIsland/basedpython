@@ -647,7 +647,7 @@ class Formatter:
                         the record is emitted
     """
 
-    converter: (int | float | None) -> struct_time
+    converter: ((int | float)?) -> struct_time
     _fmt: str?  # undocumented
     datefmt: str?  # undocumented
     _style: PercentStyle  # undocumented

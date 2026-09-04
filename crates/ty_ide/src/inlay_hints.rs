@@ -8173,7 +8173,7 @@ Source with applied edits:
         LL | class str(Sequence[str]):
            |       ^^^
         info: Source
-          --> main2.py:LL:37
+          --> main2.py:LL:34
            |
         LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                                     ^^^
@@ -8184,7 +8184,7 @@ Source with applied edits:
         LL | class int:
            |       ^^^
         info: Source
-          --> main2.py:LL:43
+          --> main2.py:LL:40
            |
         LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                                           ^^^
@@ -8195,7 +8195,7 @@ Source with applied edits:
         LL | class list[in out Element](MutableSequence[Element]):
            |       ^^^^
         info: Source
-          --> main2.py:LL:49
+          --> main2.py:LL:46
            |
         LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                                                 ^^^^
@@ -8206,7 +8206,7 @@ Source with applied edits:
         LL | class str(Sequence[str]):
            |       ^^^
         info: Source
-          --> main2.py:LL:54
+          --> main2.py:LL:51
            |
         LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                                                      ^^^

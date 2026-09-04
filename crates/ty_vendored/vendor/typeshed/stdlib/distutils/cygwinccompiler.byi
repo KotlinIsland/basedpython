@@ -46,7 +46,7 @@ def check_config_h() -> ("ok" | "not ok" | "uncertain", str):
 
 final RE_VERSION: Pattern[bytes]
 
-def get_versions() -> (*: LooseVersion | None):
+def get_versions() -> (*: LooseVersion?):
     """Try to find out the versions of gcc, ld and dllwrap.
 
     If not possible it returns None for it.

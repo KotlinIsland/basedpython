@@ -312,7 +312,7 @@ class HTTPConnection:
     debuglevel: int
     default_port: int  # undocumented
     response_class: type[HTTPResponse]  # undocumented
-    timeout: int | float | None
+    timeout: (int | float)?
     host: str
     port: int
     sock: socket | MaybeNone  # can be `None` if `.connect()` was not called
@@ -321,7 +321,7 @@ class HTTPConnection:
             self,
             host: str,
             port: int? = None,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             blocksize: int = 8192,
             *,
@@ -332,7 +332,7 @@ class HTTPConnection:
             self,
             host: str,
             port: int? = None,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             blocksize: int = 8192,
         ) -> None
@@ -441,7 +441,7 @@ class HTTPSConnection(HTTPConnection):
             host: str,
             port: int? = None,
             *,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             context: ssl.SSLContext? = None,
             blocksize: int = 8192,
@@ -453,7 +453,7 @@ class HTTPSConnection(HTTPConnection):
             host: str,
             port: int? = None,
             *,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             context: ssl.SSLContext? = None,
             blocksize: int = 8192,
@@ -465,7 +465,7 @@ class HTTPSConnection(HTTPConnection):
             port: int? = None,
             key_file: None = None,
             cert_file: None = None,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             *,
             context: ssl.SSLContext? = None,
@@ -482,7 +482,7 @@ class HTTPSConnection(HTTPConnection):
             port: int? = None,
             key_file: StrOrBytesPath? = None,
             cert_file: StrOrBytesPath? = None,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             *,
             context: ssl.SSLContext? = None,

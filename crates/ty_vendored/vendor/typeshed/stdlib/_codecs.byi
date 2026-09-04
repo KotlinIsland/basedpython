@@ -12,7 +12,7 @@ final class _EncodingMap:
 
 type _CharMap = dict[int, int] | _EncodingMap
 private type Handler = (UnicodeError) -> (str | bytes, int)
-private type SearchFunction = (str) -> (codecs.CodecInfo?)
+private type SearchFunction = (str) -> codecs.CodecInfo?
 
 def register(search_function: SearchFunction, /):
     """Register a codec search function.

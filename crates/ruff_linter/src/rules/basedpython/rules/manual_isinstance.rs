@@ -3,6 +3,7 @@ use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::{self as ast, Expr, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
+use crate::codes::Category;
 use crate::checkers::ast::Checker;
 use crate::rules::basedpython::helpers::{comparison_fits, comparison_operand_source};
 use crate::{AlwaysFixableViolation, Edit, Fix};
@@ -44,7 +45,7 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 /// ## References
 /// - [basedpython documentation: identity and isinstance](https://docs.basedpython.org/features/identity-swap)
 #[derive(ViolationMetadata)]
-#[violation_metadata(stable_since = "0.0.1-a10")]
+#[violation_metadata(stable_since = "0.0.1-a10", category = Category::Style)]
 pub(crate) struct ManualIsinstance;
 
 impl AlwaysFixableViolation for ManualIsinstance {

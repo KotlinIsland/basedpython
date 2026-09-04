@@ -294,7 +294,7 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
     def version_string(self) -> str:
         """Return the server software version string."""
 
-    def date_time_string(self, timestamp: int | float | None = None) -> str:
+    def date_time_string(self, timestamp: (int | float)? = None) -> str:
         """Return the current date and time formatted for a message header."""
 
     def log_date_time_string(self) -> str:
@@ -421,7 +421,7 @@ def executable(path: StrPath) -> bool:  # undocumented
     """Test for executable file."""
 
 if sys.version_info < (3, 15):
-    @deprecated("Deprecated and unsafe; will be removed in Python 3.15.")
+    @deprecated("Deprecated and unsafe; removed in Python 3.15.")
     class CGIHTTPRequestHandler(SimpleHTTPRequestHandler):
         """Complete HTTP server with GET, HEAD and POST commands.
 

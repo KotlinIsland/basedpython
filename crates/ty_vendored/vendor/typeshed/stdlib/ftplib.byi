@@ -84,7 +84,7 @@ class FTP:
     sock: socket?
     welcome: str?
     passiveserver: int
-    timeout: int | float | None
+    timeout: (int | float)?
     af: int
     lastresp: str
     file: TextIO?
@@ -100,7 +100,7 @@ class FTP:
         user: str = "",
         passwd: str = "",
         acct: str = "",
-        timeout: int | float | None = ...,
+        timeout: (int | float)? = ...,
         source_address: (str, int)? = None,
         *,
         encoding: str = "utf-8",
@@ -370,7 +370,7 @@ class FTP_TLS(FTP):
             acct: str = "",
             *,
             context: SSLContext? = None,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             encoding: str = "utf-8",
         ) -> None
@@ -384,7 +384,7 @@ class FTP_TLS(FTP):
             keyfile: None = None,
             certfile: None = None,
             context: SSLContext? = None,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             *,
             encoding: str = "utf-8",
@@ -402,7 +402,7 @@ class FTP_TLS(FTP):
             keyfile: StrOrBytesPath? = None,
             certfile: StrOrBytesPath? = None,
             context: None = None,
-            timeout: int | float | None = ...,
+            timeout: (int | float)? = ...,
             source_address: (str, int)? = None,
             *,
             encoding: str = "utf-8",

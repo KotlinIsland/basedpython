@@ -16,4 +16,4 @@ def what(file: StrPath | ReadableBinary, h: None = None) -> str?:
     """Return the type of image contained in a file or byte stream."""
 def what(file: dynamic, h: bytes) -> str?
 
-tests: list[(bytes, BinaryIO?) -> (str?)]
+tests: list[(bytes, BinaryIO?) -> str?]

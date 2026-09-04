@@ -177,7 +177,7 @@ fn add_dependency(
     }
 
     let system = session.system();
-    let uv = ty_project::metadata::uv::executable(system)
+    let uv = ty_project::uv::executable(system)
         .map_err(|error| anyhow::anyhow!("`uv add` cannot be run: {error}"))?;
     let executor = system
         .command_executor()

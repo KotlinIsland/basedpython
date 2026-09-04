@@ -62,19 +62,20 @@ use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::helpers::{last_bound_parameter, parameter_modifiers};
 use ruff_python_ast::{self as ast, OperatorPrecedence, ParameterWithDefault};
+use ruff_python_edits::unwrapped_call_argument;
 use ruff_text_size::Ranged;
 use salsa::plumbing::AsId;
 use ty_module_resolver::{ImportingFile, KnownModule, ModuleName, file_to_module, resolve_module};
 
 use crate::place::{DefinedPlace, Definedness, Place, declared_type_at_load, place_from_bindings};
 use crate::types::call::{Binding, CallArguments};
-use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
+use crate::types::callable::CallableTypeKind;
 use crate::types::constraints::ConstraintSet;
 use crate::types::context::InferContext;
 use crate::types::cyclic::ActiveRecursionDetector;
 use crate::types::diagnostic::{
-    ASSERT_TYPE_UNSPELLABLE_SUBTYPE, INVALID_ARGUMENT_TYPE, REDUNDANT_CAST, STATIC_ASSERT_ERROR,
-    TYPE_ASSERTION_FAILURE, report_bad_argument_to_get_protocol_members,
+    ASSERT_TYPE_UNSPELLABLE_SUBTYPE, DISJOINT_CAST, INVALID_ARGUMENT_TYPE, REDUNDANT_CAST,
+    STATIC_ASSERT_ERROR, TYPE_ASSERTION_FAILURE, report_bad_argument_to_get_protocol_members,
     report_bad_argument_to_protocol_interface, report_invalid_total_ordering_call,
     report_issubclass_check_against_protocol_with_non_method_members,
     report_runtime_check_against_non_runtime_checkable_protocol,
@@ -95,7 +96,9 @@ use crate::types::signatures::{
     CallableSignature, NarrowingGuard, NarrowingGuardKind, ReturnCallableTypeVarScope, Signature,
 };
 use crate::types::tuple::TupleSpec;
-use crate::types::variance::{TypeVarVariance, VarianceInferable};
+use crate::types::variance::{
+    TypeVarVariance, VarianceInferable, VarianceOrigin, VarianceTerm,
+};
 use crate::types::visitor::{any_over_type, non_any_dynamic_content};
 use crate::types::{
     ApplyTypeMappingVisitor, BoundMethodType, BoundTypeVarIdentity, BoundTypeVarInstance,
@@ -105,9 +108,9 @@ use crate::types::{
     TypeVarBoundOrConstraints, UnionBuilder, UnionType, binding_type, definition_expression_type,
     walk_signature,
 };
-use crate::{Db, FxOrderSet, ProgramEnvironment};
+use crate::{Db, FxIndexMap, FxOrderSet, ProgramEnvironment};
 use ty_python_core::ast_ids::HasScopedUseId;
-use ty_python_core::definition::Definition;
+use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::scope::ScopeId;
 use ty_python_core::{FileScopeId, ProgramFile, SemanticIndex, semantic_index};
 
@@ -434,7 +437,11 @@ pub(crate) struct CallbackParameterModifiers {
 
 #[salsa::tracked]
 impl<'db> OverloadLiteral<'db> {
-    fn with_deprecated(self, db: &'db dyn Db, deprecated: DeprecatedInstance<'db>) -> Self {
+    pub(super) fn with_deprecated(
+        self,
+        db: &'db dyn Db,
+        deprecated: DeprecatedInstance<'db>,
+    ) -> Self {
         Self::new(
             db,
             self.name(db),
@@ -1282,7 +1289,7 @@ impl<'db> OverloadLiteral<'db> {
             // the parameter is often declared optional — `property`'s `fget` is
             // `Callable[[Any], Any] | None` — and what a decoration passes it is the callable
             expected => expected
-                .filter_union(db, Type::is_callable_type)
+                .filter_union(db, env, Type::is_callable_type)
                 .as_callable()?,
         };
         let [expected_signature] = expected.signatures(db).overloads.as_slice() else {
@@ -1997,7 +2004,7 @@ pub(super) fn walk_function_type<'db, V: super::visitor::TypeVisitor<'db> + ?Siz
 
 #[salsa::tracked]
 impl<'db> FunctionType<'db> {
-    fn updated_signature(self, db: &'db dyn Db) -> Option<&'db CallableSignature<'db>> {
+    pub(super) fn updated_signature(self, db: &'db dyn Db) -> Option<&'db CallableSignature<'db>> {
         self.updated_signatures(db)
             .as_deref()
             .and_then(|updated| updated.signature.as_ref())
@@ -2061,13 +2068,11 @@ impl<'db> FunctionType<'db> {
             self.implementation_callables(db)
                 .iter()
                 .map(|callable| {
-                    CallableType::new(
+                    callable.with_signatures(
                         db,
                         callable
                             .signatures(db)
                             .with_inherited_generic_context(db, inherited_generic_context),
-                        callable.kind(db),
-                        callable.provenance(db),
                     )
                 })
                 .collect()
@@ -2119,13 +2124,9 @@ impl<'db> FunctionType<'db> {
         let literal = self.literal(db);
         let (updated_signature, updated_implementation_callables) = if matches!(
             type_mapping,
-            TypeMapping::ApplySpecialization(
-                ApplySpecialization::ReturnCallables(_) | ApplySpecialization::TypeAlias(_)
-            ) | TypeMapping::ApplySpecializationWithMaterialization {
-                specialization: ApplySpecialization::ReturnCallables(_)
-                    | ApplySpecialization::TypeAlias(_),
-                ..
-            }
+            TypeMapping::ApplySpecialization(specialization)
+                | TypeMapping::ApplySpecializationWithMaterialization { specialization, .. }
+                if specialization.preserves_lazy_signatures()
         ) {
             (
                 self.updated_signature(db).map(|signature| {
@@ -2291,18 +2292,26 @@ impl<'db> FunctionType<'db> {
         self.updated_signature(db).is_none() && self.is_reified(db)
     }
 
-    /// Returns true if this method is decorated with `@classmethod`, or if it is implicitly a
-    /// classmethod.
+    /// Returns true if every definition of this method uses `@classmethod`, or is implicitly a
+    /// classmethod. An inconsistently applied decorator does not affect method binding.
     pub(crate) fn is_classmethod(self, db: &'db dyn Db) -> bool {
-        self.iter_overloads_and_implementation(db)
-            .any(|overload| overload.is_classmethod(db))
+        let mut overloads = self.iter_overloads_and_implementation(db);
+        // Overload discovery can return no definitions during cycle recovery.
+        overloads
+            .next()
+            .is_some_and(|overload| overload.is_classmethod(db))
+            && overloads.all(|overload| overload.is_classmethod(db))
     }
 
-    /// Returns true if this method is decorated with `@staticmethod`, or if it is implicitly a
-    /// static method.
+    /// Returns true if every definition of this method uses `@staticmethod`, or is implicitly a
+    /// static method. An inconsistently applied decorator does not affect method binding.
     pub(crate) fn is_staticmethod(self, db: &'db dyn Db) -> bool {
-        self.iter_overloads_and_implementation(db)
-            .any(|overload| overload.is_staticmethod(db))
+        let mut overloads = self.iter_overloads_and_implementation(db);
+        // Overload discovery can return no definitions during cycle recovery.
+        overloads
+            .next()
+            .is_some_and(|overload| overload.is_staticmethod(db))
+            && overloads.all(|overload| overload.is_staticmethod(db))
     }
 
     /// Returns true if this function has an implicit `self` or `cls` receiver parameter.
@@ -2476,20 +2485,27 @@ impl<'db> FunctionType<'db> {
             .unwrap_or_else(|| self.literal(db).signature(db))
     }
 
-    /// Infer the variance of a type variable within this function's signature.
-    ///
-    /// This is tracked because signatures can contain recursive `TypeOf` references back to the
-    /// function itself. Class and generic-alias variance use the same `Bivariant` cycle fallback.
-    #[salsa::tracked(
-        returns(copy),
-        cycle_initial=|_, _, _, _| TypeVarVariance::Bivariant,
-        heap_size=ruff_memory_usage::heap_size,
-    )]
+    /// Refer to this signature's equation, including recursive `TypeOf` references to itself.
     pub(crate) fn variance_of(
         self,
         db: &'db dyn Db,
         typevar: BoundTypeVarIdentity<'db>,
-    ) -> TypeVarVariance {
+    ) -> VarianceTerm<'db> {
+        VarianceTerm::variable(db, VarianceOrigin::Function(self), typevar)
+    }
+
+    /// Build the signature's equation in the function's defining environment, independent of
+    /// the caller's environment. Recursive `TypeOf` annotations remain named references.
+    #[salsa::tracked(
+        returns(copy),
+        cycle_initial=|_, _, _, _| VarianceTerm::BIVARIANT,
+        heap_size=ruff_memory_usage::heap_size,
+    )]
+    pub(in crate::types) fn variance_equation(
+        self,
+        db: &'db dyn Db,
+        typevar: BoundTypeVarIdentity<'db>,
+    ) -> VarianceTerm<'db> {
         let env = ProgramEnvironment::from_scope(self.literal(db).last_definition.body_scope(db));
         self.signature(db).variance_of(db, &env, typevar)
     }
@@ -2551,14 +2567,7 @@ impl<'db> FunctionType<'db> {
 
     /// Convert the `FunctionType` into a [`CallableType`].
     pub(crate) fn into_callable_type(self, db: &'db dyn Db) -> CallableType<'db> {
-        CallableType::new(
-            db,
-            self.signature(db),
-            self.callable_type_kind(db),
-            CallableFunctionProvenance::from_function_return_annotation(
-                self.has_explicit_return_annotation(db),
-            ),
-        )
+        CallableType::new(db, self.signature(db), self.callable_type_kind(db))
     }
 
     /// Convert the `FunctionType` into a [`BoundMethodType`].
@@ -2567,7 +2576,7 @@ impl<'db> FunctionType<'db> {
         db: &'db dyn Db,
         self_instance: Type<'db>,
     ) -> BoundMethodType<'db> {
-        BoundMethodType::new(db, self, self_instance)
+        BoundMethodType::new(db, self, self_instance, self_instance)
     }
 
     pub(crate) fn find_legacy_typevars_impl(
@@ -2984,6 +2993,7 @@ fn is_instance_truthiness<'db>(
         | Type::SpecialForm(..)
         | Type::KnownInstance(..)
         | Type::PropertyInstance(..)
+        | Type::SlotDescriptor(..)
         | Type::AlwaysTruthy
         | Type::AlwaysFalsy
         | Type::BoundSuper(..)
@@ -3230,6 +3240,9 @@ pub enum KnownFunction {
     /// `_pytest.fixtures.fixture` — the `@pytest.fixture` decorator
     #[strum(serialize = "fixture")]
     PytestFixture,
+    /// `_pytest.fixtures.yield_fixture`
+    #[strum(serialize = "yield_fixture")]
+    PytestYieldFixture,
 
     /// `functools.total_ordering`
     TotalOrdering,
@@ -3361,6 +3374,9 @@ impl KnownFunction {
             Self::PydanticFieldValidator => {
                 matches!(module, KnownModule::PydanticFunctionalValidators)
             }
+            Self::PytestFixture | Self::PytestYieldFixture => {
+                matches!(module, KnownModule::PytestFixtures)
+            }
             Self::TotalOrdering => module.is_functools(),
             Self::GetattrStatic => module.is_inspect(),
             Self::StaticAssert | Self::IgnorableReturnValue | Self::MustUseReturnValue => {
@@ -3402,6 +3418,7 @@ impl KnownFunction {
         overload: &mut Binding<'db>,
         call_arguments: &CallArguments<'_, 'db>,
         call_expression: &ast::ExprCall,
+        caller_semantic_index: &SemanticIndex<'db>,
     ) {
         let db = context.db();
         let parameter_types = overload.parameter_types();
@@ -3455,9 +3472,14 @@ impl KnownFunction {
                     &ASSERT_TYPE_UNSPELLABLE_SUBTYPE
                 };
                 if let Some(builder) = context.report_lint(diagnostic, call_expression) {
+                    let settings = DisplaySettings::from_possibly_ambiguous_types(
+                        db,
+                        env,
+                        [*actual_ty, asserted_ty],
+                    );
                     let mut diagnostic = builder.into_diagnostic(format_args!(
                         "Argument does not have asserted type `{}`",
-                        asserted_ty.display(db, env),
+                        asserted_ty.display_with(db, env, settings.clone()),
                     ));
 
                     diagnostic.annotate(
@@ -3469,28 +3491,28 @@ impl KnownFunction {
                         )
                         .message(format_args!(
                             "Inferred type is `{}`",
-                            actual_ty.display(db, env)
+                            actual_ty.display_with(db, env, settings.clone())
                         )),
                     );
 
                     if actual_ty.is_subtype_of(db, env, asserted_ty) {
                         diagnostic.info(format_args!(
                             "`{inferred_type}` is a subtype of `{asserted_type}`, but they are not equivalent",
-                            asserted_type = asserted_ty.display(db, env),
-                            inferred_type = actual_ty.display(db, env),
+                            asserted_type = asserted_ty.display_with(db, env, settings.clone()),
+                            inferred_type = actual_ty.display_with(db, env, settings.clone()),
                         ));
                     } else {
                         diagnostic.info(format_args!(
                             "`{asserted_type}` and `{inferred_type}` are not equivalent types",
-                            asserted_type = asserted_ty.display(db, env),
-                            inferred_type = actual_ty.display(db, env),
+                            asserted_type = asserted_ty.display_with(db, env, settings.clone()),
+                            inferred_type = actual_ty.display_with(db, env, settings.clone()),
                         ));
                     }
 
                     diagnostic.set_concise_message(format_args!(
                         "Type `{}` does not match asserted type `{}`",
-                        actual_ty.display(db, env),
-                        asserted_ty.display(db, env),
+                        actual_ty.display_with(db, env, settings.clone()),
+                        asserted_ty.display_with(db, env, settings),
                     ));
                 }
             }
@@ -3609,23 +3631,18 @@ impl KnownFunction {
                         }
                         if let Some(value) = call_expression.arguments.find_argument_value("val", 1)
                         {
+                            let source = source_text(db, context.file());
                             let covering = covering_node(
                                 context.module().syntax().into(),
                                 call_expression.range(),
                             );
-                            let needs_parens = covering
-                                .parent()
-                                .and_then(ast::AnyNodeRef::as_expr_ref)
-                                .is_some_and(|parent| {
-                                    let value_precedence = OperatorPrecedence::from_expr(value);
-                                    OperatorPrecedence::from_expr_ref(parent) >= value_precedence
-                                });
-                            let value_text = &source_text(db, context.file())[value.range()];
-                            let replacement = if needs_parens {
-                                format!("({value_text})")
-                            } else {
-                                value_text.to_string()
-                            };
+                            let replacement = unwrapped_call_argument(
+                                call_expression,
+                                value,
+                                covering.parent(),
+                                context.module().tokens(),
+                                &source,
+                            );
                             diagnostic.help("Remove the redundant `cast`");
                             diagnostic.set_fix(Fix::safe_edit(Edit::range_replacement(
                                 replacement,
@@ -3633,6 +3650,99 @@ impl KnownFunction {
                             )));
                         }
                     }
+                } else if context.is_lint_enabled(&DISJOINT_CAST)
+                    && !context.file().is_stub(db)
+                    && !caller_semantic_index.is_in_type_checking_block(
+                        context.scope().file_scope_id(db),
+                        call_expression.range(),
+                    )
+                    && source_type.is_disjoint_from(db, env, casted_type)
+                    && !casted_type.is_equivalent_to(db, env, Type::Never)
+                    && !source_type.is_equivalent_to(db, env, Type::Never)
+                    && let Some(builder) = context.report_lint(&DISJOINT_CAST, call_expression)
+                {
+                    let types = [*source_type, casted_type];
+                    let settings = DisplaySettings::from_possibly_ambiguous_types(db, env, types);
+                    let source_display = source_type.display_with(db, env, settings.clone());
+                    let casted_display = casted_type.display_with(db, env, settings.clone());
+                    let mut diagnostic = builder.into_diagnostic("Cast to a disjoint type");
+                    diagnostic.set_concise_message(format_args!(
+                        "Cast from `{source_display}` to disjoint type `{casted_display}`",
+                    ));
+                    if let Some(arg) = call_expression.arguments.find_argument_value("typ", 0) {
+                        diagnostic.annotate(
+                            context
+                                .secondary(arg)
+                                .message("Disjoint from the inferred type"),
+                        );
+                    }
+                    if let Some(arg) = call_expression.arguments.find_argument_value("val", 1) {
+                        diagnostic.annotate(
+                            context
+                                .secondary(arg)
+                                .message(format_args!("Inferred as `{source_display}`")),
+                        );
+                    }
+
+                    // deduplicate definitions before attaching a subdiagnostic to each definition,
+                    // or we'd have multiple subdiagnostics pointing to a single definition
+                    // if the two types are specializations of the same generic class.
+                    let definitions: FxIndexMap<Definition<'db>, String> = types
+                        .into_iter()
+                        .filter_map(|ty| ty.definition(db, env))
+                        .filter_map(|definition| definition.definition())
+                        .filter_map(|definition| Some((definition, definition.name(db)?)))
+                        .collect();
+
+                    for (definition, name) in definitions {
+                        let file = definition.python_file(db);
+                        let module = parsed_module(db, file).load(db);
+                        let mut range = definition.focus_range(db, &module);
+                        if let DefinitionKind::Class(class) = definition.kind(db) {
+                            let definition_types = infer_definition_types(db, definition);
+                            if let Some(decorator) =
+                                class.node(&module).decorator_list.iter().find(|decorator| {
+                                    definition_types
+                                        .expression_type(&decorator.expression)
+                                        .as_function_literal()
+                                        .is_some_and(|func| func.is_known(db, KnownFunction::Final))
+                                })
+                            {
+                                range = range.cover_range(decorator.range());
+                            }
+                        }
+                        diagnostic.annotate(
+                            Annotation::secondary(Span::from(range))
+                                .message(format_args!("`{name}` defined here")),
+                        );
+                    }
+
+                    if casted_type.is_protocol_instance() {
+                        if source_type.is_protocol_instance() {
+                            diagnostic.info(format_args!(
+                                "protocol `{casted_display}` is disjoint \
+                                from protocol `{source_display}`"
+                            ));
+                        } else {
+                            diagnostic.info(format_args!(
+                                "protocol `{casted_display}` is disjoint \
+                                from `{source_display}`"
+                            ));
+                        }
+                    } else if source_type.is_protocol_instance() {
+                        diagnostic.info(format_args!(
+                            "`{casted_display}` is disjoint \
+                            from protocol `{source_display}`"
+                        ));
+                    } else {
+                        diagnostic.info(format_args!(
+                            "`{casted_display}` is disjoint from `{source_display}`"
+                        ));
+                    }
+
+                    source_type
+                        .disjointness_error_context(db, env, casted_type)
+                        .attach_to(db, env, &mut diagnostic);
                 }
             }
 
@@ -3964,6 +4074,9 @@ pub(crate) mod tests {
 
                 KnownFunction::PydanticField => KnownModule::PydanticFields,
                 KnownFunction::PydanticFieldValidator => KnownModule::PydanticFunctionalValidators,
+                KnownFunction::PytestFixture | KnownFunction::PytestYieldFixture => {
+                    KnownModule::PytestFixtures
+                }
 
                 KnownFunction::PytestFixture => KnownModule::PytestFixtures,
 

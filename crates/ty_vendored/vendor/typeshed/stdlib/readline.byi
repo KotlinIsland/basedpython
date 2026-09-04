@@ -6,7 +6,7 @@ from collections.abc import Callable, Sequence
 from typing import Literal, TypeAlias
 
 if sys.platform != "win32":
-    type _Completer = (str, int) -> (str?)
+    type _Completer = (str, int) -> str?
     type _CompDisp = (str, Sequence[str], int) -> None
 
     def parse_and_bind(string: str, /):

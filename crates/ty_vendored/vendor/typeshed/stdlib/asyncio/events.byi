@@ -203,7 +203,8 @@ class AbstractEventLoop:
     # Future methods
     abstract def create_future(self) -> Future[dynamic]
     # Tasks methods
-    if sys.version_info >= (3, 14):
+    # `eager_start` is supported as an arbitrary kwarg starting in 3.13.3.
+    if sys.version_info >= (3, 13):
         abstract def create_task[Element](
             self,
             coro: _CoroutineLike[Element],
@@ -255,9 +256,9 @@ class AbstractEventLoop:
             sock: None = None,
             local_addr: (str, int)? = None,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
-            happy_eyeballs_delay: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
+            happy_eyeballs_delay: (int | float)? = None,
             interleave: int? = None,
         ) -> (Transport, ProtocolT)
         abstract async def create_connection[ProtocolT: BaseProtocol](
@@ -273,9 +274,9 @@ class AbstractEventLoop:
             sock: socket,
             local_addr: None = None,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
-            happy_eyeballs_delay: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
+            happy_eyeballs_delay: (int | float)? = None,
             interleave: int? = None,
         ) -> (Transport, ProtocolT)
     else:
@@ -292,8 +293,8 @@ class AbstractEventLoop:
             sock: None = None,
             local_addr: (str, int)? = None,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            happy_eyeballs_delay: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            happy_eyeballs_delay: (int | float)? = None,
             interleave: int? = None,
         ) -> (Transport, ProtocolT)
         abstract async def create_connection[ProtocolT: BaseProtocol](
@@ -309,8 +310,8 @@ class AbstractEventLoop:
             sock: socket,
             local_addr: None = None,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            happy_eyeballs_delay: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            happy_eyeballs_delay: (int | float)? = None,
             interleave: int? = None,
         ) -> (Transport, ProtocolT)
 
@@ -330,8 +331,8 @@ class AbstractEventLoop:
             reuse_address: bool? = None,
             reuse_port: bool? = None,
             keep_alive: bool? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
             start_serving: bool = True,
         ) -> Server:
             """A coroutine which creates a TCP server bound to host and port.
@@ -400,8 +401,8 @@ class AbstractEventLoop:
             reuse_address: bool? = None,
             reuse_port: bool? = None,
             keep_alive: bool? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
             start_serving: bool = True,
         ) -> Server
     elif sys.version_info >= (3, 11):
@@ -418,8 +419,8 @@ class AbstractEventLoop:
             ssl: _SSLContext = None,
             reuse_address: bool? = None,
             reuse_port: bool? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
             start_serving: bool = True,
         ) -> Server:
             """A coroutine which creates a TCP server bound to host and port.
@@ -483,8 +484,8 @@ class AbstractEventLoop:
             ssl: _SSLContext = None,
             reuse_address: bool? = None,
             reuse_port: bool? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
             start_serving: bool = True,
         ) -> Server
     else:
@@ -501,7 +502,7 @@ class AbstractEventLoop:
             ssl: _SSLContext = None,
             reuse_address: bool? = None,
             reuse_port: bool? = None,
-            ssl_handshake_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
             start_serving: bool = True,
         ) -> Server:
             """A coroutine which creates a TCP server bound to host and port.
@@ -561,7 +562,7 @@ class AbstractEventLoop:
             ssl: _SSLContext = None,
             reuse_address: bool? = None,
             reuse_port: bool? = None,
-            ssl_handshake_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
             start_serving: bool = True,
         ) -> Server
 
@@ -574,8 +575,8 @@ class AbstractEventLoop:
             *,
             server_side: bool = False,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
         ) -> Transport?:
             """Upgrade a transport to TLS.
 
@@ -591,8 +592,8 @@ class AbstractEventLoop:
             sock: socket? = None,
             backlog: int = 100,
             ssl: _SSLContext = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
             start_serving: bool = True,
         ) -> Server:
             """A coroutine which creates a UNIX Domain Socket server.
@@ -633,7 +634,7 @@ class AbstractEventLoop:
             *,
             server_side: bool = False,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
         ) -> Transport?:
             """Upgrade a transport to TLS.
 
@@ -649,7 +650,7 @@ class AbstractEventLoop:
             sock: socket? = None,
             backlog: int = 100,
             ssl: _SSLContext = None,
-            ssl_handshake_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
             start_serving: bool = True,
         ) -> Server:
             """A coroutine which creates a UNIX Domain Socket server.
@@ -685,8 +686,8 @@ class AbstractEventLoop:
             sock: socket,
             *,
             ssl: _SSLContext = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
         ) -> (Transport, ProtocolT):
             """Handle an accepted connection.
 
@@ -704,7 +705,7 @@ class AbstractEventLoop:
             sock: socket,
             *,
             ssl: _SSLContext = None,
-            ssl_handshake_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
         ) -> (Transport, ProtocolT):
             """Handle an accepted connection.
 
@@ -724,8 +725,8 @@ class AbstractEventLoop:
             ssl: _SSLContext = None,
             sock: socket? = None,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
         ) -> (Transport, ProtocolT)
     else:
         async def create_unix_connection[ProtocolT: BaseProtocol](
@@ -736,7 +737,7 @@ class AbstractEventLoop:
             ssl: _SSLContext = None,
             sock: socket? = None,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
         ) -> (Transport, ProtocolT)
 
     abstract async def sock_sendfile(

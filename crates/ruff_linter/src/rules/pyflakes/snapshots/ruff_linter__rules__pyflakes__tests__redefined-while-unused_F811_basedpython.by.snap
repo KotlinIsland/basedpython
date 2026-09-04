@@ -1,0 +1,18 @@
+---
+source: crates/ruff_linter/src/rules/pyflakes/mod.rs
+---
+F811 Redefinition of unused `g` from line 38
+  --> F811_basedpython.by:42:5
+   |
+42 | def g():
+   |     ^ `g` redefined here
+43 |     pass
+   |
+  ::: F811_basedpython.by:38:5
+   |
+37 | # a real redefinition still fires
+38 | def g():
+   |     - previous definition of `g` here
+39 |     pass
+   |
+help: Remove definition: `g`

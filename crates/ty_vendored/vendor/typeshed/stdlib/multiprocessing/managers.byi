@@ -359,7 +359,7 @@ class BaseManager:
         """
 
     shutdown: _Finalize  # only available after start() was called
-    def join(self, timeout: int | float | None = None):  # undocumented
+    def join(self, timeout: (int | float)? = None):  # undocumented
         """
         Join the manager process (if it has been spawned)
         """
@@ -395,7 +395,7 @@ class SyncManager(BaseManager):
     """
 
     def Barrier(
-        self, parties: int, action: (() -> None)? = None, timeout: int | float | None = None
+        self, parties: int, action: (() -> None)? = None, timeout: (int | float)? = None
     ) -> threading.Barrier
     def BoundedSemaphore(self, value: int = 1) -> threading.BoundedSemaphore
     def Condition(self, lock: threading.Lock | threading._RLock | None = None) -> threading.Condition

@@ -23,7 +23,7 @@ else:
         "start_unix_server",
     )
 
-private type ClientConnectedCallback = (StreamReader, StreamWriter) -> (Awaitable[None]?)
+private type ClientConnectedCallback = (StreamReader, StreamWriter) -> Awaitable[None]?
 
 @type_check_only
 private protocol ReaduntilBuffer(ReadableBuffer, Sized)
@@ -33,7 +33,7 @@ async def open_connection(
     port: int | str | None = None,
     *,
     limit: int = 65536,
-    ssl_handshake_timeout: int | float | None = None,
+    ssl_handshake_timeout: (int | float)? = None,
     **kwds: dynamic,
 ) -> (StreamReader, StreamWriter):
     """A wrapper for create_connection() returning a (reader, writer) pair.
@@ -60,7 +60,7 @@ async def start_server(
     port: int | str | None = None,
     *,
     limit: int = 65536,
-    ssl_handshake_timeout: int | float | None = None,
+    ssl_handshake_timeout: (int | float)? = None,
     **kwds: dynamic,
 ) -> Server:
     """Start a socket server, call back for each client connected.
@@ -165,14 +165,14 @@ class StreamWriter:
             sslcontext: ssl.SSLContext,
             *,
             server_hostname: str? = None,
-            ssl_handshake_timeout: int | float | None = None,
-            ssl_shutdown_timeout: int | float | None = None,
+            ssl_handshake_timeout: (int | float)? = None,
+            ssl_shutdown_timeout: (int | float)? = None,
         ) -> None:
             """Upgrade an existing stream-based connection to TLS."""
 
     elif sys.version_info >= (3, 11):
         async def start_tls(
-            self, sslcontext: ssl.SSLContext, *, server_hostname: str? = None, ssl_handshake_timeout: int | float | None = None
+            self, sslcontext: ssl.SSLContext, *, server_hostname: str? = None, ssl_handshake_timeout: (int | float)? = None
         ) -> None:
             """Upgrade an existing stream-based connection to TLS."""
 

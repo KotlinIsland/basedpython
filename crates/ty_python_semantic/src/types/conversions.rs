@@ -1389,7 +1389,7 @@ fn arity_after_receiver(parameters: &Parameters<'_>) -> (usize, bool) {
     let rest = || parameters.iter().skip(1);
     let required = rest()
         .filter(|parameter| {
-            parameter.default_type().is_none()
+            !parameter.has_default()
                 && !parameter.is_variadic()
                 && !parameter.is_keyword_variadic()
         })

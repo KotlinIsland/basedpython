@@ -5,8 +5,8 @@ use ty_combine::Combine;
 use ty_python_semantic::lint::RuleSelection;
 use ty_python_semantic::{AnalysisSettings, ExperimentalSettings};
 
-use crate::metadata::options::{FileOptions, InnerOverrideOptions, Options, OutputFormat};
-use crate::metadata::script::script_metadata;
+use crate::metadata::options::{InnerOverrideOptions, OutputFormat};
+use crate::script::Script;
 use ruff_db::system::SystemPath;
 
 use crate::glob::{GlobFilterCheckMode, IncludeResult};
@@ -252,42 +252,15 @@ impl Override {
 /// Resolves the settings for a given file.
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
-    let project = db.project();
+    if let Some(script) = Script::for_file(db, file) {
+        let settings = script.settings(db);
+        return FileSettings::File(Arc::new(OverrideSettings {
+            rules: settings.rules().clone(),
+            analysis: settings.analysis().clone(),
+        }));
+    }
 
-    // a PEP 723 script's own `[tool.ty]` block is one more configuration layer for
-    // that single file — the highest-precedence one — and not a replacement for the
-    // project's configuration. a script that says nothing about a rule is held to
-    // whatever the project it sits in says about that rule, the same as any other
-    // file, so a project can relax a rule for a vendored script or tighten one
-    // without every site needing its own suppression comment.
-    //
-    // an explicit `--config` is the one thing that outranks the block: it is a
-    // deliberate instruction from the command line about this very run, so the
-    // block is dropped rather than layered.
-    //
-    // ignore script settings for files that aren't checked as part of the project.
-    // check for metadata first so files without metadata don't depend on the
-    // low-durability open-file set.
-    let script_layer = if let Some(script) = script_metadata(db, file)
-        && crate::should_check_file(db, file)
-        && project.metadata(db).config_file_override().is_none()
-    {
-        script
-            .options()
-            .map(|options| {
-                // a script layer varies `rules` and `analysis`; the preset those start from is
-                // a project-level decision, resolved in `merge_overrides`
-                let FileOptions {
-                    rules,
-                    analysis,
-                    type_checking_preset: _,
-                } = options.file_options();
-                Arc::new(InnerOverrideOptions { rules, analysis })
-            })
-            .filter(|layer| layer.rules.is_some() || layer.analysis.is_some())
-    } else {
-        None
-    };
+    let project = db.project();
 
     let settings = project.settings(db);
 
@@ -296,7 +269,7 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
         ruff_db::files::FilePath::SystemVirtual(_) | ruff_db::files::FilePath::Vendored(_) => {
             // a file with no system path matches no `include`/`exclude` glob, but a
             // script carries its configuration in its own text, so that still applies
-            return script_settings(db, script_layer);
+            return FileSettings::Global;
         }
     };
 
@@ -307,16 +280,13 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
 
     let Some(first) = matching_overrides.next() else {
         // If the file matches no override, it uses the global settings.
-        return script_settings(db, script_layer);
+        return FileSettings::Global;
     };
 
     let Some(second) = matching_overrides.next() else {
         tracing::debug!("Applying override for file `{path}`: {}", first.files);
         // If the file matches only one override, return that override's settings.
-        return match script_layer {
-            Some(layer) => merge_overrides(db, vec![Arc::clone(&first.options)], Some(layer)),
-            None => FileSettings::File(Arc::clone(&first.settings)),
-        };
+        return FileSettings::File(Arc::clone(&first.settings));
     };
 
     let mut filters = tracing::enabled!(tracing::Level::DEBUG)
@@ -338,16 +308,7 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
         tracing::debug!("Applying multiple overrides for file `{path}`: {filters}");
     }
 
-    merge_overrides(db, overrides, None)
-}
-
-/// The settings for a file that matches no override, which for a PEP 723 script
-/// still has to account for the script's own `[tool.ty]` block.
-fn script_settings(db: &dyn Db, script: Option<Arc<InnerOverrideOptions>>) -> FileSettings {
-    match script {
-        Some(script) => merge_overrides(db, Vec::new(), Some(script)),
-        None => FileSettings::Global,
-    }
+    merge_overrides(db, overrides, ())
 }
 
 /// Merges multiple override options, caching the result.
@@ -355,15 +316,8 @@ fn script_settings(db: &dyn Db, script: Option<Arc<InnerOverrideOptions>>) -> Fi
 /// Overrides often apply to multiple files. This query ensures that we avoid
 /// resolving the same override combinations multiple times.
 ///
-/// `script` is a PEP 723 script's own `[tool.ty]` block. It applies to exactly one
-/// file, so it does not share the caching benefit the override list has, but it
-/// takes part in the same merge because it is just one more layer.
 #[salsa::tracked(returns(clone), heap_size=ruff_memory_usage::heap_size)]
-fn merge_overrides(
-    db: &dyn Db,
-    overrides: Vec<Arc<InnerOverrideOptions>>,
-    script: Option<Arc<InnerOverrideOptions>>,
-) -> FileSettings {
+fn merge_overrides(db: &dyn Db, overrides: Vec<Arc<InnerOverrideOptions>>, _: ()) -> FileSettings {
     let mut overrides = overrides.into_iter().rev();
     let mut merged = overrides.next().map_or(
         InnerOverrideOptions {
@@ -378,22 +332,17 @@ fn merge_overrides(
     }
 
     let metadata = db.project().metadata(db);
-    let script = script.map(|script| Options {
-        rules: script.rules.clone(),
-        analysis: script.analysis.clone(),
-        ..Options::default()
-    });
 
     // An override varies `rules` and `analysis`, never the preset those start from.
     let preset = metadata
-        .options_in_precedence_order(metadata.options())
-        .find_map(Options::configured_type_checking_preset)
+        .options_in_precedence_order(metadata.options(), metadata.uv_workspace_options.as_deref())
+        .find_map(crate::metadata::options::Options::configured_type_checking_preset)
         .unwrap_or_default();
 
     // Merge with the project level options by replaying the individual options
     // in the correct precedence order.
-    for options in
-        metadata.options_in_precedence_order_with_script(metadata.options(), script.as_ref())
+    for options in metadata
+        .options_in_precedence_order(metadata.options(), metadata.uv_workspace_options.as_deref())
     {
         merged.rules.combine_with(options.rules.clone());
         merged.analysis.combine_with(options.analysis.clone());
@@ -416,7 +365,7 @@ fn merge_overrides(
 
 /// The resolved settings for a file.
 #[derive(Debug, Eq, PartialEq, Clone, get_size2::GetSize)]
-pub enum FileSettings {
+pub(crate) enum FileSettings {
     /// The file uses the global settings.
     Global,
 

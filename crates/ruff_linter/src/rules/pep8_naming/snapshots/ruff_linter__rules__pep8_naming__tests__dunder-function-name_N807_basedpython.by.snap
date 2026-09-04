@@ -1,0 +1,11 @@
+---
+source: crates/ruff_linter/src/rules/pep8_naming/mod.rs
+---
+N807 Function name should not start and end with `__`
+  --> N807_basedpython.by:14:5
+   |
+13 | # a real declaration is still judged
+14 | def __my_function__() -> int:
+   |     ^^^^^^^^^^^^^^^
+15 |     return 1
+   |

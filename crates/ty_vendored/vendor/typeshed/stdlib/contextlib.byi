@@ -30,7 +30,7 @@ if sys.version_info >= (3, 11):
 
 
 
-private type ExitFunc = (type[BaseException]?, BaseException?, TracebackType?) -> (bool?)
+private type ExitFunc = (type[BaseException]?, BaseException?, TracebackType?) -> bool?
 
 # mypy and pyright object to this being both ABC and Protocol.
 # At runtime it inherits from ABC and is not a Protocol, but it is on the

@@ -128,11 +128,43 @@ struct Relocation {
 pub fn scan(root: &Path) -> CollectionsAbcHome {
     let relocation = std::fs::read_to_string(root.join("typing.byi"))
         .ok()
+        // the classes travel as source text, so they have to be read *after* the pep 695
+        // conversion has rewritten them — a class moved in the same run that converts
+        // `typing` arrives in its legacy form, and the `TypeVar` declarations it refers to
+        // stay behind in `typing` and are deleted with the conversion, leaving it broken.
+        // the sync script runs this binary to a fixed point, so declining here just moves
+        // the relocation into the next run, by which time `typing` is converted
+        .filter(|source| !declares_legacy_typevars(source))
         .and_then(|source| {
             let parsed = parse_unchecked_source(&source, PySourceType::BasedPythonStub);
             relocation(&parsed, &source)
         });
     CollectionsAbcHome { relocation }
+}
+
+/// whether `typing` still declares the module-level legacy `TypeVar`s that the pep 695
+/// conversion turns into type parameters.
+///
+/// `AnyStr` is deliberately left in legacy form — it is a constrained typevar the stdlib
+/// exports by name — so it does not count as unconverted.
+fn declares_legacy_typevars(source: &str) -> bool {
+    let parsed = parse_unchecked_source(source, PySourceType::BasedPythonStub);
+    parsed.syntax().body.iter().any(|stmt| {
+        let Stmt::Assign(assign) = stmt else {
+            return false;
+        };
+        let [Expr::Name(target)] = assign.targets.as_slice() else {
+            return false;
+        };
+        if target.id.as_str() == "AnyStr" {
+            return false;
+        }
+        assign
+            .value
+            .as_call_expr()
+            .and_then(|call| call.func.as_name_expr())
+            .is_some_and(|func| func.id.as_str() == "TypeVar")
+    })
 }
 
 impl Patch for CollectionsAbcHome {

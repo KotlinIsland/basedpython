@@ -11,8 +11,8 @@ class ApplyResult[in out Element]:
     init(
         self, pool: Pool, callback: ((Element) -> object)?, error_callback: ((BaseException) -> object)?
     )
-    def get(self, timeout: int | float | None = None) -> Element
-    def wait(self, timeout: int | float | None = None)
+    def get(self, timeout: (int | float)? = None) -> Element
+    def wait(self, timeout: (int | float)? = None)
     def ready(self) -> bool
     def successful(self) -> bool
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
@@ -38,8 +38,8 @@ class MapResult[in out Element](ApplyResult[list[Element]]):
 class IMapIterator[in out Element]:
     init(self, pool: Pool)
     def __iter__(self) -> Self
-    def next(self, timeout: int | float | None = None) -> Element
-    def __next__(self, timeout: int | float | None = None) -> Element
+    def next(self, timeout: (int | float)? = None) -> Element
+    def __next__(self, timeout: (int | float)? = None) -> Element
 
 class IMapUnorderedIterator[in out Element](IMapIterator[Element])
 

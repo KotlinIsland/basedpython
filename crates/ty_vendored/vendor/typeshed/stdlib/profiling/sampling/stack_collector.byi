@@ -28,8 +28,8 @@ class FlamegraphCollector(StackTraceCollector):
         sample_interval_usec: int,
         duration_sec: int | float,
         sample_rate: int | float,
-        error_rate: int | float | None = None,
-        missed_samples: int | float | None = None,
+        error_rate: (int | float)? = None,
+        missed_samples: (int | float)? = None,
         mode: int? = None,
     ):
         """Set profiling statistics to include in flamegraph data."""

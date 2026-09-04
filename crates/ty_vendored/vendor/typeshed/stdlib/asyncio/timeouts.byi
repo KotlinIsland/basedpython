@@ -12,7 +12,7 @@ final class Timeout:
     directly.
     """
 
-    init(self, when: int | float | None):
+    init(self, when: (int | float)?):
         """Schedule a timeout that will trigger at a given loop time.
 
         - If `when` is `None`, the timeout will never trigger.
@@ -20,10 +20,10 @@ final class Timeout:
           iteration of the event loop.
         """
 
-    def when(self) -> int | float | None:
+    def when(self) -> (int | float)?:
         """Return the current deadline."""
 
-    def reschedule(self, when: int | float | None):
+    def reschedule(self, when: (int | float)?):
         """Reschedule the timeout."""
 
     def expired(self) -> bool:
@@ -34,7 +34,7 @@ final class Timeout:
         self, exc_type: type[BaseException]?, exc_val: BaseException?, exc_tb: TracebackType?
     ) -> None
 
-def timeout(delay: int | float | None) -> Timeout:
+def timeout(delay: (int | float)?) -> Timeout:
     """Timeout async context manager.
 
     Useful in cases when you want to apply timeout logic around block
@@ -51,7 +51,7 @@ def timeout(delay: int | float | None) -> Timeout:
     into TimeoutError.
     """
 
-def timeout_at(when: int | float | None) -> Timeout:
+def timeout_at(when: (int | float)?) -> Timeout:
     """Schedule the timeout at absolute time.
 
     Like timeout() but argument gives absolute time in the same clock system

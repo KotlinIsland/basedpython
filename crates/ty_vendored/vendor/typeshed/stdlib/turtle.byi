@@ -361,7 +361,7 @@ class TurtleScreenBase:
         """
 
     def numinput(
-        self, title: str, prompt: str, default: int | float | None = None, minval: int | float | None = None, maxval: int | float | None = None
+        self, title: str, prompt: str, default: (int | float)? = None, minval: (int | float)? = None, maxval: (int | float)? = None
     ) -> float?:
         """Pop up a dialog window for input of a number.
 
@@ -714,7 +714,7 @@ class TurtleScreen(TurtleScreenBase):
 
         """
 
-    def listen(self, xdummy: int | float | None = None, ydummy: int | float | None = None):
+    def listen(self, xdummy: (int | float)? = None, ydummy: (int | float)? = None):
         """Set focus on TurtleScreen (in order to collect key-events)
 
         No arguments.
@@ -884,7 +884,7 @@ class TNavigator:
         """
 
     if sys.version_info >= (3, 12):
-        def teleport(self, x: int | float | None = None, y: int | float | None = None, *, fill_gap: bool = False):
+        def teleport(self, x: (int | float)? = None, y: (int | float)? = None, *, fill_gap: bool = False):
             """To be overwritten by child class RawTurtle.
             Includes no TPen references.
             """
@@ -1169,7 +1169,7 @@ class TNavigator:
         90
         """
 
-    def circle(self, radius: int | float, extent: int | float | None = None, steps: int? = None):
+    def circle(self, radius: int | float, extent: (int | float)? = None, steps: int? = None):
         """Draw a circle with given radius.
 
         Arguments:
@@ -1436,7 +1436,7 @@ class TPen:
     def color(self, color1: Color, color2: Color) -> None
 
     if sys.version_info >= (3, 12):
-        def teleport(self, x: int | float | None = None, y: int | float | None = None, *, fill_gap: bool = False):
+        def teleport(self, x: (int | float)? = None, y: (int | float)? = None, *, fill_gap: bool = False):
             """To be overwritten by child class RawTurtle.
             Includes no TNavigator references.
             """
@@ -1682,7 +1682,7 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.shapesize(outline=8)
         """
     def shapesize(
-        self, stretch_wid: int | float | None = None, stretch_len: int | float | None = None, outline: int | float | None = None
+        self, stretch_wid: (int | float)? = None, stretch_len: (int | float)? = None, outline: (int | float)? = None
     ) -> None
 
     def shearfactor(self, shear: None = None) -> int | float:
@@ -1728,7 +1728,7 @@ class RawTurtle(TPen, TNavigator):
         (4.0, -1.0, -0.0, 2.0)
         """
     def shapetransform(
-        self, t11: int | float | None = None, t12: int | float | None = None, t21: int | float | None = None, t22: int | float | None = None
+        self, t11: (int | float)? = None, t12: (int | float)? = None, t21: (int | float)? = None, t22: (int | float)? = None
     ) -> None
 
     def get_shapepoly(self) -> PolygonCoords?:
@@ -2252,7 +2252,7 @@ def textinput(title: str, prompt: str) -> str?:
     """
 
 def numinput(
-    title: str, prompt: str, default: int | float | None = None, minval: int | float | None = None, maxval: int | float | None = None
+    title: str, prompt: str, default: (int | float)? = None, minval: (int | float)? = None, maxval: (int | float)? = None
 ) -> float?:
     """Pop up a dialog window for input of a number.
 
@@ -2571,7 +2571,7 @@ def onkey(fun: () -> object, key: str):
 
     """
 
-def listen(xdummy: int | float | None = None, ydummy: int | float | None = None):
+def listen(xdummy: (int | float)? = None, ydummy: (int | float)? = None):
     """Set focus on TurtleScreen (in order to collect key-events)
 
     No arguments.
@@ -3080,7 +3080,7 @@ def setheading(to_angle: int | float):
     90
     """
 
-def circle(radius: int | float, extent: int | float | None = None, steps: int? = None):
+def circle(radius: int | float, extent: (int | float)? = None, steps: int? = None):
     """Draw a circle with given radius.
 
     Arguments:
@@ -3496,7 +3496,7 @@ def shape(name: None = None) -> str:
 def shape(name: str) -> None
 
 if sys.version_info >= (3, 12):
-    def teleport(x: int | float | None = None, y: int | float | None = None, *, fill_gap: bool = False):
+    def teleport(x: (int | float)? = None, y: (int | float)? = None, *, fill_gap: bool = False):
         """Instantly move turtle to an absolute position.
 
         Arguments:
@@ -3554,7 +3554,7 @@ def shapesize() -> (int | float, int | float, int | float):
     >>> shapesize(5, 5, 12)
     >>> shapesize(outline=8)
     """
-def shapesize(stretch_wid: int | float | None = None, stretch_len: int | float | None = None, outline: int | float | None = None) -> None
+def shapesize(stretch_wid: (int | float)? = None, stretch_len: (int | float)? = None, outline: (int | float)? = None) -> None
 
 def shearfactor(shear: None = None) -> int | float:
     """Set or return the current shearfactor.
@@ -3599,7 +3599,7 @@ def shapetransform() -> (int | float, int | float, int | float, int | float):
     (4.0, -1.0, -0.0, 2.0)
     """
 def shapetransform(
-    t11: int | float | None = None, t12: int | float | None = None, t21: int | float | None = None, t22: int | float | None = None
+    t11: (int | float)? = None, t12: (int | float)? = None, t21: (int | float)? = None, t22: (int | float)? = None
 ) -> None
 
 def get_shapepoly() -> PolygonCoords?:

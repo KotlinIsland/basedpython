@@ -92,6 +92,7 @@ from _typeshed import MaybeNone, SupportsItems, SupportsKeysAndGetItem
 from collections.abc import Container, Iterable
 from types import GenericAlias
 from typing import Generic, TypeVar
+from typing_extensions import deprecated
 
 __all__ = ["CookieError", "BaseCookie", "SimpleCookie"]
 
@@ -130,6 +131,7 @@ class Morsel[in out Element](dict[str, dynamic]):
     def isReservedKey(self, K: str) -> bool
     def output(self, attrs: Container[str]? = None, header: str = "Set-Cookie:") -> str
     __str__ = output
+    @deprecated("Deprecated; will be removed in Python 3.19. Use `output()` instead.")
     def js_output(self, attrs: Container[str]? = None) -> str
     def OutputString(self, attrs: Container[str]? = None) -> str
     override def __eq__(self, morsel: object) -> bool
@@ -164,6 +166,7 @@ class BaseCookie[in out Element](dict[str, Morsel[Element]]):
         """Return a string suitable for HTTP."""
 
     __str__ = output
+    @deprecated("Deprecated; will be removed in Python 3.19. Use `output()` instead.")
     def js_output(self, attrs: Container[str]? = None) -> str:
         """Return a string suitable for JavaScript."""
 

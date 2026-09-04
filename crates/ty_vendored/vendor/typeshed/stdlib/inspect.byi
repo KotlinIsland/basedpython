@@ -283,8 +283,8 @@ def isgeneratorfunction(obj: (...) -> Generator[dynamic, dynamic, dynamic]) -> b
     Generator function objects provide the same attributes as functions.
     See help(isfunction) for a list of attributes.
     """
-def isgeneratorfunction[Parameters: (*: *, **: *)](obj: (**Parameters) -> dynamic) -> TypeGuard[(**Parameters) -> GeneratorType[dynamic, dynamic, dynamic]]
-def isgeneratorfunction(obj: object) -> TypeGuard[(...) -> GeneratorType[dynamic, dynamic, dynamic]]
+def isgeneratorfunction[Parameters: (*: *, **: *)](obj: (**Parameters) -> dynamic) -> TypeGuard[(**Parameters) -> Generator[dynamic, dynamic, dynamic]]
+def isgeneratorfunction(obj: object) -> TypeGuard[(...) -> Generator[dynamic, dynamic, dynamic]]
 
 def iscoroutinefunction(obj: (...) -> Coroutine[dynamic, dynamic, dynamic]) -> bool:
     """Return true if the object is a coroutine function.
@@ -292,9 +292,9 @@ def iscoroutinefunction(obj: (...) -> Coroutine[dynamic, dynamic, dynamic]) -> b
     Coroutine functions are normally defined with "async def" syntax, but may
     be marked via markcoroutinefunction.
     """
-def iscoroutinefunction[Parameters: (*: *, **: *), Element](obj: (**Parameters) -> Awaitable[Element]) -> TypeGuard[(**Parameters) -> CoroutineType[dynamic, dynamic, Element]]
-def iscoroutinefunction[Parameters: (*: *, **: *)](obj: (**Parameters) -> object) -> TypeGuard[(**Parameters) -> CoroutineType[dynamic, dynamic, dynamic]]
-def iscoroutinefunction(obj: object) -> TypeGuard[(...) -> CoroutineType[dynamic, dynamic, dynamic]]
+def iscoroutinefunction[Parameters: (*: *, **: *), Element](obj: (**Parameters) -> Awaitable[Element]) -> TypeGuard[(**Parameters) -> Coroutine[dynamic, dynamic, Element]]
+def iscoroutinefunction[Parameters: (*: *, **: *)](obj: (**Parameters) -> object) -> TypeGuard[(**Parameters) -> Coroutine[dynamic, dynamic, dynamic]]
+def iscoroutinefunction(obj: object) -> TypeGuard[(...) -> Coroutine[dynamic, dynamic, dynamic]]
 
 def isgenerator(object: object) -> object is GeneratorType[object, Never, object]:
     """Return true if the object is a generator.
@@ -327,8 +327,8 @@ def isasyncgenfunction(obj: (...) -> AsyncGenerator[dynamic, dynamic]) -> bool:
     Asynchronous generator functions are defined with "async def"
     syntax and have "yield" expressions in their body.
     """
-def isasyncgenfunction[Parameters: (*: *, **: *)](obj: (**Parameters) -> dynamic) -> TypeGuard[(**Parameters) -> AsyncGeneratorType[dynamic, dynamic]]
-def isasyncgenfunction(obj: object) -> TypeGuard[(...) -> AsyncGeneratorType[dynamic, dynamic]]
+def isasyncgenfunction[Parameters: (*: *, **: *)](obj: (**Parameters) -> dynamic) -> TypeGuard[(**Parameters) -> AsyncGenerator[dynamic, dynamic]]
+def isasyncgenfunction(obj: object) -> TypeGuard[(...) -> AsyncGenerator[dynamic, dynamic]]
 
 @type_check_only
 private protocol SupportsSet[in Input, in V]:
@@ -429,18 +429,18 @@ def isroutine(
 def ismethoddescriptor(object: object) -> object is MethodDescriptorType:
     """Return true if the object is a method descriptor.
 
-    But not if ismethod() or isclass() or isfunction() are true.
+    But not if ismethod(), isclass() or isfunction() is true.
 
-    This is new in Python 2.2, and, for example, is true of int.__add__.
-    An object passing this test has a __get__ attribute, but not a
-    __set__ attribute or a __delete__ attribute. Beyond that, the set
-    of attributes varies; __name__ is usually sensible, and __doc__
-    often is.
+    An object passing this test (for example, int.__add__) has a __get__
+    attribute, but not a __set__ attribute or a __delete__ attribute.
+    Beyond that, the set of attributes varies; __name__ is usually
+    sensible, and __doc__ often is.
 
     Methods implemented via descriptors that also pass one of the other
-    tests return false from the ismethoddescriptor() test, simply because
-    the other tests promise more -- you can, e.g., count on having the
-    __func__ attribute (etc) when an object passes ismethod().
+    tests (ismethod(), isclass(), isfunction()) make this function return
+    false, simply because those other tests promise more -- you can, for
+    example, count on having the __func__ attribute when an object passes
+    ismethod().
     """
 
 def ismemberdescriptor(object: object) -> object is MemberDescriptorType:
@@ -463,8 +463,13 @@ def isgetsetdescriptor(object: object) -> object is GetSetDescriptorType:
 def isdatadescriptor(object: object) -> object is SupportsSet[Never, Never] | SupportsDelete[Never]:
     """Return true if the object is a data descriptor.
 
+    But not if ismethod(), isclass() or isfunction() is true.
+
     Data descriptors have a __set__ or a __delete__ attribute.  Examples are
-    properties (defined in Python) and getsets and members (defined in C).
+    properties, getsets, and members.  For the latter two (defined only in C
+    extension modules) more specific tests are available as well:
+    isgetsetdescriptor() and ismemberdescriptor(), respectively.
+
     Typically, data descriptors will also have __name__ and __doc__ attributes
     (properties, getsets, and members have both of these attributes), but this
     is not guaranteed.

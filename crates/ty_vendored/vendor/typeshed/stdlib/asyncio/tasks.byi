@@ -84,7 +84,7 @@ if sys.version_info >= (3, 13):
     @type_check_only
     private protocol SyncAndAsyncIterator[in out Element](Iterator[Coroutine[dynamic, dynamic, Element]], AsyncIterator[Future[Element]])
 
-    def as_completed[Element](fs: Iterable[_FutureLike[Element]], *, timeout: int | float | None = None) -> SyncAndAsyncIterator[Element]:
+    def as_completed[Element](fs: Iterable[_FutureLike[Element]], *, timeout: (int | float)? = None) -> SyncAndAsyncIterator[Element]:
         """Create an iterator of awaitables or their results in completion order.
 
         Run the supplied awaitables concurrently. The returned object can be
@@ -134,7 +134,7 @@ if sys.version_info >= (3, 13):
         """
 
 else:
-    def as_completed[Element](fs: Iterable[_FutureLike[Element]], *, timeout: int | float | None = None) -> Iterator[Future[Element]]:
+    def as_completed[Element](fs: Iterable[_FutureLike[Element]], *, timeout: (int | float)? = None) -> Iterator[Future[Element]]:
         """Return an iterator whose values are coroutines.
 
         When waiting for the yielded coroutines you'll get the results (or
@@ -336,7 +336,7 @@ async def sleep(delay: int | float) -> None:
     """Coroutine that completes after a given time (in seconds)."""
 async def sleep[Element](delay: int | float, result: Element) -> Element
 
-async def wait_for[Element](fut: _FutureLike[Element], timeout: int | float | None) -> Element:
+async def wait_for[Element](fut: _FutureLike[Element], timeout: (int | float)?) -> Element:
     """Wait for the single Future or coroutine to complete, with timeout.
 
     Coroutine will be wrapped in Task.
@@ -355,7 +355,7 @@ async def wait_for[Element](fut: _FutureLike[Element], timeout: int | float | No
 
 if sys.version_info >= (3, 11):
     async def wait[FT: Future[dynamic]](
-        fs: Iterable[FT], *, timeout: int | float | None = None, return_when: str = "ALL_COMPLETED"
+        fs: Iterable[FT], *, timeout: (int | float)? = None, return_when: str = "ALL_COMPLETED"
     ) -> (set[FT], set[FT]):
         """Wait for the Futures or Tasks given by fs to complete.
 
@@ -373,7 +373,7 @@ if sys.version_info >= (3, 11):
 
 else:
     async def wait[FT: Future[dynamic]](
-        fs: Iterable[FT], *, timeout: int | float | None = None, return_when: str = "ALL_COMPLETED"
+        fs: Iterable[FT], *, timeout: (int | float)? = None, return_when: str = "ALL_COMPLETED"
     ) -> (set[FT], set[FT]):
         """Wait for the Futures and coroutines given by fs to complete.
 
@@ -391,7 +391,7 @@ else:
         when the timeout occurs are returned in the second set.
         """
     async def wait[Element](
-        fs: Iterable[Awaitable[Element]], *, timeout: int | float | None = None, return_when: str = "ALL_COMPLETED"
+        fs: Iterable[Awaitable[Element]], *, timeout: (int | float)? = None, return_when: str = "ALL_COMPLETED"
     ) -> (set[Task[Element]], set[Task[Element]])
 
 if sys.version_info >= (3, 12):

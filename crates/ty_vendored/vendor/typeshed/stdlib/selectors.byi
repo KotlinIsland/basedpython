@@ -94,7 +94,7 @@ class BaseSelector(metaclass=ABCMeta):
         Anything that unregister() or register() raises
         """
 
-    abstract def select(self, timeout: int | float | None = None) -> list[(SelectorKey, int)]:
+    abstract def select(self, timeout: (int | float)? = None) -> list[(SelectorKey, int)]:
         """Perform the actual selection, until some monitored file objects are
         ready or a timeout expires.
 
@@ -141,12 +141,12 @@ class _BaseSelectorImpl(BaseSelector, metaclass=ABCMeta):
 class SelectSelector(_BaseSelectorImpl):
     """Select-based selector."""
 
-    override def select(self, timeout: int | float | None = None) -> list[(SelectorKey, int)]
+    override def select(self, timeout: (int | float)? = None) -> list[(SelectorKey, int)]
 
 class _PollLikeSelector(_BaseSelectorImpl):
     """Base class shared between poll, epoll and devpoll selectors."""
 
-    override def select(self, timeout: int | float | None = None) -> list[(SelectorKey, int)]
+    override def select(self, timeout: (int | float)? = None) -> list[(SelectorKey, int)]
 
 if sys.platform != "win32":
     class PollSelector(_PollLikeSelector):
@@ -168,7 +168,7 @@ if sys.platform != "win32" and sys.platform != "linux":
         """Kqueue-based selector."""
 
         def fileno(self) -> int
-        override def select(self, timeout: int | float | None = None) -> list[(SelectorKey, int)]
+        override def select(self, timeout: (int | float)? = None) -> list[(SelectorKey, int)]
 
 # Not a real class at runtime, it is just a conditional alias to other real selectors.
 # The runtime logic is more fine-grained than a `sys.platform` check;
@@ -176,6 +176,6 @@ if sys.platform != "win32" and sys.platform != "linux":
 class DefaultSelector(_BaseSelectorImpl):
     """Epoll-based selector."""
 
-    override def select(self, timeout: int | float | None = None) -> list[(SelectorKey, int)]
+    override def select(self, timeout: (int | float)? = None) -> list[(SelectorKey, int)]
     if sys.platform != "win32":
         def fileno(self) -> int

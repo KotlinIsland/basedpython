@@ -384,7 +384,7 @@ impl<'db> ConstructorBinding<'db> {
         }
         let class = self.constructed_class_literal(db, env)?.as_static()?;
         let overload = self.first_matching_overload()?;
-        let keyword = |name| overload.parameter_type_by_name(name, false).ok().flatten();
+        let keyword = |name: &str| overload.parameter_type_by_name(db, name, false).ok().flatten();
         django::field_constructor_instance_type(
             db,
             env,
@@ -455,7 +455,7 @@ impl<'db> ConstructorBinding<'db> {
             let self_parameter_specialization = static_class_literal.and_then(|lit| {
                 let self_param_ty = overload.signature.parameters().get(0)?.annotated_type();
                 let resolved_self_param_ty = overload
-                    .specialization(db, env)
+                    .merged_specialization(db, env)
                     .map_or(self_param_ty, |specialization| {
                         self_param_ty.apply_specialization(db, specialization)
                     });
@@ -469,7 +469,7 @@ impl<'db> ConstructorBinding<'db> {
                         .copied()
                         .map(|mapped_ty| {
                             let without_unknown =
-                                mapped_ty.filter_union(db, |element| !element.is_unknown());
+                                mapped_ty.filter_union(db, env, |element| !element.is_unknown());
                             let mapped_ty = if without_unknown.is_never() {
                                 mapped_ty
                             } else {
@@ -494,7 +494,7 @@ impl<'db> ConstructorBinding<'db> {
                     .or(return_specialization)
                     .or_else(|| {
                         overload
-                            .specialization(db, env)?
+                            .merged_specialization(db, env)?
                             .restrict(db, class_context)
                     })
             };
@@ -643,7 +643,7 @@ impl<'db> ConstructorBinding<'db> {
             .unspecialized_return_type(db)
             .apply_optional_specialization(
                 db,
-                overload.specialization(db, env).map(|specialization| {
+                overload.merged_specialization(db, env).map(|specialization| {
                     self.unspecialize_class_type_variables(db, env, specialization)
                 }),
             );

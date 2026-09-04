@@ -18,16 +18,30 @@ class BaseProcess:
 
     authkey: bytes
     _identity: (*: int)  # undocumented
-    init(
-        self,
-        group: None = None,
-        target: (...) -> object? = None,
-        name: str? = None,
-        args: Iterable[dynamic] = (),
-        kwargs: Mapping[str, dynamic] = {},
-        *,
-        daemon: bool? = None,
-    )
+    if sys.version_info >= (3, 14):
+        # kwargs default changed in Python 3.14.1
+        def __init__(
+            self,
+            group: None = None,
+            target: (...) -> object? = None,
+            name: str? = None,
+            args: Iterable[dynamic] = (),
+            kwargs: Mapping[str, dynamic]? = None,
+            *,
+            daemon: bool? = None,
+        ) -> None
+    else:
+        def __init__(
+            self,
+            group: None = None,
+            target: (...) -> object? = None,
+            name: str? = None,
+            args: Iterable[dynamic] = (),
+            kwargs: Mapping[str, dynamic] = {},
+            *,
+            daemon: bool? = None,
+        ) -> None
+
     def run(self):
         """
         Method to be run in sub-process; can be overridden in sub-class
@@ -62,7 +76,7 @@ class BaseProcess:
         an error to call this method if the child process is still running.
         """
 
-    def join(self, timeout: int | float | None = None):
+    def join(self, timeout: (int | float)? = None):
         """
         Wait until child process terminates
         """

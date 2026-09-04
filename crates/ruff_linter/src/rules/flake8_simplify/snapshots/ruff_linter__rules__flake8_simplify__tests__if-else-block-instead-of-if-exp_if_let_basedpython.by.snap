@@ -1,0 +1,27 @@
+---
+source: crates/ruff_linter/src/rules/flake8_simplify/mod.rs
+---
+SIM108 [*] Use ternary operator `y = 1 if a else 2` instead of `if`-`else`-block
+  --> if_let_basedpython.by:39:1
+   |
+37 |       x = 2
+38 |
+39 | / if a:
+40 | |     y = 1
+41 | | else:
+42 | |     y = 2
+   | |_________^
+43 |
+44 |   # SIM114: if with same arms
+   |
+help: Replace `if`-`else`-block with `y = 1 if a else 2`
+   |
+38 |
+   - if a:
+   -     y = 1
+   - else:
+   -     y = 2
+39 + y = 1 if a else 2
+40 |
+   |
+note: This is an unsafe fix and may change runtime behavior

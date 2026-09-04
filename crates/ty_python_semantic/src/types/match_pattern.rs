@@ -9,7 +9,7 @@ use ty_python_core::predicate::{
 };
 
 use crate::place::{DefinedPlace, Place};
-use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
+use crate::types::callable::CallableTypeKind;
 use crate::types::context_sensitive::case_name_pattern_type;
 use crate::types::equality::{
     ComparisonSoundnessPolicy, evaluate_type_equality, is_same_enum_domain,
@@ -170,7 +170,6 @@ fn sequence_pattern_getitem_method<'db>(
         db,
         CallableSignature::from_overloads(overloads.chain(fallback_overload)),
         CallableTypeKind::FunctionLike,
-        CallableFunctionProvenance::None,
     )
 }
 
@@ -1146,7 +1145,9 @@ fn subject_independent_definite_match_pattern_type<'db>(
         PatternPredicateKind::Class(kind) => {
             match infer_same_file_expression_type(db, kind.class, TypeContext::default()) {
                 Type::ClassLiteral(class) if kind.is_empty() => {
-                    let class_instance_ty = Type::instance(db, env, class.top_materialization(db));
+                    let class_instance_ty =
+                        Type::instance(db, env, class.unknown_specialization(db))
+                            .top_materialization(db, env);
                     let typed_dict_adds_runtime_matches =
                         typed_dict_matches_class_pattern(db, env, class)
                             && !Type::object().is_subtype_of(db, env, class_instance_ty);
@@ -1212,7 +1213,8 @@ pub(crate) fn definite_match_pattern_type<'db>(
         PatternPredicateKind::Class(kind) => {
             match infer_same_file_expression_type(db, kind.class, TypeContext::default()) {
                 Type::ClassLiteral(class) if kind.is_empty() => {
-                    Type::instance(db, env, class.top_materialization(db))
+                    Type::instance(db, env, class.unknown_specialization(db))
+                        .top_materialization(db, env)
                 }
                 Type::SpecialForm(SpecialFormType::CollectionsAbcCallable) if kind.is_empty() => {
                     callable_pattern_type(db, env)

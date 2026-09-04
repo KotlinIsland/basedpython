@@ -118,6 +118,7 @@ excepthook: (type[BaseException], BaseException, TracebackType?) -> dynamic
 exec_prefix: str
 executable: str
 float_repr_style: "short" | "legacy"
+_framework: str  # empty string on non-macOS platforms
 hexversion: int
 last_type: type[BaseException]?
 last_value: BaseException?
@@ -430,7 +431,7 @@ final class _int_info(structseq[int], tuple[int, int, int, int]):
     let str_digits_check_threshold: int
 
 private type ThreadInfoName = "nt" | "pthread" | "pthread-stubs" | "solaris"
-private type ThreadInfoLock = "semaphore" | "mutex+cond" | None
+private type ThreadInfoLock = "semaphore" | "mutex+cond"?
 
 # This class is not exposed at runtime. It calls itself sys.thread_info.
 @type_check_only

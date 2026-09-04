@@ -52,28 +52,19 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/named_tuple.md
 # Diagnostics
 
 ```
-error[invalid-named-tuple]: NamedTuple class `C` cannot use multiple inheritance except with `Generic[]`
- --> src/mdtest_snippet.py:4:21
+error[unresolved-import]: Module `typing` has no member `NamedTuple`
+ --> src/mdtest_snippet.py:1:20
   |
-4 | class C(NamedTuple, object):
-  |                     ^^^^^^
+1 | from typing import NamedTuple, Protocol
+  |                    ^^^^^^^^^^
 
 ```
 
 ```
-error[invalid-named-tuple]: NamedTuple class `D` cannot use multiple inheritance except with `Generic[]`
-  --> src/mdtest_snippet.py:10:5
+error[unresolved-import]: Module `typing` has no member `NamedTuple`
+  --> src/mdtest_snippet.py:20:20
    |
-10 |     int,  # error: [invalid-named-tuple]
-   |     ^^^
-
-```
-
-```
-error[invalid-named-tuple]: NamedTuple class `E` cannot use multiple inheritance except with `Generic[]`
-  --> src/mdtest_snippet.py:17:21
-   |
-17 | class E(NamedTuple, Protocol): ...
-   |                     ^^^^^^^^
+20 | from typing import NamedTuple
+   |                    ^^^^^^^^^^
 
 ```

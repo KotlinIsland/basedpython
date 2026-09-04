@@ -536,7 +536,7 @@ class _patch_dict:
     values: dynamic
     clear: dynamic
     init(self, in_dict: dynamic, values: dynamic = (), clear: dynamic = False, **kwargs: dynamic)
-    def __call__(self, f: dynamic) -> dynamic
+    def __call__[F: (...) -> dynamic](self, f: F) -> F
     def __enter__(self) -> dynamic:
         """Patch the dict."""
 
@@ -980,16 +980,16 @@ class PropertyMock(Mock):
 
 if sys.version_info >= (3, 13):
     class ThreadingMixin(Base):
-        final DEFAULT_TIMEOUT: int | float | None = None
+        final DEFAULT_TIMEOUT: (int | float)? = None
 
-        init(self, /, *args: dynamic, timeout: int | float | None | _SentinelObject = ..., **kwargs: dynamic)
+        init(self, /, *args: dynamic, timeout: (int | float)? | _SentinelObject = ..., **kwargs: dynamic)
         # Same as `NonCallableMock.reset_mock.`
         def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False):
             """
             See :func:`.Mock.reset_mock()`
             """
 
-        def wait_until_called(self, *, timeout: int | float | None | _SentinelObject = ...):
+        def wait_until_called(self, *, timeout: (int | float)? | _SentinelObject = ...):
             """Wait until the mock object is called.
 
             `timeout` - time to wait for in seconds, waits forever otherwise.

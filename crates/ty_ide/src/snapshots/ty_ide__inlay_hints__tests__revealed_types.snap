@@ -3,17 +3,17 @@ source: crates/ty_ide/src/inlay_hints.rs
 expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ revealed_types: true, ..InlayHintSettings::none() })"
 ---
 
-reveal_type(1)[ Literal[1]]
+reveal_type(1)
 
 x = 'a'
-reveal_type(x)  # a trailing comment[ Literal["a"]]
+reveal_type(x)  # a trailing comment
 
 def f(y: int) -> None:
-    reveal_type(y)[ int]
+    reveal_type(y)
 
 a: int = 1
-reveal_type(a)[ Literal[1], narrowed from int]
+reveal_type(a)
 
 def g(z: int | str) -> None:
     if isinstance(z, int):
-        reveal_type(z)[ int, narrowed from int | str]
+        reveal_type(z)

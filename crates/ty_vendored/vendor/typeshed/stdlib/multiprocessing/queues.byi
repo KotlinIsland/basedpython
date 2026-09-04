@@ -15,8 +15,8 @@ class Queue[in out Element]:
     init(self, maxsize: int = 0, *, ctx: dynamic = ...)
     def __getstate__(self) -> _QueueState
     def __setstate__(self, state: _QueueState)
-    def put(self, obj: Element, block: bool = True, timeout: int | float | None = None)
-    def get(self, block: bool = True, timeout: int | float | None = None) -> Element
+    def put(self, obj: Element, block: bool = True, timeout: (int | float)? = None)
+    def get(self, block: bool = True, timeout: (int | float)? = None) -> Element
     def qsize(self) -> int
     def empty(self) -> bool
     def full(self) -> bool

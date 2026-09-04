@@ -144,6 +144,15 @@ protocol SupportsTrunc:
 
 # Mapping-like protocols
 
+# The second and third overload could technically be combined, but splitting
+# them works better with some type checkers.
+protocol SupportsGet[in KT, out Value]:
+    def get(self, key: KT, /) -> Value | None
+    def get(  # pyrefly: ignore[invalid-variance]
+        self, key: KT, default: Value, /
+    ) -> Value
+    def get[Element](self, key: KT, default: Element, /) -> Value | Element
+
 # stable
 protocol SupportsItems[out Key, out Value]:
     def items(self) -> AbstractSet[(Key, Value)]
@@ -168,6 +177,8 @@ protocol SupportsItemAccess[in KT, in out Value]:
     def __getitem__(self, key: KT, /) -> Value
     def __setitem__(self, key: KT, value: Value, /)
     def __delitem__(self, key: KT, /)
+
+# Path and file handling
 
 type StrPath = str | PathLike[str]  # stable
 type BytesPath = bytes | PathLike[bytes]  # stable
@@ -278,7 +289,7 @@ StrOrLiteralStr = TypeVar("StrOrLiteralStr", LiteralString, str)  # noqa: Y001
 type ProfileFunction = (FrameType, Literal["call", "return", "c_call", "c_return", "c_exception"], dynamic) -> object
 
 # Objects suitable to be passed to sys.settrace, threading.settrace, and similar
-type TraceFunction = (FrameType, Literal["call", "line", "return", "exception", "opcode"], dynamic) -> (TraceFunction?)
+type TraceFunction = (FrameType, Literal["call", "line", "return", "exception", "opcode"], dynamic) -> TraceFunction?
 
 # experimental
 # Might not work as expected for pyright, see

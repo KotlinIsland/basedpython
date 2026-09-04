@@ -1170,7 +1170,7 @@ class socket:
         setblocking(False) is equivalent to settimeout(0.0).
         """
 
-    def settimeout(self, value: int | float | None, /):
+    def settimeout(self, value: (int | float)?, /):
         """settimeout(timeout)
 
         Set a timeout on socket operations.  'timeout' can be a float,
@@ -1329,7 +1329,7 @@ def getdefaulttimeout() -> float?:
     """
 
 # F811: "Redefinition of unused `timeout`"
-def setdefaulttimeout(timeout: int | float | None, /):
+def setdefaulttimeout(timeout: (int | float)?, /):
     """setdefaulttimeout(timeout)
 
     Set the default timeout in seconds (real number) for new socket objects.

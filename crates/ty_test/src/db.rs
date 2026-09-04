@@ -18,6 +18,7 @@ use ty_module_resolver::ModuleGlobSetBuilder;
 use ty_python_core::program::ProgramSettings;
 use ty_python_core::{Db as _, ProgramFile, TestProgramDb};
 use ty_python_semantic::dependencies::DependencyManifest;
+use ty_python_semantic::dependency::DependencyMetadata;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::{
     AnalysisSettings, Db as SemanticDb, ExperimentalSettings, PythonVersionWithSource,
@@ -116,6 +117,13 @@ impl Db {
         let settings = self.settings();
         if settings.dependency_manifest(self) != &manifest {
             settings.set_dependency_manifest(self).to(manifest);
+        }
+    }
+
+    pub(crate) fn update_dependency_metadata(&mut self, metadata: Option<&DependencyMetadata>) {
+        let settings = self.settings();
+        if settings.dependency_metadata(self).as_ref() != metadata {
+            settings.set_dependency_metadata(self).to(metadata.cloned());
         }
     }
 
@@ -235,6 +243,13 @@ impl SemanticDb for Db {
         self.settings().dependency_manifest(self).as_ref()
     }
 
+    fn dependency_metadata(&self, file: File) -> Option<&DependencyMetadata> {
+        match file_settings(self, file) {
+            FileSettings::Global => self.settings().dependency_metadata(self).as_ref(),
+            FileSettings::File(settings) => settings.dependency_metadata.as_ref(),
+        }
+    }
+
     fn dyn_clone(&self) -> Box<dyn SemanticDb> {
         Box::new(self.clone())
     }
@@ -272,6 +287,7 @@ fn file_settings(db: &dyn SemanticDb, file: File) -> FileSettings {
     FileSettings::File(Box::new(InlineSettings {
         rules: MdtestRuleSelection(mdtest_rule_selection(preset, options.rules.as_ref(), None)),
         analysis: mdtest_analysis_settings(preset, options.analysis.as_ref()),
+        dependency_metadata: options.dependency_metadata.map(|fixture| fixture.metadata),
     }))
 }
 
@@ -287,6 +303,7 @@ enum FileSettings {
 struct InlineSettings {
     rules: MdtestRuleSelection,
     analysis: AnalysisSettings,
+    dependency_metadata: Option<DependencyMetadata>,
 }
 
 impl FileSettings {
@@ -315,6 +332,9 @@ struct Settings {
     #[default]
     #[returns(ref)]
     experimental: ExperimentalSettings,
+    #[default]
+    #[returns(ref)]
+    dependency_metadata: Option<DependencyMetadata>,
     #[default]
     #[returns(deref)]
     rule_selection: MdtestRuleSelection,
@@ -509,6 +529,7 @@ fn mdtest_rule_selection(
         // The `unsound-*` rules are also exceptions because they are very strict, would
         // result in lots of additional diagnostics in mdtests, and are not the default behaviour
         // we'll show to our users.
+        "unsound-assignment",
         "unsound-return-statement",
         "unsound-yield",
         // `implicit-declaration` is an exception for the same reason: it asks every

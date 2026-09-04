@@ -293,6 +293,7 @@ impl<'db> Type<'db> {
                 | Type::SpecialForm(_)
                 | Type::KnownInstance(_)
                 | Type::PropertyInstance(_)
+                | Type::SlotDescriptor(_)
                 | Type::AlwaysTruthy
                 | Type::AlwaysFalsy
                 | Type::BoundSuper(_)

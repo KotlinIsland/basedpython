@@ -1544,7 +1544,7 @@ class socket(_socket.socket):
     def makefile(
         self,
         mode: "rwb" | "rbw" | "wrb" | "wbr" | "brw" | "bwr",
-        buffering: -1 | 1 | None = None,
+        buffering: -1 | 1? = None,
         *,
         encoding: str? = None,
         errors: str? = None,
@@ -1553,7 +1553,7 @@ class socket(_socket.socket):
     def makefile(
         self,
         mode: "rb" | "br",
-        buffering: -1 | 1 | None = None,
+        buffering: -1 | 1? = None,
         *,
         encoding: str? = None,
         errors: str? = None,
@@ -1562,7 +1562,7 @@ class socket(_socket.socket):
     def makefile(
         self,
         mode: "wb" | "bw",
-        buffering: -1 | 1 | None = None,
+        buffering: -1 | 1? = None,
         *,
         encoding: str? = None,
         errors: str? = None,
@@ -1709,7 +1709,7 @@ def getfqdn(name: str = "") -> str:
 if sys.version_info >= (3, 11):
     def create_connection(
         address: (str?, bytes | str | int | None),
-        timeout: int | float | None = ...,
+        timeout: (int | float)? = ...,
         source_address: _Address? = None,
         *,
         all_errors: bool = False,
@@ -1730,7 +1730,7 @@ if sys.version_info >= (3, 11):
 
 else:
     def create_connection(
-        address: (str?, int), timeout: int | float | None = ..., source_address: _Address? = None
+        address: (str?, int), timeout: (int | float)? = ..., source_address: _Address? = None
     ) -> socket:
         """Connect to *address* and return the socket object.
 

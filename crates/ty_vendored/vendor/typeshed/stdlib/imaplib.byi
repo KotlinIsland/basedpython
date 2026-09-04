@@ -100,8 +100,8 @@ class IMAP4:
     welcome: bytes
     capabilities: (*: str)
     PROTOCOL_VERSION: str
-    init(self, host: str = "", port: int = 143, timeout: int | float | None = None)
-    def open(self, host: str = "", port: int = 143, timeout: int | float | None = None):
+    init(self, host: str = "", port: int = 143, timeout: (int | float)? = None)
+    def open(self, host: str = "", port: int = 143, timeout: (int | float)? = None):
         """Setup connection to remote server on "host:port"
             (default: localhost:standard IMAP4 port).
         This connection will be used by the routines:
@@ -165,7 +165,7 @@ class IMAP4:
                 All args except 'message' can be None.
         """
 
-    def authenticate(self, mechanism: str, authobject: (bytes) -> (bytes?)) -> (str, str):
+    def authenticate(self, mechanism: str, authobject: (bytes) -> bytes?) -> (str, str):
         """Authenticate command - requires response processing.
 
         'mechanism' specifies which authentication mechanism is to
@@ -281,7 +281,7 @@ class IMAP4:
         """
 
     if sys.version_info >= (3, 14):
-        def idle(self, duration: int | float | None = None) -> Idler:
+        def idle(self, duration: (int | float)? = None) -> Idler:
             """Return an iterable IDLE context manager producing untagged responses.
             If the argument is not None, limit iteration to 'duration' seconds.
 
@@ -292,7 +292,8 @@ class IMAP4:
             Note: 'duration' requires a socket connection (not IMAP4_stream).
             """
 
-    if sys.version_info >= (3, 15):
+    if sys.version_info >= (3, 13):
+        # Default was fixed in Python 3.13.15, 3.14.7
         def list(self, directory: str = "", pattern: str = "*") -> (str, AnyResponseData):
             """List mailbox names in directory matching pattern.
 
@@ -332,7 +333,8 @@ class IMAP4:
         Returns server 'BYE' response.
         """
 
-    if sys.version_info >= (3, 15):
+    if sys.version_info >= (3, 13):
+        # Default was fixed in Python 3.13.15, 3.14.7
         def lsub(self, directory: str = "", pattern: str = "*") -> CommandResults:
             """List 'subscribed' mailbox names in directory matching pattern.
 
@@ -419,7 +421,8 @@ class IMAP4:
         (typ, [data]) = <instance>.setacl(mailbox, who, what)
         """
 
-    if sys.version_info >= (3, 15):
+    if sys.version_info >= (3, 13):
+        # Parameter "mailbox" was added in Python 3.13.15, 3.14.7
         def setannotation(self, mailbox: str | bytes, *args: str) -> CommandResults:
             """(typ, [data]) = <instance>.setannotation(mailbox[, entry, attribute]+)
             Set ANNOTATIONs.
@@ -515,7 +518,7 @@ if sys.version_info >= (3, 14):
         Note: The name and structure of this class are subject to change.
         """
 
-        init(self, imap: IMAP4, duration: int | float | None = None)
+        init(self, imap: IMAP4, duration: (int | float)? = None)
         def __enter__(self) -> Self
         def __exit__(self, exc_type: object, exc_val: Unused, exc_tb: Unused) -> False
         def __iter__(self) -> Self
@@ -549,7 +552,7 @@ class IMAP4_SSL(IMAP4):
 
     if sys.version_info >= (3, 12):
         def __init__(
-            self, host: str = "", port: int = 993, *, ssl_context: SSLContext? = None, timeout: int | float | None = None
+            self, host: str = "", port: int = 993, *, ssl_context: SSLContext? = None, timeout: (int | float)? = None
         ) -> None
     else:
         def __init__(
@@ -559,7 +562,7 @@ class IMAP4_SSL(IMAP4):
             keyfile: None = None,
             certfile: None = None,
             ssl_context: SSLContext? = None,
-            timeout: int | float | None = None,
+            timeout: (int | float)? = None,
         ) -> None
         @deprecated(
             "The `keyfile`, `certfile` parameters are deprecated since Python 3.6; "
@@ -572,7 +575,7 @@ class IMAP4_SSL(IMAP4):
             keyfile: StrOrBytesPath? = None,
             certfile: StrOrBytesPath? = None,
             ssl_context: None = None,
-            timeout: int | float | None = None,
+            timeout: (int | float)? = None,
         ) -> None
 
         keyfile: StrOrBytesPath?
@@ -585,7 +588,7 @@ class IMAP4_SSL(IMAP4):
     else:
         file: IO[dynamic]
 
-    override def open(self, host: str = "", port: int? = 993, timeout: int | float | None = None):
+    override def open(self, host: str = "", port: int? = 993, timeout: (int | float)? = None):
         """Setup connection to remote server on "host:port".
             (default: localhost:standard IMAP4 SSL port).
         This connection will be used by the routines:
@@ -615,7 +618,7 @@ class IMAP4_stream(IMAP4):
     process: subprocess.Popen[bytes]
     writefile: IO[dynamic]
     readfile: IO[dynamic]
-    override def open(self, host: str? = None, port: int? = None, timeout: int | float | None = None):
+    override def open(self, host: str? = None, port: int? = None, timeout: (int | float)? = None):
         """Setup a stream connection.
         This connection will be used by the routines:
             read, readline, send, shutdown.

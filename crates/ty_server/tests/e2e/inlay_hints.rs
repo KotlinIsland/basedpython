@@ -27,7 +27,7 @@ y = foo(Thing())
 ";
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(foo, foo_content)?
         .enable_inlay_hints(true)
@@ -147,7 +147,7 @@ def f(x: int) -> None:
 ";
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(foo, foo_content)?
         .enable_inlay_hints(true)
@@ -191,7 +191,7 @@ fn variable_inlay_hints_disabled() -> Result<()> {
 
     let mut server = TestServerBuilder::new()?
         .with_initialization_options(
-            ClientOptions::default().with_variable_types_inlay_hints(false),
+            &ClientOptions::default().with_variable_types_inlay_hints(false),
         )
         .with_workspace(workspace_root, None)?
         .with_file(foo, foo_content)?
@@ -277,7 +277,7 @@ def get_a() -> A:
 ";
 
     let mut server = TestServerBuilder::new()?
-        .with_initialization_options(ClientOptions::default())
+        .with_initialization_options(&ClientOptions::default())
         .with_workspace(workspace_root, None)?
         .with_file(foo, foo_content)?
         .with_file(bar, bar_content)?

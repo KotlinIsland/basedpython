@@ -1,4 +1,5 @@
 use crate::dependencies::DependencyManifest;
+use crate::dependency::DependencyMetadata;
 use crate::lint::{LintRegistry, RuleSelection};
 use crate::{AnalysisSettings, ExperimentalSettings, PythonVersionWithSource};
 use ruff_db::diagnostic::Diagnostic;
@@ -28,6 +29,9 @@ pub trait Db: PythonCoreDb {
     /// Project-wide rather than per-file: an experimental feature is a language
     /// feature, and a module's meaning cannot depend on which file is asking.
     fn experimental_settings(&self) -> &ExperimentalSettings;
+
+    /// Returns the package manager's dependency information for this file.
+    fn dependency_metadata(&self, file: File) -> Option<&DependencyMetadata>;
 
     /// Whether ty is running with logging verbosity INFO or higher (`-v` or more).
     fn verbose(&self) -> bool;
@@ -286,6 +290,10 @@ pub(crate) mod tests {
             &self.experimental_settings
         }
 
+        fn dependency_metadata(&self, _file: File) -> Option<&DependencyMetadata> {
+            None
+        }
+
         fn verbose(&self) -> bool {
             false
         }
@@ -310,10 +318,14 @@ pub(crate) mod tests {
         python_version: PythonVersion,
         /// Target Python platform
         python_platform: PythonPlatform,
+        /// Roots containing first-party modules.
+        src_roots: Vec<SystemPathBuf>,
         /// Path and content pairs for files that should be present
         files: Vec<(&'a str, &'a str)>,
         /// Directories resolved as site-packages (third-party) search paths
         site_packages: Vec<SystemPathBuf>,
+        /// Whether module resolution should include packages from the synthetic virtual environment.
+        third_party_packages: bool,
     }
 
     impl<'a> TestDbBuilder<'a> {
@@ -321,8 +333,10 @@ pub(crate) mod tests {
             Self {
                 python_version: PythonVersion::default(),
                 python_platform: PythonPlatform::default(),
+                src_roots: vec![SystemPathBuf::from("/src")],
                 files: vec![],
                 site_packages: vec![],
+                third_party_packages: false,
             }
         }
 
@@ -348,6 +362,11 @@ pub(crate) mod tests {
             self
         }
 
+        pub(crate) fn with_src_roots(mut self, src_roots: Vec<SystemPathBuf>) -> Self {
+            self.src_roots = src_roots;
+            self
+        }
+
         pub(crate) fn with_file(
             mut self,
             path: &'a (impl AsRef<SystemPath> + ?Sized),
@@ -357,11 +376,27 @@ pub(crate) mod tests {
             self
         }
 
+        /// Makes packages installed in the synthetic virtual environment available for imports.
+        ///
+        /// Files under `/.venv/lib/python3.13/site-packages` are treated as third-party modules,
+        /// mirroring the import roots discovered from a project's configured Python environment.
+        pub(crate) fn with_third_party_packages(mut self) -> Self {
+            self.third_party_packages = true;
+            self
+        }
+
         pub(crate) fn build(self) -> anyhow::Result<TestDb> {
             let mut db = TestDb::new();
 
-            let src_root = SystemPathBuf::from("/src");
-            db.memory_file_system().create_directory_all(&src_root)?;
+            for src_root in &self.src_roots {
+                db.memory_file_system().create_directory_all(src_root)?;
+            }
+
+            let default_site_packages = SystemPathBuf::from("/.venv/lib/python3.13/site-packages");
+            if self.third_party_packages {
+                db.memory_file_system()
+                    .create_directory_all(&default_site_packages)?;
+            }
             for site_packages in &self.site_packages {
                 db.memory_file_system()
                     .create_directory_all(site_packages)?;
@@ -370,10 +405,18 @@ pub(crate) mod tests {
             db.write_files(self.files)
                 .context("Failed to write test files")?;
 
-            let search_paths = SearchPathSettings {
-                site_packages_paths: self.site_packages,
-                ..SearchPathSettings::new(vec![src_root])
+            let mut search_path_settings = if self.third_party_packages {
+                SearchPathSettings {
+                    src_roots: self.src_roots,
+                    site_packages_paths: vec![default_site_packages],
+                    ..SearchPathSettings::empty()
+                }
+            } else {
+                SearchPathSettings::new(self.src_roots)
             };
+            search_path_settings
+                .site_packages_paths
+                .extend(self.site_packages);
 
             let program_settings = ProgramSettings {
                 python_version: PythonVersionWithSource {
@@ -381,7 +424,7 @@ pub(crate) mod tests {
                     source: PythonVersionSource::default(),
                 },
                 python_platform: self.python_platform,
-                search_paths: search_paths
+                search_paths: search_path_settings
                     .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
                     .context("Invalid search path settings")?,
             };

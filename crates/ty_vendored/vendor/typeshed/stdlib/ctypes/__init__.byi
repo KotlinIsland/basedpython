@@ -229,7 +229,7 @@ def create_unicode_buffer(init: int | str, size: int? = None) -> Array[c_wchar]:
     """
 
 if sys.version_info < (3, 15):
-    @deprecated("Deprecated; will be removed in Python 3.15.")
+    @deprecated("Deprecated; removed in Python 3.15.")
     def SetPointerType(pointer: type[_Pointer[dynamic]], cls: _CTypeBaseType) -> None
 
 @deprecated("Soft deprecated. Use multiplication instead.")

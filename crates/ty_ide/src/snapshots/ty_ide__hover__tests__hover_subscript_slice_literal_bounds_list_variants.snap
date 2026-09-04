@@ -3,10 +3,10 @@ source: crates/ty_ide/src/hover.rs
 expression: output
 ---
 list case 0:
-list[str]
+Unknown
 ---------------------------------------------
 ```python
-list[str]
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -21,10 +21,10 @@ info[hover]: Hovered content is
 
 
 list case 1:
-list[str]
+Unknown
 ---------------------------------------------
 ```python
-list[str]
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -39,10 +39,10 @@ info[hover]: Hovered content is
 
 
 list case 2:
-list[str]
+Unknown
 ---------------------------------------------
 ```python
-list[str]
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -57,10 +57,10 @@ info[hover]: Hovered content is
 
 
 list case 3:
-list[str]
+Unknown
 ---------------------------------------------
 ```python
-list[str]
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -75,10 +75,10 @@ info[hover]: Hovered content is
 
 
 list case 4:
-list[str]
+Unknown
 ---------------------------------------------
 ```python
-list[str]
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is
@@ -93,10 +93,10 @@ info[hover]: Hovered content is
 
 
 list case 5:
-list[str]
+Unknown
 ---------------------------------------------
 ```python
-list[str]
+Unknown
 ```
 ---------------------------------------------
 info[hover]: Hovered content is

@@ -123,7 +123,7 @@ pub fn module_rename_edits(db: &dyn Db, moves: &[FileMove]) -> ModuleRenameEdits
     // deliberate gesture, and it has to produce a stable order — the client applies these as one
     // edit and a set of edits that arrives in a different order on every run is one nobody can
     // review or test.
-    let mut files: Vec<File> = db.project().files(db).iter().copied().collect();
+    let mut files: Vec<File> = db.project().files(db).iter().collect();
     files.sort_by_key(|file| file.path(db).as_str().to_string());
 
     for file in files {

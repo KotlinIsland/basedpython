@@ -24,7 +24,7 @@ use ty_ide::{
 };
 use ty_ide::{NavigationTarget, NavigationTargets, hints, signature_help};
 use ty_project::metadata::options::Options;
-use ty_project::watch::{ChangeEvent, ChangedKind, CreatedKind, DeletedKind};
+use ty_project::watch::{ChangeEvent, ChangedKind, DeletedKind};
 use ty_project::{CheckMode, ProjectMetadata};
 use ty_project::{Db, ProjectDatabase, SemanticDb as _};
 use ty_python_core::program::FallibleStrategy;
@@ -199,10 +199,7 @@ impl Workspace {
             .write_file_all(&path, contents)
             .map_err(into_error)?;
 
-        self.db.apply_changes(&[ChangeEvent::Created {
-            path: path.clone(),
-            kind: CreatedKind::File,
-        }]);
+        self.db.apply_changes(&[ChangeEvent::Opened(path.clone())]);
 
         let file = system_path_to_file(&self.db, &path).expect("File to exist");
 
@@ -279,7 +276,7 @@ impl Workspace {
 
     #[wasm_bindgen(js_name = "hints")]
     pub fn hints(&self, file_id: &FileHandle) -> Result<Vec<Hint>, Error> {
-        Ok(hints(&self.db, self.db.program_file(file_id.file))
+        Ok(hints(&self.db, file_id.file)
             .into_iter()
             .map(|hint| Hint::from_ide_hint(&self.db, file_id.file, self.position_encoding, &hint))
             .collect())
@@ -1622,6 +1619,7 @@ pub enum SemanticTokenKind {
     TypeParameter,
     Comment,
     Operator,
+    Regexp,
 }
 
 impl From<ty_ide::SemanticTokenType> for SemanticTokenKind {
@@ -1644,6 +1642,7 @@ impl From<ty_ide::SemanticTokenType> for SemanticTokenKind {
             ty_ide::SemanticTokenType::TypeParameter => Self::TypeParameter,
             ty_ide::SemanticTokenType::Comment => Self::Comment,
             ty_ide::SemanticTokenType::Operator => Self::Operator,
+            ty_ide::SemanticTokenType::Regexp => Self::Regexp,
         }
     }
 }

@@ -283,8 +283,8 @@ impl<'db> FluidFold<'db, '_> {
         let file = self.file;
         let specialization = self
             .builder
-            .build_with(self.generic_context, |typevar, bounds| {
-                let lower = bounds?.lower?;
+            .build_merged_with(|typevar, bounds| {
+                let lower = bounds?.evidence_lower()?;
                 Some(if promote && typevar.widens_literal_solutions(db) {
                     // see the note in `solve_fluid_specialization`
                     lower
@@ -457,7 +457,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         continue;
                     }
 
-                    let Some(specialization) = overload.specialization(db, env) else {
+                    let Some(specialization) = overload.merged_specialization(db, env) else {
                         continue;
                     };
                     let Some(matched) = overload
@@ -513,13 +513,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             if let Some(signature_context) = overload.signature.generic_context {
                                 let eventual = binding_type(db, candidate_def);
                                 let constraints = ConstraintSetBuilder::new();
-                                let inferable = signature_context.inferable_typevars(db);
-                                let mut builder =
-                                    SpecializationBuilder::new(db, env, &constraints, inferable);
+                                let mut builder = SpecializationBuilder::new(
+                                    db,
+                                    env,
+                                    &constraints,
+                                    signature_context,
+                                );
                                 if builder.infer(parameter_ty, eventual).is_ok() {
                                     let eventual_specialization =
-                                        builder.build_with(signature_context, |_, bounds| {
-                                            let lower = bounds?.lower?;
+                                        builder.build_merged_with(|_, bounds| {
+                                            let lower = bounds?.evidence_lower()?;
                                             Some(lower)
                                         });
                                     overload.return_ty =
@@ -723,9 +726,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             self.fluid_creation_constraint(identity_instance, generic_context, creation);
 
         let constraint_sets = ConstraintSetBuilder::new();
-        let inferable = generic_context.inferable_typevars(db);
         let mut fold = FluidFold {
-            builder: SpecializationBuilder::new(db, env, &constraint_sets, inferable),
+            builder: SpecializationBuilder::new(db, env, &constraint_sets, generic_context),
             identity_instance,
             generic_context,
             file: self.file(),
@@ -989,16 +991,15 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let env = self.program_environment();
         let db = self.db();
         let constraints = ConstraintSetBuilder::new();
-        let inferable = generic_context.inferable_typevars(db);
-        let mut builder = SpecializationBuilder::new(db, env, &constraints, inferable);
+        let mut builder = SpecializationBuilder::new(db, env, &constraints, generic_context);
 
         if builder.infer(identity_instance, constraint).is_err() {
             // An incompatible context still hands the value to another observer.
             return true;
         }
 
-        let specialization = builder.build_with(generic_context, |_, bounds| {
-            let lower = bounds?.lower?;
+        let specialization = builder.build_merged_with(|_, bounds| {
+            let lower = bounds?.evidence_lower()?;
             Some(lower)
         });
 
@@ -1020,16 +1021,15 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let env = self.program_environment();
         let db = self.db();
         let constraints = ConstraintSetBuilder::new();
-        let inferable = generic_context.inferable_typevars(db);
-        let mut builder = SpecializationBuilder::new(db, env, &constraints, inferable);
+        let mut builder = SpecializationBuilder::new(db, env, &constraints, generic_context);
 
         for constraint in constraint_instances {
             builder.infer(identity_instance, constraint).ok()?;
         }
 
         let file = self.file();
-        let specialization = builder.build_with(generic_context, |typevar, bounds| {
-            let lower = bounds?.lower?;
+        let specialization = builder.build_merged_with(|typevar, bounds| {
+            let lower = bounds?.evidence_lower()?;
             Some(if promote && typevar.widens_literal_solutions(db) {
                 // Match the promotion policy of collection-literal inference: promote
                 // literal types in invariant position, and promote singleton types to

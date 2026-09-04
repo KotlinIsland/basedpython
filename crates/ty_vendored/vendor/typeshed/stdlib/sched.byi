@@ -69,7 +69,7 @@ class scheduler:
 
         """
 
-    def run(self, blocking: bool = True) -> int | float | None:
+    def run(self, blocking: bool = True) -> (int | float)?:
         """Execute events until the queue is empty.
         If blocking is False executes the scheduled events due to
         expire soonest (if any) and then return the deadline of the

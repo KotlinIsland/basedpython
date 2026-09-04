@@ -109,7 +109,7 @@ fn uv_manages(db: &dyn Db, root: &SystemPath) -> bool {
 
     root.ancestors()
         .any(|directory| system.is_file(&directory.join("uv.lock")))
-        && ty_project::metadata::uv::executable(system).is_ok()
+        && ty_project::uv::executable(system).is_ok()
 }
 
 /// A dependency to declare by running `uv add`.

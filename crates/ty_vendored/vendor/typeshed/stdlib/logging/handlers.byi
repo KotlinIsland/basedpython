@@ -348,13 +348,13 @@ class SysLogHandler(Handler):
     facility_names: ClassVar[dict[str, int]]  # undocumented
     priority_map: ClassVar[dict[str, str]]  # undocumented
     if sys.version_info >= (3, 14):
-        timeout: int | float | None
+        timeout: (int | float)?
         def __init__(
             self,
             address: (str, int) | str = ("localhost", 514),
             facility: str | int = 1,
             socktype: SocketKind? = None,
-            timeout: int | float | None = None,
+            timeout: (int | float)? = None,
         ) -> None:
             """
             Initialize a handler.

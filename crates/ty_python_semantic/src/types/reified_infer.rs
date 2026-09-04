@@ -71,7 +71,7 @@ pub(crate) fn inferred_call_type_arguments<'db>(
         .and_then(|callable| callable.matching_overloads().exactly_one().ok())
         .ok_or(ReifiedInferenceError::NoBinding)?
         .1
-        .specialization(db, env);
+        .merged_specialization(db, env);
     rendered_type_arguments(db, env, file, function, specialization)
 }
 

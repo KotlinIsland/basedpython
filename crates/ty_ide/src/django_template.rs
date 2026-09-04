@@ -646,7 +646,7 @@ pub(crate) mod tests {
                 python_platform: PythonPlatform::default(),
                 search_paths,
             };
-            Program::from_settings(&db, settings.clone());
+            Program::from_settings(&db, &settings);
             // a project-level query (`has_django`) resolves against the project's own
             // settings rather than a file's, so they have to carry the search paths too
             ty_project::Db::project(&db).update_program(&mut db, settings);

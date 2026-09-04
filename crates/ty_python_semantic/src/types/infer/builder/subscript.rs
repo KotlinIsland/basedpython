@@ -34,14 +34,14 @@ use crate::types::tuple::{Tuple, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::typed_dict::{
     TypedDictAssignmentKind, TypedDictExtraItems, TypedDictKeyAssignment,
 };
-use crate::types::typevar::TypeVarSet;
 use crate::types::typevar::pack_bound_violation;
+use crate::types::typevar::{BindingContext, TypeVarSet};
 use crate::types::{
     BoundTypeVarInstance, CallArguments, CallDunderError, CallableBinding, CycleDetector,
-    DynamicType, InternedType, KnownClass, KnownInstanceType, LintDiagnosticGuard,
+    DisplaySettings, DynamicType, InternedType, KnownClass, KnownInstanceType, LintDiagnosticGuard,
     MemberLookupPolicy, Parameter, Parameters, SpecialFormType, StaticClassLiteral, Type,
-    TypeAliasType, TypeAndQualifiers, TypeContext, TypeVarBoundOrConstraints, UnionType,
-    UnionTypeInstance, any_over_type, todo_type,
+    TypeAliasType, TypeAndQualifiers, TypeContext, TypeMapping, TypeVarBoundOrConstraints,
+    UnionType, UnionTypeInstance, any_over_type, todo_type,
 };
 use crate::{Db, FxOrderSet, ProgramEnvironment};
 use ty_python_core::definition::Definition;
@@ -195,7 +195,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // against bounds/constraints, but recording the expression for deferred
         // checking at end of scope. This would avoid a lot of cycles caused by eagerly
         // doing assignment checks here.
-        match typevar.typevar(db).bound_or_constraints(db, env) {
+        let bound_or_constraints = typevar.typevar(db).bound_or_constraints(db, env);
+        let provided_type = if bound_or_constraints.is_some() {
+            // Defaults such as `Box[T]` may be inferred before `T` has a binding context.
+            // Bind only the copy used for validation, so the original default can later
+            // be bound to each generic that uses it.
+            provided_type.apply_type_mapping(
+                db,
+                env,
+                &TypeMapping::BindLegacyTypevars(BindingContext::Synthetic(env.program(db))),
+                TypeContext::default(),
+            )
+        } else {
+            provided_type
+        };
+        match bound_or_constraints {
             Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
                 if provided_type
                     .when_assignable_to(db, env, bound, &constraints, TypeVarSet::None)
@@ -520,10 +534,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         }
 
-        let tuple_generic_alias = |env: &ProgramEnvironment<'db>, tuple: Option<TupleType<'db>>| {
-            let tuple = tuple.unwrap_or_else(|| TupleType::homogeneous(db, env, Type::unknown()));
-            Type::from(tuple.to_class_type(db))
-        };
+        let tuple_generic_alias = |tuple: TupleType<'db>| Type::from(tuple.to_class_type(db));
 
         match value_ty {
             Type::ClassLiteral(class) => {
@@ -551,7 +562,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // special cases, too.
                 if class.is_tuple(db) {
                     return Ok(tuple_generic_alias(
-                        env,
                         self.infer_tuple_type_expression(subscript),
                     ));
                 } else if class.is_known(db, KnownClass::Type) {
@@ -619,7 +629,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Type::SpecialForm(special_form) => match special_form {
                 SpecialFormType::Tuple => {
                     return Ok(tuple_generic_alias(
-                        env,
                         self.infer_tuple_type_expression(subscript),
                     ));
                 }
@@ -2353,7 +2362,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         .iter_flat()
                         .flat_map(CallableBinding::matching_overloads)
                         .filter_map(|(_, identity_overload)| {
-                            identity_overload.specialization(db, env)
+                            identity_overload.merged_specialization(db, env)
                         })
                     {
                         // Record the constraints on the receiver's generic context formed by
@@ -2695,14 +2704,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                             target.range.cover(rhs_value_node.range()),
                                         )
                                     {
-                                        let assigned_d = rhs_value_ty.display(db, env);
-                                        let object_d = object_ty.display(db, env);
+                                        let settings =
+                                            DisplaySettings::from_possibly_ambiguous_types(
+                                                db,
+                                                env,
+                                                [rhs_value_ty, object_ty, slice_ty],
+                                            );
+                                        let assigned_d =
+                                            rhs_value_ty.display_with(db, env, settings.clone());
+                                        let object_d =
+                                            object_ty.display_with(db, env, settings.clone());
 
                                         let mut diagnostic = builder.into_diagnostic(format_args!(
                                             "Invalid subscript assignment with key of type `{}` \
                                             and value of type `{assigned_d}` \
                                             on object of type `{object_d}`",
-                                            slice_ty.display(db, env),
+                                            slice_ty.display_with(db, env, settings),
                                         ));
 
                                         // Special diagnostic for dictionaries

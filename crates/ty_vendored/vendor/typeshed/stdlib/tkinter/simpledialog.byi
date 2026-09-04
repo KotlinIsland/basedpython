@@ -85,9 +85,9 @@ def askfloat(
     title: str?,
     prompt: str,
     *,
-    initialvalue: int | float | None = ...,
-    minvalue: int | float | None = ...,
-    maxvalue: int | float | None = ...,
+    initialvalue: (int | float)? = ...,
+    minvalue: (int | float)? = ...,
+    maxvalue: (int | float)? = ...,
     parent: Misc? = ...,
 ) -> float?:
     """get a float from the user

@@ -112,7 +112,7 @@ final class _lru_cache_wrapper[Fn: (...) -> object]:
     __name__: str
     __qualname__: str
 
-def lru_cache[Fn: (...) -> object](maxsize: int? = 128, typed: bool = False) -> (Fn) -> _lru_cache_wrapper[Fn]:
+def lru_cache[Element](maxsize: int? = 128, typed: bool = False) -> ((...) -> Element) -> _lru_cache_wrapper[Element]:
     """Least-recently-used cache decorator.
 
     If *maxsize* is set to None, the LRU features are disabled and the cache

@@ -224,7 +224,7 @@ class Telnet:
 
         """
 
-    def read_until(self, match: bytes, timeout: int | float | None = None) -> bytes:
+    def read_until(self, match: bytes, timeout: (int | float)? = None) -> bytes:
         """Read until a given string is encountered or until timeout.
 
         When no match is found, return whatever is available instead,
@@ -328,7 +328,7 @@ class Telnet:
         """Helper for mt_interact() -- this executes in the other thread."""
 
     def expect(
-        self, list: MutableSequence[Pattern[bytes] | bytes] | Sequence[Pattern[bytes]], timeout: int | float | None = None
+        self, list: MutableSequence[Pattern[bytes] | bytes] | Sequence[Pattern[bytes]], timeout: (int | float)? = None
     ) -> (int, Match[bytes]?, bytes):
         """Read until one from a list of a regular expressions matches.
 
