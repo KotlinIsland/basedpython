@@ -3552,7 +3552,6 @@ dependencies = [
  "salsa",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "tikv-jemallocator",
  "tracing",
