@@ -300,6 +300,18 @@ fn finish(
     // and the same program compiled, so that importing the artefact does not have to
     // parse it all over again. it is asked for after every rewrite above, because what
     // gets compiled has to be exactly what would otherwise be run
+    // a compiled module publishes a real `function` under each of its own function
+    // names rather than the native object, because a `PyCFunction` is not a
+    // descriptor and so never receives a receiver when it is installed on a class.
+    // the forwarders are python, and this is where python gets compiled — so they
+    // are written into the twin before it is handed to the interpreter
+    let twin = match by_irbuild::shims::shims(&module, &twin) {
+        Some(shims) => {
+            module.shims = Some(shims.install);
+            format!("{twin}{}", shims.source)
+        }
+        None => twin,
+    };
     module.fallback_code = toolchain.and_then(|toolchain| toolchain.marshal(&twin));
     module.fallback_source = Some(twin);
     Ok(module)
@@ -509,6 +521,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         };
         let dir = std::env::temp_dir().join("by_build_refuses_test");
         let _ = fs::remove_dir_all(&dir);

@@ -9,25 +9,31 @@ python is a smaller problem for us than it is for mypyc, because basedpython has
 already ruled out most of what makes compilation observable. the table below is
 short for that reason:
 
-| behaviour                                   | interpreted                          | compiled                          | why                                                               |
-| ------------------------------------------- | ------------------------------------ | --------------------------------- | ----------------------------------------------------------------- |
-| monkey-patching a module function           | works                                | tier 3: no                        | early binding, gated on `api.lock`                                |
-| adding an attribute not in the class body   | stored, unless `__slots__`           | the same, on 3.13 and above       | an instance dict beside the layout; below 3.13 it is refused      |
-| `is` on a fixed-length tuple                | identity                             | unspecified                       | unboxed tuples have no identity                                   |
-| `type(x)` where `x: int` held a `bool`      | `bool`                               | `int`                             | the tagged form has no room for it                                |
-| `is` on a small `int` or interned `str`     | identity                             | unspecified                       | unboxed and re-boxed values differ                                |
-| a wrong annotation on non-compiled code     | `TypeError` (soundness checks)       | `TypeError`                       | same mechanism, already shipped                                   |
-| `__dict__` on an instance                   | present unless `__slots__`           | absent where the class has fields | a mapping naming only the dict half would be a quiet wrong answer |
-| `if __name__ == "__main__"`                 | n/a                                  | n/a                               | the entry point is [`main`](../../features/main-function.md)      |
-| stack depth on deep recursion               | python's limit                       | the C stack's                     | native frames are not python frames                               |
-| `type(f)` for a compiled function           | `function`                           | `builtin_function_or_method`      | a native function is a C function object                          |
-| `f.__code__`, `f.__defaults__`              | present                              | absent                            | there is no python code object behind it                          |
-| a `data class` constructor's argument types | unchecked (unless `--soundness all`) | checked                           | a compiled field is unboxed, so the check is mandatory            |
+| behaviour                                       | interpreted                          | compiled                           | why                                                                                   |
+| ----------------------------------------------- | ------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------------- |
+| monkey-patching a module function               | works                                | tier 3: no                         | early binding, gated on `api.lock`                                                    |
+| adding an attribute not in the class body       | stored, unless `__slots__`           | the same, on 3.13 and above        | an instance dict beside the layout; below 3.13 it is refused                          |
+| `is` on a fixed-length tuple                    | identity                             | unspecified                        | unboxed tuples have no identity                                                       |
+| `type(x)` where `x: int` held a `bool`          | `bool`                               | `int`                              | the tagged form has no room for it                                                    |
+| `is` on a small `int` or interned `str`         | identity                             | unspecified                        | unboxed and re-boxed values differ                                                    |
+| a wrong annotation on non-compiled code         | `TypeError` (soundness checks)       | `TypeError`                        | same mechanism, already shipped                                                       |
+| `__dict__` on an instance                       | present unless `__slots__`           | present, over the whole state      | a real `dict` every write updates; `del` of a *field* raises                          |
+| `if __name__ == "__main__"`                     | n/a                                  | n/a                                | the entry point is [`main`](../../features/main-function.md)                          |
+| stack depth on deep recursion                   | python's limit                       | the C stack's                      | native frames are not python frames                                                   |
+| `f.__code__` for a compiled function            | the definition's                     | the forwarder's                    | the module publishes a `function` that forwards to the native, and that is its code   |
+| `f.__wrapped__` for a compiled function         | absent                               | the interpreted definition         | which is where `inspect` reads the signature, the source and the file from            |
+| a traceback through a compiled function         | the module's file and the line       | `<by native forwarder>`            | the frame that exists is the forwarder's; the native has none                         |
+| `is` against a compiled function's own name     | identity                             | `False` where the body captured it | the module body runs before the compiled name replaces it, and what it captured stays |
+| a `data class` constructor's argument types     | unchecked (unless `--soundness all`) | checked                            | a compiled field is unboxed, so the check is mandatory                                |
+| assigning a method onto a class from outside it | works                                | `TypeError` at the assignment      | an emitted class is sealed unless the source decorates it                             |
 
-the three `is`-related rows are the only genuine losses, and they are the same
-ones mypyc takes. `is` on immutable value types is already a python anti-pattern;
-`buff` should grow a lint for it under a compiled configuration rather than
-leaving it to a runtime surprise
+the `is`-related rows are the only genuine losses, and the first three are the
+same ones mypyc takes. the fourth — `is` against a function's own name — is ours:
+the body captured the definition python built, and the name now holds the
+forwarder published over it. both call the same way and answer the same value, so
+what diverges is only the `is`. `is` on immutable value types is already a python
+anti-pattern; `buff` should grow a lint for it under a compiled configuration
+rather than leaving it to a runtime surprise
 
 the constructor row is the representation invariant doing its job: a `data class`
 field with an `int` annotation is an unboxed `ByTagged`, and a `str` cannot be
@@ -35,11 +41,25 @@ stored there at all. so the check is not a choice — it is the `parameters`
 soundness position, mandatory wherever a field is unboxed. the interpreted build
 reaches the same behaviour under `--soundness all`
 
-the two function-object rows are the price of the calling
-convention rather than of any optimization: a natively compiled function is a
-`PyCFunction`, so it has no `__code__` and introspection that reaches for one
-fails. a declined function keeps its python function object, so the fallback is
-also the escape hatch for code that needs introspection
+the function-object rows are the price of making a module's own names *bind*. a
+natively compiled function is a `PyCFunction`, which is not a descriptor — so
+`Cls.method = mod.fn`, which is what `functools.total_ordering` does, installed
+something that never received the receiver, and with a default on that receiver it
+answered quietly rather than raising. cpython offers no way to make a `PyCFunction`
+bind, so a module publishes a real `function` that forwards to the native instead.
+it answers for the definition about everything it is asked — its name, docstring,
+module, defaults, annotations, and, through `__wrapped__`, its signature, source and
+file — and what is left over is the three rows above: its own code object, the
+`__wrapped__` that carries the rest, and the frame a traceback finds
+
+the sealed-class row is where `functools.total_ordering(SomeClass)` from another
+module lands. it fills in the comparisons a class is missing by assigning them, and an
+emitted class refuses an assignment it did not open itself to — with python's own
+wording, at the assignment, rather than at whatever reads the missing method later.
+written on the `class` statement it works: a class the source decorates is built as a
+type a decorator can write to, and `@total_ordering` fills the gaps and the class
+compiles. nothing checkable in one module can see another module's call, so the refusal
+is the runtime's to make and the only question was whether it is made loudly
 
 the `bool` row gets an opt-out once
 [`final T`](planned-features.md#final-t-exactness-at-the-use-site) lands: a

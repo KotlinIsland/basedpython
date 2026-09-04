@@ -714,26 +714,32 @@ pub enum Op {
     /// [`Self::StoreGlobal`] reach, so a write through it is visible at once to the
     /// rest of the module and to the interpreted twin, exactly as python's is
     ModuleDict { dest: RegisterId },
-    /// `warnings.warn(message, category)` at the default stack level, with the
-    /// context supplied rather than counted off frames
+    /// `warnings.warn(message, category, stacklevel)` with the context supplied rather
+    /// than counted off frames
     ///
     /// `warn` blames the frame of whoever called it, and a compiled function pushes
-    /// none — so it blames the caller's frame instead, in another module. at a stack
-    /// level of one there is nothing to count, though: the frame it would have read is
-    /// this very function's, and everything it would have read off it is known. the
-    /// file and the line come from the module's line table, and `__name__` and
-    /// `__warningregistry__` are read out of the module namespace at the call. so the
-    /// call goes to `warn_explicit`, which takes all four.
+    /// none — so the count starts one frame further out than the source meant. the one
+    /// missing frame is this function's own, and everything python would have read off
+    /// it is known: the file and the line come from the module's line table, and
+    /// `__name__` and `__warningregistry__` are read out of the module namespace at the
+    /// call. at a stack level of one that frame is the one blamed, and those four are
+    /// the whole answer; above one the blamed frame is further out, and the runtime
+    /// walks the real frames from the one this function would have stood on.
     ///
-    /// only that stack level. above one the frame to blame is the *caller's*, and how
-    /// many frames are missing under a compiled function is not a static question —
-    /// a compiled function calling another loses both
+    /// a compiled function *below* this one is still a frame python would have counted
+    /// and this cannot see. a caller in the same module is turned down for that when
+    /// the module is pruned; one reached through a value or from another module is a
+    /// frame an interpreted definition of this function would lose just the same
     Warn {
         dest: RegisterId,
         message: Value,
         /// the `category` the call wrote, when it wrote one. left out means python's
         /// own defaulting applies, which the runtime helper reproduces
         category: Option<Value>,
+        /// the `stacklevel` the call wrote, as python counts it: one is the warning's
+        /// own frame. a level at or below one is held at one, which is what `warn`'s
+        /// own walk does with it
+        stacklevel: u32,
         /// the byte offset the call is written at, which codegen turns into a line
         /// number through the same table the `#line` directives come from
         offset: u32,
@@ -1171,6 +1177,14 @@ impl Op {
         }
     }
 
+    /// the loop cursor, mutably — see [`Op::loop_cursor`]
+    pub fn loop_cursor_mut(&mut self) -> Option<&mut RegisterId> {
+        match self {
+            Self::GetIter { cursor, .. } | Self::IterNext { cursor, .. } => cursor.as_mut(),
+            _ => None,
+        }
+    }
+
     /// the register this operation writes, if any
     pub fn dest(&self) -> Option<RegisterId> {
         match self {
@@ -1522,9 +1536,18 @@ impl Op {
             Self::DelegateIter { src, .. } => vec![src],
             Self::DelegateStep { inner, sent, .. } => vec![inner, sent],
             Self::ArrayNew { items, .. } => items.iter().collect(),
-            Self::ArrayGet { array, index, .. }
-            | Self::ArrayRead { array, index, .. }
-            | Self::ArraySet { array, index, .. } => vec![array, index],
+            Self::ArrayGet { array, index, .. } | Self::ArrayRead { array, index, .. } => {
+                vec![array, index]
+            }
+            // the *value* is read as much as the array and the index are. leaving it out
+            // meant nothing that asks an op what it reads could see it — the liveness a
+            // renumbering pass runs, and the verifier's own read check, both missed it
+            Self::ArraySet {
+                array,
+                index,
+                value,
+                ..
+            } => vec![array, index, value],
             Self::ArrayLen { array, .. } => vec![array],
             Self::DeleteItem {
                 container, index, ..
@@ -1711,9 +1734,18 @@ impl Op {
             Self::DelegateIter { src, .. } => vec![src],
             Self::DelegateStep { inner, sent, .. } => vec![inner, sent],
             Self::ArrayNew { items, .. } => items.iter_mut().collect(),
-            Self::ArrayGet { array, index, .. }
-            | Self::ArrayRead { array, index, .. }
-            | Self::ArraySet { array, index, .. } => vec![array, index],
+            Self::ArrayGet { array, index, .. } | Self::ArrayRead { array, index, .. } => {
+                vec![array, index]
+            }
+            // the *value* is read as much as the array and the index are. leaving it out
+            // meant nothing that asks an op what it reads could see it — the liveness a
+            // renumbering pass runs, and the verifier's own read check, both missed it
+            Self::ArraySet {
+                array,
+                index,
+                value,
+                ..
+            } => vec![array, index, value],
             Self::DeleteItem {
                 container, index, ..
             } => vec![container, index],

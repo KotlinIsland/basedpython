@@ -1120,10 +1120,13 @@ impl Verifier<'_> {
                 index,
             } => {
                 self.expect(block, container, &RType::OBJECT, "a subscript container");
-                // an integer index keeps its register, so the lookup never boxes it
+                // an integer index keeps its register, so the lookup never boxes
+                // it — an unboxed counter included, which reaches the element by
+                // the machine integer it already holds
                 if let Some(ty) = self.operand_type(block, index)
                     && ty != RType::OBJECT
                     && ty != RType::INT
+                    && !matches!(ty, RType::Primitive(Primitive::Fixed(_)))
                 {
                     self.error(
                         Some(block),
@@ -1566,6 +1569,8 @@ mod tests {
             defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
+            doc: None,
+            takes_a_weak_reference: false,
         }
     }
 
@@ -1754,6 +1759,8 @@ mod tests {
             defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
+            doc: None,
+            takes_a_weak_reference: false,
         };
         let errors = verify(&f).unwrap_err();
         assert!(
@@ -1803,6 +1810,8 @@ mod tests {
             defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
+            doc: None,
+            takes_a_weak_reference: false,
         };
         assert_eq!(verify(&f), Ok(()));
     }
@@ -1853,6 +1862,8 @@ mod tests {
             defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
+            doc: None,
+            takes_a_weak_reference: false,
         };
         let errors = verify(&f).unwrap_err();
         assert!(
@@ -1954,6 +1965,8 @@ mod tests {
             defaults_held_by: crate::function::DefaultsHeldBy::Twin,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
+            doc: None,
+            takes_a_weak_reference: false,
         };
         let errors = verify(&f).unwrap_err();
         assert!(errors.iter().any(|e| e.message.contains("past the end")));
@@ -1974,6 +1987,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         };
         let errors = verify_module(&module).unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -2010,6 +2024,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         };
         let errors = verify_module(&module).unwrap_err();
         assert!(

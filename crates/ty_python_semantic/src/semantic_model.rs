@@ -2100,6 +2100,21 @@ impl HasType for ast::Expr {
     }
 }
 
+/// basedpython: the class object a `class` statement binds, or `None` where the
+/// semantic index holds no single definition for it.
+///
+/// [`HasType`] answers the same question for a `StmtClassDef`, but by way of
+/// `expect_single_definition`, which stops the run where the index holds none. The
+/// native compiler asks this of every class a module writes — including ones written
+/// inside a module-level block — so it needs the answer that says "not known" instead.
+pub fn basedpython_class_type<'db>(
+    model: &SemanticModel<'db>,
+    class: &ast::StmtClassDef,
+) -> Option<Type<'db>> {
+    let index = semantic_index(model.db, model.program_file());
+    Some(binding_type(model.db, index.try_definition(class)?))
+}
+
 macro_rules! impl_binding_has_ty_def {
     ($ty: ty) => {
         impl HasDefinition for $ty {

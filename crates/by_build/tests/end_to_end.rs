@@ -148,6 +148,7 @@ fn arith_module() -> ModuleIr {
         lines: None,
         fallback_source: None,
         fallback_code: None,
+        shims: None,
     }
 }
 
@@ -213,6 +214,7 @@ fn fib_module() -> ModuleIr {
         lines: None,
         fallback_source: None,
         fallback_code: None,
+        shims: None,
     }
 }
 
@@ -350,6 +352,7 @@ fn division_floors_like_python_and_raises_on_zero() {
         lines: None,
         fallback_source: None,
         fallback_code: None,
+        shims: None,
     };
     let Some(dir) = built(&module, &toolchain, "divzero") else {
         return;
@@ -407,6 +410,7 @@ fn floats_are_unboxed_and_exclude_int() {
         lines: None,
         fallback_source: None,
         fallback_code: None,
+        shims: None,
     };
     let Some(dir) = built(&module, &toolchain, "float") else {
         return;
@@ -479,6 +483,7 @@ fn calls_between_compiled_functions_stay_native() {
         lines: None,
         fallback_source: None,
         fallback_code: None,
+        shims: None,
     };
     let Some(dir) = built(&module, &toolchain, "call") else {
         return;
@@ -1457,6 +1462,75 @@ else:
     };
     assert_eq!(asserted(&[]), "True");
     assert_eq!(asserted(&["-O"]), "False");
+}
+
+#[test]
+fn running_the_interpreter_with_oo_takes_the_docstrings_out_of_the_compiled_definitions() {
+    // a docstring is baked into the method table at build time, but the level the
+    // artefact is *run* at is only known at import. under `-OO` python compiles a
+    // function with no docstring at all, so the interpreted twin of this very source
+    // answers `None` — and a compiled definition still holding the baked-in string would
+    // disagree with its own twin, in the same process
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = e2e_root().join("by_e2e_docoptrun");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def plain():
+    \"the plain one\"
+    return 1
+
+
+class Described:
+    def described(self):
+        \"on a method\"
+        return 2
+";
+    let Ok(built) = build_source(
+        source,
+        "by_e2e_docoptrun",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) else {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let docs = |flags: &[&str]| {
+        let mut command = Command::new(&python);
+        command.args(flags).args([
+            "-c",
+            &format!(
+                "import sys\nsys.path.insert(0, {:?})\n\
+                 import by_e2e_docoptrun as m\n\
+                 _leg = lambda f: 'native' if f.__code__.co_filename == '<by native forwarder>' else type(f).__name__\n\
+                 print(_leg(m.plain),\n\
+                 \x20     type(m.Described.__dict__['described']).__name__,\n\
+                 \x20     repr(m.plain.__doc__), repr(m.Described.described.__doc__))\n",
+                dir.display().to_string()
+            ),
+        ]);
+        let out = command.output().expect("the interpreter runs");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    // the kinds are in every line so that a leg which fell back to its interpreted
+    // definition cannot answer for one of these: it would agree about `None` under `-OO`
+    // for a reason that says nothing about the table
+    let kept = "native method_descriptor 'the plain one' 'on a method'";
+    assert_eq!(docs(&[]), kept);
+    // `-O` takes out `assert`, and only `-OO` takes out the docstrings as well
+    assert_eq!(docs(&["-O"]), kept);
+    assert_eq!(docs(&["-OO"]), "native method_descriptor None None");
 }
 
 #[test]

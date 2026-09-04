@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use by_ir::function::{Function, ModuleIr};
-use by_ir::ops::{Op, RegisterId, Value};
+use by_ir::ops::{RegisterId, Value};
 
 pub fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
@@ -38,22 +38,42 @@ fn eliminate(function: &mut Function) {
     }
     function.registers = kept;
 
-    let rewrite_value = |value: &mut Value, remap: &[Option<RegisterId>]| {
-        if let Value::Register(id) = value
-            && let Some(Some(new)) = remap.get(id.index())
-        {
+    // the rewrite asks the op what it reads and writes rather than listing the
+    // variants itself. it did list them, and the list drifted: `MatchAttr`'s `class`
+    // operand was swallowed by a `..`, so `case str(slot)` kept a *stale* register id
+    // through the renumbering — which landed on whichever register had taken that
+    // number, and the generated C passed a `char` where a `PyObject *` belonged.
+    // `Terminator::NarrowShort` was missing for the same reason. both are counted as
+    // live by the scan below, which reads the same accessors, so only the rewrite
+    // disagreed — and a second list that has to agree with the first is how that
+    // happened
+    let rewrite_register = |id: &mut RegisterId| {
+        if let Some(Some(new)) = remap.get(id.index()) {
             *id = *new;
+        }
+    };
+    let rewrite_value = |value: &mut Value| {
+        if let Value::Register(id) = value {
+            rewrite_register(id);
         }
     };
 
     for block in &mut function.blocks {
         for op in &mut block.ops {
-            rewrite_op(op, &remap, &rewrite_value);
+            if let Some(dest) = op.dest_mut() {
+                rewrite_register(dest);
+            }
+            // a loop cursor is read and written in place, so it is neither a dest nor
+            // an operand
+            if let Some(cursor) = op.loop_cursor_mut() {
+                rewrite_register(cursor);
+            }
+            for operand in op.operands_mut() {
+                rewrite_value(operand);
+            }
         }
-        match &mut block.terminator {
-            by_ir::ops::Terminator::Branch { cond, .. } => rewrite_value(cond, &remap),
-            by_ir::ops::Terminator::Return(value) => rewrite_value(value, &remap),
-            _ => {}
+        for operand in block.terminator.operands_mut() {
+            rewrite_value(operand);
         }
     }
 }
@@ -86,421 +106,11 @@ fn live_registers(function: &Function) -> HashSet<RegisterId> {
     live
 }
 
-fn rewrite_op(
-    op: &mut Op,
-    remap: &[Option<RegisterId>],
-    rewrite_value: &impl Fn(&mut Value, &[Option<RegisterId>]),
-) {
-    let rewrite_dest = |dest: &mut RegisterId| {
-        if let Some(Some(new)) = remap.get(dest.index()) {
-            *dest = *new;
-        }
-    };
-    match op {
-        Op::AsyncContext {
-            dest,
-            manager,
-            exception: Some(exception),
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(manager, remap);
-            rewrite_value(exception, remap);
-        }
-        Op::Assign { dest, src } => {
-            rewrite_dest(dest);
-            rewrite_value(src, remap);
-        }
-        // a positional sub-pattern reads `__match_args__` off a *class* it is
-        // handed at runtime, so that class is an operand like the subject is —
-        // renumbering one and not the other left the class naming a register
-        // that had been given to something else
-        Op::MatchAttr {
-            dest,
-            subject,
-            class,
-            ..
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(subject, remap);
-            if let Some(class) = class {
-                rewrite_value(class, remap);
-            }
-        }
-        Op::IntBinary { dest, lhs, rhs, .. }
-        | Op::FloatBinary { dest, lhs, rhs, .. }
-        | Op::FloatObjectBinary { dest, lhs, rhs, .. }
-        | Op::FloatObjectCompare { dest, lhs, rhs, .. }
-        | Op::Identity { dest, lhs, rhs, .. }
-        | Op::Contains {
-            dest,
-            value: lhs,
-            container: rhs,
-            ..
-        }
-        | Op::IsInstance {
-            dest,
-            src: lhs,
-            class: rhs,
-        }
-        | Op::MatchKey {
-            dest,
-            map: lhs,
-            key: rhs,
-        }
-        | Op::MatchRest {
-            dest,
-            map: lhs,
-            keys: rhs,
-        }
-        | Op::IntCompare { dest, lhs, rhs, .. }
-        | Op::FloatCompare { dest, lhs, rhs, .. }
-        | Op::ObjectBinary { dest, lhs, rhs, .. }
-        | Op::ObjectCompare { dest, lhs, rhs, .. }
-        | Op::StrCompare { dest, lhs, rhs, .. }
-        | Op::StrConcat { dest, lhs, rhs, .. }
-        | Op::StrConcatInt {
-            dest,
-            lhs,
-            value: rhs,
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(lhs, remap);
-            rewrite_value(rhs, remap);
-        }
-        Op::Unary { dest, operand, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(operand, remap);
-        }
-        Op::IterNext { dest, iter, cursor } => {
-            rewrite_dest(dest);
-            rewrite_value(iter, remap);
-            if let Some(cursor) = cursor {
-                rewrite_dest(cursor);
-            }
-        }
-        Op::CallNative { dest, args, .. } => {
-            if let Some(dest) = dest {
-                rewrite_dest(dest);
-            }
-            for arg in args {
-                rewrite_value(arg, remap);
-            }
-        }
-        Op::CallPython { dest, args, .. } => {
-            rewrite_dest(dest);
-            for arg in args {
-                rewrite_value(arg, remap);
-            }
-        }
-        Op::LoadGlobal { dest, .. }
-        | Op::ModuleDict { dest }
-        | Op::LoadClass { dest, .. }
-        | Op::ImportModule { dest, .. } => {
-            rewrite_dest(dest);
-        }
-        Op::Warn {
-            dest,
-            message,
-            category,
-            ..
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(message, remap);
-            if let Some(category) = category {
-                rewrite_value(category, remap);
-            }
-        }
-        Op::StoreGlobal { dest, value, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(value, remap);
-        }
-        Op::DeleteGlobal { dest, .. } | Op::DeleteLocal { dest } => {
-            rewrite_dest(dest);
-        }
-        Op::ImportFrom { dest, module, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(module, remap);
-        }
-        Op::NewInstance { dest, fields, .. } => {
-            rewrite_dest(dest);
-            for field in fields.iter_mut().flatten() {
-                rewrite_value(field, remap);
-            }
-        }
-        Op::GetCell { dest, receiver, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(receiver, remap);
-        }
-        Op::MakeClosure { dest, env, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(env, remap);
-        }
-        Op::CallValue { dest, callee, args } => {
-            rewrite_dest(dest);
-            rewrite_value(callee, remap);
-            for arg in args {
-                rewrite_value(arg, remap);
-            }
-        }
-        Op::CallMethod {
-            dest,
-            receiver,
-            args,
-            ..
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(receiver, remap);
-            for arg in args {
-                rewrite_value(arg, remap);
-            }
-        }
-        Op::GetAttr { dest, receiver, .. } | Op::GetField { dest, receiver, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(receiver, remap);
-        }
-        Op::SetField {
-            receiver, value, ..
-        } => {
-            rewrite_value(receiver, remap);
-            rewrite_value(value, remap);
-        }
-        Op::SetAttr {
-            dest,
-            receiver,
-            value,
-            ..
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(receiver, remap);
-            rewrite_value(value, remap);
-        }
-        Op::Box { dest, src }
-        | Op::IsSequence { dest, src }
-        | Op::IsMapping { dest, src }
-        | Op::AsyncIter { dest, src, .. }
-        | Op::AsyncContext {
-            dest,
-            manager: src,
-            exception: None,
-        }
-        | Op::IsMissing { dest, src }
-        | Op::MethodStands { dest, src, .. }
-        | Op::DictShadows { dest, src, .. }
-        | Op::MatchSlice {
-            dest,
-            sequence: src,
-            ..
-        }
-        | Op::IntToFloat { dest, src }
-        | Op::Unbox { dest, src, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(src, remap);
-        }
-        Op::TupleBuild { dest, items }
-        | Op::BuildList { dest, items }
-        | Op::BuildSet { dest, items }
-        | Op::BuildTuple { dest, items } => {
-            rewrite_dest(dest);
-            for item in items {
-                rewrite_value(item, remap);
-            }
-        }
-        Op::GetIter { dest, src, cursor } => {
-            rewrite_dest(dest);
-            rewrite_value(src, remap);
-            if let Some(cursor) = cursor {
-                rewrite_dest(cursor);
-            }
-        }
-        Op::TupleGet { dest, src, .. }
-        | Op::Truthy { dest, src }
-        | Op::Len { dest, src }
-        | Op::StrOfInt { dest, value: src }
-        | Op::IsNull { dest, src } => {
-            rewrite_dest(dest);
-            rewrite_value(src, remap);
-        }
-        Op::BuildDict { dest, pairs } => {
-            rewrite_dest(dest);
-            for pair in pairs {
-                rewrite_value(pair, remap);
-            }
-        }
-        Op::DictFind {
-            dest,
-            container,
-            key: index,
-        }
-        | Op::GetItem {
-            dest,
-            container,
-            index,
-        }
-        | Op::StrGetItem {
-            dest,
-            container,
-            index,
-        }
-        | Op::StrItemCompare {
-            dest,
-            container,
-            index,
-            ..
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(container, remap);
-            rewrite_value(index, remap);
-        }
-        Op::SetItem {
-            dest,
-            container,
-            index,
-            value,
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(container, remap);
-            rewrite_value(index, remap);
-            rewrite_value(value, remap);
-        }
-        Op::Format {
-            dest, value, spec, ..
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(value, remap);
-            if let Some(spec) = spec {
-                rewrite_value(spec, remap);
-            }
-        }
-        Op::FetchException { dest } => rewrite_dest(dest),
-        Op::ExceptionMatches { dest, value, class } => {
-            rewrite_dest(dest);
-            rewrite_value(value, remap);
-            rewrite_value(class, remap);
-        }
-        Op::Reraise { value } => rewrite_value(value, remap),
-        Op::Extend {
-            dest,
-            container,
-            source,
-            ..
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(container, remap);
-            rewrite_value(source, remap);
-        }
-        Op::CallUnpacked {
-            dest,
-            callee,
-            args,
-            kwargs,
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(callee, remap);
-            rewrite_value(args, remap);
-            if let Some(kwargs) = kwargs {
-                rewrite_value(kwargs, remap);
-            }
-        }
-        Op::ArrayNew { dest, items } => {
-            rewrite_dest(dest);
-            for item in items {
-                rewrite_value(item, remap);
-            }
-        }
-        Op::ArrayGet { dest, array, index } => {
-            rewrite_dest(dest);
-            rewrite_value(array, remap);
-            rewrite_value(index, remap);
-        }
-        Op::ArraySet {
-            dest,
-            array,
-            index,
-            value,
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(array, remap);
-            rewrite_value(index, remap);
-            rewrite_value(value, remap);
-        }
-        Op::DeleteItem {
-            dest,
-            container,
-            index,
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(container, remap);
-            rewrite_value(index, remap);
-        }
-        Op::DeleteAttr { dest, receiver, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(receiver, remap);
-        }
-        Op::ArrayRead { dest, array, index } => {
-            rewrite_dest(dest);
-            rewrite_value(array, remap);
-            rewrite_value(index, remap);
-        }
-        Op::ArrayLen { dest, array } => {
-            rewrite_dest(dest);
-            rewrite_value(array, remap);
-        }
-        Op::ArrayPush { dest, array, value } => {
-            rewrite_dest(dest);
-            rewrite_value(array, remap);
-            rewrite_value(value, remap);
-        }
-        Op::ToTuple { dest, src } => {
-            rewrite_dest(dest);
-            rewrite_value(src, remap);
-        }
-        Op::Unpack { dest, src, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(src, remap);
-        }
-        Op::PushHandled { dest, value } => {
-            rewrite_dest(dest);
-            rewrite_value(value, remap);
-        }
-        Op::PopHandled { value } => rewrite_value(value, remap),
-        Op::RaiseObject { exception, cause } => {
-            rewrite_value(exception, remap);
-            if let Some(cause) = cause {
-                rewrite_value(cause, remap);
-            }
-        }
-        Op::RaiseStandard { .. } => {}
-        Op::RaiseWith { value, .. } | Op::FinishFrame { value } => rewrite_value(value, remap),
-        Op::Enter { dest, manager } => {
-            rewrite_dest(dest);
-            rewrite_value(manager, remap);
-        }
-        Op::ExitContext {
-            dest,
-            manager,
-            exception,
-        } => {
-            rewrite_dest(dest);
-            rewrite_value(manager, remap);
-            rewrite_value(exception, remap);
-        }
-        Op::DelegateIter { dest, src, .. } => {
-            rewrite_dest(dest);
-            rewrite_value(src, remap);
-        }
-        Op::DelegateStep { dest, inner, sent } => {
-            rewrite_dest(dest);
-            rewrite_value(inner, remap);
-            rewrite_value(sent, remap);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BinOp, Terminator};
+    use by_ir::ops::{BinOp, Op, Terminator};
     use by_ir::print::print_function;
     use by_ir::rtype::RType;
     use by_ir::verify::verify;
@@ -516,6 +126,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         }
     }
 
@@ -621,5 +232,48 @@ mod tests {
         run(&mut m);
         assert_eq!(m.functions[0].registers.len(), 2);
         assert_eq!(verify(&m.functions[0]), Ok(()));
+    }
+
+    #[test]
+    fn every_operand_an_op_reads_is_renumbered_and_not_only_the_first() {
+        // `case str(slot)` is where this was found. the rewrite used to list the
+        // variants itself and read `MatchAttr` as though `subject` were its only
+        // operand, so `class` kept an id that now named a different register — a `bit`,
+        // which reached the C compiler as a `char` passed where a `PyObject *` belonged
+        let mut builder = FunctionBuilder::new("f", RType::OBJECT);
+        let subject = builder.param("v", RType::OBJECT);
+        let _dead = builder.temp(RType::OBJECT);
+        let class = builder.temp(RType::OBJECT);
+        let out = builder.temp(RType::OBJECT);
+        builder.push(Op::LoadGlobal {
+            dest: class,
+            name: "str".to_string(),
+        });
+        builder.push(Op::MatchAttr {
+            dest: out,
+            subject: Value::Register(subject),
+            name: None,
+            class: Some(Value::Register(class)),
+            index: 0,
+            count: 1,
+        });
+        builder.terminate(Terminator::Return(Value::Register(out)));
+        let mut m = module(builder.finish());
+        run(&mut m);
+        // the dead temporary went, so the class register moved down one — and the
+        // operand reading it has to have moved with it
+        let function = &m.functions[0];
+        assert_eq!(verify(function), Ok(()));
+        let Some(Op::MatchAttr {
+            class: Some(Value::Register(read)),
+            ..
+        }) = function.blocks[0].ops.last()
+        else {
+            panic!("{}", print_function(function));
+        };
+        let Some(Op::LoadGlobal { dest, .. }) = function.blocks[0].ops.first() else {
+            panic!("{}", print_function(function));
+        };
+        assert_eq!(read, dest);
     }
 }

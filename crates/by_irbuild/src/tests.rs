@@ -976,6 +976,40 @@ def fail(reason: str) -> int:
 }
 
 #[test]
+fn a_returned_pair_holds_an_instance_in_a_slot_of_its_own() {
+    // a slot is a pointer to the class's struct, so the pair is two words rather
+    // than a heap `tuple` — the class's name is declared ahead of the tuple structs
+    // for exactly this
+    with_source(
+        "\
+class Point:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+
+def placed(n: int) -> tuple[Point, int]:
+    return Point(n), n
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            let placed = module
+                .all_functions()
+                .find(|function| function.name == "placed")
+                .expect("placed is compiled");
+            let RType::Tuple(slots) = &placed.ret else {
+                panic!("the pair stayed on the heap: {}", print_function(placed));
+            };
+            assert!(
+                matches!(slots.first(), Some(RType::Instance { class, .. }) if class == "Point"),
+                "{}",
+                print_function(placed)
+            );
+        },
+    );
+}
+
+#[test]
 fn a_raise_of_a_class_the_compiler_does_not_know_still_compiles() {
     // the class itself declines, and the raise looks it up by name — so a
     // user-defined exception needs nothing special
@@ -1283,6 +1317,29 @@ class Tagged:
             "Tagged".to_string(),
             "`__repr__` is both defined and assigned, and its type slot has room for one"
                 .to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_docstring_holding_a_nul_declines() {
+    // the method table spells `ml_doc` as a `const char *` and python reads it with
+    // `PyUnicode_FromString`, which stops at the first NUL. so there are two entries this
+    // could be given and neither means it: the truncation, and the `NULL` that stands for
+    // a definition with no docstring at all. either would have the compiled definition
+    // answer `__doc__` with something its interpreted twin does not, which is worth more
+    // than the compilation
+    assert_eq!(
+        declines(
+            "\
+def described() -> int:
+    \"before\\0after\"
+    return 1
+"
+        ),
+        [(
+            "described".to_string(),
+            "a docstring containing a NUL has no faithful spelling in a method table".to_string()
         )]
     );
 }
@@ -2948,6 +3005,206 @@ class Fine:
                 "a `__slots__` entry is not a literal name".to_string()
             ),
         ]
+    );
+}
+
+/// a weak reference taken a whole function away from the instance it is of
+///
+/// the same fact the `__slots__` case above turns on — a type spec adds no `__weakref__`
+/// — and the frontend refuses `weakref.ref(self)` where it is written. but
+/// `logging.Handler.__init__` does not write one: it calls `_addHandlerRef(self)`, whose
+/// body takes the reference, and no predicate over `__init__`'s own body can see that.
+/// so the refusal is carried back to the caller that hands the instance over, and
+/// declining that caller is what keeps its class interpreted — which is a class a weak
+/// reference *can* be made of
+#[test]
+fn a_caller_that_hands_an_instance_to_a_weak_reference_is_declined() {
+    let reasons = declines(
+        "\
+import weakref
+
+registry = []
+
+
+def registers(thing):
+    registry.append(weakref.ref(thing))
+
+
+class Handler:
+    def __init__(self):
+        registers(self)
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![(
+            "Handler".to_string(),
+            "`registers` takes a weak reference of what it is handed, and an emitted instance is its layout — a type spec adds no `__weakref__`, so no weak reference of one can be made".to_string()
+        )]
+    );
+}
+
+/// and the cascade goes as far as the calls do
+///
+/// a frame between the receiver and the weak reference is one more function the answer
+/// has to travel through, which the pruner's own loop does. handing over something that
+/// is not an instance of ours costs nothing at all: an object from anywhere else carries
+/// a `__weakref__` of its own
+#[test]
+fn only_a_caller_handing_over_an_instance_of_ours_is_declined() {
+    let reasons = declines(
+        "\
+import weakref
+
+registry = []
+
+
+def registers(thing):
+    registry.append(weakref.ref(thing))
+
+
+def forwards(thing):
+    registers(thing)
+
+
+class Handler:
+    def __init__(self):
+        forwards(self)
+
+
+def registers_a_stranger(other: object) -> None:
+    registers(other)
+",
+    );
+    assert_eq!(
+        reasons
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["Handler"]
+    );
+    assert!(
+        reasons[0]
+            .1
+            .starts_with("`forwards` takes a weak reference"),
+        "gave `{}`",
+        reasons[0].1
+    );
+}
+
+/// a weak reference of something the receiver *holds* is not a weak reference of the
+/// receiver
+///
+/// `multiprocessing.queues.Queue._start_thread` writes `weakref.ref(self._thread)`, and
+/// a `threading.Thread` is not a `Queue`. the refusal is about the *place* rather than
+/// about the spelling: a field whose type no instance of ours is assignable to can hold
+/// none of them, so nothing about the call raises and nothing about it is turned down
+#[test]
+fn a_weak_reference_of_a_field_no_instance_of_ours_can_reach_is_kept() {
+    let reasons = declines(
+        "\
+import threading
+import weakref
+
+registry = []
+
+
+class Queue:
+    def __init__(self, thread: threading.Thread) -> None:
+        self.thread = thread
+
+    def watch(self) -> None:
+        registry.append(weakref.ref(self.thread))
+
+    def start(self) -> None:
+        self.watch()
+",
+    );
+    assert_eq!(reasons, Vec::new());
+}
+
+/// and where an instance of ours *can* be standing there, the refusal stays
+///
+/// `Holder.node` is declared as a class this module lays out, so the reference is of an
+/// emitted instance and raises. that is turned down where it is written rather than
+/// carried back to a caller: the frame that reads the field is the frame that raises,
+/// and no caller of it is handing the instance over
+#[test]
+fn a_weak_reference_of_a_field_declared_as_one_of_ours_is_declined() {
+    let reasons = declines(
+        "\
+import weakref
+
+registry = []
+
+
+class Node:
+    def __init__(self) -> None:
+        self.tag = 1
+
+
+class Holder:
+    def __init__(self, node: Node) -> None:
+        self.node = node
+
+    def watch(self) -> None:
+        registry.append(weakref.ref(self.node))
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![(
+            "Holder".to_string(),
+            "an emitted instance is its layout and a type spec adds no `__weakref__`, so a weak reference to one cannot be made".to_string()
+        )]
+    );
+}
+
+/// a field declared `object` is a place an instance of ours fits, so the frame stays
+/// marked and its callers are still turned down
+///
+/// this is what says the question asked is assignability and not a match on a class's
+/// name: nothing here writes `Node` anywhere near the weak reference, and `object` is a
+/// place every one of ours can stand in
+#[test]
+fn a_weak_reference_of_a_field_declared_object_still_reaches_its_callers() {
+    let reasons = declines(
+        "\
+import weakref
+
+registry = []
+
+
+class Node:
+    def __init__(self) -> None:
+        self.tag = 1
+
+
+class Holder:
+    def __init__(self, held: object) -> None:
+        self.held = held
+
+    def watch(self) -> None:
+        registry.append(weakref.ref(self.held))
+
+
+def runs(holder: Holder) -> None:
+    holder.watch()
+",
+    );
+    assert_eq!(
+        reasons
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["runs"]
+    );
+    assert!(
+        reasons[0]
+            .1
+            .starts_with("`Holder.watch` takes a weak reference"),
+        "gave `{}`",
+        reasons[0].1
     );
 }
 
@@ -8727,10 +8984,11 @@ fn the_frame_reading_builtins_are_declined() {
 }
 
 /// `warnings.warn` blames a frame counted back from its own caller, and the count
-/// starts one frame further out when the caller is compiled. at the default stack
-/// level there is no count to get wrong, so the call is lowered instead
+/// starts one frame further out when the caller is compiled. the one frame that is
+/// missing is this function's own, and the lowering supplies it, so the call is
+/// lowered however the level is written
 #[test]
-fn a_warning_at_the_default_level_is_lowered_however_it_is_reached() {
+fn a_warning_at_a_written_level_is_lowered_however_it_is_reached() {
     for source in [
         "\
 import warnings
@@ -8777,6 +9035,30 @@ import warnings
 def f() -> None:
     warnings.warn('gone', DeprecationWarning, 1, None)
 ",
+        // above the default level the walk is written out rather than counted, so
+        // these are lowered too
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning, stacklevel=2)
+",
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning, 3)
+",
+        // a level no stack is ever that deep for lands where python lands: off the end
+        "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning, stacklevel=1000000000000)
+",
     ] {
         assert_eq!(declines(source), vec![], "{source}");
     }
@@ -8805,16 +9087,15 @@ def f() -> None:
 #[test]
 fn a_warning_the_compiler_cannot_place_is_declined_for_its_own_reason() {
     for (call, expected) in [
-        // the caller's frame, which may belong to another compiled function that
-        // pushed none either
-        (
-            "warnings.warn('m', UserWarning, stacklevel=2)",
-            "above `stacklevel=1`",
-        ),
-        ("warnings.warn('m', UserWarning, 3)", "above `stacklevel=1`"),
+        // how far the walk goes has to be settled here, because the walk is written
+        // into the call rather than counted at it
         (
             "warnings.warn('m', UserWarning, stacklevel=level)",
-            "computed `stacklevel`",
+            "`stacklevel` written out",
+        ),
+        (
+            "warnings.warn('m', UserWarning, stacklevel=level + 1)",
+            "`stacklevel` written out",
         ),
         // the keyword forces the level to at least two, and does not exist at all
         // before 3.12 — so accepting even an empty one would answer where python raised
@@ -8858,6 +9139,167 @@ def f(level: int, rest: tuple) -> None:
             "{call} gave `{reason}`, which does not mention {expected}"
         );
     }
+}
+
+/// the level the walk is given is the one the call wrote, held to a floor of one
+///
+/// the behavioural tests in `by_build` say the warning lands where python lands; this
+/// says the number that decides where reaches the op at all, because a level dropped on
+/// the way through would leave every one of them at the default and still lower
+#[test]
+fn a_warning_carries_the_level_it_was_written_with() {
+    for (written, level) in [
+        ("", 1),
+        (", stacklevel=1", 1),
+        (", stacklevel=0", 1),
+        (", stacklevel=-3", 1),
+        (", stacklevel=2", 2),
+        (", 7", 7),
+        (", stacklevel=1000000000000", 2_147_483_647),
+    ] {
+        let rendered = ir(&format!(
+            "\
+import warnings
+
+
+def f() -> None:
+    warnings.warn('gone', DeprecationWarning{written})
+"
+        ));
+        assert!(
+            rendered.contains(&format!(" up {level} at ")),
+            "`{written}` lowered to\n{rendered}"
+        );
+    }
+}
+
+/// a warning above the default level written in a class body is lowered like any other
+///
+/// the refusal that used to stand here was a re-costing rather than a rule about frames:
+/// a method's decline is what keeps its class interpreted, so lowering one put a whole
+/// class under the compiler for the first time. the two failures that turned up when it
+/// was first tried — `logging.Handler()` over a weak reference taken through a helper,
+/// `fileinput.FileInput()` over `sys.flags` — were defects of their own and are fixed
+#[test]
+fn a_warning_above_the_default_level_in_a_class_body_is_lowered() {
+    assert_eq!(
+        declines(
+            "\
+import warnings
+
+
+class A:
+    def talks(self) -> None:
+        warnings.warn('talks', DeprecationWarning, stacklevel=2)
+"
+        ),
+        vec![]
+    );
+    // and the level it was written with reaches the op, which is what says the walk is
+    // written out rather than left at the default
+    assert!(
+        method_ir(
+            "\
+import warnings
+
+
+class A:
+    def talks(self) -> None:
+        warnings.warn('talks', DeprecationWarning, stacklevel=2)
+",
+            "A",
+            "talks",
+        )
+        .contains(" up 2 at "),
+    );
+}
+
+/// and a caller inside the class is what keeps the frame the warning would name
+///
+/// a method reached by a name is reached by the bare one, because a call through the
+/// object protocol writes no target down — so `A.talks` blames `A.speaks`, and `A` goes
+/// as a unit
+#[test]
+fn a_caller_of_a_warning_written_in_a_class_body_is_declined() {
+    assert_eq!(
+        declines(
+            "\
+import warnings
+
+
+class A:
+    def talks(self) -> None:
+        warnings.warn('talks', DeprecationWarning, stacklevel=2)
+
+    def speaks(self) -> None:
+        self.talks()
+"
+        ),
+        vec![(
+            "A".to_string(),
+            "`talks` warns about whoever called it, and this frame is the one it would name"
+                .to_string()
+        )]
+    );
+}
+
+/// a caller a warning would name is the definition that has to keep its frame
+///
+/// the walk written into the call reaches every frame below this function, but not this
+/// function's own caller when that caller is compiled: it pushes none, and the blame
+/// would land a module further out. so the caller declines, and for a level above two
+/// the ordinary cascade carries that on outwards
+#[test]
+fn a_caller_a_warning_would_name_is_declined() {
+    let reasons = declines(
+        "\
+import warnings
+
+
+def far() -> None:
+    warnings.warn('far', DeprecationWarning, stacklevel=2)
+
+
+def calls_far() -> None:
+    far()
+
+
+def calls_calls_far() -> None:
+    calls_far()
+",
+    );
+    assert_eq!(
+        reasons,
+        vec![
+            (
+                "calls_far".to_string(),
+                "`far` warns about whoever called it, and this frame is the one it would name"
+                    .to_string()
+            ),
+            (
+                "calls_calls_far".to_string(),
+                "`calls_far` declined, so a call has no target".to_string()
+            ),
+        ]
+    );
+    // and a call to one that warns at the default level costs its caller nothing: the
+    // frame that warning names is the callee's own, which the lowering already has
+    assert_eq!(
+        declines(
+            "\
+import warnings
+
+
+def near() -> None:
+    warnings.warn('near', DeprecationWarning)
+
+
+def calls_near() -> None:
+    near()
+"
+        ),
+        vec![]
+    );
 }
 
 /// `vars(x)` and `dir(x)` are about the object they are handed, not about a frame

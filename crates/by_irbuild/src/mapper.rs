@@ -175,16 +175,6 @@ pub fn map_fixed_tuple(
         .iter()
         .map(|element| map_type_with(db, env, *element, layouts).ok())
         .collect::<Option<Box<[RType]>>>()?;
-    // an instance of a class this module emits is a pointer to that class's struct,
-    // and the tuple structs are written out before any of them: a class field may
-    // itself be a fixed-length tuple, so the tuples have to come first. the pair
-    // stays on the heap rather than naming a type that does not exist yet
-    if slots
-        .iter()
-        .any(|slot| matches!(slot, RType::Instance { .. }))
-    {
-        return None;
-    }
     Some(RType::Tuple(slots))
 }
 

@@ -11,6 +11,7 @@
 mod closures;
 mod generators;
 pub mod mapper;
+pub mod shims;
 pub mod single_file;
 
 pub use single_file::module_from_source;
@@ -156,6 +157,12 @@ pub fn build_module(
     // every attribute a `del` anywhere in this module names — see `deleted_attributes`
     let deleted = deleted_attributes(suite);
 
+    let module_facts = ModuleFacts {
+        suite,
+        watched: &watched,
+        deleted: &deleted,
+    };
+
     // pass one: which classes get an emitted layout. a body cannot be lowered
     // until this is known, because whether `self.x` is a field read or a
     // `PyObject_GetAttr` depends on it.
@@ -187,7 +194,7 @@ pub fn build_module(
             if let Stmt::ClassDef(class) = stmt
                 && layouts.contains_key(class.name.as_str())
             {
-                match class_fields(db, env, model, suite, class, &layouts, &deleted) {
+                match class_fields(db, env, model, class, &layouts, module_facts) {
                     Ok(fields) => {
                         if layouts.get(class.name.as_str()) != Some(&fields) {
                             layouts.insert(class.name.to_string(), fields);
@@ -598,9 +605,9 @@ pub fn build_module(
     // same time — nothing about standing in a block makes it a different statement.
     // `smtplib` writes `class SMTP_SSL(SMTP)` under `if _have_ssl:`, and reading only
     // the top level meant `SMTP` was emitted with nothing recorded as extending it.
-    // [`walk_with_cases`] stops at a nested `def` or `class`, which is the boundary
-    // that matters: what those write is bound somewhere other than the module namespace
-    let extends: Vec<(String, Vec<String>)> = walk_with_cases(suite)
+    // [`walk`] stops at a nested `def` or `class`, which is the boundary that matters:
+    // what those write is bound somewhere other than the module namespace
+    let extends: Vec<(String, Vec<String>)> = walk(suite)
         .into_iter()
         .filter_map(|stmt| match stmt {
             Stmt::ClassDef(class) => Some((
@@ -1023,6 +1030,9 @@ fn lower_generator_constructor(
     let mut builder = FunctionBuilder::new(function.name.to_string(), RType::OBJECT);
     builder.at(span(function.range));
     builder.decorators(decorators);
+    // this is the function the name holds, so it is the one `__doc__` is asked of —
+    // the resume body below it is never reached through a name at all
+    builder.doc(docstring(&function.body)?);
     builder.defaults(defaults);
     builder.variadic(vararg, kwarg);
     builder.binding_kinds(posonly, kwonly);
@@ -1159,6 +1169,7 @@ fn lower_resume(
         globals: declared_globals(&function.body),
         native_callees,
         decorated: unit.decorated,
+        suite: unit.suite,
         layouts,
         methods,
         signatures,
@@ -1432,9 +1443,80 @@ fn prune_unbuildable(
             .all_functions()
             .map(Function::qualified_name)
             .collect();
+        // the functions whose warnings are blamed on whoever called them
+        //
+        // `warnings.warn` above the default stack level names a frame further out than
+        // the function that wrote it, and the nearest of those is this caller's. a
+        // compiled caller pushes none, so it would be walked straight past and a frame
+        // outside this module would carry the blame — which is a wrong answer rather
+        // than a slower one. so the *caller* is the one that has to keep its
+        // interpreted definition, and the cascade below carries that on outwards for
+        // the levels above two.
+        //
+        // a call through the object protocol names no target, so a definition that is
+        // emitted as a method is matched by the name it is written with instead. a
+        // nested `def` is one of those — it becomes a method of its environment class —
+        // so a function that warns from inside one is reached by name and nothing else.
+        // *reading* the name counts as much as calling it, because a call written
+        // `Owner.method(self, *args)` reaches the method through a value and the name is
+        // the last place it is written down. matching a bare name turns down more frames
+        // than reach one of these, which is the direction to err in.
+        //
+        // a caller that reaches one of these without writing its name — out of a
+        // dispatch table, or through `getattr` — or one in another module, is a
+        // compiled frame in the way that nothing in this module can see
+        let warns_further_out = |function: &Function| {
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.ops)
+                .any(|op| matches!(op, Op::Warn { stacklevel, .. } if *stacklevel > 1))
+        };
+        let blamed: HashSet<String> = module
+            .all_functions()
+            .filter(|function| warns_further_out(function))
+            .map(Function::qualified_name)
+            .collect();
+        let blamed_methods: HashSet<String> = module
+            .all_functions()
+            .filter(|function| function.owner.is_some() && warns_further_out(function))
+            .map(|function| function.name.clone())
+            .collect();
+        let named_receivers = NamedReceivers {
+            classes: &classes,
+            extends,
+            disturbed,
+        };
+        let (weak_referencing, weak_referencing_methods) =
+            weak_referencing_closure(module, &named_receivers);
         let anchors = storage_anchors(module);
 
         let unbuildable = |function: &Function| -> Option<String> {
+            // both walk every op the function holds, so they are worked out only where
+            // something in this module takes a weak reference at all — which most do not
+            let takes_one = !weak_referencing.is_empty();
+            let ours = if takes_one {
+                instance_registers(function)
+            } else {
+                HashSet::new()
+            };
+            let one_of_ours =
+                |value: &Value| matches!(value, Value::Register(id) if ours.contains(id));
+            let handed_one_of_ours = |args: &[Value]| args.iter().any(&one_of_ours);
+            let named = if takes_one {
+                named_receivers.in_function(function)
+            } else {
+                HashMap::new()
+            };
+            let reaches_a_weak_reference = |receiver: &Value, name: &str| {
+                named_receivers.reaches(
+                    &named,
+                    receiver,
+                    name,
+                    &weak_referencing,
+                    &weak_referencing_methods,
+                )
+            };
             // an edition is only ever reached from a call written against the name its
             // definition is installed under, so it is only the right call while that
             // definition is still what the module holds
@@ -1457,11 +1539,39 @@ fn prune_unbuildable(
             }
             for op in function.blocks.iter().flat_map(|block| &block.ops) {
                 match op {
-                    Op::CallNative { owner, callee, .. } => {
+                    Op::CallNative {
+                        owner,
+                        callee,
+                        args,
+                        ..
+                    } => {
                         let target = qualify(owner.as_deref(), callee);
                         if !targets.contains(&target) {
                             return Some(format!("`{target}` declined, so a call has no target"));
                         }
+                        if blamed.contains(&target) {
+                            return Some(format!(
+                                "`{target}` warns about whoever called it, and this frame is the one it would name"
+                            ));
+                        }
+                        if weak_referencing.contains(&target) && handed_one_of_ours(args) {
+                            return Some(weakly_referenced(&target));
+                        }
+                    }
+                    // a decorated definition is called through the module namespace even
+                    // though this unit owns it, which is the one way a call to one of
+                    // ours is spelled like a call to something else
+                    Op::CallPython { callee, args, .. }
+                        if weak_referencing.contains(callee) && handed_one_of_ours(args) =>
+                    {
+                        return Some(weakly_referenced(callee));
+                    }
+                    Op::CallMethod { name, .. } | Op::GetAttr { name, .. }
+                        if blamed_methods.contains(name.as_str()) =>
+                    {
+                        return Some(format!(
+                            "`{name}` warns about whoever called it, and this frame is the one it would name"
+                        ));
                     }
                     Op::GetField { class, .. } | Op::SetField { class, .. }
                         if !classes.contains(class.as_str()) =>
@@ -1469,6 +1579,24 @@ fn prune_unbuildable(
                         return Some(format!("`{class}` declined, so it has no layout"));
                     }
                     _ => {}
+                }
+            }
+            // a call through the object protocol names no target, so a method is matched
+            // by the name it is written with. that is a blunt instrument where the name
+            // is a dunder every class writes — `Handler.__init__` calls `Filterer.__init__`
+            // — so it is asked last, and a call that names its target answers first with
+            // the function it actually names
+            for op in function.blocks.iter().flat_map(|block| &block.ops) {
+                if let Op::CallMethod {
+                    receiver,
+                    name,
+                    args,
+                    ..
+                } = op
+                    && reaches_a_weak_reference(receiver, name)
+                    && (one_of_ours(receiver) || handed_one_of_ours(args))
+                {
+                    return Some(weakly_referenced(name));
                 }
             }
             None
@@ -1570,6 +1698,238 @@ fn prune_unbuildable(
         }
         module.declined.extend(fresh);
     }
+}
+
+/// every function in this module a value handed over may reach a weak reference through,
+/// by qualified name and — for the ones emitted as methods — by the bare name a call
+/// through the object protocol writes
+///
+/// an emitted instance cannot be the target of a weak reference, and the frontend refuses
+/// `weakref.ref(self)` where it is written. `logging.Handler.__init__` writes none: it
+/// calls `_addHandlerRef(self)`, whose body takes the reference, so nothing about
+/// `__init__`'s own body says it raises. the frontend marks the frame that writes the
+/// call, and this closes those marks over the module's calls — a frame that hands a value
+/// on to a marked one is one more function standing between an instance and the
+/// reference, so it is marked too. `prune_unbuildable` then declines whoever hands one of
+/// these an instance of ours, which is what keeps that instance's class interpreted, and
+/// an interpreted class is one a weak reference *can* be made of.
+///
+/// what is out of reach stays out of reach: a caller in another module, and one that
+/// reaches a frame through a value rather than by a name. a call whose arguments are all
+/// immediates is left out because it forwards nothing — an `int` the callee was written
+/// with is not the caller's instance
+fn weak_referencing_closure(
+    module: &ModuleIr,
+    named_receivers: &NamedReceivers<'_>,
+) -> (HashSet<String>, HashSet<String>) {
+    let mut reaching: HashSet<String> = module
+        .all_functions()
+        .filter(|function| function.takes_a_weak_reference)
+        .map(Function::qualified_name)
+        .collect();
+    // most modules take no weak reference at all, and the walk below is over every op
+    // every function holds
+    if reaching.is_empty() {
+        return (reaching, HashSet::new());
+    }
+    let forwards = |values: &[Value]| {
+        values
+            .iter()
+            .any(|value| matches!(value, Value::Register(_)))
+    };
+    // bounded by the function count: a round either adds one of a finite set or stops
+    for _ in 0..=module.all_functions().count() {
+        let by_bare_name = bare_method_names(module, &reaching);
+        let joining: Vec<String> = module
+            .all_functions()
+            .filter(|function| !reaching.contains(&function.qualified_name()))
+            .filter(|function| {
+                let named = named_receivers.in_function(function);
+                function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.ops)
+                    .any(|op| match op {
+                        Op::CallNative {
+                            owner,
+                            callee,
+                            args,
+                            ..
+                        } => {
+                            reaching.contains(&qualify(owner.as_deref(), callee)) && forwards(args)
+                        }
+                        // a decorated definition is called through the module namespace
+                        // even though this unit owns it
+                        Op::CallPython { callee, args, .. } => {
+                            reaching.contains(callee) && forwards(args)
+                        }
+                        Op::CallMethod {
+                            receiver,
+                            name,
+                            args,
+                            ..
+                        } => {
+                            named_receivers.reaches(
+                                &named,
+                                receiver,
+                                name,
+                                &reaching,
+                                &by_bare_name,
+                            ) && (matches!(receiver, Value::Register(_)) || forwards(args))
+                        }
+                        _ => false,
+                    })
+            })
+            .map(Function::qualified_name)
+            .collect();
+        if joining.is_empty() {
+            break;
+        }
+        reaching.extend(joining);
+    }
+    let by_bare_name = bare_method_names(module, &reaching);
+    (reaching, by_bare_name)
+}
+
+/// the bare names of the methods in `reaching`, which is all a call through the object
+/// protocol writes down
+fn bare_method_names(module: &ModuleIr, reaching: &HashSet<String>) -> HashSet<String> {
+    module
+        .all_functions()
+        .filter(|function| {
+            function.owner.is_some() && reaching.contains(&function.qualified_name())
+        })
+        .map(|function| function.name.clone())
+        .collect()
+}
+
+/// how a call written `receiver.name(...)` is matched against a set of functions
+///
+/// a receiver that names a class this module writes settles which method the call means:
+/// `Base.__init__(self)` is `Base`'s constructor, or the nearest one above it that writes
+/// one. that distinction is what keeps the match from being a name alone — one weakly
+/// referencing `__init__` in the module would otherwise be matched in every other class's,
+/// and `logging.Logger` would decline over `logging.Handler`'s.
+///
+/// anything else reaches a method through the object protocol, which names no target, so
+/// the bare name is all there is to match on
+struct NamedReceivers<'a> {
+    /// the classes this module still means to emit
+    classes: &'a HashSet<String>,
+    /// every class the module writes and the names its header extends
+    extends: &'a [(String, Vec<String>)],
+    disturbed: &'a Disturbed,
+}
+
+impl NamedReceivers<'_> {
+    /// which class each register in `function` holds the type object of, where the frame
+    /// read one by name
+    ///
+    /// a name the module body rebinds stands for whatever the rebind left there rather
+    /// than for the class, so it is left out and the bare-name match answers instead
+    fn in_function<'f>(&self, function: &'f Function) -> HashMap<RegisterId, &'f str> {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .filter_map(|op| match op {
+                Op::LoadClass { dest, class } => Some((*dest, class.as_str())),
+                Op::LoadGlobal { dest, name }
+                    if self.classes.contains(name.as_str())
+                        && !self.disturbed.rebound.contains(name) =>
+                {
+                    Some((*dest, name.as_str()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// whether `receiver.name(...)` may reach one of `reaching`
+    fn reaches(
+        &self,
+        named: &HashMap<RegisterId, &str>,
+        receiver: &Value,
+        name: &str,
+        reaching: &HashSet<String>,
+        by_bare_name: &HashSet<String>,
+    ) -> bool {
+        match receiver {
+            Value::Register(id) if let Some(class) = named.get(id) => self
+                .ancestry(class)
+                .iter()
+                .any(|owner| reaching.contains(&qualify(Some(owner), name))),
+            _ => by_bare_name.contains(name),
+        }
+    }
+
+    /// `class` and every class it stands on, through the header names the module wrote
+    fn ancestry(&self, class: &str) -> Vec<String> {
+        let mut seen = vec![class.to_string()];
+        let mut index = 0;
+        // `seen` only ever takes a name it does not already hold, and the names come from
+        // a finite table, so a base cycle stops rather than spinning
+        while index < seen.len() {
+            let current = seen[index].clone();
+            index += 1;
+            for base in self
+                .extends
+                .iter()
+                .filter(|(name, _)| *name == current)
+                .flat_map(|(_, bases)| bases)
+            {
+                if !seen.contains(base) {
+                    seen.push(base.clone());
+                }
+            }
+        }
+        seen
+    }
+}
+
+/// why a frame that hands an instance of ours to `target` cannot be built
+fn weakly_referenced(target: &str) -> String {
+    format!(
+        "`{target}` takes a weak reference of what it is handed, and an emitted instance is its layout — a type spec adds no `__weakref__`, so no weak reference of one can be made"
+    )
+}
+
+/// every register in `function` that can be holding an instance of a class this module
+/// lays out
+///
+/// a register's own representation says so wherever the lowering kept one. `Box` is
+/// where it stops saying so: widening an instance to `object` to hand it to a function
+/// that takes no annotation leaves a register typed `object` holding the very same
+/// instance, and that widening stands between `Handler.__init__`'s receiver and the
+/// `_addHandlerRef(self)` that would raise over it. so the two ops that only move a
+/// value along carry the answer with them
+fn instance_registers(function: &Function) -> HashSet<RegisterId> {
+    let mut ours: HashSet<RegisterId> = function
+        .registers
+        .iter()
+        .enumerate()
+        .filter(|(_, register)| !register.ty.instance_classes().is_empty())
+        .map(|(index, _)| RegisterId(index))
+        .collect();
+    // a move may stand anywhere among the blocks, including before the one that wrote
+    // its source, so this runs until it settles. a round can only add registers and
+    // there are no more than the function declares, so it settles
+    for _ in 0..=function.registers.len() {
+        let mut grew = false;
+        for op in function.blocks.iter().flat_map(|block| &block.ops) {
+            let (dest, src) = match op {
+                Op::Box { dest, src } | Op::Assign { dest, src } => (*dest, src),
+                _ => continue,
+            };
+            if matches!(src, Value::Register(id) if ours.contains(id)) && ours.insert(dest) {
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    ours
 }
 
 /// every class an emitted one keeps storage inside an instance of
@@ -1720,10 +2080,23 @@ fn lower_class<'a>(
     // class form with a field-initializing constructor — which is exactly what a
     // fixed layout needs. a plain class with bare annotations has no constructor
     // in the interpreted build either, so compiling one would invent behaviour
-    let (is_data, class_decorators, wrote_a_decorator) = class_modifiers(db, model, class)?;
+    // `class_fields` below asks what the decorators cost, so only whether there are any
+    // matters here
+    let (is_data, class_decorators, _) = class_modifiers(db, model, class)?;
     let base = base_class(db, env, model, suite, class, layouts)?;
 
-    let fields = class_fields(db, env, model, suite, class, layouts, deleted)?;
+    let fields = class_fields(
+        db,
+        env,
+        model,
+        class,
+        layouts,
+        ModuleFacts {
+            suite,
+            watched: unit.watched,
+            deleted,
+        },
+    )?;
     // the `@property` pairs, worked out before any method is lowered: the two halves of
     // one are both written `def value`, so a pass that took them one at a time would see
     // a name defined twice rather than the single attribute python builds out of them
@@ -1969,11 +2342,6 @@ fn lower_class<'a>(
             "a property half named `{clash}` reaches the same symbol as a method of this class"
         )));
     }
-    // this class's own decorators are applied at init and taken out of the twin's source,
-    // so the module body must not reach the class in the window between the twin's
-    // `class` statement and init — everything it bound in that window keeps the
-    // definition nothing had decorated yet
-    decorator_effects_stay_unseen(unit.watched, class.name.as_str(), wrote_a_decorator)?;
     Ok((
         by_ir::function::ClassIr {
             resume: None,
@@ -2273,8 +2641,8 @@ fn receiver_writes<'a>(
 /// every statement a body contains, however deeply — the bodies of nested `def`s and
 /// `class`es included
 ///
-/// [`walk`] and [`walk_with_cases`] deliberately stop at a nested definition, because
-/// what a nested frame binds is not what this one binds. a question about the *values* a
+/// [`walk`] deliberately stops at a nested definition, because what a nested frame
+/// binds is not what this one binds. a question about the *values* a
 /// frame reaches has no such boundary: a closure reads the enclosing frame's names, so a
 /// write it makes is a write this frame's receiver sees
 fn every_statement(body: &[Stmt]) -> Vec<&Stmt> {
@@ -2523,7 +2891,7 @@ fn init_fields(
     // storing something the struct cannot hold
     let mut widths: Vec<(String, RType)> = Vec::new();
     for (method, receiver) in &methods {
-        for statement in walk_with_cases(&method.body) {
+        for statement in walk(&method.body) {
             for (name, target) in receiver_writes(statement, receiver, Some(&class.name))? {
                 if properties.contains(&name) {
                     continue;
@@ -2788,76 +3156,7 @@ fn class_modifiers(
             }
         }
     }
-    if !applied.is_empty()
-        && let Some(unwritten) = published_beyond_the_body(class)
-    {
-        return Err(Decline::new(format!(
-            "an emitted type publishes `{unwritten}` alongside a method this class writes, and a decorator reads the class it is handed"
-        )));
-    }
     Ok((is_data, applied, written))
-}
-
-/// the dunders an emitted type publishes alongside this one, because they share a slot
-///
-/// python reaches these through a *slot* rather than by name, and one slot backs several
-/// names: `tp_richcompare` backs all six comparisons, every binary numeric slot backs an
-/// operator and its reflection, and `mp_ass_subscript` backs `__setitem__` along with
-/// `__delitem__`. the type publishes a wrapper for each name a filled slot backs, so a
-/// class that writes one of a group gets the whole group and the rest answer
-/// `NotImplemented`.
-///
-/// the groups are `COMPARISONS`, `ARITHMETIC`, `POWER` and `slot_companion` in
-/// `by_codegen_c`, which sits downstream of this crate and cannot be asked from here
-fn shares_a_slot(name: &str) -> &'static [&'static str] {
-    const GROUPS: &[&[&str]] = &[
-        &["__lt__", "__le__", "__eq__", "__ne__", "__gt__", "__ge__"],
-        &["__add__", "__radd__"],
-        &["__sub__", "__rsub__"],
-        &["__mul__", "__rmul__"],
-        &["__truediv__", "__rtruediv__"],
-        &["__floordiv__", "__rfloordiv__"],
-        &["__mod__", "__rmod__"],
-        &["__divmod__", "__rdivmod__"],
-        &["__lshift__", "__rlshift__"],
-        &["__rshift__", "__rrshift__"],
-        &["__and__", "__rand__"],
-        &["__xor__", "__rxor__"],
-        &["__or__", "__ror__"],
-        &["__matmul__", "__rmatmul__"],
-        &["__pow__", "__rpow__"],
-        &["__setitem__", "__delitem__"],
-    ];
-    GROUPS
-        .iter()
-        .find(|group| group.contains(&name))
-        .copied()
-        .unwrap_or(&[])
-}
-
-/// a name the emitted type would publish that the class body never wrote, where the
-/// class writes any method at all that shares its slot with one
-///
-/// this is what stops a decorator being handed a class the `class` statement did not
-/// write. `@functools.total_ordering` is the shape that proves it matters: it fills in
-/// the comparisons a class left out, saw `__le__` already published, added nothing — and
-/// `a <= b` then raised where the interpreted class answered `True`
-fn published_beyond_the_body(class: &ast::StmtClassDef) -> Option<&'static str> {
-    let written = |name: &str| {
-        class
-            .body
-            .iter()
-            .any(|statement| matches!(statement, Stmt::FunctionDef(method) if method.name.as_str() == name))
-    };
-    class.body.iter().find_map(|statement| {
-        let Stmt::FunctionDef(method) = statement else {
-            return None;
-        };
-        shares_a_slot(method.name.as_str())
-            .iter()
-            .copied()
-            .find(|name| !written(name))
-    })
 }
 
 /// what a modifier keyword means to the native build
@@ -4297,22 +4596,50 @@ fn stores_through_setattr(class: &ast::StmtClassDef) -> bool {
     })
 }
 
+/// what a class's layout is decided against beyond its own `class` statement
+///
+/// three module-wide readings, all of them about what the *rest* of the module does: the
+/// body a base is resolved in, the definitions that body goes on running below, and the
+/// attributes a `del` anywhere in it names
+#[derive(Clone, Copy)]
+struct ModuleFacts<'a> {
+    suite: &'a [Stmt],
+    watched: &'a BTreeSet<&'a str>,
+    deleted: &'a HashSet<String>,
+}
+
 /// the declared fields of a class, or a decline explaining why it has no layout
 fn class_fields(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
-    suite: &[Stmt],
     class: &ast::StmtClassDef,
     layouts: &Layouts,
-    deleted: &HashSet<String>,
+    module: ModuleFacts<'_>,
 ) -> Lowered<Vec<by_ir::function::FieldDecl>> {
+    let ModuleFacts {
+        suite,
+        watched,
+        deleted,
+    } = module;
     if stores_through_setattr(class) {
         return Err(Decline::new(
             "a `setattr` on the receiver names its attribute at runtime",
         ));
     }
-    let (is_data, _, _) = class_modifiers(db, model, class)?;
+    let (is_data, _, wrote_a_decorator) = class_modifiers(db, model, class)?;
+    // this class's own decorators are applied at init and taken out of the twin's source,
+    // so the module body must not reach the class in the window between the twin's
+    // `class` statement and init — everything it bound in that window keeps the
+    // definition nothing had decorated yet.
+    //
+    // it is asked *here*, where a layout is decided, rather than where the class is
+    // lowered. a class that keeps its layout and then declines is one every other class
+    // has already been lowered against — `Trace` holds a `Traceback`, so `Trace` declines
+    // for a layout that is no longer there, and so does everything holding a `Trace`.
+    // refusing the layout instead leaves the class an ordinary object to the rest of the
+    // module, which is what a declining class is
+    decorator_effects_stay_unseen(watched, class.name.as_str(), wrote_a_decorator)?;
     let base = base_class(db, env, model, suite, class, layouts)?;
 
     // a subclass's struct *begins* with its base's fields, in the same order and
@@ -5378,6 +5705,34 @@ fn lower_function(
     lower_function_with_receiver(unit, function, None, None, &[], Frame::AsWritten)
 }
 
+/// the string python would answer `__doc__` with, where the body opens with one
+///
+/// only a `str` literal, and only the first statement: `b"..."` first is not a docstring
+/// and neither is an f-string, which is a *format* rather than a constant. implicit
+/// concatenation is one literal already, so `"a" "b"` arrives here joined.
+///
+/// a docstring holding a NUL declines the definition. the method table spells `ml_doc` as
+/// a `const char *`, which python reads with `PyUnicode_FromString` and so reads no
+/// further than the first NUL — there is no entry that means this string, and both of the
+/// entries that could be written (the truncation, and the `NULL` that means "no
+/// docstring") would have the compiled definition quietly answer `__doc__` with something
+/// its interpreted twin does not
+fn docstring(body: &[Stmt]) -> Lowered<Option<String>> {
+    let Some(Stmt::Expr(node)) = body.first() else {
+        return Ok(None);
+    };
+    let Expr::StringLiteral(literal) = node.value.as_ref() else {
+        return Ok(None);
+    };
+    let text = literal.value.to_str();
+    if text.contains('\0') {
+        return Err(Decline::new(
+            "a docstring containing a NUL has no faithful spelling in a method table",
+        ));
+    }
+    Ok(Some(text.to_string()))
+}
+
 /// which frame a body is being given
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Frame {
@@ -5727,6 +6082,7 @@ fn lower_function_with_receiver(
     let mut builder = FunctionBuilder::new(function.name.to_string(), ret.clone());
     builder.at(span(function.range));
     builder.decorators(decorators);
+    builder.doc(docstring(&function.body)?);
     builder.defaults(defaults);
     builder.variadic(vararg, kwarg);
     builder.binding_kinds(posonly, kwonly);
@@ -5968,6 +6324,7 @@ fn lower_function_with_receiver(
         globals: declared_global,
         native_callees,
         decorated: unit.decorated,
+        suite: unit.suite,
         layouts,
         methods,
         signatures,
@@ -6991,9 +7348,8 @@ fn tuple_return_type(
     }
     let mut found: Option<RType> = None;
     // every `return` has to be seen, a `case` body's included — one this missed would
-    // be lowered against a representation nothing proved it had. reaching further than
-    // [`return_type`] does can only make this refuse more often, never accept more
-    for stmt in walk_with_cases(body) {
+    // be lowered against a representation nothing proved it had
+    for stmt in walk(body) {
         let Stmt::Return(node) = stmt else { continue };
         // a bare `return` is `None`, and so is a body with no `return` at all
         let value = node.value.as_deref()?;
@@ -7315,6 +7671,19 @@ fn local_representations(
             Stmt::FunctionDef(node) => {
                 record(node.name.as_str(), RType::OBJECT, &mut found);
             }
+            // a `case` pattern binds the subject, or a piece of it, and
+            // [`Lowering::bind_pattern_name`] writes it as a plain object — so this is
+            // the other write whose representation is known without asking the checker.
+            // it has to be recorded because this is what says a name is a *local* of the
+            // frame: a name bound only by a pattern and left out here was read out of
+            // the module namespace by anything nested inside
+            Stmt::Match(node) => {
+                for case in &node.cases {
+                    for name in crate::closures::pattern_names(&case.pattern) {
+                        record(name, RType::OBJECT, &mut found);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -7459,7 +7828,19 @@ fn declared_globals(body: &[Stmt]) -> HashSet<String> {
         .collect()
 }
 
-/// every statement in `body`, including nested ones
+/// every statement in `body`, including nested ones — the body of every `match` case
+/// among them
+///
+/// a `case` body is a body like any other: what it binds, what it declares `global`, and
+/// what it reads all belong to the frame the `match` stands in. this walk once stopped at
+/// a `match`, and every pass built on it inherited that blindness silently: a name bound
+/// only in a case never reached the closure analysis, so a nested function captured
+/// nothing and read the name out of the module namespace, and a `global` declared in a
+/// case was not treated as a declaration at all, so the write stayed in a register the
+/// module never saw
+///
+/// the walk still stops at a nested `def` or `class`, which is a boundary that is real:
+/// what those bind is bound in a frame that is not this one
 fn walk(body: &[Stmt]) -> Vec<&Stmt> {
     let mut out = Vec::new();
     for stmt in body {
@@ -7489,6 +7870,11 @@ fn walk(body: &[Stmt]) -> Vec<&Stmt> {
                 out.extend(walk(&node.finalbody));
             }
             Stmt::With(node) => out.extend(walk(&node.body)),
+            Stmt::Match(node) => {
+                for case in &node.cases {
+                    out.extend(walk(&case.body));
+                }
+            }
             _ => {}
         }
     }
@@ -7528,25 +7914,6 @@ fn named_parameters(
         .chain(parameters.kwonlyargs.iter())
 }
 
-/// as [`walk`], reaching the body of every `case` as well
-///
-/// a `case` body is a body like any other and what it writes is a field like any other,
-/// so the field passes have to see into one. this is a step of their own rather than a
-/// widening of [`walk`] because that walk is shared with the passes that choose a
-/// register's representation, and a `match` arm arriving there changes what they choose
-fn walk_with_cases(body: &[Stmt]) -> Vec<&Stmt> {
-    let mut out = Vec::new();
-    for stmt in walk(body) {
-        out.push(stmt);
-        if let Stmt::Match(node) = stmt {
-            for case in &node.cases {
-                out.extend(walk_with_cases(&case.body));
-            }
-        }
-    }
-    out
-}
-
 struct Lowering<'a, 'db> {
     db: &'db dyn ty_python_semantic::Db,
     model: &'a SemanticModel<'db>,
@@ -7558,6 +7925,10 @@ struct Lowering<'a, 'db> {
     native_callees: &'a HashSet<String>,
     /// the module-level functions whose name a decorator rebinds
     decorated: &'a HashSet<String>,
+    /// the module body, so a value's type can be asked whether one of the classes
+    /// this module writes could be standing behind it — see
+    /// [`Lowering::could_be_one_of_ours`]
+    suite: &'a [Stmt],
     layouts: &'a Layouts,
     methods: &'a Methods,
     /// the signature of each module-level function, so a call coerces its arguments
@@ -13275,8 +13646,9 @@ impl Lowering<'_, '_> {
     /// `urllib.request.URLopener.__init__` warns with `stacklevel=3` and the compiled
     /// leg printed nothing, because the frame three back was no longer python's.
     ///
-    /// at the default stack level of one there is no walk to get wrong, and the call
-    /// is lowered rather than refused — see [`Self::a_warning`].
+    /// that one missing frame is filled in rather than refused, at every stack level —
+    /// see [`Self::a_warning`], which is where the shapes that are still refused are
+    /// listed.
     ///
     /// a stdlib function that walks frames for some *other* purpose —
     /// `inspect.stack`, `namedtuple` reading `__module__` off its caller — lands one
@@ -13329,11 +13701,24 @@ impl Lowering<'_, '_> {
     ///
     /// which snapshots a weak reference to the receiver where the `def` stands.
     ///
-    /// only an argument this frame can already see as an emitted instance — an
+    /// an argument this frame can already see as an emitted instance — an
     /// `RType::Instance` is exactly that, because a class from outside the module maps
-    /// to a plain object. a weak reference taken of one *reached* some other way is the
-    /// same wrong answer and this does not see it; that is the limitation itself, not
-    /// this gate
+    /// to a plain object — is refused here and now.
+    ///
+    /// where it cannot see one, the value still reached this frame from somewhere, and
+    /// the frame that sent it is where the answer is. `logging` is the shape:
+    /// `Handler.__init__` calls `_addHandlerRef(self)`, whose body writes the
+    /// `weakref.ref` a whole function away from the receiver it would raise over. so the
+    /// frame is marked instead, and [`prune_unbuildable`] carries the refusal back to
+    /// every caller in this module that hands it one of ours.
+    ///
+    /// a caller in *another* module is out of that reach, and so is one that reaches
+    /// this frame through a value rather than by its name
+    ///
+    /// and where the value's own type says no instance of ours can be standing behind
+    /// it, there is nothing for a caller to be blamed for and the frame is left alone.
+    /// `multiprocessing.queues` is the shape: `Queue._start_thread` writes
+    /// `weakref.ref(self._thread)`, and a `threading.Thread` is not a `Queue`
     fn a_weak_reference(&mut self, node: &ast::ExprCall) -> Lowered<()> {
         let written = match node.func.as_ref() {
             Expr::Attribute(attribute) => attribute.attr.as_str(),
@@ -13345,20 +13730,6 @@ impl Lowering<'_, '_> {
         if !matches!(written, "ref" | "proxy") {
             return Ok(());
         }
-        let Some(argument) = node.arguments.args.first() else {
-            return Ok(());
-        };
-        let emitted = match argument {
-            Expr::Name(name) => matches!(
-                self.place(name.id.as_str()),
-                Some(Place::Register(id))
-                    if matches!(self.register_type(id), Ok(RType::Instance { .. }))
-            ),
-            _ => false,
-        };
-        if !emitted {
-            return Ok(());
-        }
         // and identity, not spelling: `ref` is a name a great many modules bind to
         // something of their own
         let env = &self.model.program_environment();
@@ -13367,37 +13738,108 @@ impl Lowering<'_, '_> {
         {
             return Ok(());
         }
-        Err(Decline::new(
-            "an emitted instance is its layout and a type spec adds no `__weakref__`, so a weak reference to one cannot be made",
-        ))
+        let Some(referent) = node.arguments.args.first() else {
+            return Ok(());
+        };
+        let emitted = matches!(referent, Expr::Name(name) if matches!(
+            self.place(name.id.as_str()),
+            Some(Place::Register(id))
+                if matches!(self.register_type(id), Ok(RType::Instance { .. }))
+        )) || matches!(self.peek_type(referent), Ok(RType::Instance { .. }));
+        if emitted {
+            return Err(Decline::new(
+                "an emitted instance is its layout and a type spec adds no `__weakref__`, so a weak reference to one cannot be made",
+            ));
+        }
+        if !self.could_be_one_of_ours(referent) {
+            return Ok(());
+        }
+        self.builder.takes_a_weak_reference();
+        Ok(())
     }
 
-    /// `warnings.warn(...)` at the default stack level, lowered into the call it would
-    /// have made once it had counted the frames
+    /// whether an instance of a class this module lays out could be standing where
+    /// `expr` is read
+    ///
+    /// this is a question about the *place*, not about what happens to be in it: the
+    /// mapper answers [`RType::Instance`] only where the type names one of these
+    /// classes outright, and a value of one reaches a place typed as anything it is
+    /// assignable to. so every class the module writes is asked whether an instance of
+    /// it fits here, and a `self._thread` declared `threading.Thread | None` answers no
+    /// for all of them while a parameter with no annotation at all answers yes for
+    /// every one — gradual is assignable to everything.
+    ///
+    /// anything the question cannot be put to answers yes, because refusing is the safe
+    /// direction: an expression with no inferred type, a `class` statement with no class
+    /// type behind it, and a layout whose `class` statement this walk never reached
+    fn could_be_one_of_ours(&self, expr: &Expr) -> bool {
+        let env = &self.model.program_environment();
+        let Some(place) = expr.inferred_type(self.model) else {
+            return true;
+        };
+        let mut asked = 0usize;
+        for stmt in walk(self.suite) {
+            let Stmt::ClassDef(class) = stmt else {
+                continue;
+            };
+            if !self.layouts.contains_key(class.name.as_str()) {
+                continue;
+            }
+            asked += 1;
+            let Some(instance) = ty_python_semantic::basedpython_class_type(self.model, class)
+                .and_then(|ty| ty.basedpython_instance_of(self.db, env))
+            else {
+                return true;
+            };
+            if instance.is_assignable_to(self.db, env, place) {
+                return true;
+            }
+        }
+        asked != self.layouts.count()
+    }
+
+    /// `warnings.warn(...)` lowered into the call it would have made once it had
+    /// counted the frames
     ///
     /// `warn`'s whole use for a frame is to fill in four things: the file and line the
     /// warning is reported at, the `__name__` of the module to blame, and that module's
-    /// `__warningregistry__`. at a stack level of one the frame in question is this
-    /// very function's, so all four are known — the first two when the module is built,
-    /// the other two from the module namespace at the call — and `warn_explicit` takes
-    /// exactly them. see `By_Warn` in the runtime for the argument handling that has to
-    /// match `warn`'s own.
+    /// `__warningregistry__`. the count starts at this function's own frame, which is
+    /// the one frame a compiled function does not have — so at a stack level of one all
+    /// four are known here, the first two when the module is built and the other two
+    /// from the module namespace at the call, and above one the runtime counts the rest
+    /// from the frame this function would have stood on. `warn_explicit` takes exactly
+    /// those four either way. see `By_Warn` in the runtime for both walks and for the
+    /// argument handling that has to match `warn`'s own.
     ///
-    /// everything else is refused, and refused for its own reason:
+    /// a compiled function further down the stack is a frame python would have counted
+    /// and this walk cannot see. a caller in this module is turned down for that in
+    /// `prune_unbuildable`, which is the same reach the decline of this call used to
+    /// have; one that reaches this function through a value, or from another module, is
+    /// a frame nothing here can see — and declining this call never answered that
+    /// either, because the interpreted definition it would fall back to loses the same
+    /// frames below it. `inspect.stack` and `namedtuple` reading `__module__` off their
+    /// caller land short in the same way.
     ///
-    ///   - a stack level above one blames the *caller's* frame, and how many frames are
-    ///     missing under a compiled function is not a static question. a compiled
-    ///     function calling another compiled one loses both, so nothing at this call
-    ///     site can say how far out the real caller is
-    ///   - `skip_file_prefixes` forces the level to at least two, so it is the same
-    ///     question by another name
+    /// a stack level above one written in a *class body* used to be refused as well,
+    /// and for a reason that was not about frames: a method's decline is what keeps its
+    /// class interpreted, so lowering one puts a whole class under the compiler for the
+    /// first time. what that first re-costing turned up was `logging.Handler()` raising
+    /// over a weak reference taken through a helper and `fileinput.FileInput()` raising
+    /// over `sys.flags` — two defects of their own, both since fixed, and neither a
+    /// warning defect. so the refusal is gone and what a class body writes is lowered
+    /// like anything else.
+    ///
+    /// what is refused is refused for its own reason:
+    ///
+    ///   - a computed `stacklevel` decides how far the walk goes, and the runtime
+    ///     helper takes a written one
+    ///   - `skip_file_prefixes` walks past files by name, which is a second rule on top
+    ///     of the one the helper reproduces
     ///   - `source` is what `warn` hands `warn_explicit` for `tracemalloc` to hang a
     ///     traceback off, and the public `warn_explicit` entry point takes none
     ///   - a `*` or `**` in the call, or an argument this does not know the name of,
     ///     leaves which value is which unsettled
     fn a_warning(&mut self, node: &ast::ExprCall) -> Lowered<(Value, RType)> {
-        const A_WALK: &str = "`warnings.warn` above `stacklevel=1` blames a frame counted back from its caller, and a compiled function pushes none";
-
         // a `*` or a `**` moves every argument after it, so which one fills which
         // parameter is not knowable here
         if node.arguments.args.iter().any(Expr::is_starred_expr)
@@ -13426,27 +13868,29 @@ impl Lowering<'_, '_> {
                 ));
             }
         }
-        // a level at or below one is this frame's own, which is the whole of what makes
-        // the lowering possible. zero and negatives land there too: `warn` walks
-        // `stacklevel - 1` frames and never fewer than none
-        if let Some(written) = node.arguments.find_argument_value("stacklevel", 2) {
-            match literal_int(written) {
-                Some(level) if level <= 1 => {}
-                Some(_) => return Err(Decline::new(A_WALK)),
+        // zero and negatives are held at one, which is what `warn`'s own walk does with
+        // them: it steps back `stacklevel - 1` frames and never fewer than none
+        //
+        // a level beyond `i32` is held at the largest one the runtime helper takes,
+        // which walks off the end of the stack exactly as the written one would
+        let stacklevel = match node.arguments.find_argument_value("stacklevel", 2) {
+            Some(written) => match literal_int(written) {
+                Some(level) => u32::try_from(level.clamp(1, i64::from(i32::MAX))).unwrap_or(1),
                 None => {
                     return Err(Decline::new(
-                        "`warnings.warn` with a computed `stacklevel` cannot be told from a frame walk",
+                        "`warnings.warn` needs its `stacklevel` written out to say how far the walk goes",
                     ));
                 }
-            }
-        }
+            },
+            None => 1,
+        };
         // even an *empty* one, and even though an empty one changes nothing about the
         // walk: the keyword was added in 3.12, so on 3.11 writing it at all is a
         // `TypeError` — and a lowering that quietly accepted it would answer where
         // python raised
         if node.arguments.find_keyword("skip_file_prefixes").is_some() {
             return Err(Decline::new(
-                "`warnings.warn` with `skip_file_prefixes` walks frames to skip them, and a compiled function pushes none",
+                "`warnings.warn` with `skip_file_prefixes` walks past files by name, which the written-out walk does not do",
             ));
         }
         if let Some(source) = node.arguments.find_argument_value("source", 3)
@@ -13474,6 +13918,7 @@ impl Lowering<'_, '_> {
             dest,
             message,
             category,
+            stacklevel,
             offset: node.range().start().to_u32(),
         });
         Ok((Value::Register(dest), RType::OBJECT))

@@ -26,7 +26,7 @@ use rustc_hash::FxHasher;
 pub use semantic_model::{
     Completion, DjangoLookupArgument, ExpectedStringLiteralCompletion, ExtensionOperatorRewrite,
     HasDefinition, HasType, ImplicitReceiverReference, MemberDefinition, NameKind,
-    PreludeDunderReceiver, SemanticModel,
+    PreludeDunderReceiver, SemanticModel, basedpython_class_type,
 };
 use std::hash::BuildHasherDefault;
 pub use suppression::UNUSED_IGNORE_COMMENT;

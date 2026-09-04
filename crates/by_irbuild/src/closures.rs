@@ -232,26 +232,12 @@ pub(crate) fn bound_only_by_their_def(body: &[Stmt]) -> HashSet<String> {
             self.bind(bound.as_str());
         }
 
+        // [`pattern_names`] already descends, so this must not walk on as well or a
+        // nested binding would be counted once for every pattern enclosing it
         fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
-            match pattern {
-                ast::Pattern::MatchAs(node) => {
-                    if let Some(bound) = &node.name {
-                        self.bind(bound.as_str());
-                    }
-                }
-                ast::Pattern::MatchStar(node) => {
-                    if let Some(bound) = &node.name {
-                        self.bind(bound.as_str());
-                    }
-                }
-                ast::Pattern::MatchMapping(node) => {
-                    if let Some(bound) = &node.rest {
-                        self.bind(bound.as_str());
-                    }
-                }
-                _ => {}
+            for name in pattern_names(pattern) {
+                self.bind(name);
             }
-            visitor::walk_pattern(self, pattern);
         }
     }
 
@@ -378,10 +364,44 @@ pub(crate) fn written_names(body: &[Stmt]) -> Vec<&str> {
                 }
             }
             Stmt::FunctionDef(node) => out.push(node.name.as_str()),
+            // a `case` pattern binds in the frame the `match` stands in, and it binds
+            // without being an assignment — so none of the arms above reaches it
+            Stmt::Match(node) => {
+                for case in &node.cases {
+                    out.extend(pattern_names(&case.pattern));
+                }
+            }
             _ => {}
         }
     }
     out
+}
+
+/// every name a `case` pattern binds
+///
+/// `case [a]`, `case [*tail]`, `case {**rest}` and `case Point(x=a)` all bind, and the
+/// last two show why this recurses rather than reading the pattern it is handed: a
+/// binding sits at any depth, and a class pattern's arguments are patterns of their own.
+/// the recursion is [`visitor::walk_pattern`]'s rather than a hand-written match over the
+/// variants, so a pattern kind added later is descended into without being remembered
+/// here
+pub(crate) fn pattern_names(pattern: &ast::Pattern) -> Vec<&str> {
+    struct Collect<'a>(Vec<&'a str>);
+    impl<'a> Visitor<'a> for Collect<'a> {
+        fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
+            let bound = match pattern {
+                ast::Pattern::MatchAs(node) => node.name.as_ref(),
+                ast::Pattern::MatchStar(node) => node.name.as_ref(),
+                ast::Pattern::MatchMapping(node) => node.rest.as_ref(),
+                _ => None,
+            };
+            self.0.extend(bound.map(ast::Identifier::as_str));
+            visitor::walk_pattern(self, pattern);
+        }
+    }
+    let mut collect = Collect(Vec::new());
+    collect.visit_pattern(pattern);
+    collect.0
 }
 
 /// every name a body reads, including in nested expressions *and nested functions*

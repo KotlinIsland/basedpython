@@ -230,6 +230,14 @@ fn box_remaining_reads(function: &mut Function, register: RegisterId, steps: &[R
                     index: Value::Register(index),
                     ..
                 } if *index == register => true,
+                // and a subscript names its element by an offset, which is the
+                // number already in the register. handing the counter back its
+                // tagged value here would be a shift out and a shift straight
+                // back in, once per element
+                Op::GetItem {
+                    index: Value::Register(index),
+                    ..
+                } if *index == register => true,
                 _ => false,
             } || op
                 .dest()
@@ -316,6 +324,7 @@ mod tests {
             lines: None,
             fallback_source: None,
             fallback_code: None,
+            shims: None,
         }
     }
 
@@ -362,6 +371,42 @@ mod tests {
             RType::fixed(IntWidth::I64)
         );
         assert_eq!(verify(&module.functions[0]), Ok(()));
+    }
+
+    /// a subscript names the element at an offset, and the offset is the number the
+    /// register already holds — so the counter keeps its machine representation all
+    /// the way into the read, and codegen reaches `By_GetItemI64` rather than boxing
+    #[test]
+    fn a_counter_that_indexes_a_container_is_never_boxed() {
+        let module = counted(|builder, text, counter| {
+            let element = builder.temp(RType::OBJECT);
+            builder.push(Op::GetItem {
+                dest: element,
+                container: Value::Register(text),
+                index: Value::Register(counter),
+            });
+        });
+        assert_eq!(boxes(&module), 0, "{}", by_ir::print::print_module(&module));
+        assert_eq!(
+            module.functions[0].registers[1].ty,
+            RType::fixed(IntWidth::I64)
+        );
+        assert_eq!(verify(&module.functions[0]), Ok(()));
+    }
+
+    /// a *container* that happens to be the counter is not an index, so it is boxed
+    /// as any other read would be
+    #[test]
+    fn a_counter_subscripted_as_the_container_still_gets_its_tagged_value_back() {
+        let module = counted(|builder, _text, counter| {
+            let element = builder.temp(RType::OBJECT);
+            builder.push(Op::GetItem {
+                dest: element,
+                container: Value::Register(counter),
+                index: Value::Int(0),
+            });
+        });
+        assert_eq!(boxes(&module), 1, "{}", by_ir::print::print_module(&module));
     }
 
     /// the fused comparison is the only reader that takes a machine index. a
