@@ -849,6 +849,17 @@ impl<'a> SemanticModel<'a> {
     /// linter does not have — so it defers, exactly as it does for a receiver
     /// block's `self`. A name matching no variant at all is still reported, and
     /// ty reports one whose expected type does not accept it.
+    /// basedpython: whether a bare `case <name>:` names an `enum class` variant
+    /// in this file rather than binding a capture.
+    ///
+    /// The public form of [`Self::is_based_enum_variant`], for the one caller
+    /// outside name resolution: a pattern name has to be *bound* either way,
+    /// since python's grammar spells a member match as a capture, so the rules
+    /// that read a capture as a variable need to be told which it is
+    pub fn is_based_enum_case_name(&self, name: &str) -> bool {
+        self.in_basedpython_file() && self.is_based_enum_variant(name)
+    }
+
     fn is_based_enum_variant(&self, name: &str) -> bool {
         self.global_scope().binding_ids().any(|binding_id| {
             let BindingKind::ClassDefinition(scope_id) = self.bindings[binding_id].kind else {

@@ -17,3 +17,15 @@ help: Remove assignment to unused variable `plain`
 21 |     return f()
    |
 note: This is an unsafe fix and may change runtime behavior
+
+F841 Local variable `Unmatched` is assigned to but never used
+  --> F841_basedpython.by:44:14
+   |
+42 | def ordinary_capture(value: object) -> int:
+43 |     match value:
+44 |         case Unmatched:  # F841
+   |              ^^^^^^^^^
+45 |             return 1
+46 |         case _:
+   |
+help: Remove assignment to unused variable `Unmatched`

@@ -25,6 +25,7 @@ mod tests {
     #[test_case(Rule::InvalidFirstArgumentNameForClassMethod, Path::new("N804.py"))]
     #[test_case(Rule::InvalidFirstArgumentNameForMethod, Path::new("N805.py"))]
     #[test_case(Rule::NonLowercaseVariableInFunction, Path::new("N806.py"))]
+    #[test_case(Rule::NonLowercaseVariableInFunction, Path::new("N806_basedpython.by"))]
     #[test_case(Rule::DunderFunctionName, Path::new("N807.py"))]
     #[test_case(Rule::DunderFunctionName, Path::new("N807_basedpython.by"))]
     #[test_case(Rule::ConstantImportedAsNonConstant, Path::new("N811.py"))]

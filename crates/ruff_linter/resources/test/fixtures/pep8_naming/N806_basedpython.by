@@ -1,0 +1,23 @@
+# a bare `case` name that is an `enum class` variant is spelled the way its
+# declaration spells it — it names a member, not a variable, so the naming rule
+# has nothing to say about it
+enum class Colour:
+    case Red
+    case Green
+
+
+def enum_case_names(c: Colour) -> int:
+    match c:
+        case Red:
+            return 1
+        case Green:
+            return 2
+
+
+# a capture that matches no variant is an ordinary variable and still fires
+def ordinary_capture(value: object) -> int:
+    match value:
+        case Unmatched:  # N806
+            return 1
+        case _:
+            return 0

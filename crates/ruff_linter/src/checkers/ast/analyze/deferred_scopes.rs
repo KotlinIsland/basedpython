@@ -164,6 +164,10 @@ pub(crate) fn deferred_scopes(checker: &Checker) {
                             && !binding.is_nonlocal()
                             && !binding.is_global()
                             && !is_context_declaration(binding, checker.semantic())
+                            // basedpython: a bare `case Red:` that names an
+                            // `enum class` variant binds nothing, so there is
+                            // nothing for it to leave unused
+                            && !binding.is_based_enum_case_name()
                             && !checker.settings().ignores_unused_binding(name)
                             && !matches!(
                                 name,
