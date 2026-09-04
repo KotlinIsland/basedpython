@@ -155,7 +155,10 @@ pub(crate) mod tests {
                 analysis_settings: AnalysisSettings::default().into(),
                 // the in-crate test db is used for unit tests of the type system
                 // itself, where an experimental feature is what is under test
-                experimental_settings: ExperimentalSettings { module_api: true },
+                experimental_settings: ExperimentalSettings {
+                    module_api: true,
+                    build_stamps: true,
+                },
                 open_files: rustc_hash::FxHashSet::default(),
                 program_settings,
             }

@@ -15,12 +15,10 @@
 //! existing `__main__` guard or a bare top-level `main()` call — so the entry
 //! point never runs twice
 
-use std::fmt::Write as _;
-
 use ruff_python_ast::{self as ast, CmpOp, Expr, ModModule, Parameters, Stmt, StmtFunctionDef};
 
 use super::ast_driver::{AstPass, PassContext};
-use super::source_util::is_synthetic_decorator;
+use super::source_util::{is_synthetic_decorator, python_string_literal};
 
 /// Parses `sys.argv` into `main`'s parameters. Driven by a spec of
 /// `(name, converter, kind, required)` tuples emitted from the signature, so
@@ -366,32 +364,6 @@ fn trailing_name(expr: &Expr) -> Option<&str> {
         Expr::Attribute(attribute) => Some(attribute.attr.as_str()),
         _ => None,
     }
-}
-
-/// `value` as a python string literal.
-///
-/// Rust's own debug spelling is not python: it escapes a control character as
-/// `\u{7f}`, which python does not read. Everything printable is written as
-/// itself, non-ascii included — the emitted file is the utf-8 python reads by
-/// default.
-fn python_string_literal(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            control if control.is_control() => {
-                let _ = write!(out, "\\x{:02x}", control as u32);
-            }
-            other => out.push(other),
-        }
-    }
-    out.push('"');
-    out
 }
 
 /// the operands of a `|` union, flattened — `a | b | c` nests to the left

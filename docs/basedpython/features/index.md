@@ -154,6 +154,7 @@ the forms a class, function or binding can take
 - [properties](properties.md)
 - [empty declarations](empty-declarations.md)
 - [main function](main-function.md)
+- [build stamps](build-stamps.md)
 - [`sentinel` declarations](sentinel.md)
 - [decorator keyword](decorator-keyword.md)
 - [decorated function parameters](decorated-parameters.md)

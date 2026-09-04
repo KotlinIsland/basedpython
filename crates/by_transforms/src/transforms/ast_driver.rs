@@ -36,7 +36,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::source_util::preamble_offset;
 use super::{
-    annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast,
+    annotation, anon_named_tuple, auto_quote, build_stamps, callable, character_type, checked_cast,
     class_pattern_star, coalesce, coalesce_chain, compat, conformance, context_params, conversion,
     decl_site_variance, decorated_binding, decorator_keyword, dedent_string, destructure,
     django_lookup, dynamic_keyword, empty_declarations, export_import, extension, flexible_keyword,
@@ -552,6 +552,7 @@ pub(crate) fn run_against_source<'a>(
     let match_type_pass = match_type::MatchTypePass::new(source_ref);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref);
     let main_function_pass = main_function::MainFunction::new(source_ref, config.is_stub);
+    let build_stamps_pass = build_stamps::BuildStampsPass::new(source_ref, config.stamps.clone());
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
     let overload_pass = overload::Overload::new(source_ref, config.is_stub);
     let decorator_keyword_pass = decorator_keyword::DecoratorKeyword::new(source_ref);
@@ -669,6 +670,10 @@ pub(crate) fn run_against_source<'a>(
         // emits, and before the AST-mutation passes so `main`'s decorator
         // ranges are still valid for the `private` check
         &main_function_pass,
+        // replaces a whole `build:` block with the class it lowers to, reading
+        // the block's own source for each default — so it has to run while those
+        // ranges still mean something, ahead of every mutation pass
+        &build_stamps_pass,
         &empty_declarations_pass,
         &overload_pass,
         &decorator_keyword_pass,

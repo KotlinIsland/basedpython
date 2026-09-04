@@ -1,0 +1,13 @@
+build:
+    """what this artifact was built from"""
+
+    GIT_SHA: str
+    GIT_SHA_SHORT: str
+    GIT_DIRTY: bool
+    BUILT_AT: str
+    VERSION: str = "0.0.0+dev"
+    BUILD_NUMBER: int = 0
+
+
+def describe() -> str:
+    return f"{build.GIT_SHA_SHORT}{'-dirty' if build.GIT_DIRTY else ''}"

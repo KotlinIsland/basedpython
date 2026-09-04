@@ -99,9 +99,21 @@ impl StmtClassDef {
     /// `Invalid` ctx distinguishes it from a real decorator of the same
     /// spelling.
     pub fn has_synthetic_marker(&self, marker: &str) -> bool {
-        self.decorator_list.iter().any(|dec| {
-            matches!(&dec.expression, Expr::Name(name) if name.is_invalid() && name.id == marker)
-        })
+        self.synthetic_marker_range(marker).is_some()
+    }
+
+    /// The range of the keyword a synthetic basedpython marker was written as —
+    /// the `build` of `build:`, the `enum class` of `enum class Color:`. The
+    /// marker carries the keyword's own range, which is the only span in the
+    /// source that names the construct: the class name the parser synthesizes for
+    /// it spans nothing.
+    pub(crate) fn synthetic_marker_range(&self, marker: &str) -> Option<TextRange> {
+        self.decorator_list
+            .iter()
+            .find_map(|dec| match &dec.expression {
+                Expr::Name(name) if name.is_invalid() && name.id == marker => Some(name.range),
+                _ => None,
+            })
     }
 
     /// True for a based-enum declaration (`enum class Shape:`).
@@ -129,6 +141,21 @@ impl StmtClassDef {
     /// extension def never introduces a binding for it.
     pub fn is_extension(&self) -> bool {
         self.has_synthetic_marker("extension_def")
+    }
+
+    /// True for a build-stamp declaration (`build:`) — the values the build
+    /// settles when the artifact is produced. Parses to a class so that
+    /// `build.GIT_SHA` is ordinary attribute access; the members are
+    /// annotation-only until lowering fills each one in.
+    pub fn is_build_stamps(&self) -> bool {
+        self.has_synthetic_marker("build_def")
+    }
+
+    /// The range of the `build` keyword this block was written as, for a
+    /// diagnostic that has to point at the construct rather than at the class it
+    /// desugars to.
+    pub fn build_stamps_range(&self) -> Option<TextRange> {
+        self.synthetic_marker_range("build_def")
     }
 
     /// True for a based-enum variant (`Circle(radius: float)`, `Empty`) — the

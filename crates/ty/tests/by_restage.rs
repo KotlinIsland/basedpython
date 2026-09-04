@@ -46,6 +46,56 @@ fn restage(dir: &Path, file: &str) -> (bool, serde_json::Value) {
     (out.status.success(), json)
 }
 
+/// A re-stage is handed no stamps, so it can only reproduce the build's if the
+/// build wrote them down.
+///
+/// This is the reason `build:` stamps arrive as transpile config rather than
+/// being discovered inside the pipeline. A re-stage that went looking for the
+/// commit itself would answer with whatever `HEAD` is *now* — and drop a module
+/// claiming one commit into a tree of modules claiming another, with nothing to
+/// say they disagree.
+#[test]
+fn restaging_reproduces_the_stamps_the_build_settled() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]
+name = \"p\"
+version = \"0.1.0\"
+requires-python = \">=3.13\"
+
+# build stamps are experimental, so a project that writes a `build:` block asks
+# for them by name
+[tool.ty.experimental]
+build-stamps = true
+",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("main.by"),
+        "build:\n    GIT_SHA: str\n\nprint(build.GIT_SHA)\n",
+    )
+    .unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--out", "out", "--stamp", "GIT_SHA=abc123"])
+        .current_dir(dir.path())
+        .status()
+        .expect("`by build` should run");
+    assert!(status.success(), "`by build` failed");
+
+    let on_disk = std::fs::read_to_string(dir.path().join("out/main.py")).unwrap();
+    assert!(
+        on_disk.contains(r#"GIT_SHA: str = "abc123""#),
+        "the build should have stamped the value:\n{on_disk}"
+    );
+
+    let (ok, answer) = restage(dir.path(), "main.by");
+    assert!(ok, "an unedited file should re-stage: {answer}");
+    assert_eq!(answer["content"].as_str().unwrap(), on_disk);
+    assert_eq!(answer["changed"].as_bool(), Some(false));
+}
+
 /// **The property the whole design rests on.**
 ///
 /// A re-stage has to produce the bytes the build itself would have written, or the debugger is

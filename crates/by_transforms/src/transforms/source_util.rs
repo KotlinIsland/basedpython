@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::fmt::Write as _;
 
 use super::ast_driver::Fragment;
 
@@ -299,6 +300,32 @@ pub(crate) fn binding_start(
         // in it, which the parser rejects; falling back past the decorator rather
         // than to the statement keeps even that case from reaching back over them
         .map_or(last.range().end(), |token| token.range.start())
+}
+
+/// `value` as a python string literal.
+///
+/// Rust's own debug spelling is not python: it escapes a control character as
+/// `\u{7f}`, which python does not read. Everything printable is written as
+/// itself, non-ascii included — the emitted file is the utf-8 python reads by
+/// default.
+pub(crate) fn python_string_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            control if control.is_control() => {
+                let _ = write!(out, "\\x{:02x}", control as u32);
+            }
+            other => out.push(other),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Invoke `on_ann` on every annotation expression reachable from `stmt`.

@@ -256,6 +256,7 @@ Settings: Settings {
     },
     experimental: ExperimentalSettings {
         module_api: false,
+        build_stamps: false,
     },
     editor: EditorSettings {
         common_aliases: [],

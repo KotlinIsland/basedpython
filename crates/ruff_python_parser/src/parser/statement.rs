@@ -756,6 +756,19 @@ impl<'src> Parser<'src> {
             );
             return Some(self.parse_extension_def(start));
         }
+        // `build:` — the values the build stamps into the program. the colon has
+        // to be followed by a newline: `build: int` is an annotated assignment of
+        // an ordinary name, and only a bare `build:` opening a block is unclaimed
+        // syntax today
+        if kw == "build"
+            && self.peek() == TokenKind::Colon
+            && self.peek_nth(1).0 == TokenKind::Newline
+        {
+            self.error_if_not_basedpython(
+                "`build` declarations are not valid in .py files".to_string(),
+            );
+            return Some(self.parse_build_def(start));
+        }
         if kw == "implements" && self.peek() == TokenKind::Name {
             self.error_if_not_basedpython(
                 "`implements` declarations are not valid in .py files".to_string(),
@@ -1905,6 +1918,59 @@ impl<'src> Parser<'src> {
             name,
             type_params: type_params.map(Box::new),
             arguments,
+            body,
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Parses a `build:` declaration — the values the build stamps into the
+    /// program, settled when the artifact was produced rather than read at
+    /// startup.
+    ///
+    /// Produces a [`ClassDef`] named `build` carrying a synthetic `build_def`
+    /// marker decorator, so a use site is ordinary class-attribute access
+    /// (`build.GIT_SHA`) and needs no resolution rule of its own.
+    ///
+    /// The name is given an empty range at the end of the keyword. There is no
+    /// identifier in the source to point at, and a name sharing the keyword's
+    /// span would highlight twice and offer a rename of something nobody wrote;
+    /// an empty range is skipped by everything that reports on a span.
+    ///
+    /// [`ClassDef`]: ast::StmtClassDef
+    fn parse_build_def(&mut self, start: TextSize) -> Stmt {
+        let keyword_start = self.current_token_range().start();
+        self.bump(TokenKind::Name); // consume "build"
+        let keyword_range = TextRange::new(keyword_start, self.current_token_range().start());
+
+        let mut decorators = DecoratorList::new();
+        decorators.push(ast::Decorator {
+            expression: Expr::Name(ast::ExprName {
+                id: Name::new_static("build_def"),
+                ctx: ExprContext::Invalid,
+                range: keyword_range,
+                node_index: AtomicNodeIndex::NONE,
+            }),
+            range: keyword_range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+
+        let name = ast::Identifier {
+            id: Name::new_static("build"),
+            range: TextRange::empty(keyword_range.end()),
+            node_index: AtomicNodeIndex::NONE,
+        };
+
+        // the dispatch that got here required the colon, so there is no missing
+        // one to recover from
+        self.bump(TokenKind::Colon);
+        let body = self.parse_body(Clause::Class);
+
+        Stmt::ClassDef(ast::StmtClassDef {
+            range: self.node_range(start),
+            decorator_list: decorators,
+            name,
+            type_params: None,
+            arguments: None,
             body,
             node_index: AtomicNodeIndex::NONE,
         })

@@ -137,6 +137,15 @@ pub struct ExperimentalSettings {
     /// against it until the project opts in, and a declaration written with the
     /// feature off says so rather than being quietly ignored.
     pub module_api: bool,
+
+    /// Whether a `build:` block declares build stamps.
+    ///
+    /// Like [`module_api`](Self::module_api), the block parses and lowers either
+    /// way — a program that reads `build.GIT_SHA` must keep working when the
+    /// project turns the feature off — but a block written while it is off is
+    /// reported, because a stamp nobody settles is a value that quietly stands
+    /// for nothing.
+    pub build_stamps: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]

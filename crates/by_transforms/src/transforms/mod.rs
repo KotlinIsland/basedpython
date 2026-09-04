@@ -2,6 +2,7 @@ pub(crate) mod annotation;
 pub(crate) mod anon_named_tuple;
 pub(crate) mod ast_driver;
 pub(crate) mod auto_quote;
+pub(crate) mod build_stamps;
 pub(crate) mod callable;
 pub(crate) mod character_type;
 pub(crate) mod checked_cast;

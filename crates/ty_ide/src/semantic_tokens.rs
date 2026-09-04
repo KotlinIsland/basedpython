@@ -6374,6 +6374,31 @@ enum class Color:
     }
 
     #[test]
+    fn semantic_tokens_build_stamps() {
+        // `build` highlights through its `build_def` marker like any other
+        // keyword the parser models as a synthetic decorator. the class name the
+        // parser synthesizes spans nothing, so it contributes no second token
+        // over the same text
+        let test = SemanticTokenTest::new_by(
+            "
+build:
+    GIT_SHA: str
+    GIT_DIRTY: bool
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "build" @ 1..6: Keyword
+        "GIT_SHA" @ 12..19: Variable [definition, readonly]
+        "str" @ 21..24: Class
+        "GIT_DIRTY" @ 29..38: Variable [definition, readonly]
+        "bool" @ 40..44: Class
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_conformance_extension() {
         // the `extension` keyword highlights through its `extension_def` marker,
         // and the conformance list rides in the class's argument list — so its

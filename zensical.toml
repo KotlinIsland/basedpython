@@ -164,6 +164,7 @@ features = [
     { "properties" = "features/properties.md" },
     { "empty declarations" = "features/empty-declarations.md" },
     { "main function" = "features/main-function.md" },
+    { "build stamps" = "features/build-stamps.md" },
     { "sentinel declarations" = "features/sentinel.md" },
     { "decorator keyword" = "features/decorator-keyword.md" },
     { "decorated function parameters" = "features/decorated-parameters.md" },

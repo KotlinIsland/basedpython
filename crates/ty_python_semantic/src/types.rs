@@ -159,6 +159,7 @@ use ty_python_core::{ProgramFile, Truthiness, place_table, semantic_index, use_d
 mod attribute_write;
 mod bool;
 mod bound_super;
+mod build_stamps;
 mod call;
 mod callable;
 pub mod character;
