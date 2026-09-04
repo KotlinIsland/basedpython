@@ -17,6 +17,7 @@ use ruff_python_literal::escape::{Escape, UnicodeEscape};
 use ruff_python_literal::format::FormatSpec;
 use ruff_python_literal::mini_language::FormatSpecComponent;
 use ruff_python_literal::strftime;
+use ruff_python_stdlib::identifiers::{is_identifier_continuation, is_identifier_start};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::FxHashSet;
 use ty_module_resolver::{
@@ -72,6 +73,14 @@ pub fn completion<'db>(
     }
 
     if !matches!(context.kind, ContextKind::Keywords(_)) && context.cursor.is_in_string() {
+        // a name written inside a plain string's braces, which the string only
+        // reads as a name once it is an f-string
+        if let Some(completions) =
+            string_field_completions(db, env, program_file, &model, &source, &context.cursor)
+        {
+            return completions.into_completions();
+        }
+
         let Some(string_expr) = context.cursor.enclosing_string_literal_expr() else {
             return vec![];
         };
@@ -348,6 +357,11 @@ impl<'db> Completions<'db> {
             .collect()
     }
 
+    /// Whether nothing has been added to this collection.
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     /// Attempts to adds the given completion to this collection.
     ///
     /// When added, `true` is returned.
@@ -503,6 +517,13 @@ pub struct Completion<'db> {
     /// An import statement to insert (or ensure is already
     /// present) when this completion is selected.
     pub import: Option<Edit>,
+    /// a further edit the client should apply along with this completion,
+    /// without which the completion would not mean what it says
+    ///
+    /// a name completed inside the braces of a plain string is the one that
+    /// needs this: `"hello {na"` only reads `name` as a name once the string
+    /// carries the `f` that makes it an f-string, so that `f` rides along
+    pub additional_edit: Option<Edit>,
     /// Whether this suggestion came from builtins or not.
     ///
     /// At time of writing (2025-06-26), this information
@@ -564,6 +585,7 @@ struct CompletionBuilder<'db> {
     kind: Option<CompletionKind>,
     module_name: Option<&'db ModuleName>,
     import: Option<Edit>,
+    additional_edit: Option<Edit>,
     builtin: bool,
     is_context_specific: bool,
     is_type_check_only: bool,
@@ -592,6 +614,7 @@ impl<'db> CompletionBuilder<'db> {
             kind: None,
             module_name: None,
             import: None,
+            additional_edit: None,
             builtin: false,
             is_context_specific: false,
             is_type_check_only: false,
@@ -720,6 +743,7 @@ impl<'db> CompletionBuilder<'db> {
             module_name: self.module_name,
             module_dependency_kind: self.module_dependency_kind,
             import: self.import,
+            additional_edit: self.additional_edit,
             builtin: self.builtin,
             is_type_check_only: self.is_type_check_only,
             is_context_specific: self.is_context_specific,
@@ -782,6 +806,11 @@ impl<'db> CompletionBuilder<'db> {
 
     fn import(mut self, edit: impl Into<Option<Edit>>) -> CompletionBuilder<'db> {
         self.import = edit.into();
+        self
+    }
+
+    fn additional_edit(mut self, edit: Edit) -> CompletionBuilder<'db> {
+        self.additional_edit = Some(edit);
         self
     }
 
@@ -1228,6 +1257,23 @@ impl<'m> ContextCursor<'m> {
             Some(ast::AnyNodeRef::ExprStringLiteral(string_expr)) => Some(string_expr),
             _ => None,
         }
+    }
+
+    /// returns the string literal expression the cursor is in, when that
+    /// string is a plain one
+    ///
+    /// an f-string and a t-string are already read for the names they hold,
+    /// and a bytes literal can never hold one, so only a plain string has
+    /// anything to gain from becoming an f-string
+    fn enclosing_plain_string_literal_expr(&self) -> Option<&'m ast::ExprStringLiteral> {
+        if self
+            .tokens_before
+            .last()
+            .is_none_or(|token| token.kind() != TokenKind::String)
+        {
+            return None;
+        }
+        self.enclosing_string_literal_expr()
     }
 
     /// Returns the quote style of the string literal that the cursor is positioned within, if any.
@@ -3618,6 +3664,226 @@ fn position_of(component: FormatSpecComponent) -> usize {
         .unwrap_or(0)
 }
 
+/// completions for a name being typed inside a plain string's braces
+///
+/// `"hello {na"` is only text to python, so the `na` in it names nothing and
+/// nothing is offered for it today. but the braces say what the user is
+/// reaching for, so the names in scope are offered, and taking one writes the
+/// `f` that makes the string an f-string along with the brace that closes the
+/// replacement field:
+///
+/// ```python
+/// name = "john"
+/// f"hello {name}"
+/// ```
+///
+/// `None` when the string says nothing about a field, and also when it says
+/// so but nothing in scope matches what has been typed. the string is then
+/// still an ordinary string to everything that reads one, so the completions
+/// it would otherwise offer — a django name, an expected literal — are the
+/// ones the user gets
+fn string_field_completions<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: ProgramFile<'db>,
+    model: &SemanticModel<'db>,
+    source: &str,
+    cursor: &ContextCursor<'_>,
+) -> Option<Completions<'db>> {
+    let string = cursor.enclosing_plain_string_literal_expr()?;
+    // the text is checked first because it rejects most cursors outright, and
+    // it costs nothing next to the semantic question below
+    let field = StringField::being_typed(source, cursor, string)?;
+    if !can_become_an_fstring(model, cursor, string) {
+        return None;
+    }
+
+    let mut completions = Completions::new(
+        db,
+        file,
+        CollectionContext::none(),
+        UserQuery::fuzzy(Some(&source[field.typed])),
+    );
+    // the brace the user has yet to write. one they already wrote is left
+    // alone, so completing into `{na}` doesn't leave `{name}}`
+    let closing = if field.closed { "" } else { "}" };
+    for semantic in model.scoped_completions(string.into()) {
+        let name = semantic.name.clone();
+        let module_dependency_kind = if semantic.builtin {
+            ModuleDependencyKind::Builtin
+        } else {
+            ModuleDependencyKind::Current
+        };
+        completions.add(
+            CompletionBuilder::from_semantic_completion(db, env, semantic)
+                .label(name.clone())
+                .insert(compact_str::format_compact!("{name}{closing}"))
+                .replace(field.replace)
+                .additional_edit(Edit::insertion("f".to_string(), field.prefix_at))
+                .module_dependency_kind(module_dependency_kind),
+        );
+    }
+    if completions.is_empty() {
+        return None;
+    }
+    Some(completions)
+}
+
+/// a replacement field the user is part way through writing inside a plain
+/// string
+struct StringField {
+    /// where an `f` goes to make the string holding the field an f-string
+    ///
+    /// this is the start of the one part the cursor is in: only that part of
+    /// an implicitly concatenated string needs the prefix
+    prefix_at: TextSize,
+    /// the name written so far, between the brace and the cursor
+    typed: TextRange,
+    /// the name the completion stands in for, which runs past the cursor when
+    /// the user went back to correct one they had already written
+    replace: TextRange,
+    /// whether a brace already closes the field
+    closed: bool,
+}
+
+impl StringField {
+    /// looks for the field the cursor sits in the middle of writing
+    ///
+    /// `None` when the cursor is somewhere in the string that says nothing
+    /// about a field: ordinary text, a brace pair that is already closed, or a
+    /// `{{` that spells one literal brace the moment the string becomes an
+    /// f-string
+    fn being_typed(
+        source: &str,
+        cursor: &ContextCursor<'_>,
+        string: &ast::ExprStringLiteral,
+    ) -> Option<StringField> {
+        let part = string
+            .value
+            .iter()
+            .find(|part| part.content_range().contains_inclusive(cursor.offset))?;
+        // `u` and `f` cannot both prefix one string
+        if part.flags.prefix().is_unicode() {
+            return None;
+        }
+        let content = part.content_range();
+        let before = source.get(content.start().to_usize()..cursor.offset.to_usize())?;
+        let open = before.rfind('{')?;
+        // a field the user has already closed
+        if before[open + 1..].contains('}') {
+            return None;
+        }
+        // braces pair up into escapes from the left, so the brace that opens a
+        // field is the last of a run of odd length. an even run is all escapes,
+        // and spells literal braces the user wants left as they are
+        let braces = before[..=open].bytes().rev().take_while(|b| *b == b'{');
+        if braces.count() % 2 == 0 {
+            return None;
+        }
+        let typed = &before[open + 1..];
+        if !is_name_prefix(typed) {
+            return None;
+        }
+        // the rest of a name the user went back into the middle of. it belongs
+        // to the field, so the completion stands in for it rather than pushing
+        // it along
+        let after = source.get(cursor.offset.to_usize()..content.end().to_usize())?;
+        let trailing = after
+            .find(|c: char| !is_identifier_continuation(c))
+            .unwrap_or(after.len());
+        Some(StringField {
+            prefix_at: part.start(),
+            typed: TextRange::new(cursor.offset - TextSize::of(typed), cursor.offset),
+            replace: TextRange::new(
+                cursor.offset - TextSize::of(typed),
+                cursor.offset + TextSize::try_from(trailing).ok()?,
+            ),
+            closed: after[trailing..].starts_with('}'),
+        })
+    }
+}
+
+/// whether the string the cursor sits in could be an f-string instead
+///
+/// python reads a string in some positions for something other than the text
+/// it holds, and an f-string is not read that way. a docstring stops being a
+/// docstring, a `case` pattern and a type expression stop being valid, and a
+/// `str.format` template already spells its fields for `format` to fill in
+/// later
+fn can_become_an_fstring(
+    model: &SemanticModel<'_>,
+    cursor: &ContextCursor<'_>,
+    string: &ast::ExprStringLiteral,
+) -> bool {
+    !is_docstring(cursor, string)
+        && !is_match_pattern(cursor)
+        && !is_format_template(cursor)
+        && !cursor.is_in_type_expression(model)
+}
+
+/// whether the string under the cursor is the docstring of what encloses it
+///
+/// the string has to be the whole of the first statement, not merely somewhere
+/// inside it: `print("hi")` opening a body is not a docstring
+fn is_docstring(cursor: &ContextCursor<'_>, string: &ast::ExprStringLiteral) -> bool {
+    let mut ancestors = ancestors_above_string(cursor);
+    let Some(AnyNodeRef::StmtExpr(statement)) = ancestors.next() else {
+        return false;
+    };
+    if statement.value.range() != string.range() {
+        return false;
+    }
+    let body = match ancestors.next() {
+        Some(AnyNodeRef::StmtFunctionDef(function)) => &function.body,
+        Some(AnyNodeRef::StmtClassDef(class)) => &class.body,
+        Some(AnyNodeRef::ModModule(module)) => &module.body,
+        _ => return false,
+    };
+    body.first()
+        .is_some_and(|first| first.range() == statement.range())
+}
+
+/// whether the string under the cursor is part of a `case` pattern
+///
+/// a pattern may only match a literal, so an f-string there is a syntax error
+/// python raises and ty does not yet report
+fn is_match_pattern(cursor: &ContextCursor<'_>) -> bool {
+    ancestors_above_string(cursor)
+        .take_while(|node| !node.is_statement())
+        .any(AnyNodeRef::is_pattern)
+}
+
+/// whether the string under the cursor is a template `str.format` fills in
+fn is_format_template(cursor: &ContextCursor<'_>) -> bool {
+    matches!(
+        ancestors_above_string(cursor).next(),
+        Some(AnyNodeRef::ExprAttribute(attribute))
+            if matches!(attribute.attr.as_str(), "format" | "format_map")
+    )
+}
+
+/// the nodes enclosing the string the cursor is in, nearest first
+fn ancestors_above_string<'m>(cursor: &ContextCursor<'m>) -> impl Iterator<Item = AnyNodeRef<'m>> {
+    cursor
+        .covering_node
+        .ancestors()
+        .skip_while(|node| !matches!(node, AnyNodeRef::ExprStringLiteral(_)))
+        .skip(1)
+}
+
+/// whether `text` could be the start of a name
+///
+/// this is the text between the brace and the cursor, so it is a name only
+/// part written: `na` on the way to `name`, and empty the moment the brace
+/// itself is typed
+fn is_name_prefix(text: &str) -> bool {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return true;
+    };
+    is_identifier_start(first) && chars.all(is_identifier_continuation)
+}
+
 /// Adds the django names the string literal under the cursor could be spelling.
 ///
 /// A template name and a url name are ordinary strings to python, so only the
@@ -4900,7 +5166,7 @@ mod tests {
     use ruff_python_ast::helpers::is_dunder;
     use ruff_python_ast::token::{TokenKind, Tokens};
     use ruff_python_parser::{Mode, ParseOptions};
-    use ruff_text_size::{TextRange, TextSize};
+    use ruff_text_size::{Ranged, TextRange, TextSize};
     use ty_module_resolver::ModuleName;
     use ty_project::metadata::options::{EditorOptions, Options};
 
@@ -10128,6 +10394,361 @@ x: Literal["a"] = "a<CURSOR>
     }
 
     #[test]
+    fn string_field_writes_the_fstring_prefix_and_the_closing_brace() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {na<CURSOR>"
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.snapshot(),
+            @"name}",
+        );
+        assert_snapshot!(
+            test.apply("name"),
+            @r#"
+        name = "john"
+        f"hello {name}"
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_leaves_a_brace_the_user_already_wrote() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {na<CURSOR>}"
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.apply("name"),
+            @r#"
+        name = "john"
+        f"hello {name}"
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_completes_a_local() {
+        let builder = completion_test_builder(
+            r#"
+def greet(who: str) -> str:
+    return "hello {wh<CURSOR>"
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.apply("who"),
+            @r#"
+        def greet(who: str) -> str:
+            return f"hello {who}"
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_prefixes_only_the_part_that_holds_it() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+("hello " "there {na<CURSOR>")
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.apply("name"),
+            @r#"
+        name = "john"
+        ("hello " f"there {name}")
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_keeps_a_raw_prefix() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+r"hello {na<CURSOR>"
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.apply("name"),
+            @r#"
+        name = "john"
+        fr"hello {name}"
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_replaces_the_rest_of_a_name_the_cursor_sits_inside() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {na<CURSOR>me}"
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.apply("name"),
+            @r#"
+        name = "john"
+        f"hello {name}"
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_offers_a_second_field_beside_one_already_written() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {name} and {na<CURSOR>"
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.apply("name"),
+            @r#"
+        name = "john"
+        f"hello {name} and {name}"
+        "#,
+        );
+    }
+
+    /// braces pair up into escapes from the left, so `{{{` opens a field after
+    /// one escaped brace
+    #[test]
+    fn string_field_reads_an_odd_run_of_braces_as_opening_one() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {{{na<CURSOR>"
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.apply("name"),
+            @r#"
+        name = "john"
+        f"hello {{{name}"
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_without_a_brace() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello na<CURSOR>"
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_for_a_closed_brace() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {name} na<CURSOR>"
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_for_a_doubled_brace() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {{na<CURSOR>"
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_for_something_that_is_not_a_name() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {name.up<CURSOR>"
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_in_a_docstring() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+
+def greet() -> None:
+    """say hello to {na<CURSOR>"""
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    /// a string that merely opens a body is not a docstring, so a name in it
+    /// completes like any other
+    #[test]
+    fn string_field_completes_in_a_call_that_opens_a_body() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+
+def greet() -> None:
+    print("hi {na<CURSOR>")
+"#,
+        );
+
+        let builder = builder.skip_keywords().skip_builtins();
+        let test = builder.build();
+        assert_snapshot!(
+            test.apply("name"),
+            @r#"
+        name = "john"
+
+        def greet() -> None:
+            print(f"hi {name}")
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_in_a_case_pattern() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+
+match name:
+    case "hello {na<CURSOR>":
+        pass
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    /// the string is still an ordinary string, so a brace in it must not cost
+    /// the user the completions the string itself expects
+    #[test]
+    fn string_field_leaves_expected_literals_alone_when_nothing_matches() {
+        let builder = completion_test_builder(
+            r#"
+from typing import Literal
+
+def render(template: Literal["{a}", "{b}"]) -> None: ...
+
+render("{zqzqzq<CURSOR>")
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().skip_auto_import().build().snapshot(),
+            @r#"
+        {a}
+        {b}
+        "#,
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_in_a_format_template() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+"hello {na<CURSOR>".format(name=name)
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_in_a_bytes_literal() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+b"hello {na<CURSOR>"
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
+    fn string_field_offers_nothing_in_a_unicode_prefixed_string() {
+        let builder = completion_test_builder(
+            r#"
+name = "john"
+u"hello {na<CURSOR>"
+"#,
+        );
+
+        assert_snapshot!(
+            builder.skip_keywords().skip_builtins().build().snapshot(),
+            @"<No completions found>",
+        );
+    }
+
+    #[test]
     fn string_literal_completions_in_standalone_statement() {
         let builder = completion_test_builder(
             r#"
@@ -14414,6 +15035,7 @@ raise <CURSOR>
                 .collect();
             CompletionTest {
                 db: self.db(),
+                cursor: &self.cursor_test.cursor,
                 original,
                 filtered,
                 type_signatures: self.type_signatures,
@@ -14529,6 +15151,8 @@ raise <CURSOR>
 
     struct CompletionTest<'db> {
         db: &'db ty_project::TestDb,
+        /// the file the completions were requested in, and where in it
+        cursor: &'db crate::tests::Cursor,
         /// The original completions returned before any additional
         /// test-specific filtering. We keep this around in order to
         /// slightly modify the test snapshot generated. This
@@ -14598,6 +15222,47 @@ raise <CURSOR>
                 })
                 .collect::<Vec<String>>()
                 .join("\n")
+        }
+
+        /// the document as it reads once the named completion is taken
+        ///
+        /// every edit the completion carries is applied, so this is what the
+        /// user would be left looking at
+        #[track_caller]
+        fn apply(&self, name: &str) -> String {
+            let completion = self
+                .filtered
+                .iter()
+                .find(|completion| completion.name == name)
+                .unwrap_or_else(|| panic!("Expected completions to include `{name}`"));
+            let replace = completion.replace.unwrap_or_else(|| {
+                panic!("`{name}` says nothing about what it replaces, so it cannot be applied")
+            });
+            let inserted = completion.insert.as_deref().unwrap_or(completion.label());
+
+            let mut edits = vec![(replace, inserted.to_string())];
+            for edit in completion
+                .import
+                .iter()
+                .chain(completion.additional_edit.iter())
+            {
+                edits.push((
+                    edit.range(),
+                    edit.content().map(ToString::to_string).unwrap_or_default(),
+                ));
+            }
+            // applying from the back keeps every range pointing at the text it
+            // was computed against
+            edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start()));
+
+            let mut source = self.cursor.source.as_str().to_string();
+            for (range, text) in edits {
+                source.replace_range(
+                    range.start().to_usize()..range.end().to_usize(),
+                    text.as_str(),
+                );
+            }
+            source
         }
 
         #[track_caller]
