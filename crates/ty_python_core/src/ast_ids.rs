@@ -63,6 +63,18 @@ fn ast_ids<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> &'db AstIds {
     semantic_index(db, file).ast_ids()
 }
 
+/// The id of `expr`'s use, or `None` when the scope recorded no use of it.
+///
+/// [`HasScopedUseId`] panics for an expression that uses no place; this answers for any
+/// expression, which is what a caller that only knows the expression *might* be a place needs.
+pub fn try_scoped_use_id(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    expr: impl Into<ExpressionNodeKey>,
+) -> Option<ScopedUseId> {
+    ast_ids(db, file).try_use_id(expr)
+}
+
 /// Uniquely identifies a use of a name in a [`crate::FileScopeId`].
 #[newtype_index]
 #[derive(Ord, PartialOrd, get_size2::GetSize)]

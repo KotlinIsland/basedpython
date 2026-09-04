@@ -633,6 +633,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 return_type_from_body(
                     db,
                     env,
+                    scope_id.to_scope_id(db, self.program_file()),
                     function,
                     scope_id.is_generator_function(self.index),
                     can_implicitly_return_none(db, self.index.use_def_map(scope_id)),

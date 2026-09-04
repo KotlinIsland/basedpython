@@ -186,6 +186,7 @@ mod generics;
 pub mod ide_support;
 pub(crate) mod implicit_names;
 mod infer;
+pub(crate) mod inferred_narrowing;
 pub(crate) mod inferred_signature;
 mod instance;
 mod iteration;

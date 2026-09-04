@@ -224,7 +224,11 @@ fn asserts_guard_targets<'db>(
                 NarrowingGuardKind::AssertsType { is_positive, ty } => {
                     ty.negate_if(db, env, !is_positive)
                 }
-                NarrowingGuardKind::Predicate => return None,
+                // a predicate narrows where the call evaluates truthy, which is the reach of
+                // the call expression itself rather than of the statement it is in
+                NarrowingGuardKind::Predicate | NarrowingGuardKind::InferredPredicate { .. } => {
+                    return None;
+                }
             };
 
             let target = match guard_root(guard, signature.parameters(), call) {
@@ -4617,6 +4621,15 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
             return Some(type_guard_call_constraints);
         }
 
+        // basedpython: a recovered guard the return type had no room for — several places, or one
+        // side only. A `TypeIs` return type is the other half of the same recovery, so this is
+        // only reached once that has answered nothing
+        if let Some(inferred_guard_constraints) =
+            self.evaluate_inferred_narrowing_guards(inference, expr_call, is_positive)
+        {
+            return Some(inferred_guard_constraints);
+        }
+
         let callable_ty = inference.expression_type(&*expr_call.func);
 
         match callable_ty {
@@ -4765,6 +4778,71 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
         }?;
 
         Some(NarrowingConstraints::from_iter([place_and_constraint]))
+    }
+
+    /// basedpython: the places a call narrows through guards its callee never wrote down.
+    ///
+    /// A written `-> a is int` becomes a `TypeIs` return type, which carries one place and
+    /// narrows it both ways. A recovered guard set is not so constrained: it can name several
+    /// places, and it can say what a truthy result means without saying anything about a falsy
+    /// one. So it stays on the callee's signature and is resolved against this call's arguments
+    /// here — the same resolution a statement-level `asserts` call performs, for the reach of the
+    /// call expression rather than of the statement around it.
+    ///
+    /// See [`crate::types::inferred_narrowing`].
+    fn evaluate_inferred_narrowing_guards(
+        &mut self,
+        inference: &ExpressionInference<'db>,
+        expr_call: &ast::ExprCall,
+        is_positive: bool,
+    ) -> Option<NarrowingConstraints<'db>> {
+        let db = self.db;
+        let callee_ty = inference.expression_type(&*expr_call.func);
+        if matches!(callee_ty, Type::Dynamic(_)) {
+            return None;
+        }
+        let callable = callee_ty
+            .try_upcast_to_callable(db, &self.env)
+            .and_then(CallableTypes::exactly_one)?;
+        // an overloaded callable does not say which signature this call picked, so it says
+        // nothing about what the call narrows
+        let [signature] = callable.signatures(db).overloads.as_slice() else {
+            return None;
+        };
+        if signature.narrowing_guards.is_empty() {
+            return None;
+        }
+
+        let scope = self.scope();
+        let mut constraints = NarrowingConstraints::default();
+        for guard in &signature.narrowing_guards {
+            let NarrowingGuardKind::InferredPredicate { positive, negative } = guard.kind else {
+                continue;
+            };
+            let Some(narrowed) = (if is_positive { positive } else { negative }) else {
+                continue;
+            };
+            let target = match guard_root(guard, signature.parameters(), expr_call) {
+                GuardRoot::Parameter(parameter_index) => {
+                    asserted_argument(expr_call, parameter_index, &guard.name)
+                        .and_then(|argument| narrowed_place(db, scope, guard, argument))
+                }
+                GuardRoot::Receiver(receiver) => narrowed_place(db, scope, guard, receiver),
+                GuardRoot::Scope => narrowed_scope_place(db, scope, guard),
+            };
+            let Some(target) = target else {
+                continue;
+            };
+            merge_constraints_and(
+                &mut constraints,
+                NarrowingConstraints::from_iter([(
+                    target,
+                    NarrowingConstraint::intersection(narrowed),
+                )]),
+            );
+        }
+
+        (!constraints.is_empty()).then_some(constraints)
     }
 
     fn evaluate_negative_match_pattern_singleton(

@@ -13,7 +13,7 @@ use ruff_db::parsed::ParsedModuleRef;
 
 use ruff_db::source::{SourceText, source_text};
 use ruff_index::IndexVec;
-use ruff_python_ast::name::Name;
+use ruff_python_ast::name::{Name, UnqualifiedName};
 use ruff_python_ast::visitor::{
     Visitor, walk_body, walk_expr, walk_keyword, walk_pattern, walk_stmt,
 };
@@ -1503,6 +1503,23 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         )
     }
 
+    /// basedpython: whether the function whose body this scope is wrote down no return type, so
+    /// that its body is the only statement of what it returns.
+    ///
+    /// A written return type is what the function declares, and nothing about the returned
+    /// expression beyond its type is then anybody's business. Without one the body is the only
+    /// source there is, and what a returned expression narrows is part of what it says.
+    fn enclosing_function_wrote_down_no_return_type(&self) -> bool {
+        matches!(
+            self.scopes[self.current_scope()].node(),
+            NodeWithScopeKind::Function(function)
+                if {
+                    let function = function.node(self.module);
+                    function.returns.is_none() && !function.is_asserts_return
+                }
+        )
+    }
+
     #[track_caller]
     fn mark_place_declared(&mut self, id: ScopedPlaceId) {
         self.current_place_table_mut().mark_declared(id);
@@ -1519,6 +1536,35 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         }
         let use_id = self.current_ast_ids_mut().record_use(expr);
         self.current_use_def_map_mut().record_use(place_id, use_id);
+    }
+
+    /// basedpython: capture the state of the places below the place `value` names, alongside the
+    /// use the walk of `value` has just recorded for it.
+    ///
+    /// Narrowing that established something about `a.b` is recorded on `a.b`, so returning `a`
+    /// would ordinarily leave it behind. The recovered return type carries it instead — see
+    /// `ty_python_semantic::types::inferred_narrowing`.
+    fn record_returned_place_members(&mut self, value: &'ast ast::Expr) {
+        let scope = self.current_scope();
+        let Some(use_id) = self.ast_ids[scope].try_use_id(value) else {
+            return;
+        };
+        let place_table = &self.place_tables[scope];
+        let Some(place_id) =
+            PlaceExpr::try_from_expr(value).and_then(|place| place_table.place_id((&place).into()))
+        else {
+            return;
+        };
+        let members: Vec<ScopedPlaceId> = place_table
+            .associated_place_ids(place_id)
+            .iter()
+            .copied()
+            .map(ScopedPlaceId::from)
+            .collect();
+        if members.is_empty() {
+            return;
+        }
+        self.use_def_maps[scope].record_places_at_use(members.into_iter(), use_id);
     }
 
     /// basedpython: records `expr` as a value of the statement expression whose
@@ -2657,20 +2703,31 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         else {
             return Vec::new();
         };
-        let (scope_targets, member_chains) = {
-            let targets = self.basedpython_guard_targets();
-            if targets.is_empty() {
-                return Vec::new();
-            }
-            (targets.scope_places.clone(), targets.member_chains.clone())
-        };
-
         let node = expression.node_ref(self.db).node(self.module);
         let mut collector = CallCollector { calls: Vec::new() };
         collector.visit_expr(node);
         if collector.calls.is_empty() {
             return Vec::new();
         }
+        let called_names: Vec<&Name> = collector
+            .calls
+            .iter()
+            .filter_map(|call| called_name(call))
+            .collect();
+
+        let (scope_targets, member_chains) = {
+            let targets = self.basedpython_guard_targets();
+            if targets.is_empty() {
+                return Vec::new();
+            }
+            let mut chains = targets.member_chains.clone();
+            for name in called_names {
+                if let Some(recovered) = targets.recovered_member_chains.get(name) {
+                    chains.extend(recovered.iter().cloned());
+                }
+            }
+            (targets.scope_places.clone(), chains)
+        };
 
         // a guard on a parameter or a receiver narrows a member of whatever the call passes
         // there, so every root the call mentions is paired with every member chain
@@ -5457,7 +5514,30 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             }
 
             ast::Stmt::Raise(_) | ast::Stmt::Return(_) => {
+                let recovers_from_body = matches!(stmt, ast::Stmt::Return(_))
+                    && self.enclosing_function_wrote_down_no_return_type();
+                if let ast::Stmt::Return(ast::StmtReturn {
+                    value: Some(value), ..
+                }) = stmt
+                    && recovers_from_body
+                {
+                    // basedpython: a returned expression says more than its own type does —
+                    // `return a is int` tells every caller what a truthy result means about the
+                    // argument. Reading that is the narrowing machinery's job, and it evaluates
+                    // a predicate over a standalone expression, so record one for it
+                    self.add_standalone_expression(value);
+                }
                 walk_stmt(self, stmt);
+                // and what narrowing established about the members of a returned place is part of
+                // what is handed back. Nothing between the walk of the value and here changes any
+                // binding, so this is still the state the `return` sees
+                if let ast::Stmt::Return(ast::StmtReturn {
+                    value: Some(value), ..
+                }) = stmt
+                    && recovers_from_body
+                {
+                    self.record_returned_place_members(value);
+                }
                 self.record_terminal_finally_entry();
                 // Everything in the current block after a terminal statement is unreachable.
                 self.mark_unreachable();
@@ -7068,7 +7148,7 @@ fn dunder_all_extend_argument(value: &ast::Expr) -> Option<&ast::Expr> {
     (attr == "__all__").then_some(value)
 }
 
-/// basedpython: the places this file's narrowing return annotations name.
+/// basedpython: the places this file's narrowing guards name.
 #[derive(Debug, Default)]
 struct GuardTargets {
     /// Guards whose root is not a parameter of the annotated function, as a root name and
@@ -7077,11 +7157,24 @@ struct GuardTargets {
     /// The attribute segments of guards rooted at a parameter, which apply below whatever
     /// a call passes for that parameter.
     member_chains: Vec<Box<[Name]>>,
+    /// The same, for a guard recovered from a body rather than written in an annotation, keyed
+    /// by the name of the `def` it was recovered from.
+    ///
+    /// A written guard is rare enough that pairing every chain with every call costs nothing. A
+    /// recovered one is not: every unannotated `def` that returns a test on a member of a
+    /// parameter contributes a chain, and a file with many of both would pay their product at
+    /// every narrowing predicate. The name a call writes is the one syntactic thing that can
+    /// narrow that down before the callee is resolvable, so a chain only reaches a call that
+    /// writes the name it was recovered from. A call that reaches its callee some other way —
+    /// through a variable, an alias — registers nothing and so narrows nothing.
+    recovered_member_chains: FxHashMap<Name, Vec<Box<[Name]>>>,
 }
 
 impl GuardTargets {
     fn is_empty(&self) -> bool {
-        self.scope_places.is_empty() && self.member_chains.is_empty()
+        self.scope_places.is_empty()
+            && self.member_chains.is_empty()
+            && self.recovered_member_chains.is_empty()
     }
 }
 
@@ -7092,22 +7185,43 @@ struct GuardTargetCollector<'a> {
 
 impl<'ast> Visitor<'ast> for GuardTargetCollector<'_> {
     fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
-        if let ast::Stmt::FunctionDef(function) = stmt
-            && let Some(guards) = return_guards(function)
-        {
-            for guard in guards {
-                let (name, members) = guard.place_parts();
-                let members: Box<[Name]> = members.into_iter().cloned().collect();
-                if function
-                    .parameters
-                    .iter()
-                    .any(|parameter| parameter.name().id == *name)
-                {
-                    if !members.is_empty() {
-                        self.targets.member_chains.push(members);
+        if let ast::Stmt::FunctionDef(function) = stmt {
+            if let Some(guards) = return_guards(function) {
+                for guard in guards {
+                    let (name, members) = guard.place_parts();
+                    let members: Box<[Name]> = members.into_iter().cloned().collect();
+                    if function
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.name().id == *name)
+                    {
+                        if !members.is_empty() {
+                            self.targets.member_chains.push(members);
+                        }
+                    } else {
+                        self.targets.scope_places.push((name.clone(), members));
                     }
-                } else {
-                    self.targets.scope_places.push((name.clone(), members));
+                }
+            } else if function.returns.is_none() && !function.is_asserts_return {
+                // a `def` that wrote no return type has its guards recovered from what it
+                // returns, so the chains those returns name below a parameter are targets too
+                let mut chains = Vec::new();
+                walk_body(
+                    &mut ReturnedExpressionCollector {
+                        parameters: &function.parameters,
+                        chains: &mut chains,
+                    },
+                    &function.body,
+                );
+                if !chains.is_empty() {
+                    let recovered = self
+                        .targets
+                        .recovered_member_chains
+                        .entry(function.name.id.clone())
+                        .or_default();
+                    recovered.extend(chains);
+                    recovered.sort_unstable();
+                    recovered.dedup();
                 }
             }
         }
@@ -7115,7 +7229,64 @@ impl<'ast> Visitor<'ast> for GuardTargetCollector<'_> {
     }
 
     fn visit_expr(&mut self, _expr: &'ast ast::Expr) {
-        // annotations live on statements; expressions can't declare a guard
+        // a guard is declared on a statement, and recovered from the `return`s of one
+    }
+}
+
+/// basedpython: collects the attribute chains a body's `return`s name below a parameter.
+///
+/// These are the places a recovered guard can narrow — see
+/// `ty_python_semantic::types::inferred_narrowing`. Only what a `return` names counts: an
+/// attribute the body merely touches is not something a caller is told anything about, and every
+/// chain collected here is paired with every call root at every narrowing predicate in the file.
+struct ReturnedExpressionCollector<'a, 'ast> {
+    parameters: &'ast ast::Parameters,
+    chains: &'a mut Vec<Box<[Name]>>,
+}
+
+impl<'ast> Visitor<'ast> for ReturnedExpressionCollector<'_, 'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        match stmt {
+            // a nested `def` or `class` returns for itself, not for the function around it
+            ast::Stmt::FunctionDef(_) | ast::Stmt::ClassDef(_) => {}
+            ast::Stmt::Return(ast::StmtReturn {
+                value: Some(value), ..
+            }) => {
+                let mut chains = MemberChainCollector {
+                    parameters: self.parameters,
+                    chains: self.chains,
+                };
+                chains.visit_expr(value);
+            }
+            _ => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, _expr: &'ast ast::Expr) {
+        // a statement other than a `return` is walked for the `return`s inside it alone
+    }
+}
+
+/// basedpython: collects the attribute chains an expression names below a parameter.
+struct MemberChainCollector<'a, 'ast> {
+    parameters: &'ast ast::Parameters,
+    chains: &'a mut Vec<Box<[Name]>>,
+}
+
+impl<'ast> Visitor<'ast> for MemberChainCollector<'_, 'ast> {
+    fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+        if expr.is_attribute_expr()
+            && let Some(path) = UnqualifiedName::from_expr(expr)
+            && let [root, members @ ..] = path.segments()
+            && self
+                .parameters
+                .iter()
+                .any(|parameter| parameter.name().id == *root)
+        {
+            self.chains
+                .push(members.iter().copied().map(Name::new).collect());
+        }
+        walk_expr(self, expr);
     }
 }
 
@@ -7130,6 +7301,16 @@ impl<'ast> Visitor<'ast> for CallCollector<'ast> {
             self.calls.push(call);
         }
         walk_expr(self, expr);
+    }
+}
+
+/// The name a call writes for its callee, whether that is a bare name or the last segment of an
+/// attribute access.
+fn called_name(call: &ast::ExprCall) -> Option<&Name> {
+    match call.func.as_ref() {
+        ast::Expr::Name(name) => Some(&name.id),
+        ast::Expr::Attribute(attribute) => Some(attribute.attr.id()),
+        _ => None,
     }
 }
 

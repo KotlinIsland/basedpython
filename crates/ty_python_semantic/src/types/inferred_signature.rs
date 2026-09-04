@@ -37,6 +37,7 @@ use crate::types::call::CallArguments;
 use crate::types::callable::CallableType;
 use crate::types::constraints::{ConstraintSetBuilder, max_constructor_and_typevar_depth};
 use crate::types::function::OverloadLiteral;
+use crate::types::inferred_narrowing::with_narrowed_members;
 use crate::types::narrow::{NarrowingConstraint, infer_narrowing_constraints};
 use crate::types::protocol_class::InlineProtocolMember;
 use crate::types::signatures::{Parameter, ParameterKind, Parameters, Signature};
@@ -85,6 +86,7 @@ pub(crate) fn inferred_return_type<'db>(
     return_type_from_body(
         db,
         env,
+        body_scope,
         node,
         file_scope_id.is_generator_function(index),
         can_implicitly_return_none(db, index.use_def_map(file_scope_id)),
@@ -137,6 +139,7 @@ fn divergence_bounded<'db>(
 pub(crate) fn return_type_from_body<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
+    body_scope: ScopeId<'db>,
     node: &ast::StmtFunctionDef,
     is_generator: bool,
     can_implicitly_return_none: bool,
@@ -145,6 +148,10 @@ pub(crate) fn return_type_from_body<'db>(
     let mut collector = BodyValueCollector {
         db,
         env: env.clone(),
+        body_scope,
+        // a `type def` hands back a type rather than a value, so there is no value whose members
+        // a caller could read and nothing for a structural claim about them to describe
+        carries_member_narrowing: !ast::helpers::is_type_def(node),
         expression_type,
         returns: Vec::new(),
         yields: Vec::new(),
@@ -2389,6 +2396,8 @@ pub(crate) fn can_implicitly_return_none<'db>(db: &'db dyn Db, use_def: &UseDefM
 struct BodyValueCollector<'db, F> {
     db: &'db dyn Db,
     env: ProgramEnvironment<'db>,
+    body_scope: ScopeId<'db>,
+    carries_member_narrowing: bool,
     expression_type: F,
     returns: Vec<Type<'db>>,
     yields: Vec<Type<'db>>,
@@ -2410,7 +2419,14 @@ where
                 let returned = match ret.value.as_deref() {
                     Some(value) => {
                         self.visit_expr(value);
-                        (self.expression_type)(value)
+                        // what the body established about the members of a returned place is
+                        // part of what it hands back, so it travels with it
+                        let returned = (self.expression_type)(value);
+                        if self.carries_member_narrowing {
+                            with_narrowed_members(self.db, &env, self.body_scope, value, returned)
+                        } else {
+                            returned
+                        }
                     }
                     None => Type::none(self.db, &env),
                 };
