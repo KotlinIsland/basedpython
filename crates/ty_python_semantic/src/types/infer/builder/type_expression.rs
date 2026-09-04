@@ -51,6 +51,18 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
     /// Infer the type of a type expression.
     pub(super) fn infer_type_expression(&mut self, expression: &ast::Expr) -> Type<'db> {
+        let ty = self.infer_type_expression_unstored(expression);
+        self.store_expression_type(expression, ty);
+        ty
+    }
+
+    /// Infer the type of a type expression in type-expression context, without recording the
+    /// result against `expression`.
+    ///
+    /// A caller that stores a *different* type against the expression than the one the type
+    /// expression denotes needs this, because `store_expression_type` accepts one entry per
+    /// node.
+    pub(super) fn infer_type_expression_unstored(&mut self, expression: &ast::Expr) -> Type<'db> {
         let previous_deferred_state = self.deferred_state;
         let was_in_type_expression = self
             .inference_flags()
@@ -89,7 +101,6 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             InferenceFlags::IN_TYPE_EXPRESSION,
             previously_in_type_expression,
         );
-        self.store_expression_type(expression, ty);
         ty
     }
 

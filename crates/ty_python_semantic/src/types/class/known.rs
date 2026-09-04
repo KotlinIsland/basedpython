@@ -1188,7 +1188,18 @@ impl KnownClass {
             "Use `Type::heterogeneous_tuple` or `Type::homogeneous_tuple` to create `tuple` instances"
         );
 
-        #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+        // the lookup this delegates to already recovers from cycles by answering "no such
+        // class", and it has to: a first-party module that shadows a stdlib one (a project
+        // with its own `_collections_abc.py`, say) makes a known class resolve into code
+        // whose own inference asks for that same known class again. specializing the class
+        // we found reopens exactly that recursion one level further down — through
+        // `generic_context` and `explicit_bases` — so this query needs the same recovery,
+        // or salsa aborts the whole run
+        #[salsa::tracked(
+            returns(copy),
+            cycle_initial=|_, _, _| Type::unknown(),
+            heap_size=ruff_memory_usage::heap_size,
+        )]
         fn known_class_to_instance<'db>(
             db: &'db dyn Db,
             argument: KnownClassArgument<'db>,

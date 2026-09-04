@@ -781,8 +781,8 @@ impl<'db> UnionBuilder<'db> {
                                 }
                                 UnionElement::Type(existing)
                                     if cycle_recovery
-                                        && literal.fallback_instance(db, &self.env)
-                                            == *existing =>
+                                        && literal
+                                            .is_fallback_instance(db, &self.env, *existing) =>
                                 {
                                     return;
                                 }
@@ -836,8 +836,8 @@ impl<'db> UnionBuilder<'db> {
                                 }
                                 UnionElement::Type(existing)
                                     if cycle_recovery
-                                        && literal.fallback_instance(db, &self.env)
-                                            == *existing =>
+                                        && literal
+                                            .is_fallback_instance(db, &self.env, *existing) =>
                                 {
                                     return;
                                 }
@@ -893,8 +893,8 @@ impl<'db> UnionBuilder<'db> {
                                 }
                                 UnionElement::Type(existing)
                                     if cycle_recovery
-                                        && literal.fallback_instance(db, &self.env)
-                                            == *existing =>
+                                        && literal
+                                            .is_fallback_instance(db, &self.env, *existing) =>
                                 {
                                     return;
                                 }
@@ -970,8 +970,8 @@ impl<'db> UnionBuilder<'db> {
                                 }
                                 UnionElement::Type(existing)
                                     if cycle_recovery
-                                        && literal.fallback_instance(db, &self.env)
-                                            == *existing =>
+                                        && literal
+                                            .is_fallback_instance(db, &self.env, *existing) =>
                                 {
                                     return;
                                 }
@@ -1072,7 +1072,7 @@ impl<'db> UnionBuilder<'db> {
         }
 
         let db = self.db;
-        let fallback = literal.fallback_instance(db, &self.env);
+        let fallback = literal.fallback(db);
         let mut same_kind = SmallVec::<[usize; 8]>::new();
         for (index, element) in self.elements.iter().enumerate() {
             let UnionElement::Type(existing) = element else {
@@ -1081,11 +1081,11 @@ impl<'db> UnionBuilder<'db> {
             // Once widened, the instance type stands for every literal of its kind, this one
             // included. Outside recovery `push_type` reaches the same conclusion through the
             // ordinary redundancy check, which also applies the simplifications skipped here.
-            if self.cycle_recovery && *existing == fallback {
+            if self.cycle_recovery && literal.is_fallback_instance(db, &self.env, *existing) {
                 return true;
             }
             if let Type::LiteralValue(existing_literal) = existing
-                && existing_literal.fallback_instance(db, &self.env) == fallback
+                && existing_literal.fallback(db) == fallback
             {
                 same_kind.push(index);
             }
@@ -1099,6 +1099,7 @@ impl<'db> UnionBuilder<'db> {
         for index in same_kind.into_iter().rev() {
             self.elements.remove(index);
         }
+        let fallback = literal.fallback_instance(db, &self.env);
         self.add_in_place_impl(fallback, seen_aliases);
         true
     }

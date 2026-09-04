@@ -1187,3 +1187,80 @@ def run(flag: int):
             t = 0.6
         reveal_type(t)  # revealed: 0.1 | 0.2 | 0.3 | 0.4 | 0.5 | 0.6
 ```
+
+## a first-party module that shadows the home of a known class
+
+The `collections.abc` ABCs really live in `_collections_abc`, so a project carrying a file of that
+name is what `Sequence` resolves to — and `str` is declared in terms of `Sequence` in the typeshed.
+Working out what an instance of a known class is therefore runs through the shadowing file, whose
+own classes ask for that known class back before it has one.
+
+The metaclass here is load-bearing: a metaclass that is not itself a class is the thing that sends
+working out `Base`'s metaclass through `str`, which is where the two directions meet.
+
+`_collections_abc.py`:
+
+```py
+def meta(name, bases, namespace): ...
+
+class Base(metaclass=meta): ...
+class Sequence(Base): ...
+```
+
+Neither direction can finish before the other, and while that is being untangled the known class
+answers `Unknown` — the same thing it answers when it cannot be found at all. Once the recursion has
+settled it is the class the typeshed declares again, so nothing outside the cycle pays for it:
+
+```py
+reveal_type("a".upper())  # revealed: LiteralString
+reveal_type([1, 2, 3])  # revealed: list[int]
+```
+
+## the class a literal falls back to, while the module it lives in is still being untangled
+
+A project can carry files named after several stdlib modules that import one another, and then its
+own `typing`, `warnings` and `linecache` are in a cycle with each other. `typing` is where the
+typeshed reaches for the pieces `builtins` is written in terms of, so while that cycle is being
+untangled, *which class `str` is* has no answer yet either.
+
+`linecache.py`:
+
+```py
+def getline(lineno):
+    if lineno:
+        return lines[lineno - 1]  # error: [unresolved-reference]
+    return ""
+```
+
+`warnings.py`:
+
+```py
+import linecache
+
+line = linecache.getline(1)
+
+def _deprecated(*, remove, _version=sys.version_info):  # error: [unresolved-reference]
+    pass
+```
+
+`typing.py`:
+
+```py
+import collections
+import warnings
+
+warnings._deprecated(remove=1)
+
+Sequence = collections.abc.Sequence
+```
+
+`getline` says nothing about what it returns, so its return type is recovered from the cycle, and
+recovering it rebuilds the union of everything the body hands back. Adding `Literal[""]` to a union
+that already holds a `str` means deciding whether the two say the same thing — and asking that by
+building the `str` this program means would re-enter, from inside the recovery, the very cycle being
+recovered from. The class the existing type is already carrying answers it without going anywhere:
+
+```py
+reveal_type("a".upper())  # revealed: LiteralString
+reveal_type([1, 2, 3])  # revealed: list[int]
+```

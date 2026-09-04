@@ -2433,13 +2433,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let mut infer_slice_ty = MultiInferenceGuard::new(infer_slice_ty);
                 let mut infer_rhs_value = MultiInferenceGuard::new(infer_rhs_value);
 
+                // an intersection with nothing but negative elements — `object & ~int`, from
+                // `if not isinstance(x, int)` — still has a positive bound, because everything
+                // is an `object`. iterating the positive elements alone would visit nothing at
+                // all here, which leaves the slice and the assigned value never inferred out
+                // loud. the read side of a subscript takes the same fallback
                 let mut check_positive_elements = |emit_diagnostic_and_short_circuit| {
                     let mut valid = false;
-                    for element_ty in intersection.positive(db) {
+                    for element_ty in intersection.positive_elements_or_object(db) {
                         valid |= self.validate_subscript_assignment_impl(
                             target,
                             full_object_ty.or(Some(object_ty)),
-                            *element_ty,
+                            element_ty,
                             &mut |builder, tcx| infer_slice_ty.infer_silent(builder, tcx),
                             rhs_value_node,
                             &mut |builder, tcx| infer_rhs_value.infer_silent(builder, tcx),
@@ -2841,22 +2846,27 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
 
             Type::Intersection(intersection) => {
-                // Check if any positive element supports deletion
-                let positive = intersection.positive(db);
+                // an intersection with nothing but negative elements — `object & ~int`, from
+                // `if not isinstance(x, int)` — still has a positive bound, because everything
+                // is an `object`. iterating the positive elements alone visits nothing at all
+                // there, so the deletion went unchecked and nothing was reported. the store and
+                // read sides of a subscript both take the same fallback
                 let mut any_valid = false;
-                for element_ty in positive {
-                    if self.can_delete_subscript(*element_ty, slice_ty) {
+                let mut first = None;
+                for element_ty in intersection.positive_elements_or_object(db) {
+                    first.get_or_insert(element_ty);
+                    if self.can_delete_subscript(element_ty, slice_ty) {
                         any_valid = true;
                         break;
                     }
                 }
 
                 // If none are valid, emit a diagnostic for the first failing element
-                if !any_valid && let Some(element_ty) = positive.first() {
+                if !any_valid && let Some(element_ty) = first {
                     self.validate_subscript_deletion_impl(
                         target,
                         full_object_ty.or(Some(object_ty)),
-                        *element_ty,
+                        element_ty,
                         slice_ty,
                     );
                 }
