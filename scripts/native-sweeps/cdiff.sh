@@ -15,10 +15,22 @@
 # it is also the one check that sees a module the compiler stopped emitting altogether:
 # `same` and `differs` both mean C was produced, and `a-only`/`b-only`/`neither` are
 # each their own line
+#
+# the runtime header is compared too, and that is what makes this rung able to scope a
+# change to `by.h`. the header is included rather than inlined into the translation unit,
+# so a change to `By_GetItemTagged` leaves all 550 modules' C byte-identical while the
+# behaviour of every module that calls it has moved — which used to read here as "nothing
+# to walk". a module whose C is unchanged but which calls a helper whose definition
+# changed is reported as `header`, so the population to pair the behavioural rungs over is
+# `differs` plus `header`
 SP="$1"; BY_A="$2"; BY_B="$3"; PY="$4"; OUT="$5"; shift 5
 # shellcheck source=scripts/native-sweeps/sweeplib.sh
 . "$(dirname "$0")/sweeplib.sh"
 LIB=$(sweep_lib "$PY")
+# unknown until the first module compiles on both legs; then `same` or `differs`, and in
+# the `differs` case `header_scope` is an ERE alternation of the helpers that moved
+header_state=unknown
+header_scope=""
 sweep_begin cdiff || exit 1
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
@@ -35,10 +47,41 @@ for b in $(sweep_modules "$LIB" "$@"); do
     out=$(sweep_out_dir "$d")
     # the staged module is always `m`, so the emitted translation unit always `m.c`
     if [ -f "$out/m.c" ]; then cp "$out/m.c" "$SWEEP_ROOT/$leg.c"; else rm -f "$SWEEP_ROOT/$leg.c"; fi
+    # `--emit-c-only` writes the runtime header beside the translation unit, and a given
+    # compiler emits the same one for every module — so it is captured on whichever
+    # module compiles first and not looked at again
+    if [ -f "$out/by.h" ]; then cp "$out/by.h" "$SWEEP_ROOT/$leg.h"; fi
   done
+  # which helpers changed between the two runtimes, worked out once and then reused
+  #
+  # the answer is `same` (nothing a module calls moved), `unscopable` (it moved in a way
+  # no line-level reading can attribute, so no module may be scoped out), or an ERE
+  # alternation of the helpers that changed
+  if [ "$header_state" = unknown ] && [ -f "$SWEEP_ROOT/a.h" ] && [ -f "$SWEEP_ROOT/b.h" ]; then
+    header_scope=$(sweep_header_scope "$SWEEP_ROOT/a.h" "$SWEEP_ROOT/b.h" "$SWEEP_ROOT")
+    case "$header_scope" in
+      same)       header_state=same;    header_scope="" ;;
+      unscopable) header_state=differs; header_scope="" ;;
+      *)          header_state=differs ;;
+    esac
+    printf 'header: %s\n' "$header_state${header_scope:+ (scoped)}" >&2
+  fi
   if [ -f "$SWEEP_ROOT/a.c" ] && [ -f "$SWEEP_ROOT/b.c" ]; then
     if cmp -s "$SWEEP_ROOT/a.c" "$SWEEP_ROOT/b.c"; then
-      printf '%s\tsame\n' "$b" >> "$OUT"
+      # identical C, so the only way this module's behaviour moved is through the runtime
+      calls=""
+      if [ "$header_state" = differs ]; then
+        if [ -n "$header_scope" ]; then
+          calls=$(grep -oE "$header_scope" "$SWEEP_ROOT/a.c" | sort -u | paste -sd, -)
+        else
+          calls="unscopable"
+        fi
+      fi
+      if [ -n "$calls" ]; then
+        printf '%s\theader\t%s\n' "$b" "$calls" >> "$OUT"
+      else
+        printf '%s\tsame\n' "$b" >> "$OUT"
+      fi
     else
       printf '%s\tdiffers\t%s\n' "$b" \
         "$(diff "$SWEEP_ROOT/a.c" "$SWEEP_ROOT/b.c" | grep -c '^[<>]')" >> "$OUT"
@@ -53,7 +96,7 @@ for b in $(sweep_modules "$LIB" "$@"); do
 done
 {
   printf 'walked: %s\n' "$(cat "$OUT.walked" 2>/dev/null || echo '?')"
-  for kind in same differs a-only b-only neither; do
+  for kind in same differs header a-only b-only neither; do
     printf '%s: %s\n' "$kind" "$(grep -c "	$kind" "$OUT")"
   done
 }

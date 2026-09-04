@@ -479,6 +479,47 @@ sweep_stage() {
 # `by compile` lays its output out as the *module* tree, so a package member's `m.c`,
 # `m.annotated` and `m*.so` sit at the member's own place under `o` rather than at the
 # top of it — which is where the staged source sits within the project
+# which runtime helpers two builds of `by.h` disagree about
+#
+# prints `same` when nothing a module could call has moved, `unscopable` when the change
+# cannot be attributed to particular helpers, or an ERE alternation of the ones that have.
+# takes the two headers and a scratch directory
+#
+# a helper is scoped *out* of a walk only when the evidence says so plainly, because
+# getting this wrong in the narrowing direction hides a real divergence: a module reported
+# `same` is one the behavioural rungs never run. so comment and blank lines are dropped as
+# carrying no behaviour, and of what is left **every** line must name a `By_` symbol of its
+# own for the change to be scopable at all. a changed line naming none is something like a
+# top-level `#define BY_THRESHOLD 8`, which no line-level reading can attribute and which
+# every helper reading it depends on.
+#
+# `diff -p` is deliberately not trusted to attribute those. it names the function a hunk
+# falls in, and for a change *after* the last function in the file it names that function
+# regardless — which is how a top-level define came to be blamed on
+# `By_StrItemCompareCharI64`. where the change is scopable its names are added to the
+# symbols read off the lines, because a change inside a body often does not repeat the
+# name of the body it is in. that union over-approximates, which is the safe direction: a
+# helper named that did not change costs one module a walk it did not need
+sweep_header_scope() {
+  local a="$1" b="$2" tmp="$3"
+  cmp -s "$a" "$b" && { printf 'same\n'; return 0; }
+  diff "$a" "$b" 2>/dev/null | grep '^[<>]' | sed 's/^[<>][[:space:]]*//' > "$tmp/changed"
+  grep -v '^[[:space:]]*$' "$tmp/changed" |
+    grep -v '^[[:space:]]*\(\*\|//\|/\*\)' > "$tmp/meaningful"
+  if [ ! -s "$tmp/meaningful" ]; then
+    printf 'same\n'
+    return 0
+  fi
+  if [ "$(grep -c . "$tmp/meaningful")" -ne "$(grep -c 'By_[A-Za-z0-9_]' "$tmp/meaningful")" ]; then
+    printf 'unscopable\n'
+    return 0
+  fi
+  {
+    grep -o 'By_[A-Za-z0-9_]*' "$tmp/meaningful"
+    diff -p "$a" "$b" 2>/dev/null | grep '^\*\{15\}' | grep -o 'By_[A-Za-z0-9_]*(' | tr -d '('
+  } | sort -u | paste -sd'|' -
+}
+
 sweep_out_dir() {
   local rel="${SWEEP_SRC%/*}"
   if [ "$rel" = "$SWEEP_SRC" ]; then printf '%s/o' "$1"; else printf '%s/o/%s' "$1" "$rel"; fi
