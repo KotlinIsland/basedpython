@@ -59,6 +59,64 @@ def f(a: f"{str}", b: f"{Character}") -> None:
     reveal_type(b)  # revealed: Character
 ```
 
+## a hole spelled as a type alias is the type it stands for
+
+a hole is read for what it means rather than for how it was written, so an alias distributes the
+same way the type it names would.
+
+```by
+type Name = "foo" | "bar"
+
+def f(a: f"the {Name}") -> None:
+    reveal_type(a)  # revealed: "the foo" | "the bar"
+
+# error: [invalid-assignment] "Object of type `"the asdf"` is not assignable to `"the foo" | "the bar"`"
+b: f"the {Name}" = "the asdf"
+```
+
+## an alias is followed as far as it goes
+
+a union written in a type expression keeps the names its arms were written with, so the type a hole
+stands for can be an alias of an alias. every step is followed, and a pattern reached that way is
+spliced in just as one written directly would be.
+
+```by
+type Inner = "foo" | "bar"
+type Outer = Inner | "baz"
+
+type Version = f"v{int}"
+type Tagged = Version | "untagged"
+
+def f(a: f"the {Outer}", b: f"[{Tagged}]") -> None:
+    reveal_type(a)  # revealed: "the foo" | "the bar" | "the baz"
+    reveal_type(b)  # revealed: f"[v{int}]" | "[untagged]"
+```
+
+## an alias that names itself is followed only once
+
+```by
+type Loop = Loop | "q"
+
+type Left = Right | int
+type Right = Left | str
+
+def f(a: f"a{Loop}b", b: f"a{Right}b") -> None:
+    reveal_type(a)  # revealed: "aqb"
+    reveal_type(b)  # revealed: f"a{str}b"
+```
+
+## an alias of a type that is not a union is still that type
+
+resolving a hole is not a distribution — an alias naming one type leaves a pattern that is still a
+pattern, spelled with the type rather than with the alias.
+
+```by
+type Text = str
+
+def f(a: f"a{Text}b") -> None:
+    reveal_type(a)  # revealed: f"a{str}b"
+```
+
 ## a `None` hole renders as `str(None)` does
 
 ```by

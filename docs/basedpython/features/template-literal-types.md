@@ -25,6 +25,18 @@ negative number, and never a leading zero, so `"a07b"` is not an `f"a{int}b"`.
 `Character` is one extended grapheme cluster. a type the reading does not model
 stands for any string at all, which never rejects anything
 
+## a hole written as an alias
+
+a hole is read for the type it means, not for the name it was written with, so
+an alias stands for whatever it names — however many aliases deep that is:
+
+```by
+type Inner = "foo" | "bar"
+type Outer = Inner | "baz"
+
+a: f"the {Outer}"    # "the foo" | "the bar" | "the baz"
+```
+
 ## a pattern that says something simpler is that simpler thing
 
 a hole that renders to exactly one string folds into the text, so a pattern with

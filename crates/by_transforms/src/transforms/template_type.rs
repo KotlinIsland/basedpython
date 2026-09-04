@@ -180,4 +180,31 @@ mod tests {
             "},
         );
     }
+
+    #[test]
+    fn a_type_alias_hole_folds() {
+        check(
+            "type Name = \"foo\" | \"bar\"\ntype Title = f\"the {Name}\"\n",
+            indoc! {"
+                from typing import Literal
+                from typing_extensions import TypeAliasType
+                Name = TypeAliasType(\"Name\", Literal[\"foo\", \"bar\"])
+                Title = TypeAliasType(\"Title\", Literal[\"the foo\", \"the bar\"])
+            "},
+        );
+    }
+
+    #[test]
+    fn an_alias_of_an_alias_hole_folds() {
+        check(
+            "type Inner = \"foo\" | \"bar\"\ntype Outer = Inner | \"baz\"\ntype Title = f\"the {Outer}\"\n",
+            indoc! {"
+                from typing import Literal
+                from typing_extensions import TypeAliasType
+                Inner = TypeAliasType(\"Inner\", Literal[\"foo\", \"bar\"])
+                Outer = TypeAliasType(\"Outer\", Inner | Literal[\"baz\"])
+                Title = TypeAliasType(\"Title\", Literal[\"the foo\", \"the bar\", \"the baz\"])
+            "},
+        );
+    }
 }

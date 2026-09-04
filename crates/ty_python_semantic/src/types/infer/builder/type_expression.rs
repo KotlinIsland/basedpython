@@ -545,7 +545,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         let right_ty = self.infer_type_expression(&binary.right);
 
                         // Detect runtime errors from e.g. `int | "bytes"` on Python <3.14 without `__future__` annotations.
-                        if !ignore_runtime_errors(self) {
+                        //
+                        // the transpiler lowers a `.by` type expression before runtime — a
+                        // bare `"foo"` becomes `Literal["foo"]`, and a union that reaches the
+                        // runtime on an old target becomes `Union[...]` — so what the operands
+                        // would mean as values says nothing about what actually runs
+                        if !self.is_basedpython_file() && !ignore_runtime_errors(self) {
                             let mut speculative_builder = self.speculate_without_diagnostics();
                             // If the left-hand side of the union is itself a PEP-604 union,
                             // we'll already have checked whether it can be used with `|` in a previous inference step

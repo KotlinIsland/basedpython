@@ -13,6 +13,7 @@
 //! the constructor normalizes, so the variant only ever exists in a form that
 //! nothing else can already spell:
 //!
+//! - a hole spelled as a type alias is the type that alias stands for
 //! - a hole whose type renders to one string is folded into the text, so a
 //!   template with no holes left is a plain string literal
 //! - a union hole distributes, so `f"{Literal[1, 2]}"` is `Literal["1", "2"]`
@@ -157,26 +158,23 @@ impl<'db> TemplateLiteralType<'db> {
         parts: Vec<TemplatePart<'db>>,
         promotable: Promotable,
     ) -> Type<'db> {
+        // normalization reads a hole's own shape — whether it is a union to
+        // distribute, whether it renders to one string — and a type alias
+        // answers none of those questions for the type it stands for
+        let parts: Vec<TemplatePart<'db>> = parts
+            .into_iter()
+            .map(|part| match part {
+                TemplatePart::Hole(hole) => TemplatePart::Hole(resolved_hole(db, env, hole)),
+                text @ TemplatePart::Text(_) => text,
+            })
+            .collect();
+
         if parts
             .iter()
             .any(|part| matches!(part, TemplatePart::Hole(Type::Never)))
         {
             return Type::Never;
         }
-
-        // a hole that is itself a pattern is that pattern spliced in: the string
-        // it stands for is built the same way, one level down
-        let parts: Vec<TemplatePart<'db>> = parts
-            .into_iter()
-            .flat_map(|part| match part {
-                TemplatePart::Hole(Type::LiteralValue(literal))
-                    if let Some(nested) = literal.as_template() =>
-                {
-                    nested.parts(db).to_vec()
-                }
-                other => vec![other],
-            })
-            .collect();
 
         let alternatives = distribute(db, env, &parts);
         let arms: Vec<Type<'db>> = alternatives
@@ -195,6 +193,22 @@ impl<'db> TemplateLiteralType<'db> {
         parts: Vec<TemplatePart<'db>>,
         promotable: Promotable,
     ) -> Type<'db> {
+        // a hole that is itself a pattern is that pattern spliced in: the string
+        // it stands for is built the same way, one level down. this waits until
+        // after distribution, because a hole is only ever a single pattern once
+        // the union it may have been written as has been split into branches
+        let parts: Vec<TemplatePart<'db>> = parts
+            .into_iter()
+            .flat_map(|part| match part {
+                TemplatePart::Hole(Type::LiteralValue(literal))
+                    if let Some(nested) = literal.as_template() =>
+                {
+                    nested.parts(db).to_vec()
+                }
+                other => vec![other],
+            })
+            .collect();
+
         let mut folded: Vec<TemplatePart<'db>> = Vec::with_capacity(parts.len());
         for part in parts {
             let part = match part {
@@ -338,6 +352,50 @@ impl<'db> TemplateLiteralType<'db> {
             _ => None,
         }
     }
+}
+
+/// the type a hole really stands for.
+///
+/// a hole may be written as a type alias, and a union written in a type
+/// expression keeps its arms' aliases — [`UnionType::from_elements_leave_aliases`]
+/// builds it that way so a union displays the names it was written with. so
+/// reaching the union that [`distribute`] has to see, or the pattern that gets
+/// spliced in, can take more than the one step [`Type::resolve_type_alias`] takes
+fn resolved_hole<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    hole: Type<'db>,
+) -> Type<'db> {
+    resolve_hole_arms(db, env, hole, &mut FxHashSet::default())
+}
+
+/// [`resolved_hole`], carrying the unions already being expanded further up.
+///
+/// `type Cyc = Cyc | "q"` gives a union holding the very alias that produced it,
+/// so following the arms of a union is not on its own a descent — without
+/// remembering what is already open, that alias expands forever. the unions are
+/// dropped again on the way out, so an arm that appears twice in different
+/// branches is still expanded in both
+fn resolve_hole_arms<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    hole: Type<'db>,
+    open: &mut FxHashSet<Type<'db>>,
+) -> Type<'db> {
+    let resolved = hole.resolve_type_alias(db);
+    let Type::Union(union) = resolved else {
+        return resolved;
+    };
+    if !open.insert(resolved) {
+        return resolved;
+    }
+    let arms: Vec<Type<'db>> = union
+        .elements(db)
+        .iter()
+        .map(|arm| resolve_hole_arms(db, env, *arm, open))
+        .collect();
+    open.remove(&resolved);
+    UnionType::from_elements(db, env, arms)
 }
 
 /// whether a hole type is itself a set of strings, so a pattern that is nothing
