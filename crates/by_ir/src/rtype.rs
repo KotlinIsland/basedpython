@@ -233,9 +233,9 @@ impl RType {
 
     /// the value a register of this type holds before it is assigned, and the
     /// value a fallible function returns on the error path
-    pub fn undefined(&self) -> &'static str {
+    pub fn undefined(&self) -> String {
         match self {
-            Self::Array(_) => "NULL",
+            Self::Array(_) => "NULL".to_string(),
             Self::Primitive(primitive) => match primitive {
                 Primitive::Object
                 | Primitive::Str
@@ -247,11 +247,48 @@ impl RType {
                 Primitive::Fixed(_) => "-113",
                 Primitive::Float => "BY_FLOAT_ERROR",
                 Primitive::Bool | Primitive::Bit | Primitive::None => "2",
-            },
-            // a zeroed struct: every refcounted member is NULL, which is what the
-            // release discipline and the error check both expect
-            Self::Tuple(_) => "{0}",
-            Self::Instance { .. } => "NULL",
+            }
+            .to_string(),
+            // each member takes its own undefined value rather than a zero, so that
+            // the members which reserve a bit pattern carry it here too — that is
+            // what [`Self::error_sentinel`] reads back. every refcounted member is
+            // still one the release discipline accepts: `NULL` for a pointer, and
+            // `BY_INT_ERROR` for a tagged `int`, which `By_DecRefTagged` guards
+            Self::Tuple(items) if !items.is_empty() => format!(
+                "{{ {} }}",
+                items
+                    .iter()
+                    .map(Self::undefined)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::Tuple(_) => "{0}".to_string(),
+            Self::Instance { .. } => "NULL".to_string(),
+        }
+    }
+
+    /// where inside a value of this type an error can be read back off the value
+    /// itself: the field path to the member holding the sentinel, and the pattern
+    /// that member reserves
+    ///
+    /// a struct has no spare bit pattern of its own, so a fixed-length tuple borrows
+    /// one from the first member that reserves one. that is what lets a call
+    /// returning a pair be checked with a compare instead of by asking the thread
+    /// whether an exception is set — and the compare is not merely the cheaper of
+    /// the two. `PyErr_Occurred` is an opaque call, so a C compiler has to assume it
+    /// clobbers everything and stops inlining the callee into the loop around it
+    ///
+    /// `None` where nothing can be read back — an empty tuple, or one whose members
+    /// are all `double`s and fixed-width integers — and the caller falls back to the
+    /// thread's exception state
+    pub fn error_sentinel(&self) -> Option<(String, String)> {
+        match self {
+            Self::Tuple(items) => items.iter().enumerate().find_map(|(index, item)| {
+                let (path, pattern) = item.error_sentinel()?;
+                Some((format!(".f{index}{path}"), pattern))
+            }),
+            _ if self.error_overlaps() => None,
+            _ => Some((String::new(), self.undefined())),
         }
     }
 }
@@ -387,6 +424,46 @@ mod tests {
         // a tagged int reserves a bit pattern, and a pointer reserves NULL
         assert!(!RType::INT.error_overlaps());
         assert!(!RType::OBJECT.error_overlaps());
+    }
+
+    #[test]
+    fn a_tuple_borrows_its_error_sentinel_from_the_first_member_that_has_one() {
+        let pair = RType::Tuple(Box::new([RType::INT, RType::INT]));
+        assert_eq!(
+            pair.error_sentinel(),
+            Some((".f0".to_string(), "BY_INT_ERROR".to_string()))
+        );
+        // a `double` reserves nothing, so the sentinel comes from further along
+        let mixed = RType::Tuple(Box::new([RType::FLOAT, RType::STR]));
+        assert_eq!(
+            mixed.error_sentinel(),
+            Some((".f1".to_string(), "NULL".to_string()))
+        );
+        let nested = RType::Tuple(Box::new([
+            RType::FLOAT,
+            RType::Tuple(Box::new([RType::fixed(IntWidth::I64), RType::INT])),
+        ]));
+        assert_eq!(
+            nested.error_sentinel(),
+            Some((".f1.f1".to_string(), "BY_INT_ERROR".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_tuple_with_nothing_to_reserve_has_no_error_sentinel() {
+        let scalars = RType::Tuple(Box::new([RType::FLOAT, RType::fixed(IntWidth::I64)]));
+        assert_eq!(scalars.error_sentinel(), None);
+        assert_eq!(RType::Tuple(Box::new([])).error_sentinel(), None);
+    }
+
+    #[test]
+    fn a_tuple_is_undefined_member_by_member() {
+        assert_eq!(
+            RType::Tuple(Box::new([RType::INT, RType::STR])).undefined(),
+            "{ BY_INT_ERROR, NULL }"
+        );
+        // an empty struct has no member to name, so the zero initializer stands
+        assert_eq!(RType::Tuple(Box::new([])).undefined(), "{0}");
     }
 
     #[test]
