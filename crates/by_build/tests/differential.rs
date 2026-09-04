@@ -10788,6 +10788,78 @@ def raised(fn: object) -> str:
     );
 }
 
+/// a property reached from *compiled* code answers as the descriptor would
+///
+/// every other property comparison here reads the attribute from python, which goes
+/// through the `property` object whatever the compiler did. a compiled frame with a typed
+/// receiver calls the half outright instead, and these are the answers that route has to
+/// keep giving: the setter's body runs rather than a store landing beside it, the getter's
+/// body runs rather than the field it reads being taken directly, and a property with no
+/// setter still refuses the write in python's own wording
+#[test]
+fn a_property_reached_from_compiled_code_agrees() {
+    agree_python(
+        "propdirect",
+        "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n * 10
+
+    @value.setter
+    def value(self, given: int) -> None:
+        self._n = given + 1
+
+
+class Reading:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n
+
+    @value.deleter
+    def value(self) -> None:
+        self._n = 0
+
+
+def through(box: Box, given: int) -> int:
+    box.value = given
+    return box.value
+
+
+def underneath(box: Box) -> int:
+    return box._n
+
+
+def store(reading: Reading) -> None:
+    reading.value = 1
+
+
+def refused(reading: Reading) -> str:
+    try:
+        store(reading)
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
+",
+        &[
+            // the setter added one and the getter multiplied by ten, so neither half was
+            // skipped on the way through
+            "m.through(m.Box(0), 4)",
+            "m.underneath(m.Box(0))",
+            "(lambda b: (m.through(b, 7), m.underneath(b)))(m.Box(0))",
+            "m.refused(m.Reading(3))",
+            // and the refusal left the field the getter reads alone
+            "(lambda r: (m.refused(r), r.value))(m.Reading(3))",
+        ],
+    );
+}
+
 /// what the type publishes under a property's name is a `property`
 ///
 /// this is the half no behavioural comparison can reach. an attribute published through
@@ -10858,6 +10930,135 @@ class Box:
          method_descriptor Box.value\n\
          4 None False\n\
          property False True True"
+    );
+}
+
+/// a `@property` with nothing written under it is published over the compiled body
+///
+/// a group of one is the same construct with two of its three halves absent, and python
+/// folds it into a `property` exactly as it folds a pair. what makes it worth publishing
+/// is the half inside: `@property` is a decorator the class body already applied, so left
+/// to the ordinary method path the type is given the object *that* body left — a
+/// `property` holding the interpreted function, written over the method table's entry, so
+/// the compiled body is emitted and then never reached.
+///
+/// `method_descriptor` for `fget` is what says the published one won. it is also what says
+/// the twin's own `property` did not land beside it: the adoption that carries a twin's
+/// attributes over skips a name the type already holds, and this is that name
+#[test]
+fn a_lone_property_getter_is_published_over_the_compiled_body() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_proplone");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n * 10
+";
+    let built = match build_source(
+        source,
+        "by_diff_proplone",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_proplone as m\n\
+         p = m.Box.__dict__['value']\n\
+         print(type(p).__name__, isinstance(p, property), p.fset, p.fdel)\n\
+         print(type(p.fget).__name__, p.fget.__name__, p.fget.__qualname__)\n\
+         # the getter is reached through the property and under no name of its own\n\
+         print(m.Box(4).value, hasattr(m.Box, 'value$get'))\n",
+    );
+    assert_eq!(
+        out,
+        "property True None None\n\
+         method_descriptor value Box.value\n\
+         40 False"
+    );
+}
+
+/// a `@property` with no setter answers and refuses exactly as the interpreted one does
+///
+/// the group of one is published rather than left to the class body's own object, so
+/// every answer it gives is now the compiled type's: the read runs the getter's body, and
+/// the write and the `del` are refused by the `property` itself — in python's own wording,
+/// which names the property, so it is also what says `__set_name__` reached it.
+///
+/// `refused` asks the same question from a *compiled* frame with a typed receiver, which
+/// calls the half outright instead of going round the descriptor. that route has its own
+/// way of getting a missing half wrong: a write with nowhere to go could land beside the
+/// property instead of raising.
+///
+/// none of it says *which* leg answered, and it cannot: an interpreted fallback answers a
+/// property exactly as the published one does, so every line here passes with the group of
+/// one left unlowered. the test above is what says the compiled body is the one running
+#[test]
+fn a_lone_property_getter_agrees() {
+    agree_python(
+        "proplonediff",
+        "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def value(self) -> int:
+        return self._n * 10
+
+
+def read(box: Box) -> int:
+    return box.value
+
+
+def store(box: Box) -> None:
+    box.value = 1
+
+
+def refused(box: Box) -> str:
+    try:
+        store(box)
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
+
+
+def raised(fn: object) -> str:
+    try:
+        fn()
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
+",
+        &[
+            "m.Box(3).value",
+            "m.read(m.Box(3))",
+            "m.raised(lambda: setattr(m.Box(1), 'value', 2))",
+            "m.raised(lambda: delattr(m.Box(1), 'value'))",
+            "m.refused(m.Box(3))",
+            // and the refusal left the field the getter reads alone rather than
+            // dropping a value beside the property
+            "(lambda b: (m.refused(b), b.value, b._n))(m.Box(3))",
+        ],
     );
 }
 
@@ -11095,7 +11296,7 @@ class Wide:
         return 5
 
     @value.setter
-    def value(self, given: int, extra: int = 1) -> None:
+    def value(self, given: int, extra: int) -> None:
         pass
 ";
     let built = match build_source(
