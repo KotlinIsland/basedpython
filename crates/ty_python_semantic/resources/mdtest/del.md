@@ -513,3 +513,18 @@ error[invalid-argument-type]: Cannot delete unknown key "non_existent" from Type
 25 | del mixed["non_existent"]
    |           ^^^^^^^^^^^^^^
 ```
+
+### An intersection narrowed down to nothing but negatives
+
+`~int` carries no positive element of its own, but it still has a positive bound: everything is an
+`object`, and `object` has no `__delitem__`. Without that bound the deletion was checked against no
+element at all and went unreported. Unlike the assignment case, the key is inferred either way —
+only the deletion diagnostic was lost.
+
+```py
+def _(x: object) -> None:
+    if not isinstance(x, int):
+        # error: [not-subscriptable]
+        # error: [unresolved-reference]
+        del x[missing_key]
+```

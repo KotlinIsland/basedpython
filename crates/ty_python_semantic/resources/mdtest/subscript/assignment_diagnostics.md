@@ -151,3 +151,18 @@ def _(config: dict[str, int] | dict[str, str]) -> None:
     # error: [invalid-assignment]
     config["retries"] = 3.0
 ```
+
+## An intersection narrowed down to nothing but negatives
+
+`~int` carries no positive element of its own, but it still has a positive bound: everything is an
+`object`, and `object` has no `__setitem__`. Checking against that bound is also what infers the key
+and the assigned value, so the names in them are resolved rather than skipped.
+
+```py
+def _(x: object) -> None:
+    if not isinstance(x, int):
+        # error: [invalid-assignment]
+        # error: [unresolved-reference]
+        # error: [unresolved-reference]
+        x[missing_key] = missing_value
+```

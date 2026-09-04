@@ -1,0 +1,53 @@
+---
+source: crates/mdtest/src/lib.rs
+expression: snapshot
+---
+
+---
+mdtest name: assignment_diagnostics.md - Subscript assignment diagnostics - An intersection narrowed down to nothing but negatives
+mdtest path: crates/ty_python_semantic/resources/mdtest/subscript/assignment_diagnostics.md
+---
+
+# Python source files
+
+## mdtest_snippet.py
+
+```
+1 | def _(x: object) -> None:
+2 |     if not isinstance(x, int):
+3 |         # error: [invalid-assignment]
+4 |         # error: [unresolved-reference]
+5 |         # error: [unresolved-reference]
+6 |         x[missing_key] = missing_value
+```
+
+# Diagnostics
+
+```
+error[invalid-assignment]: Cannot assign to a subscript on an object of type `object`
+ --> src/mdtest_snippet.py:6:9
+  |
+6 |         x[missing_key] = missing_value
+  |         ^^^^^^^^^^^^^^
+info: The full type of the subscripted object is `~int`
+info: `object` does not have a `__setitem__` method.
+
+```
+
+```
+error[unresolved-reference]: Name `missing_key` used when not defined
+ --> src/mdtest_snippet.py:6:11
+  |
+6 |         x[missing_key] = missing_value
+  |           ^^^^^^^^^^^
+
+```
+
+```
+error[unresolved-reference]: Name `missing_value` used when not defined
+ --> src/mdtest_snippet.py:6:26
+  |
+6 |         x[missing_key] = missing_value
+  |                          ^^^^^^^^^^^^^
+
+```

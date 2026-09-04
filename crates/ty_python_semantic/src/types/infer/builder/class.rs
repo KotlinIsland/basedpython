@@ -130,7 +130,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             let mut is_typed_dict = false;
 
             for base in class.bases() {
-                let ty = if let ast::Expr::Starred(starred) = base {
+                let ty = if let Some(ty) =
+                    self.infer_parameter_shape_class_base(base, defer_class_args)
+                {
+                    ty
+                } else if let ast::Expr::Starred(starred) = base {
                     let ty = self.infer_expression(&starred.value, TypeContext::default());
                     self.store_expression_type(base, ty);
                     ty
@@ -580,11 +584,64 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 let previous_typevar_binding_context =
                     self.typevar_binding_context.replace(definition);
                 for base in class_node.bases() {
-                    self.infer_expression(base, TypeContext::default());
+                    if self
+                        .infer_parameter_shape_class_base(base, /* deferred = */ false)
+                        .is_none()
+                    {
+                        self.infer_expression(base, TypeContext::default());
+                    }
                 }
                 self.typevar_binding_context = previous_typevar_binding_context;
             }
         }
+    }
+
+    /// basedpython: resolve a class base written in the callable-parameter tuple form
+    ///
+    /// `(*: int)` is how basedpython spells `tuple[int, ...]`, and it is what the reverse
+    /// transpiler writes into the `.byi` typeshed — `class _flags(_UninstantiableStructseq,
+    /// (*: int))` is `sys.flags`. the form is type-only: no runtime value is ever spelled
+    /// that way. inferring it as a value therefore reads its `*: int` element as an unpack
+    /// in value position and yields `Unknown`, which as a base makes the class assignable
+    /// to every type. so resolve the base as a type expression, exactly as the transpiler
+    /// lowers it, and hand back the class the resulting instance is an instance of, which
+    /// is the shape a base list needs.
+    ///
+    /// returns `None` for every base this does not apply to, leaving the caller's ordinary
+    /// value inference to run
+    fn infer_parameter_shape_class_base(
+        &mut self,
+        base: &ast::Expr,
+        deferred: bool,
+    ) -> Option<Type<'db>> {
+        if !self.is_basedpython_file() {
+            return None;
+        }
+        let ast::Expr::Tuple(tuple) = base else {
+            return None;
+        };
+        if !tuple.has_parameter_shape() {
+            return None;
+        }
+        let previous_deferred_state = if deferred {
+            Some(std::mem::replace(
+                &mut self.deferred_state,
+                DeferredExpressionState::Deferred,
+            ))
+        } else {
+            None
+        };
+        let ty = self.infer_type_expression_unstored(base);
+        if let Some(previous) = previous_deferred_state {
+            self.deferred_state = previous;
+        }
+        // a base that does not denote a class is recorded as it is, so the ordinary
+        // `invalid-base` report fires instead of the type silently going missing
+        let base_ty = ty
+            .nominal_class(self.db(), self.program_environment())
+            .map_or(ty, Type::from);
+        self.store_expression_type(base, base_ty);
+        Some(base_ty)
     }
 
     pub(super) fn infer_class_deferred(
@@ -603,6 +660,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             .inference_flags
             .replace(InferenceFlags::IN_TYPE_EXPRESSION, true);
         for base in class.bases() {
+            if self
+                .infer_parameter_shape_class_base(base, defer_class_args)
+                .is_some()
+            {
+                continue;
+            }
             if defer_class_args {
                 self.infer_expression_with_state(
                     base,

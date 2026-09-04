@@ -282,23 +282,73 @@ impl<'db> LiteralValueType<'db> {
         }
     }
 
+    /// Which class this literal's values are instances of, named rather than looked up.
+    pub(crate) fn fallback(self, db: &'db dyn Db) -> LiteralFallback<'db> {
+        match self.kind() {
+            LiteralValueTypeKind::String(_)
+            | LiteralValueTypeKind::LiteralString
+            | LiteralValueTypeKind::Template(_) => LiteralFallback::Known(KnownClass::Str),
+            LiteralValueTypeKind::Bool(_) => LiteralFallback::Known(KnownClass::Bool),
+            LiteralValueTypeKind::Int(_) => LiteralFallback::Known(KnownClass::Int),
+            LiteralValueTypeKind::Bytes(_) => LiteralFallback::Known(KnownClass::Bytes),
+            LiteralValueTypeKind::Enum(literal) => LiteralFallback::Enum(literal.enum_class(db)),
+            LiteralValueTypeKind::Float(_) => LiteralFallback::Known(KnownClass::Float),
+            LiteralValueTypeKind::Complex(_) => LiteralFallback::Known(KnownClass::Complex),
+        }
+    }
+
     pub(crate) fn fallback_instance(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
     ) -> Type<'db> {
-        match self.kind() {
-            LiteralValueTypeKind::String(_)
-            | LiteralValueTypeKind::LiteralString
-            | LiteralValueTypeKind::Template(_) => KnownClass::Str.to_instance(db, env),
-            LiteralValueTypeKind::Bool(_) => KnownClass::Bool.to_instance(db, env),
-            LiteralValueTypeKind::Int(_) => KnownClass::Int.to_instance(db, env),
-            LiteralValueTypeKind::Bytes(_) => KnownClass::Bytes.to_instance(db, env),
-            LiteralValueTypeKind::Enum(literal) => literal.enum_class_instance(db, env),
-            LiteralValueTypeKind::Float(_) => KnownClass::Float.to_instance(db, env),
-            LiteralValueTypeKind::Complex(_) => KnownClass::Complex.to_instance(db, env),
+        match self.fallback(db) {
+            LiteralFallback::Known(known) => known.to_instance(db, env),
+            LiteralFallback::Enum(class) => class.to_non_generic_instance(db, env),
         }
     }
+
+    /// Whether `ty` is the very type [`Self::fallback_instance`] would build.
+    ///
+    /// For a builtin this is answered from the class `ty` is already carrying, without
+    /// building the fallback: naming `str` is free, but *finding* the `str` a program means
+    /// is a salsa query, and cycle recovery may not run one it was not already inside.
+    /// Reading the class off the type in hand also gives the right answer where building it
+    /// cannot — a project whose own module shadows the one a builtin lives in makes the
+    /// lookup fail, and a failed lookup matches nothing at all.
+    pub(crate) fn is_fallback_instance(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        ty: Type<'db>,
+    ) -> bool {
+        match self.fallback(db) {
+            LiteralFallback::Known(known) => match ty {
+                Type::NominalInstance(instance) => instance
+                    .class_without_lookup(db)
+                    .is_some_and(|class| class.is_known(db, known)),
+                _ => false,
+            },
+            // an enum literal carries the enum it belongs to, so there is nothing to look up
+            LiteralFallback::Enum(class) => class.to_non_generic_instance(db, env) == ty,
+        }
+    }
+}
+
+/// The class a literal type's values are instances of.
+///
+/// Which class it is and what type that class makes are kept apart on purpose. The first is
+/// a property of the literal; the second means resolving the module the class lives in and
+/// reading the symbol out of it, which is a salsa query — and a query is exactly what a
+/// cycle recovery function must not run, or salsa aborts the run rather than let the
+/// recovery pull a half-finished query of its own into the cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiteralFallback<'db> {
+    /// A builtin — `str`, `int`, `bytes`, `bool`, `float`, `complex` — which has to be found
+    /// before its instance type can be built.
+    Known(KnownClass),
+    /// The enum a member belongs to, which the literal is already holding.
+    Enum(ClassLiteral<'db>),
 }
 
 impl From<FloatLiteralType> for LiteralValueTypeKind<'_> {

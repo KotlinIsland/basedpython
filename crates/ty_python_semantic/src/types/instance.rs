@@ -351,6 +351,23 @@ impl<'db> NominalInstanceType<'db> {
         file_to_module(db, class.program_file(db).resolver_file(db)).map(|module| module.name(db))
     }
 
+    /// The class this is an instance of, when the instance is already carrying it.
+    ///
+    /// `object`, `sys.version_info` and an exact tuple name their class rather than hold it,
+    /// and finding the class a name stands for means resolving the module it lives in and
+    /// reading the symbol out — a salsa query. A cycle recovery function may not run a query
+    /// it was not already inside, on pain of salsa aborting the whole run, so a caller that
+    /// runs inside one asks this instead and reads `None` as "not without looking it up".
+    pub(crate) fn class_without_lookup(&self, db: &'db dyn Db) -> Option<ClassType<'db>> {
+        match self.0 {
+            NominalInstanceInner::NonTuple(class) => Some(class.class(db)),
+            NominalInstanceInner::Regex(regex) => Some(regex.class(db)),
+            NominalInstanceInner::ExactTuple(_)
+            | NominalInstanceInner::SysVersionInfo
+            | NominalInstanceInner::Object => None,
+        }
+    }
+
     pub(crate) fn class(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> ClassType<'db> {
         match self.0 {
             NominalInstanceInner::ExactTuple(tuple) => tuple.to_class_type(db),
