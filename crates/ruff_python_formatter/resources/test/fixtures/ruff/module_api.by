@@ -1,0 +1,15 @@
+implements Backend
+
+implements Backend, Migratable
+
+implements api.Backend
+
+implements   Backend   for   ".*"
+
+implements Backend for ".*", "!.base"
+
+implements Backend, api.Migratable for ".**", "._named"
+
+
+class A:
+    implements Backend

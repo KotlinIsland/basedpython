@@ -547,6 +547,15 @@ impl<'db> SemanticTokenVisitor<'db> {
         TextRange::at(range.start(), text.trim_end().text_len())
     }
 
+    /// The `for` of an `implements ... for ...` declaration, which sits between
+    /// the last interface and the first pattern and has no node of its own.
+    fn for_keyword_range(&self, after: TextSize, before: TextSize) -> Option<TextRange> {
+        let between = self.source.get(usize::from(after)..usize::from(before))?;
+        let offset = between.find("for")?;
+        let start = after + TextSize::try_from(offset).ok()?;
+        Some(TextRange::at(start, TextSize::from(3)))
+    }
+
     /// True when `name` resolves to no binding, i.e. it is a bare keyword rather
     /// than a user-defined symbol shadowing one.
     fn is_unbound(&self, name: &ast::ExprName) -> bool {
@@ -1894,6 +1903,38 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 self.visit_body(&try_stmt.finalbody);
             }
             ast::Stmt::Expr(expr) => {
+                // basedpython: an `implements A for ".*"` declaration is stored as
+                // a call to a synthetic marker, so neither of its keywords has a
+                // node to highlight from, and the marker itself must not be
+                // highlighted as the name it is not
+                if self.is_basedpython
+                    && let Some(declaration) =
+                        ruff_python_ast::helpers::implements_declaration_expression(&expr.value)
+                {
+                    self.add_token(
+                        declaration.keyword_range,
+                        SemanticTokenType::Keyword,
+                        SemanticTokenModifier::empty(),
+                    );
+                    for interface in declaration.interfaces {
+                        self.visit_expr(interface);
+                    }
+                    if let (Some(last), Some(first)) =
+                        (declaration.interfaces.last(), declaration.patterns.first())
+                        && let Some(range) =
+                            self.for_keyword_range(last.range().end(), first.range().start())
+                    {
+                        self.add_token(
+                            range,
+                            SemanticTokenType::Keyword,
+                            SemanticTokenModifier::empty(),
+                        );
+                    }
+                    for pattern in declaration.patterns {
+                        self.visit_expr(pattern);
+                    }
+                    return;
+                }
                 if expecting_docstring && expr.value.is_string_literal_expr() {
                     self.in_docstring = true;
                 }
@@ -6364,6 +6405,40 @@ extension str(Show):
         "self" @ 86..90: SelfParameter [definition]
         "str" @ 95..98: Class
         "self" @ 115..119: Parameter
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_implements_declaration() {
+        // `implements` and the `for` of its clause are stored as a call to a
+        // synthetic marker, so neither has a node to highlight from — and the
+        // marker itself must not be highlighted as the name it is not
+        let test = SemanticTokenTest::new_by(
+            "
+protocol Show:
+    def show(self) -> str
+
+implements Show
+
+implements Show for \".*\", \"!.base\"
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "protocol" @ 1..9: Keyword
+        "Show" @ 10..14: Class [definition]
+        "show" @ 24..28: Method [definition]
+        "self" @ 29..33: SelfParameter [definition]
+        "str" @ 38..41: Class
+        "implements" @ 43..53: Keyword
+        "Show" @ 54..58: Class
+        "implements" @ 60..70: Keyword
+        "Show" @ 71..75: Class
+        "for" @ 76..79: Keyword
+        "\".*\"" @ 80..84: String
+        "\"!.base\"" @ 86..94: String
         "#);
     }
 

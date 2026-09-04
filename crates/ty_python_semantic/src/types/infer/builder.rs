@@ -2152,6 +2152,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         crate::types::lifetimes::check_loop_variable_capture(&self.context, &module.body, |expr| {
             self.try_expression_type(expr)
         });
+
+        // basedpython: the interfaces this module is obliged to answer, whether it
+        // said so itself or a package it lives in said so for it
+        crate::types::module_api::check_module_api(&self.context, &module.body);
     }
 
     fn infer_type_alias_type_params(&mut self, type_alias: &ast::StmtTypeAlias) {

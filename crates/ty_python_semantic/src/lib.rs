@@ -121,6 +121,24 @@ fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&BLANKET_IGNORE_COMMENT);
 }
 
+/// The experimental features a project has opted in to, from `[tool.ty.experimental]`.
+///
+/// An experimental feature is off unless the project asks for it by name. It is
+/// deliberately not part of [`AnalysisSettings`]: an analysis setting says how to
+/// read code that is already understood, while this says whether a language
+/// feature is on at all, and switching one on for some files and off for others
+/// would make a module's meaning depend on which file asked.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, get_size2::GetSize)]
+pub struct ExperimentalSettings {
+    /// Whether `implements` declarations are enforced.
+    ///
+    /// The declaration parses and lowers either way — it has to, or emitted python
+    /// would carry a name that does not exist at runtime — but nothing is checked
+    /// against it until the project opts in, and a declaration written with the
+    /// feature off says so rather than being quietly ignored.
+    pub module_api: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 #[expect(
     clippy::struct_excessive_bools,

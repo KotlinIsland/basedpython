@@ -146,6 +146,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&INVALID_CONFORMANCE);
+    registry.register_lint(&INVALID_MODULE_API);
+    registry.register_lint(&UNMET_MODULE_API);
     registry.register_lint(&INVALID_CONVERSION);
     registry.register_lint(&AMBIGUOUS_CONVERSION);
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
@@ -1187,6 +1189,73 @@ declare_lint! {
     pub(crate) static INVALID_CONFORMANCE = {
         summary: "detects invalid basedpython conformance declarations",
         status: LintStatus::stable("0.0.1-alpha.5"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that an `implements` declaration is one a module can be held to:
+    /// that it names a protocol, that a `for` clause is written in a package's
+    /// `__init__` with patterns relative to that package and reaching something,
+    /// and that the module it obliges can actually be checked.
+    ///
+    /// ## Why is this bad?
+    /// An obligation nothing can check is worse than no obligation: it reads, in
+    /// review and in the editor, as a promise that is being enforced. A rule
+    /// whose patterns match no module, or one written where no module will look
+    /// for it, enforces nothing at all.
+    ///
+    /// This also covers a declaration written while the feature is off. `implements`
+    /// is experimental, so a project opts in by name:
+    ///
+    /// ```toml
+    /// # basedpython.toml
+    /// [experimental]
+    /// module-api = true
+    /// ```
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class Backend:
+    ///     def connect(self) -> None: ...
+    ///
+    /// implements Backend  # error: `Backend` is not a protocol
+    /// ```
+    pub(crate) static INVALID_MODULE_API = {
+        summary: "detects invalid basedpython `implements` declarations",
+        status: LintStatus::stable("0.0.72"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks a module against the interfaces it is obliged to answer, whether it
+    /// declared one itself with `implements` or a package it lives in imposed one
+    /// with `implements ... for`.
+    ///
+    /// ## Why is this bad?
+    /// A module that is meant to be used through an interface — a plugin, a
+    /// backend, a settings module — is otherwise only checked where something
+    /// assigns it to an interface-typed place. A plugin loaded by name is never
+    /// checked at all, and an error that does surface lands on the consumer
+    /// rather than on the module that broke.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// protocol Backend:
+    ///     static def connect(url: str) -> None
+    ///
+    /// implements Backend  # error: this module does not answer `Backend`
+    /// ```
+    pub(crate) static UNMET_MODULE_API = {
+        summary: "detects a module that does not answer an interface it is obliged to",
+        status: LintStatus::stable("0.0.72"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }

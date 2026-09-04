@@ -1,4 +1,4 @@
-use crate::config::{Analysis, Rules, ScriptOptions};
+use crate::config::{Analysis, Experimental, Rules, ScriptOptions};
 use camino::{Utf8Component, Utf8PathBuf};
 use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::{Diagnostic, Severity};
@@ -20,8 +20,8 @@ use ty_python_core::{Db as _, ProgramFile, TestProgramDb};
 use ty_python_semantic::dependencies::DependencyManifest;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::{
-    AnalysisSettings, Db as SemanticDb, PythonVersionWithSource, TypeCheckingPreset,
-    check_file_unwrap, default_lint_registry, django_settings,
+    AnalysisSettings, Db as SemanticDb, ExperimentalSettings, PythonVersionWithSource,
+    TypeCheckingPreset, check_file_unwrap, default_lint_registry, django_settings,
 };
 
 #[salsa::db]
@@ -93,6 +93,19 @@ impl Db {
         let settings = self.settings();
         if settings.analysis(self) != &analysis {
             settings.set_analysis(self).to(analysis);
+        }
+    }
+
+    pub(crate) fn update_experimental_options(&mut self, options: Option<&Experimental>) {
+        let experimental = ExperimentalSettings {
+            module_api: options
+                .and_then(|options| options.module_api)
+                .unwrap_or_default(),
+        };
+
+        let settings = self.settings();
+        if settings.experimental(self) != &experimental {
+            settings.set_experimental(self).to(experimental);
         }
     }
 
@@ -211,6 +224,10 @@ impl SemanticDb for Db {
         file_settings(self, file).analysis(self)
     }
 
+    fn experimental_settings(&self) -> &ExperimentalSettings {
+        self.settings().experimental(self)
+    }
+
     fn dependency_manifest(&self, _file: File) -> Option<&DependencyManifest> {
         self.settings().dependency_manifest(self).as_ref()
     }
@@ -292,6 +309,9 @@ struct Settings {
     #[default]
     #[returns(ref)]
     analysis: AnalysisSettings,
+    #[default]
+    #[returns(ref)]
+    experimental: ExperimentalSettings,
     #[default]
     #[returns(deref)]
     rule_selection: MdtestRuleSelection,

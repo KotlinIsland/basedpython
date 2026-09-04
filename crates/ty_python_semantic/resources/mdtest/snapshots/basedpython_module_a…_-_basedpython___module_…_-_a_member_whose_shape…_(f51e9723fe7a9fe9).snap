@@ -1,0 +1,42 @@
+---
+source: crates/mdtest/src/lib.rs
+expression: snapshot
+---
+
+---
+mdtest name: basedpython_module_api.md - basedpython: module api enforcement - a member whose shape is wrong
+mdtest path: crates/ty_python_semantic/resources/mdtest/basedpython_module_api.md
+---
+
+# Source files
+
+## api.by
+
+```
+1 | protocol Backend:
+2 |     static def connect(url: str) -> str
+```
+
+## postgres.by
+
+```
+1 | from api import Backend
+2 | 
+3 | # error: [unmet-module-api] "`postgres` does not answer `Backend`"
+4 | implements Backend
+5 | 
+6 | def connect(url: int) -> str:
+7 |     return str(url)
+```
+
+# Diagnostics
+
+```
+error[unmet-module-api]: `postgres` does not answer `Backend`
+ --> src/postgres.by:4:1
+  |
+4 | implements Backend
+  | ^^^^^^^^^^
+info: `connect` is `def connect(url: int) -> str`, but `Backend` declares it as `def connect(url: str) -> str`
+
+```

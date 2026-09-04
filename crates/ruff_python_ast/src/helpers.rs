@@ -1393,6 +1393,58 @@ pub fn declaration_annotation_type(annotation: &Expr) -> Option<&Expr> {
         .then(|| subscript.slice.as_ref())
 }
 
+/// basedpython: an `implements A, B` declaration, and the `for` clause that says
+/// which modules it obliges.
+///
+/// The parser encodes the statement as a call to the synthetic `__implements__`
+/// marker, so the interfaces stay ordinary load expressions — an import that
+/// exists only for the declaration still counts as used, and an interface that
+/// does not exist is still an undefined name. A `for` clause's module patterns
+/// follow the interfaces in the same argument list, and are told apart from them
+/// by being string literals, which is why an interface may only be written as a
+/// name or a dotted name.
+pub struct ImplementsDeclaration<'a> {
+    /// the range of the `implements` keyword itself, which is where a diagnostic
+    /// about the declaration belongs
+    pub keyword_range: TextRange,
+    /// the interfaces the declaration names
+    pub interfaces: &'a [Expr],
+    /// the module patterns of a `for` clause, empty when there is none
+    pub patterns: &'a [Expr],
+}
+
+/// The [`ImplementsDeclaration`] `stmt` is, if it is one.
+pub fn implements_declaration(stmt: &Stmt) -> Option<ImplementsDeclaration<'_>> {
+    let Stmt::Expr(statement) = stmt else {
+        return None;
+    };
+    implements_declaration_expression(&statement.value)
+}
+
+/// The [`ImplementsDeclaration`] an expression carries, if it is the marker call
+/// a declaration parses to.
+pub fn implements_declaration_expression(expression: &Expr) -> Option<ImplementsDeclaration<'_>> {
+    let Expr::Call(call) = expression else {
+        return None;
+    };
+    let Expr::Name(marker) = call.func.as_ref() else {
+        return None;
+    };
+    if marker.id.as_str() != "__implements__" || !matches!(marker.ctx, ExprContext::Invalid) {
+        return None;
+    }
+    let arguments = &call.arguments.args;
+    let first_pattern = arguments
+        .iter()
+        .position(Expr::is_string_literal_expr)
+        .unwrap_or(arguments.len());
+    Some(ImplementsDeclaration {
+        keyword_range: marker.range,
+        interfaces: &arguments[..first_pattern],
+        patterns: &arguments[first_pattern..],
+    })
+}
+
 /// basedpython: the type a declaration writes, wherever it writes it.
 ///
 /// A plain `x: int` writes its annotation directly; a keyword declaration writes it

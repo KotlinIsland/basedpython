@@ -198,6 +198,7 @@ mod match_pattern;
 pub(crate) mod match_type;
 mod member;
 mod method;
+mod module_api;
 mod mro;
 pub(crate) mod name_fallback;
 pub(crate) mod narrow;

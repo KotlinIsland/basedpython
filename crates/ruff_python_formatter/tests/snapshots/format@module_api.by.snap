@@ -1,0 +1,41 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/module_api.by
+---
+## Input
+```bython
+implements Backend
+
+implements Backend, Migratable
+
+implements api.Backend
+
+implements   Backend   for   ".*"
+
+implements Backend for ".*", "!.base"
+
+implements Backend, api.Migratable for ".**", "._named"
+
+
+class A:
+    implements Backend
+```
+
+## Output
+```bython
+implements Backend
+
+implements Backend, Migratable
+
+implements api.Backend
+
+implements Backend for ".*"
+
+implements Backend for ".*", "!.base"
+
+implements Backend, api.Migratable for ".**", "._named"
+
+
+class A:
+    implements Backend
+```

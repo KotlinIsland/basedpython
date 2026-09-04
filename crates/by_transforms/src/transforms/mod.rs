@@ -50,6 +50,7 @@ pub(crate) mod main_function;
 pub(crate) mod match_polyfill;
 pub(crate) mod match_type;
 pub(crate) mod modifiers;
+pub(crate) mod module_api;
 pub(crate) mod mutable_defaults;
 pub(crate) mod none_chain;
 pub(crate) mod not_type;

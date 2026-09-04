@@ -310,6 +310,7 @@ fn run_test(
     db.update_program(settings);
     let preset = configuration.type_checking_preset();
     db.update_analysis_options(preset, configuration.analysis.as_ref());
+    db.update_experimental_options(configuration.experimental.as_ref());
     db.update_dependency_manifest(configuration.dependency_manifest());
     db.update_mdtest_rule_selection(
         preset,

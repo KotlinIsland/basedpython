@@ -1,6 +1,6 @@
 use crate::dependencies::DependencyManifest;
 use crate::lint::{LintRegistry, RuleSelection};
-use crate::{AnalysisSettings, PythonVersionWithSource};
+use crate::{AnalysisSettings, ExperimentalSettings, PythonVersionWithSource};
 use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::File;
 use ty_python_core::{Db as PythonCoreDb, ProgramFile};
@@ -22,6 +22,12 @@ pub trait Db: PythonCoreDb {
     fn lint_registry(&self) -> &LintRegistry;
 
     fn analysis_settings(&self, file: File) -> &AnalysisSettings;
+
+    /// The experimental features the project has opted in to.
+    ///
+    /// Project-wide rather than per-file: an experimental feature is a language
+    /// feature, and a module's meaning cannot depend on which file is asking.
+    fn experimental_settings(&self) -> &ExperimentalSettings;
 
     /// Whether ty is running with logging verbosity INFO or higher (`-v` or more).
     fn verbose(&self) -> bool;
@@ -119,6 +125,7 @@ pub(crate) mod tests {
         events: Events,
         rule_selection: Arc<RuleSelection>,
         analysis_settings: Arc<AnalysisSettings>,
+        experimental_settings: ExperimentalSettings,
         open_files: rustc_hash::FxHashSet<File>,
         program_settings: ProgramSettings,
     }
@@ -146,6 +153,9 @@ pub(crate) mod tests {
                     TypeCheckingPreset::default(),
                 )),
                 analysis_settings: AnalysisSettings::default().into(),
+                // the in-crate test db is used for unit tests of the type system
+                // itself, where an experimental feature is what is under test
+                experimental_settings: ExperimentalSettings { module_api: true },
                 open_files: rustc_hash::FxHashSet::default(),
                 program_settings,
             }
@@ -267,6 +277,10 @@ pub(crate) mod tests {
 
         fn analysis_settings(&self, _file: File) -> &AnalysisSettings {
             &self.analysis_settings
+        }
+
+        fn experimental_settings(&self) -> &ExperimentalSettings {
+            &self.experimental_settings
         }
 
         fn verbose(&self) -> bool {

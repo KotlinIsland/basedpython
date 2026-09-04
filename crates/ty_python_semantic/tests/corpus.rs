@@ -9,8 +9,8 @@ use ty_python_core::program::ProgramSettings;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::pull_types::pull_types;
 use ty_python_semantic::{
-    AnalysisSettings, Db as _, PythonVersionWithSource, TypeCheckingPreset, check_file_unwrap,
-    default_lint_registry,
+    AnalysisSettings, Db as _, ExperimentalSettings, PythonVersionWithSource, TypeCheckingPreset,
+    check_file_unwrap, default_lint_registry,
 };
 
 use ruff_db::diagnostic::Diagnostic;
@@ -147,6 +147,7 @@ pub struct CorpusDb {
     system: TestSystem,
     vendored: VendoredFileSystem,
     analysis_settings: Arc<AnalysisSettings>,
+    experimental_settings: ExperimentalSettings,
     program_settings: ProgramSettings,
 }
 
@@ -165,6 +166,8 @@ impl CorpusDb {
             ),
             files: Files::default(),
             analysis_settings: Arc::new(AnalysisSettings::default()),
+            // the corpus is checked with every basedpython feature on
+            experimental_settings: ExperimentalSettings { module_api: true },
             program_settings,
         }
     }
@@ -248,6 +251,10 @@ impl ty_python_semantic::Db for CorpusDb {
 
     fn analysis_settings(&self, _file: File) -> &AnalysisSettings {
         &self.analysis_settings
+    }
+
+    fn experimental_settings(&self) -> &ExperimentalSettings {
+        &self.experimental_settings
     }
 
     fn dyn_clone(&self) -> Box<dyn ty_python_semantic::Db> {

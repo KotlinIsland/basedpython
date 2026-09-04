@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use ruff_db::files::File;
 use ty_combine::Combine;
-use ty_python_semantic::AnalysisSettings;
 use ty_python_semantic::lint::RuleSelection;
+use ty_python_semantic::{AnalysisSettings, ExperimentalSettings};
 
 use crate::metadata::options::{FileOptions, InnerOverrideOptions, Options, OutputFormat};
 use crate::metadata::script::script_metadata;
@@ -32,6 +32,7 @@ pub struct Settings {
     pub(super) src: SrcSettings,
     pub(super) build: BuildSettings,
     pub(super) analysis: AnalysisSettings,
+    pub(super) experimental: ExperimentalSettings,
     pub(super) editor: EditorSettings,
 
     /// Settings for configuration overrides that apply to specific file patterns.
@@ -69,6 +70,15 @@ impl Settings {
 
     pub fn analysis(&self) -> &AnalysisSettings {
         &self.analysis
+    }
+
+    /// The experimental features the project opted in to.
+    ///
+    /// Project-wide, and deliberately not part of [`OverrideSettings`]: an
+    /// experimental feature is a language feature, and a module's meaning cannot
+    /// depend on which file is asking about it.
+    pub fn experimental(&self) -> &ExperimentalSettings {
+        &self.experimental
     }
 
     pub fn editor(&self) -> &EditorSettings {
