@@ -1676,6 +1676,58 @@ mod cross_file {
         transpile_typed(project.db(), file, config, Some(&rebuild)).expect("transpile failed")
     }
 
+    /// a literal conversion whose target is reached through a package
+    /// re-export: `Dp` is declared in `ui.geometry` and re-exported by
+    /// `ui/__init__`, and the file only imports `ui`. the conversion must
+    /// import the class from its declaring module — spelled through the
+    /// package the file does import — under the mangled alias, instead of
+    /// giving up because no import names `ui.geometry` itself
+    #[test]
+    fn conversion_target_reached_through_a_re_export_imports_its_declaring_module() {
+        let project = project_db(&[
+            ("/ui/__init__.by", "from .geometry export Dp\n"),
+            (
+                "/ui/geometry.by",
+                "frozen data class Dp:\n    value: float\n\n    class def __of__(cls, value: int | float) -> Dp:\n        return Dp(float(value))\n",
+            ),
+            (
+                "/main.by",
+                "from ui import Dp\n\ndef pad(amount: Dp) -> float:\n    return amount.value\n\nprint(pad(8))\n",
+            ),
+        ]);
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from ui.geometry import Dp as _by_conv__Dp"),
+            "the declaring module is spelled through the imported package, got:\n{out}"
+        );
+        assert!(
+            out.contains("print(pad(_by_conv__Dp.__of__(8)))"),
+            "the literal converts through the alias, got:\n{out}"
+        );
+    }
+
+    /// the same through a relative import inside the package: the spelling
+    /// stays relative, so it does not depend on how the package is rooted
+    #[test]
+    fn conversion_target_reached_through_a_relative_re_export_stays_relative() {
+        let project = project_db(&[
+            ("/ui/__init__.by", "from .geometry export Dp\n"),
+            (
+                "/ui/geometry.by",
+                "frozen data class Dp:\n    value: float\n\n    class def __of__(cls, value: int | float) -> Dp:\n        return Dp(float(value))\n",
+            ),
+            (
+                "/ui/widgets.by",
+                "from . import Dp\n\ndef pad(amount: Dp) -> float:\n    return amount.value\n\nprint(pad(8))\n",
+            ),
+        ]);
+        let out = transpile_file(&project, "/ui/widgets.by", &Config::test_default());
+        assert!(
+            out.contains("from .geometry import Dp as _by_conv__Dp"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("_by_conv__Dp.__of__(8)"), "got:\n{out}");
+    }
     /// `f[int](1)` must lower to `f(1)` only because ty resolves the imported
     /// `f` to a generic *function* (constructor calls like `Foo[int](1)` keep
     /// their args). that resolution requires cross-module type info — the

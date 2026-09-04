@@ -280,6 +280,15 @@ def is_disjoint_from(
 def is_singleton(ty: TypeForm[object]) -> bool:
     """Returns `True` if `ty` is a singleton type with exactly one inhabitant."""
 
+def is_deeply_immutable(ty: TypeForm[object]) -> bool:
+    """basedpython: returns `True` if no value of `ty` can change after it is created.
+
+    Scalars, enum members, tuples and frozensets of immutable elements, frozen dataclasses and
+    named tuples whose fields are immutable, type objects, callables and the `basedpython_ui`
+    observables are deeply immutable; a `list`, `dict`, `set`, a non-frozen class or `object`
+    is not. This is the framework's notion of a *stable* value — one that may be held in state.
+    """
+
 # -------------------
 # Operations on types
 # -------------------

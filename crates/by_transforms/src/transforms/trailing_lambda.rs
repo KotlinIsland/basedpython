@@ -73,19 +73,31 @@ struct TrailingLambdaLower<'a, 'src> {
 }
 
 /// Collects the `Name` targets *assigned* directly in a block — every rebinding,
-/// via `=`, `for`, `with as`, `:=`, or augmented / annotated assignment (ruff
-/// marks them all [`ExprContext::Store`]). Attribute / subscript targets
-/// (`a.b = …`) don't rebind a name, so their `Load`-context root is skipped.
-/// Nested functions, classes, lambdas, and comprehensions are their own scope
-/// and are not descended into.
+/// via `=`, `for`, `with as`, `:=`, or augmented assignment (ruff marks them all
+/// [`ExprContext::Store`]). Attribute / subscript targets (`a.b = …`) don't
+/// rebind a name, so their `Load`-context root is skipped. An *annotated*
+/// assignment — a `let` / `var` declaration, `x: T = …` — is not collected
+/// either: python gives an annotated name to the function that annotates it and
+/// rejects `nonlocal` on it, so such a name is the block's own local, as it is
+/// for the checker. Nested functions, classes, lambdas, and comprehensions are
+/// their own scope and are not descended into.
 struct BlockAssignments<'ast> {
     names: Vec<&'ast Expr>,
 }
 
 impl<'ast> Visitor<'ast> for BlockAssignments<'ast> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        if matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
-            return;
+        match stmt {
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+            // the declaration's value may still assign (a walrus), so it is
+            // walked; only the declared target is left out
+            Stmt::AnnAssign(declaration) => {
+                if let Some(value) = &declaration.value {
+                    self.visit_expr(value);
+                }
+                return;
+            }
+            _ => {}
         }
         walk_stmt(self, stmt);
     }
@@ -364,7 +376,15 @@ impl TrailingLambdaLower<'_, '_> {
                         .iter_source_order()
                         .map(|arg| arg.range().end())
                         .max();
+                    // the `context` lowering splices its own arguments in at
+                    // this same point, and it decides *its* separator from the
+                    // source alone — which has nothing in the parens to
+                    // separate from. so a call that writes no arguments but
+                    // fills a `context` parameter still needs one here, or the
+                    // two insertions run together: `f(theme=themeblock=...)`
+                    let fills_context = !self.types.implicit_context_arguments(call).is_empty();
                     let separator = match last_argument_end {
+                        None if fills_context => ", ",
                         None => "",
                         // a trailing comma in the source already separates
                         Some(end)
@@ -521,6 +541,27 @@ mod tests {
         transpile(input, &Config::test_default()).unwrap()
     }
 
+    #[test]
+    fn a_declaration_inside_a_block_is_a_block_local() {
+        // `let user` declares the block's own local: no `nonlocal` (python
+        // rejects `nonlocal` on an annotated name), even though the enclosing
+        // function binds `user` too
+        let out = check(indoc! {"
+            def run(once block: () -> None):
+                block()
+
+            def main(user: str) -> None:
+                run:
+                    let user = 1
+                    print(user)
+                print(user)
+        "});
+        assert!(!out.contains("nonlocal"), "got:\n{out}");
+        assert!(
+            out.contains("    def _trailing_lambda_0(it=None):\n        user: Final = 1"),
+            "got:\n{out}"
+        );
+    }
     #[test]
     fn a_block_that_awaits_lowers_to_an_async_def() {
         // the block is a function of its own, so `await` in it makes *it* a

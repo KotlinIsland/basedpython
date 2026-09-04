@@ -14,7 +14,7 @@
 
 use crate::Db;
 use crate::types::class::CodeGeneratorKind;
-use crate::types::dedicated::{django, pydantic, pytest, sqlalchemy};
+use crate::types::dedicated::{basedpython_ui, django, pydantic, pytest, sqlalchemy};
 use crate::types::enums::is_enum_class;
 use crate::types::{ClassLiteral, FunctionType, StaticClassLiteral, Type};
 
@@ -76,6 +76,22 @@ pub(crate) enum FunctionFrameworkRole {
     PytestFixture,
     /// a pytest test — a `test*` function in a collected test file
     PytestTest,
+    /// a basedpython-ui composable — a function decorated with the framework's
+    /// `@composable`, whose body is a composition scope
+    Composable,
+}
+
+impl FunctionFrameworkRole {
+    /// whether pytest manages this function — fills its parameters from the
+    /// fixture registry and reads its `parametrize` markers. The pytest checks
+    /// gate on this rather than on "has any role", since a composable's
+    /// parameters are ordinary ones
+    pub(crate) const fn is_pytest(self) -> bool {
+        match self {
+            Self::PytestFixture | Self::PytestTest => true,
+            Self::Composable => false,
+        }
+    }
 }
 
 /// classify `function` against the supported function-level frameworks.
@@ -92,6 +108,9 @@ pub fn function_framework_role<'db>(
     }
     if pytest::is_test_function(db, function) {
         return Some(FunctionFrameworkRole::PytestTest);
+    }
+    if basedpython_ui::is_composable(db, function) {
+        return Some(FunctionFrameworkRole::Composable);
     }
     None
 }

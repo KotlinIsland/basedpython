@@ -218,6 +218,7 @@ features = [
   { "pytest" = "frameworks/pytest.md" },
   { "Django" = "frameworks/django.md" },
   { "Django templates" = "frameworks/django-templates.md" },
+  { "basedpython-ui" = "frameworks/basedpython-ui.md" },
 ]
 
 [[project.nav]]
