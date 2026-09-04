@@ -69,6 +69,21 @@ group = "memory"
 measures = "attribute reads and writes on one long-lived object"
 declines = 0
 
+[programs.props]
+group = "dispatch"
+measures = "the same access as `fields`, reached through a `@property` pair"
+declines = 0
+
+[programs.props_ext]
+group = "dispatch"
+measures = "the `props` pair on a class another in the module extends"
+declines = 0
+
+[programs.props_get]
+group = "dispatch"
+measures = "a `@property` getter with no setter written under it"
+declines = 0
+
 [programs.objects]
 group = "memory"
 measures = "allocation, fields and methods together, as object code looks"
@@ -92,6 +107,11 @@ declines = 0
 [programs.tuples]
 group = "tuple"
 measures = "tuples packed, unpacked and indexed, and a two-value return"
+declines = 0
+
+[programs.pairs]
+group = "tuple"
+measures = "the same pair with a slot holding a reference — the retain `tuples` never pays"
 declines = 0
 
 [programs.sets]

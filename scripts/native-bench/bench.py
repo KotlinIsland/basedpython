@@ -35,6 +35,7 @@ the method it enforces is written up in
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -54,12 +55,18 @@ ROOT = HERE.parent.parent
 PROGRAMS = HERE / "programs"
 MANIFEST = HERE / "programs.toml"
 
-# one sample is as many calls as it takes to land between these, measured
-# against the fastest and the slowest build respectively. every build of a
-# benchmark runs the same number, so the pairing stays exact
-MIN_SAMPLE = 0.010
-MAX_SAMPLE = 0.150
-PROBE_SAMPLE = 0.010
+# how long one sample runs. each build fills this for itself, by calling
+# `bench()` until the time is up, so the number of calls differs between builds
+# and is not decided before the run — see `timer.sample`
+#
+# the size is set by the scheduler rather than by the clock. `perf_counter`
+# resolves nanoseconds, and on a quiet machine this suite read a ±0.9% floor off
+# a 0.9ms sample, so shortness on its own is not the problem. what it has to
+# swamp is a descheduling, which comes back roughly a ten-millisecond quantum
+# late: at 50ms that is a 20% outlier the median absorbs, and at the 0.3ms this
+# suite used to hand its compiled builds it was a factor of thirty. so the
+# target buys the tail rather than the median
+SAMPLE_TARGET = 0.050
 MAX_CALLS = 1_000_000
 
 # below this the median's confidence interval degenerates to the full range of
@@ -81,8 +88,26 @@ class Failure(Exception):
     """something the run cannot honestly continue past"""
 
 
+def digest(path: Path) -> str:
+    """what the compiler being measured actually is, as a hash of its bytes
+
+    a version string and a git description are both about the checkout, not
+    about the file on disk, and both go on saying the same thing while the
+    binary underneath them is rebuilt — or is not rebuilt when it should have
+    been. an ablation harness here once compared a build against itself because
+    two paths resolved to one file, and the honest reading of that data was the
+    opposite of what was concluded from it. this is what makes that visible
+    """
+    hashed = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1 << 20):
+            hashed.update(block)
+    return hashed.hexdigest()
+
+
 def load() -> str:
-    """what else the machine is doing, recorded at both ends of the run
+    """what else the machine is doing, recorded at both ends of the run and
+    again before each row is timed
 
     it does not change any decision the harness makes — the noise floor does
     that, and it measures the effect rather than guessing at it. this is here so
@@ -380,7 +405,13 @@ class Result:
     status: str
     legs: dict[str, Leg]
     times: dict[str, list[float]] = field(default_factory=dict)
-    calls: int = 0
+    calls: dict[str, int] = field(default_factory=dict)
+    # what the machine was doing while *this row* was timed. the run-level
+    # reading is taken at the two ends and a run is minutes long: one of these
+    # runs began at load 26 and finished at 193, so its early rows and its late
+    # rows were measured on what amounted to two different machines, and the
+    # table gave no way to tell which was which
+    load: str = "unknown"
     notes: list[str] = field(default_factory=list)
 
     def median(self, leg: str) -> float | None:
@@ -515,27 +546,14 @@ def run_program(
         return result
 
     base["legs"] = [leg.spec() for leg in live]
-    calibration = drive(
-        python,
-        {
-            **base,
-            "mode": "calibrate",
-            "probe_target": PROBE_SAMPLE,
-            "min_sample": MIN_SAMPLE,
-            "max_sample": MAX_SAMPLE,
-            "max_count": MAX_CALLS,
-        },
-        root,
-        f"{program.name}-calibrate",
-    )
-    result.calls = calibration["count"]
-
+    result.load = load()
     timed = drive(
         python,
         {
             **base,
             "mode": "time",
-            "count": result.calls,
+            "sample_target": SAMPLE_TARGET,
+            "max_calls": MAX_CALLS,
             "rounds": args.rounds,
             "warmup": args.warmup,
         },
@@ -543,6 +561,14 @@ def run_program(
         f"{program.name}-time",
     )
     result.times = timed["timings"]
+    # kept for the record rather than for any decision: a build whose median
+    # sample was a single call is one whose `bench()` already runs longer than
+    # the target, which is worth being able to read back off an old run
+    result.calls = {
+        name: int(statistics.median(values))
+        for name, values in timed["counts"].items()
+        if values
+    }
     return result
 
 
@@ -559,13 +585,14 @@ def render(
     print()
     print(f"python  {metadata['python']}  ({metadata['implementation']})")
     print(f"by      {metadata['by_version']}  from {metadata['git']}")
+    print(f"        {metadata['by_sha256'][:16]}  {metadata['by_path']}")
     print(f"mypy    {metadata['mypy'] or 'unavailable'}")
     print(
         f"host    {metadata['host']}, {metadata['cpus']} cpus, load {metadata['load_before']}"
     )
     print(
         f"method  {metadata['rounds']} rounds after {metadata['warmup']} warmup, "
-        f"paired medians, strict-float on"
+        f"{metadata['sample_target'] * 1000:.0f}ms samples, paired medians, strict-float on"
     )
     print()
     print(header)
@@ -599,6 +626,8 @@ def render(
             f"{f'±{noise * 100:.1f}%' + ('!' if result.noisy(limit) else ''):>10}"
             f"{len(result.legs['by'].declines):>5}"
         )
+        if result.noisy(limit):
+            print(f"{'':<25}note: load was {result.load} while this row was timed")
         for note in result.notes:
             print(f"{'':<25}note: {note}")
 
@@ -668,6 +697,22 @@ def compare(
                 f"  warning: {key} was {baseline['metadata'].get(key)!r} then and is "
                 f"{CURRENT[key]!r} now — the two runs are not comparable"
             )
+
+    # which compiler each run measured, said out loud rather than inferred from
+    # the paths that were typed. a comparison of one binary against itself is a
+    # null experiment and every row of it is noise — that is a useful thing to
+    # run deliberately, and a disastrous one to run by accident, and the two look
+    # identical from the outside. this suite's ancestor did run it by accident
+    was = baseline["metadata"].get("by_sha256")
+    if was is None:
+        print("  the baseline did not record which compiler it measured")
+    elif was == CURRENT["by_sha256"]:
+        print(
+            f"  both runs measured the same compiler ({was[:16]}), so every row "
+            f"below is this machine's noise and nothing else"
+        )
+    else:
+        print(f"  compiler {was[:16]} then, {CURRENT['by_sha256'][:16]} now")
 
     print(f"  {'benchmark':<15}{'then':>12}{'now':>12}{'change':>12}   verdict")
     regressed = False
@@ -1009,11 +1054,14 @@ def main() -> int:
             "python": full_version,
             "implementation": implementation,
             "by_version": version,
+            "by_sha256": digest(args.by),
+            "by_path": str(args.by),
             "git": git or "unknown",
             "mypy": mypy,
             "host": f"{platform.system()} {platform.machine()}",
             "cpus": os.cpu_count(),
             "load_before": load(),
+            "sample_target": SAMPLE_TARGET,
             "rounds": args.rounds,
             "warmup": args.warmup,
             "strict_float": True,
@@ -1052,6 +1100,7 @@ def main() -> int:
                 "group": result.program.group,
                 "notes": result.notes,
                 "calls": result.calls,
+                "load": result.load,
                 "declines": result.legs["by"].declines if "by" in result.legs else [],
                 "times": result.times,
                 **(

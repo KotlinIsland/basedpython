@@ -80,8 +80,35 @@ def load(leg: dict[str, Any], root: str, built_after: float) -> tuple[Bench, str
     return cast(Bench, module), str(path)
 
 
-def sample(module, count: int) -> float:
-    """one timed sample: `count` calls, with the collector quiesced first
+def sample(module, target: float, ceiling: int) -> tuple[float, int]:
+    """one timed sample: however many calls it takes to fill `target` seconds
+
+    the call count is not fixed in advance, and it is not shared between builds.
+    it was both, once: one number was calibrated per benchmark from a single
+    probe and then handed to every build of it. that is survivable on a quiet
+    machine, and it is what most of this suite's published tables were taken
+    with, but it leaves two ways for a busy one to ruin a row. a benchmark's four
+    builds can be two hundred times apart, so one count cannot suit them — a
+    count long enough for the interpreted build left the compiled one timing a
+    third of a millisecond, and one descheduling at the scheduler's
+    ten-millisecond granularity is then thirty times the reading. and the probe
+    was one un-replicated sample taken minutes before the timing, so a machine
+    that got busier in between chose the count from a speed the run no longer
+    had: a `mandel_inline` count picked against a 16ms interpreted call was still
+    in use when that call had become 77ms.
+
+    running each sample to a *duration* removes both. every build's sample is
+    long enough by construction, on whatever machine it turns out to be on, and
+    nothing about it is decided ahead of time. measured against the count it
+    replaced — two runs of one unchanged compiler each way — it left the median
+    row where it was and pulled the worst row in from a 50% run-to-run
+    disagreement to 8%.
+
+    the clock is read once per chunk rather than once per call, and the next
+    chunk is sized from the rate measured so far — so the reading carries no
+    per-call timing overhead and reaches the target in a few steps. the growth
+    is capped at eightfold a step so that one anomalously quick chunk cannot
+    overshoot the target by an order of magnitude.
 
     `gc.collect()` sits outside the timed region rather than being disabled,
     because disabling it would change what an allocation-heavy benchmark
@@ -89,10 +116,20 @@ def sample(module, count: int) -> float:
     anyway out of whichever build was unlucky enough to trigger it
     """
     gc.collect()
+    calls = 0
+    chunk = 1
     start = time.perf_counter()
-    for _ in range(count):
-        module.bench()
-    return time.perf_counter() - start
+    while True:
+        for _ in range(chunk):
+            module.bench()
+        calls += chunk
+        elapsed = time.perf_counter() - start
+        if elapsed >= target or calls >= ceiling:
+            return elapsed, calls
+        # the clock cannot read zero for a chunk that ran a python call, but a
+        # rate is being divided by it, so it is floored rather than trusted
+        wanted = math.ceil((target - elapsed) * calls / max(elapsed, 1e-9))
+        chunk = max(1, min(chunk * 8, wanted, ceiling - calls))
 
 
 def main() -> int:
@@ -121,36 +158,12 @@ def main() -> int:
         print(json.dumps({"answers": answers, "refused": refused, "origins": origins}))
         return 0
 
-    if spec["mode"] == "calibrate":
-        # how many calls make one sample. every build of a benchmark runs the
-        # same number, so the pairing stays exact — which means one number has
-        # to suit builds that can be forty times apart. it is chosen from both
-        # ends: long enough that the fastest build's sample is well clear of the
-        # clock, short enough that the slowest build's round does not dominate
-        # the run. where the two disagree the cap wins, and the control column
-        # then says out loud whether the resulting sample was too short
-        per_call = {}
-        for name, module in loaded:
-            count = 1
-            while True:
-                elapsed = sample(module, count)
-                if elapsed >= spec["probe_target"] or count >= spec["max_count"]:
-                    break
-                grow = max(2, min(8, int(spec["probe_target"] / max(elapsed, 1e-9))))
-                count = min(count * grow, spec["max_count"])
-            per_call[name] = elapsed / count
-
-        fastest, slowest = min(per_call.values()), max(per_call.values())
-        wanted = math.ceil(spec["min_sample"] / fastest)
-        cap = max(1, int(spec["max_sample"] / slowest))
-        count = max(1, min(wanted, cap, spec["max_count"]))
-        print(json.dumps({"count": count, "per_call": per_call, "refused": refused}))
-        return 0
-
-    count, rounds, warmup = spec["count"], spec["rounds"], spec["warmup"]
+    target, ceiling = spec["sample_target"], spec["max_calls"]
+    rounds, warmup = spec["rounds"], spec["warmup"]
     order = [name for name, _ in loaded]
     modules = dict(loaded)
-    timings = {name: [] for name in order}
+    timings: dict[str, list[float]] = {name: [] for name in order}
+    counts: dict[str, list[int]] = {name: [] for name in order}
 
     for index in range(warmup + rounds):
         # rotate, so no build is systematically the one that pays for a cold
@@ -158,9 +171,10 @@ def main() -> int:
         # benchmark run should be reproducible
         shift = index % len(order)
         for name in order[shift:] + order[:shift]:
-            elapsed = sample(modules[name], count)
+            elapsed, calls = sample(modules[name], target, ceiling)
             if index >= warmup:
-                timings[name].append(elapsed / count)
+                timings[name].append(elapsed / calls)
+                counts[name].append(calls)
 
     print(
         json.dumps(
@@ -168,7 +182,7 @@ def main() -> int:
                 "timings": timings,
                 "refused": refused,
                 "origins": origins,
-                "count": count,
+                "counts": counts,
             }
         )
     )

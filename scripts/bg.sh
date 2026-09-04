@@ -22,11 +22,20 @@
 #                                             the caller can simply call again
 #   scripts/bg.sh status <name>               done/running/missing, no waiting
 #   scripts/bg.sh log   <name> [lines]        tail the output
+#   scripts/bg.sh stop  <name>                end it, and everything it started
 #
 # `wait` distinguishes the two outcomes a bare sleep loop cannot: `done rc=N`
 # means the job really finished and N is its exit status; `running` means it is
 # still going and nothing is wrong. a job that dies still writes its marker, so
 # a crash is never mistaken for slowness
+#
+# `stop` exists because there was no way to end a job, so it was done by hand
+# with `pkill -f <the rung's name>`. that kills the *script* the wrapper is
+# running and leaves the wrapper alive — and a wrapper running a loop simply
+# advances to the next iteration and spawns the next thing. a sweep chain killed
+# that way carried straight on through three more rungs and ran orphaned for 98
+# minutes, while every benchmark in that session was being timed against the load
+# it was making. `pkill` returning cleanly looked like success each time
 
 set -u
 
@@ -65,17 +74,92 @@ start() {
     printf '%s is already running — pick another name or wait for it\n' "$name" >&2
     return 1
   fi
-  rm -f "$d/$name.done" "$d/$name.log" "$d/$name.pid"
+  rm -f "$d/$name.done" "$d/$name.log" "$d/$name.pid" "$d/$name.stopped"
   # the marker is written by the same shell that runs the command, after it
   # exits, so it cannot be missed and it carries the real status
   #
   # the single quotes are the point: `$@`, `$?` and `$0` are for the *inner* shell to
   # expand once it has run the command, not for this one to expand now
+  #
+  # `set -m` is what makes the job stoppable: with job control on, the background
+  # job leads a process group of its own whose id is its pid, so one signal to the
+  # negative pid reaches the wrapper, the command, and everything the command went
+  # on to spawn. without it the job shares this shell's group and there is nothing
+  # to signal but the wrapper
+  set -m
   # shellcheck disable=SC2016
   nohup bash -c '"$@" ; printf "%s\n" "$?" > "$0"' \
     "$d/$name.done" "$@" > "$d/$name.log" 2>&1 &
-  printf '%s\n' "$!" > "$d/$name.pid"
+  local pid=$!
+  set +m
+  printf '%s\n' "$pid" > "$d/$name.pid"
   printf 'started %s (log %s)\n' "$name" "$d/$name.log"
+}
+
+# end a job and everything it started
+#
+# a deliberate stop is recorded, because otherwise it is indistinguishable from
+# the machine killing the job: both leave a job that never wrote its exit status,
+# and the whole point of `status` is that those two are not the same thing
+#
+# the group is given a chance to exit on `TERM` before `KILL`, so a rung that
+# cleans up after itself gets to. and the group is re-checked afterwards rather
+# than trusted — a single kill looked like success three times in a row here while
+# the loop above it had already started the next child
+stop() {
+  local name="$1" d; d=$(dir)
+  if [ -f "$d/$name.done" ]; then
+    printf 'already done rc=%s\n' "$(cat "$d/$name.done")"
+    return 0
+  fi
+  if [ ! -f "$d/$name.pid" ]; then
+    printf 'missing\n'
+    return 0
+  fi
+  local pid; pid=$(cat "$d/$name.pid")
+  if ! kill -0 "$pid" 2>/dev/null; then
+    printf 'not running\n'
+    return 0
+  fi
+  # `kill -TERM -$pid` means "the process group numbered $pid", and a group id is only
+  # this job's if this job leads it. a job started before `start` enabled job control
+  # shares whatever group its caller was in, so the negative form would name a group
+  # belonging to somebody else — quite possibly the shell asking. so the leadership is
+  # checked rather than assumed, and where the job does not lead a group only the job
+  # itself is signalled and the report says the children could not be reached
+  local pgid group=""
+  pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+  [ "$pgid" = "$pid" ] && group="-"
+  kill -TERM "$group$pid" 2>/dev/null
+  local waited=0
+  while [ "$waited" -lt 10 ] && kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$group$pid" 2>/dev/null
+    sleep 2
+  fi
+  if kill -0 "$pid" 2>/dev/null; then
+    printf 'still running after KILL — pid %s\n' "$pid" >&2
+    return 1
+  fi
+  if [ -z "$group" ]; then
+    printf 'stopped %s, but it led no process group — anything it spawned is still running\n' \
+      "$name" >&2
+    printf 'stopped\n' > "$d/$name.stopped"
+    return 1
+  fi
+  # anything left in the group is a straggler that outlived its leader, and it is
+  # the thing this verb exists to catch
+  local left
+  left=$(ps -Ao pgid= 2>/dev/null | tr -d ' ' | grep -c "^$pid$") || left=0
+  printf 'stopped\n' > "$d/$name.stopped"
+  if [ "$left" -gt 0 ]; then
+    printf 'stopped %s, but %s process(es) remain in its group\n' "$name" "$left" >&2
+    return 1
+  fi
+  printf 'stopped %s\n' "$name"
 }
 
 # a job killed outright — OOM, SIGKILL, the machine giving up — never reaches the
@@ -102,6 +186,10 @@ status() {
     sleep 1
     if [ -f "$d/$name.done" ]; then
       printf 'done rc=%s\n' "$(cat "$d/$name.done")"
+      return 0
+    fi
+    if [ -f "$d/$name.stopped" ]; then
+      printf 'stopped (by request)\n'
       return 0
     fi
     printf 'died (no exit status — killed, not finished)\n'
@@ -133,5 +221,6 @@ case "${1:-}" in
   wait)   shift; wait_for "$@" ;;
   status) shift; status "$@" ;;
   log)    shift; tail -n "${2:-40}" "$(dir)/$1.log" ;;
-  *) printf 'usage: %s {start|wait|status|log} <name> [...]\n' "$0" >&2; exit 2 ;;
+  stop)   shift; stop "$@" ;;
+  *) printf 'usage: %s {start|wait|status|log|stop} <name> [...]\n' "$0" >&2; exit 2 ;;
 esac
