@@ -8250,11 +8250,43 @@ impl<'src> Parser<'src> {
                 );
             }
         }
+        // one exception: the last parameter may be the callback a trailing block
+        // (`f(...):`) fills, which the call passes by keyword — so a component
+        // can declare both a `context` parameter and a content block:
+        // `def Card(title: str, context theme: Theme, once content: () -> None)`
+        //
+        // A callable annotation alone is not enough to earn the exemption. An
+        // ordinary callable parameter *can* take a positional argument, and
+        // exempting it would let `Card("x", handler)` bind `handler` to the
+        // `context` parameter instead — the very thing this rule exists to stop.
+        // The `local` / `once` modifier is what marks a parameter as a borrowed
+        // callback rather than a value the caller hands over, so that is what is
+        // required here. Anything else after a `context` parameter can still be
+        // written keyword-only, after a bare `*`.
+        let trailing_callback_index = parameters
+            .args
+            .last()
+            .filter(|param| {
+                matches!(
+                    param.parameter.annotation.as_deref(),
+                    Some(ruff_python_ast::Expr::CallableType(_))
+                ) && {
+                    // `local` / `once` on a `def` parameter carry no AST field:
+                    // they live in the span between the parameter's start and
+                    // its name (see `parameter_modifiers`)
+                    let modifiers = ruff_python_ast::helpers::parameter_modifiers(
+                        self.source,
+                        &param.parameter,
+                    );
+                    modifiers.local || modifiers.once
+                }
+            })
+            .map(|_| parameters.args.len() - 1);
         let mut seen_context_param = false;
-        for param in &parameters.args {
+        for (index, param) in parameters.args.iter().enumerate() {
             if param.parameter.is_context {
                 seen_context_param = true;
-            } else if seen_context_param {
+            } else if seen_context_param && trailing_callback_index != Some(index) {
                 self.add_error(
                     ParseErrorType::OtherError(
                         "parameter after a `context` parameter must also be `context`".to_string(),

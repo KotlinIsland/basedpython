@@ -31,7 +31,7 @@ use ty_python_core::semantic_index;
 use crate::Db;
 use crate::place::known_module_symbol;
 use crate::types::ProgramEnvironment;
-use crate::types::dedicated::role::function_framework_role;
+use crate::types::dedicated::role::{FunctionFrameworkRole, function_framework_role};
 use crate::types::{
     FunctionType, KnownClass, KnownFunction, Type, definition_expression_type,
     infer_definition_types,
@@ -390,7 +390,9 @@ pub(in crate::types) fn injected_parameter_type<'db>(
     function: FunctionType<'db>,
     name: &str,
 ) -> Option<Type<'db>> {
-    function_framework_role(db, function)?;
+    if !function_framework_role(db, function).is_some_and(FunctionFrameworkRole::is_pytest) {
+        return None;
+    }
     if parametrized_names(db, function).contains(name) {
         return None;
     }

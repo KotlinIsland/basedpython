@@ -37,7 +37,7 @@ use crate::Db;
 use crate::types::ProgramEnvironment;
 use crate::types::receivers::{ImplicitReceiverName, implicit_receiver_name};
 use crate::types::soundness::single_signature;
-use crate::types::trailing_lambda::{enclosing_block_callee_type, trailing_lambda_it_type};
+use crate::types::trailing_lambda::{enclosing_block_callee, trailing_lambda_it_type};
 use crate::types::{Type, binding_type};
 
 /// the outcome of resolving one unmatched `context` parameter at a call site
@@ -317,8 +317,8 @@ fn collect_block_candidates<'db>(
         });
     }
 
-    if let Some(callee_ty) = enclosing_block_callee_type(db, scope)
-        && let Some(ty) = trailing_lambda_it_type(db, callee_ty)
+    if let Some(callee) = enclosing_block_callee(db, scope)
+        && let Some(ty) = trailing_lambda_it_type(db, callee)
     {
         out.push(Candidate {
             name: Name::new_static("it"),

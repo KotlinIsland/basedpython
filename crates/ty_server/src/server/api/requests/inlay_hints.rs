@@ -153,6 +153,13 @@ fn inlay_hint_kind(inlay_hint_kind: &InlayHintKind) -> lsp_types::InlayHintKind 
         | InlayHintKind::Reification
         | InlayHintKind::TypeArgument
         | InlayHintKind::Override
+        // basedpython-ui: a read set, a dependency set and an invalidation set
+        // are typing facts about the function, and `unstable` is a modifier
+        // like `override`
+        | InlayHintKind::Reads
+        | InlayHintKind::Stability
+        | InlayHintKind::DerivedDeps
+        | InlayHintKind::Invalidates
         | InlayHintKind::NumericPromotion
         | InlayHintKind::RevealedType
         | InlayHintKind::EnumValue => lsp_types::InlayHintKind::Type,

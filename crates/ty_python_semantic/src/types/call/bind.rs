@@ -2621,6 +2621,14 @@ impl<'db> Bindings<'db> {
                             }
                         }
 
+                        Some(KnownFunction::IsDeeplyImmutable) => {
+                            if let [Some(ty)] = overload.parameter_types() {
+                                overload.set_return_type(Type::bool_literal(
+                                    ty.project_type_form(db, env).is_deeply_immutable(db, env),
+                                ));
+                            }
+                        }
+
                         Some(KnownFunction::GenericContext) => {
                             if let [Some(ty)] = overload.parameter_types() {
                                 let wrap_generic_context = |generic_context| {
@@ -10919,13 +10927,17 @@ impl<'db> BindingError<'db> {
         argument_index: Option<usize>,
     ) -> Option<ArgOrKeyword<'_>> {
         match (node, argument_index) {
-            (ast::AnyNodeRef::ExprCall(call_node), Some(argument_index)) => Some(
-                call_node
-                    .arguments
-                    .iter_source_order()
-                    .nth(argument_index)
-                    .expect("argument index should not be out of range"),
-            ),
+            // basedpython: a call carrying a trailing block binds one argument
+            // more than it writes — the block, which has no node. An index past
+            // the written arguments is that block, and reports on the whole call.
+            //
+            // Any *other* out-of-range index would be a bug in argument
+            // matching. This returns `None` for that too rather than panicking:
+            // the cost is a diagnostic anchored on the call instead of on one
+            // argument, which is what the block case wants anyway
+            (ast::AnyNodeRef::ExprCall(call_node), Some(argument_index)) => {
+                call_node.arguments.iter_source_order().nth(argument_index)
+            }
             // If we've been passed a `ClassDef` node, it indicates that we're reporting an error
             // relating to the class's keyword arguments. Keyword arguments are passed to `__init_subclass__`,
             // or `__new__`/`__prepare__` on the metaclass -- but positional arguments are not, and neither

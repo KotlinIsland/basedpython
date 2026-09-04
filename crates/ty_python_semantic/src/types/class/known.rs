@@ -190,6 +190,13 @@ pub enum KnownClass {
     SqlalchemyMapped,
     // Pytest
     PytestParametrizeMarkDecorator,
+
+    // basedpython-ui (`basedpython_ui.runtime`) — the framework's observables
+    BasedpythonUiState,
+    BasedpythonUiStateList,
+    BasedpythonUiStateDict,
+    BasedpythonUiDerived,
+    BasedpythonUiAmbient,
 }
 
 impl KnownClass {
@@ -329,6 +336,11 @@ impl KnownClass {
             | Self::SqlalchemyDeclarativeBase
             | Self::SqlalchemyMappedAsDataclass
             | Self::SqlalchemyMapped
+            | Self::BasedpythonUiState
+            | Self::BasedpythonUiStateList
+            | Self::BasedpythonUiStateDict
+            | Self::BasedpythonUiDerived
+            | Self::BasedpythonUiAmbient
             | Self::Character => false,
         }
     }
@@ -481,6 +493,11 @@ impl KnownClass {
             | Self::SqlalchemyDeclarativeBase
             | Self::SqlalchemyMappedAsDataclass
             | Self::SqlalchemyMapped
+            | Self::BasedpythonUiState
+            | Self::BasedpythonUiStateList
+            | Self::BasedpythonUiStateDict
+            | Self::BasedpythonUiDerived
+            | Self::BasedpythonUiAmbient
             | Self::ByStaticProperty
             | Self::PytestParametrizeMarkDecorator => Some(Truthiness::Ambiguous),
 
@@ -624,6 +641,11 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
+            | KnownClass::BasedpythonUiState
+            | KnownClass::BasedpythonUiStateList
+            | KnownClass::BasedpythonUiStateDict
+            | KnownClass::BasedpythonUiDerived
+            | KnownClass::BasedpythonUiAmbient
             | KnownClass::ByStaticProperty
             | KnownClass::PytestParametrizeMarkDecorator => false,
         }
@@ -758,6 +780,11 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
+            | KnownClass::BasedpythonUiState
+            | KnownClass::BasedpythonUiStateList
+            | KnownClass::BasedpythonUiStateDict
+            | KnownClass::BasedpythonUiDerived
+            | KnownClass::BasedpythonUiAmbient
             | KnownClass::ByStaticProperty
             | KnownClass::PytestParametrizeMarkDecorator => false,
 
@@ -894,6 +921,11 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
+            | KnownClass::BasedpythonUiState
+            | KnownClass::BasedpythonUiStateList
+            | KnownClass::BasedpythonUiStateDict
+            | KnownClass::BasedpythonUiDerived
+            | KnownClass::BasedpythonUiAmbient
             | KnownClass::ByStaticProperty
             | KnownClass::PytestParametrizeMarkDecorator => false,
         }
@@ -1041,6 +1073,11 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
+            | KnownClass::BasedpythonUiState
+            | KnownClass::BasedpythonUiStateList
+            | KnownClass::BasedpythonUiStateDict
+            | KnownClass::BasedpythonUiDerived
+            | KnownClass::BasedpythonUiAmbient
             | KnownClass::ByStaticProperty
             | Self::PytestParametrizeMarkDecorator => false,
         }
@@ -1177,6 +1214,11 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
+            | KnownClass::BasedpythonUiState
+            | KnownClass::BasedpythonUiStateList
+            | KnownClass::BasedpythonUiStateDict
+            | KnownClass::BasedpythonUiDerived
+            | KnownClass::BasedpythonUiAmbient
             | KnownClass::ByStaticProperty
             | KnownClass::PytestParametrizeMarkDecorator => false,
             KnownClass::NamedTupleFallback
@@ -1327,6 +1369,11 @@ impl KnownClass {
             Self::SqlalchemyMappedAsDataclass => "MappedAsDataclass",
             Self::SqlalchemyMapped => "Mapped",
             Self::PytestParametrizeMarkDecorator => "_ParametrizeMarkDecorator",
+            Self::BasedpythonUiState => "State",
+            Self::BasedpythonUiStateList => "StateList",
+            Self::BasedpythonUiStateDict => "StateDict",
+            Self::BasedpythonUiDerived => "Derived",
+            Self::BasedpythonUiAmbient => "Ambient",
         }
     }
 
@@ -1788,6 +1835,11 @@ impl KnownClass {
             }
             Self::SqlalchemyMapped => KnownModule::SqlalchemyOrmBase,
             Self::PytestParametrizeMarkDecorator => KnownModule::PytestMarkStructures,
+            Self::BasedpythonUiState
+            | Self::BasedpythonUiStateList
+            | Self::BasedpythonUiStateDict
+            | Self::BasedpythonUiDerived
+            | Self::BasedpythonUiAmbient => KnownModule::BasedpythonUiRuntime,
         }
     }
 
@@ -1921,6 +1973,11 @@ impl KnownClass {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
+            | KnownClass::BasedpythonUiState
+            | KnownClass::BasedpythonUiStateList
+            | KnownClass::BasedpythonUiStateDict
+            | KnownClass::BasedpythonUiDerived
+            | KnownClass::BasedpythonUiAmbient
             | KnownClass::ByStaticProperty
             | Self::PytestParametrizeMarkDecorator => false,
         }
@@ -2057,6 +2114,11 @@ impl KnownClass {
             "MappedAsDataclass" => &[Self::SqlalchemyMappedAsDataclass],
             "Mapped" => &[Self::SqlalchemyMapped],
             "_ParametrizeMarkDecorator" => &[Self::PytestParametrizeMarkDecorator],
+            "State" => &[Self::BasedpythonUiState],
+            "StateList" => &[Self::BasedpythonUiStateList],
+            "StateDict" => &[Self::BasedpythonUiStateDict],
+            "Derived" => &[Self::BasedpythonUiDerived],
+            "Ambient" => &[Self::BasedpythonUiAmbient],
             _ => return None,
         };
 
@@ -2189,6 +2251,11 @@ impl KnownClass {
             | Self::SqlalchemyDeclarativeBase
             | Self::SqlalchemyMappedAsDataclass
             | Self::SqlalchemyMapped
+            | Self::BasedpythonUiState
+            | Self::BasedpythonUiStateList
+            | Self::BasedpythonUiStateDict
+            | Self::BasedpythonUiDerived
+            | Self::BasedpythonUiAmbient
             | Self::ByStaticProperty => module == self.canonical_module(python_version),
 
             // no equivalent class exists in typing_extensions, nor ever will
