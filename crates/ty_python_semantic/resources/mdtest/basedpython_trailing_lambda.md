@@ -800,7 +800,7 @@ reveal_type(mutable)  # revealed: str
 
 mutable = "other"
 
-# error: [invalid-assignment] "Reassignment of `Final` symbol `declared` is not allowed"
+# error: [invalid-assignment] "read-only symbol `declared` cannot be reassigned"
 declared = "other"
 ```
 

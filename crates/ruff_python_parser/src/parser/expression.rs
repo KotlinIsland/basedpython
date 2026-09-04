@@ -129,6 +129,7 @@ pub(super) const fn starts_statement_expression(kind: TokenKind) -> bool {
         TokenKind::If
             | TokenKind::For
             | TokenKind::While
+            | TokenKind::Try
             | TokenKind::Raise
             | TokenKind::Return
             | TokenKind::Break
@@ -1268,6 +1269,7 @@ impl<'src> Parser<'src> {
             // clause, so a missing comprehension target still reports as such
             TokenKind::If
             | TokenKind::While
+            | TokenKind::Try
             | TokenKind::Raise
             | TokenKind::Return
             | TokenKind::Break

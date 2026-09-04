@@ -1761,13 +1761,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         let env = self.program_environment();
-        let (mut place_and_quals, conflicting) = place_from_declarations_with_reachability_cache(
+        let result = place_from_declarations_with_reachability_cache(
             db,
             env,
             declarations,
             self.reachability_cache(),
-        )
-        .into_place_and_conflicting_declarations();
+        );
+        let declaration = result.first_declaration;
+        let (mut place_and_quals, conflicting) = result.into_place_and_conflicting_declarations();
 
         if let Some(conflicting) = conflicting {
             // TODO point out the conflicting declarations in the diagnostic?
@@ -1813,6 +1814,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             node,
             qualifiers,
             is_local,
+            declaration,
         }
     }
 
@@ -5224,6 +5226,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 node,
                 qualifiers: TypeQualifiers::empty(),
                 is_local: true,
+                declaration: None,
             };
             let target_ty = if let Some(value) = value {
                 // Infer the value as an ordinary assignment without using the rejected annotation
@@ -16846,6 +16849,9 @@ struct AddBinding<'db, 'ast> {
     node: AnyNodeRef<'ast>,
     qualifiers: TypeQualifiers,
     is_local: bool,
+    /// The declaration the qualifiers came from, which a diagnostic about them
+    /// points back to.
+    declaration: Option<Definition<'db>>,
 }
 
 impl<'db, 'ast> AddBinding<'db, 'ast> {
@@ -16869,52 +16875,64 @@ impl<'db, 'ast> AddBinding<'db, 'ast> {
         let mut bound_ty = inferred_ty;
 
         if self.qualifiers.contains(TypeQualifiers::FINAL) {
-            let mut previous_bindings = use_def.bindings_at_definition(self.binding);
+            // An assignment to a local read-only symbol is only an error if the symbol was
+            // already assigned before it.
+            //
+            // A loop header stands for the bindings that reached the loop's back edge, so it
+            // is an earlier assignment only when it stands for one. A basedpython `let`
+            // written inside the loop body goes out of scope where that body ends, which
+            // leaves the header standing for nothing: every iteration assigns a declaration
+            // of its own, exactly as it would in a `let` block that ran once.
+            //
+            // ```by
+            // while True:
+            //     let a
+            //     a = 1  # not a reassignment
+            // ```
+            let already_assigned = use_def
+                .bindings_at_definition(self.binding)
+                .filter_map(|previous| previous.binding.definition())
+                .any(|previous| {
+                    !previous.kind(db).is_loop_header()
+                        || !loop_header_reachability(db, previous)
+                            .reachable_bindings
+                            .is_empty()
+                });
 
-            // An assignment to a local `Final`-qualified symbol is only an error if there are prior bindings
-
-            let previous_definition = previous_bindings.find_map(|r| r.binding.definition());
-
-            if !self.is_local || previous_definition.is_some() {
+            if !self.is_local || already_assigned {
                 let place = place_table.place(self.binding.place(db));
                 if let Some(diag_builder) = builder.context.report_lint(
                     &INVALID_ASSIGNMENT,
                     self.binding.full_range(builder.db(), builder.module()),
                 ) {
                     let mut diagnostic = diag_builder.into_diagnostic(format_args!(
-                        "Reassignment of `Final` symbol `{place}` is not allowed"
+                        "read-only symbol `{place}` cannot be reassigned"
                     ));
 
-                    diagnostic.set_primary_annotation_message("Reassignment of `Final` symbol");
+                    diagnostic.set_primary_annotation_message("reassigned here");
 
-                    if let Some(previous_definition) = previous_definition {
-                        // It is not very helpful to show the previous definition if it results from
-                        // an import. Ideally, we would show the original definition in the external
-                        // module, but that information is currently not threaded through attribute
-                        // lookup.
-                        if !previous_definition.kind(db).is_import() {
-                            if let DefinitionKind::AnnotatedAssignment(assignment) =
-                                previous_definition.kind(db)
-                            {
-                                let range = assignment.annotation(builder.module()).range();
-                                diagnostic.annotate(
-                                    builder
-                                        .context
-                                        .secondary(range)
-                                        .message("Symbol declared as `Final` here"),
-                                );
-                            } else {
-                                let range = previous_definition.full_range(db, builder.module());
-                                diagnostic.annotate(
-                                    builder
-                                        .context
-                                        .secondary(range)
-                                        .message("Symbol declared as `Final` here"),
-                                );
+                    // It is not very helpful to point at a declaration that results from an
+                    // import. Ideally, we would show the original declaration in the external
+                    // module, but that information is currently not threaded through attribute
+                    // lookup.
+                    if let Some(declaration) = self.declaration
+                        && !declaration.kind(db).is_import()
+                    {
+                        // An annotation says on its own what makes the symbol read-only, and
+                        // a basedpython declaration's annotation is the keyword prefix that
+                        // was written in front of the name
+                        let range = match declaration.kind(db) {
+                            DefinitionKind::AnnotatedAssignment(assignment) => {
+                                assignment.annotation(builder.module()).range()
                             }
-                            diagnostic
-                                .set_primary_annotation_message("Symbol later reassigned here");
-                        }
+                            _ => declaration.full_range(db, builder.module()).range(),
+                        };
+                        diagnostic.annotate(
+                            builder
+                                .context
+                                .secondary(range)
+                                .message("declared read-only here"),
+                        );
                     }
                 }
             }

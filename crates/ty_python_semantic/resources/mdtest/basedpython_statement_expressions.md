@@ -188,6 +188,74 @@ def f(rows: list[list[int]]):
     reveal_type(a)  # revealed: int
 ```
 
+## `try`
+
+The `try` block's value is what it evaluates last, and each handler supplies the value for the
+exception it catches.
+
+```by
+def f(s: str):
+    a = try:
+        s.index("=")
+    except ValueError:
+        "no separator"
+    reveal_type(a)  # revealed: int | "no separator"
+```
+
+## an `else` clause is what a completed `try` block produces
+
+The `else` clause runs once the `try` block has completed, so it is the value on that path and the
+`try` block's own last expression is not.
+
+```by
+def f(s: str):
+    a = try:
+        at = s.index("=")
+    except ValueError:
+        0
+    else:
+        at + 1
+    reveal_type(a)  # revealed: int
+```
+
+## a `finally` clause produces no value
+
+It runs on the way out of every path, including the ones that carry an exception past the statement,
+so what it evaluates last is not what the statement produces.
+
+```by
+def f(s: str, log: list[str]):
+    a = try:
+        s.index("=")
+    except ValueError:
+        0
+    finally:
+        log.append(s)
+    reveal_type(a)  # revealed: int
+```
+
+## a handler that does not end in an expression is not exhaustive
+
+```by
+def f(s: str):
+    # error: [non-exhaustive-statement-expression] "this statement expression can complete without producing a value"
+    a = try:
+        s.index("=")
+    except ValueError:
+        pass
+```
+
+## a handler that raises contributes no value
+
+```by
+def f(s: str):
+    a = try:
+        s.index("=")
+    except ValueError:
+        raise TypeError(s)
+    reveal_type(a)  # revealed: int
+```
+
 ## narrowing inside a branch applies to its value
 
 ```by
@@ -351,6 +419,35 @@ def f(rows: list[list[int]]) -> int:
     else:
         0
     return a
+```
+
+## a compound statement's header is not a value position
+
+A compound statement has no value of its own, so nothing in its header — a `for` iterable, an `if`
+test, a base class — is the tail of anything.
+
+```by
+def f(xs: list[int] | None):
+    # error: [invalid-syntax] "a statement expression must be the tail of its statement"
+    for x in xs ?? raise ValueError():
+        print(x)
+```
+
+## a rejected statement expression is dropped along with its suite
+
+What the suite declares belongs to the scope the statement expression is written in, which is only
+true where the position rule holds. So a rejected one keeps nothing but the range it was written at,
+and the rest of the file is still checked.
+
+```by
+def f(n: int) -> int:
+    # error: [invalid-syntax] "a statement expression with a suite must be the whole value of its statement"
+    assert match n:
+        case 1:
+            v: int = 2
+            v
+        case _: 0
+    return n
 ```
 
 ## a statement expression with a suite must be the first statement on its line

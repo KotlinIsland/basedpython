@@ -16,7 +16,20 @@ def f(c: bool, x: int | str, xs: list[int], table: dict[str, int], k: str) -> ob
         0
     e = table.get(k) ?? raise KeyError(k)
     g = x if c else raise ValueError(x)
-    return (a, b, d, e, g)
+    i = try:
+        table[k]
+    except KeyError:
+        # a handler's suite is source too
+        0
+    j = try:
+        n = table[k]
+    except KeyError:
+        0
+    else:
+        n + 1
+    finally:
+        print(k)
+    return (a, b, d, e, g, i, j)
 
 
 def h(c: bool) -> int:
