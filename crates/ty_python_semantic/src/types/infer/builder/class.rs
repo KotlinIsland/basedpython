@@ -1,6 +1,8 @@
 use crate::Db;
 use crate::ProgramEnvironment;
 use crate::place::Place;
+use crate::reified::{UnansweredReason, reified_class_reads};
+use crate::types::diagnostic::{INVALID_VARIANCE_DECLARATION, REIFIED_WITHOUT_RECEIVER};
 use crate::types::{
     CallArguments, ClassLiteralFlags, DataclassFlags, DataclassParams, KnownClass,
     KnownInstanceType, MemberLookupPolicy, SpecialFormType, StaticClassLiteral, SubclassOfType,
@@ -15,11 +17,90 @@ use crate::types::{
     },
     special_form::TypeQualifier,
 };
+use ruff_db::source::source_text;
 use ruff_python_ast::{self as ast, helpers::any_over_expr};
 use ty_module_resolver::{ImportingFile, KnownModule, file_to_module};
 use ty_python_core::{definition::Definition, scope::NodeWithScopeRef};
 
 impl<'db> TypeInferenceBuilder<'db, '_> {
+    /// basedpython: report what `class`'s reified type parameters cannot do.
+    ///
+    /// A read no receiver can answer: a class's type argument belongs to the
+    /// instance that carries it, so the class body — and a static method, which
+    /// is handed no receiver — has nothing to read one from. The transpiler
+    /// refuses the same reads from the same syntactic answer, so a program that
+    /// checks clean is one it can lower.
+    ///
+    /// And a declared variance, which reification has already decided.
+    fn report_reified_class_errors(&mut self, class: &ast::StmtClassDef) {
+        let source_type = self.file().source_type(self.db());
+        if !source_type.is_basedpython() {
+            return;
+        }
+        let source = source_text(self.db(), self.file());
+        let reads = reified_class_reads(source.as_str(), source_type, class);
+
+        // reification fixes the variance, so a declaration saying anything else
+        // is a contradiction rather than a refinement — and the variance it
+        // would override is what makes a bare construction solvable
+        for type_param in class.type_params.iter().flat_map(|params| params.iter()) {
+            if let ast::TypeParam::TypeVar(type_var) = type_param
+                && type_var.variance.is_some()
+                && reads.names.contains(&type_var.name.id)
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&INVALID_VARIANCE_DECLARATION, type_param)
+            {
+                let name = type_param.name();
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "Type parameter `{name}` cannot declare a variance"
+                ));
+                diagnostic.info(
+                    "a reified type parameter is invariant: the program can read its type \
+                     argument back, so two specializations match only when they were given \
+                     the same one",
+                );
+            }
+        }
+
+        // `A[int]` is what records a class's type arguments, so a class that
+        // answers that subscript itself leaves them nowhere to go
+        if let Some(range) = reads.own_class_getitem
+            && !reads.names.is_empty()
+            && let Some(builder) = self.context.report_lint(&REIFIED_WITHOUT_RECEIVER, range)
+        {
+            let mut diagnostic = builder
+                .into_diagnostic("A reified class cannot define `__class_getitem__`".to_string());
+            diagnostic.info(
+                "`A[int]` is what records the type arguments an instance carries, so the \
+                 class cannot answer that subscript itself",
+            );
+        }
+
+        for read in reads.unanswerable {
+            let Some(builder) = self
+                .context
+                .report_lint(&REIFIED_WITHOUT_RECEIVER, read.range)
+            else {
+                continue;
+            };
+            let name = &read.name;
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "Type parameter `{name}` has no receiver to be read from"
+            ));
+            diagnostic.info(match read.reason {
+                UnansweredReason::OutsideMethod => {
+                    "a class's type argument belongs to the instance that carries it, and this \
+                     runs while the class is still being built"
+                }
+                UnansweredReason::WithoutReceiver => {
+                    "a class's type argument belongs to the instance that carries it, and a \
+                     static method is handed none"
+                }
+            });
+        }
+    }
+
     pub(super) fn infer_class_body(&mut self, class: &ast::StmtClassDef) {
         self.infer_body(&class.body);
     }
@@ -35,6 +116,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             self.typevar_binding_context.replace(binding_context);
 
         self.infer_type_parameters(type_params, TypeParamReification::Class);
+        self.report_reified_class_errors(class);
 
         if class.arguments.is_some() {
             let defer_class_args = self.in_stub() || self.is_basedpython_file();

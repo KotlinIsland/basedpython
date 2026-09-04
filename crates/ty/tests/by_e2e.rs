@@ -2350,6 +2350,27 @@ fn transpile_directory_round_trips_through_build() {
     );
 }
 
+/// An interpreter new enough to run a reified class: the specializer reads the
+/// class's own `__type_params__`, which needs the native PEP 695 header.
+fn python_at_least_312() -> Option<String> {
+    // `$PYTHON` is what pins the interpreter for every python-executing test,
+    // so an explicit one is the answer whether or not it is new enough — a run
+    // that pinned an old interpreter should say so rather than quietly pick
+    // another
+    if let Ok(pinned) = std::env::var("PYTHON") {
+        return Some(pinned);
+    }
+    ["python3.13", "python3.12", "python3"]
+        .into_iter()
+        .find(|python| {
+            Command::new(python)
+                .args(["-c", "import sys; sys.exit(sys.version_info < (3, 12))"])
+                .output()
+                .is_ok_and(|out| out.status.success())
+        })
+        .map(str::to_owned)
+}
+
 /// transpile with `--min-version 3.13` — reified generics require native PEP
 /// 695 syntax in the output (the closure mechanism), available from 3.12+.
 fn transpile_at_313(source: &str) -> String {
@@ -2376,6 +2397,80 @@ f[int](1)
     assert!(
         out.contains("f[int](1)"),
         "reified call site must keep its type args:\n{out}"
+    );
+}
+
+#[test]
+fn reified_class_binds_its_type_argument_from_the_receiver() {
+    // `T` in a value position reifies the class: it is decorated with
+    // `@generic_class`, the method that reads `T` opens by binding it from its
+    // receiver, and the construction names the specialization ty solved
+    let out = transpile_at_313(
+        "\
+class A[T]:
+    def f(self):
+        print(T)
+
+a: A[int] = A()
+a.f()
+",
+    );
+    assert!(
+        out.contains("@generic_class  # basedpython: reified"),
+        "reified class should be decorated:\n{out}"
+    );
+    assert!(
+        out.contains("        T = _type_argument(self, \"T\")"),
+        "the read should bind from the receiver:\n{out}"
+    );
+    assert!(
+        out.contains("a: A[int] = A[int]()"),
+        "the construction should name its specialization:\n{out}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn reified_class_reads_its_type_argument_at_runtime() {
+    // the whole contract end to end: an instance built from `A[int]` answers
+    // `int` when its method reads the class's type parameter
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class A[T]:
+    def f(self):
+        print(T)
+
+a: A[int] = A()
+a.f()
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "<class 'int'>"
     );
 }
 

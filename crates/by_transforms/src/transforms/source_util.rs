@@ -1,8 +1,12 @@
 use std::fmt::Display;
 
+use super::ast_driver::Fragment;
+
 use ruff_python_ast::helpers::consumed_keywords;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{Decorator, Expr, Parameters, Stmt, StmtImportFrom, TypeParam, TypeParams};
+use ruff_python_ast::{
+    Decorator, Expr, Parameters, Stmt, StmtFunctionDef, StmtImportFrom, TypeParam, TypeParams,
+};
 use ruff_python_trivia::SimpleTokenizer;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
@@ -215,6 +219,16 @@ pub(crate) fn line_start(source: &str, pos: TextSize) -> TextSize {
     TextSize::try_from(start).expect("line start fits u32")
 }
 
+/// Byte offset just past the newline that ends the line containing `pos` — the
+/// end of the source when that line is the last one and carries no newline
+pub(crate) fn line_past_end(source: &str, pos: TextSize) -> TextSize {
+    let offset = usize::from(pos);
+    let end = source[offset..]
+        .find('\n')
+        .map_or(source.len(), |newline| offset + newline + 1);
+    TextSize::try_from(end).expect("line end fits u32")
+}
+
 /// Leading-whitespace slice of the line containing `pos`. Empty when the line
 /// has no indentation or `pos` falls inside the indentation prefix
 pub(crate) fn line_indent(source: &str, pos: TextSize) -> &str {
@@ -424,4 +438,120 @@ pub(crate) fn rename_identifiers(
         }
     }
     out
+}
+
+/// One statement a [`body_prologue`] insertion writes at the top of a function
+/// body.
+///
+/// `push` appends the statement's fragments; `indent` is the indentation of the
+/// body, which a statement that continues onto a second line has to re-establish
+/// itself.
+pub(crate) trait PrologueStatement {
+    fn push(&self, frags: &mut Vec<Fragment>, indent: &str);
+}
+
+/// The insertion that writes `statements` at the top of `f`'s body — after a
+/// docstring, before everything else the source wrote there.
+///
+/// `None` when the body holds nothing the source wrote at all: the `init(…)`
+/// shorthand generates its whole body, and an offset taken from a statement the
+/// parser synthesized from a parameter points back into the signature.
+pub(crate) fn body_prologue(
+    source: &str,
+    f: &StmtFunctionDef,
+    statements: &[impl PrologueStatement],
+) -> Option<(TextSize, Vec<Fragment>)> {
+    let mut frags: Vec<Fragment> = Vec::new();
+    if let Some(range) = first_source_statement(f).and_then(|s| body_range(s, header_end(f))) {
+        let insert_at = range.start();
+        let prefix = &source[usize::from(line_start(source, insert_at))..usize::from(insert_at)];
+        if prefix.trim().is_empty() {
+            // the insertion lands after the statement's own indentation; each
+            // statement re-establishes it for the line that follows
+            for statement in statements {
+                statement.push(&mut frags, prefix);
+                frags.push(Fragment::Lit(format!("\n{prefix}")));
+            }
+        } else {
+            // single-line body (`def f(self): return T`) — break it onto its
+            // own indented line after the insertion
+            let indent = format!("{}    ", line_indent(source, f.range().start()));
+            for statement in statements {
+                frags.push(Fragment::Lit(format!("\n{indent}")));
+                statement.push(&mut frags, &indent);
+            }
+            frags.push(Fragment::Lit(format!("\n{indent}")));
+        }
+        return Some((insert_at, frags));
+    }
+    // a docstring is the only thing the source wrote: the insertion follows it
+    let docstring = f
+        .body
+        .first()
+        .filter(|stmt| {
+            matches!(stmt, Stmt::Expr(e) if matches!(e.value.as_ref(), Expr::StringLiteral(_)))
+        })
+        .and_then(|stmt| body_range(stmt, header_end(f)))?;
+    let indent = format!("{}    ", line_indent(source, f.range().start()));
+    for statement in statements {
+        frags.push(Fragment::Lit(format!("\n{indent}")));
+        statement.push(&mut frags, &indent);
+    }
+    Some((docstring.end(), frags))
+}
+
+/// The first statement in `f`'s body that came from the source, skipping a
+/// docstring and any statement the parser synthesized.
+///
+/// This is the anchor a body insertion hangs off, and [`init_method`] reads the
+/// same one: a body the two disagree about is a body where one of them emits a
+/// `_MISSING` sentinel and the other emits no guard for it.
+///
+/// [`init_method`]: super::init_method
+pub(crate) fn first_source_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
+    let header_end = header_end(f);
+    let docstring_count = if let Some(Stmt::Expr(e)) = f.body.first() {
+        usize::from(matches!(e.value.as_ref(), Expr::StringLiteral(_)))
+    } else {
+        0
+    };
+    f.body
+        .iter()
+        .skip(docstring_count)
+        .find(|s| body_range(s, header_end).is_some())
+}
+
+/// The first statement in `f`'s body that came from the source, a docstring
+/// included — that is, whether the source wrote a body at all.
+///
+/// [`init_method`] hangs the body it generates off this, and it is what
+/// [`is_bodyless_init_shorthand`](super::mutable_defaults::is_bodyless_init_shorthand)
+/// means by bodyless. A docstring *is* a body: generating another one around it
+/// would leave two.
+///
+/// [`init_method`]: super::init_method
+pub(crate) fn first_body_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
+    let header_end = header_end(f);
+    f.body
+        .iter()
+        .find(|stmt| body_range(stmt, header_end).is_some())
+}
+
+/// The statement's range when it is a position in the *body*. A statement the
+/// parser synthesized for an `init(…)` shorthand carries either an empty range
+/// or the range of the parameter it was built from, so it points into the
+/// header — splicing an insertion there lands it in the middle of the signature.
+fn body_range(stmt: &Stmt, header_end: TextSize) -> Option<TextRange> {
+    let range = stmt.range();
+    (!range.is_empty() && range.start() >= header_end).then_some(range)
+}
+
+/// The offset past everything a `def`'s header can span, so a statement before
+/// it is one the parser synthesized from a parameter rather than a body.
+fn header_end(f: &StmtFunctionDef) -> TextSize {
+    f.parameters.range().end().max(
+        f.returns
+            .as_ref()
+            .map_or(TextSize::new(0), |r| r.range().end()),
+    )
 }

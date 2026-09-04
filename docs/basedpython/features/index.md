@@ -133,6 +133,7 @@ type parameters — their bounds, their variance, and what survives to runtime
 - [overlapping](overlapping.md)
 - [explicit generic call sites](generic-calls.md)
 - [reified type parameters](reified-generics.md)
+- [reified class type parameters](reified-class-generics.md)
 - [type reification](type-reification.md)
 - [parametric type tests](parametric-type-tests.md)
 

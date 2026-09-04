@@ -44,10 +44,10 @@ use super::{
     if_let, implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float,
     kw_subscript, literal_string, literal_types, local_once, main_function, match_type, modifiers,
     mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
-    private_method, propagate, properties, protocol_type, raises_clause, reified_generic,
-    repeated_underscore, return_value_use, runtime_union, sentinel, some_ctor, soundness,
-    statement_expression, string_tag, super_keyword, symbolic_type_op, template_type, top_star,
-    trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
+    private_method, propagate, properties, protocol_type, raises_clause, reified_class,
+    reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel, some_ctor,
+    soundness, statement_expression, string_tag, super_keyword, symbolic_type_op, template_type,
+    top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
     typed_lambda, typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
 };
 use crate::Config;
@@ -562,6 +562,8 @@ pub(crate) fn run_against_source<'a>(
     let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
+    let reified_class_pass =
+        reified_class::ReifiedClassPass::new(source_ref, config.min_version, config.is_stub);
     let type_reification_pass =
         type_reification::TypeReificationPass::new(config.min_version, config.is_stub);
     let private_method_pass = private_method::PrivateMethodPass;
@@ -776,6 +778,11 @@ pub(crate) fn run_against_source<'a>(
         // must precede generic_call so the call-site strip skips the wrapped
         // function's specialized calls (they route through `generic.__getitem__`)
         &reified_generic_pass,
+        // reified class generics decorate `class A[T]` (value-position `T`) with
+        // `@generic_class` and bind each read from its method's receiver. it
+        // must precede type_reification, whose injected `A[int](…)` is what
+        // reaches the specializer the decorator installs
+        &reified_class_pass,
         &generic_call_pass,
         // type reification: bare generic constructor calls get their solved
         // specialization (`A(1)` → `A[int](1)`) and collection literals their

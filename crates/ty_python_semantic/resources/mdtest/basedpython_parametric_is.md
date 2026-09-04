@@ -645,6 +645,29 @@ def f(y: object) -> bool:
     return y is X
 ```
 
+## a reified class answers the probe from its specialization
+
+A [reified class](basedpython_reified_class_generics.md) specializes to a subclass rather than to a
+`typing` alias, and the probe reads that specialization the same way it reads the alias one — down
+the base chain too, so a subclass answers for what its base was given:
+
+```by
+class A[T]:
+    def kind(self) -> type[T]:
+        return T
+
+class B[U](A[U]):
+    pass
+
+def is_a_int(x: object) -> bool:
+    return x is A[int]
+
+assert is_a_int(A[int]())
+assert not is_a_int(A[str]())
+assert is_a_int(B[int]())
+assert not is_a_int(B[str]())
+```
+
 ## a bare class name is an ordinary instance test
 
 A name that is not a specialization keeps plain `isinstance` semantics — never an erased-target

@@ -37,9 +37,11 @@ variadic and a keyword pack as well (`reified *Ts`, `reified **Kwargs`)
 `reified` is a soft keyword: a type parameter *named* `reified` is still just
 that, since nothing that can open a parameter follows it
 
-reification is a property of a function — nothing else has a closure for the
-specialization step to rebuild — so `reified` on a class, a type alias, or a
-`type def` is an error (`invalid-reified-type-param`)
+a class reifies too, though it reads the argument from the instance rather than
+from a closure — see [reified class type parameters](reified-class-generics.md).
+nothing else has a step to hang a runtime value off, so `reified` on a type
+alias or a `type def` is an error (`invalid-reified-type-param`), as it is on a
+class's keyword pack, which a subscript has no way to supply
 
 the editor hints the modifier wherever the body reifies a type parameter
 without declaring it, so what is inferred and what is written read the same

@@ -12530,6 +12530,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             _ => return_ty,
         };
 
+        self.check_reified_construction(call_expression, callable_type, return_ty);
+
         self.check_narrowing_guard_as_value(call_expression, &bindings);
 
         self.record_unsolved_typevar_call(call_expression, return_ty, &bindings);
@@ -12541,6 +12543,77 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             &bindings,
             call_expression,
         )
+    }
+
+    /// basedpython: report a construction of a reified generic class that does
+    /// not say which specialization it builds.
+    ///
+    /// A reified class's type arguments live on the specialization its instances
+    /// are built from, so a bare `A(…)` is accepted only where the transpiler can
+    /// inject the solved one — the same decision, from the same query, so the two
+    /// cannot disagree. `A[int](…)` is already specialized and never reaches here:
+    /// its callee is the alias, not the class.
+    fn check_reified_construction(
+        &self,
+        call_expression: &ast::ExprCall,
+        callable_type: Type<'db>,
+        return_ty: Type<'db>,
+    ) {
+        let db = self.db();
+        if !self.is_basedpython_file() {
+            return;
+        }
+        let Type::ClassLiteral(class_literal) = callable_type else {
+            return;
+        };
+        let Some(class) = class_literal.as_static() else {
+            return;
+        };
+        // a class that forwards its parameter into a reified base is as reified
+        // as the base: its instances answer for the base's parameter
+        if !class.inherits_reification(db) {
+            return;
+        }
+        // nothing to specialize — a non-generic subclass of a reified class
+        // carries the arguments its base list already fixed
+        if class.generic_context(db).is_none() {
+            return;
+        }
+        let env = self.program_environment();
+        let Some(failure) = reified_infer::reified_construction_error(
+            db,
+            env,
+            self.file(),
+            class_literal,
+            return_ty,
+        ) else {
+            return;
+        };
+        let Some(builder) = self
+            .context
+            .report_lint(&UNSPECIALIZED_REIFIED_GENERIC, call_expression)
+        else {
+            return;
+        };
+        let name = class.name(db);
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "Cannot construct reified generic class `{name}` without a specialization"
+        ));
+        match failure {
+            ReifiedInferenceError::Unsolved(parameter) => diagnostic.info(format_args!(
+                "reified type parameter `{parameter}` cannot be inferred here — \
+                 construct a specialization, as in `{name}[int](...)`"
+            )),
+            ReifiedInferenceError::Unspellable(parameter, ty) => diagnostic.info(format_args!(
+                "inferred type `{}` for type parameter `{parameter}` has no runtime \
+                 spelling — construct a specialization, as in `{name}[int](...)`",
+                ty.display(db, env),
+            )),
+            ReifiedInferenceError::NoBinding => diagnostic.info(format_args!(
+                "the specialization cannot be inferred from this call — construct \
+                 one, as in `{name}[int](...)`"
+            )),
+        }
     }
 
     /// basedpython: remember a call that only returns `Never` because it left a type variable
@@ -13194,16 +13267,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let ty = ty.inner_type();
 
-        // basedpython: a pep 695 function type parameter referenced in a value
-        // position is reified — the runtime value is the supplied type
-        // argument, so the reference types as `type[T]` rather than as the
-        // `TypeVar` object. a `*Ts` parameter absorbs a whole run of type
-        // arguments, so its value is a tuple of them; a `**Kwargs` pack binds
-        // its fields, so its value is a mapping of field name to type
+        // basedpython: a pep 695 type parameter referenced in a value position is
+        // reified — the runtime value is the supplied type argument, so the
+        // reference types as `type[T]` rather than as the `TypeVar` object. a
+        // `*Ts` parameter absorbs a whole run of type arguments, so its value is
+        // a tuple of them; a `**Kwargs` pack binds its fields, so its value is a
+        // mapping of field name to type.
+        //
+        // a function's argument comes from the call and a class's from the
+        // instance, but the type of the reference is the same either way
         if self.is_basedpython_file()
-            && !self
-                .inference_flags()
-                .contains(InferenceFlags::IN_TYPE_EXPRESSION)
+            && !self.inference_flags().intersects(
+                // a dotted type expression infers its own receiver as a value, so
+                // the type-expression flag alone does not say `T.a` is a type
+                InferenceFlags::IN_TYPE_EXPRESSION
+                    | InferenceFlags::RESOLVING_DOTTED_TYPE_EXPRESSION,
+            )
             && let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = ty
             && matches!(
                 typevar.kind(db),
@@ -13211,11 +13290,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     | TypeVarKind::Pep695TypeVarTuple
                     | TypeVarKind::Pep695KeywordVariadic
             )
-            && typevar.definition(db).is_some_and(|definition| {
-                matches!(
-                    definition.scope(db).node(db),
-                    NodeWithScopeKind::FunctionTypeParameters(_)
-                )
+            && let Some(owner) = typevar.definition(db).and_then(|definition| {
+                match definition.scope(db).node(db) {
+                    NodeWithScopeKind::FunctionTypeParameters(_) => {
+                        Some(TypeParamReification::Function)
+                    }
+                    NodeWithScopeKind::ClassTypeParameters(_) => Some(TypeParamReification::Class),
+                    _ => None,
+                }
             })
             && let Some(bound_typevar) = bind_typevar(
                 db,
@@ -13224,6 +13306,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 self.typevar_binding_context,
                 typevar,
             )
+            // a function's type parameter is reified by this very reference —
+            // the detector counts a value-position read as one. a class's is
+            // not: the read has to be somewhere an instance can answer it, so
+            // ask the class whether it reifies the parameter at all
+            && (matches!(owner, TypeParamReification::Function)
+                || bound_typevar.is_reified_class_typevar(db))
         {
             let kind = typevar.kind(db);
             if kind.is_typevartuple() {
@@ -16271,9 +16359,10 @@ type ArgExpr<'db, 'ast> = (usize, &'ast ast::Expr, TypeContext<'db>);
 /// basedpython: the owner of a type-parameter list, as far as reification is
 /// concerned.
 ///
-/// Reification rebuilds the *function's* closure so its body sees the type
-/// argument as a value; nothing else has such a step, so a `reified` parameter
-/// declared elsewhere promises a runtime value that never arrives.
+/// A function reifies by rebuilding its closure at the call, and a class by
+/// recording the type arguments on the specialization its instances are built
+/// from. Nothing else has such a step, so a `reified` parameter declared
+/// elsewhere promises a runtime value that never arrives.
 #[derive(Clone, Copy)]
 pub(super) enum TypeParamReification {
     Function,
@@ -16301,9 +16390,10 @@ impl TypeParamReification {
                 "outside a `.by` source file `**P` declares a PEP 612 `ParamSpec`, and a \
                  parameter list has no runtime object to bind",
             ),
-            Self::Class => {
-                Some("a class's type parameters are erased; only a function reifies one")
-            }
+            Self::Class => type_param.is_param_spec().then_some(
+                "a class writes its specialization as a subscript, and a subscript takes no \
+                 keyword arguments, so a keyword-variadic pack has no way to be supplied",
+            ),
             Self::TypeAlias => {
                 Some("a type alias's type parameters are erased; only a function reifies one")
             }

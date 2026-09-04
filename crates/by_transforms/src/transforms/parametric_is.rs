@@ -103,9 +103,19 @@ def _by_type_param_defaults(args):
             resolved.append(arg)
     return tuple(resolved) if substituted else args
 
+def _by_alias(value):
+    # a reified generic class specializes to a *subclass*, which records the
+    # alias it stands for; anything else already is what it says it is. read
+    # from the class's own dict, so an ordinary subclass of a specialization is
+    # not mistaken for one
+    if isinstance(value, type):
+        return value.__dict__.get(\"__orig_class__\", value)
+    return value
+
 def _by_subst(annotation, mapping):
     # replace type parameters with the arguments bound to them, rebuilding
     # nested aliases (`list[dict[str, T]]` with `T = int` → `list[dict[str, int]]`)
+    annotation = _by_alias(annotation)
     try:
         if annotation in mapping:
             return mapping[annotation]
@@ -133,6 +143,7 @@ def _by_specialize(alias, origin, depth=0):
     # `class Swap[A, B](dict[B, A])` specializes `dict` in the other order
     if depth > 16:
         return None
+    alias = _by_alias(alias)
     klass = getattr(alias, \"__origin__\", alias)
     if not isinstance(klass, type):
         return None
@@ -180,7 +191,7 @@ def _by_generic_args(value, origin):
     return [found] if found is not None else []
 
 def _parametric_is(value, alias, variances):
-    alias = getattr(alias, \"__value__\", alias)
+    alias = _by_alias(getattr(alias, \"__value__\", alias))
     origin = getattr(alias, \"__origin__\", alias)
     if not isinstance(value, origin):
         return False
@@ -219,7 +230,7 @@ def _parametric_is_lenient(value, alias, variances):
     # arguments to check, so the base class test is the whole guarantee. this is
     # what keeps `[1, 2] cast list[int]` legal while still rejecting a value
     # whose recorded arguments contradict the target
-    alias = getattr(alias, \"__value__\", alias)
+    alias = _by_alias(getattr(alias, \"__value__\", alias))
     origin = getattr(alias, \"__origin__\", alias)
     if not isinstance(value, origin):
         return False

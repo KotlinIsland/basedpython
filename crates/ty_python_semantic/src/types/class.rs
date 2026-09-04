@@ -542,7 +542,20 @@ impl<'db> GenericAlias<'db> {
             .variables(db)
             .zip(specialization.types(db))
             .map(|(generic_typevar, ty)| {
-                if let Some(explicit_variance) = generic_typevar.typevar(db).explicit_variance(db) {
+                // basedpython: a reified parameter is invariant for the same reason a
+                // declared one is fixed — the argument is a runtime property of the
+                // instance — so it answers here like a declaration, and a class that
+                // forwards its own parameter into a reified base inherits that
+                let declared_variance =
+                    generic_typevar
+                        .typevar(db)
+                        .explicit_variance(db)
+                        .or_else(|| {
+                            generic_typevar
+                                .is_reified_class_typevar(db)
+                                .then_some(TypeVarVariance::Invariant)
+                        });
+                if let Some(explicit_variance) = declared_variance {
                     ty.with_polarity(explicit_variance)
                         .variance_of(db, &env, typevar)
                 } else {

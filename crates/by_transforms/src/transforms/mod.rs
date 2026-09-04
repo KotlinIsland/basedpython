@@ -62,6 +62,7 @@ pub(crate) mod propagate;
 pub(crate) mod properties;
 pub(crate) mod protocol_type;
 pub(crate) mod raises_clause;
+pub(crate) mod reified_class;
 pub(crate) mod reified_generic;
 pub(crate) mod repeated_underscore;
 pub(crate) mod return_value_use;

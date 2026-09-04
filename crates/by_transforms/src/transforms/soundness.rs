@@ -105,6 +105,7 @@ async def _soundness_aiter(_it, _t):
 // (and its `_parametric_is_sub`) from `PARAMETRIC_IS_RUNTIME`
 const PARAMETRIC_HELPER: &str = "\
 def _soundness_parametric(_v, _alias, _variances):
+    _alias = _by_alias(_alias)
     _origin = getattr(_alias, \"__origin__\", _alias)
     if not isinstance(_v, _origin):
         raise TypeError(

@@ -28,7 +28,8 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::callable::lower_type_expr_full;
-use super::mutable_defaults::{first_body_statement, parameter_guards};
+use super::mutable_defaults::parameter_guards;
+use super::source_util::{PrologueStatement, first_body_statement};
 use crate::type_info::TypeInfo;
 
 pub(crate) struct InitMethod<'src> {

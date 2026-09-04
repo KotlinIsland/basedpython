@@ -1376,7 +1376,7 @@
         },
         "invalid-reified-type-param": {
           "title": "detects `reified` type parameters that cannot be reified",
-          "description": "## What it does\nChecks for a basedpython `reified` type parameter declared somewhere\nreification cannot happen.\n\n## Why is this bad?\nReification is a property of a *function*: the specialization step\nrebuilds the function's closure so the body sees the type argument as a\nruntime value. A class, a type alias and a `type def` have no such step —\ntheir type parameters are erased — so `reified` there promises a runtime\nvalue that never arrives.\n\n## Example\n\n```by\nclass C[reified T]:  # error: a class type parameter is never reified\n    ...\n```",
+          "description": "## What it does\nChecks for a basedpython `reified` type parameter declared somewhere\nreification cannot happen.\n\n## Why is this bad?\nReification is a property of a *function* or a *class*: a function\nrebuilds its closure at the call so the body sees the type argument as a\nruntime value, and a class records it on the specialization its instances\nare built from. A type alias and a `type def` have no such step — their\ntype parameters are erased — and neither has a class's keyword-variadic\npack, which a subscript has no way to supply. `reified` there promises a\nruntime value that never arrives.\n\n## Example\n\n```by\ntype Alias[reified T] = list[T]  # error: an alias's parameters are erased\n```",
           "default": "error",
           "oneOf": [
             {
@@ -2024,6 +2024,16 @@
             }
           ]
         },
+        "reified-without-receiver": {
+          "title": "detects reads of a reified class type parameter with no receiver to read it from",
+          "description": "## What it does\nChecks for a read of a reified class type parameter where nothing can\nanswer it.\n\n## Why is this bad?\nA class's type argument belongs to the *instance* that carries it, so a\nread is answered through the receiver of the method it sits in. The class\nbody itself, a method's decorators and parameter defaults, and the body of\na class nested directly in the class all run while the class is being\nbuilt, before any instance exists; a `staticmethod` runs later but is\nhanded no receiver. A read in any of those has no type argument to name.\n\n## Example\n\n```by\nclass C[T]:\n    kind = T  # error: the class body has no instance to read from\n\n    @staticmethod\n    def make():\n        return T()  # error: a static method is handed no receiver\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "shadowed-receiver-member": {
           "title": "detects a block declaration that shadows the receiver's member of the same name",
           "description": "## What it does\nChecks for a declaration inside a [trailing lambda] block that gives the block a\nname the block's receiver already has a member for.\n\n## Why is this bad?\nThe declaration takes the name away from the member for the whole block. A bare\n`href = \"/x\"` there writes the receiver's `href`, and reading `href` means the\nreceiver's `href` — so a `let href` two lines away silently makes both mean\nsomething else.\n\nShadowing is what a declaration is for, so this is a warning rather than an error:\nit is how you ask for a name of your own when the receiver happens to have one\nalready. Renaming the local says the same thing without the ambiguity.\n\n## Examples\n```by\nclass Tag:\n    var href: str\n\n    def div(self, block: Tag.() -> None) -> None:\n        block(self)\n\ndef build(t: Tag) -> None:\n    t.div:\n        href = \"/x\"      # ok, writes `t.href`\n        let href = \"/x\"  # warning: shadows `t.href` for the whole block\n```\n\n[trailing lambda]: https://basedpython.org/features/trailing-lambdas/",
@@ -2435,8 +2445,8 @@
           ]
         },
         "unspecialized-reified-generic": {
-          "title": "detects calls to reified generic functions without explicit specialization",
-          "description": "## What it does\nChecks for calls to a basedpython reified generic function whose\nspecialization is neither written explicitly nor inferable from the\narguments.\n\n## Why is this bad?\nA function whose type parameter is referenced in a value position is\n*reified*: the type parameter behaves like a positional parameter that\nis filled by the `[...]` specialization step. A bare call is legal only\nwhen the transpiler can inject that step — every type parameter must\nsolve, from the arguments or its PEP 696 default, to a type with a\nruntime spelling at the call site. Otherwise the parameter has no\nvalue at runtime.\n\n## Example\n\n```by\ndef f[T](t: object):\n    print(T)\n\nf[int](1)  # ok\nf(1)       # error: `T` appears nowhere in the signature\n\ndef g[T](t: T):\n    print(T)\n\ng(1)       # ok — transpiles to g[int](1)\n```",
+          "title": "detects reified generics used without their specialization",
+          "description": "## What it does\nChecks for calls to a basedpython reified generic function whose\nspecialization is neither written explicitly nor inferable from the\narguments.\n\n## Why is this bad?\nA function whose type parameter is referenced in a value position is\n*reified*: the type parameter behaves like a positional parameter that\nis filled by the `[...]` specialization step, and a reified generic\n*class* records its type arguments on the specialization its instances\nare built from. Either is legal without writing the step only when the\ntranspiler can inject it — every type parameter must solve, from the\narguments or its PEP 696 default, to a type with a runtime spelling\nthere. Otherwise the parameter has no value at runtime.\n\n## Example\n\n```by\ndef f[T](t: object):\n    print(T)\n\nf[int](1)  # ok\nf(1)       # error: `T` appears nowhere in the signature\n\ndef g[T](t: T):\n    print(T)\n\ng(1)       # ok — transpiles to g[int](1)\n\nclass A[T]:\n    def kind(self) -> type[T]:\n        return T\n\na: A[int] = A()  # ok — transpiles to A[int]()\nA()              # error: nothing says which specialization this is\n```",
           "default": "error",
           "oneOf": [
             {

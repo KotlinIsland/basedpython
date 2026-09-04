@@ -651,6 +651,48 @@ impl<'db> StaticClassLiteral<'db> {
             .collect()
     }
 
+    /// basedpython: names of the PEP 695 type parameters this class reifies —
+    /// declared `reified`, or read in a value position by the class body — in
+    /// declaration order. Always empty outside basedpython files.
+    ///
+    /// A reified parameter is part of what an instance *is* at runtime, so
+    /// unlike an erased one it is never inferred bivariant; see
+    /// [`BoundTypeVarInstance::variance_with_polarity`].
+    ///
+    /// Tracked because it reads the class's AST node.
+    ///
+    /// [`BoundTypeVarInstance::variance_with_polarity`]: crate::types::BoundTypeVarInstance::variance_with_polarity
+    #[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
+    pub(crate) fn reified_type_params(self, db: &'db dyn Db) -> Box<[Name]> {
+        let file = self.file(db);
+        let source_type = file.source_type(db);
+        if !source_type.is_basedpython() || !self.has_type_params(db) {
+            return Box::default();
+        }
+        let module = parsed_module(db, self.python_file(db)).load(db);
+        let source = ruff_db::source::source_text(db, file);
+        crate::reified::reified_class_type_param_names(
+            source.as_str(),
+            source_type,
+            self.node(db, &module),
+        )
+        .into_boxed_slice()
+    }
+
+    /// basedpython: whether this class or anything it inherits from reifies a
+    /// type parameter, so an instance of it carries type arguments at runtime.
+    ///
+    /// A class that forwards its own parameter into a reified base — or simply
+    /// inherits one — is as reified as the base is: its instances answer for the
+    /// base's parameter, so its constructions have to name a specialization too.
+    pub(crate) fn inherits_reification(self, db: &'db dyn Db) -> bool {
+        self.iter_mro(db, None).any(|base| {
+            base.into_class()
+                .and_then(|class| class.class_literal(db).as_static())
+                .is_some_and(|literal| !literal.reified_type_params(db).is_empty())
+        })
+    }
+
     pub(crate) fn apply_specialization(
         self,
         db: &'db dyn Db,

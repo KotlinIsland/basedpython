@@ -1495,6 +1495,16 @@ impl<'db> BoundTypeVarInstance<'db> {
                 BindingContext::Definition(definition) => polarity.compose_thunk(|| {
                     let env = ProgramEnvironment::from_definition(definition);
                     let binding_ty = binding_type(db, definition);
+                    // basedpython: a reified class parameter is part of what the
+                    // instance *is* — the program can read the type argument back
+                    // and test for it — so two specializations of the class match
+                    // only when they were given the same argument. that is what
+                    // invariance says, and inferring anything wider would let a
+                    // construction solve the parameter to something the instance
+                    // then reports it was never built with
+                    if self.reifies_on(db, binding_ty) {
+                        return TypeVarVariance::Invariant;
+                    }
                     match binding_ty.variance_of(db, &env, self.identity(db)) {
                         // When both directions are valid, the typing spec selects covariance. It
                         // says so of a parameter the class never mentions; basedpython also infers
@@ -1532,12 +1542,39 @@ impl<'db> BoundTypeVarInstance<'db> {
             Some(explicit_variance) => explicit_variance,
             None => match self.binding_context(db) {
                 BindingContext::Definition(definition) => {
+                    let binding_ty = binding_type(db, definition);
+                    if self.reifies_on(db, binding_ty) {
+                        return TypeVarVariance::Invariant;
+                    }
                     let env = ProgramEnvironment::from_definition(definition);
-                    binding_type(db, definition).variance_of(db, &env, self.identity(db))
+                    binding_ty.variance_of(db, &env, self.identity(db))
                 }
                 BindingContext::Synthetic(_) => TypeVarVariance::Invariant,
             },
         }
+    }
+
+    /// basedpython: whether this is a type parameter of a class that reifies it,
+    /// so the type argument is a runtime property of every instance rather than
+    /// something erased at construction.
+    pub(crate) fn is_reified_class_typevar(self, db: &'db dyn Db) -> bool {
+        let BindingContext::Definition(definition) = self.binding_context(db) else {
+            return false;
+        };
+        self.reifies_on(db, binding_type(db, definition))
+    }
+
+    /// [`is_reified_class_typevar`](Self::is_reified_class_typevar) for a caller
+    /// that already has the binding's type in hand.
+    fn reifies_on(self, db: &'db dyn Db, binding_ty: Type<'db>) -> bool {
+        binding_ty
+            .as_class_literal()
+            .and_then(ClassLiteral::as_static)
+            .is_some_and(|class| {
+                class
+                    .reified_type_params(db)
+                    .contains(self.typevar(db).name(db))
+            })
     }
 
     /// The variance of this type variable at the position it is bound.

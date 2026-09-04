@@ -65,18 +65,10 @@ use crate::type_info::TypeInfo;
 /// locals, `__class__`) survive. parameter defaults, kwonly defaults and the
 /// qualname carry over to the rebuilt function.
 ///
-/// `_bind` maps the supplied arguments onto the parameters. a `TypeVarTuple`
-/// takes, as a tuple, the whole run of positional arguments the fixed
-/// parameters around it don't claim, so `f[int, str, bool]` on `[T, *Args]`
-/// binds `T = int` and `Args = (str, bool)`; a keyword-variadic `**Kwargs` sits
-/// outside the positional slots entirely and binds the mapping of the keyword
-/// fields (`f[foo=int]` → `Kwargs = {'foo': int}`, spelled
-/// `f.__getitem__(foo=int)` in the lowered python, since subscripts take no
-/// keywords). an omitted slot is filled from its pep 696 default, read off the
-/// function's `__type_params__`, so `f()` works when every reified parameter
-/// defaults; an unfilled `TypeVarTuple` or `**Kwargs` binds empty, and any
-/// other slot with no value raises `TypeError`, as does over-specialization of
-/// a parameter list with no variadic. the wrapper is also a descriptor:
+/// the supplied arguments are mapped onto the parameters by
+/// [`BIND_TYPE_PARAMS_RUNTIME`], so `f()` works when every reified parameter
+/// carries a pep 696 default; a slot that binding leaves empty and the body
+/// reads raises `TypeError` at the call. the wrapper is also a descriptor:
 /// `__get__` captures the receiver so a reified *method* (`obj.m[int]()`) binds
 /// `self` like an ordinary method. attribute access falls through to the
 /// wrapped function, keeping introspection (`f.__name__`, `f.__doc__`) working
@@ -101,64 +93,21 @@ class generic:
             return self
         return generic(self.fn, self.args, obj, self.fields)
 
-    def _bind(self, supplied, fields):
-        params = self.fn.__type_params__
-        pack = next((p for p in params if isinstance(p, ParamSpec)), None)
-        if pack is None and fields:
-            raise TypeError(
-                f\"{self.fn.__name__} has no keyword-variadic type parameter for \"
-                f\"{', '.join(fields)}\"
-            )
-        slots = [p for p in params if p is not pack]
-        variadic = next(
-            (i for i, p in enumerate(slots) if isinstance(p, TypeVarTuple)), None
-        )
-        if variadic is None:
-            if len(supplied) > len(slots):
-                raise TypeError(
-                    f\"too many type arguments for {self.fn.__name__}: \"
-                    f\"expected {len(slots)}, got {len(supplied)}\"
-                )
-            bound = dict(zip((p.__name__ for p in slots), supplied))
-        else:
-            trailing = slots[variadic + 1:]
-            packed = tuple(supplied[variadic:len(supplied) - len(trailing)])
-            bound = dict(zip((p.__name__ for p in slots[:variadic]), supplied))
-            if packed:
-                bound[slots[variadic].__name__] = packed
-            bound.update(
-                zip(
-                    (p.__name__ for p in trailing),
-                    supplied[variadic + len(packed):],
-                )
-            )
-        if fields:
-            bound[pack.__name__] = dict(fields)
-        for param in params:
-            name = param.__name__
-            if name in bound:
-                continue
-            has_default = getattr(param, \"has_default\", None)
-            if has_default is not None and has_default():
-                bound[name] = param.__default__
-            elif isinstance(param, TypeVarTuple):
-                bound[name] = ()
-            elif param is pack:
-                bound[name] = {}
-        return bound
-
     def __getitem__(self, *items, **fields):
         if self.args is not None or self.fields is not None:
             raise TypeError(\"type arguments already specified\")
         if len(items) == 1 and isinstance(items[0], tuple):
             items = items[0]
-        self._bind(items, fields)  # reject a bad arity here, not at the call
+        # reject a bad arity here, not at the call
+        _bind_type_params(self.fn.__type_params__, items, fields, self.fn.__name__)
         return generic(self.fn, items, self.instance, fields)
 
     def __call__(self, *args, **kwargs):
         fn = self.fn
         code = fn.__code__
-        values = self._bind(self.args or (), self.fields or {})
+        values = _bind_type_params(
+            fn.__type_params__, self.args or (), self.fields or {}, fn.__name__
+        )
         for param in fn.__type_params__:
             name = param.__name__
             if name not in values and name in code.co_freevars:
@@ -181,6 +130,66 @@ class generic:
         if self.instance is not None:
             return temp_fn(self.instance, *args, **kwargs)
         return temp_fn(*args, **kwargs)
+";
+
+/// binds supplied type arguments onto a type-parameter list, shared by the
+/// function wrapper and the class specializer.
+///
+/// a `TypeVarTuple` takes, as a tuple, the whole run of positional arguments
+/// the fixed parameters around it don't claim, so `[int, str, bool]` on
+/// `[T, *Args]` binds `T = int` and `Args = (str, bool)`; a keyword-variadic
+/// `**Kwargs` sits outside the positional slots entirely and binds the mapping
+/// of the keyword fields (`f[foo=int]` → `Kwargs = {'foo': int}`, spelled
+/// `f.__getitem__(foo=int)` in the lowered python, since subscripts take no
+/// keywords). an omitted slot is filled from its pep 696 default, read off the
+/// parameter list itself; an unfilled `TypeVarTuple` or `**Kwargs` binds empty,
+/// and any other slot is simply left out for the caller to answer for.
+/// over-specializing a parameter list with no variadic raises
+pub(crate) const BIND_TYPE_PARAMS_RUNTIME: &str = "\
+def _bind_type_params(params, supplied, fields, owner):
+    pack = next((p for p in params if isinstance(p, ParamSpec)), None)
+    if pack is None and fields:
+        raise TypeError(
+            f\"{owner} has no keyword-variadic type parameter for \"
+            f\"{', '.join(fields)}\"
+        )
+    slots = [p for p in params if p is not pack]
+    variadic = next(
+        (i for i, p in enumerate(slots) if isinstance(p, TypeVarTuple)), None
+    )
+    if variadic is None:
+        if len(supplied) > len(slots):
+            raise TypeError(
+                f\"too many type arguments for {owner}: \"
+                f\"expected {len(slots)}, got {len(supplied)}\"
+            )
+        bound = dict(zip((p.__name__ for p in slots), supplied))
+    else:
+        trailing = slots[variadic + 1:]
+        packed = tuple(supplied[variadic:len(supplied) - len(trailing)])
+        bound = dict(zip((p.__name__ for p in slots[:variadic]), supplied))
+        if packed:
+            bound[slots[variadic].__name__] = packed
+        bound.update(
+            zip(
+                (p.__name__ for p in trailing),
+                supplied[variadic + len(packed):],
+            )
+        )
+    if fields:
+        bound[pack.__name__] = dict(fields)
+    for param in params:
+        name = param.__name__
+        if name in bound:
+            continue
+        has_default = getattr(param, \"has_default\", None)
+        if has_default is not None and has_default():
+            bound[name] = param.__default__
+        elif isinstance(param, TypeVarTuple):
+            bound[name] = ()
+        elif param is pack:
+            bound[name] = {}
+    return bound
 ";
 
 /// marker comment appended to the synthesized `@generic` decorator line. the
@@ -352,6 +361,8 @@ impl TypeAwarePass for ReifiedGenericPass<'_> {
                 .push("from types import CellType, FunctionType".to_owned());
             ctx.required_imports
                 .push("from typing import ParamSpec, TypeVarTuple".to_owned());
+            ctx.required_imports
+                .push(BIND_TYPE_PARAMS_RUNTIME.to_owned());
             ctx.required_imports.push(GENERIC_RUNTIME.to_owned());
         }
         ctx.text_edits.extend(inner.edits);
@@ -404,64 +415,21 @@ mod tests {
                             return self
                         return generic(self.fn, self.args, obj, self.fields)
 
-                    def _bind(self, supplied, fields):
-                        params = self.fn.__type_params__
-                        pack = next((p for p in params if isinstance(p, ParamSpec)), None)
-                        if pack is None and fields:
-                            raise TypeError(
-                                f\"{self.fn.__name__} has no keyword-variadic type parameter for \"
-                                f\"{', '.join(fields)}\"
-                            )
-                        slots = [p for p in params if p is not pack]
-                        variadic = next(
-                            (i for i, p in enumerate(slots) if isinstance(p, TypeVarTuple)), None
-                        )
-                        if variadic is None:
-                            if len(supplied) > len(slots):
-                                raise TypeError(
-                                    f\"too many type arguments for {self.fn.__name__}: \"
-                                    f\"expected {len(slots)}, got {len(supplied)}\"
-                                )
-                            bound = dict(zip((p.__name__ for p in slots), supplied))
-                        else:
-                            trailing = slots[variadic + 1:]
-                            packed = tuple(supplied[variadic:len(supplied) - len(trailing)])
-                            bound = dict(zip((p.__name__ for p in slots[:variadic]), supplied))
-                            if packed:
-                                bound[slots[variadic].__name__] = packed
-                            bound.update(
-                                zip(
-                                    (p.__name__ for p in trailing),
-                                    supplied[variadic + len(packed):],
-                                )
-                            )
-                        if fields:
-                            bound[pack.__name__] = dict(fields)
-                        for param in params:
-                            name = param.__name__
-                            if name in bound:
-                                continue
-                            has_default = getattr(param, \"has_default\", None)
-                            if has_default is not None and has_default():
-                                bound[name] = param.__default__
-                            elif isinstance(param, TypeVarTuple):
-                                bound[name] = ()
-                            elif param is pack:
-                                bound[name] = {}
-                        return bound
-
                     def __getitem__(self, *items, **fields):
                         if self.args is not None or self.fields is not None:
                             raise TypeError(\"type arguments already specified\")
                         if len(items) == 1 and isinstance(items[0], tuple):
                             items = items[0]
-                        self._bind(items, fields)  # reject a bad arity here, not at the call
+                        # reject a bad arity here, not at the call
+                        _bind_type_params(self.fn.__type_params__, items, fields, self.fn.__name__)
                         return generic(self.fn, items, self.instance, fields)
 
                     def __call__(self, *args, **kwargs):
                         fn = self.fn
                         code = fn.__code__
-                        values = self._bind(self.args or (), self.fields or {})
+                        values = _bind_type_params(
+                            fn.__type_params__, self.args or (), self.fields or {}, fn.__name__
+                        )
                         for param in fn.__type_params__:
                             name = param.__name__
                             if name not in values and name in code.co_freevars:
@@ -484,6 +452,51 @@ mod tests {
                         if self.instance is not None:
                             return temp_fn(self.instance, *args, **kwargs)
                         return temp_fn(*args, **kwargs)
+
+                def _bind_type_params(params, supplied, fields, owner):
+                    pack = next((p for p in params if isinstance(p, ParamSpec)), None)
+                    if pack is None and fields:
+                        raise TypeError(
+                            f\"{owner} has no keyword-variadic type parameter for \"
+                            f\"{', '.join(fields)}\"
+                        )
+                    slots = [p for p in params if p is not pack]
+                    variadic = next(
+                        (i for i, p in enumerate(slots) if isinstance(p, TypeVarTuple)), None
+                    )
+                    if variadic is None:
+                        if len(supplied) > len(slots):
+                            raise TypeError(
+                                f\"too many type arguments for {owner}: \"
+                                f\"expected {len(slots)}, got {len(supplied)}\"
+                            )
+                        bound = dict(zip((p.__name__ for p in slots), supplied))
+                    else:
+                        trailing = slots[variadic + 1:]
+                        packed = tuple(supplied[variadic:len(supplied) - len(trailing)])
+                        bound = dict(zip((p.__name__ for p in slots[:variadic]), supplied))
+                        if packed:
+                            bound[slots[variadic].__name__] = packed
+                        bound.update(
+                            zip(
+                                (p.__name__ for p in trailing),
+                                supplied[variadic + len(packed):],
+                            )
+                        )
+                    if fields:
+                        bound[pack.__name__] = dict(fields)
+                    for param in params:
+                        name = param.__name__
+                        if name in bound:
+                            continue
+                        has_default = getattr(param, \"has_default\", None)
+                        if has_default is not None and has_default():
+                            bound[name] = param.__default__
+                        elif isinstance(param, TypeVarTuple):
+                            bound[name] = ()
+                        elif param is pack:
+                            bound[name] = {}
+                    return bound
 
                 @generic  # basedpython: reified
                 def f[T](t: object):
