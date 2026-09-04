@@ -220,6 +220,7 @@ features = [
 [[project.nav]]
 development = [
   { "how transpilation works" = "development/how-transpilation-works.md" },
+  { "module api enforcement" = "development/module-api-design.md" },
   { "reverse transforms" = "development/reverse-transforms.md" },
   { "sourcemaps" = "development/sourcemaps.md" },
   { "type functions" = "development/type-def-design.md" },
