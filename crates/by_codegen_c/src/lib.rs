@@ -671,6 +671,141 @@ fn emit_class_struct(module: &ModuleIr, class: &ClassIr) -> String {
     out
 }
 
+/// how many instances' worth of memory a class keeps back for the next instance
+///
+/// the depth a loop actually needs is one: an object built and dropped every time
+/// round frees the previous block just after taking the next, so the array never
+/// holds more than a couple. sixteen is room for a handful of short-lived objects
+/// alive at once, and it is the whole of what a class holds onto — sixteen blocks
+/// of its own instance size, which for a two-field object is under a kilobyte
+const RECYCLED_INSTANCES: usize = 16;
+
+/// whether this class keeps the memory of a dead instance for the next one
+///
+/// what a recycled block has to be is *indistinguishable from a fresh one*, and the
+/// question that decides it is what per-instance state lives outside the struct the
+/// reset zeroes. there are two such places, and one of them cost a real miscompile
+/// before it was found.
+///
+/// **the collector's header**, which sits in front of the block rather than in it.
+/// untracking — which this class's own deallocator does before it frees — zeroes
+/// `_gc_next` and masks `_gc_prev` down to a single bit: *this object has been
+/// finalized*. that bit survives into the recycled block, python has no call that
+/// clears it, and the next object to live there is one `__del__` never runs for:
+///
+/// ```python
+/// class Noisy:
+///     def __del__(self): print("gone")
+///
+/// for i in range(3):
+///     Noisy()          # printed twice, not three times
+/// ```
+///
+/// so a class with a finalizer is turned away. the bit is only ever set after a
+/// non-null `tp_finalize` has been called, and the two things that fill that slot
+/// are a written `__del__` — [`finalizes`], which asks the whole base chain — and a
+/// generator's own. with neither, the header of a parked block is all zeroes, which
+/// is exactly what the allocator hands back
+///
+/// **the object header's own trace links**, which only exist in a build tracing
+/// every object. those are inside the reset, and zeroing them would cut a live list
+/// in two, so such a build recycles nothing — see [`emit_instance_recycling`]
+///
+/// and the block has to be the right *size*. [`mutable_type`] is false only for a
+/// sealed leaf: no base, nothing derived from it, no decorator and no written
+/// `__new__`. that is the shape whose `tp_alloc` and `tp_free` nothing can inherit,
+/// so every block that reaches the array was allocated by this class's own
+/// allocator, at this class's own size
+///
+/// what is *not* on this list, because an emitted class never has it: a managed
+/// dict or inline values, which live in front of the block too — the dict here is a
+/// plain member inside the struct — and a weakref list, which a spec of ours never
+/// asks for
+fn recycles_instances(module: &ModuleIr, class: &ClassIr) -> bool {
+    !mutable_type(module, class) && class.resume.is_none() && !finalizes(module, class)
+}
+
+/// a class keeping the memory of a dead instance back for the next one
+///
+/// `tp_free` parks the block on a small array instead of handing it to the
+/// allocator, and `tp_alloc` takes it from there. cpython does exactly this for
+/// floats, tuples and frames, and it sits entirely *below* `tp_dealloc`: the
+/// object really is destroyed and the next instance really is a new one — only the
+/// block of memory is reused. so there is nothing a program can ask that changes
+/// answer, which is why this needs no analysis of where an instance goes. what a
+/// recycled block does *not* reset is in [`recycles_instances`], as the classes it
+/// therefore turns away
+///
+/// what it saves is the allocator and the collector's bookkeeping, which for a
+/// small object is most of what building one costs. measured on the benchmark
+/// suite's `alloc`, an object built and dropped every iteration and nothing kept:
+/// **1.99x**, against a noise floor of 1.003x. on `objects`, which allocates and
+/// then calls methods on what it built, **1.12x**
+fn emit_instance_recycling(module: &ModuleIr, class: &ClassIr) -> String {
+    if !recycles_instances(module, class) {
+        return String::new();
+    }
+    let struct_name = class.struct_name(module.name.dotted());
+    let type_name = class.type_name(module.name.dotted());
+    // a collected class is allocated with the collector's header in front of the
+    // block, and freeing one through the plain allocator would free the wrong
+    // address. `PyType_GenericAlloc` reads the flag to decide, and these two have
+    // to agree with it or an instance is allocated under one discipline and freed
+    // under another
+    let (release, track) = if instance_dict(module, class) {
+        ("PyObject_GC_Del", "        PyObject_GC_Track(by_block);\n")
+    } else {
+        ("PyObject_Free", "")
+    };
+    // a free-threaded build gets none of it: the array is shared mutable state, and
+    // this module tells such an interpreter it keeps none — see the `Py_mod_gil`
+    // slot. nor does a build that traces every object, which threads a doubly linked
+    // list through the object header itself — the memset that resets an instance
+    // would cut a live list in two
+    let recycling = "#if !defined(Py_GIL_DISABLED) && !defined(Py_TRACE_REFS)";
+    format!(
+        "{recycling}\n\
+         static PyObject *{type_name}_recycled[{RECYCLED_INSTANCES}];\n\
+         static Py_ssize_t {type_name}_recycled_at = 0;\n\
+         #endif\n\n\
+         static PyObject *{type_name}_alloc(PyTypeObject *by_type, Py_ssize_t by_items) {{\n\
+         {recycling}\n\
+         \x20   /* the type is asked about because `tp_alloc` is inherited: only a\n\
+         \x20    * request for exactly this class is one these blocks are the size of */\n\
+         \x20   if (BY_LIKELY({type_name}_recycled_at > 0 && by_items == 0\n\
+         \x20                 && by_type == (PyTypeObject *){type_name}_OBJ)) {{\n\
+         \x20       PyObject *by_block = {type_name}_recycled[--{type_name}_recycled_at];\n\
+         \x20       /* the same state `PyType_GenericAlloc` leaves: zeroed fields, one\n\
+         \x20        * reference, and a reference to the type where it is refcounted */\n\
+         \x20       memset(by_block, 0, sizeof({struct_name}));\n\
+         \x20       Py_SET_TYPE(by_block, by_type);\n\
+         \x20       Py_SET_REFCNT(by_block, 1);\n\
+         \x20       if (by_type->tp_flags & Py_TPFLAGS_HEAPTYPE) Py_INCREF(by_type);\n\
+         {track}\
+         \x20       return by_block;\n\
+         \x20   }}\n\
+         #endif\n\
+         \x20   return PyType_GenericAlloc(by_type, by_items);\n\
+         }}\n\n\
+         static void {type_name}_free(void *by_block) {{\n\
+         {recycling}\n\
+         \x20   if (BY_LIKELY({type_name}_recycled_at < {RECYCLED_INSTANCES})) {{\n\
+         \x20       {type_name}_recycled[{type_name}_recycled_at++] = (PyObject *)by_block;\n\
+         \x20       return;\n\
+         \x20   }}\n\
+         #endif\n\
+         \x20   {release}(by_block);\n\
+         }}\n\n\
+         /* the module is going away, so nothing will come to take these back */\n\
+         static void {type_name}_drain(void) {{\n\
+         {recycling}\n\
+         \x20   while ({type_name}_recycled_at > 0)\n\
+         \x20       {release}({type_name}_recycled[--{type_name}_recycled_at]);\n\
+         #endif\n\
+         }}\n\n"
+    )
+}
+
 /// `tp_new` allocates and zeroes, `tp_init` fills every field, `tp_dealloc`
 /// releases them. every field is written by `__init__`, which is what makes them
 /// *always defined* — no bitfield and no per-read check
@@ -683,6 +818,7 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
     if frees_its_instances(module, class) {
         out.push_str(&emit_appended_storage(module, class));
     } else {
+        out.push_str(&emit_instance_recycling(module, class));
         // the pair only exists where the dict does: a class without one asks to be
         // collected for no reason, and a function nothing reaches is a warning the build
         // turns into an error
@@ -1908,10 +2044,23 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         } else {
             String::new()
         };
+        // the pair that keeps a dead instance's memory back for the next one. it goes
+        // only on a class that declares its own size: a type inheriting these from a
+        // base would ask that base's allocator for an instance of a size it has never
+        // seen — see [`recycles_instances`]
+        let recycled = if recycles_instances(module, class) {
+            format!(
+                "\x20   {{Py_tp_alloc, (void *){type_name}_alloc}},\n\
+                 \x20   {{Py_tp_free, (void *){type_name}_free}},\n"
+            )
+        } else {
+            String::new()
+        };
         (
             format!("sizeof({struct_name})"),
             format!(
-                "\x20   {{Py_tp_dealloc, (void *){type_name}_dealloc}},\n{walked}{construction}"
+                "\x20   {{Py_tp_dealloc, (void *){type_name}_dealloc}},\n\
+                 {recycled}{walked}{construction}"
             ),
         )
     };
@@ -4003,7 +4152,7 @@ fn box_borrowed(ty: &RType, expr: &str) -> String {
 fn undefined(module: &ModuleIr, ty: &RType) -> String {
     match ty {
         RType::Tuple(_) => format!("({}){}", ctype(module, ty), ty.undefined()),
-        other => other.undefined().to_string(),
+        other => other.undefined(),
     }
 }
 
@@ -4469,7 +4618,13 @@ fn error_check(ty: &RType, expr: &str) -> String {
         RType::Primitive(Primitive::Bool | Primitive::Bit | Primitive::None) => {
             format!("{expr} == 2")
         }
-        RType::Tuple(_) => format!("PyErr_Occurred() != NULL && ((void)({expr}), 1)"),
+        // a struct reserves no bit pattern of its own, but a member usually does, and
+        // the error path writes it there. only a tuple with nothing to read back —
+        // one holding only `double`s and fixed-width integers — has to ask the thread
+        RType::Tuple(_) => match ty.error_sentinel() {
+            Some((path, pattern)) => format!("({expr}){path} == {pattern}"),
+            None => format!("PyErr_Occurred() != NULL && ((void)({expr}), 1)"),
+        },
         RType::Primitive(_) | RType::Instance { .. } => format!("{expr} == NULL"),
     }
 }
@@ -5980,6 +6135,10 @@ fn emit_op(
             // there is nothing statically to key on, and a receiver that is not an
             // exact list pays one type check and takes the ordinary path
             //
+            // the four `str` methods below are the same bargain against `str` rather
+            // than `list`, and they keep the site for the receivers they refuse, so a
+            // name that is not a string method's is no worse off than it was
+            //
             // every other name goes through a site of its own, which remembers what
             // the name resolved to for the receiver's type and re-derives it only
             // when the type or its version tag moves
@@ -5992,7 +6151,14 @@ fn emit_op(
                         args.len()
                     );
                 }
-                _ => {
+                other => {
+                    let callee = match other {
+                        "split" => "By_StrSplit",
+                        "startswith" => "By_StrStartswith",
+                        "join" => "By_StrJoin",
+                        "upper" => "By_StrUpper",
+                        _ => "By_CallMethodSite",
+                    };
                     let site = format!("by_site_{}", mangle(name));
                     let _ = writeln!(
                         out,
@@ -6000,7 +6166,7 @@ fn emit_op(
                     );
                     let _ = writeln!(
                         out,
-                        "      PyObject *by_t = By_CallMethodSite(&{site}, {}, {slot}, by_argv, {});",
+                        "      PyObject *by_t = {callee}(&{site}, {}, {slot}, by_argv, {});",
                         value_expr(receiver),
                         args.len()
                     );
@@ -7744,6 +7910,33 @@ fn emit_module_init(module: &ModuleIr) -> String {
             ))
         })
         .collect();
+    // a class holding instance memory back holds it for as long as it might be asked
+    // for another instance, which is as long as the module stands. handing it back when
+    // the module goes is what keeps the whole scheme from being a leak
+    let mut drain_recycled = String::new();
+    for class in module
+        .classes
+        .iter()
+        .filter(|class| !frees_its_instances(module, class) && recycles_instances(module, class))
+    {
+        let _ = writeln!(
+            drain_recycled,
+            "    {}_drain();",
+            class.type_name(module.name.dotted())
+        );
+    }
+    let module_free = if drain_recycled.is_empty() {
+        (String::new(), "NULL")
+    } else {
+        (
+            format!(
+                "static void by_module_free(void *by_unused) {{\n\
+                 \x20   (void)by_unused;\n\
+                 {drain_recycled}}}\n\n"
+            ),
+            "by_module_free",
+        )
+    };
     // every method table this module owns, so the docstrings baked into them can be
     // taken back out where the *running* interpreter is one that compiles without
     // docstrings — see `By_StripDocsAtOO`
@@ -7815,8 +8008,9 @@ fn emit_module_init(module: &ModuleIr) -> String {
          #endif\n\
          \x20   {{0, NULL}}\n\
          }};\n\n\
+         {}\
          static struct PyModuleDef by_module = {{\n\
-         \x20   PyModuleDef_HEAD_INIT, \"{last}\", NULL, 0, NULL, by_slots, NULL, NULL, NULL\n\
+         \x20   PyModuleDef_HEAD_INIT, \"{last}\", NULL, 0, NULL, by_slots, NULL, NULL, {}\n\
          }};\n\n\
          PyMODINIT_FUNC {}(void) {{\n\
          \x20   /* before `by_module` itself is handed over: a module definition is a\n\
@@ -7825,6 +8019,8 @@ fn emit_module_init(module: &ModuleIr) -> String {
          \x20   if (!By_InterpreterMatches()) return NULL;\n\
          \x20   return PyModuleDef_Init(&by_module);\n\
          }}\n",
+        module_free.0,
+        module_free.1,
         module.init_symbol()
     );
     out
@@ -10243,5 +10439,147 @@ mod tests {
             .expect("a table")..];
         let table = &table[..table.find("};").expect("a table end")];
         assert!(table.contains("__class_getitem__"), "{table}");
+    }
+    /// a sealed leaf class — no base, nothing derived from it, no decorator — keeps a
+    /// dead instance's memory back for the next one, and hands it over when the module
+    /// goes. that is the whole of the scheme: it sits under `tp_dealloc`, so the object
+    /// is really destroyed and only the block is reused
+    #[test]
+    fn a_sealed_class_keeps_its_instances_memory_for_the_next_one() {
+        let mut module = module_with(add());
+        module.classes = vec![sealed_class()];
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("{Py_tp_alloc, (void *)By_app_Point_Type_alloc},")
+                && c.contains("{Py_tp_free, (void *)By_app_Point_Type_free},"),
+            "the type takes both halves over: {c}"
+        );
+        assert!(
+            c.contains("static PyObject *By_app_Point_Type_recycled[16];"),
+            "and holds sixteen blocks: {c}"
+        );
+        // a request for any other type is one these blocks are not the size of
+        assert!(
+            c.contains("&& by_type == (PyTypeObject *)By_app_Point_Type_OBJ)"),
+            "the allocator asks what it is being asked for: {c}"
+        );
+        assert!(
+            c.contains("    By_app_Point_Type_drain();\n")
+                && c.contains("by_slots, NULL, NULL, by_module_free"),
+            "and the module hands the blocks back when it goes: {c}"
+        );
+    }
+
+    /// a class python can subclass must not: `tp_alloc` and `tp_free` are inherited, so a
+    /// subclass would ask this allocator for an instance of a size it has never seen and
+    /// be handed a block laid out for the base. neither may the subclass, whose layout is
+    /// the base's rather than one of its own
+    #[test]
+    fn a_subclassable_class_keeps_no_instance_memory() {
+        let mut module = module_with(add());
+        let mut derived = sealed_class();
+        derived.name = "Shifted".to_string();
+        derived.base = Some(ClassBase::InModule("Point".to_string()));
+        module.classes = vec![sealed_class(), derived];
+        let c = emit_module(&module);
+
+        assert!(
+            !c.contains("Py_tp_alloc") && !c.contains("Py_tp_free"),
+            "neither the base nor what stands on it takes a half over: {c}"
+        );
+        assert!(
+            c.contains("by_slots, NULL, NULL, NULL"),
+            "and there is nothing for the module to hand back: {c}"
+        );
+    }
+
+    /// nor a class whose storage is appended past an external base's instance. it
+    /// declares no size of its own, so a block of "its own instance size" is not a thing
+    /// that exists here — the base allocates and the base frees
+    #[test]
+    fn a_class_standing_on_a_base_keeps_no_instance_memory() {
+        let mut module = module_with(add());
+        module.classes = vec![appending_class()];
+        let c = emit_module(&module);
+
+        assert!(
+            !c.contains("Py_tp_alloc") && !c.contains("Py_tp_free"),
+            "the base allocates and frees: {c}"
+        );
+    }
+
+    /// a class with no instance dict is not a collected type, so its instances are
+    /// allocated and freed through the plain allocator — asking the collector to release
+    /// one would free an address a header before the block
+    #[test]
+    fn an_uncollected_class_recycles_through_the_plain_allocator() {
+        let mut module = module_with(add());
+        let mut class = sealed_class();
+        class.declares_slots = true;
+        module.classes = vec![class];
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("    PyObject_Free(by_block);") && !c.contains("PyObject_GC_Del(by_block)"),
+            "the plain allocator on both sides: {c}"
+        );
+        assert!(
+            !c.contains("PyObject_GC_Track(by_block);"),
+            "and nothing to track: {c}"
+        );
+    }
+
+    /// nor a class with a `__del__`. "this object has been finalized" is a bit in the
+    /// collector's header rather than in the block, so recycling does not reset it and
+    /// the second instance to live in a recycled block would be one `__del__` never ran
+    /// for. that was a real miscompile: three objects made and dropped in a loop printed
+    /// from two of them
+    #[test]
+    fn a_class_with_a_finalizer_keeps_no_instance_memory() {
+        let mut module = module_with(add());
+        let mut class = sealed_class();
+        let mut finalizer = FunctionBuilder::new("__del__", RType::NONE);
+        finalizer.param("self", RType::OBJECT);
+        finalizer.terminate(Terminator::Return(Value::None));
+        class.methods.push(finalizer.finish());
+        module.classes = vec![class];
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("PyObject_CallFinalizerFromDealloc"),
+            "the finalizer is reached from the deallocator: {c}"
+        );
+        assert!(
+            !c.contains("Py_tp_alloc") && !c.contains("Py_tp_free"),
+            "and the block is not kept back: {c}"
+        );
+    }
+
+    /// a plain class: its own layout, nothing derived from it, and an instance dict
+    fn sealed_class() -> ClassIr {
+        ClassIr {
+            name: "Point".to_string(),
+            immutable: false,
+            exported: true,
+            base: None,
+            inherited_init: false,
+            generic: false,
+            declares_slots: false,
+            constants: Vec::new(),
+            properties: Vec::new(),
+            slot_aliases: Vec::new(),
+            fields: vec![by_ir::function::FieldDecl {
+                name: "x".to_string(),
+                ty: RType::OBJECT,
+                default: None,
+                optional: false,
+                defaulted_by: None,
+            }],
+            decorators: Vec::new(),
+            methods: Vec::new(),
+            resume: None,
+            keywords: Vec::new(),
+        }
     }
 }

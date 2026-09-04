@@ -3221,6 +3221,93 @@ def shout_all(items: list) -> object:
     );
 }
 
+/// `split`, `startswith`, `join` and `upper` are called through their own C-API
+/// entry points rather than through the method, so every argument shape that entry
+/// point does *not* serve has to be handed back to the method
+///
+/// each of them is asked with the shape it takes directly and with every shape it
+/// refuses, in the same process and through the same call site: a separator that is
+/// `None` or a `str` subclass or not a string at all, a `maxsplit`, a `startswith`
+/// given a range or a tuple, a receiver that is a `str` subclass or not a string,
+/// and — for `upper`, which is the one that repeats the interpreter's work rather
+/// than calling it — a string above ascii, where the case mapping can change the
+/// length of the answer
+#[test]
+fn a_string_method_taken_directly_answers_what_the_method_answers() {
+    agree_python(
+        "strdirect",
+        "\
+def split_all(line) -> object:
+    return line.split()
+
+def split_on(line, sep) -> object:
+    return line.split(sep)
+
+def split_capped(line, sep, limit) -> object:
+    return line.split(sep, limit)
+
+def leads(s, prefix) -> object:
+    return s.startswith(prefix)
+
+def leads_from(s, prefix, start) -> object:
+    return s.startswith(prefix, start)
+
+def leads_within(s, prefix, start, end) -> object:
+    return s.startswith(prefix, start, end)
+
+def glued(sep, parts) -> object:
+    return sep.join(parts)
+
+def shout(s) -> object:
+    return s.upper()
+",
+        &[
+            // the separator shapes: absent, a string, `None`, a subclass, and the
+            // empty string python refuses
+            "[m.split_on(line, ' ') for line in ('', 'a', 'a b c', ' a  b ', 'a b ')]",
+            "[m.split_all(line) for line in ('', '   ', 'a b c', ' a\\tb\\nc ')]",
+            "[m.split_on('a b c', None), m.split_all('a b c')]",
+            "m.split_on('a-b', type('S', (str,), {})('-'))",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.split_on, 'ab', '')]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.split_on, 'ab', 5)]]",
+            // a maxsplit is a second argument, which the direct call does not serve
+            "[m.split_capped('a b c d', ' ', n) for n in (-1, 0, 1, 2, 9)]",
+            // a receiver that is not an exact `str`
+            "m.split_on(type('S', (str,), {'split': lambda self, sep: ['Z']})('a b'), ' ')",
+            "m.split_on(b'a b', b' ')",
+            "m.split_all(b'a b')",
+            // `startswith`: a string prefix, a subclass, a tuple, a range, a refusal
+            "[m.leads(s, 'w') for s in ('', 'w', 'word', 'xw')]",
+            "[m.leads('word', p) for p in ('', 'word', 'words', ('x', 'w'), ('x',), ())]",
+            "m.leads('word', type('S', (str,), {})('w'))",
+            "[m.leads_from('xword', 'w', n) for n in (0, 1, 2, -4, 99)]",
+            "[m.leads_within('xword', 'wo', 1, n) for n in (1, 2, 3, 99)]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.leads, 'word', 5)]]",
+            "m.leads(type('S', (str,), {'startswith': lambda self, p: 'Z'})('ab'), 'a')",
+            "m.leads(b'ab', b'a')",
+            // `join` over the sequences and iterables python accepts, and the two
+            // errors it raises
+            "[m.glued(s, p) for s in ('', '-', '::') for p in ([], ['a'], ['a', 'b'], ('c', 'd'))]",
+            "[m.glued('-', iter(['a', 'b'])), m.glued('-', 'abc')]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.glued, '-', [1, 2]), _capture(m.glued, '-', 5)]]",
+            "m.glued(type('S', (str,), {'join': lambda self, p: 'Z'})('-'), ['a'])",
+            "m.glued(b'-', [b'a', b'b'])",
+            // `upper` over ascii, where the direct path answers, and above it, where
+            // it does not — `ß` uppercases to two characters and `ﬀ` to three
+            "[m.shout(s) for s in ('', 'a', 'abc', 'ABC', 'a1-b_c', '\\x7f', '\\x00')]",
+            "[m.shout(s) for s in ('é', '🎉', 'ß', 'ﬀ', 'aß', 'ıi')]",
+            "[type(m.shout('ab')).__name__, m.shout('') == '', len(m.shout('abc'))]",
+            "m.shout(type('S', (str,), {'upper': lambda self: 'Z'})('ab'))",
+            "m.shout(type('P', (str,), {})('ab'))",
+            "m.shout(b'ab')",
+            // the same site asked for an exact string, then a subclass, then an exact
+            // string again — the direct path has to be taken, given up and retaken
+            "[m.shout(s) for s in ('ab', type('S', (str,), {'upper': lambda self: 'Z'})('cd'), 'ef')]",
+            "[m.split_on(o, ' ') for o in ('a b', type('S', (str,), {})('c d'), 'e f')]",
+        ],
+    );
+}
+
 /// the other way a remembered answer stops being right: the method is rebound on
 /// the type after the site was armed
 ///
@@ -26031,6 +26118,107 @@ def named(n: int) -> str:
 }
 
 #[test]
+fn a_pair_returning_call_that_fails_is_read_off_the_pair_it_answered_with() {
+    // a struct reserves no bit pattern of its own, so a body that fails writes one
+    // into a *member* and the caller reads it back from there: a member holding a
+    // tagged `int` takes `BY_INT_ERROR`, one holding an object takes `NULL`. a pair
+    // of `double`s has no member with a pattern to spare, so that one asks the
+    // thread's exception state instead, and it is here to keep that arm exercised.
+    //
+    // `.by` rather than `.py` so that a `float` annotation is a machine double —
+    // python's admits an `int`, which would put the slot back on the object protocol
+    // and stop testing the arm it is here for
+    agree(
+        "pairfail",
+        "\
+class Point:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+
+def divided(value: int, by: int) -> tuple[int, int]:
+    return value // by, value % by
+
+
+# the failure is in the *second* half, so the first has already been computed and is
+# a reference the error path has to give back rather than hand on
+def counted(value: int, by: int) -> tuple[str, int]:
+    return str(value), value // by
+
+
+def placed(value: int, by: int) -> tuple[Point, int]:
+    return Point(value // by), value
+
+
+def scaled(value: int, by: int) -> tuple[float, float]:
+    return value / by, value * 0.5
+
+
+# a compiled caller takes its own error edge on what the callee answered, rather
+# than unpacking a pair that was never built
+def summed(value: int, by: int) -> int:
+    whole, part = divided(value, by)
+    return whole + part
+
+
+def named(value: int, by: int) -> int:
+    text, count = counted(value, by)
+    return len(text) + count
+
+
+def positioned(value: int, by: int) -> int:
+    point, keep = placed(value, by)
+    return point.x + keep
+
+
+def halved(value: int, by: int) -> float:
+    lo, hi = scaled(value, by)
+    return lo + hi
+
+
+# and a handler in the calling frame sees the callee's exception, not a pair
+def caught(value: int, by: int) -> str:
+    try:
+        whole, part = divided(value, by)
+    except ZeroDivisionError:
+        return 'caught'
+    return str(whole + part)
+
+
+# the same call over and over, so a leaked reference on the error path shows up as
+# something still alive rather than as a wrong answer once
+def repeatedly(n: int) -> int:
+    survived = 0
+    i = 0
+    while i < n:
+        try:
+            point, keep = placed(i, 0)
+            survived = survived + point.x + keep
+        except ZeroDivisionError:
+            survived = survived + 1
+        i = i + 1
+    return survived
+",
+        &[
+            "[m.divided(93, 7), m.counted(93, 7), m.placed(93, 7)[1], m.scaled(9, 2)]",
+            "[m.summed(93, 7), m.named(93, 7), m.positioned(93, 7), m.halved(9, 2)]",
+            // every shape fails the same way, and the exception is the callee's own
+            "[(type(e).__name__, str(e)) for e in [_capture(m.divided, 1, 0)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.counted, 1, 0)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.placed, 1, 0)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.scaled, 1, 0)]]",
+            // and a compiled caller propagates it rather than reading a half-built pair
+            "[(type(e).__name__, str(e)) for e in [_capture(m.summed, 1, 0)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.named, 1, 0)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.positioned, 1, 0)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.halved, 1, 0)]]",
+            "[m.caught(93, 7), m.caught(93, 0)]",
+            "m.repeatedly(200)",
+        ],
+    );
+}
+
+#[test]
 fn a_return_inside_a_match_case_is_seen_by_the_representation_choice() {
     // the walk that decides how a body hands its pair back has to reach a `case`
     // body: a `return` it missed would be lowered against a layout nothing proved it
@@ -28069,5 +28257,189 @@ fn the_runtime_and_the_writer_spell_a_forwarders_file_the_same_way() {
             by_irbuild::shims::SHIM_FILE
         )),
         "the header does not define the file the forwarders are written with"
+    );
+}
+
+/// a class the module keeps no instance of: built and dropped, over and over
+///
+/// its memory is kept back for the next instance rather than handed to the
+/// allocator, which is worth about twice the speed on allocation-shaped code. the
+/// thing that has to stay true is that recycling a *block* is not recycling an
+/// *object*: every instance is its own, and the finalizer of every one of them
+/// runs.
+///
+/// that is exactly what went wrong first. "this object has been finalized" is a bit
+/// python keeps in the collector's header, which sits in front of the block rather
+/// than in it, so resetting the instance does not reach it — and the second object
+/// to live in a recycled block was one `__del__` never ran for. the class is turned
+/// away now, and this is the test that says so
+const RECYCLED_FINALIZERS: &str = "\
+seen: list[int] = []
+
+
+class Noisy:
+    def __init__(self, tag: int):
+        self.tag = tag
+
+    def __del__(self) -> None:
+        seen.append(self.tag)
+
+
+def churn(n: int) -> int:
+    i = 0
+    while i < n:
+        Noisy(i)
+        i = i + 1
+    return i
+";
+
+#[test]
+fn every_instance_of_a_class_with_a_finalizer_runs_it() {
+    agree_python(
+        "by_diff_recycledfinal",
+        RECYCLED_FINALIZERS,
+        // one call, because each of them runs in a python of its own: what the
+        // finalizers left behind has to be read in the same process that made them
+        &["(m.churn(6), sorted(m.seen))"],
+    );
+}
+
+/// the same shape with no finalizer, which is the one that *does* recycle
+///
+/// a block reused is not an object reused: two instances alive at once are two
+/// objects, and what a program can ask about either of them is unchanged
+const RECYCLED_INSTANCES_SOURCE: &str = "\
+class Node:
+    def __init__(self, tag: int):
+        self.tag = tag
+
+    def read(self) -> int:
+        return self.tag
+
+
+def churn(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        node = Node(i)
+        total = total + node.read()
+        i = i + 1
+    return total
+
+
+def not_shared(n: int) -> str:
+    kept = Node(0)
+    total = 0
+    i = 1
+    while i < n:
+        passing = Node(i)
+        total = total + passing.read()
+        i = i + 1
+    return str(kept.read()) + \" \" + str(total)
+";
+
+#[test]
+fn a_recycled_block_is_not_a_recycled_object() {
+    agree_python(
+        "by_diff_recycled",
+        RECYCLED_INSTANCES_SOURCE,
+        &[
+            "m.churn(6)",
+            // an instance held across a churn that reuses blocks behind it
+            "m.not_shared(6)",
+            // and five alive at once are five objects, whatever memory they are in
+            "len({id(n) for n in [m.Node(i) for i in range(5)]})",
+        ],
+    );
+}
+
+/// the three other routes by which a recycled block could show the last instance's
+/// state, each with the part of the instance it would come from
+///
+/// `Optional.extra` is written only on every other construction, so what has to be
+/// reset is the byte saying whether the field is *there* — the one part of an
+/// instance a constructor does not always overwrite, and so the one the reset is
+/// actually load-bearing for. `Slotted` keeps no dict, which makes it an uncollected type allocated
+/// and freed through the plain allocator rather than the collector's; asking the
+/// wrong one to release a block would free an address a header before it. and
+/// `Linked` builds cycles and collects them, which is the other flag the collector
+/// keeps in that header — the deallocator's own untrack is what clears it
+const RECYCLED_ROUTES: &str = "\
+import gc
+
+
+class Optional:
+    def __init__(self, tag: int, extra: int | None = None):
+        self.tag = tag
+        if extra is not None:
+            self.extra = extra
+
+    def has_extra(self) -> bool:
+        return hasattr(self, \"extra\")
+
+
+class Slotted:
+    __slots__ = (\"tag\",)
+
+    def __init__(self, tag: int):
+        self.tag = tag
+
+    def read(self) -> int:
+        return self.tag
+
+
+class Linked:
+    def __init__(self, tag: int):
+        self.tag = tag
+        self.peer = None
+
+
+def unset_stays_unset(n: int) -> str:
+    marks = \"\"
+    i = 0
+    while i < n:
+        one = Optional(i, i) if i % 2 == 0 else Optional(i)
+        marks = marks + str(one.has_extra())
+        i = i + 1
+    return marks
+
+
+def slotted_churn(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = total + Slotted(i).read()
+        i = i + 1
+    return total
+
+
+def cycles_then_reuse(n: int) -> int:
+    i = 0
+    while i < n:
+        a = Linked(i)
+        b = Linked(i + 1)
+        a.peer = b
+        b.peer = a
+        i = i + 1
+    gc.collect()
+    total = 0
+    i = 0
+    while i < n:
+        total = total + Linked(i).tag
+        i = i + 1
+    gc.collect()
+    return total
+";
+
+#[test]
+fn a_recycled_block_carries_nothing_of_the_instance_before_it() {
+    agree_python(
+        "by_diff_recycledroutes",
+        RECYCLED_ROUTES,
+        &[
+            "m.unset_stays_unset(6)",
+            "m.slotted_churn(5)",
+            "m.cycles_then_reuse(20)",
+        ],
     );
 }

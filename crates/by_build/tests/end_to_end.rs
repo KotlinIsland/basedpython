@@ -520,6 +520,45 @@ fn repeated_calls_do_not_leak_the_boxed_representation() {
 }
 
 #[test]
+fn a_raising_body_releases_the_registers_it_never_wrote() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    // every refcounted register starts holding the int error sentinel, and the block
+    // that runs on the way out releases all of them — so a body that raises early
+    // hands the sentinel to `By_DecRefTagged` several times over. it is skipped
+    // because the sentinel is the tag bit alone and `By_LongOf` turns it into NULL;
+    // release it as if it were an object and the process dies on the first raise
+    let Some(dir) = built_from_source(
+        "\
+def chain(a: int, b: int) -> int:
+    first = a * b
+    second = first // b
+    third = second + first
+    return third
+",
+        "by_e2e_sentinel",
+        &toolchain,
+        "sentinel",
+    ) else {
+        return;
+    };
+
+    let out = script(
+        &python,
+        &dir,
+        "import by_e2e_sentinel\n\
+         print(by_e2e_sentinel.chain(6, 3))\n\
+         try:\n    by_e2e_sentinel.chain(6, 0)\n\
+         except ZeroDivisionError:\n    print('caught')\n\
+         else:\n    print('no error')\n",
+    );
+    // the first line proves the body ran compiled at all; the second proves the
+    // release block survived three unwritten registers
+    assert_eq!(out, "24\ncaught");
+}
+
+#[test]
 fn a_returned_value_outlives_the_frame_that_made_it() {
     let Some((python, toolchain)) = environment() else {
         return;

@@ -164,6 +164,15 @@ BY_HOT PyObject *By_LongOf(ByTagged x) {
     return (PyObject *)(x & ~BY_INT_TAG);
 }
 
+/* `By_DecRefTagged` and `By_IncRefTagged` release the sentinel by handing it to
+ * `By_LongOf` and letting the X-forms drop the NULL, rather than comparing against
+ * `BY_INT_ERROR` a second time. that only works while the sentinel carries no object
+ * bits — give it any other odd value and those two would hand a bogus pointer to
+ * `Py_DECREF` on every error path, silently, in every compiled module */
+_Static_assert((BY_INT_ERROR & ~BY_INT_TAG) == 0,
+               "BY_INT_ERROR must be the tag bit alone, or the tagged refcount "
+               "helpers would release a bogus pointer");
+
 /* borrow-free: returns a new reference */
 static inline PyObject *By_BoxInt(ByTagged x) {
     if (By_IsShort(x)) {
@@ -210,15 +219,23 @@ static inline ByTagged By_TaggedFromLong(PyObject *o) {
     }
 }
 
+/* the error sentinel is an odd word whose object bits are all zero, so `By_LongOf`
+ * already turns it into NULL. asking `x != BY_INT_ERROR` as well puts a second
+ * compare and a second branch on the straight line of every release a loop makes;
+ * letting the X-forms do it instead leaves the null test in the cold half beside
+ * the refcount write, where a value that is neither short nor an error never goes.
+ *
+ * a register that was never written still holds the sentinel and still reaches
+ * here from an error path, so the case has to be handled — this only moves where */
 BY_HOT void By_DecRefTagged(ByTagged x) {
-    if (BY_UNLIKELY(!By_IsShort(x) && x != BY_INT_ERROR)) {
-        Py_DECREF(By_LongOf(x));
+    if (BY_UNLIKELY(!By_IsShort(x))) {
+        Py_XDECREF(By_LongOf(x));
     }
 }
 
 BY_HOT void By_IncRefTagged(ByTagged x) {
-    if (BY_UNLIKELY(!By_IsShort(x) && x != BY_INT_ERROR)) {
-        Py_INCREF(By_LongOf(x));
+    if (BY_UNLIKELY(!By_IsShort(x))) {
+        Py_XINCREF(By_LongOf(x));
     }
 }
 
@@ -2922,6 +2939,85 @@ static inline PyObject *By_ListAppend(PyObject *receiver, PyObject *name, PyObje
         return By_NewRef(Py_None);
     }
     return By_CallMethod(receiver, name, args, nargs);
+}
+
+/* the `str` methods that have a C-API entry point of their own
+ *
+ * a method site already skips the attribute lookup, but it still ends in an
+ * indirect call into the method's python-facing wrapper, which unpacks the
+ * argument array again before doing the work. for these four the work itself is
+ * reachable directly, so the wrapper and the argument array both go.
+ *
+ * each one takes the ordinary path — the same site, so the fallback is no worse
+ * than it was — unless the receiver is an *exact* `str` and the arguments are the
+ * shape the C-API entry point serves. that is what keeps the answer python's own
+ * rather than an approximation of it: a `str` subclass with a method of its own, a
+ * separator that is not a string, a `startswith` given a tuple of prefixes or a
+ * start and end range, all fall through to `str`'s own method. these are all
+ * ordinary calls, so the argument slot 0 that `By_CallMethod` fills with the
+ * receiver is still reserved and the arguments still begin at `args[1]` */
+static inline PyObject *By_StrSplit(ByMethodSite *site, PyObject *receiver, PyObject *name,
+                                    PyObject **args, Py_ssize_t nargs) {
+    if (BY_LIKELY(receiver != NULL && PyUnicode_CheckExact(receiver))) {
+        /* `PyUnicode_Split` is `str.split`'s body with the argument parsing lifted
+         * off, and it reads a NULL separator as the whitespace split — which is what
+         * `str.split()` and `str.split(None)` both mean */
+        if (nargs == 0) return PyUnicode_Split(receiver, NULL, -1);
+        if (nargs == 1) {
+            PyObject *separator = args[1];
+            if (separator == Py_None) return PyUnicode_Split(receiver, NULL, -1);
+            if (BY_LIKELY(PyUnicode_Check(separator))) {
+                return PyUnicode_Split(receiver, separator, -1);
+            }
+        }
+    }
+    return By_CallMethodSite(site, receiver, name, args, nargs);
+}
+
+static inline PyObject *By_StrStartswith(ByMethodSite *site, PyObject *receiver, PyObject *name,
+                                         PyObject **args, Py_ssize_t nargs) {
+    if (BY_LIKELY(nargs == 1 && receiver != NULL && PyUnicode_CheckExact(receiver))
+        && BY_LIKELY(PyUnicode_Check(args[1]))) {
+        /* the range `str.startswith` uses when it is given none, and `-1` for the
+         * direction is the prefix end. a tuple of prefixes is not this shape and is
+         * left to the method, which knows how to walk one */
+        Py_ssize_t matched = PyUnicode_Tailmatch(receiver, args[1], 0, PY_SSIZE_T_MAX, -1);
+        if (BY_UNLIKELY(matched < 0)) return NULL;
+        return By_NewRef(matched ? Py_True : Py_False);
+    }
+    return By_CallMethodSite(site, receiver, name, args, nargs);
+}
+
+static inline PyObject *By_StrJoin(ByMethodSite *site, PyObject *receiver, PyObject *name,
+                                   PyObject **args, Py_ssize_t nargs) {
+    if (BY_LIKELY(nargs == 1 && receiver != NULL && PyUnicode_CheckExact(receiver))) {
+        return PyUnicode_Join(receiver, args[1]);
+    }
+    return By_CallMethodSite(site, receiver, name, args, nargs);
+}
+
+/* `str.upper` has no C-API entry point, so this is the one of the four that has to
+ * repeat what the interpreter does rather than call it. it repeats only the arm
+ * that is small enough to be obviously the same: for a string that is entirely
+ * ascii, `unicode_upper` builds an ascii result of the same length and maps each
+ * byte through `Py_TOUPPER`, which is what this does. every other string — anything
+ * carrying a character above 127, where the mapping is the full unicode one and can
+ * change the length — is left to the method */
+static inline PyObject *By_StrUpper(ByMethodSite *site, PyObject *receiver, PyObject *name,
+                                    PyObject **args, Py_ssize_t nargs) {
+    if (BY_LIKELY(nargs == 0 && receiver != NULL && PyUnicode_CheckExact(receiver))
+        && BY_LIKELY(PyUnicode_IS_ASCII(receiver))) {
+        Py_ssize_t length = PyUnicode_GET_LENGTH(receiver);
+        PyObject *upper = PyUnicode_New(length, 127);
+        if (BY_UNLIKELY(upper == NULL)) return NULL;
+        const unsigned char *source = (const unsigned char *)PyUnicode_DATA(receiver);
+        unsigned char *target = (unsigned char *)PyUnicode_DATA(upper);
+        for (Py_ssize_t i = 0; i < length; i++) {
+            target[i] = (unsigned char)Py_TOUPPER(source[i]);
+        }
+        return upper;
+    }
+    return By_CallMethodSite(site, receiver, name, args, nargs);
 }
 
 /* the tests a `match` case makes about the *shape* of its subject
