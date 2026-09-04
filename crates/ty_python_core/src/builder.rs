@@ -6463,6 +6463,19 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
             rest: Some(name), ..
         }) = pattern
         {
+            // A capture's own scope has to be recorded rather than left to the
+            // interval map to infer. That map merges consecutive same-scope
+            // entries into ranges, so a node with no entry of its own is only
+            // answered for when some *recorded* expression in the same scope sits
+            // on either side of it in node order. A `match` subject happens to sit
+            // before its patterns and so covered them by accident; basedpython's
+            // `let (a, b) := v` and `if let P := v` write the pattern *before* the
+            // value, and a `let (m, n): T` parameter binder has no neighbouring
+            // expression at all, so both fell outside every interval and every
+            // service that starts by asking which scope a name is in — goto,
+            // find-references, rename, highlight — answered nothing at the binder
+            self.scopes_by_expression
+                .record_expression(name, self.current_scope());
             let symbol = self.add_symbol(name.id().clone());
             let state = self.current_match_case.as_ref().unwrap();
             let (pattern_node, predicate, case_name) = (
