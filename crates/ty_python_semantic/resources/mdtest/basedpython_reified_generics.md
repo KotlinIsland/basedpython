@@ -6,6 +6,9 @@ real runtime value (the supplied type argument), so it types as `type[T]` rather
 `TypeVar` object. Reification makes the `[...]` specialization step required — written explicitly,
 or inferred from the arguments and injected by the transpiler.
 
+A class reifies too, from the same rule but through its instances; that is
+`basedpython_reified_class_generics.md`. This file is about functions.
+
 ## a value-position type parameter is `type[T]`
 
 ```by
@@ -107,17 +110,6 @@ class C:
     # error: [reified-classmethod]
     def f[reified T](cls) -> None:
         pass
-```
-
-## a class type parameter cannot be reified
-
-Reification rebuilds a *function's* closure. A class has no such step, so the modifier would promise
-a runtime value that never arrives:
-
-```by
-# error: [invalid-reified-type-param] "Type parameter `T` cannot be reified"
-class C[reified T]:
-    pass
 ```
 
 ## a type alias type parameter cannot be reified
@@ -630,10 +622,11 @@ def outer[T](data: list[T]) -> None:
     inner(data)
 ```
 
-## a class type parameter has no cell to forward
+## an erased class type parameter has no cell to forward
 
-A class type parameter lives on the class, not in a function closure, so it is never a forwardable
-cell:
+Forwarding reads the parameter as a value, and a class parameter no method reads is erased — there
+is nothing on the instance to forward. (A class that does reify one is a different matter; see
+`basedpython_reified_class_generics.md`.)
 
 ```by
 def inner[reified T](data: list[T]) -> None: ...

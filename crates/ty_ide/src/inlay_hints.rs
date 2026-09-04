@@ -18,7 +18,9 @@ use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_module_resolver::file_to_module;
 use ty_python_core::ProgramFile;
-use ty_python_semantic::reified::inferred_reified_type_param_names;
+use ty_python_semantic::reified::{
+    inferred_reified_class_type_param_names, inferred_reified_type_param_names,
+};
 use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     InlayHintCallArgumentDetails, hintable_parameter_type, implicit_enum_member_value,
@@ -1175,15 +1177,35 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// basedpython: hint `reified` on each type parameter of `function` that a
     /// value-position use in the body reifies without saying so.
     fn add_inferred_reification(&mut self, function: &ast::StmtFunctionDef) {
+        let inferred = |hints: &mut Self| {
+            inferred_reified_type_param_names(hints.source, hints.source_type, function)
+        };
+        self.add_inferred_reification_of(function.type_params.as_deref(), inferred);
+    }
+
+    /// basedpython: the same hint on a class, which reifies a type parameter its
+    /// methods read through their receiver.
+    fn add_inferred_class_reification(&mut self, class: &ast::StmtClassDef) {
+        let inferred = |hints: &mut Self| {
+            inferred_reified_class_type_param_names(hints.source, hints.source_type, class)
+        };
+        self.add_inferred_reification_of(class.type_params.as_deref(), inferred);
+    }
+
+    fn add_inferred_reification_of(
+        &mut self,
+        type_params: Option<&ast::TypeParams>,
+        inferred: impl FnOnce(&mut Self) -> Vec<Name>,
+    ) {
         if !self.settings.inferred_reification || !self.is_basedpython() {
             return;
         }
 
-        let Some(type_params) = function.type_params.as_deref() else {
+        let Some(type_params) = type_params else {
             return;
         };
 
-        let inferred = inferred_reified_type_param_names(self.source, self.source_type, function);
+        let inferred = inferred(self);
 
         // the hint goes where the keyword would be written, which is ahead of
         // everything the parameter's own declaration spells
@@ -1752,6 +1774,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 self.add_inferred_variances(class.type_params.as_deref(), |model| {
                     class.inferred_type(model)
                 });
+                self.add_inferred_class_reification(class);
 
                 // a `case` variant is a member declaration with nowhere to write
                 // a value, so it goes after the name — `case Red 1, Green 2`
@@ -10133,6 +10156,32 @@ Source with applied edits:
             class C:
                 def method[T](self):
                     print(T)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_reification: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_inferred_class_reification() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class ValueUse[T]:
+                def kind(self):
+                    return T
+
+            class AnnotationOnly[T]:
+                value: T
+
+            class Declared[reified T]:
+                pass
+
+            class HalfDeclared[reified T, U]:
+                def kind(self):
+                    return U
             ",
         );
 

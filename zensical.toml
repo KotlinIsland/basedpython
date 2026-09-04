@@ -150,6 +150,7 @@ features = [
     { "overlapping" = "features/overlapping.md" },
     { "explicit generic call sites" = "features/generic-calls.md" },
     { "reified type parameters" = "features/reified-generics.md" },
+    { "reified class type parameters" = "features/reified-class-generics.md" },
     { "type reification" = "features/type-reification.md" },
     { "parametric type tests" = "features/parametric-type-tests.md" },
   ] },

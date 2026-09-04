@@ -50,7 +50,7 @@ use ruff_python_ast::{Expr, ParameterWithDefault, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::source_util::{line_indent, line_start};
+use super::source_util::{PrologueStatement, body_prologue, first_body_statement};
 use crate::type_info::TypeInfo;
 
 /// what a `_MISSING`-sentinel guard does when the argument was not supplied
@@ -66,8 +66,8 @@ pub(crate) enum Guard {
     Required { name: String, function: String },
 }
 
-impl Guard {
-    pub(crate) fn push(&self, frags: &mut Vec<Fragment>, base: &str) {
+impl PrologueStatement for Guard {
+    fn push(&self, frags: &mut Vec<Fragment>, base: &str) {
         match self {
             Guard::Reevaluate { name, default } => {
                 frags.push(Fragment::Lit(format!(
@@ -94,15 +94,6 @@ struct MutableDefaults<'src> {
     /// functions whose body starts with parser-synthesized statements, so a
     /// guard has no source position to anchor to
     unanchored: Vec<String>,
-}
-
-/// the statement's range when it is a position in the *body*. a statement the
-/// parser synthesized for an `init(…)` shorthand carries either an empty range
-/// or the range of the parameter it was built from, so it points into the
-/// header — splicing a guard there lands it in the middle of the signature
-fn body_range(stmt: &Stmt, header_end: TextSize) -> Option<TextRange> {
-    let range = stmt.range();
-    (!range.is_empty() && range.start() >= header_end).then_some(range)
 }
 
 /// replace a default with the sentinel. a template rather than plain text so
@@ -236,52 +227,6 @@ pub(crate) fn is_bodyless_init_shorthand(f: &StmtFunctionDef) -> bool {
         && first_body_statement(f).is_none()
 }
 
-/// The first statement in `f`'s body that came from the source, docstring
-/// included — that is, whether the source wrote a body at all.
-///
-/// [`init_method`] hangs the body it generates off this, and it is what
-/// [`is_bodyless_init_shorthand`] means by bodyless. A docstring *is* a body:
-/// generating another one around it would leave two.
-///
-/// [`init_method`]: super::init_method
-pub(crate) fn first_body_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
-    let header_end = header_end(f);
-    f.body
-        .iter()
-        .find(|stmt| body_range(stmt, header_end).is_some())
-}
-
-/// The offset past everything a `def`'s header can span, so a statement before
-/// it is one the parser synthesized from a parameter rather than a body.
-fn header_end(f: &StmtFunctionDef) -> TextSize {
-    f.parameters.range().end().max(
-        f.returns
-            .as_ref()
-            .map_or(TextSize::new(0), |r| r.range().end()),
-    )
-}
-
-/// The first statement in `f`'s body that came from the source, skipping a
-/// docstring and any statement the parser synthesized.
-///
-/// This is the anchor a body insertion hangs off, and [`init_method`] reads the
-/// same one: a body the two disagree about is a body where one of them emits a
-/// `_MISSING` sentinel and the other emits no guard for it.
-///
-/// [`init_method`]: super::init_method
-pub(crate) fn first_source_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
-    let header_end = header_end(f);
-    let docstring_count = if let Some(Stmt::Expr(e)) = f.body.first() {
-        usize::from(matches!(e.value.as_ref(), Expr::StringLiteral(_)))
-    } else {
-        0
-    };
-    f.body
-        .iter()
-        .skip(docstring_count)
-        .find(|s| body_range(s, header_end).is_some())
-}
-
 impl MutableDefaults<'_> {
     fn process_function(&mut self, f: &StmtFunctionDef) {
         // the `init(…)` shorthand with no body of its own has no source
@@ -299,60 +244,14 @@ impl MutableDefaults<'_> {
         }
         self.used = true;
 
-        // insert the guards at the start of the first body statement the source
+        // the guards go at the start of the first body statement the source
         // actually wrote
-        let docstring_count = if let Some(Stmt::Expr(e)) = f.body.first() {
-            usize::from(matches!(e.value.as_ref(), Expr::StringLiteral(_)))
-        } else {
-            0
-        };
-        // the body begins after everything the header can span
-        let header_end = f.parameters.range().end().max(
-            f.returns
-                .as_ref()
-                .map_or(TextSize::new(0), |r| r.range().end()),
-        );
-        let mut frags: Vec<Fragment> = Vec::new();
-        if let Some(range) = first_source_statement(f).and_then(|s| body_range(s, header_end)) {
-            let insert_at = range.start();
-            let prefix = &self.source
-                [usize::from(line_start(self.source, insert_at))..usize::from(insert_at)];
-            if prefix.trim().is_empty() {
-                // the insertion lands after the statement's own indentation;
-                // each guard re-establishes it for the following line
-                let base = prefix.to_owned();
-                for guard in &guards {
-                    guard.push(&mut frags, &base);
-                    frags.push(Fragment::Lit(format!("\n{base}")));
-                }
-            } else {
-                // single-line body (`def f(x=[]): ...`) — break it onto its own
-                // indented line after the guards
-                let base = format!("{}    ", line_indent(self.source, f.range().start()));
-                for guard in &guards {
-                    frags.push(Fragment::Lit(format!("\n{base}")));
-                    guard.push(&mut frags, &base);
-                }
-                frags.push(Fragment::Lit(format!("\n{base}")));
-            }
-            self.guards.push((insert_at, frags));
-        } else if let Some(range) = docstring_count
-            .checked_sub(1)
-            .and_then(|i| f.body.get(i))
-            .and_then(|s| body_range(s, header_end))
-        {
-            // docstring-only body: append the guards after it
-            let base = format!("{}    ", line_indent(self.source, f.range().start()));
-            for guard in &guards {
-                frags.push(Fragment::Lit(format!("\n{base}")));
-                guard.push(&mut frags, &base);
-            }
-            self.guards.push((range.end(), frags));
-        } else {
+        match body_prologue(self.source, f, &guards) {
+            Some(anchored) => self.guards.push(anchored),
             // nothing in the body came from the source, so there is nowhere to
             // put the guard. say so rather than splice it at a synthesized
             // node's offset, which lands inside the signature
-            self.unanchored.push(f.name.to_string());
+            None => self.unanchored.push(f.name.to_string()),
         }
     }
 }

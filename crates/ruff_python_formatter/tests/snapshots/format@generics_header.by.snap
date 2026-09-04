@@ -27,6 +27,15 @@ class Variant[out Key, in Sent, in out Value]:
 
 
 class BoundedVariant[out T: int = bool]: ...
+
+
+# `reified` stacks ahead of the variance keywords, on a class as on a function
+class Reified[reified T, reified out U]:
+    def kinds(self):
+        return (T, U)
+
+
+def reified_fn[reified T]() -> None: ...
 ```
 
 ## Output
@@ -54,4 +63,13 @@ class Variant[out Key, in Sent, in out Value]:
 
 
 class BoundedVariant[out T: int = bool]: ...
+
+
+# `reified` stacks ahead of the variance keywords, on a class as on a function
+class Reified[reified T, reified out U]:
+    def kinds(self):
+        return (T, U)
+
+
+def reified_fn[reified T]() -> None: ...
 ```

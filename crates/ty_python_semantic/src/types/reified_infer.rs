@@ -373,7 +373,8 @@ fn spell_class<'db>(
             let origin = ClassLiteral::Static(alias.origin(db));
             let base = spell_class_literal(db, env, file, origin)?;
             let arguments =
-                spell_specialization_arguments(db, env, file, origin, alias.specialization(db))?;
+                spell_specialization_arguments(db, env, file, origin, alias.specialization(db))
+                    .ok()?;
             Some(format!("{base}[{arguments}]"))
         }
     }
@@ -504,57 +505,115 @@ fn mro_mentions_class_getitem<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) -
 }
 
 /// the comma-joined runtime spellings of a specialization's type arguments —
-/// what goes inside a class's `[...]`. tuples carry their precise element
-/// shape out-of-band; spell it rather than the class's single typevar
+/// what goes inside a class's `[...]` — or the reason there are none.
+///
+/// each parameter spells by its own kind, the way a function's do: a `*Ts`
+/// flattens into the run of arguments it stands for, because that is what the
+/// runtime binding reads back out of the subscript. tuples carry their precise
+/// element shape out-of-band; spell it rather than the class's single typevar
 fn spell_specialization_arguments<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
     origin: ClassLiteral<'db>,
     specialization: Specialization<'db>,
-) -> Option<String> {
-    // the caller is about to *invent* an `origin[…]` the source never wrote, so
-    // it fires only on positive evidence. a wrong yes kills the program at
+) -> Result<String, ReifiedInferenceError<'db>> {
+    // the caller may be about to *invent* an `origin[…]` the source never wrote,
+    // so it fires only on positive evidence. a wrong yes kills the program at
     // import; a wrong no costs the specialization nothing else can observe
     if runtime_subscript(db, env, origin) != RuntimeSubscript::Supported {
-        return None;
+        return Err(ReifiedInferenceError::NoBinding);
     }
     if origin.is_known(db, KnownClass::Tuple) {
-        return match specialization.tuple(db)? {
-            Tuple::Fixed(fixed) => {
-                let elements = fixed
-                    .elements_slice()
-                    .iter()
-                    .map(|element| runtime_spelling(db, env, file, element.promote(db, env)))
-                    .collect::<Option<Vec<_>>>()?;
-                if elements.is_empty() {
-                    Some("()".to_owned())
-                } else {
-                    Some(elements.join(", "))
-                }
-            }
-            Tuple::Variable(_) => None,
+        let Some(Tuple::Fixed(fixed)) = specialization.tuple(db) else {
+            return Err(ReifiedInferenceError::NoBinding);
         };
+        let elements = fixed
+            .elements_slice()
+            .iter()
+            .map(|element| runtime_spelling(db, env, file, element.promote(db, env)))
+            .collect::<Option<Vec<_>>>()
+            .ok_or(ReifiedInferenceError::NoBinding)?;
+        return Ok(if elements.is_empty() {
+            "()".to_owned()
+        } else {
+            elements.join(", ")
+        });
     }
-    // an argument is promoted one by one: a covariant parameter keeps the literal type it was
-    // inferred from, and only a class object can be written at runtime
-    let arguments = specialization
-        .types(db)
-        .iter()
-        .map(|argument| runtime_spelling(db, env, file, argument.promote(db, env)))
-        .collect::<Option<Vec<_>>>()?;
-    Some(arguments.join(", "))
+    let Some(generic_context) = origin.generic_context(db) else {
+        return Err(ReifiedInferenceError::NoBinding);
+    };
+    let mut arguments = Vec::new();
+    for (bound_typevar, argument) in generic_context.variables(db).zip(specialization.types(db)) {
+        let typevar = bound_typevar.typevar(db);
+        let kind = ParameterKind::of(typevar.kind(db));
+        // a class writes its specialization as a subscript, and a subscript
+        // takes no keyword arguments, so a pack's fields cannot be spelled the
+        // way a function's are — a class never reifies one for the same reason
+        if matches!(kind, ParameterKind::KeywordPack) {
+            return Err(ReifiedInferenceError::NoBinding);
+        }
+        // an argument is promoted one by one: a covariant parameter keeps the
+        // literal type it was inferred from, and only a class object can be
+        // written at runtime
+        let promoted = argument.promote(db, env);
+        // an unsolved parameter reads as `Never`, and one solved from something
+        // the checker cannot see reads as `Unknown`. neither is an argument
+        // anybody wrote down, so both say the same thing: name one
+        if matches!(kind, ParameterKind::Single) && (promoted.is_never() || promoted.is_dynamic()) {
+            return Err(ReifiedInferenceError::Unsolved(typevar.name(db).clone()));
+        }
+        let Some(spelling) = kind.spelling(db, env, file, promoted) else {
+            return Err(ReifiedInferenceError::Unspellable(
+                typevar.name(db).clone(),
+                promoted,
+            ));
+        };
+        // an empty run stands for no arguments at all, which is what the runtime
+        // binding fills in for an unsupplied variadic
+        if !spelling.is_empty() {
+            arguments.push(spelling);
+        }
+    }
+    Ok(arguments.join(", "))
+}
+
+/// The specialization a construction of `class_literal` builds, or the reason
+/// it has none.
+///
+/// Read from the (already inferred, literal-promoted) type of the constructed
+/// instance, so the answer always matches the checker's solved specialization —
+/// including PEP 696 defaults and any usage-based widening. This is the single
+/// decision behind both directions: [`constructor_specialization_display`] is
+/// the transpiler's injection and [`reified_construction_error`] the checker's
+/// diagnostic, so the two cannot disagree about which constructions are legal.
+fn constructor_specialization<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    class_literal: ClassLiteral<'db>,
+    constructed: Type<'db>,
+) -> Result<String, ReifiedInferenceError<'db>> {
+    let Type::NominalInstance(instance) = constructed.promote(db, env) else {
+        return Err(ReifiedInferenceError::NoBinding);
+    };
+    let ClassType::Generic(alias) = instance.class(db, env) else {
+        return Err(ReifiedInferenceError::NoBinding);
+    };
+    let origin = ClassLiteral::Static(alias.origin(db));
+    if origin != class_literal {
+        return Err(ReifiedInferenceError::NoBinding);
+    }
+    spell_specialization_arguments(db, env, file, origin, alias.specialization(db))
 }
 
 /// The bracketed type-argument spelling to inject at a bare constructor call
 /// of the generic class `class_literal` (`A(1)` → `"int"`).
 ///
-/// Read from the (already inferred, literal-promoted) type of the constructed
-/// instance, so the injection always matches the checker's solved
-/// specialization — including pep 696 defaults and any usage-based widening.
-/// `None` when the instance is not a specialization of the called class or an
-/// argument has no runtime spelling; unlike a bare reified-generic call this
-/// is never an error — the call simply stays bare.
+/// `None` when the construction has no writable specialization; unlike a bare
+/// reified-generic call this is never an error on its own — the call simply
+/// stays bare, and [`reified_construction_error`] reports it only when the class
+/// reifies something.
 pub(crate) fn constructor_specialization_display<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -562,79 +621,26 @@ pub(crate) fn constructor_specialization_display<'db>(
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
 ) -> Option<String> {
-    let Type::NominalInstance(instance) = constructed.promote(db, env) else {
-        return None;
-    };
-    let ClassType::Generic(alias) = instance.class(db, env) else {
-        return None;
-    };
-    let origin = ClassLiteral::Static(alias.origin(db));
-    if origin != class_literal {
-        return None;
-    }
-    if !is_runtime_subscriptable(db, env, origin) {
-        return None;
-    }
-    spell_specialization_arguments(db, env, file, origin, alias.specialization(db))
+    constructor_specialization(db, env, file, class_literal, constructed).ok()
 }
 
-/// Whether `C[…]` evaluates at runtime, so a reified call may be spelled that
-/// way.
+/// Why a construction of the reified generic class `class_literal` cannot say
+/// which specialization it builds, or `None` when it can.
 ///
-/// Almost every generic class is subscriptable, because being generic is what
-/// puts `Generic` — and so `__class_getitem__` — among its bases. The
-/// exceptions are all in one place: the C-implemented types of the standard
-/// library, which are generic only in typeshed's description of them.
-/// `zip[tuple[int, str]]` is a `TypeError` on every python version, and so are
-/// `filter`, `map`, `reversed`, most of `itertools`, and `io.TextIOWrapper`.
-///
-/// Typeshed's convention is what tells those apart: it spells out
-/// `__class_getitem__` on each C type that does accept a subscript, because
-/// those implement it themselves rather than inheriting it. A stdlib class that
-/// says neither that nor "I extend a generic class" — `zip` has no base at all
-/// — is the C type it looks like. Every other class, first-party or
-/// third-party, stub or source, is python, and python gives a generic class its
-/// `__class_getitem__`.
-///
-/// Reification is best-effort, so where the signal runs out the answer is no: a
-/// missed `__orig_class__` is a feature not applied, and a subscript the
-/// runtime rejects is a `TypeError`.
-fn is_runtime_subscriptable<'db>(
+/// A reified class records its type arguments on the specialization its
+/// instances are built from, so a construction has to name one. This is
+/// [`constructor_specialization_display`]'s decision with the reason kept: the
+/// transpiler injects the solved specialization wherever one can be written, and
+/// where it cannot the instance would have no answer for a type parameter its
+/// own methods read.
+pub(crate) fn reified_construction_error<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
-    class: ClassLiteral<'db>,
-) -> bool {
-    if !describes_the_standard_library(db, class) {
-        return true;
-    }
-    if class
-        .class_member(db, env, "__class_getitem__", MemberLookupPolicy::default())
-        .place
-        .ignore_possibly_undefined()
-        .is_some()
-    {
-        return true;
-    }
-    // the class itself heads its own MRO, and every class with a type-parameter
-    // list carries a `Generic` entry there whether or not its runtime accepts a
-    // subscript — so what is looked for is a *base* that is a specialized
-    // generic class, which for a python class is what drags `Generic` in
-    class
-        .iter_mro(db)
-        .skip(1)
-        .any(|base| matches!(base, ClassBase::Class(ClassType::Generic(_))))
-}
-
-/// Whether `class` is declared in a stub of the standard library, whose classes
-/// are cpython's C types rather than python of their own.
-fn describes_the_standard_library<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
-    let file = class.file(db);
-    if !file.is_stub(db) {
-        return false;
-    }
-    ty_module_resolver::file_to_module(db, db.program_file(file).resolver_file(db))
-        .and_then(|module| module.search_path(db))
-        .is_some_and(ty_module_resolver::SearchPath::is_standard_library)
+    file: File,
+    class_literal: ClassLiteral<'db>,
+    constructed: Type<'db>,
+) -> Option<ReifiedInferenceError<'db>> {
+    constructor_specialization(db, env, file, class_literal, constructed).err()
 }
 
 /// The full runtime spelling (`list[int]`, `tuple[int, str]`) with which the

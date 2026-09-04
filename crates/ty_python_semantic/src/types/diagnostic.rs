@@ -178,6 +178,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNUSED_RETURN_VALUE);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
     registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
+    registry.register_lint(&REIFIED_WITHOUT_RECEIVER);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
     registry.register_lint(&REIFIED_CLASSMETHOD);
     registry.register_lint(&INVALID_REIFIED_TYPE_PARAM);
@@ -2157,11 +2158,12 @@ declare_lint! {
     /// ## Why is this bad?
     /// A function whose type parameter is referenced in a value position is
     /// *reified*: the type parameter behaves like a positional parameter that
-    /// is filled by the `[...]` specialization step. A bare call is legal only
-    /// when the transpiler can inject that step — every type parameter must
-    /// solve, from the arguments or its PEP 696 default, to a type with a
-    /// runtime spelling at the call site. Otherwise the parameter has no
-    /// value at runtime.
+    /// is filled by the `[...]` specialization step, and a reified generic
+    /// *class* records its type arguments on the specialization its instances
+    /// are built from. Either is legal without writing the step only when the
+    /// transpiler can inject it — every type parameter must solve, from the
+    /// arguments or its PEP 696 default, to a type with a runtime spelling
+    /// there. Otherwise the parameter has no value at runtime.
     ///
     /// ## Example
     ///
@@ -2176,10 +2178,48 @@ declare_lint! {
     ///     print(T)
     ///
     /// g(1)       # ok — transpiles to g[int](1)
+    ///
+    /// class A[T]:
+    ///     def kind(self) -> type[T]:
+    ///         return T
+    ///
+    /// a: A[int] = A()  # ok — transpiles to A[int]()
+    /// A()              # error: nothing says which specialization this is
     /// ```
     pub(crate) static UNSPECIALIZED_REIFIED_GENERIC = {
-        summary: "detects calls to reified generic functions without explicit specialization",
+        summary: "detects reified generics used without their specialization",
         status: LintStatus::stable("0.0.1-alpha.3"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a read of a reified class type parameter where nothing can
+    /// answer it.
+    ///
+    /// ## Why is this bad?
+    /// A class's type argument belongs to the *instance* that carries it, so a
+    /// read is answered through the receiver of the method it sits in. The class
+    /// body itself, a method's decorators and parameter defaults, and the body of
+    /// a class nested directly in the class all run while the class is being
+    /// built, before any instance exists; a `staticmethod` runs later but is
+    /// handed no receiver. A read in any of those has no type argument to name.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class C[T]:
+    ///     kind = T  # error: the class body has no instance to read from
+    ///
+    ///     @staticmethod
+    ///     def make():
+    ///         return T()  # error: a static method is handed no receiver
+    /// ```
+    pub(crate) static REIFIED_WITHOUT_RECEIVER = {
+        summary: "detects reads of a reified class type parameter with no receiver to read it from",
+        status: LintStatus::stable("0.0.72"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }
@@ -2191,17 +2231,18 @@ declare_lint! {
     /// reification cannot happen.
     ///
     /// ## Why is this bad?
-    /// Reification is a property of a *function*: the specialization step
-    /// rebuilds the function's closure so the body sees the type argument as a
-    /// runtime value. A class, a type alias and a `type def` have no such step —
-    /// their type parameters are erased — so `reified` there promises a runtime
-    /// value that never arrives.
+    /// Reification is a property of a *function* or a *class*: a function
+    /// rebuilds its closure at the call so the body sees the type argument as a
+    /// runtime value, and a class records it on the specialization its instances
+    /// are built from. A type alias and a `type def` have no such step — their
+    /// type parameters are erased — and neither has a class's keyword-variadic
+    /// pack, which a subscript has no way to supply. `reified` there promises a
+    /// runtime value that never arrives.
     ///
     /// ## Example
     ///
     /// ```by
-    /// class C[reified T]:  # error: a class type parameter is never reified
-    ///     ...
+    /// type Alias[reified T] = list[T]  # error: an alias's parameters are erased
     /// ```
     pub(crate) static INVALID_REIFIED_TYPE_PARAM = {
         summary: "detects `reified` type parameters that cannot be reified",
