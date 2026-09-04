@@ -21,6 +21,7 @@ use walkdir::WalkDir;
 
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
+use crate::by_lowering::SettledLowering;
 use by_stage::emit::{CheckGate, Transpiled, is_unusable_source, transpile_bug_diagnostic};
 use by_stage::project::{
     BY_SOURCES, COMPILABLE_SOURCES, Rebuilder, build_project_db, may_contain_sources, module_roots,
@@ -61,17 +62,54 @@ pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
 }
 
 impl LoweringArgs {
-    /// Fold the lowering options into a config already carrying its target
+    /// Fold the lowering options this command was given into a config already
+    /// carrying its target version.
+    fn apply(&self, config: &mut Config, cwd: &Path) -> anyhow::Result<()> {
+        self.fold(&SettledLowering::from(self), config, cwd)
+    }
+
+    /// [`apply`](Self::apply) for `by build`, which is the only command a
+    /// `--wheels` release runs inside itself.
+    ///
+    /// A release settles these once and hands them down, so a build that is one
+    /// of several inside one lowers the way the release asked rather than the
+    /// way its own command line reads — the backend passes no lowering options
+    /// on, so that command line is not the user's anyway.
+    ///
+    /// Every other command keeps [`apply`](Self::apply). These options change
+    /// what the emitted python does, and a variable left in the environment
+    /// must not silently re-lower a `by transpile` that was given options of its
+    /// own.
+    fn apply_for_build(&self, config: &mut Config, cwd: &Path) -> anyhow::Result<()> {
+        let settled = crate::by_lowering::settled_by_the_release()
+            .unwrap_or_else(|| SettledLowering::from(self));
+        self.fold(&settled, config, cwd)
+    }
+
+    /// Fold settled lowering options into a config already carrying its target
     /// version.
     ///
     /// `cwd` is where the project is looked for: the lowerings a project
     /// configures belong to every command that emits python, so they are read
     /// here rather than at each command's own config. Outside a project the
     /// transpiler's own defaults stand.
-    fn apply(&self, config: &mut Config, cwd: &Path) -> anyhow::Result<()> {
-        config.soundness = parse_soundness(&self.soundness)?;
-        config.runtime_raises_checks = self.runtime_raises_checks;
-        config.unique_loop_bindings = !self.no_unique_loop_bindings;
+    fn fold(
+        &self,
+        lowering: &SettledLowering,
+        config: &mut Config,
+        cwd: &Path,
+    ) -> anyhow::Result<()> {
+        // destructured for the same reason the arguments are on the way in: an
+        // option carried across but never applied is dropped just as quietly as
+        // one never carried
+        let SettledLowering {
+            soundness,
+            runtime_raises_checks,
+            no_unique_loop_bindings,
+        } = lowering;
+        config.soundness = parse_soundness(soundness)?;
+        config.runtime_raises_checks = *runtime_raises_checks;
+        config.unique_loop_bindings = !*no_unique_loop_bindings;
         if let Ok(project) = ResolvedProject::discover(cwd) {
             config.float_literals = project.float_literals();
         }
@@ -804,7 +842,7 @@ pub(crate) fn cmd_build(
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let mut config = version_config(min_version, &cwd)?;
-    lowering.apply(&mut config, &cwd)?;
+    lowering.apply_for_build(&mut config, &cwd)?;
     let target = config.min_version.to_string();
     crate::by_stamps::fill_discovered(&mut config.stamps, &cwd, Some(&target));
 

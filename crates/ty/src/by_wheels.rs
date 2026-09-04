@@ -27,6 +27,9 @@ use ty_project::{Db, ProjectDatabase, ProjectMetadata};
 use ty_site_packages::PythonEnvironment;
 
 use crate::ExitStatus;
+use crate::args::LoweringArgs;
+use crate::by_lowering::SettledLowering;
+use by_stage::record::parse_soundness;
 
 /// The tag every wheel carries when it was not lowered for one python.
 ///
@@ -35,13 +38,49 @@ use crate::ExitStatus;
 /// generic wheel silently wins over the whole set.
 const UNTAGGED_WHEEL_MARKER: &str = "-py3-none-any.whl";
 
+/// What a release settles once and hands to every build inside it, each as the
+/// json its environment variable carries.
+///
+/// One value rather than two strings side by side. They are both json and both
+/// bound for an environment variable, so passing them positionally would let a
+/// swap compile — and a swap is silent at run time too, because each reader
+/// ignores a value it cannot parse and falls back to its own default.
+struct SettledRelease {
+    stamps: String,
+    lowering: String,
+}
+
 #[allow(clippy::print_stderr)]
 pub(crate) fn cmd_build_wheels(
     out: Option<&Path>,
-    stamps: &[String],
+    lowering: &LoweringArgs,
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let destination = cwd.join(out.unwrap_or(Path::new("dist")));
+
+    // everything the command line asked for is read before any of it is acted
+    // on, so a spec it cannot parse is one error from the command the user ran
+    // — not the same error from each of the builds inside the release, and not
+    // one arriving after a `git` discovery has already run
+    let mut stamps = crate::by_stamps::parse_explicit(&lowering.stamps)?;
+    let lowering_options = SettledLowering::from(lowering);
+    let _ = parse_soundness(&lowering_options.soundness)?;
+
+    // a release is one build, however many times the frontend is called inside
+    // it. what it settles is settled here and handed down, so every wheel and
+    // the source distribution report the same commit and the same moment rather
+    // than each reading the clock — and, if something lands mid-release, the
+    // same commit rather than two — and every one of them lowers the way the
+    // release was asked to rather than the way the backend happens to call it.
+    // `PYTHON_VERSION` is left out on purpose: each wheel is lowered to a
+    // different python and settles that one for itself
+    crate::by_stamps::fill_discovered(&mut stamps, &cwd, None);
+    let settled = SettledRelease {
+        stamps: serde_json::to_string(&stamps)
+            .context("could not describe the stamps this release settled")?,
+        lowering: serde_json::to_string(&lowering_options)
+            .context("could not describe the lowering options this release settled")?,
+    };
 
     let uv = find_uv(&cwd)?;
     let versions = wheel_versions(&cwd)?;
@@ -66,20 +105,6 @@ pub(crate) fn cmd_build_wheels(
     // outrank nothing, so an interpreter whose wheel is missing quietly takes an
     // older one and no one is told
     let staging = tempfile::TempDir::new().context("failed to create temp directory")?;
-
-    // a release is one build, however many times the frontend is called inside
-    // it. the stamps are settled here and handed down, so every wheel and the
-    // source distribution report the same commit and the same moment rather than
-    // each reading the clock — and, if something lands mid-release, the same
-    // commit rather than two. `PYTHON_VERSION` is left out on purpose: each
-    // wheel is lowered to a different python and settles that one for itself
-    //
-    // only the stamps travel. the rest of `--min-version`'s neighbours do not
-    // reach the builds inside a `--wheels` run today
-    let mut settled = crate::by_stamps::parse_explicit(stamps)?;
-    crate::by_stamps::fill_discovered(&mut settled, &cwd, None);
-    let settled = serde_json::to_string(&settled)
-        .context("could not describe the stamps this release settled")?;
 
     run_uv(&uv, &cwd, &["build", "--sdist"], staging.path(), &settled)?;
     for version in &versions {
@@ -333,16 +358,17 @@ fn run_uv(
     cwd: &Path,
     arguments: &[&str],
     out: &Path,
-    settled_stamps: &str,
+    settled: &SettledRelease,
 ) -> anyhow::Result<()> {
     let status = Command::new(uv)
         .args(arguments)
         .arg("--out-dir")
         .arg(out)
         .current_dir(cwd)
-        // reaches the `by build` the frontend eventually runs, through the
+        // both reach the `by build` the frontend eventually runs, through the
         // backend, which passes its environment on
-        .env(crate::by_stamps::SETTLED_STAMPS, settled_stamps)
+        .env(crate::by_stamps::SETTLED_STAMPS, &settled.stamps)
+        .env(crate::by_lowering::SETTLED_LOWERING, &settled.lowering)
         .status()
         .with_context(|| format!("could not run `{}`", uv.display()))?;
     if !status.success() {

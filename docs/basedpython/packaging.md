@@ -157,6 +157,10 @@ wheel-versions = ["3.12", "3.14"]
 the result. nothing reaches `dist/` unless the whole set built, because a release
 missing one of its wheels hands that interpreter an older one without saying so
 
+the lowering flags apply to the whole release. `by build --wheels --soundness none` settles that once and every wheel in the set is lowered with it, so the
+artifacts of one release are lowered alike rather than each wheel answering for
+itself
+
 `dist/` itself is checked too, since that is where a release is published *from*.
 an artifact of this release that this build did not produce — an untagged wheel
 from an earlier `uv build`, or a version no longer built — is refused, because

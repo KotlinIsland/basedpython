@@ -4050,6 +4050,237 @@ fn building_wheels_without_a_frontend_says_what_is_missing() {
     );
 }
 
+/// one source touched by all three lowering options, so a test can tell which
+/// of them crossed the wire and which quietly did not
+///
+/// each moves in a different direction, so a payload of non-defaults cannot
+/// pass by accident: the soundness check disappears, the raises guard appears,
+/// and the loop's per-iteration wrapper disappears
+const LOWERED_THREE_WAYS: &str = "\
+items: list[int] = []
+fns: list[object] = []
+
+
+def t[T]() -> T:
+    raise NotImplementedError
+
+
+def uses():
+    a: str = t()
+
+
+def f() raises ValueError:
+    raise ValueError
+
+
+for i in items:
+    fns.append(lambda: i)
+";
+
+/// build `source` in a fresh project and return the emitted python
+fn build_emitting(source: &str, settled: Option<&str>) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), source).unwrap();
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_by"));
+    command
+        .args(["build", "--out", "out"])
+        .current_dir(dir.path());
+    match settled {
+        Some(settled) => command.env("BY_BUILD_LOWERING", settled),
+        // whatever the developer's own environment holds must not decide what
+        // this observes
+        None => command.env_remove("BY_BUILD_LOWERING"),
+    };
+    let output = command.output().expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    fs::read_to_string(dir.path().join("out").join("main.py")).expect("emitted python")
+}
+
+/// the builds inside a `--wheels` release are the ones that transpile, so every
+/// lowering option has to reach them. one that stopped at the outer command
+/// would be accepted and then change nothing about the wheels
+#[test]
+fn a_build_inside_a_release_lowers_the_way_the_release_settled() {
+    // on its own the build lowers with the defaults, which is what makes each
+    // difference below mean something
+    let alone = build_emitting(LOWERED_THREE_WAYS, None);
+    assert!(
+        alone.contains("_soundness_check(t(), str)"),
+        "checks are on by default:\n{alone}"
+    );
+    assert!(
+        !alone.contains("_by_raises"),
+        "the raises guard is off by default:\n{alone}"
+    );
+    assert!(
+        alone.contains("fns.append((lambda i: lambda: i)(i))"),
+        "a loop binds per iteration by default:\n{alone}"
+    );
+
+    let inside_a_release = build_emitting(
+        LOWERED_THREE_WAYS,
+        Some(r#"{"soundness":"none","runtime_raises_checks":true,"no_unique_loop_bindings":true}"#),
+    );
+    assert!(
+        !inside_a_release.contains("_soundness_check"),
+        "the release settled `--soundness none`:\n{inside_a_release}"
+    );
+    assert!(
+        inside_a_release.contains("_by_raises"),
+        "the release settled `--runtime-raises-checks`:\n{inside_a_release}"
+    );
+    assert!(
+        inside_a_release.contains("fns.append(lambda: i)"),
+        "the release settled `--no-unique-loop-bindings`:\n{inside_a_release}"
+    );
+}
+
+/// the two `by` executables in a release need not be the same build, because a
+/// project asks for `basedpython` by a lower bound and the backend prefers the
+/// one the frontend resolved. so a build has to read a message written by a
+/// `by` that had never heard of one of these options, and take the rest of it
+#[test]
+fn a_build_reads_settled_lowering_written_by_an_older_by() {
+    let emitted = build_emitting(LOWERED_THREE_WAYS, Some(r#"{"soundness":"none"}"#));
+    assert!(
+        !emitted.contains("_soundness_check"),
+        "the option that was written still applies:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("_by_raises"),
+        "and one that was not written takes its own default:\n{emitted}"
+    );
+}
+
+/// the variable is the outer command's, so anything else in it is not this
+/// build's to refuse: it lowers the way it would have anyway rather than
+/// stopping for a reason nobody could act on
+#[test]
+fn a_build_ignores_settled_lowering_it_cannot_read() {
+    let emitted = build_emitting(LOWERED_THREE_WAYS, Some("not the outer command's"));
+    assert!(
+        emitted.contains("_soundness_check(t(), str)"),
+        "an unreadable value leaves the lowering alone:\n{emitted}"
+    );
+}
+
+/// only `by build` is ever run inside a release, and these options change what
+/// the emitted python does — so a variable left in the environment must not
+/// silently re-lower a `by transpile` that was given options of its own
+#[test]
+fn only_a_build_takes_its_lowering_from_the_environment() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), LOWERED_THREE_WAYS).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["transpile", "main.by"])
+        .current_dir(dir.path())
+        .env(
+            "BY_BUILD_LOWERING",
+            r#"{"soundness":"none","runtime_raises_checks":false,"no_unique_loop_bindings":false}"#,
+        )
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by transpile failed:\n{stderr}");
+    let emitted = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        emitted.contains("_soundness_check(t(), str)"),
+        "a stray variable must not re-lower an unrelated transpile:\n{emitted}"
+    );
+}
+
+/// the release settles the options once, so a spec it cannot parse is one error
+/// from the command the user ran — not the same error from each of the builds
+/// inside it, and not a release that got as far as driving the frontend
+#[test]
+fn building_wheels_refuses_a_soundness_spec_it_cannot_parse() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--wheels", "--soundness", "nonsense"])
+        .current_dir(dir.path())
+        // refused before the frontend is even looked for, so this holds on a
+        // machine with no `uv` as well as on one with it
+        .env("PATH", "")
+        .env_remove("VIRTUAL_ENV")
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected a failure");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown soundness position"),
+        "the message has to name what was wrong with the spec:\n{stderr}"
+    );
+}
+
+/// what the outer command actually writes, which nothing else here observes:
+/// every test above sets the variables by hand, so a release that wrote them to
+/// the wrong names — or swapped them — would pass all of them
+///
+/// this drives the real `cmd_build_wheels` with a stub standing in for `uv`, so
+/// it needs no frontend and no network. the release fails afterwards, because
+/// the stub builds nothing, but by then it has recorded what it was handed
+#[cfg(unix)]
+#[test]
+fn a_release_hands_each_build_the_stamps_and_the_lowering() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nrequires-python = \">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+
+    let bin = dir.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let report = dir.path().join("handed.txt");
+    let uv = bin.join("uv");
+    fs::write(
+        &uv,
+        "#!/bin/sh\n\
+         printf 'STAMPS=%s\\nLOWERING=%s\\n' \"$BY_BUILD_STAMPS\" \"$BY_BUILD_LOWERING\" \
+         >> \"$BY_TEST_REPORT\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["build", "--wheels", "--soundness", "none"])
+        .current_dir(dir.path())
+        // the stub is the only `uv` reachable, so this cannot accidentally
+        // drive the developer's real one
+        .env("PATH", &bin)
+        .env_remove("VIRTUAL_ENV")
+        .env("BY_TEST_REPORT", &report)
+        .output()
+        .expect("failed to spawn by");
+
+    let handed = fs::read_to_string(&report).unwrap_or_else(|_| {
+        panic!(
+            "the release never ran the frontend:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
+
+    assert!(
+        handed.contains(r#"LOWERING={"soundness":"none""#),
+        "the release has to hand down what it was asked to lower to:\n{handed}"
+    );
+    // and the stamps still travel beside them, under their own name
+    assert!(
+        handed.contains(r#"STAMPS={"#) && handed.contains("BUILT_AT"),
+        "the stamps must not have been displaced:\n{handed}"
+    );
+}
+
 /// `--wheels` produces a release, `--min-version` produces one tree lowered to
 /// one python. asking for both is asking for two different things at once
 #[test]
