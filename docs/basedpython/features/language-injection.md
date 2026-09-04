@@ -80,9 +80,16 @@ a string carrying an escape is left alone. the fragment is the characters as
 written, so `"\n"` would reach it as a backslash and an `n` rather than as a
 newline — write the fragment raw or triple-quoted instead
 
+an f-string is left alone too. it is a string with holes in it, and the text
+between the holes is not a program in any language
+
 a fragment written as several adjacent literals is one fragment:
 
 ```by
 # language=sql
 query = "select name" " from users"
 ```
+
+such a fragment keeps its indentation, because a string written this way is not
+[dedented](dedent-strings.md) either. write it as one triple-quoted string to
+have the indentation stripped

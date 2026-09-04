@@ -3,7 +3,8 @@ use ruff_db::source::{line_index, source_text};
 use ruff_source_file::OneIndexed;
 use ruff_text_size::{Ranged, TextRange};
 use ty_ide::{
-    SemanticTokenModifier, SemanticTokenType, django_template_semantic_tokens, semantic_tokens,
+    Fragments, SemanticTokenModifier, SemanticTokenType, django_template_semantic_tokens,
+    semantic_tokens,
 };
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
@@ -21,13 +22,14 @@ pub(crate) fn generate_semantic_tokens(
     encoding: PositionEncoding,
     multiline_token_support: bool,
     django_template: bool,
+    fragments: Fragments,
 ) -> Vec<SemanticToken> {
     let source = source_text(db, file);
     let line_index = line_index(db, file);
     let semantic_token_data = if django_template {
         django_template_semantic_tokens(db, file, range)
     } else {
-        semantic_tokens(db, db.program_file(file), range)
+        semantic_tokens(db, db.program_file(file), range, fragments)
     };
 
     let mut encoder = Encoder {

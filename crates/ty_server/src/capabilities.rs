@@ -38,6 +38,7 @@ bitflags::bitflags! {
         const FULL_DIAGNOSTIC_OUTPUT = 1 << 20;
         const IMPLEMENTATION_LINK_SUPPORT = 1 << 21;
         const TRIGGER_SIGNATURE_HELP_COMMAND = 1 << 22;
+        const LANGUAGE_INJECTION = 1 << 23;
     }
 }
 
@@ -219,6 +220,18 @@ impl ResolvedClientCapabilities {
         self.contains(Self::TRIGGER_SIGNATURE_HELP_COMMAND)
     }
 
+    /// Returns `true` if the client asks for `by/injections` and paints the
+    /// fragments itself.
+    ///
+    /// It has to say so, because the answer changes what the semantic tokens
+    /// mean: a client that paints a fragment in the language it was told does
+    /// not want a `string` token drawn over the result, and a client that does
+    /// not inject would be left with the fragment unhighlighted if the token
+    /// were dropped.
+    pub(crate) const fn supports_language_injection(self) -> bool {
+        self.contains(Self::LANGUAGE_INJECTION)
+    }
+
     pub(super) fn new(client_capabilities: &ClientCapabilities) -> Self {
         let mut flags = Self::empty();
 
@@ -301,6 +314,16 @@ impl ResolvedClientCapabilities {
             })
         {
             flags |= Self::TRIGGER_SIGNATURE_HELP_COMMAND;
+        }
+
+        if client_capabilities
+            .experimental
+            .as_ref()
+            .and_then(|experimental| experimental.get("languageInjection"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or_default()
+        {
+            flags |= Self::LANGUAGE_INJECTION;
         }
 
         if text_document

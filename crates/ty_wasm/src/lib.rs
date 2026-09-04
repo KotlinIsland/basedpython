@@ -645,8 +645,14 @@ impl Workspace {
         let index = line_index(&self.db, file_id.file);
         let source = source_text(&self.db, file_id.file);
 
-        let semantic_token =
-            ty_ide::semantic_tokens(&self.db, self.db.program_file(file_id.file), None);
+        // the playground does not ask for injections, so a fragment of another
+        // language is just a string to it
+        let semantic_token = ty_ide::semantic_tokens(
+            &self.db,
+            self.db.program_file(file_id.file),
+            None,
+            ty_ide::Fragments::Strings,
+        );
 
         let result = semantic_token
             .iter()
@@ -673,6 +679,7 @@ impl Workspace {
             &self.db,
             self.db.program_file(file_id.file),
             Some(range.to_text_range(&index, &source, self.position_encoding)?),
+            ty_ide::Fragments::Strings,
         );
 
         let result = semantic_token
