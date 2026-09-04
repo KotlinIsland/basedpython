@@ -35,7 +35,7 @@ use crate::types::context::ProgramEnvironment;
 use crate::types::{EnumLiteralType, Type};
 
 /// the type an observation pins a name to, when it pins one at all
-pub(crate) fn seeded_type<'db>(
+fn seeded_type<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     observed: &Observed,

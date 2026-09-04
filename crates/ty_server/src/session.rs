@@ -1451,7 +1451,7 @@ impl Session {
         // This is a "maybe" because the `File` might've not been interned yet i.e., the
         // `try_system` call will return `None` which doesn't mean that the file is new, it's just
         // that the server didn't need the file yet.
-        let is_maybe_new_system_file = path.as_system().is_some_and(|system_path| {
+        let _is_maybe_new_system_file = path.as_system().is_some_and(|system_path| {
             let db = self.project_db(path);
             db.files()
                 .try_system(db, system_path)
@@ -2047,7 +2047,7 @@ impl DocumentHandle {
     ///
     /// A notebook and its cells are always python; only a plain text document
     /// can be anything else.
-    pub(crate) fn language_id(&self) -> LanguageId {
+    fn language_id(&self) -> LanguageId {
         match self {
             Self::Text { language_id, .. } => *language_id,
             Self::Notebook { .. } | Self::Cell { .. } => LanguageId::Python,

@@ -112,7 +112,10 @@ impl BasicBlock {
         out
     }
 
-    pub fn new(terminator: Terminator) -> Self {
+    // only the crate's own tests build a block this way; every other producer fills
+    // the fields directly as it lowers
+    #[cfg(test)]
+    pub(crate) fn new(terminator: Terminator) -> Self {
         Self {
             ops: Vec::new(),
             terminator,
@@ -454,7 +457,7 @@ impl Function {
     /// whether this function reaches into a class of this module's own, by name
     ///
     /// three places say so, and all three are needed. an operation may name a class
-    /// outright — see [`Op::named_classes`]. a register may be *typed* as an instance
+    /// outright — see `Op::named_classes`. a register may be *typed* as an instance
     /// of one, which is what licenses every direct field read the body then makes of
     /// it. and the return type is a register's type one frame along: a caller that
     /// takes the answer into an instance-typed register reads it as that struct.
@@ -527,8 +530,8 @@ impl FieldDecl {
     /// reserved words would have to be kept correct against every C version and
     /// compiler extension forever; a prefix cannot collide with any of them
     ///
-    /// the prefix also says whether the name was [generated](Self::generated), and it has
-    /// to. `$` is not a portable C identifier character — msvc rejects it — so [`mangle`]
+    /// the prefix also says whether the name was generated, and it has
+    /// to. `$` is not a portable C identifier character — msvc rejects it — so `mangle`
     /// turns it into `_`, which is exactly the character a source name may hold: `$state`
     /// and a local called `_state` both came out as `by_f__state`, and a generator taking
     /// a parameter of that name declared one struct member twice and failed the *build*.
@@ -578,7 +581,7 @@ pub struct PropertyIr {
 
 impl PropertyIr {
     /// whether this property is where the method of that name went
-    pub fn holds(&self, method: &str) -> bool {
+    fn holds(&self, method: &str) -> bool {
         [&self.getter, &self.setter, &self.deleter]
             .into_iter()
             .flatten()

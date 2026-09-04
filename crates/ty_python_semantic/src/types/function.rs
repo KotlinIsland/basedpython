@@ -61,7 +61,7 @@ use ruff_db::source::source_text;
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::helpers::{last_bound_parameter, parameter_modifiers};
-use ruff_python_ast::{self as ast, OperatorPrecedence, ParameterWithDefault};
+use ruff_python_ast::{self as ast, ParameterWithDefault};
 use ruff_python_edits::unwrapped_call_argument;
 use ruff_text_size::Ranged;
 use salsa::plumbing::AsId;
@@ -82,7 +82,7 @@ use crate::types::diagnostic::{
     report_runtime_check_against_typed_dict,
 };
 use crate::types::display::DisplaySettings;
-use crate::types::generics::{ApplySpecialization, GenericContext, typing_self};
+use crate::types::generics::{GenericContext, typing_self};
 use crate::types::infer::{
     function_known_decorators, infer_definition_types, nearest_enclosing_class, original_class_type,
 };
@@ -96,9 +96,7 @@ use crate::types::signatures::{
     CallableSignature, NarrowingGuard, NarrowingGuardKind, ReturnCallableTypeVarScope, Signature,
 };
 use crate::types::tuple::TupleSpec;
-use crate::types::variance::{
-    TypeVarVariance, VarianceInferable, VarianceOrigin, VarianceTerm,
-};
+use crate::types::variance::{VarianceInferable, VarianceOrigin, VarianceTerm};
 use crate::types::visitor::{any_over_type, non_any_dynamic_content};
 use crate::types::{
     ApplyTypeMappingVisitor, BoundMethodType, BoundTypeVarIdentity, BoundTypeVarInstance,
@@ -557,7 +555,12 @@ impl<'db> OverloadLiteral<'db> {
         if !source_type.is_basedpython() {
             return Box::default();
         }
-        let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+        // the module has to come from *this* overload's python file, not from
+        // `db.program_file(file)`. those differ for a vendored stub reached from a
+        // pep 723 script: the script's program checks it at the script's version,
+        // while a file with no system path falls back to the project's, and the node
+        // below belongs to whichever one the body scope was built for
+        let module = parsed_module(db, self.python_file(db)).load(db);
         let node = self.body_scope(db).node(db).expect_function().node(&module);
         let source = source_text(db, file);
         crate::reified::reified_type_param_names(source.as_str(), source_type, node)
@@ -578,8 +581,7 @@ impl<'db> OverloadLiteral<'db> {
         if reified.is_empty() {
             return Box::default();
         }
-        let file = self.file(db);
-        let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+        let module = parsed_module(db, self.python_file(db)).load(db);
         let node = self.body_scope(db).node(db).expect_function().node(&module);
         let Some(type_params) = node.type_params.as_deref() else {
             return Box::default();
@@ -606,7 +608,7 @@ impl<'db> OverloadLiteral<'db> {
         db: &'db dyn Db,
     ) -> CallbackParameterModifiers {
         let file = self.file(db);
-        let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+        let module = parsed_module(db, self.python_file(db)).load(db);
         let parameters = &self.node(db, file, &module).parameters;
         let source = source_text(db, file);
 
@@ -688,7 +690,7 @@ impl<'db> OverloadLiteral<'db> {
     /// basedpython: whether this overload is the getter of a `static let` property.
     /// Its implicit first parameter is the owning class, like a classmethod's, but
     /// the member it decorates is a descriptor rather than a bound method.
-    pub(crate) fn takes_implicit_class_receiver(self, db: &dyn Db) -> bool {
+    fn takes_implicit_class_receiver(self, db: &dyn Db) -> bool {
         self.is_classmethod(db)
             || self.has_known_decorator(db, FunctionDecorators::BY_STATIC_PROPERTY)
     }
@@ -705,7 +707,7 @@ impl<'db> OverloadLiteral<'db> {
     /// [`Signature::add_implicit_self_annotation`] leaves its `cls` alone — but construction
     /// still binds the class there, and nothing a call site writes lands in it. A parameter no
     /// caller fills is not a hole for one to fill.
-    pub(crate) fn binds_first_parameter(self, db: &'db dyn Db) -> bool {
+    fn binds_first_parameter(self, db: &'db dyn Db) -> bool {
         self.body_scope(db).is_method_scope(db)
             && (!self.is_staticmethod(db) || is_implicit_staticmethod(self.name(db)))
     }
@@ -878,7 +880,7 @@ impl<'db> OverloadLiteral<'db> {
     }
 
     /// Returns the effective signatures of this overload after applying decorators.
-    pub(crate) fn decorated_signatures(
+    fn decorated_signatures(
         self,
         db: &'db dyn Db,
     ) -> impl Iterator<Item = Signature<'db>> + Clone + 'db {
@@ -3370,7 +3372,6 @@ impl KnownFunction {
                 matches!(module, KnownModule::Dataclasses)
             }
             Self::PydanticField => matches!(module, KnownModule::PydanticFields),
-            Self::PytestFixture => matches!(module, KnownModule::PytestFixtures),
             Self::PydanticFieldValidator => {
                 matches!(module, KnownModule::PydanticFunctionalValidators)
             }
@@ -4077,8 +4078,6 @@ pub(crate) mod tests {
                 KnownFunction::PytestFixture | KnownFunction::PytestYieldFixture => {
                     KnownModule::PytestFixtures
                 }
-
-                KnownFunction::PytestFixture => KnownModule::PytestFixtures,
 
                 KnownFunction::GetattrStatic => KnownModule::Inspect,
 

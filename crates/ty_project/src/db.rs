@@ -800,7 +800,7 @@ pub(crate) mod testing {
         /// The transpiler builds one of these per file it converts, so this is not
         /// only a test fixture. Recording every salsa event costs a mutex and a push
         /// per event and retains them all in an unbounded `Vec`, which is a large
-        /// price for something only [`Self::with_salsa_events`]'s callers read.
+        /// price for something only `with_salsa_events`'s callers read.
         /// Worse, it turns a query that fails to converge into an out-of-memory kill
         /// rather than a slow one, which hides what actually went wrong.
         pub fn new(project: ProjectMetadata) -> Self {
@@ -809,8 +809,11 @@ pub(crate) mod testing {
 
         /// A database that records every salsa event, for tests that assert on which
         /// queries ran. Read the events back with [`Self::take_salsa_events`].
-        #[cfg(any(test, feature = "testing"))]
-        pub fn with_salsa_events(project: ProjectMetadata) -> Self {
+        ///
+        /// Only this crate's own tests assert on the event stream, so unlike the rest of
+        /// [`TestDb`] this is not part of what the `testing` feature hands to other crates.
+        #[cfg(test)]
+        pub(crate) fn with_salsa_events(project: ProjectMetadata) -> Self {
             Self::build(project, true)
         }
 

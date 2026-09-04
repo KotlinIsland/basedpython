@@ -4,11 +4,11 @@ a [pygments](https://pygments.org) lexer for basedpython, so that ```` ```by ```
 blocks in the documentation are syntax highlighted
 
 pygments picks the lexer up from an entry point, so nothing needs to reference it —
-installing the package is enough. it is pulled into the `docs` dependency group of the
+installing the package is enough. it is pulled into the `basedpython-docs` dependency group of the
 repository root, which is what the docs build installs
 
 ```sh
-uv sync --group docs --no-install-project
+uv sync --group basedpython-docs --no-install-project
 uv run --no-sync zensical serve
 ```
 

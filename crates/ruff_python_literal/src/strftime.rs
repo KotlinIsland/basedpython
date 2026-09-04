@@ -51,7 +51,7 @@ impl Directive {
 
     /// what this directive writes for [`SAMPLE`], or `None` when the answer
     /// depends on the machine rather than the value
-    pub fn sample(&self) -> Option<&'static str> {
+    fn sample(&self) -> Option<&'static str> {
         let code = self.code?;
         // a flag changes the padding, so the unflagged sample would be a lie
         if self.flagged {

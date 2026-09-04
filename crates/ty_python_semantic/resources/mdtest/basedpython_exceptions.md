@@ -106,13 +106,20 @@ def main():
 
 ## else and finally are not protected by the handlers
 
+The `try` body has to be able to raise, or its handler is never entered and nothing after it is
+analysed either.
+
 ```by
+def risky() -> int:
+    raise ValueError
+
 def f():
     raise TypeError
 
 def main():
     try:
-        pass
+        # error: [unhandled-exception] "`ValueError` can escape `main`, the entry point"
+        risky()
     except TypeError:
         pass
     else:

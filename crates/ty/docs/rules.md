@@ -1008,18 +1008,20 @@ Detects decorator applications that replace a function with `Any` or another [dy
 
 A decorator can replace the function it receives with any object. Type checkers therefore use the
 decorator's return type as the type of the decorated function. If the decorator returns `Any` or
-`Unknown` (explicitly or implicitly), the original type is lost, along with the type checker's
-ability to catch invalid calls and attribute accesses:
+`Unknown`, the original type is lost, along with the type checker's ability to catch invalid calls
+and attribute accesses. basedpython infers an unannotated return, so a decorator reaches this state
+by saying `Any` outright, or by coming from code the checker cannot read:
 
 ```py
 from collections.abc import Callable
+from typing import Any
 
 
-def untyped_decorator(function: Callable[..., object]):
+def untyped_decorator(function: Callable[..., object]) -> Any:
     return function
 
 
-# error: "Decorator returns `Unknown`"
+# error: "Decorator returns `Any`"
 @untyped_decorator
 def stringify(value: int) -> str:
     return str(value)
@@ -1043,9 +1045,10 @@ annotations in third-party code installed into `site-packages`.
 
 ```py
 from collections.abc import Callable
+from typing import Any
 
 
-def untyped_decorator(function: Callable[..., object]):
+def untyped_decorator(function: Callable[..., object]) -> Any:
     return function
 ```
 
@@ -1055,7 +1058,7 @@ def untyped_decorator(function: Callable[..., object]):
 from third_party_library import untyped_decorator
 
 
-# error: "Decorator returns `Unknown`"
+# error: "Decorator returns `Any`"
 @untyped_decorator
 def greet(name: str) -> str:
     return f"Hello, {name}!"
@@ -1632,23 +1635,21 @@ Checks for a variable that a basedpython file assigns without ever declaring it.
 **Why is this bad?**
 
 
-Python introduces a variable by assigning to it, so a typo makes a new variable
-rather than an error, and reading a statement tells you nothing about whether
-the name is new or one you have seen before.
+Python introduces a variable by assigning to it, so a typo makes a new variable rather than an
+error, and reading a statement tells you nothing about whether the name is new or one you have seen
+before.
 
-basedpython has a keyword for each: `let` for a binding that never changes, and
-`var` for one that does. With this rule on, every variable a scope binds has to
-be declared once with one of them, and every later assignment is visibly a
-re-assignment.
+basedpython has a keyword for each: `let` for a binding that never changes, and `var` for one that
+does. With this rule on, every variable a scope binds has to be declared once with one of them, and
+every later assignment is visibly a re-assignment.
 
-This rule is off by default, because a file written without the keywords is
-valid basedpython.
+This rule is off by default, because a file written without the keywords is valid basedpython.
 
 **Examples**
 
 
-Every assignment to a name the scope never declares is reported, so a variable
-introduced this way is reported wherever it is written:
+Every assignment to a name the scope never declares is reported, so a variable introduced this way
+is reported wherever it is written:
 
 `undeclared.by`:
 
@@ -1666,8 +1667,8 @@ var count = 0
 count = count + 1
 ```
 
-An assignment to something other than a plain name — an attribute, a subscript,
-an item of an unpacking — is not a declaration, and is never reported.
+An assignment to something other than a plain name — an attribute, a subscript, an item of an
+unpacking — is not a declaration, and is never reported.
 
 ## `implicit-object-repr`
 
@@ -2873,8 +2874,8 @@ class D(Generic[U, T]): ...  # error
 
 
 # covariant type parameter used in a position that requires contravariance
-class E(Generic[V]):  # error
-    def set(self, value: V) -> None: ...
+class E(Generic[V]):
+    def set(self, value: V) -> None: ...  # error
 ```
 
 **References**
@@ -3143,8 +3144,7 @@ Checks for invalid match patterns.
 **Why is this bad?**
 
 
-Invalid match patterns can cause a `TypeError` or a `SyntaxError` at runtime.
-This includes:
+Invalid match patterns can cause a `TypeError` or a `SyntaxError` at runtime. This includes:
 
 - Using a non-type object in a class pattern.
 - Providing positional subpatterns when `__match_args__` is missing or has an invalid static type.
@@ -4092,10 +4092,10 @@ Checks for basedpython static resource imports that cannot be read.
 **Why is this bad?**
 
 
-`import "data/config.yaml" as config` says the file is part of the program. A
-path that names nothing, a path that names a place on one machine, a file in a
-format that is not `.json`, `.toml`, `.yaml` or `.yml`, and a document the
-format's own parser rejects all leave the import with no value to bind.
+`import "data/config.yaml" as config` says the file is part of the program. A path that names
+nothing, a path that names a place on one machine, a file in a format that is not `.json`, `.toml`,
+`.yaml` or `.yml`, and a document the format's own parser rejects all leave the import with no value
+to bind.
 
 **Examples**
 
@@ -6629,18 +6629,18 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.62">0.0.62</a
 **What it does**
 
 
-Checks for a basedpython destructuring binder whose pattern may not match the
-value it destructures, with nothing to handle the failure.
+Checks for a basedpython destructuring binder whose pattern may not match the value it destructures,
+with nothing to handle the failure.
 
 **Why is this bad?**
 
 
-A destructuring binder — a `let` statement, a `for` target, a `with` item, a
-parameter — binds its captures unconditionally. A pattern that does not match
-leaves them unbound, which is a `NameError` at the first use.
+A destructuring binder — a `let` statement, a `for` target, a `with` item, a parameter — binds its
+captures unconditionally. A pattern that does not match leaves them unbound, which is a `NameError`
+at the first use.
 
-A `let` statement can handle the failure with an `else` block, but only if the
-block diverges: control that falls out of it reaches the same unbound captures.
+A `let` statement can handle the failure with an `else` block, but only if the block diverges:
+control that falls out of it reaches the same unbound captures.
 
 **Examples**
 
@@ -6656,8 +6656,7 @@ def g(value: int | str) -> int:
     return n  # error: [possibly-unresolved-reference]
 ```
 
-Use a pattern that matches every value of the type, or an `else` block that
-diverges:
+Use a pattern that matches every value of the type, or an `else` block that diverges:
 
 ```by
 def f(value: int | str) -> int:
@@ -6679,27 +6678,26 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.71">0.0.71</a
 **What it does**
 
 
-Checks for an unpacking assignment whose value is not known to have the number
-of elements the targets require.
+Checks for an unpacking assignment whose value is not known to have the number of elements the
+targets require.
 
 **Why is this bad?**
 
 
-`a, b = value` binds both names unconditionally, but the unpacking only succeeds
-if `value` yields exactly two elements. A `tuple[int, ...]`, a `list[int]`, or
-any other iterable whose length is not part of its type satisfies the annotation
-at every length, so nothing rules out a `ValueError` at runtime.
+`a, b = value` binds both names unconditionally, but the unpacking only succeeds if `value` yields
+exactly two elements. A `tuple[int, ...]`, a `list[int]`, or any other iterable whose length is not
+part of its type satisfies the annotation at every length, so nothing rules out a `ValueError` at
+runtime.
 
-A starred target absorbs any number of elements, so it only requires the ones
-around it: `a, *rest = value` still needs at least one element, and reports for
-the same reason. A splatted argument is the same question against a parameter
-list: `f(*value)` binds the parameters positionally, so a length that does not
-match raises `TypeError` rather than `ValueError`.
+A starred target absorbs any number of elements, so it only requires the ones around it:
+`a, *rest = value` still needs at least one element, and reports for the same reason. A splatted
+argument is the same question against a parameter list: `f(*value)` binds the parameters
+positionally, so a length that does not match raises `TypeError` rather than `ValueError`.
 
-Three values are left alone: one whose type is `Any`, which has opted out of
-checking altogether; one whose element type is `Unknown`, which ty fills in
-where the code said nothing at all; and an unannotated parameter, whose type is
-bounded by what its function's body asks of it — including the unpacking itself.
+Three values are left alone: one whose type is `Any`, which has opted out of checking altogether;
+one whose element type is `Unknown`, which ty fills in where the code said nothing at all; and an
+unannotated parameter, whose type is bounded by what its function's body asks of it — including the
+unpacking itself.
 
 **Examples**
 
@@ -8916,14 +8914,12 @@ Checks for keys in an imported static resource that python cannot name.
 **Why is this bad?**
 
 
-A static resource is read through attributes, so a key that is not a valid
-python identifier — `build-backend`, `class`, `2` — has no attribute to be read
-through, and is left out of the value the import binds. The document still holds
-it; nothing in the program can reach it.
+A static resource is read through attributes, so a key that is not a valid python identifier —
+`build-backend`, `class`, `2` — has no attribute to be read through, and is left out of the value
+the import binds. The document still holds it; nothing in the program can reach it.
 
-Names with two leading underscores are left out for the same reason: python
-mangles `__x` inside a class body, so the attribute the reader would write is
-not the one that would exist.
+Names with two leading underscores are left out for the same reason: python mangles `__x` inside a
+class body, so the attribute the reader would write is not the one that would exist.
 
 **Examples**
 

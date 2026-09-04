@@ -173,7 +173,7 @@ impl<'src> Parser<'src> {
     /// whereas `out[...]`, `out(...)`, `out.attr`, `out + 1` etc. are an
     /// ordinary subscript / call / attribute / arithmetic on a variable named
     /// `out` and must be left alone (real Python uses them, e.g. `xs[out[0]]`).
-    pub(super) fn eat_basedpython_variance_prefix(
+    fn eat_basedpython_variance_prefix(
         &mut self,
     ) -> Option<ruff_python_ast::helpers::UseSiteVariance> {
         use ruff_python_ast::helpers::UseSiteVariance;
@@ -214,7 +214,7 @@ impl<'src> Parser<'src> {
     /// `marker_range` should cover the variance keyword tokens themselves
     /// (no trailing whitespace) so the formatter can emit the exact source
     /// text on round-trip.
-    pub(super) fn wrap_variance_marker(
+    fn wrap_variance_marker(
         inner: Expr,
         variance: ruff_python_ast::helpers::UseSiteVariance,
         marker_range: TextRange,
@@ -249,7 +249,7 @@ impl<'src> Parser<'src> {
     /// that a type which does not start with a name — a parenthesized callable
     /// type, a string forward reference, a starred type — cannot carry a bare
     /// modifier; see the docs for the recommended spelling.
-    pub(super) fn eat_basedpython_type_modifier_prefix(
+    fn eat_basedpython_type_modifier_prefix(
         &mut self,
     ) -> Option<(ruff_python_ast::helpers::TypeModifier, TextRange)> {
         use ruff_python_ast::helpers::TypeModifier;
@@ -278,7 +278,7 @@ impl<'src> Parser<'src> {
     ///
     /// `marker_range` covers the keyword token only (no trailing whitespace) so
     /// the formatter can emit the exact source text on round-trip.
-    pub(super) fn wrap_type_modifier_marker(
+    fn wrap_type_modifier_marker(
         inner: Expr,
         modifier: ruff_python_ast::helpers::TypeModifier,
         marker_range: TextRange,
@@ -2120,7 +2120,7 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse `a?.b` — basedpython None-chaining attribute access.
-    pub(super) fn parse_optional_attribute_expression(
+    fn parse_optional_attribute_expression(
         &mut self,
         value: Expr,
         start: TextSize,
@@ -5138,7 +5138,7 @@ impl<'src> Parser<'src> {
     /// If the parser isn't positioned at an `if` token.
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#conditional-expressions>
-    pub(super) fn parse_if_expression(
+    fn parse_if_expression(
         &mut self,
         body: Expr,
         start: TextSize,
@@ -5161,6 +5161,10 @@ impl<'src> Parser<'src> {
         } else {
             ExpressionContext::default()
         };
+        // `a if b else a if b else ...` recurses through `orelse` at the conditional
+        // layer, which the `parse_lhs_expression` guard does not cover — that scope is
+        // released once each atom is parsed — so the guard belongs here. the
+        // binary-expression guard has likewise already returned by this point
         let orelse =
             self.with_recursion(|p| p.parse_conditional_expression_or_higher_impl(orelse_context));
 
@@ -5545,12 +5549,12 @@ impl ExpressionContext {
     /// basedpython: returns a new context that marks parsing as being inside a
     /// subscript slice element, enabling bare `*` top-star markers nested
     /// inside type-position binops like `int | *`
-    pub(super) fn with_subscript_slice(self) -> Self {
+    fn with_subscript_slice(self) -> Self {
         ExpressionContext(self.0 | ExpressionContextFlags::SUBSCRIPT_SLICE)
     }
 
     /// basedpython: returns `true` if currently parsing a subscript slice element
-    pub(super) const fn is_subscript_slice(self) -> bool {
+    const fn is_subscript_slice(self) -> bool {
         self.0.contains(ExpressionContextFlags::SUBSCRIPT_SLICE)
     }
 
@@ -5561,7 +5565,7 @@ impl ExpressionContext {
     }
 
     /// basedpython: returns `true` if currently parsing a type expression
-    pub(super) const fn is_in_type_expression(self) -> bool {
+    const fn is_in_type_expression(self) -> bool {
         self.0.contains(ExpressionContextFlags::IN_TYPE_EXPRESSION)
     }
 
@@ -5571,7 +5575,7 @@ impl ExpressionContext {
     /// yield / comprehension rules inside them are their own — but being in a
     /// type expression is a property of the *position*, and a parenthesis does
     /// not leave it. Without this, `(literal str)` reads `literal` as a name
-    pub(super) fn inheriting_type_expression(self, outer: Self) -> Self {
+    fn inheriting_type_expression(self, outer: Self) -> Self {
         if outer.is_in_type_expression() {
             self.with_in_type_expression()
         } else {
@@ -5581,14 +5585,14 @@ impl ExpressionContext {
 
     /// basedpython: returns a new context that marks parsing as being inside the
     /// value of an interpolated-string replacement field
-    pub(super) fn with_in_interpolation(self) -> Self {
+    fn with_in_interpolation(self) -> Self {
         ExpressionContext(self.0 | ExpressionContextFlags::IN_INTERPOLATION)
     }
 
     /// basedpython: returns `true` if parsing the value of an interpolated-string
     /// replacement field, where a trailing `!` is the conversion flag rather
     /// than the postfix force-unwrap operator
-    pub(super) const fn is_in_interpolation(self) -> bool {
+    const fn is_in_interpolation(self) -> bool {
         self.0.contains(ExpressionContextFlags::IN_INTERPOLATION)
     }
 
@@ -5601,7 +5605,7 @@ impl ExpressionContext {
     /// basedpython: returns `true` if parsing the lower end of a type-parameter bound range,
     /// where a following `..` separates the two ends rather than being a malformed attribute
     /// access
-    pub(super) const fn is_in_type_param_bound(self) -> bool {
+    const fn is_in_type_param_bound(self) -> bool {
         self.0.contains(ExpressionContextFlags::IN_TYPE_PARAM_BOUND)
     }
 

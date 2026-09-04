@@ -25,10 +25,10 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/named_tuple.md
 # Diagnostics
 
 ```
-error[unresolved-import]: Module `typing` has no member `NamedTuple`
- --> src/mdtest_snippet.py:1:20
+warning[mismatched-type-name]: The name passed to `NamedTuple` must match the variable it is assigned to
+ --> src/mdtest_snippet.py:5:23
   |
-1 | from typing import NamedTuple
-  |                    ^^^^^^^^^^
+5 | Mismatch = NamedTuple("WrongName", [("x", int)])
+  |                       ^^^^^^^^^^^ Expected "Mismatch", got "WrongName"
 
 ```

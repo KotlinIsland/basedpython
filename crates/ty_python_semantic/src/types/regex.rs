@@ -32,9 +32,9 @@ pub(crate) use parse::{PatternAnalysis, analyze};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub struct RegexGroup {
     /// the `(?P<name>…)` name, if the group has one
-    pub(crate) name: Option<Name>,
+    name: Option<Name>,
     /// whether the group must have participated in *every* successful match
-    pub(crate) definitely_set: bool,
+    definitely_set: bool,
 }
 
 /// the capture groups of a statically-known pattern, in group-number order

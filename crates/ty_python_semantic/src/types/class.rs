@@ -46,12 +46,12 @@ use crate::types::signatures::{
 };
 use crate::types::tuple::TupleSpec;
 use crate::types::typevar::TypeVarSet;
+use crate::types::variance::VarianceOrigin;
 use crate::types::{
     ApplyTypeMappingVisitor, CallableType, CallableTypes, DataclassParams, ErrorContext,
     ErrorContextTree, FindLegacyTypeVarsVisitor, IntersectionType, TypeContext, TypeMapping,
     TypeVarVariance, TypingModule, UnionBuilder, VarianceInferable, VarianceTerm,
 };
-use crate::types::variance::VarianceOrigin;
 use crate::{
     Db, FxIndexMap, FxOrderSet,
     place::{
@@ -372,7 +372,7 @@ impl<'db> CodeGeneratorKind<'db> {
         matches!(self, Self::Pydantic(_))
     }
 
-    pub(super) const fn is_sqlalchemy(self) -> bool {
+    const fn is_sqlalchemy(self) -> bool {
         matches!(self, Self::SqlalchemyDeclarative)
     }
 
@@ -592,8 +592,8 @@ impl<'db> GenericAlias<'db> {
                         });
                 // Composition is commutative. Keep the argument on the left so evaluation can
                 // skip the class's potentially expensive equation when the argument is bivariant.
-                ty.variance_of(db, &env, typevar).compose_thunk(db, || {
-                    match declared_variance {
+                ty.variance_of(db, &env, typevar)
+                    .compose_thunk(db, || match declared_variance {
                         Some(explicit_variance)
                             if generic_typevar.is_paramspec(db)
                                 || generic_typevar.is_typevartuple(db)
@@ -607,8 +607,7 @@ impl<'db> GenericAlias<'db> {
                             generic_typevar.identity(db),
                         ),
                         None => origin.variance_of(db, &env, generic_typevar.identity(db)),
-                    }
-                })
+                    })
             });
         VarianceTerm::join(db, variances)
     }
@@ -929,7 +928,7 @@ impl<'db> ClassLiteral<'db> {
     }
 
     /// basedpython: returns whether this class is declared `sealed`.
-    pub(crate) fn is_sealed(self, db: &'db dyn Db) -> bool {
+    fn is_sealed(self, db: &'db dyn Db) -> bool {
         match self {
             Self::Static(class) => class.is_sealed(db),
             Self::Dynamic(_)
@@ -1964,7 +1963,13 @@ impl<'db> ClassType<'db> {
                 .map(|specialization| specialization.tuple_runtime_element_specialization(db));
             class_literal
                 .own_class_member(db, env, inherited_generic_context, specialization, name)
-                .map_type(|ty| ty.apply_projected_optional_specialization(db, env, specialization))
+                .map_type(|ty| {
+                    ty.apply_projected_optional_owner_specialization_to_member(
+                        db,
+                        env,
+                        specialization,
+                    )
+                })
         };
 
         match name {
@@ -2279,7 +2284,9 @@ impl<'db> ClassType<'db> {
 
                 class_literal
                     .instance_member(db, env, Some(specialization), name)
-                    .map_type(|ty| ty.apply_projected_specialization(db, env, specialization))
+                    .map_type(|ty| {
+                        ty.apply_projected_owner_specialization_to_member(db, env, specialization)
+                    })
             }
         }
     }
@@ -2904,7 +2911,7 @@ impl Field<'_> {
     /// Whether this field is immutable after construction because of a per-field
     /// marker (`pydantic.Field(frozen=True)`). Model-wide freezing (a frozen
     /// dataclass or a frozen model config) is handled separately.
-    pub(crate) const fn is_frozen(&self) -> bool {
+    const fn is_frozen(&self) -> bool {
         match &self.kind {
             FieldKind::Pydantic { frozen, .. } => *frozen,
             _ => false,

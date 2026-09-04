@@ -139,18 +139,18 @@ fn owner_of<'db>(
 }
 
 /// the format spec written in a replacement field
-pub(crate) struct WrittenSpec<'ast> {
+struct WrittenSpec<'ast> {
     /// the spec text, when every part of it is literal. a spec containing a
     /// nested replacement field (`f"{v:{width}}"`) is only known at runtime
-    pub(crate) literal: Option<&'ast str>,
+    literal: Option<&'ast str>,
     /// the range the spec occupies, for reporting
-    pub(crate) range: TextRange,
+    range: TextRange,
 }
 
 impl<'ast> WrittenSpec<'ast> {
     /// read the spec off a replacement field. a field with no spec at all has
     /// the empty spec, which is the one every type accepts
-    pub(crate) fn of(element: &'ast ast::InterpolatedElement) -> Self {
+    fn of(element: &'ast ast::InterpolatedElement) -> Self {
         let Some(spec) = &element.format_spec else {
             // an empty range just past the expression, so a report about the
             // absent spec still points somewhere sensible
@@ -528,7 +528,7 @@ fn malformed_detail(error: &FormatSpecError) -> Option<String> {
 /// `__repr__` whether or not the runtime class has them — `int` declares
 /// neither and still prints as a number — so a class from a stub anywhere in
 /// the MRO makes the answer unknowable and nothing is reported
-pub(crate) fn check_implicit_object_repr<'db>(
+fn check_implicit_object_repr<'db>(
     context: &InferContext<'db, '_>,
     at: TextRange,
     value_ty: Type<'db>,

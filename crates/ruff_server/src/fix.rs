@@ -25,7 +25,7 @@ use ruff_source_file::LineIndex;
 pub(crate) type Fixes = FxHashMap<lsp_types::Uri, Vec<lsp_types::TextEdit>>;
 
 /// The source a document started from, and the source the linter's fixer produced from it.
-pub(crate) struct FixedSource {
+struct FixedSource {
     source: SourceKind,
     fixed: SourceKind,
 }

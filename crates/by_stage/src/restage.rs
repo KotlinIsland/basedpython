@@ -48,17 +48,17 @@ use crate::verbatim::verbatim_destination;
 #[serde(rename_all = "camelCase")]
 pub struct Restaged {
     /// where the bytes go: absolute, inside the build directory
-    pub generated: PathBuf,
+    generated: PathBuf,
     /// the full text to write there
-    pub content: String,
+    content: String,
     /// the full new text of `_by_sourcemap.py`, or `None` when nothing about the
     /// map changed — including for a file that has no entry in it, which is every
     /// file the build copied rather than transpiled
-    pub sourcemap: Option<String>,
+    sourcemap: Option<String>,
     /// sha-256 of the source bytes this was produced from
-    pub by_digest: String,
+    by_digest: String,
     /// sha-256 of `content`
-    pub py_digest: String,
+    py_digest: String,
     /// whether `content` differs from what is in the tree right now
     ///
     /// Measured against the file on disk rather than against the digest the
@@ -66,7 +66,7 @@ pub struct Restaged {
     /// writing this would change the tree — and the tree is the thing that ran.
     /// Re-staging a file nobody edited answers `false`, which is what makes
     /// `true` mean "the user's edit changed something".
-    pub changed: bool,
+    changed: bool,
 }
 
 /// Why nothing was produced.

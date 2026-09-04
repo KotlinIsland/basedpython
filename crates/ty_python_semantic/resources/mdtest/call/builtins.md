@@ -609,9 +609,9 @@ dictionary literals.
 `main.py`:
 
 ```py
-reveal_type(dict(a=1))  # revealed: Unknown
-reveal_type(dict(a=1, b=2))  # revealed: Unknown
-reveal_type({"a": 1})  # revealed: Unknown
+reveal_type(dict(a=1))  # revealed: dict[str, int]
+reveal_type(dict(a=1, b=2))  # revealed: dict[str, int]
+reveal_type({"a": 1})  # revealed: dict[str, int]
 
 # error: [unresolved-reference]
 dict(a=1, b=missing)

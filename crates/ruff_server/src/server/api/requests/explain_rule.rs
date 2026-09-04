@@ -32,7 +32,7 @@ impl Request for ExplainRuleRequest {
 pub(crate) struct ExplainRuleParams {
     /// A noqa code (`F401`) or a rule name (`unused-import`). Both are what a reader has in hand:
     /// the code is what a diagnostic shows, the name is what the documentation calls it.
-    pub(crate) code: String,
+    code: String,
 }
 
 /// What the rule is, ready to show.
@@ -40,11 +40,11 @@ pub(crate) struct ExplainRuleParams {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuleExplanation {
     /// The rule's own name, e.g. `unused-import`.
-    pub(crate) name: String,
+    name: String,
     /// The noqa code, e.g. `F401`.
-    pub(crate) code: String,
+    code: String,
     /// The full explanation, in markdown.
-    pub(crate) documentation: String,
+    documentation: String,
 }
 
 pub(crate) struct ExplainRule;
@@ -72,7 +72,10 @@ impl BackgroundRequestHandler for ExplainRule {
 fn explanation_of(code: &str) -> Option<RuleExplanation> {
     resolve(code).map(|rule| RuleExplanation {
         name: rule.name().as_str().to_string(),
-        code: rule.noqa_code().map(|code| code.to_string()).unwrap_or_default(),
+        code: rule
+            .noqa_code()
+            .map(|code| code.to_string())
+            .unwrap_or_default(),
         documentation: rule_documentation(rule),
     })
 }
@@ -106,7 +109,10 @@ mod tests {
     #[test]
     fn a_code_resolves_to_its_rule() {
         let rule = resolve("F401").expect("F401 is this linter's");
-        assert_eq!(rule.noqa_code().map(|code| code.to_string()).as_deref(), Some("F401"));
+        assert_eq!(
+            rule.noqa_code().map(|code| code.to_string()).as_deref(),
+            Some("F401")
+        );
     }
 
     /// A reader who has the name rather than the code is asking the same question.

@@ -1047,7 +1047,7 @@ def identity[**P](callback: Callback[P]) -> Callback[P]:
 
 def _(callback: Callback[[object, int]] | Callback[[str, object]]) -> None:
     f = identity(callback)
-    # revealed: (bound method Callback[((object, int, /)) | ((str, object, /))].call(object, int, /) -> None) | (bound method Callback[((object, int, /)) | ((str, object, /))].call(str, object, /) -> None)
+    # revealed: (bound method Callback[((object, int, /)) | ((str, object, /))].call(object, int, /)) | (bound method Callback[((object, int, /)) | ((str, object, /))].call(str, object, /))
     reveal_type(f.call)
 
     f.call("value", 1)

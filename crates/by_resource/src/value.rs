@@ -8,7 +8,7 @@
 /// anchor) is resolved or rejected while parsing, so the renderer never has to
 /// know which format it came from.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
+pub(crate) enum Value {
     Null,
     Bool(bool),
     Int(i64),

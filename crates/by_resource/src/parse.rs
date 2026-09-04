@@ -138,7 +138,7 @@ fn too_deep() -> String {
 }
 
 /// read `text` as `format`.
-pub fn parse(format: Format, text: &str) -> Result<Value, ParseError> {
+pub(crate) fn parse(format: Format, text: &str) -> Result<Value, ParseError> {
     let value = match format {
         Format::Json => json(text),
         Format::Toml => toml(text),

@@ -356,7 +356,7 @@ def unchanged_branch(flag: bool) -> None:
     state = 0
     try:
         may_raise()
-        if flag is True:
+        if flag is True:  # error: [redundant-boolean-comparison] "Comparison of a `bool` with `True` is redundant"
             pass
         may_raise()
     except:
@@ -783,6 +783,7 @@ from collections.abc import Iterable
 def unpacking(values: Iterable[int]) -> None:
     state = 0
     try:
+        # error: [refutable-unpacking] "`Iterable[int]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
         first, second = values
         state = 1
     except:

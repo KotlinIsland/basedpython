@@ -11,11 +11,12 @@
 //! widening annotation on it does not make the body another view of the class.
 
 use super::{
-    BoundTypeVarInstance, ClassLiteral, MemberLookupPolicy, Type, TypeVarVariance, any_over_type,
-    is_private_member,
+    BoundTypeVarInstance, ClassBase, ClassLiteral, MemberLookupPolicy, Type, TypeVarVariance,
+    any_over_type, is_private_member,
 };
 use crate::Db;
 use crate::types::ProgramEnvironment;
+use crate::types::member::class_member;
 
 /// basedpython safe variance: a private member seen through a view of its class that is
 /// not the class's own.
@@ -119,7 +120,8 @@ pub(super) fn private_member_view<'db>(
     // still names the class's type parameters rather than the receiver's arguments. a
     // `__getattr__` result is not a declared member of anything, so it is never private
     // however its name is spelled
-    let own_view = Type::instance(db, env, class.identity_specialization(db));
+    let own_class = class.identity_specialization(db);
+    let own_view = Type::instance(db, env, own_class);
     let member = own_view.member_lookup_with_policy(
         db,
         env,
@@ -129,6 +131,33 @@ pub(super) fn private_member_view<'db>(
     let declared_ty = member.place.ignore_possibly_undefined()?;
     if !is_private_member(db, attribute, member.qualifiers, declared_ty) {
         return None;
+    }
+
+    // a member a code generator supplies is part of the surface that construct gives every one
+    // of its classes, not something the class kept to itself. a named tuple's `_asdict` and
+    // `_replace` are why this matters: python spells them with a leading underscore to keep the
+    // field namespace clear, not to hide them
+    //
+    // only the class that actually supplies the member answers this. a body declaration wins over
+    // synthesis, so a subclass that declares a name some generator also supplies is keeping a
+    // member of its own private and stays subject to erasure
+    for (base, base_specialization) in own_class
+        .iter_mro(db)
+        .filter_map(ClassBase::into_class)
+        .filter_map(|base| base.static_class_literal(db))
+    {
+        if class_member(db, base.body_scope(db), attribute)
+            .ignore_possibly_undefined()
+            .is_some()
+        {
+            break;
+        }
+        if base
+            .own_synthesized_member(db, env, base_specialization, None, attribute)
+            .is_some()
+        {
+            return None;
+        }
     }
 
     let substituted: Box<[_]> = substituted()

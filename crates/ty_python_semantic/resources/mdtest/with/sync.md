@@ -80,7 +80,11 @@ class EmptyIterableManager:
         return True
 
 value = "before"
-with EmptyIterableManager() as (value, missing):
+# error: [refutable-unpacking] "`list[int]` may not have exactly 2 elements, which would raise `ValueError` when unpacked"
+with EmptyIterableManager() as (
+    value,
+    missing,
+):
     pass
 
 reveal_type(value)  # revealed: Literal["before"] | int

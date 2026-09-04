@@ -384,7 +384,12 @@ impl<'db> ConstructorBinding<'db> {
         }
         let class = self.constructed_class_literal(db, env)?.as_static()?;
         let overload = self.first_matching_overload()?;
-        let keyword = |name: &str| overload.parameter_type_by_name(db, name, false).ok().flatten();
+        let keyword = |name: &str| {
+            overload
+                .parameter_type_by_name(db, name, false)
+                .ok()
+                .flatten()
+        };
         django::field_constructor_instance_type(
             db,
             env,
@@ -643,9 +648,11 @@ impl<'db> ConstructorBinding<'db> {
             .unspecialized_return_type(db)
             .apply_optional_specialization(
                 db,
-                overload.merged_specialization(db, env).map(|specialization| {
-                    self.unspecialize_class_type_variables(db, env, specialization)
-                }),
+                overload
+                    .merged_specialization(db, env)
+                    .map(|specialization| {
+                        self.unspecialize_class_type_variables(db, env, specialization)
+                    }),
             );
         if self
             .constructed_class_literal(db, env)

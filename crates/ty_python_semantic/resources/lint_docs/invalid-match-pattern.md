@@ -4,8 +4,7 @@ Checks for invalid match patterns.
 
 ## Why is this bad?
 
-Invalid match patterns can cause a `TypeError` or a `SyntaxError` at runtime.
-This includes:
+Invalid match patterns can cause a `TypeError` or a `SyntaxError` at runtime. This includes:
 
 - Using a non-type object in a class pattern.
 - Providing positional subpatterns when `__match_args__` is missing or has an invalid static type.

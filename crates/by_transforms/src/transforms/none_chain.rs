@@ -13,11 +13,11 @@ use crate::type_info::TypeInfo;
 pub(crate) struct NoneChain<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
-    pub(crate) template_edits: Vec<(TextRange, Vec<Fragment>)>,
+    template_edits: Vec<(TextRange, Vec<Fragment>)>,
 }
 
 impl<'src> NoneChain<'src> {
-    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
+    fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
         Self {
             source,
             types,

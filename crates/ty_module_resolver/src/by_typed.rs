@@ -37,7 +37,7 @@ pub struct Marker {
 
 impl Marker {
     /// Reads what a `by.typed` says.
-    pub fn parse(text: &str) -> Self {
+    fn parse(text: &str) -> Self {
         let Ok(table) = text.parse::<toml::Table>() else {
             return Self::default();
         };
@@ -61,7 +61,7 @@ impl Marker {
 
     /// The text of a marker that declares `exported` and nothing else.
     ///
-    /// This is the other end of [`Self::parse`], and the only thing that writes a
+    /// This is the other end of `parse`, and the only thing that writes a
     /// `by.typed`'s contents: what a build stages is what a consumer reads back.
     pub fn render(exported: &[impl AsRef<str>]) -> String {
         if exported.is_empty() {
@@ -82,12 +82,16 @@ impl Marker {
     }
 
     /// The dependencies this distribution declares part of its interface.
-    pub fn exported_dependencies(&self) -> &[DistributionName] {
+    ///
+    /// Resolution asks [`Self::exports`] about one name at a time; the whole list is
+    /// what the tests below check `parse` and `render` against.
+    #[cfg(test)]
+    fn exported_dependencies(&self) -> &[DistributionName] {
         &self.exported_dependencies
     }
 
     /// Whether this distribution hands `distribution` out on purpose.
-    pub fn exports(&self, distribution: &DistributionName) -> bool {
+    fn exports(&self, distribution: &DistributionName) -> bool {
         self.exported_dependencies.contains(distribution)
     }
 

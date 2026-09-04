@@ -319,12 +319,12 @@ class GoodContravariant(Generic[T_contra]):
 class GoodInvariant(Generic[T]):
     value: T
 
-# snapshot: invalid-generic-class
 class BadCovariantParameter(Generic[T_co]):
+    # snapshot: invalid-generic-class
     def set(self, value: T_co) -> None: ...
 
-# error: [invalid-generic-class] "Variance of type variable `T_contra` is incompatible with its usage in `BadContravariantReturn`"
 class BadContravariantReturn(Generic[T_contra]):
+    # error: [invalid-generic-class] "Variance of type variable `T_contra` is incompatible with method `get`"
     def get(self) -> T_contra:
         raise ValueError
 
@@ -334,12 +334,12 @@ class BadCovariantAttribute(Generic[T_co]):
 ```
 
 ```snapshot
-error[invalid-generic-class]: Variance of type variable `T_co` is incompatible with its usage in `BadCovariantParameter`
-  --> src/mdtest_snippet.py:18:7
+error[invalid-generic-class]: Variance of type variable `T_co` is incompatible with method `set`
+  --> src/mdtest_snippet.py:19:26
    |
-18 | class BadCovariantParameter(Generic[T_co]):
-   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: Type variable `T_co` is declared as covariant, but `BadCovariantParameter` uses it contravariantly
+19 |     def set(self, value: T_co) -> None: ...
+   |                          ^^^^
+info: Type variable `T_co` is declared as covariant, but this method requires it to be contravariant
 ```
 
 ## Variance in method signatures

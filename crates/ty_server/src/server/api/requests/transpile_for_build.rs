@@ -66,7 +66,7 @@ pub(crate) struct TranspileForBuildParams {
     /// A client that has not saved yet gets the buffer transpiled and the `.by` digest taken over
     /// that same buffer, which is coherent — though a client doing this for a debugger should save
     /// first anyway, because the traceback rewriter reads the file from disk.
-    pub(crate) text_document: TextDocumentIdentifier,
+    text_document: TextDocumentIdentifier,
 
     /// the build tree the program is running out of
     ///
@@ -74,7 +74,7 @@ pub(crate) struct TranspileForBuildParams {
     /// thing that sees the name is whatever started the program. It is not trusted on the strength
     /// of being sent — `_by_build.json` in it has to say it was written by this same `by`, or the
     /// answer is a refusal.
-    pub(crate) build_directory: std::path::PathBuf,
+    build_directory: std::path::PathBuf,
 }
 
 pub(crate) struct TranspileForBuildRequestHandler;

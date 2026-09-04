@@ -45,7 +45,7 @@ jobs:
           enable-cache: true
 
       - name: Install docs dependencies
-        run: uv sync --group docs --no-install-project --locked
+        run: uv sync --group basedpython-docs --no-install-project --locked
 
       - name: Build site
         run: uv run --no-sync zensical build --clean --strict

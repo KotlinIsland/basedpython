@@ -125,7 +125,7 @@ pub struct DistributionIndex {
 impl DistributionIndex {
     /// The distributions that install `top_level`, which is a directory name or
     /// a module file's stem directly inside `site-packages`.
-    pub fn owners_of_top_level(&self, top_level: &str) -> &[DistributionName] {
+    fn owners_of_top_level(&self, top_level: &str) -> &[DistributionName] {
         self.owners.get(top_level).map_or(&[], |owners| owners)
     }
 
@@ -217,7 +217,7 @@ pub struct RequirementIndex {
 
 impl RequirementIndex {
     /// The installed distributions `distribution` requires.
-    pub fn requirements_of(&self, distribution: &DistributionName) -> &[DistributionName] {
+    fn requirements_of(&self, distribution: &DistributionName) -> &[DistributionName] {
         self.requirements
             .get(distribution)
             .map_or(&[], |requirements| requirements)

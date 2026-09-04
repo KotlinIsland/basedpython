@@ -9,6 +9,15 @@ with a full `RUST_BACKTRACE=1` dump, and a build that failed with thousands of
 unresolved-import diagnostics.
 """
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pytest"]
+#
+# # the module under test is the sibling script, imported the way pytest imports it
+# [tool.ty.environment]
+# extra-paths = ["."]
+# ///
+
 from __future__ import annotations
 
 import json
@@ -19,6 +28,7 @@ from check_ecosystem_roundtrip import (
     _COMMENT_BUDGET,
     BUILD_PATH,
     COMMENT_CHAR_LIMIT,
+    FULL_REPORT_ARTIFACT,
     FileDiff,
     ProjectDiff,
     ProjectErrors,
@@ -231,6 +241,58 @@ class TestRenderDiffReport:
         body, _ = render_diff_report(results, "base", "head")
         assert "error changes: 200" in body
         assert "finding(s) omitted" in body
+
+    def test_the_full_report_keeps_what_the_comment_drops(self):
+        # the comment leaves findings out to fit GitHub's limit and says so. what
+        # it says has to be true: the artifact it names holds every one of them
+        results = [
+            project(
+                f"noise{i}", "error-changed", panic(thread=i, first_line=1, frames=900)
+            )
+            for i in range(200)
+        ]
+        comment, _ = render_diff_report(results, "base", "head")
+        assert "finding(s) omitted" in comment
+        missing = [r.name for r in results if r.name not in comment]
+        assert missing, "expected this many findings not to fit the comment"
+
+        full, _ = render_diff_report(results, "base", "head", full=True)
+        assert "finding(s) omitted" not in full
+        for name in missing:
+            assert name in full
+
+    def test_the_full_report_elides_nothing_within_a_finding(self):
+        # dropping whole findings is not the only thing the comment does to fit:
+        # it also clips each body. the artifact keeps them whole
+        results = [
+            project(
+                "huge", "error-changed", diagnostics(binary="by", sha="a", count=5_000)
+            )
+        ]
+        comment, _ = render_diff_report(results, "base", "head")
+        full, _ = render_diff_report(results, "base", "head", full=True)
+        assert "characters elided" in comment
+        assert "characters elided" not in full
+        assert len(full) > len(comment)
+
+    def test_the_notice_names_the_artifact_the_workflow_uploads(self):
+        # the notice used to send the reader to the `comment.md` artifact, which is
+        # the truncated comment itself — the findings it promised were nowhere
+        results = [
+            project(
+                f"noise{i}", "error-changed", panic(thread=i, first_line=1, frames=900)
+            )
+            for i in range(200)
+        ]
+        comment, _ = render_diff_report(results, "base", "head")
+        assert f"`{FULL_REPORT_ARTIFACT}` artifact" in comment
+
+        workflow = (
+            Path(__file__).parent.parent
+            / ".github/workflows/by-ecosystem-roundtrip.yaml"
+        ).read_text()
+        assert f"name: {FULL_REPORT_ARTIFACT}" in workflow
+        assert f"--render-full {FULL_REPORT_ARTIFACT}" in workflow
 
     def test_a_small_report_is_not_truncated(self):
         body, _ = render_diff_report(

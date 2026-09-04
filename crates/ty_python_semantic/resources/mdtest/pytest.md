@@ -403,12 +403,12 @@ import pytest
 def value() -> int:
     return 1
 
-@pytest.mark.parametrize("value", ["a", "b"])
+@pytest.mark.parametrize("value", ["a", "b"])  # error: [dynamic-function-decorator-return] "Decorator returns `Any`"
 def test_it(value) -> None:
     # supplied by the marker, so the same-named fixture does not apply
     reveal_type(value)  # revealed: value@test_it
 
-@pytest.mark.parametrize("other", ["a", "b"])
+@pytest.mark.parametrize("other", ["a", "b"])  # error: [dynamic-function-decorator-return] "Decorator returns `Any`"
 def test_mixed(other, value) -> None:
     reveal_type(other)  # revealed: other@test_mixed
     reveal_type(value)  # revealed: int

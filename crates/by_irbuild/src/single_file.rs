@@ -16,7 +16,8 @@ use ty_python_semantic::{ProgramEnvironment, SemanticModel};
 use crate::Language;
 
 /// build a one-file db from basedpython source and hand its model and suite to `f`
-pub fn with_source<T>(
+#[cfg(test)]
+pub(crate) fn with_source<T>(
     source: &str,
     f: impl FnOnce(
         &dyn ty_python_semantic::Db,
@@ -30,7 +31,7 @@ pub fn with_source<T>(
 
 /// build a one-file db from source of a given language and hand its model and
 /// suite to `f`
-pub fn with_source_in<T>(
+pub(crate) fn with_source_in<T>(
     source: &str,
     language: Language,
     f: impl FnOnce(

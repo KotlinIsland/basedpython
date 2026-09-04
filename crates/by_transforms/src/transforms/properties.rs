@@ -150,7 +150,7 @@ impl<'src> PropertiesPass<'src> {
 /// nothing else a metaclass would offer, so a plain non-data descriptor is the
 /// whole implementation. Mirrors `_by_static_property` in `ty_extensions._internal`,
 /// which is ty's type-only view of the same thing.
-pub(crate) const STATIC_PROPERTY_HELPER: &str = "\
+const STATIC_PROPERTY_HELPER: &str = "\
 class _by_static_property:
     def __init__(self, fget):
         self._fget = fget

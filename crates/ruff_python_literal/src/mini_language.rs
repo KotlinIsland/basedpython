@@ -150,7 +150,7 @@ impl FormatSpecComponent {
         FormatSpecComponent::Type,
     ];
 
-    pub fn label(self) -> &'static str {
+    fn label(self) -> &'static str {
         match self {
             FormatSpecComponent::Conversion => "conversion",
             FormatSpecComponent::Fill => "fill",
@@ -165,7 +165,7 @@ impl FormatSpecComponent {
         }
     }
 
-    pub fn documentation(self) -> &'static str {
+    fn documentation(self) -> &'static str {
         match self {
             FormatSpecComponent::Conversion => {
                 "applied before formatting: `!s` calls `str`, `!r` calls `repr`, `!a` calls `ascii`"

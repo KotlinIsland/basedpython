@@ -30,7 +30,7 @@ use by_ir::rtype::{Primitive, RType};
 /// every one of its own operations is, *and* every function it calls is. so a
 /// pair of mutually recursive float functions converges to infallible, and one
 /// division anywhere in a cycle makes the whole cycle fallible.
-pub fn run(module: &mut ModuleIr) {
+pub(crate) fn run(module: &mut ModuleIr) {
     let names: Vec<String> = module
         .all_functions()
         .map(Function::qualified_name)

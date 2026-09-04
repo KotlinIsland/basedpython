@@ -163,7 +163,7 @@ caller actually wrote.
 class A:
     init(a: int)
 
-# error: [invalid-argument-type] "Argument to class `A` is incorrect: Expected `int`, found `"s"`"
+# error: [invalid-argument-type] "Argument to `A.__init__` is incorrect: Expected `int`, found `"s"`"
 A("s")
 
 # error: [missing-argument] "No argument provided for required parameter `a` of class `A`"

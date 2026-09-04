@@ -127,7 +127,7 @@ impl<'ast> Visitor<'ast> for ClauseVisitor<'_> {
 /// The clause itself — keyword through closing parenthesis — comes from
 /// [`raises_clause_spans`], which tokenizes rather than searching for text, so
 /// neither a comment nor a parenthesized type displaces the range.
-pub(crate) fn clause_range(source: &str, function: &StmtFunctionDef) -> Option<TextRange> {
+fn clause_range(source: &str, function: &StmtFunctionDef) -> Option<TextRange> {
     let spans = raises_clause_spans(source, function)?;
     let before = source[..usize::from(spans.clause.start())].trim_end_matches([' ', '\t']);
 

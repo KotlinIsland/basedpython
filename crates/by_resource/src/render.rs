@@ -45,7 +45,7 @@ impl Rendered {
 ///
 /// `root` must be a valid identifier; [`binding_name`] makes one out of a file
 /// name.
-pub fn render(value: &Value, root: &str) -> Rendered {
+pub(crate) fn render(value: &Value, root: &str) -> Rendered {
     let mut renderer = Renderer {
         prefix: format!("{HELPER_PREFIX}{root}_"),
         helpers: Vec::new(),

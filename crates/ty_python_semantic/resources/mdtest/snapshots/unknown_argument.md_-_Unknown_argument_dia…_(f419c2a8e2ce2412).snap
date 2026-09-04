@@ -61,8 +61,8 @@ error[unknown-argument]: Argument `d` does not match any known parameter of func
    |
 12 | h(a=1, b=2, d=42)
    |             ^^^^
-info: Union variant `def f(a, b, c = 42)` is incompatible with this call site
-info: Attempted to call union type `(def f(a, b, c = 42)) | (def g(a, b))`
+info: Union variant `def f(a, b, c: some int = 42)` is incompatible with this call site
+info: Attempted to call union type `(def f(a, b, c: some int = 42)) | (def g(a, b))`
 
 ```
 
@@ -73,7 +73,7 @@ error[unknown-argument]: Argument `d` does not match any known parameter of func
 12 | h(a=1, b=2, d=42)
    |             ^^^^
 info: Union variant `def g(a, b)` is incompatible with this call site
-info: Attempted to call union type `(def f(a, b, c = 42)) | (def g(a, b))`
+info: Attempted to call union type `(def f(a, b, c: some int = 42)) | (def g(a, b))`
 
 ```
 

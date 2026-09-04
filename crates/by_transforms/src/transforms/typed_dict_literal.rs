@@ -110,8 +110,8 @@ fn quote_type(type_source: &str) -> String {
 
 pub(crate) struct TypedDictLiteral<'src> {
     source: &'src str,
-    pub(crate) edits: Vec<Fix>,
-    pub(crate) errors: Vec<String>,
+    edits: Vec<Fix>,
+    errors: Vec<String>,
     /// Insertion-ordered map of shape → synthesized class name so emitted
     /// classes follow dependency order (inner-before-outer)
     shapes: IndexMap<Shape, String>,
@@ -119,17 +119,17 @@ pub(crate) struct TypedDictLiteral<'src> {
     /// Used when rendering an outer dict's body to substitute nested dict
     /// spans with their class names.
     range_to_class: Vec<(ruff_text_size::TextRange, String)>,
-    pub(crate) needs_import: bool,
+    needs_import: bool,
     /// Whether any field rendering used basedpython literal-type promotion.
     /// Lib's preamble step turns this into the `from typing import Literal`
     /// import.
-    pub(crate) needs_literal_import: bool,
+    needs_literal_import: bool,
     /// set when a nested `T??` field needs the runtime `Optional[...]` wrapper
-    pub(crate) needs_optional_runtime: bool,
+    needs_optional_runtime: bool,
 }
 
 impl<'src> TypedDictLiteral<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
+    fn new(source: &'src str) -> Self {
         Self {
             source,
             edits: Vec::new(),
@@ -142,7 +142,7 @@ impl<'src> TypedDictLiteral<'src> {
         }
     }
 
-    pub(crate) fn class_defs(&self) -> String {
+    fn class_defs(&self) -> String {
         let mut out = String::new();
         for (shape, name) in &self.shapes {
             out.push_str(&shape.class_def(name));

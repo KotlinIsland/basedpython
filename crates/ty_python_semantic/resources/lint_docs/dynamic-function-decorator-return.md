@@ -6,18 +6,20 @@ Detects decorator applications that replace a function with `Any` or another [dy
 
 A decorator can replace the function it receives with any object. Type checkers therefore use the
 decorator's return type as the type of the decorated function. If the decorator returns `Any` or
-`Unknown` (explicitly or implicitly), the original type is lost, along with the type checker's
-ability to catch invalid calls and attribute accesses:
+`Unknown`, the original type is lost, along with the type checker's ability to catch invalid calls
+and attribute accesses. basedpython infers an unannotated return, so a decorator reaches this state
+by saying `Any` outright, or by coming from code the checker cannot read:
 
 ```py
 from collections.abc import Callable
+from typing import Any
 
 
-def untyped_decorator(function: Callable[..., object]):
+def untyped_decorator(function: Callable[..., object]) -> Any:
     return function
 
 
-# error: "Decorator returns `Unknown`"
+# error: "Decorator returns `Any`"
 @untyped_decorator
 def stringify(value: int) -> str:
     return str(value)
@@ -40,9 +42,10 @@ annotations in third-party code installed into `site-packages`.
 
 ```py
 from collections.abc import Callable
+from typing import Any
 
 
-def untyped_decorator(function: Callable[..., object]):
+def untyped_decorator(function: Callable[..., object]) -> Any:
     return function
 ```
 
@@ -52,7 +55,7 @@ def untyped_decorator(function: Callable[..., object]):
 from third_party_library import untyped_decorator
 
 
-# error: "Decorator returns `Unknown`"
+# error: "Decorator returns `Any`"
 @untyped_decorator
 def greet(name: str) -> str:
     return f"Hello, {name}!"

@@ -18,15 +18,11 @@ pub(crate) struct KwSubscript<'src, T: TypeInfo + ?Sized> {
     source: &'src str,
     types: Option<&'src T>,
     min_version: PythonVersion,
-    pub(crate) edits: Vec<Fix>,
+    edits: Vec<Fix>,
 }
 
 impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
-    pub(crate) fn new(
-        source: &'src str,
-        types: Option<&'src T>,
-        min_version: PythonVersion,
-    ) -> Self {
+    fn new(source: &'src str, types: Option<&'src T>, min_version: PythonVersion) -> Self {
         Self {
             source,
             types,

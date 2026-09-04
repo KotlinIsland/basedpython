@@ -1049,7 +1049,7 @@ impl Op {
     /// deliberately written without a catch-all arm. an operation added later with a
     /// class in it is then a compile error here rather than an operation that quietly
     /// answers "none" and lets a class be left out from under it
-    pub fn named_classes(&self) -> Vec<&str> {
+    pub(crate) fn named_classes(&self) -> Vec<&str> {
         match self {
             Self::GetCell { class, .. }
             | Self::NewInstance { class, .. }
@@ -1810,7 +1810,7 @@ pub enum Terminator {
 
 impl Terminator {
     /// the blocks control can transfer to
-    pub fn successors(&self) -> Vec<BlockId> {
+    pub(crate) fn successors(&self) -> Vec<BlockId> {
         match self {
             Self::Goto(target) => vec![*target],
             Self::Branch {

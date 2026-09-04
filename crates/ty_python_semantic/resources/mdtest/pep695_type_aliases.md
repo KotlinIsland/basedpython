@@ -229,7 +229,7 @@ def _(flag: bool):
 
 ```py
 type ListOrSet[T] = list[T] | set[T]
-# revealed: tuple[typing.TypeVar | typing_extensions.TypeVar | typing.ParamSpec | typing_extensions.ParamSpec | typing.TypeVarTuple | typing_extensions.TypeVarTuple, ...]
+# revealed: tuple[_TypeParameter, ...]
 reveal_type(ListOrSet.__type_params__)
 type Tuple1[T] = tuple[T]
 

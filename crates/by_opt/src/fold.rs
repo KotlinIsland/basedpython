@@ -14,7 +14,7 @@ use by_ir::function::{Function, ModuleIr};
 use by_ir::ops::{BinOp, CmpOp, Op, RegisterId, Terminator, UnaryOp, Value};
 use by_ir::rtype::RType;
 
-pub fn run(module: &mut ModuleIr) {
+pub(crate) fn run(module: &mut ModuleIr) {
     // a `frozen` class's field cannot change after the constructor wrote it, so two
     // reads of one are the same read — *across an arbitrary call*, which is the part
     // an optimizer without the type system's word for it cannot assume

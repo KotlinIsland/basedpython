@@ -77,7 +77,7 @@ def return_in_both_branches(cond: bool):
 def return_in_try(cond: bool):
     x = "before"
     try:
-        if cond is True:
+        if cond is True:  # error: [redundant-boolean-comparison] "Comparison of a `bool` with `True` is redundant"
             x = "test"
             return
     except:
@@ -372,7 +372,7 @@ When only one branch raises, the exception handler sees only the value assigned 
 def raise_in_then_branch(cond: bool):
     x = "before"
     try:
-        if cond is True:
+        if cond is True:  # error: [redundant-boolean-comparison] "Comparison of a `bool` with `True` is redundant"
             x = "raise"
             raise ValueError
         x = "else"
@@ -389,7 +389,7 @@ If both branches raise, the handler sees either value and the `else` clause cann
 def raise_in_both_branches(cond: bool):
     x = "before"
     try:
-        if cond is True:
+        if cond is True:  # error: [redundant-boolean-comparison] "Comparison of a `bool` with `True` is redundant"
             x = "raise1"
             raise ValueError
         else:
@@ -408,9 +408,9 @@ Nested conditions do not make values from non-raising branches visible to the ex
 def raise_in_nested_branch(cond1: bool, cond2: bool):
     x = "before"
     try:
-        if cond1 is True:
+        if cond1 is True:  # error: [redundant-boolean-comparison] "Comparison of a `bool` with `True` is redundant"
             x = "else1"
-        elif cond2 is True:
+        elif cond2 is True:  # error: [redundant-boolean-comparison] "Comparison of a `bool` with `True` is redundant"
             x = "raise"
             raise ValueError
         else:
@@ -428,9 +428,9 @@ Multiple raising branches inside a nested condition remain visible to the handle
 def raise_in_both_nested_branches(cond1: bool, cond2: bool):
     x = "before"
     try:
-        if cond1 is True:
+        if cond1 is True:  # error: [redundant-boolean-comparison] "Comparison of a `bool` with `True` is redundant"
             x = "else"
-        elif cond2 is True:
+        elif cond2 is True:  # error: [redundant-boolean-comparison] "Comparison of a `bool` with `True` is redundant"
             x = "raise1"
             raise ValueError
         else:
@@ -1136,7 +1136,7 @@ The same statically known condition also removes the unreachable binding from a 
 class Example:
     value = 1
 
-    if flag:
+    if flag:  # error: [redundant-condition] "This condition is always false"
         value = "unreachable"
 
         if 1 + 1 == 2:

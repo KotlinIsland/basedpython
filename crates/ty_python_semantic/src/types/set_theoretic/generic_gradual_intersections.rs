@@ -58,6 +58,21 @@ pub(super) fn generic_gradual_intersection<'db>(
 /// materializations instead of incorrectly collapsing, for example,
 /// `Sequence[int] & Top[list[Any]]` to `list[int]`.
 /// Subclass arguments that do not specialize the base retain their gradualness.
+/// The widest type a covariant parameter can hold, which is its bound where it has one.
+///
+/// `frozenset[out Element: Hashable]` tops out at `frozenset[Hashable]`, so `object` alone does not
+/// recognise every top-generalized argument — though `object` is still one, being wider.
+fn typevar_top<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    typevar: crate::types::BoundTypeVarInstance<'db>,
+) -> Type<'db> {
+    typevar
+        .typevar(db)
+        .upper_bound(db, env)
+        .map_or_else(Type::object, |bound| bound.top_materialization(db, env))
+}
+
 fn base_top_intersection<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -138,7 +153,10 @@ fn base_top_intersection<'db>(
         }
 
         let is_top_generalization = match specialization_variance(db, subclass_typevar) {
-            TypeVarVariance::Covariant => subclass_type == Type::object(),
+            TypeVarVariance::Covariant => {
+                subclass_type == Type::object()
+                    || subclass_type == typevar_top(db, env, subclass_typevar)
+            }
             TypeVarVariance::Contravariant => subclass_type.is_never(),
             TypeVarVariance::Invariant => {
                 subclass_specialization.materialization_kind(db) == Some(MaterializationKind::Top)

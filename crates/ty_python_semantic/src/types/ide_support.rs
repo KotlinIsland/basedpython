@@ -27,12 +27,11 @@ use crate::types::signatures::{
     ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
 };
 use crate::types::{
-    CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType, KnownClass, KnownFunction,
-    KnownUnion, PropertyAccessorRole, SpecialFormType, SubclassOfInner, Type, TypeContext,
-    TypeVarBoundOrConstraints, TypeVarVariance, binding_type,
+    CallDunderError, CallableTypes, ClassBase, ClassLiteral, KnownClass, KnownFunction, KnownUnion,
+    PropertyAccessorRole, SpecialFormType, Type, TypeContext, TypeVarBoundOrConstraints,
+    TypeVarVariance, binding_type,
 };
 use crate::{Db, HasDefinition, HasType, ProgramEnvironment, SemanticModel};
-use itertools::Either;
 use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
@@ -43,18 +42,20 @@ use rustc_hash::FxHashSet;
 use ty_module_resolver::{
     ImportingFile, Module, ModuleName, ResolverFile, resolve_module_confident,
 };
-use ty_python_core::definition::{Definition, DefinitionKind, NestedBindingExecution};
+use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::scope::FileScopeId;
-use ty_python_core::{ProgramFile, attribute_scopes, global_scope, semantic_index, use_def_map};
+use ty_python_core::{ProgramFile, attribute_scopes, semantic_index, use_def_map};
 
 mod data_flow;
 mod unreachable_code;
 #[path = "ide_support/unused_bindings.rs"]
 mod unused_binding_support;
 
-pub use data_flow::{ConditionVerdict, DataFlow, ValueVerdict, data_flow};
-use crate::types::definition_resolution::{self, find_symbol_in_scope, resolve_definition, user_visible_definitions};
+use crate::types::definition_resolution::{
+    self, find_symbol_in_scope, resolve_definition, user_visible_definitions,
+};
 pub use crate::types::definition_resolution::{ImportAliasResolution, ResolvedDefinition};
+pub use data_flow::{ConditionVerdict, DataFlow, ValueVerdict, data_flow};
 pub use stub_mapping::map_stub_definition;
 pub use unreachable_code::{UnreachableKind, UnreachableRange, unreachable_ranges};
 pub use unused_binding_support::{UnusedBinding, unused_bindings};
@@ -111,7 +112,10 @@ pub fn definitions_for_name<'db>(
 
     // If we didn't find any definitions in scopes, fallback to builtins
     let Some(builtins_scope) = implicit_builtins_symbol_scope(db, &env, name_str) else {
-        return vec![];
+        // basedpython: a name with no import behind it is not always a builtin —
+        // `Character` is `ty_extensions.Character` — so the implicit-name table is
+        // asked before giving up
+        return implicit_name_definitions(db, &env, model, node, name_str);
     };
     // Special cases for `float` and `complex` in type annotation positions.
     // We don't know whether we're in a type annotation position, so we'll just ask `Name`'s type,
@@ -3156,7 +3160,7 @@ pub fn inherited_parameter_annotation<'db>(
 /// A method's defaults are part of what it declares, so a parameter an override re-declares
 /// without one keeps the base's. `None` when the parameter writes a default of its own, when
 /// nothing it overrides declares one, or when what the base declares is an expression rather than
-/// a value — see [`Type::display_default_value`].
+/// a value — see `Type::display_default_value`.
 pub fn inherited_parameter_default(
     model: &SemanticModel<'_>,
     parameter: &ast::ParameterWithDefault,

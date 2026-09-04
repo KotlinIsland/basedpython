@@ -29,13 +29,3 @@ info: The full type of the subscripted object is `dict[str, int] | None`
 info: `None` does not have a `__setitem__` method.
 
 ```
-
-```
-error[invalid-assignment]: Invalid subscript assignment with key of type `Literal["retries"]` and value of type `Literal[3]` on object of type `dict[str, int]`
- --> src/mdtest_snippet.py:2:5
-  |
-2 |     config["retries"] = 3  # error: [invalid-assignment]
-  |     ^^^^^^^^^^^^^^^^^^^^^
-info: The full type of the subscripted object is `dict[str, int] | None`
-
-```

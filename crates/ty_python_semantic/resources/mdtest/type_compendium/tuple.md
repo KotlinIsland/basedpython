@@ -631,7 +631,7 @@ python-version = "3.12"
 ```py
 def homogeneous(values: tuple[float, ...]):
     source = (*[1, *values, "two"],)
-    reveal_type(source)  # revealed: tuple[Literal[1], *tuple[float, ...], Literal["two"]]
+    reveal_type(source)  # revealed: tuple[Literal[1], *tuple[int | float, ...], Literal["two"]]
 
 def symbolic[*Ts](values: tuple[*Ts]):
     source = (*[1, *values, "two"],)

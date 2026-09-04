@@ -96,7 +96,9 @@ pub(crate) fn check_declared_alias_variance<'db>(
             continue;
         };
 
-        let required = alias.variance_of(db, env, bound_typevar.identity(db)).evaluate(db);
+        let required = alias
+            .variance_of(db, env, bound_typevar.identity(db))
+            .evaluate(db);
         if declared.join(required) == declared {
             continue;
         }

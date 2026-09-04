@@ -843,8 +843,10 @@ def f(
     reveal_type(with_prefix(i, s, b))  # revealed: tuple[int, str, bool]
     reveal_type(with_prefix(*fixed))  # revealed: tuple[int, str]
     reveal_type(with_prefix(i, *fixed))  # revealed: tuple[int, int, str]
+    # error: [refutable-unpacking] "`tuple[int, ...]` may not have at least 1 element, which would raise `TypeError` when unpacked into this call"
     reveal_type(with_prefix(*unbounded))  # revealed: tuple[int, *tuple[int, ...]]
     reveal_type(with_prefix(i, *unbounded))  # revealed: tuple[int, *tuple[int, ...]]
+    # error: [refutable-unpacking] "`list[int]` may not have at least 1 element, which would raise `TypeError` when unpacked into this call"
     reveal_type(with_prefix(*xs))  # revealed: tuple[int, *tuple[int, ...]]
 
     reveal_type(bounded(i, *suffix))  # revealed: tuple[bool]
@@ -898,14 +900,14 @@ def check_splat_error(values: list[int]) -> None:
 
 ```snapshot
 error[invalid-argument-type]: Argument to function `bounded_arguments` is incorrect
-  --> src/mdtest_snippet.py:86:9
+  --> src/mdtest_snippet.py:88:9
    |
-86 |         *values,  # snapshot: invalid-argument-type
+88 |         *values,  # snapshot: invalid-argument-type
    |         ^^^^^^^ Argument type `int` does not satisfy upper bound `str` of type variable `T`
 info: Type variable defined here
-  --> src/mdtest_snippet.py:74:33
+  --> src/mdtest_snippet.py:76:33
    |
-74 | def bounded_arguments[U: bytes, T: str, *Ts](first: U, *args: *tuple[*Ts, T]) -> tuple[*Ts, T]:
+76 | def bounded_arguments[U: bytes, T: str, *Ts](first: U, *args: *tuple[*Ts, T]) -> tuple[*Ts, T]:
    |                                 ^^^^^^
 ```
 

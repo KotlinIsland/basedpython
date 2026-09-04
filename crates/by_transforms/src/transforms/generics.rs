@@ -20,9 +20,9 @@ pub(crate) struct GenericPolyfill<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
     config: Config,
-    pub(crate) edits: Vec<Fix>,
+    edits: Vec<Fix>,
     // Imports to inject at the top of the file.
-    pub(crate) needed_imports: ImportNeeds,
+    needed_imports: ImportNeeds,
     /// `TypeVar` definitions already emitted at module scope. Polyfilling each
     /// generic class/function emits its own `_T = TypeVar("_T")` line; without
     /// dedup, a module with several generics over the same name produces
@@ -41,7 +41,7 @@ pub(crate) struct GenericPolyfill<'src> {
     /// substitution at runtime accepts them
     parameters_targets: HashSet<String>,
     /// set when a Parameters spec lowering used `Any` for a named-only field
-    pub(crate) needed_imports_any: bool,
+    needed_imports_any: bool,
     /// generic class name → its `T`→`_T` rename map. based-enum variants lower
     /// to module-level subclasses of the enum (`class _Tree_Node(Tree)`) that
     /// reference the enum's type params in their field annotations; those refs
@@ -63,24 +63,24 @@ pub(crate) struct GenericPolyfill<'src> {
     pending_edits: Vec<(TextRange, String)>,
     /// ranges of `pending_edits` this pass re-rendered; the driver drops them so
     /// the stale un-renamed text cannot win the overlap race
-    pub(crate) superseded: Vec<TextRange>,
+    superseded: Vec<TextRange>,
 }
 
 #[derive(Default)]
 #[expect(clippy::struct_excessive_bools)]
 pub(crate) struct ImportNeeds {
-    pub(crate) typevar: bool,
-    pub(crate) generic: bool,
-    pub(crate) typevar_tuple: bool,
-    pub(crate) unpack: bool,
-    pub(crate) paramspec: bool,
-    pub(crate) typealias_type: bool,
-    pub(crate) typevar_needs_ext: bool, // TypeVar(default=) on < 3.13
+    typevar: bool,
+    generic: bool,
+    typevar_tuple: bool,
+    unpack: bool,
+    paramspec: bool,
+    typealias_type: bool,
+    typevar_needs_ext: bool, // TypeVar(default=) on < 3.13
 }
 
 impl ImportNeeds {
     /// Build the import lines to prepend to the file.
-    pub(crate) fn into_lines(self) -> Vec<String> {
+    fn into_lines(self) -> Vec<String> {
         let mut lines = Vec::new();
 
         let mut typing_names: Vec<&str> = Vec::new();
@@ -139,7 +139,7 @@ struct ProcessedTypeParams {
 }
 
 impl<'src> GenericPolyfill<'src> {
-    pub(crate) fn new(
+    fn new(
         source: &'src str,
         types: &'src dyn TypeInfo,
         config: Config,

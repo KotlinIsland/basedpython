@@ -125,7 +125,7 @@ struct Relocation {
 /// nothing to do — which is the case on every run after the first, because the
 /// classes are then declared in `_collections_abc` and `typing` only imports
 /// them
-pub fn scan(root: &Path) -> CollectionsAbcHome {
+pub(crate) fn scan(root: &Path) -> CollectionsAbcHome {
     let relocation = std::fs::read_to_string(root.join("typing.byi"))
         .ok()
         // the classes travel as source text, so they have to be read *after* the pep 695

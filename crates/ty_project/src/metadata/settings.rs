@@ -5,7 +5,7 @@ use ty_combine::Combine;
 use ty_python_semantic::lint::RuleSelection;
 use ty_python_semantic::{AnalysisSettings, ExperimentalSettings};
 
-use crate::metadata::options::{InnerOverrideOptions, OutputFormat};
+use crate::metadata::options::{InnerOverrideOptions, Options, OutputFormat};
 use crate::script::Script;
 use ruff_db::system::SystemPath;
 
@@ -77,7 +77,7 @@ impl Settings {
     /// Project-wide, and deliberately not part of [`OverrideSettings`]: an
     /// experimental feature is a language feature, and a module's meaning cannot
     /// depend on which file is asking about it.
-    pub fn experimental(&self) -> &ExperimentalSettings {
+    pub(crate) fn experimental(&self) -> &ExperimentalSettings {
         &self.experimental
     }
 
@@ -252,24 +252,32 @@ impl Override {
 /// Resolves the settings for a given file.
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
 pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
-    if let Some(script) = Script::for_file(db, file) {
-        let settings = script.settings(db);
-        return FileSettings::File(Arc::new(OverrideSettings {
-            rules: settings.rules().clone(),
-            analysis: settings.analysis().clone(),
-        }));
-    }
+    // a script resolves its own settings — its inline block layered over the project's — but it
+    // is still a file the project's `[[overrides]]` can name, so the two are read the same way:
+    // the script's settings supply the base and the overrides matching its path apply on top.
+    let script = Script::for_file(db, file);
+    let script_settings = script.map(|script| script.settings(db));
+    let script_layer = script.and_then(|script| script.override_layer(db).clone());
+    let own_settings = || {
+        script_settings.map_or(FileSettings::Global, |settings| {
+            FileSettings::File(Arc::new(OverrideSettings {
+                rules: settings.rules().clone(),
+                analysis: settings.analysis().clone(),
+            }))
+        })
+    };
 
-    let project = db.project();
-
-    let settings = project.settings(db);
+    // the overrides to match are always the project's. one written inside a script's own inline
+    // block names files the script does not speak for, so it is not honoured — a script
+    // configures itself with its top-level tables.
+    let settings = db.project().settings(db);
 
     let path = match file.path(db) {
         ruff_db::files::FilePath::System(path) => path,
         ruff_db::files::FilePath::SystemVirtual(_) | ruff_db::files::FilePath::Vendored(_) => {
             // a file with no system path matches no `include`/`exclude` glob, but a
             // script carries its configuration in its own text, so that still applies
-            return FileSettings::Global;
+            return own_settings();
         }
     };
 
@@ -280,13 +288,17 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
 
     let Some(first) = matching_overrides.next() else {
         // If the file matches no override, it uses the global settings.
-        return FileSettings::Global;
+        return own_settings();
     };
 
     let Some(second) = matching_overrides.next() else {
         tracing::debug!("Applying override for file `{path}`: {}", first.files);
         // If the file matches only one override, return that override's settings.
-        return FileSettings::File(Arc::clone(&first.settings));
+        // `first.settings` is resolved without the script, so a script has to be replayed.
+        return match script_layer {
+            Some(layer) => merge_overrides(db, vec![Arc::clone(&first.options)], Some(layer)),
+            None => FileSettings::File(Arc::clone(&first.settings)),
+        };
     };
 
     let mut filters = tracing::enabled!(tracing::Level::DEBUG)
@@ -308,7 +320,7 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
         tracing::debug!("Applying multiple overrides for file `{path}`: {filters}");
     }
 
-    merge_overrides(db, overrides, ())
+    merge_overrides(db, overrides, script_layer)
 }
 
 /// Merges multiple override options, caching the result.
@@ -317,7 +329,11 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
 /// resolving the same override combinations multiple times.
 ///
 #[salsa::tracked(returns(clone), heap_size=ruff_memory_usage::heap_size)]
-fn merge_overrides(db: &dyn Db, overrides: Vec<Arc<InnerOverrideOptions>>, _: ()) -> FileSettings {
+fn merge_overrides(
+    db: &dyn Db,
+    overrides: Vec<Arc<InnerOverrideOptions>>,
+    script: Option<Arc<InnerOverrideOptions>>,
+) -> FileSettings {
     let mut overrides = overrides.into_iter().rev();
     let mut merged = overrides.next().map_or(
         InnerOverrideOptions {
@@ -332,6 +348,11 @@ fn merge_overrides(db: &dyn Db, overrides: Vec<Arc<InnerOverrideOptions>>, _: ()
     }
 
     let metadata = db.project().metadata(db);
+    let script = script.map(|script| Options {
+        rules: script.rules.clone(),
+        analysis: script.analysis.clone(),
+        ..Options::default()
+    });
 
     // An override varies `rules` and `analysis`, never the preset those start from.
     let preset = metadata
@@ -341,9 +362,11 @@ fn merge_overrides(db: &dyn Db, overrides: Vec<Arc<InnerOverrideOptions>>, _: ()
 
     // Merge with the project level options by replaying the individual options
     // in the correct precedence order.
-    for options in metadata
-        .options_in_precedence_order(metadata.options(), metadata.uv_workspace_options.as_deref())
-    {
+    for options in metadata.options_in_precedence_order_with_script(
+        metadata.options(),
+        script.as_ref(),
+        metadata.uv_workspace_options.as_deref(),
+    ) {
         merged.rules.combine_with(options.rules.clone());
         merged.analysis.combine_with(options.analysis.clone());
     }

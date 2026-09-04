@@ -44,7 +44,7 @@ use by_ir::function::{Function, ModuleIr};
 use by_ir::ops::{BlockId, Op, RegisterId, Value};
 use by_ir::rtype::RType;
 
-pub fn run(module: &mut ModuleIr) {
+pub(crate) fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
         fuse(function);
     }

@@ -15,11 +15,11 @@ use crate::type_info::TypeInfo;
 pub(crate) struct GenericCallStrip<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
-    pub(crate) edits: Vec<Fix>,
+    edits: Vec<Fix>,
 }
 
 impl<'src> GenericCallStrip<'src> {
-    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
+    fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
         Self {
             source,
             types,

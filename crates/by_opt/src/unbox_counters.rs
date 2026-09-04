@@ -18,7 +18,7 @@ use by_ir::function::{Function, ModuleIr};
 use by_ir::ops::{BinOp, Op, RegisterId, Value};
 use by_ir::rtype::{IntWidth, Primitive, RType};
 
-pub fn run(module: &mut ModuleIr) {
+pub(crate) fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
         let picks: Vec<(RegisterId, Vec<RegisterId>)> = candidates(function)
             .into_iter()

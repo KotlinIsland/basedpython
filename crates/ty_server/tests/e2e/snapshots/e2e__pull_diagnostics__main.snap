@@ -23,6 +23,22 @@ expression: main_diagnostics
       },
       "source": "ty",
       "message": "`reveal_type` used without importing it\n\ninfo: This is allowed for debugging convenience but will fail at runtime"
+    },
+    {
+      "range": {
+        "start": {
+          "line": 0,
+          "character": 12
+        },
+        "end": {
+          "line": 0,
+          "character": 22
+        }
+      },
+      "severity": 3,
+      "code": "revealed-type",
+      "source": "ty",
+      "message": "Revealed type: `Literal[\"included\"]`"
     }
   ],
   "kind": "full"

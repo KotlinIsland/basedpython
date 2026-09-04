@@ -33,7 +33,7 @@
 //!
 //! two more things accept alongside parameters: the constraints and bound of a
 //! type variable, which a call solves from its arguments (`statistics.mean`
-//! really does take `int`s), and a type alias the whole-tree [`scan`] finds used
+//! really does take `int`s), and a type alias the whole-tree `scan` finds used
 //! for nothing but parameters — an alias is a name for the accepted set, so it
 //! has to say so.
 //!
@@ -838,7 +838,7 @@ pub struct NumericPromotion {
 }
 
 impl NumericPromotion {
-    pub fn new(input_aliases: BTreeSet<String>) -> Self {
+    pub(crate) fn new(input_aliases: BTreeSet<String>) -> Self {
         Self { input_aliases }
     }
 }
@@ -890,7 +890,7 @@ impl Patch for NumericPromotion {
 /// a mention inside another alias counts against it. that is conservative — the
 /// outer alias may itself be input-only — but it keeps the rule to a single pass
 /// and errs towards leaving a type exact
-pub fn scan(root: &Path) -> BTreeSet<String> {
+pub(crate) fn scan(root: &Path) -> BTreeSet<String> {
     let mut stubs: Vec<StubUses> = Vec::new();
     for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
         let path = entry.path();

@@ -52,15 +52,15 @@ impl Request for AlignmentGroupsRequest {
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AlignmentGroupsParams {
-    pub(crate) text_document: TextDocumentIdentifier,
-    pub(crate) range: Range,
+    text_document: TextDocumentIdentifier,
+    range: Range,
 }
 
 /// assignments sharing one `=` column, which therefore have to be laid out together
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AlignmentGroup {
-    pub(crate) members: Vec<AlignmentMember>,
+    members: Vec<AlignmentMember>,
 }
 
 /// one assignment's contribution to the column
@@ -72,10 +72,10 @@ pub(crate) struct AlignmentMember {
     /// this is not the one place a hint can land on this line. what displaces this line's column is
     /// every hint drawn on it at or before `gapEnd`, added together — `a, b = 1, 2` is hinted after
     /// `a` and again after `b`, and either alone understates how far the `=` moves
-    pub(crate) gap_start: Position,
+    gap_start: Position,
 
     /// the `=`
-    pub(crate) gap_end: Position,
+    gap_end: Position,
 }
 
 pub(crate) struct AlignmentGroupsRequestHandler;

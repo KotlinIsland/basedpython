@@ -73,7 +73,8 @@ impl IntWidth {
     }
 
     /// the inclusive range of values this width holds
-    pub const fn range(self) -> (i128, i128) {
+    #[cfg(test)]
+    const fn range(self) -> (i128, i128) {
         match self {
             Self::I8 => (-128, 127),
             Self::I16 => (-32_768, 32_767),
@@ -87,7 +88,11 @@ impl IntWidth {
     }
 
     /// the narrowest width holding every value in `lo..=hi`, if any does
-    pub fn fitting(lo: i128, hi: i128) -> Option<Self> {
+    ///
+    /// nothing selects a width this way yet — the tests below are what keep the table
+    /// honest until something does
+    #[cfg(test)]
+    fn fitting(lo: i128, hi: i128) -> Option<Self> {
         [
             Self::U8,
             Self::I8,
@@ -224,7 +229,7 @@ impl RType {
     ///
     /// no fixed-width integer has a spare bit pattern to reserve, and a `double`
     /// could legitimately be any bit pattern too
-    pub fn error_overlaps(&self) -> bool {
+    fn error_overlaps(&self) -> bool {
         matches!(
             self,
             Self::Primitive(Primitive::Fixed(_) | Primitive::Float | Primitive::Bool)

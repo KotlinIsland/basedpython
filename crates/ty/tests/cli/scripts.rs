@@ -53,6 +53,56 @@ fn project_settings_and_overrides_apply() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// an override that names the file outranks the block only for the rules it actually
+/// configures. one that is silent about a rule leaves the script's own answer standing,
+/// rather than discarding the whole block for having been named
+#[test]
+fn override_silent_about_a_rule_leaves_the_script_block_standing() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty.rules]
+            unresolved-reference = "ignore"
+
+            [[tool.ty.overrides]]
+            include = ["script.py"]
+
+            [tool.ty.overrides.rules]
+            division-by-zero = "warn"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.ty.rules]
+            # unresolved-reference = "warn"
+            # ///
+
+            print(missing)
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[unresolved-reference]: Name `missing` used when not defined
+     --> script.py:7:7
+      |
+    7 | print(missing)
+      |       ^^^^^^^
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 /// with no override naming the file, the script's own block wins over the
 /// project's top-level options.
 #[test]
@@ -1744,10 +1794,26 @@ mod uv_metadata {
             .env("UV_PYTHON_DOWNLOADS", "never");
 
         assert_cmd_snapshot!(command, @"
-        success: true
-        exit_code: 0
+        success: false
+        exit_code: 1
         ----- stdout -----
-        All checks passed!
+        warning[undeclared-dependency]: `indirect_module` comes from `indirect_dependency`, which this project does not directly depend on
+          --> script.py:11:6
+           |
+        11 | from indirect_module import value
+           |      ^^^^^^^^^^^^^^^
+        info: It is installed because `direct_dependency` requires it
+        info: Add `indirect_dependency` to the project's dependencies
+
+        warning[undeclared-dependency]: `indirect_module` comes from `indirect_dependency`, which this project does not directly depend on
+          --> script.py:12:8
+           |
+        12 | import indirect_module
+           |        ^^^^^^^^^^^^^^^
+        info: It is installed because `direct_dependency` requires it
+        info: Add `indirect_dependency` to the project's dependencies
+
+        Found 2 diagnostics
 
         ----- stderr -----
         ");
@@ -1765,6 +1831,14 @@ mod uv_metadata {
         help: Declare `indirect-dependency` in the script's inline `dependencies` metadata
         info: See https://docs.astral.sh/uv/guides/scripts/#declaring-script-dependencies
 
+        warning[undeclared-dependency]: `indirect_module` comes from `indirect_dependency`, which this project does not directly depend on
+          --> script.py:11:6
+           |
+        11 | from indirect_module import value
+           |      ^^^^^^^^^^^^^^^
+        info: It is installed because `direct_dependency` requires it
+        info: Add `indirect_dependency` to the project's dependencies
+
         error[missing-direct-dependency]: Import of `indirect_module` requires a direct dependency on `indirect-dependency`
           --> script.py:12:8
            |
@@ -1773,7 +1847,15 @@ mod uv_metadata {
         help: Declare `indirect-dependency` in the script's inline `dependencies` metadata
         info: See https://docs.astral.sh/uv/guides/scripts/#declaring-script-dependencies
 
-        Found 2 diagnostics
+        warning[undeclared-dependency]: `indirect_module` comes from `indirect_dependency`, which this project does not directly depend on
+          --> script.py:12:8
+           |
+        12 | import indirect_module
+           |        ^^^^^^^^^^^^^^^
+        info: It is installed because `direct_dependency` requires it
+        info: Add `indirect_dependency` to the project's dependencies
+
+        Found 4 diagnostics
 
         ----- stderr -----
         ");
@@ -1821,8 +1903,10 @@ mod uv_metadata {
         ----- stdout -----
         ordinary.py:5:13: info[revealed-type] Revealed type: `int`
         script.py:11:6: error[missing-direct-dependency] Import of `indirect_module` requires a direct dependency on `indirect-dependency`
+        script.py:11:6: warning[undeclared-dependency] `indirect_module` comes from `indirect_dependency`, which this project does not directly depend on
         script.py:12:8: error[missing-direct-dependency] Import of `indirect_module` requires a direct dependency on `indirect-dependency`
-        Found 3 diagnostics
+        script.py:12:8: warning[undeclared-dependency] `indirect_module` comes from `indirect_dependency`, which this project does not directly depend on
+        Found 5 diagnostics
 
         ----- stderr -----
         "
@@ -2039,10 +2123,18 @@ mod uv_metadata {
                 .arg("--fix")
                 .args(["--warn", "unused-ignore-comment"]),
             @"
-        success: true
-        exit_code: 0
+        success: false
+        exit_code: 1
         ----- stdout -----
-        Found 1 diagnostic (1 fixed, 0 remaining).
+        warning[unused-return-value]: The result of this call is unused
+          --> script.py:13:1
+           |
+        13 | User(1)
+           | ^^^^^^^
+        info: `User` returns `User`
+        help: Decorate `User` with `@ignorable_return_value` if discarding its result is expected
+
+        Found 2 diagnostics (1 fixed, 1 remaining).
 
         ----- stderr -----
         "

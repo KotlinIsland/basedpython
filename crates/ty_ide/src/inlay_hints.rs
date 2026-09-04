@@ -901,7 +901,8 @@ pub struct InlayHintSettings {
 
 impl InlayHintSettings {
     /// Every hint disabled — a base for enabling one kind at a time.
-    pub fn none() -> Self {
+    #[cfg(test)]
+    pub(crate) fn none() -> Self {
         Self {
             variable_types: false,
             call_argument_names: false,
@@ -2298,19 +2299,19 @@ mod tests {
     use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
     use ty_project::ProjectMetadata;
 
-    pub(super) fn inlay_hint_test(source: &str) -> InlayHintTest {
+    fn inlay_hint_test(source: &str) -> InlayHintTest {
         inlay_hint_test_in("main.py", source, false)
     }
 
     /// Like [`inlay_hint_test`], but for a `.by` source, so basedpython-only
     /// hints are produced.
-    pub(super) fn basedpython_inlay_hint_test(source: &str) -> InlayHintTest {
+    fn basedpython_inlay_hint_test(source: &str) -> InlayHintTest {
         inlay_hint_test_in("main.by", source, false)
     }
 
     /// An inlay-hint test with `analysis.sound-types` enabled, for the signatures ty
     /// recovers rather than reads.
-    pub(super) fn sound_types_inlay_hint_test(source: &str) -> InlayHintTest {
+    fn sound_types_inlay_hint_test(source: &str) -> InlayHintTest {
         inlay_hint_test_in("main.by", source, true)
     }
 
@@ -2366,7 +2367,7 @@ mod tests {
         }
     }
 
-    pub(super) struct InlayHintTest {
+    struct InlayHintTest {
         db: ty_project::TestDb,
         file: File,
         range: TextRange,
@@ -8143,7 +8144,7 @@ Source with applied edits:
 
         def foo(x: int, *y: bool, z: str | int | list[str]): ...
 
-        a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
+        a[: def foo(x: int, *y: bool, z: str | int | list[str])] = foo
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
@@ -8153,7 +8154,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:16
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
+        LL | a[: def foo(x: int, *y: bool, z: str | int | list[str])] = foo
            |                ^^^
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -8164,7 +8165,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:25
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
+        LL | a[: def foo(x: int, *y: bool, z: str | int | list[str])] = foo
            |                         ^^^^
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -8175,8 +8176,8 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:34
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
-           |                                     ^^^
+        LL | a[: def foo(x: int, *y: bool, z: str | int | list[str])] = foo
+           |                                  ^^^
 
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
@@ -8186,8 +8187,8 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:40
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
-           |                                           ^^^
+        LL | a[: def foo(x: int, *y: bool, z: str | int | list[str])] = foo
+           |                                        ^^^
 
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
@@ -8197,8 +8198,8 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:46
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
-           |                                                 ^^^^
+        LL | a[: def foo(x: int, *y: bool, z: str | int | list[str])] = foo
+           |                                              ^^^^
 
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
@@ -8208,8 +8209,8 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:51
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
-           |                                                      ^^^
+        LL | a[: def foo(x: int, *y: bool, z: str | int | list[str])] = foo
+           |                                                   ^^^
         ");
     }
 

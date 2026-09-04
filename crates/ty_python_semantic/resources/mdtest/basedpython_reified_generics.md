@@ -515,18 +515,44 @@ f()
 f[bool]()
 ```
 
-## an unfilled variadic is the empty run
+## a variadic is solved from the arguments
 
 A variadic never forces the specialization step the way a plain reified parameter does: supplying it
-nothing is a complete answer, not a missing one, so a bare call stays legal and binds the empty run.
-Inference does not solve a variadic from the arguments, so a non-empty run has to be written out:
+nothing is a complete answer, not a missing one, so a bare call stays legal. The run it binds is
+solved from the arguments, the same way a lone type parameter and a keyword pack are, so writing the
+step out and leaving it off reach the same answer:
 
 ```by
 def f[*Ts](*args: *Ts) -> None:
-    assert Ts == () or Ts == (int, str)
+    assert Ts == (int, str)
 
-f(1, "a")  # Ts is (), not (int, str)
+f(1, "a")
 f[int, str](1, "a")
+```
+
+Each element of the run is the argument's runtime type, so a literal widens to its class under the
+file's numeric model. `2.0` binds `float` — not the `int | float` that a float argument is merely
+*accepted* as:
+
+```by
+def g[*Ts](*args: *Ts) -> None:
+    assert Ts == (int, float)
+
+g(1, 2.0)
+```
+
+Inference can only fill the step with types that have a runtime spelling at the call site. A class
+local to a function does not, so rather than bind a run naming something the call cannot see, the
+call is rejected and the step has to be written out:
+
+```by
+def h[*Ts](*args: *Ts) -> None:
+    print(Ts)
+
+def make() -> None:
+    class Local: ...
+    # error: [unspecialized-reified-generic]
+    h(Local())
 ```
 
 ## a keyword-variadic pack reifies to its fields

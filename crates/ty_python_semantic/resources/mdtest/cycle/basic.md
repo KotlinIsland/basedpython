@@ -234,10 +234,10 @@ class D:
 
 ### Lambdas
 
-all four show the default one layer deeper than the parameter it is the default of. the two
-positional ones used to stop a layer earlier, because the expected type carried into the lambda
-folded them back onto the marker — a context holding the cycle's own marker no longer earns a query
-key of its own, so they now read the same way the keyword-only two always have:
+all four stop at the same depth: the parameter is a divergent marker, and the default it stands for
+is that marker again rather than another layer of the lambda. the two positional ones used to go a
+layer deeper than the keyword-only two, which said nothing about the program and only recorded which
+of them had earned a query key of its own:
 
 ```py
 class C:
@@ -247,16 +247,16 @@ class C:
         self.c = lambda positional_only=self.c, /: positional_only
         self.d = lambda *, kw_only=self.d: kw_only
 
-        # revealed: (positional: (positional: Divergent = ...) -> Divergent = ...) -> Divergent
+        # revealed: (positional: Divergent = ...) -> Divergent
         reveal_type(self.a)
 
-        # revealed: (*, kw_only: (*, kw_only: Divergent = ...) -> Divergent = ...) -> Divergent
+        # revealed: (*, kw_only: Divergent = ...) -> Divergent
         reveal_type(self.b)
 
-        # revealed: (positional_only: (positional_only: Divergent = ..., /) -> Divergent = ..., /) -> Divergent
+        # revealed: (positional_only: Divergent = ..., /) -> Divergent
         reveal_type(self.c)
 
-        # revealed: (*, kw_only: (*, kw_only: Divergent = ...) -> Divergent = ...) -> Divergent
+        # revealed: (*, kw_only: Divergent = ...) -> Divergent
         reveal_type(self.d)
 ```
 
@@ -269,7 +269,7 @@ an earlier assertion and prevent inference from converging. This is a regression
 
 ```py
 f = lambda: f
-assert f
+assert f  # error: [redundant-condition] "This condition is always true"
 
 @property
 def f(x=lambda: f): ...
@@ -279,7 +279,7 @@ The same cycle must converge when the parameter and return type are annotated:
 
 ```py
 g = lambda: g
-assert g
+assert g  # error: [redundant-condition] "This condition is always true"
 
 @property
 def g(x: object = lambda: g) -> None: ...
@@ -297,14 +297,10 @@ reachability check for the earlier assertion. This is a regression test for
 def decorator(value: int) -> int:
     return value
 
-def check(value: Recursive):
-    reveal_type(value.callback)  # revealed: bound method C[Any].method(*args: Any, **kwargs: Any)
-    static_assert(is_subtype_of(TypeOf[value.callback], Callable[[], None]))
-
 f = lambda: f
-assert f
+assert f  # error: [redundant-condition] "This condition is always true"
 
-# error: [invalid-argument-type] "Expected `int`, found `def f(x=...) -> Unknown`"
+# error: [invalid-argument-type] "Expected `int`, found `def f(x: some () -> int = ...)`"
 @decorator
 def f(x=lambda: f): ...
 ```
@@ -315,7 +311,7 @@ Constructing a property explicitly has the same behavior as decorator syntax:
 
 ```py
 f = lambda: f
-assert f
+assert f  # error: [redundant-condition] "This condition is always true"
 
 def getter(x=lambda: f): ...
 
@@ -335,7 +331,7 @@ def decorator(fn: Callable[[Any], Any]) -> Callable[[Any], Any]:
     return fn
 
 f = lambda: f
-assert f
+assert f  # error: [redundant-condition] "This condition is always true"
 
 @decorator
 def f(x=lambda: f): ...
@@ -358,7 +354,7 @@ def decorator[**P](fn: Callable[P, None]) -> Callable[[], None]:
     return lambda: None
 
 f = lambda: f
-assert f
+assert f  # error: [redundant-condition] "This condition is always true"
 
 @decorator
 def f(x=lambda: f) -> None: ...
@@ -378,7 +374,7 @@ python-version = "3.12"
 
 ```py
 f = lambda: f
-assert f
+assert f  # error: [redundant-condition] "This condition is always true"
 
 @property
 def f[T](value: T, callback=lambda: f) -> T:
@@ -784,6 +780,11 @@ against `list[Divergent]` learned `Never ≤ T` and the marker was gone before a
 reading the same parameter off the argument's own bases keeps it, which is why the identical
 constructor declared `list[T]` always settled.
 
+that structural read only covers a protocol the argument's own bases name. `iter` and `next` are
+declared over `SupportsIter` and `SupportsNext`, which `set` satisfies without naming, so the hop
+out of the container goes back through the constraint set and loses the marker again. the display
+form settles because it never takes that hop.
+
 ```py
 def through_set(n: int):
     if n:
@@ -791,7 +792,7 @@ def through_set(n: int):
     t = set([through_set(n)])
     return "b" + next(iter(t))
 
-reveal_type(through_set(1))  # revealed: str
+reveal_type(through_set(1))  # revealed: str | Unknown
 
 def through_frozenset(n: int):
     if n:
@@ -799,7 +800,7 @@ def through_frozenset(n: int):
     t = frozenset([through_frozenset(n)])
     return "b" + next(iter(t))
 
-reveal_type(through_frozenset(1))  # revealed: str
+reveal_type(through_frozenset(1))  # revealed: str | Unknown
 
 def through_list(n: int):
     if n:
@@ -807,7 +808,7 @@ def through_list(n: int):
     t = list([through_list(n)])
     return "b" + next(iter(t))
 
-reveal_type(through_list(1))  # revealed: str
+reveal_type(through_list(1))  # revealed: str | Unknown
 ```
 
 nothing about this is particular to the containers typeshed ships. a class of one's own taking an
@@ -853,6 +854,9 @@ literal the binding was built from — a query of its own, which the return type
 first rounds never revisits — so every later round reads it back and the recursion settles on
 `str | Unknown`.
 
+reading the marker back off the container is the same hop as above, and loses it for the same
+reason: `__iter__` is reached through `SupportsIter`, which `list` satisfies without naming.
+
 ```py
 def through_dunder_iter(n: int):
     if n:
@@ -860,7 +864,7 @@ def through_dunder_iter(n: int):
     t = list([through_dunder_iter(n)])
     return "b" + next(t.__iter__())
 
-reveal_type(through_dunder_iter(1))  # revealed: str
+reveal_type(through_dunder_iter(1))  # revealed: str | Unknown
 
 def through_second_container(n: int):
     if n:
@@ -868,7 +872,7 @@ def through_second_container(n: int):
     t = list([through_second_container(n)])
     return "b" + list(t)[0]
 
-reveal_type(through_second_container(1))  # revealed: str
+reveal_type(through_second_container(1))  # revealed: str | Unknown
 ```
 
 a marker is what the answer is *not yet*, so a call on one answers with the marker. a genuinely

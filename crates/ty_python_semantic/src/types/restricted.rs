@@ -22,7 +22,7 @@ use ruff_python_ast::helpers::TypeModifier;
 
 use super::class::ClassType;
 use super::variance::{VarianceInferable, VarianceTerm};
-use super::{BoundTypeVarIdentity, KnownClass, Type, TypeVarVariance, visitor};
+use super::{BoundTypeVarIdentity, KnownClass, Type, visitor};
 use crate::Db;
 use crate::types::ProgramEnvironment;
 
@@ -105,7 +105,7 @@ impl<'db> Type<'db> {
     ///
     /// A dynamic type is literal, matching the way gradual types are admissible
     /// against every other restriction in the type system.
-    pub(crate) fn is_literal_type(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
+    fn is_literal_type(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
         match self {
             Type::LiteralValue(_) => true,
             Type::Dynamic(_) | Type::Divergent(_) | Type::Never => true,

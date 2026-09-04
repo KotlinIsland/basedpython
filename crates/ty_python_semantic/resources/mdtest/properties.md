@@ -101,8 +101,8 @@ reveal_type(original)  # revealed: CustomProperty
 reveal_type(updated)  # revealed: CustomProperty
 reveal_type(original.fget)  # revealed: def get_value(obj: object) -> int
 reveal_type(updated.fget)  # revealed: def get_text(obj: object) -> str
-reveal_type(updated.fset)  # revealed: def set_value(obj: object, value: str) -> None
-reveal_type(updated.fdel)  # revealed: def delete_value(obj: object) -> None
+reveal_type(updated.fset)  # revealed: def set_value(obj: object, value: str)
+reveal_type(updated.fdel)  # revealed: def delete_value(obj: object)
 
 class C:
     before = original

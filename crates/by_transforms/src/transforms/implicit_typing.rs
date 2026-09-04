@@ -29,11 +29,11 @@ fn canonical_implicit_name(s: &str) -> Option<&'static str> {
 
 pub(crate) struct ImplicitTyping<'a, T: TypeInfo + ?Sized> {
     types: &'a T,
-    pub(crate) needed: BTreeSet<&'static str>,
+    needed: BTreeSet<&'static str>,
 }
 
 impl<'a, T: TypeInfo + ?Sized> ImplicitTyping<'a, T> {
-    pub(crate) fn new(types: &'a T) -> Self {
+    fn new(types: &'a T) -> Self {
         Self {
             types,
             needed: BTreeSet::new(),

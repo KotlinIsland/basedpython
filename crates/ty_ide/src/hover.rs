@@ -373,18 +373,24 @@ impl<'db> Hover<'db> {
     /// Renders the hover to a string using the specified markup kind.
     pub const fn display<'a>(&'a self, db: &'db dyn Db, kind: MarkupKind) -> impl Display {
         std::fmt::from_fn(move |f| {
-            let mut first = true;
-            let env = ProgramEnvironment::from_file(self.program_file);
-            for content in &self.contents {
-                if !first {
-                    kind.horizontal_line().fmt(f)?;
+            // a hover shows the type as the reader would write it in this file:
+            // `1` in a basedpython file, `Literal[1]` in a python one. the contents
+            // render here rather than where the hover was built, so the file's own
+            // spelling has to be in force at this point too
+            with_display_for_file(db, self.program_file.file(db), || {
+                let mut first = true;
+                let env = ProgramEnvironment::from_file(self.program_file);
+                for content in &self.contents {
+                    if !first {
+                        kind.horizontal_line().fmt(f)?;
+                    }
+
+                    content.display(db, &env, kind).fmt(f)?;
+                    first = false;
                 }
 
-                content.display(db, &env, kind).fmt(f)?;
-                first = false;
-            }
-
-            Ok(())
+                Ok(())
+            })
         })
     }
 
@@ -408,35 +414,6 @@ impl<'a, 'db> IntoIterator for &'a Hover<'db> {
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
-    }
-}
-
-pub struct DisplayHover<'db, 'a> {
-    db: &'db dyn Db,
-    hover: &'a Hover<'db>,
-    kind: MarkupKind,
-}
-
-impl fmt::Display for DisplayHover<'_, '_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let db = self.db;
-        let file = self.hover.program_file;
-        // a hover shows the type as the reader would write it in this file:
-        // `1` in a basedpython file, `Literal[1]` in a python one
-        with_display_for_file(db, file.file(db), || {
-            let mut first = true;
-            let env = ProgramEnvironment::from_file(file);
-            for content in &self.hover.contents {
-                if !first {
-                    self.kind.horizontal_line().fmt(f)?;
-                }
-
-                content.display(db, &env, self.kind).fmt(f)?;
-                first = false;
-            }
-
-            Ok(())
-        })
     }
 }
 

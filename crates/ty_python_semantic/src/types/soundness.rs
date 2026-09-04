@@ -9,7 +9,7 @@
 //! - does this expression's type rest on such an assumption? (the gates:
 //!   [`call_result_is_typevar_derived`], [`is_specialized_generic_instance`])
 //! - can the inferred type be validated with `isinstance` at runtime, and
-//!   what second argument does that check take? ([`runtime_check_target`])
+//!   what second argument does that check take? (`runtime_check_target`)
 
 use ruff_db::files::File;
 
@@ -258,7 +258,7 @@ pub fn is_specialized_generic_instance<'db>(
 /// unsolved typevars) or its name cannot be resolved at module scope in
 /// `file`. the check is deliberately shallow: `list[str]` validates as
 /// `list` — the element claim is validated at its own projection sites
-pub fn runtime_check_target<'db>(
+pub(crate) fn runtime_check_target<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
@@ -272,7 +272,7 @@ pub fn runtime_check_target<'db>(
 /// Prefers a [`CheckKind::Parametric`] deep check when `ty` is a user-defined
 /// generic specialization whose instances carry `__orig_class__` (so the type
 /// arguments are checkable at runtime); otherwise falls back to the shallow
-/// [`CheckKind::Isinstance`] of [`runtime_check_target`]. `None` when neither
+/// [`CheckKind::Isinstance`] of `runtime_check_target`. `None` when neither
 /// applies (no faithful runtime test).
 pub fn runtime_check_plan<'db>(
     db: &'db dyn Db,
@@ -325,7 +325,7 @@ pub fn parameter_runtime_check_plan<'db>(
 /// erased at runtime, so only the origin class can be tested. this is what
 /// separates `list[int]` (a builtin, erased — only `list` is checkable) from
 /// `A[int]` (a user generic, whose instances carry `__orig_class__`)
-pub fn erases_type_arguments<'db>(
+pub(crate) fn erases_type_arguments<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,

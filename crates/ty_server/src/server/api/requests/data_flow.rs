@@ -40,17 +40,17 @@ impl Request for DataFlowRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DataFlowParams {
     /// the file the program is stopped in
-    pub(crate) text_document: TextDocumentIdentifier,
+    text_document: TextDocumentIdentifier,
 
     /// the one-based line it is stopped on
-    pub(crate) line: u32,
+    line: u32,
 
     /// what the debugger observed, one entry per name
     ///
     /// only observations the client is willing to stand behind belong here. a debugger that
     /// reports how long a reading stays true — as `bpd` does — is the thing that decides which
     /// ones those are; the server takes what it is given
-    pub(crate) observations: Vec<WireObservation>,
+    observations: Vec<WireObservation>,
 }
 
 /// one observation, in the shape a client sends it
@@ -66,11 +66,11 @@ pub(crate) struct DataFlowParams {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WireObservation {
     /// the name, or a dotted path such as `self.limit`
-    pub(crate) name: String,
+    name: String,
 
     /// what was seen. exactly one of these is set; anything else is refused
     #[serde(flatten)]
-    pub(crate) observed: WireObserved,
+    observed: WireObserved,
 }
 
 /// what was read off the value
@@ -144,21 +144,21 @@ impl WireObservation {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DataFlowFinding {
     /// where in the document
-    pub(crate) range: lsp_types::Range,
+    range: lsp_types::Range,
     /// what kind of finding: `condition`, `unreachable` or `value`
-    pub(crate) kind: String,
+    kind: String,
     /// which way a condition goes. absent for anything else
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) taken: Option<bool>,
+    taken: Option<bool>,
     /// what a decided read will find, written the way a source writes it. absent for anything else
     ///
     /// carried beside [`label`](Self::label), which already spells it, because a client that wants
     /// to do anything but draw the label — colour by value, offer it for a copy — should not have
     /// to take a string written for a human back apart
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) value: Option<String>,
+    value: Option<String>,
     /// what to draw beside the source
-    pub(crate) label: String,
+    label: String,
 }
 
 pub(crate) struct DataFlowRequestHandler;

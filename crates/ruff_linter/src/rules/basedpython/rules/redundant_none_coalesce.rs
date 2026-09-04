@@ -5,8 +5,8 @@ use ruff_python_ast::helpers::contains_effect;
 use ruff_python_ast::{self as ast, Operator};
 use ruff_text_size::Ranged;
 
-use crate::codes::Category;
 use crate::checkers::ast::Checker;
+use crate::codes::Category;
 use crate::{AlwaysFixableViolation, Edit, Fix};
 
 /// ## What it does

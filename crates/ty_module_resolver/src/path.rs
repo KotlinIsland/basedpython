@@ -709,7 +709,7 @@ impl SearchPath {
     }
 
     /// Is it plausible that this search path contains third-party code?
-    pub fn can_contain_third_party_code(&self) -> bool {
+    pub(crate) fn can_contain_third_party_code(&self) -> bool {
         match &*self.0 {
             SearchPathInner::SitePackages(_)
             | SearchPathInner::Editable(_)
@@ -723,7 +723,7 @@ impl SearchPath {
 
     /// basedpython: did this search path come from *installing* a distribution?
     ///
-    /// This is the narrow half of [`Self::can_contain_third_party_code`]. An extra search path
+    /// This is the narrow half of `can_contain_third_party_code`. An extra search path
     /// can hold either an installed package or code the project simply keeps elsewhere, so a
     /// diagnostic that talks about what a user has installed — telling them to `pip install` a
     /// stubs distribution, say — must not fire on one.

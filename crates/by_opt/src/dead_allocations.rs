@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use by_ir::function::{Function, ModuleIr};
 use by_ir::ops::{Op, RegisterId, Value};
 
-pub fn run(module: &mut ModuleIr) {
+pub(crate) fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
         // bounded by the op count: every round removes at least one op, or stops
         while drop_unread(function) {}

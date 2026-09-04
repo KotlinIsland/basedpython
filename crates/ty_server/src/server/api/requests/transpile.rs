@@ -37,11 +37,11 @@ impl Request for TranspileRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TranspileParams {
     /// The document to transpile. Its *buffer* — what the editor holds, which is the point.
-    pub(crate) text_document: TextDocumentIdentifier,
+    text_document: TextDocumentIdentifier,
 
     /// When true, go the other way: python in, basedpython out.
     #[serde(default)]
-    pub(crate) reverse: bool,
+    reverse: bool,
 
     /// Text to transpile instead of the document's own.
     ///
@@ -51,7 +51,7 @@ pub(crate) struct TranspileParams {
     /// document the fragment came from, because that is what routes the request to a server; the
     /// fragment is checked on its own, which is all a fragment can be.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) source: Option<String>,
+    source: Option<String>,
 }
 
 /// What came out, or why nothing did.
@@ -64,11 +64,11 @@ pub(crate) struct TranspileParams {
 pub(crate) struct TranspileResponse {
     /// The generated source, absent when the transpile failed.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) source: Option<String>,
+    source: Option<String>,
 
     /// Why it failed, absent when it did not.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) error: Option<String>,
+    error: Option<String>,
 }
 
 impl TranspileResponse {

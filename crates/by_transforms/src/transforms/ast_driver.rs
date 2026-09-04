@@ -157,14 +157,14 @@ pub(crate) trait TypeAwarePass {
 /// changed. The transformer must record its mutation status into the
 /// supplied `Cell<bool>`; the adapter resets the cell per statement.
 pub(crate) struct VisitorPass<'a, T: Transformer> {
-    pub(crate) inner: &'a T,
-    pub(crate) changed_cell: &'a std::cell::Cell<bool>,
-    pub(crate) imports: Vec<String>,
-    pub(crate) hoist: RefCell<Vec<(usize, Stmt)>>,
+    inner: &'a T,
+    changed_cell: &'a std::cell::Cell<bool>,
+    imports: Vec<String>,
+    hoist: RefCell<Vec<(usize, Stmt)>>,
     /// Sub-statement text edits the pass wants the driver to apply. Pass
     /// computes the new sub-AST, renders it via [`render_expr`], and pushes
     /// `(original_range, replacement)` here
-    pub(crate) text_edits: RefCell<Vec<(TextRange, String)>>,
+    text_edits: RefCell<Vec<(TextRange, String)>>,
 }
 
 impl<T: Transformer> AstPass for VisitorPass<'_, T> {

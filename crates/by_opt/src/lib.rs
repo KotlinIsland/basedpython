@@ -5,33 +5,33 @@
 //! is a bug that would otherwise surface as miscompiled C rather than as an
 //! error.
 
-pub mod borrow;
+pub(crate) mod borrow;
 mod coalesce;
-pub mod copy_propagation;
-pub mod dead_allocations;
-pub mod dead_registers;
-pub mod dict_find;
-pub mod fold;
-pub mod infallible;
-pub mod refcount;
-pub mod str_append;
-pub mod str_concat_int;
-pub mod str_item_compare;
-pub mod str_of_int;
-pub mod unbox_counters;
+pub(crate) mod copy_propagation;
+mod dead_allocations;
+pub(crate) mod dead_registers;
+pub(crate) mod dict_find;
+pub(crate) mod fold;
+pub(crate) mod infallible;
+pub(crate) mod refcount;
+pub(crate) mod str_append;
+mod str_concat_int;
+pub(crate) mod str_item_compare;
+mod str_of_int;
+pub(crate) mod unbox_counters;
 mod unswitch;
 
 use by_ir::function::ModuleIr;
 use by_ir::verify::{VerifyError, verify_module};
 
 /// one named pass over a module
-pub struct Pass {
-    pub name: &'static str,
-    pub run: fn(&mut ModuleIr),
+struct Pass {
+    name: &'static str,
+    run: fn(&mut ModuleIr),
 }
 
 /// the passes, in order
-pub const PASSES: &[Pass] = &[
+const PASSES: &[Pass] = &[
     Pass {
         name: "copy-propagation",
         run: copy_propagation::run,

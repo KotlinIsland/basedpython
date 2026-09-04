@@ -79,9 +79,9 @@ mod assumed;
 pub use assumed::stop_offset;
 mod db;
 pub mod dependencies;
+pub mod dependency;
 pub mod django_settings;
 pub mod django_template;
-pub mod dependency;
 mod dunder_all;
 mod fixes;
 mod lexical_name_path;
@@ -453,11 +453,11 @@ pub fn check_file_unwrap(db: &dyn Db, file: ProgramFile<'_>) -> Vec<Diagnostic> 
         .unwrap_or_else(|error| vec![error])
 }
 
-pub fn check_file(db: &dyn Db, file: ProgramFile<'_>) -> Result<Box<[Diagnostic]>, Diagnostic> {
+fn check_file(db: &dyn Db, file: ProgramFile<'_>) -> Result<Box<[Diagnostic]>, Diagnostic> {
     check_file_with(db, file, Vec::new())
 }
 
-/// [`check_file`], with lint diagnostics worked out elsewhere folded in.
+/// `check_file`, with lint diagnostics worked out elsewhere folded in.
 ///
 /// `external` are diagnostics about `file` that this crate cannot compute — the
 /// django route checks read the project's whole url tree, which is not something

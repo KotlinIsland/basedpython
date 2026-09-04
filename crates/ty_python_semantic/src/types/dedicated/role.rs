@@ -71,7 +71,7 @@ pub fn class_body_annotation_is_semantic<'db>(db: &'db dyn Db, class: ClassLiter
 /// the kind of pytest function whose parameters pytest fills from the fixture
 /// registry — the parallel of [`FrameworkRole`] for function-level frameworks
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue, get_size2::GetSize)]
-pub enum FunctionFrameworkRole {
+pub(crate) enum FunctionFrameworkRole {
     /// a pytest fixture — a function decorated with `@pytest.fixture`
     PytestFixture,
     /// a pytest test — a `test*` function in a collected test file

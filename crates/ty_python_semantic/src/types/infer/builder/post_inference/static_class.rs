@@ -764,7 +764,10 @@ pub(crate) fn check_static_class_definitions<'db>(
                     ];
                     let settings = DisplaySettings::from_possibly_ambiguous_types(db, env, types);
                     let base = if let ClassBase::Class(base) = base2 {
-                        Either::Left(base.class_literal(db).display_with(db, env, settings.clone()))
+                        Either::Left(
+                            base.class_literal(db)
+                                .display_with(db, env, settings.clone()),
+                        )
                     } else {
                         Either::Right(base2.display_with(db, env, settings.clone()))
                     };
@@ -775,10 +778,12 @@ pub(crate) fn check_static_class_definitions<'db>(
                             and `{metaclass_of_base}` (metaclass of base class `{base}`) \
                             have no subclass relationship",
                         class = ClassLiteral::Static(class).display_with(db, env, settings.clone()),
-                        metaclass_of_class = metaclass1
-                            .class_literal(db)
-                            .display_with(db, env, settings.clone()),
-                        metaclass_of_base = metaclass2.class_literal(db).display_with(db, env, settings),
+                        metaclass_of_class =
+                            metaclass1
+                                .class_literal(db)
+                                .display_with(db, env, settings.clone()),
+                        metaclass_of_base =
+                            metaclass2.class_literal(db).display_with(db, env, settings),
                     ));
                 }
             }
@@ -1216,7 +1221,9 @@ pub(crate) fn check_static_class_definitions<'db>(
 /// type and so pins it to invariance.
 ///
 /// An incompatible *base class* is reported against that base, so this only looks at the
-/// variance the class's own members require ([`StaticClassLiteral::own_variance_of`]).
+/// variance the class's own non-method members require
+/// ([`StaticClassLiteral::own_non_method_variance_of`]) — a method that contradicts its class's
+/// declared variance is reported against the method itself.
 fn check_declared_variance_usage<'db>(
     context: &InferContext<'db, '_>,
     class: StaticClassLiteral<'db>,
@@ -1228,6 +1235,21 @@ fn check_declared_variance_usage<'db>(
         return;
     };
 
+    // A protocol's variance is judged against its structural interface, and a mismatch there is
+    // already reported as `invalid-protocol`. The member walk below reads the class body instead,
+    // where a decorated or property member looks like a mutable attribute and so demands
+    // invariance that the protocol itself never requires.
+    if class.is_protocol(db) {
+        return;
+    }
+
+    // A `TypedDict`'s variance follows from its items, and the typing spec does not ask for
+    // this check on one — no other checker reports it either. Reading the class body instead
+    // would call every item a mutable attribute and demand invariance.
+    if class.is_typed_dict(db) {
+        return;
+    }
+
     for bound_typevar in generic_context.variables(db) {
         let typevar = bound_typevar.typevar(db);
         // An invariant declaration accepts every usage, and an inferred variance is by
@@ -1238,7 +1260,7 @@ fn check_declared_variance_usage<'db>(
             continue;
         };
 
-        let required_variance = class.own_variance_of(db, bound_typevar.identity(db));
+        let required_variance = class.own_non_method_variance_of(db, bound_typevar.identity(db));
         if declared_variance.join(required_variance) == declared_variance {
             continue;
         }

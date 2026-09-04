@@ -262,7 +262,7 @@ pub(crate) fn iterator_field(index: usize) -> String {
 /// an `async for` needs *two*: the asynchronous iterator itself, and the
 /// delegation that awaits each step, which is synthesized rather than written and
 /// so is not among the `await` expressions counted below
-pub(crate) fn for_loops(body: &[Stmt]) -> usize {
+fn for_loops(body: &[Stmt]) -> usize {
     let loops: usize = crate::walk(body)
         .into_iter()
         .map(|stmt| match stmt {

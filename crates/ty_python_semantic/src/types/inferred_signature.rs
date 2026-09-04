@@ -46,7 +46,7 @@ use crate::types::typevar::{
     TypeVarInstance, TypeVarKind,
 };
 use crate::types::{
-    IntersectionBuilder, KnownClass, Type, TypeContext, UnionType, infer_deferred_types,
+    IntersectionBuilder, KnownClass, Type, TypeContext, UnionType, infer_function_default_types,
     infer_scope_types,
 };
 
@@ -76,7 +76,7 @@ pub(crate) fn inferred_return_type<'db>(
 ) -> Type<'db> {
     let env = &ProgramEnvironment::from_file(overload.program_file(db));
     let file = overload.file(db);
-    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    let module = parsed_module(db, overload.python_file(db)).load(db);
     let node = overload.node(db, file, &module);
     let body_scope = overload.body_scope(db);
     let index = semantic_index(db, db.program_file(file));
@@ -199,7 +199,7 @@ pub(crate) fn return_type_from_body<'db>(
 /// builds the same one. Both its bound and its default are lazy, which is what
 /// lets the bound be read out of a body that is itself typed in terms of this
 /// hole.
-pub(crate) fn inferred_parameter_typevar<'db>(
+fn inferred_parameter_typevar<'db>(
     db: &'db dyn Db,
     name: &Name,
     parameter: Definition<'db>,
@@ -255,7 +255,7 @@ pub(crate) fn inferred_parameter_type<'db>(
 }
 
 /// The definition of the function `parameter` belongs to.
-pub(crate) fn parameter_function_definition<'db>(
+fn parameter_function_definition<'db>(
     db: &'db dyn Db,
     parameter: Definition<'db>,
 ) -> Option<Definition<'db>> {
@@ -288,10 +288,10 @@ pub(crate) fn inferred_parameter_default<'db>(
     let default = node.node(&module).default.as_deref()?;
     let function = parameter_function_definition(db, parameter)?;
 
-    // defaults are always deferred, so this goes straight to the deferred inference the
-    // same way the rest of the signature does
+    // a default is inferred in a region of its own, separate from the rest of the signature,
+    // so that changing one does not invalidate everything that reads the signature
     Some(
-        infer_deferred_types(db, function)
+        infer_function_default_types(db, function)
             .expression_type(default)
             .replace_parameter_defaults(db, env),
     )
@@ -496,15 +496,18 @@ pub(crate) fn body_parameter_constraints<'db>(
 ) -> ParameterConstraints<'db> {
     let env = &ProgramEnvironment::from_definition(function);
     let file = function.file(db);
-    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
-    let index = semantic_index(db, db.program_file(file));
+    // the definition's own program, not the one `db.program_file(file)` answers for the
+    // file: those part company for a vendored stub reached from a pep 723 script
+    let program_file = function.program_file(db);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let index = semantic_index(db, program_file);
     let DefinitionKind::Function(function_kind) = function.kind(db) else {
         return ParameterConstraints::default();
     };
     let node = function_kind.node(&module);
     let Some(body_scope) = index
         .try_node_scope(NodeWithScopeRef::Function(node))
-        .map(|scope| scope.to_scope_id(db, db.program_file(file)))
+        .map(|scope| scope.to_scope_id(db, program_file))
     else {
         return ParameterConstraints::default();
     };

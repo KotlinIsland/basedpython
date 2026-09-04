@@ -100,7 +100,7 @@ impl ExceptionEffects<'_> {
 
 /// The exceptions a call to `overload` can raise: its declared `raises` clause
 /// when it has one, and otherwise the set inferred from its body.
-pub(crate) fn raised_exceptions<'db>(db: &'db dyn Db, overload: OverloadLiteral<'db>) -> Type<'db> {
+fn raised_exceptions<'db>(db: &'db dyn Db, overload: OverloadLiteral<'db>) -> Type<'db> {
     declared_exceptions(db, overload).unwrap_or_else(|| inferred_exceptions(db, overload))
 }
 
@@ -143,7 +143,7 @@ pub(crate) fn declared_exceptions<'db>(
     if !file.source_type(db).is_basedpython() {
         return None;
     }
-    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    let module = parsed_module(db, overload.python_file(db)).load(db);
     let raises = overload.node(db, file, &module).raises.as_deref()?;
 
     if raises.is_ellipsis_literal_expr() {
@@ -191,7 +191,7 @@ pub(crate) fn body_exception_effects<'db>(
     if !file.source_type(db).is_basedpython() {
         return ExceptionEffects::default();
     }
-    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    let module = parsed_module(db, overload.python_file(db)).load(db);
     let node = overload.node(db, file, &module);
     let inference = infer_scope_types(db, overload.body_scope(db), TypeContext::default());
 
@@ -199,7 +199,7 @@ pub(crate) fn body_exception_effects<'db>(
 }
 
 /// Union the exceptions escaping `effects`, following each call into its callee.
-pub(crate) fn resolve_effects<'db>(
+fn resolve_effects<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     effects: &ExceptionEffects<'db>,
@@ -221,7 +221,7 @@ pub(crate) fn resolve_effects<'db>(
 /// is known: a directly recursive call contributes exactly the set being
 /// computed, so it is the identity of the union and can be dropped rather than
 /// re-entered.
-pub(crate) fn escaping_sites<'db>(
+fn escaping_sites<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     effects: &ExceptionEffects<'db>,
@@ -261,7 +261,7 @@ pub(crate) fn escaping_sites<'db>(
 /// A union is filtered element-wise, so `except TypeError` around code raising
 /// `TypeError | ValueError` leaves `ValueError` behind rather than nothing or
 /// everything.
-pub(crate) fn escaping<'db>(
+fn escaping<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     raised: Type<'db>,
@@ -289,7 +289,7 @@ pub(crate) fn escaping<'db>(
 }
 
 /// The members of `ty` when it is a union, and `ty` itself otherwise.
-pub(crate) fn union_elements<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Type<'db>> {
+fn union_elements<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Type<'db>> {
     match ty {
         Type::Union(union) => union.elements(db).to_vec(),
         _ => vec![ty],
@@ -301,7 +301,7 @@ pub(crate) fn union_elements<'db>(db: &'db dyn Db, ty: Type<'db>) -> Vec<Type<'d
 /// `expression_type` supplies inferred types for expressions in the body. It is
 /// a callback so that the check for the function currently being inferred can
 /// read that in-progress inference rather than re-entering it as a query.
-pub(crate) fn collect_exception_effects<'db>(
+fn collect_exception_effects<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     body: &[Stmt],

@@ -1,12 +1,11 @@
 use crate::Db;
 use crate::ProgramEnvironment;
-use crate::place::Place;
 use crate::reified::{UnansweredReason, reified_class_reads};
 use crate::types::diagnostic::{INVALID_VARIANCE_DECLARATION, REIFIED_WITHOUT_RECEIVER};
 use crate::types::{
     CallArguments, ClassLiteralFlags, DataclassFlags, DataclassParams, KnownClass,
-    KnownInstanceType, MemberLookupPolicy, SpecialFormType, StaticClassLiteral, SubclassOfType,
-    Type, TypeContext, TypingModule,
+    KnownInstanceType, SpecialFormType, StaticClassLiteral, SubclassOfType, Type, TypeContext,
+    TypingModule,
     call::CallError,
     function::KnownFunction,
     infer::{

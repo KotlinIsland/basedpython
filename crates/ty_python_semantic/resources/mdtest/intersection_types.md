@@ -1093,13 +1093,13 @@ class UsesNew:
 def _(cls: type[UsesInit]) -> None:
     if issubclass(cls, UsesNew):
         reveal_type(cls)  # revealed: type[UsesInit] & type[UsesNew]
-        # error: [invalid-argument-type] "class `UsesNew`"
+        # error: [invalid-argument-type] "Argument to constructor `UsesNew.__new__` is incorrect: Expected `str`, found `None`"
         # snapshot: invalid-argument-type
         cls(None)
 ```
 
 ```snapshot
-error[invalid-argument-type]: Argument to class `UsesInit` is incorrect
+error[invalid-argument-type]: Argument to `UsesInit.__init__` is incorrect
   --> src/mdtest_snippet.py:15:13
    |
 15 |         cls(None)

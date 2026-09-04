@@ -133,9 +133,9 @@ pub(crate) struct AnonNamedTuple<'src> {
     pub(crate) needs_import: bool,
     /// Modules a field type names that the source never imported. A shape is
     /// built through `&self`, so this collects behind a cell
-    pub(crate) type_only_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    type_only_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// `typing` names a field type reads that the source never imported
-    pub(crate) typing_names: std::cell::RefCell<std::collections::BTreeSet<&'static str>>,
+    typing_names: std::cell::RefCell<std::collections::BTreeSet<&'static str>>,
     /// Active function-scope return-annotation shape stack. Empty when not
     /// inside a function. The innermost (last) entry governs how a `return`
     /// statement inside the current function is coerced.

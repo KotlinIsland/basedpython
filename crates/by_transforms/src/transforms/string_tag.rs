@@ -43,7 +43,7 @@ use super::ast_driver::{AstPass, Fragment, PassContext};
 /// `Template.interpolations` is the replacement fields, and `Template.values`
 /// is their evaluated values. iterating a `Template` yields the segments and
 /// interpolations interleaved in source order, the same as the stdlib type
-pub(crate) const TEMPLATE_RUNTIME: &str = "\
+const TEMPLATE_RUNTIME: &str = "\
 class _Interpolation:
     def __init__(self, value, expression, conversion=None, format_spec=\"\"):
         self.value = value

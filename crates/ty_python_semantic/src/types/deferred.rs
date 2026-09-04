@@ -39,11 +39,10 @@ use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
 
 use super::Type;
-use super::infer::{
-    deferred_comparison, fold_tuple_concat, fold_tuple_repeat, literal_binary_op,
-    literal_unary_op,
-};
 use super::infer::builder::binary_expressions::BinaryInferenceState;
+use super::infer::{
+    deferred_comparison, fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
+};
 use super::visitor::{self, any_over_type};
 use crate::types::ProgramEnvironment;
 use crate::types::call::CallArguments;
@@ -116,7 +115,7 @@ impl DeferredOperation {
     /// the bound's member before specialization, a `type def` reduces to its declared return
     /// type — the annotation its author wrote to make it checkable — and a match type
     /// reduces to a gradual type because which case applies is the whole question.
-    pub(crate) const fn is_checked(&self) -> bool {
+    const fn is_checked(&self) -> bool {
         self.is_checked_arithmetic() || matches!(self, DeferredOperation::Call)
     }
 
@@ -521,16 +520,19 @@ fn evaluate<'db>(
                 true,
                 &mut BinaryInferenceState::default(),
             )
-                // the same tuple folds the value inferrer applies: without them
-                // `(X,) * Dim` would re-evaluate through typeshed's `tuple.__mul__` and
-                // widen to `tuple[X, ...]`, throwing away the length the fold just learned
-                .or_else(|| match op {
-                    ast::Operator::Mult => fold_tuple_repeat(db, env, *left, *right)
-                        .or_else(|| fold_tuple_repeat(db, env, *right, *left)),
-                    ast::Operator::Add => fold_tuple_concat(db, env, *left, *right),
-                    _ => None,
-                })
-                .or_else(|| Type::try_call_bin_op_result(db, env, *left, op, *right).map(|result| result.return_type))
+            // the same tuple folds the value inferrer applies: without them
+            // `(X,) * Dim` would re-evaluate through typeshed's `tuple.__mul__` and
+            // widen to `tuple[X, ...]`, throwing away the length the fold just learned
+            .or_else(|| match op {
+                ast::Operator::Mult => fold_tuple_repeat(db, env, *left, *right)
+                    .or_else(|| fold_tuple_repeat(db, env, *right, *left)),
+                ast::Operator::Add => fold_tuple_concat(db, env, *left, *right),
+                _ => None,
+            })
+            .or_else(|| {
+                Type::try_call_bin_op_result(db, env, *left, op, *right)
+                    .map(|result| result.return_type)
+            })
         }
         DeferredOperation::Attribute(ref name) => {
             let [receiver] = operands else { return None };

@@ -346,9 +346,9 @@ mod tests {
         let subtypes = test.subtypes();
         insta::assert_snapshot!(snapshot(&test.db, &subtypes), @"
         vendored://stdlib/email/headerregistry.byi:698:708 BaseHeader :: email.headerregistry
-        vendored://stdlib/enum.byi:17905:17912 StrEnum :: enum
+        vendored://stdlib/enum.byi:17901:17908 StrEnum :: enum
         vendored://stdlib/pdb.byi:37873:37878 _rstr :: pdb
-        vendored://stdlib/ty_extensions/__init__.pyi:9222:9231 Character :: ty_extensions
+        vendored://stdlib/ty_extensions/__init__.pyi:9260:9269 Character :: ty_extensions
         vendored://stdlib/xxlimited.byi:98:101 Str :: xxlimited
         ");
     }
@@ -379,10 +379,10 @@ mod tests {
         let subtypes = test.subtypes();
         insta::assert_snapshot!(snapshot(&test.db, &subtypes), @"
         vendored://stdlib/email/headerregistry.byi:698:708 BaseHeader :: email.headerregistry
-        vendored://stdlib/enum.byi:17905:17912 StrEnum :: enum
+        vendored://stdlib/enum.byi:17901:17908 StrEnum :: enum
         /main.py:77:89 MyEventTypeA :: main
         vendored://stdlib/pdb.byi:37873:37878 _rstr :: pdb
-        vendored://stdlib/ty_extensions/__init__.pyi:9222:9231 Character :: ty_extensions
+        vendored://stdlib/ty_extensions/__init__.pyi:9260:9269 Character :: ty_extensions
         vendored://stdlib/xxlimited.byi:98:101 Str :: xxlimited
         ");
     }
@@ -505,7 +505,7 @@ mod tests {
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:97123:97128 tuple :: builtins",
+            @"vendored://stdlib/builtins.byi:97124:97129 tuple :: builtins",
         );
     }
 

@@ -376,7 +376,7 @@ def _(x: int | None, flag: bool):
 needs_inference: Final = True
 
 def _(x: int | None):
-    if needs_inference:
+    if needs_inference:  # error: [redundant-condition] "This condition is always true"
         if x is None:
             return
         reveal_type(x)  # revealed: int
@@ -398,7 +398,7 @@ def _(x: int | None):
 
 def _(x: int | None):
     if x is None:
-        if needs_inference:
+        if needs_inference:  # error: [redundant-condition] "This condition is always true"
             return
 
     reveal_type(x)  # revealed: int

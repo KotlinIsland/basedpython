@@ -3695,8 +3695,8 @@ pub(crate) enum DjangoClassKind {
 /// class name's own range is unique within the file that declares it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize)]
 pub(crate) struct ClassRef {
-    pub(crate) file: File,
-    pub(crate) range: TextRange,
+    file: File,
+    range: TextRange,
 }
 
 /// a class django gives a role to
@@ -3884,13 +3884,13 @@ fn is_djangos_own(db: &dyn Db, file: File) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 pub(crate) struct AdminRegistrations {
     /// the admin classes registered
-    pub(crate) registered: Box<[ClassRef]>,
+    registered: Box<[ClassRef]>,
     /// whether every registration was read in full
     ///
     /// a registration whose model or whose admin class could not be worked out
     /// leaves a class registered that nothing here will ever match, which is
     /// exactly the state in which a "nothing registers this" would be wrong.
-    pub(crate) complete: bool,
+    complete: bool,
 }
 
 impl Default for AdminRegistrations {

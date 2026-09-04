@@ -1079,7 +1079,7 @@ impl<'db> DefinitionKind<'db> {
     /// (several of them share one statement expression, and the node they are
     /// keyed on may already carry a definition of its own — a walrus in tail
     /// position, say).
-    pub const fn is_statement_expression_value(&self) -> bool {
+    pub(crate) const fn is_statement_expression_value(&self) -> bool {
         matches!(self, DefinitionKind::StatementExpressionValue(_))
     }
 
@@ -1354,7 +1354,7 @@ impl<'db> MatchPatternDefinitionKind<'db> {
     /// basedpython: whether this is a bare `case A:` whose name type checking may
     /// yet resolve to an enum member of the subject, in which case the pattern is
     /// a value pattern and binds nothing.
-    pub fn is_case_name(&self) -> bool {
+    pub(crate) fn is_case_name(&self) -> bool {
         self.is_case_name
     }
 }

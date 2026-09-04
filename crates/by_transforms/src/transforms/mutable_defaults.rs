@@ -220,7 +220,7 @@ fn body_cannot_evaluate(default: &Expr) -> bool {
 
 /// Whether `f` is an `init(…)` shorthand whose whole body the parser
 /// synthesized — the source wrote none of it, so there is nothing to anchor to.
-pub(crate) fn is_bodyless_init_shorthand(f: &StmtFunctionDef) -> bool {
+fn is_bodyless_init_shorthand(f: &StmtFunctionDef) -> bool {
     f.decorator_list
         .iter()
         .any(|d| matches!(&d.expression, Expr::Name(n) if n.id.as_str() == "__init_method__"))

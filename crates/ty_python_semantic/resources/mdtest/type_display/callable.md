@@ -96,7 +96,7 @@ def mixed(
     **kwargs: bytes,
 ) -> None: ...
 
-# revealed: def mixed(prefix: bytes, /, label: str, *args: *tuple[bool, *tuple[int, ...], bytes, str], flag: bool = False, **kwargs: bytes) -> None
+# revealed: def mixed(prefix: bytes, /, label: str, *args: *tuple[bool, *tuple[int, ...], bytes, str], flag: bool = False, **kwargs: bytes)
 reveal_type(mixed)
 ```
 

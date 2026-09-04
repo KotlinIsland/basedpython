@@ -47,11 +47,11 @@ use crate::types::{MemberLookupPolicy, Type, TypeContext};
 use ty_module_resolver::ImportingFile;
 
 /// the classmethod on a target that converts a value of some other type
-pub(crate) const FROM: &str = "__from__";
+const FROM: &str = "__from__";
 /// the method on a source that converts it into the type it returns
-pub(crate) const INTO: &str = "__into__";
+const INTO: &str = "__into__";
 /// the classmethod on a target that converts a *literal*
-pub(crate) const OF: &str = "__of__";
+const OF: &str = "__of__";
 
 /// every conversion dunder, for the declaration-site validation
 pub(crate) const CONVERSION_DUNDERS: [&str; 3] = [FROM, INTO, OF];
@@ -117,11 +117,11 @@ impl<'db> Route<'db> {
 /// a conversion the checker found for an assignment that would otherwise fail
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConversionRepair<'db> {
-    pub(crate) route: Route<'db>,
+    route: Route<'db>,
     /// every *other* applicable route — an ambiguity the checker reports at the
     /// site. all of them, not just the runner-up: a site served by three
     /// conversions should not have to be fixed one report at a time
-    pub(crate) ambiguous_with: Vec<Route<'db>>,
+    ambiguous_with: Vec<Route<'db>>,
 }
 
 /// would an in-scope conversion make `source` assignable to `target`?
@@ -451,7 +451,7 @@ fn source_declares_into<'db>(
 
 /// the `__from__` / `__of__` declared on `class`, when it is the classmethod the
 /// lowered call needs
-pub(crate) fn conversion_classmethod<'db>(
+fn conversion_classmethod<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     class: ClassType<'db>,
@@ -470,7 +470,7 @@ pub(crate) fn conversion_classmethod<'db>(
 /// the `__into__` declared on `class`, when it is the plain instance method the
 /// lowered `x.__into__()` needs. an overloaded one is rejected: the call carries
 /// no target, so there would be nothing to dispatch on at runtime
-pub(crate) fn conversion_method<'db>(
+fn conversion_method<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     class: ClassType<'db>,
@@ -542,7 +542,7 @@ pub(crate) fn may_convert<'db>(
 /// the elements need not be literals (`[1, 2, foo()]` is a list display). a
 /// comprehension is not one: its contents come from another collection, which is
 /// the line element-wise conversion is drawn on
-pub(crate) fn is_literal_expression(expr: &ast::Expr) -> bool {
+fn is_literal_expression(expr: &ast::Expr) -> bool {
     matches!(
         expr,
         ast::Expr::NoneLiteral(_)
@@ -772,7 +772,7 @@ pub(crate) fn function_declared_return_type<'db>(
 /// `None` for anything else — including a literal containing an unpack
 /// (`[*bs]`, `{**d}`), whose elements come from another collection and so have no
 /// expression of their own at this site
-pub(crate) fn addressable_elements(value: &ast::Expr) -> Option<Vec<&ast::Expr>> {
+fn addressable_elements(value: &ast::Expr) -> Option<Vec<&ast::Expr>> {
     fn plain(elements: &[ast::Expr]) -> Option<Vec<&ast::Expr>> {
         elements
             .iter()
@@ -799,7 +799,7 @@ pub(crate) fn addressable_elements(value: &ast::Expr) -> Option<Vec<&ast::Expr>>
 
 /// the type a declared collection's elements must satisfy: a mapping's *value*
 /// type, else what iterating the declared type yields
-pub(crate) fn declared_element_type<'db>(
+fn declared_element_type<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     declared: Type<'db>,
@@ -1389,9 +1389,7 @@ fn arity_after_receiver(parameters: &Parameters<'_>) -> (usize, bool) {
     let rest = || parameters.iter().skip(1);
     let required = rest()
         .filter(|parameter| {
-            !parameter.has_default()
-                && !parameter.is_variadic()
-                && !parameter.is_keyword_variadic()
+            !parameter.has_default() && !parameter.is_variadic() && !parameter.is_keyword_variadic()
         })
         .count();
     let takes_positional =

@@ -1,12 +1,24 @@
 use std::collections::VecDeque;
 
+use ruff_db::parsed::parsed_module;
 use ruff_python_ast::{self as ast, helpers::any_over_expr};
-use ruff_text_size::TextRange;
+use ruff_text_size::{Ranged, TextRange};
+use rustc_hash::FxHashSet;
 use ty_module_resolver::KnownModule;
+use ty_python_core::definition::{Definition, DefinitionKind};
+use ty_python_core::predicate::PatternSubject;
+use ty_python_core::scope::ScopeId;
+use ty_python_core::{ProgramFile, place_table, semantic_index, use_def_map};
 use ty_python_core::{Truthiness, place::PlaceExpr};
 
 use crate::place::Place;
 use crate::types::ProgramEnvironment;
+use crate::types::TypeContext;
+use crate::types::definition_expression_type;
+use crate::types::definition_resolution::{
+    ImportAliasResolution, ResolvedDefinition, scoped_definitions_for_name,
+};
+use crate::types::infer::infer_scope_types;
 use crate::types::{
     ClassLiteral, IntersectionBuilder, KnownClass, Type,
     diagnostic::{OVERLAPPING_CONDITION, REDUNDANT_BOOLEAN_COMPARISON, REDUNDANT_CONDITION},
@@ -96,6 +108,361 @@ impl ConditionPolarity {
             Self::Falsy => Type::AlwaysTruthy,
         }
     }
+}
+
+/// The scope an expression was written in, which is where its type was worked out.
+fn expression_scope<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    expr: &ast::Expr,
+) -> ScopeId<'db> {
+    semantic_index(db, file)
+        .expression_scope_id(expr)
+        .to_scope_id(db, file)
+}
+
+/// Where an expression's type is to be found.
+///
+/// A definition's own value is typed by that definition — which is also what reaches an expression
+/// it borrows from an enclosing scope, such as a comprehension's first iterable. A statement
+/// *around* a definition belongs to no definition of its own, so its scope answers for it.
+#[derive(Debug, Clone, Copy)]
+enum ExpressionTypes<'db> {
+    Of(Definition<'db>),
+    InScope(ProgramFile<'db>),
+}
+
+impl<'db> ExpressionTypes<'db> {
+    fn file(self, db: &'db dyn Db) -> ProgramFile<'db> {
+        match self {
+            Self::Of(definition) => definition.program_file(db),
+            Self::InScope(file) => file,
+        }
+    }
+
+    fn of(self, db: &'db dyn Db, expr: &ast::Expr) -> Type<'db> {
+        if let Self::Of(definition) = self {
+            let ty = definition_expression_type(db, definition, expr);
+            if !ty.is_unknown() {
+                return ty;
+            }
+            // an unpacked assignment evaluates its right-hand side once, on its own, so the
+            // targets sharing it do not carry the parts — the scope that ran it does
+        }
+        let file = self.file(db);
+        infer_scope_types(db, expression_scope(db, file, expr), TypeContext::default())
+            .expression_type(expr)
+    }
+}
+
+/// The free form of [`TypeInferenceBuilder::is_environment_fact`], for an expression in another
+/// scope — or another module — than the condition that led here.
+fn expression_is_environment_fact<'db>(
+    db: &'db dyn Db,
+    types: ExpressionTypes<'db>,
+    expr: &ast::Expr,
+) -> bool {
+    let is_version_info = |expr: &ast::Expr| {
+        matches!(
+            types.of(db, expr),
+            Type::NominalInstance(instance) if instance.is_sys_version_info()
+        )
+    };
+    match expr {
+        ast::Expr::Name(name) => name.id == "TYPE_CHECKING" || is_version_info(expr),
+        ast::Expr::Attribute(attribute) => {
+            if is_version_info(expr) {
+                return true;
+            }
+            let Type::ModuleLiteral(module) = types.of(db, &attribute.value) else {
+                return false;
+            };
+            let module = module.module(db);
+            match &*attribute.attr {
+                "version_info" | "platform" => module.is_known(db, KnownModule::Sys),
+                "name" => module.is_known(db, KnownModule::Os),
+                "TYPE_CHECKING" => {
+                    module.is_known(db, KnownModule::Typing)
+                        || module.is_known(db, KnownModule::TypingExtensions)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Whether the value `definition` binds is decided by the build environment rather than by the
+/// program.
+///
+/// This is the alias half of [`is_environment_fact`]: `IS_PY314 = sys.version_info >= (3, 14)` is
+/// as much a fact about the environment as the `sys.version_info` it reads, and so is every name
+/// that goes on to stand for it, in this module or another. Tracked because following one alias
+/// reaches whatever module declared it, and a name is asked about once per condition that tests
+/// it.
+///
+/// [`is_environment_fact`]: TypeInferenceBuilder::is_environment_fact
+#[salsa::tracked(returns(copy), cycle_initial=|_, _, _| false, heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn definition_is_environment_derived<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> bool {
+    let mut visited = FxHashSet::default();
+    definition_is_environment_derived_inner(db, definition, &mut visited)
+}
+
+fn definition_is_environment_derived_inner<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+    visited: &mut FxHashSet<Definition<'db>>,
+) -> bool {
+    if !visited.insert(definition) {
+        return false;
+    }
+    let module = parsed_module(db, definition.python_file(db)).load(db);
+    // an import is followed by name resolution before it ever reaches here, so what is left is
+    // the value a binding was written with
+    let value: &ast::Expr = match definition.kind(db) {
+        DefinitionKind::Assignment(assignment) => assignment.value(&module),
+        DefinitionKind::AnnotatedAssignment(assignment) => {
+            let Some(value) = assignment.value(&module) else {
+                return false;
+            };
+            value
+        }
+        DefinitionKind::NamedExpression(named) => &named.node(&module).value,
+        DefinitionKind::For(for_stmt) => for_stmt.iterable(&module),
+        DefinitionKind::Comprehension(comprehension) => comprehension.iterable(&module),
+        DefinitionKind::WithItem(with_item) => with_item.context_expr(&module),
+        // a capture stands for whatever was matched, so it carries the subject's origin the way
+        // an assignment carries its value's
+        DefinitionKind::MatchPattern(pattern) => {
+            let subject_is_derived = match pattern.predicate().subject(db) {
+                PatternSubject::Expression(expression) => expression_is_environment_derived(
+                    db,
+                    ExpressionTypes::Of(definition),
+                    expression.node_ref(db).node(&module),
+                    visited,
+                ),
+                PatternSubject::Binder(binder) => {
+                    definition_is_environment_derived_inner(db, binder, visited)
+                }
+            };
+            return subject_is_derived || definition_is_environment_gated(db, definition, visited);
+        }
+        _ => return false,
+    };
+    expression_is_environment_derived(db, ExpressionTypes::Of(definition), value, visited)
+        || definition_is_environment_gated(db, definition, visited)
+}
+
+/// Whether `definition` is only reached when the build environment says so.
+///
+/// `line_prefix` below is written twice, and neither value mentions the environment — but which of
+/// them the program ever performs is settled before it runs, and so is the `Literal[""]` a reader
+/// is then told the name has:
+///
+/// ```python
+/// if sys.platform == "win32":
+///     line_prefix = "\n"
+/// else:
+///     line_prefix = ""
+/// ```
+///
+/// So the statements enclosing the binding are asked, the same question the value was asked. Only
+/// this module is walked: a test written in another scope has no type here, which makes it no
+/// fact, and a missed guard reports a condition rather than hiding one.
+fn definition_is_environment_gated<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+    visited: &mut FxHashSet<Definition<'db>>,
+) -> bool {
+    let file = definition.program_file(db);
+    let module = parsed_module(db, definition.python_file(db)).load(db);
+    let target = definition.full_range(db, &module).range();
+    statements_gate_range(db, file, &module.syntax().body, target, visited)
+}
+
+/// Whether any statement in `body` that encloses `target` decides it on the environment.
+fn statements_gate_range<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    body: &[ast::Stmt],
+    target: TextRange,
+    visited: &mut FxHashSet<Definition<'db>>,
+) -> bool {
+    let Some(statement) = body
+        .iter()
+        .find(|statement| statement.range().contains_range(target))
+    else {
+        return false;
+    };
+    let gated = |test: &ast::Expr, visited: &mut FxHashSet<Definition<'db>>| {
+        expression_is_environment_derived(db, ExpressionTypes::InScope(file), test, visited)
+    };
+    match statement {
+        ast::Stmt::If(if_statement) => {
+            if gated(&if_statement.test, visited) {
+                return true;
+            }
+            for clause in &if_statement.elif_else_clauses {
+                if let Some(test) = &clause.test
+                    && gated(test, visited)
+                {
+                    return true;
+                }
+            }
+            std::iter::once(&if_statement.body)
+                .chain(
+                    if_statement
+                        .elif_else_clauses
+                        .iter()
+                        .map(|clause| &clause.body),
+                )
+                .any(|body| statements_gate_range(db, file, body, target, visited))
+        }
+        ast::Stmt::Match(match_statement) => {
+            if gated(&match_statement.subject, visited) {
+                return true;
+            }
+            match_statement
+                .cases
+                .iter()
+                .any(|case| statements_gate_range(db, file, &case.body, target, visited))
+        }
+        ast::Stmt::While(while_statement) => {
+            gated(&while_statement.test, visited)
+                || std::iter::once(&while_statement.body)
+                    .chain(std::iter::once(&while_statement.orelse))
+                    .any(|body| statements_gate_range(db, file, body, target, visited))
+        }
+        // every other statement that holds a block: the guard, if there is one, is further in
+        ast::Stmt::For(for_statement) => [&for_statement.body, &for_statement.orelse]
+            .into_iter()
+            .any(|body| statements_gate_range(db, file, body, target, visited)),
+        ast::Stmt::With(with_statement) => {
+            statements_gate_range(db, file, &with_statement.body, target, visited)
+        }
+        ast::Stmt::Try(try_statement) => [
+            &try_statement.body,
+            &try_statement.orelse,
+            &try_statement.finalbody,
+        ]
+        .into_iter()
+        .chain(try_statement.handlers.iter().map(|handler| {
+            let ast::ExceptHandler::ExceptHandler(handler) = handler;
+            &handler.body
+        }))
+        .any(|body| statements_gate_range(db, file, body, target, visited)),
+        ast::Stmt::FunctionDef(function) => {
+            statements_gate_range(db, file, &function.body, target, visited)
+        }
+        ast::Stmt::ClassDef(class) => statements_gate_range(db, file, &class.body, target, visited),
+        _ => false,
+    }
+}
+
+/// Whether `expr`, as it is written in `scope`, is decided by the build environment.
+///
+/// Every part of the expression is asked, so a guard stays recognisable through the shapes a
+/// program builds around it — a comparison, a conditional expression, a tuple that an assignment
+/// then unpacks.
+fn expression_is_environment_derived<'db>(
+    db: &'db dyn Db,
+    types: ExpressionTypes<'db>,
+    expr: &ast::Expr,
+    visited: &mut FxHashSet<Definition<'db>>,
+) -> bool {
+    let mut found = false;
+    any_over_expr(expr, &mut |part: &ast::Expr| {
+        if found {
+            return true;
+        }
+        if leaf_is_environment_derived(db, types, part, visited) {
+            found = true;
+        }
+        found
+    });
+    found
+}
+
+/// Whether one leaf of an expression names an environment fact, directly or through an alias.
+fn leaf_is_environment_derived<'db>(
+    db: &'db dyn Db,
+    types: ExpressionTypes<'db>,
+    expr: &ast::Expr,
+    visited: &mut FxHashSet<Definition<'db>>,
+) -> bool {
+    if expression_is_environment_fact(db, types, expr) {
+        return true;
+    }
+    let scope = expression_scope(db, types.file(db), expr);
+    match expr {
+        ast::Expr::Name(name) => {
+            scoped_definitions_for_name(db, scope, &name.id, ImportAliasResolution::ResolveAliases)
+                .into_iter()
+                .filter_map(|resolved| match resolved {
+                    ResolvedDefinition::Definition(definition) => Some(definition),
+                    ResolvedDefinition::Module(_) | ResolvedDefinition::FileWithRange(_) => None,
+                })
+                .any(|definition| definition_is_environment_derived_inner(db, definition, visited))
+        }
+        // a member read off a class or an instance of one, such as a `Final` flag a module
+        // computed once from the platform it is being checked for
+        ast::Expr::Attribute(attribute) => {
+            let receiver = types.of(db, &attribute.value);
+            member_definitions(db, scope, receiver, &attribute.attr)
+                .into_iter()
+                .any(|definition| definition_is_environment_derived_inner(db, definition, visited))
+        }
+        _ => false,
+    }
+}
+
+/// The definitions of `name` on `receiver`, for the members a condition can be written against.
+fn member_definitions<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+    receiver: Type<'db>,
+    name: &str,
+) -> Vec<Definition<'db>> {
+    let env = ProgramEnvironment::from_scope(scope);
+    let mut definitions = Vec::new();
+    for element in receiver.union_elements(db) {
+        // an intersection narrows the receiver to one of its members, and it is that member's
+        // declaration a read lands on
+        let element = element
+            .as_intersection()
+            .and_then(|intersection| intersection.positive(db).iter().next().copied())
+            .unwrap_or(element);
+        let Some(class) = (match element {
+            Type::NominalInstance(instance) => Some(instance.class_literal(db, &env)),
+            Type::ClassLiteral(class) => Some(class),
+            _ => None,
+        })
+        .and_then(ClassLiteral::as_static) else {
+            continue;
+        };
+        for ancestor in class.iter_mro(db, None) {
+            let Some(body_scope) = ancestor
+                .into_class()
+                .map(|class| class.class_literal(db))
+                .and_then(ClassLiteral::as_static)
+                .map(|class| class.body_scope(db))
+            else {
+                continue;
+            };
+            let Some(symbol) = place_table(db, body_scope).symbol_id(name) else {
+                continue;
+            };
+            definitions.extend(
+                use_def_map(db, body_scope)
+                    .end_of_scope_symbol_bindings(symbol)
+                    .filter_map(|binding| binding.binding.definition()),
+            );
+        }
+    }
+    definitions
 }
 
 /// Strip the `not`s off a condition, returning the expression whose truthiness is really tested
@@ -249,8 +616,53 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
     /// Whether any part of `test` is a build-environment fact, which makes the whole condition's
     /// constant outcome the checker's doing rather than the program's.
+    ///
+    /// A fact reaches a condition under whatever name the program gave it, so a name is followed
+    /// to what it stands for — through this module and any other. The walk is only ever reached
+    /// for a condition that is already constant, which is the rare case.
     fn is_artificial(&self, test: &ast::Expr) -> bool {
-        any_over_expr(test, &|expr: &ast::Expr| self.is_environment_fact(expr))
+        let mut visited = FxHashSet::default();
+        any_over_expr(test, &mut |expr: &ast::Expr| {
+            self.is_environment_fact(expr) || self.reads_environment_alias(expr, &mut visited)
+        })
+    }
+
+    /// Whether `expr` names something that stands for an environment fact.
+    ///
+    /// The types this needs are the ones being inferred right now, so they are read off this
+    /// builder rather than by asking for the scope's inference — which is this. Only the
+    /// definitions a name resolves to are followed outwards, and each of those is somewhere else.
+    fn reads_environment_alias(
+        &self,
+        expr: &ast::Expr,
+        visited: &mut FxHashSet<Definition<'db>>,
+    ) -> bool {
+        let db = self.db();
+        match expr {
+            ast::Expr::Name(name) => scoped_definitions_for_name(
+                db,
+                self.scope(),
+                &name.id,
+                ImportAliasResolution::ResolveAliases,
+            )
+            .into_iter()
+            .filter_map(|resolved| match resolved {
+                ResolvedDefinition::Definition(definition) => Some(definition),
+                ResolvedDefinition::Module(_) | ResolvedDefinition::FileWithRange(_) => None,
+            })
+            .any(|definition| definition_is_environment_derived_inner(db, definition, visited)),
+            ast::Expr::Attribute(attribute) => {
+                let Some(receiver) = self.try_expression_type(&attribute.value) else {
+                    return false;
+                };
+                member_definitions(db, self.scope(), receiver, &attribute.attr)
+                    .into_iter()
+                    .any(|definition| {
+                        definition_is_environment_derived_inner(db, definition, visited)
+                    })
+            }
+            _ => false,
+        }
     }
 
     /// Whether `expr` reads a fact about the environment ty is checking *for*, as opposed to a

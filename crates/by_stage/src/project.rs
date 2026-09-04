@@ -50,7 +50,7 @@ impl Rebuilder {
     ///
     /// What the whole-tree commands hold: they resolved the project themselves
     /// and know which files they are checking, so `included` is that set rather
-    /// than the whole project. Beside [`Self::for_project`] rather than in place
+    /// than the whole project. Beside `for_project` rather than in place
     /// of it, because the two callers know genuinely different things — one has a
     /// db and nothing else, the other has the list and has not built a db yet.
     pub fn for_sources(
@@ -65,7 +65,7 @@ impl Rebuilder {
         }
     }
 
-    pub fn for_project(db: &ProjectDatabase) -> Self {
+    pub(crate) fn for_project(db: &ProjectDatabase) -> Self {
         Self {
             metadata: db.project().metadata(db).clone(),
             root: db.project().root(db).to_path_buf(),
@@ -77,7 +77,7 @@ impl Rebuilder {
     ///
     /// `by transpile <file>` is the caller: it discovers a project around one file
     /// and narrows it to that file, which is neither what [`build_project_db`]
-    /// produces nor what [`Self::for_project`] does. The three ways of arriving at
+    /// produces nor what `for_project` does. The three ways of arriving at
     /// a rebuilder stay one type, so a transpile reached from any of them resolves
     /// its imports the same way.
     pub fn new(
@@ -130,7 +130,7 @@ pub const COMPILABLE_SOURCES: &[&str] = &["by", "byi", "py"];
 /// non-hidden directories skipped when walking a project (see
 /// [`may_contain_sources`]): virtual envs, caches, and build outputs — none
 /// are first-party source. hidden directories are skipped wholesale
-pub const NON_SOURCE_DIRS: &[&str] = &[
+const NON_SOURCE_DIRS: &[&str] = &[
     ".venv",
     "venv",
     "env",
@@ -166,7 +166,7 @@ pub const NON_SOURCE_DIRS: &[&str] = &[
 /// thing keeping a dependency tree or a build output out of the emitted set. The unfiltered
 /// [`NON_SOURCE_DIRS`] still applies to [`may_contain_sources`], which walks the file system
 /// directly and never sees the project configuration at all.
-pub const NON_SOURCE_DIRS_TY_ALLOWS: &[&str] = &[
+const NON_SOURCE_DIRS_TY_ALLOWS: &[&str] = &[
     "env",
     ".env",
     "site-packages",
@@ -178,7 +178,7 @@ pub const NON_SOURCE_DIRS_TY_ALLOWS: &[&str] = &[
 ];
 
 /// Whether `path` sits inside a hidden or build-output directory under `root`.
-pub fn is_hidden_within(path: &Path, root: &Path) -> bool {
+pub(crate) fn is_hidden_within(path: &Path, root: &Path) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
@@ -198,7 +198,7 @@ pub fn is_hidden_within(path: &Path, root: &Path) -> bool {
 /// covered — and re-dropping it here would take back a file that a negated
 /// exclude deliberately re-included. Only the directories ty's defaults *leave*
 /// (and hidden ones) still have to be turned away.
-pub fn may_hold_build_content(entry: &walkdir::DirEntry) -> bool {
+pub(crate) fn may_hold_build_content(entry: &walkdir::DirEntry) -> bool {
     if entry.depth() == 0 || !entry.file_type().is_dir() {
         return true;
     }
@@ -209,7 +209,7 @@ pub fn may_hold_build_content(entry: &walkdir::DirEntry) -> bool {
 }
 
 /// Whether a project walk may descend into this entry: hidden directories
-/// (`.claude`, `.git`, `.venv`, …) and [`NON_SOURCE_DIRS`] never hold
+/// (`.claude`, `.git`, `.venv`, …) and `NON_SOURCE_DIRS` never hold
 /// first-party source. The walk root itself is always entered, even when the
 /// project directory happens to be hidden.
 pub fn may_contain_sources(entry: &walkdir::DirEntry) -> bool {
@@ -302,7 +302,7 @@ pub fn build_project_db(
 /// Separate from [`build_project_db`] so that a caller holding a db it did not
 /// build — the language server's, which is warm and must not be rebuilt — asks
 /// the same question and gets the same answer.
-pub fn project_sources(
+pub(crate) fn project_sources(
     db: &ProjectDatabase,
     extensions: &[&str],
     root: &Path,

@@ -38,9 +38,9 @@ pub trait Patch {
 /// minimal text edit. (start, end, replacement). end is exclusive
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edit {
-    pub start: usize,
-    pub end: usize,
-    pub replacement: String,
+    start: usize,
+    end: usize,
+    replacement: String,
 }
 
 /// registry of every legacy-form patch, applied in pass 1 before the pep 695

@@ -32,13 +32,13 @@ use crate::type_info::TypeInfo;
 
 pub(crate) struct JustFloat<'src> {
     types: &'src dyn TypeInfo,
-    pub(crate) edits: Vec<Fix>,
-    pub(crate) needs_float_alias: bool,
-    pub(crate) needs_complex_alias: bool,
+    edits: Vec<Fix>,
+    needs_float_alias: bool,
+    needs_complex_alias: bool,
 }
 
 impl<'src> JustFloat<'src> {
-    pub(crate) fn new(types: &'src dyn TypeInfo) -> Self {
+    fn new(types: &'src dyn TypeInfo) -> Self {
         Self {
             types,
             edits: Vec::new(),
@@ -65,7 +65,7 @@ impl<'src> JustFloat<'src> {
 
     /// public so [`rewrite_type_expr_with_imports`] can drive a one-off
     /// lowering over a single expression without spinning up a pass
-    pub(crate) fn emit_in_type_expr(&mut self, expr: &Expr) {
+    fn emit_in_type_expr(&mut self, expr: &Expr) {
         walk_one_type_expr(expr, self);
     }
 }

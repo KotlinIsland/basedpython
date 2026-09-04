@@ -83,15 +83,6 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/annotations/string.md
 # Diagnostics
 
 ```
-error[unresolved-import]: Module `typing` has no member `TYPE_CHECKING`
- --> src/mdtest_snippet.py:1:65
-  |
-1 | from typing import Any, TypeVar, Callable, Protocol, TypedDict, TYPE_CHECKING
-  |                                                                 ^^^^^^^^^^^^^
-
-```
-
-```
 error[unsupported-operator]: Unsupported `|` operation
   --> src/mdtest_snippet.py:19:8
    |
@@ -115,6 +106,36 @@ error[unsupported-operator]: Unsupported `|` operation
    |        |     |
    |        |     Has type `Literal["memoryview"]`
    |        Has type `<class 'int'>`
+info: All parameter annotations are evaluated at runtime by default on Python <3.14
+info: Python 3.13 was assumed when inferring types because it was specified on the command line
+help: Put quotes around the whole union rather than just certain elements
+
+```
+
+```
+error[unsupported-operator]: Unsupported `|` operation
+  --> src/mdtest_snippet.py:23:8
+   |
+23 |     c: "TD" | None,
+   |        ----^^^----
+   |        |      |
+   |        |      Has type `None`
+   |        Has type `Literal["TD"]`
+info: All parameter annotations are evaluated at runtime by default on Python <3.14
+info: Python 3.13 was assumed when inferring types because it was specified on the command line
+help: Put quotes around the whole union rather than just certain elements
+
+```
+
+```
+error[unsupported-operator]: Unsupported `|` operation
+  --> src/mdtest_snippet.py:25:8
+   |
+25 |     d: "P" | None,
+   |        ---^^^----
+   |        |     |
+   |        |     Has type `None`
+   |        Has type `Literal["P"]`
 info: All parameter annotations are evaluated at runtime by default on Python <3.14
 info: Python 3.13 was assumed when inferring types because it was specified on the command line
 help: Put quotes around the whole union rather than just certain elements
@@ -160,6 +181,36 @@ error[unsupported-operator]: Unsupported `|` operation
    |        |                    Has type `Literal["bytes"]`
    |        Has type `<class 'list[int | None]'>`
 info: All parameter annotations are evaluated at runtime by default on Python <3.14
+info: Python 3.13 was assumed when inferring types because it was specified on the command line
+help: Put quotes around the whole union rather than just certain elements
+
+```
+
+```
+error[unsupported-operator]: Unsupported `|` operation
+  --> src/mdtest_snippet.py:39:13
+   |
+39 |     j: list["int" | None] | "bytes",
+   |             -----^^^----
+   |             |       |
+   |             |       Has type `None`
+   |             Has type `Literal["int"]`
+info: All parameter annotations are evaluated at runtime by default on Python <3.14
+info: Python 3.13 was assumed when inferring types because it was specified on the command line
+help: Put quotes around the whole union rather than just certain elements
+
+```
+
+```
+error[unsupported-operator]: Unsupported `|` operation
+  --> src/mdtest_snippet.py:56:10
+   |
+56 | X = list["int" | None]
+   |          -----^^^----
+   |          |       |
+   |          |       Has type `None`
+   |          Has type `Literal["int"]`
+info: All type expressions are evaluated at runtime by default on Python <3.14
 info: Python 3.13 was assumed when inferring types because it was specified on the command line
 help: Put quotes around the whole union rather than just certain elements
 

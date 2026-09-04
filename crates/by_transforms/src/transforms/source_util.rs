@@ -535,7 +535,7 @@ pub(crate) fn body_prologue(
 /// `_MISSING` sentinel and the other emits no guard for it.
 ///
 /// [`init_method`]: super::init_method
-pub(crate) fn first_source_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
+fn first_source_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
     let header_end = header_end(f);
     let docstring_count = if let Some(Stmt::Expr(e)) = f.body.first() {
         usize::from(matches!(e.value.as_ref(), Expr::StringLiteral(_)))

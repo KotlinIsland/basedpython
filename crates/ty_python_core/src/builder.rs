@@ -8114,7 +8114,7 @@ fn is_if_not_type_checking(expr: &ast::Expr) -> bool {
 /// This is a purely syntactic over-approximation: whether the assigned value actually
 /// is a generic instance with an inferred specialization is determined during type
 /// inference.
-pub(crate) fn is_fluid_specialization_candidate(expr: &ast::Expr) -> bool {
+fn is_fluid_specialization_candidate(expr: &ast::Expr) -> bool {
     match expr {
         ast::Expr::List(_) | ast::Expr::Set(_) | ast::Expr::Dict(_) => true,
         ast::Expr::Call(call) => matches!(

@@ -72,7 +72,7 @@ use crate::type_info::TypeInfo;
 /// `__get__` captures the receiver so a reified *method* (`obj.m[int]()`) binds
 /// `self` like an ordinary method. attribute access falls through to the
 /// wrapped function, keeping introspection (`f.__name__`, `f.__doc__`) working
-pub(crate) const GENERIC_RUNTIME: &str = "\
+const GENERIC_RUNTIME: &str = "\
 class generic:
     def __init__(self, fn, args=None, instance=None, fields=None):
         self.fn = fn
@@ -687,9 +687,9 @@ mod tests {
     }
 
     #[test]
-    fn bare_call_leaves_a_variadic_empty() {
-        // a variadic is never inferred from the arguments; an unspecialized
-        // call binds the empty run rather than being an error
+    fn bare_call_injects_the_inferred_variadic() {
+        // the run a variadic binds is solved from the arguments, the same way a
+        // lone type parameter and a keyword pack are
         let out = transpile(
             indoc! {"
                 def f[*Ts](*args: *Ts) -> None:
@@ -703,8 +703,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("\nf(1, \"a\")"),
-            "the call should stay bare: {out}"
+            out.contains("f[int, str](1, \"a\")"),
+            "the solved run should inject: {out}"
         );
     }
 

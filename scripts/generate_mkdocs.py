@@ -316,7 +316,7 @@ def main():
             )
 
     with Path("mkdocs.generated.yml").open("w+", encoding="utf8") as fp:
-        yaml.safe_dump(config, fp)
+        _ = yaml.safe_dump(config, fp)
 
 
 if __name__ == "__main__":

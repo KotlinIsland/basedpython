@@ -4632,11 +4632,10 @@ fn a_class_declining_for_its_decorator_leaves_no_layout_behind() {
     let dir = diff_root().join("by_diff_decorlayout");
     let _ = std::fs::remove_dir_all(&dir);
     // `Holder` names a base, so evaluating its header reaches the module — which is what
-    // leaves `Held` visible, undecorated, in the window a moved decorator opens
+    // leaves `Held` visible, undecorated, in the window a moved decorator opens. the base is a
+    // plain class: an `ABCMeta` one would decline `Holder` for its metaclass and say nothing
+    // about the decorator this test is here for
     let source = "\
-from collections.abc import Sequence
-
-
 def mark(cls):
     return cls
 
@@ -4647,7 +4646,11 @@ class Held:
         self._n = n
 
 
-class Holder(Sequence):
+class Base:
+    pass
+
+
+class Holder(Base):
     def __init__(self, ns):
         self._ns = ns
 

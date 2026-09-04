@@ -159,6 +159,10 @@ _MIN_DETAIL_CHARS = 1_500
 _ENTRY_OVERHEAD = 120
 _NOTICE_RESERVE = 250
 
+# the artifact the workflow uploads the untruncated report as. the omission
+# notice names it, so the two have to stay in step
+FULL_REPORT_ARTIFACT = "roundtrip-report.md"
+
 # a project that fails identically on both binaries gets one line, not a dump
 _SUMMARY_CHARS = 200
 
@@ -544,10 +548,12 @@ def _detail_cap(n_findings: int) -> int:
     return max(_MIN_DETAIL_CHARS, min(_MAX_DETAIL_CHARS, share))
 
 
-def _truncate_detail(detail: str, cap: int) -> str:
+def _truncate_detail(detail: str, cap: int | None) -> str:
     """Cap one finding's body, keeping both ends: a panic is identified by its
-    header and topmost frames, a failed build by where it finally gave up."""
-    if len(detail) <= cap:
+    header and topmost frames, a failed build by where it finally gave up.
+
+    A cap of `None` keeps the body whole, which is what the full report wants."""
+    if cap is None or len(detail) <= cap:
         return detail
     marker = "\n... {} characters elided ...\n"
     head_budget = cap * 3 // 4
@@ -590,7 +596,7 @@ def _error_summary(err: str) -> str:
 
 
 def _details_entry(
-    name: str, path: Path, detail: str, cap: int, fence: str = ""
+    name: str, path: Path, detail: str, cap: int | None, fence: str = ""
 ) -> str:
     return "\n".join(
         [
@@ -605,12 +611,18 @@ def _details_entry(
     )
 
 
-def _assemble(header: list[str], sections: list[tuple[str, list[str]]]) -> str:
+def _assemble(
+    header: list[str], sections: list[tuple[str, list[str]]], budget: int | None
+) -> str:
     """Join the report under GitHub's comment size limit, dropping whole
     findings rather than cutting the report off mid-sentence.
 
     Sections are consumed in severity order, so what gets dropped first is the
-    least important thing in the report — never a regression."""
+    least important thing in the report — never a regression.
+
+    A `budget` of `None` drops nothing. That is the report the run uploads as an
+    artifact, and it is what the omission notice sends the reader to: a comment
+    that says findings were left out has to leave them somewhere reachable."""
     out = list(header)
     used = sum(len(line) + 1 for line in out) + _NOTICE_RESERVE
     dropped = 0
@@ -620,7 +632,10 @@ def _assemble(header: list[str], sections: list[tuple[str, list[str]]]) -> str:
         pending_cost = sum(len(line) + 1 for line in pending)
         for entry in entries:
             cost = len(entry) + 1
-            if used + (0 if placed else pending_cost) + cost > _COMMENT_BUDGET:
+            if (
+                budget is not None
+                and used + (0 if placed else pending_cost) + cost > budget
+            ):
                 dropped += 1
                 continue
             if not placed:
@@ -635,8 +650,9 @@ def _assemble(header: list[str], sections: list[tuple[str, list[str]]]) -> str:
     if dropped:
         out.append(
             f"_{dropped} finding(s) omitted to fit GitHub's "
-            f"{COMMENT_CHAR_LIMIT}-character comment limit. The full report is "
-            f"the `comment.md` artifact of this run._"
+            f"{COMMENT_CHAR_LIMIT}-character comment limit. Every finding, with "
+            f"nothing elided, is in the `{FULL_REPORT_ARTIFACT}` artifact of this "
+            f"run._"
         )
     return "\n".join(out).rstrip() + "\n"
 
@@ -655,8 +671,11 @@ def compared_projects(results: list[ProjectDiff] | list[ProjectErrors]) -> int:
 
 
 def render_diff_report(
-    results: list[ProjectDiff], old_label: str, new_label: str
+    results: list[ProjectDiff], old_label: str, new_label: str, *, full: bool = False
 ) -> tuple[str, bool]:
+    """Render the report. `full` renders it with no size limit at all, for the
+    artifact the truncated comment points at."""
+
     # sorted, not in shard-completion order: the report is read by diffing it
     # against the last run, and a stable order is what makes new entries visible
     def of_kind(kind: str) -> list[tuple[ProjectDiff, FileDiff]]:
@@ -676,6 +695,7 @@ def render_diff_report(
     total_files = sum(r.files_checked for r in results)
     n_projects = compared_projects(results)
 
+    budget = None if full else _COMMENT_BUDGET
     lines: list[str] = ["## by ecosystem round-trip", "", COMMENT_MARKER, ""]
 
     skipped_section = (
@@ -691,7 +711,7 @@ def render_diff_report(
             f"❌ nothing ran: all {len(results)} requested project(s) were skipped, "
             f"so this check compared no round-trip output at all."
         )
-        return _assemble(lines, [skipped_section]), False
+        return _assemble(lines, [skipped_section], budget), False
 
     if broken or fixed or changed or error_changed:
         lines.append(f"base: `{old_label}` → head: `{new_label}`")
@@ -718,14 +738,14 @@ def render_diff_report(
         )
     lines.append("")
 
-    cap = _detail_cap(len(broken) + len(changed) + len(error_changed))
+    cap = None if full else _detail_cap(len(broken) + len(changed) + len(error_changed))
     sections = [
         (
             "### ❌ regressions (built on base, now fails)",
             [_details_entry(r.name, d.path, d.detail, cap) for r, d in broken],
         ),
         (
-            "### ℹ️ changed round-trip output",  # noqa: RUF001
+            "### ℹ️ changed round-trip output",  # ruff: ignore[ambiguous-unicode-character-string]
             [_details_entry(r.name, d.path, d.detail, cap, "diff") for r, d in changed],
         ),
         (
@@ -743,7 +763,7 @@ def render_diff_report(
         skipped_section,
     ]
 
-    return _assemble(lines, sections), not broken
+    return _assemble(lines, sections, budget), not broken
 
 
 def _project_diff_to_dict(p: ProjectDiff) -> dict[str, Any]:
@@ -766,7 +786,9 @@ def _project_diff_from_dict(d: dict[str, Any]) -> ProjectDiff:
     )
 
 
-def render_from_json(paths: list[Path], old_label: str, new_label: str) -> int:
+def render_from_json(
+    paths: list[Path], old_label: str, new_label: str, full_out: Path | None = None
+) -> int:
     """Merge per-shard JSON results into the single markdown report."""
     projects: list[ProjectDiff] = []
     for path in paths:
@@ -774,6 +796,9 @@ def render_from_json(paths: list[Path], old_label: str, new_label: str) -> int:
         projects.extend(_project_diff_from_dict(x) for x in data["projects"])
     report, _clean = render_diff_report(projects, old_label, new_label)
     print(report)
+    if full_out is not None:
+        full, _ = render_diff_report(projects, old_label, new_label, full=True)
+        full_out.write_text(full)
     # findings (broken/changed/error-changed) are surfaced in the PR comment for
     # humans to review — they don't fail the job. only a genuine harness crash is
     # a failure, and a run that compared nothing is one of those: every shard
@@ -942,6 +967,11 @@ async def main_async(args: argparse.Namespace) -> int:
     if baseline is not None:
         diffs = [r for r in results if isinstance(r, ProjectDiff)]
         report, clean = render_diff_report(diffs, args.old_label, args.new_label)
+        if args.render_full is not None:
+            full, _ = render_diff_report(
+                diffs, args.old_label, args.new_label, full=True
+            )
+            args.render_full.write_text(full)
     else:
         errs = [r for r in results if isinstance(r, ProjectErrors)]
         report, clean = render_error_report(errs)
@@ -987,6 +1017,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         nargs="+",
         help="merge these shard JSON files into the markdown report and exit",
+    )
+    parser.add_argument(
+        "--render-full",
+        type=Path,
+        help="also write the report with nothing dropped or elided here, for the "
+        "run to upload; the comment names it when it has to leave findings out",
     )
     parser.add_argument(
         "--baseline",
@@ -1069,7 +1105,9 @@ def main() -> int:
     )
 
     if args.render:
-        return render_from_json(args.render, args.old_label, args.new_label)
+        return render_from_json(
+            args.render, args.old_label, args.new_label, args.render_full
+        )
     if args.by is None:
         logger.error("the `by` binary is required unless --render is given")
         return 2

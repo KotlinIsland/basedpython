@@ -42,7 +42,7 @@ impl Language {
     ///
     /// python shares one binding across a whole loop, so a closure made inside it
     /// sees the last value. basedpython gives each iteration its own
-    pub fn unique_loop_bindings(self) -> bool {
+    fn unique_loop_bindings(self) -> bool {
         matches!(self, Self::BasedPython)
     }
 
@@ -55,7 +55,7 @@ impl Language {
     /// a guard that re-evaluates it in the body, so each call gets its own — and the
     /// expression is then read in the *callee's* scope rather than snapshotted at the
     /// `def`
-    pub fn defaults_evaluated_at_the_def(self) -> bool {
+    fn defaults_evaluated_at_the_def(self) -> bool {
         matches!(self, Self::Python)
     }
 }

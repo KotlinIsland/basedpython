@@ -334,7 +334,7 @@ value = AliasedReceiver[str]()
 # revealed: bound method AliasedReceiver[str].aliased_return() -> tuple[ValueAlias[str]]
 reveal_type(value.aliased_return)
 
-# revealed: bound method AliasedReceiver[str].aliased_argument(value: ValueAlias[str]) -> None
+# revealed: bound method AliasedReceiver[str].aliased_argument(value: ValueAlias[str])
 reveal_type(value.aliased_argument)
 # error: [invalid-argument-type] "Expected `ValueAlias[str]`, found `Literal[1]`"
 value.aliased_argument(1)

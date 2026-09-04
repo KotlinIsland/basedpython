@@ -1462,11 +1462,20 @@ def check(value: int | str):
 ```
 
 ```snapshot
-warning[deprecated]: The overload of `convert` is deprecated
+warning[deprecated]: Possible use of deprecated function: `convert`
   --> src/mdtest_snippet.py:15:5
    |
 15 |     convert(value)
    |     ^^^^^^^ Use `parse` instead. Support ends in version 2.
+   |
+  ::: src/mdtest_snippet.py:6:5
+   |
+ 6 | def convert(value: int) -> str: ...
+   |     -------
+ 7 | @overload
+ 8 | @deprecated("Use `parse` instead. Support ends in version 2.")
+ 9 | def convert(value: str) -> str: ...
+   |     -------
 ```
 
 ### Overloads for different receivers

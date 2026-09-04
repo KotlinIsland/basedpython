@@ -512,17 +512,14 @@ first, *middle, last = (1, "wrong", 2)  # snapshot: invalid-assignment
 
 ```snapshot
 error[invalid-assignment]: Object of type `list[str]` is not assignable to `list[int]`
- --> src/mdtest_snippet.py:2:24
+ --> src/mdtest_snippet.py:2:28
   |
 1 | middle: list[int]
   |         --------- Declared type
 2 | first, *middle, last = (1, "wrong", 2)  # snapshot: invalid-assignment
-  |         ------         ^^^^^^^^^^^^^^^ Incompatible value of type `list[str]`
+  |         ------             ^^^^^^^ Incompatible iterable element of type `str` (expected `int`)
   |         |
   |         Assigned to this variable
-info: `list` is invariant in its type parameter
-info: Consider using the covariant supertype `collections.abc.Sequence`
-info: For more information, see https://docs.astral.sh/ty/reference/typing-faq/#invariant-generics
 ```
 
 ## Multiple values assigned to starred unpacking targets

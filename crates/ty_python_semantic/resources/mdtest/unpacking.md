@@ -401,7 +401,11 @@ Unpacking another iterable alongside a list literal does not affect the literal'
 
 ```py
 def nested(values: list[int]):
-    (first, *rest), (other,) = ([1, "two"], values)
+    # error: [refutable-unpacking] "`list[int]` may not have exactly 1 element, which would raise `ValueError` when unpacked"
+    (first, *rest), (other,) = (
+        [1, "two"],
+        values,
+    )
     reveal_type(first)  # revealed: Literal[1]
     reveal_type(rest)  # revealed: list[str]
     reveal_type(other)  # revealed: int

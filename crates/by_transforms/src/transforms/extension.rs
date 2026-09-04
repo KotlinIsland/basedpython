@@ -50,7 +50,7 @@ pub(crate) const EXTENSION_MARKER: &str = "# basedpython: extension";
 /// exactly one leading underscore: python private-name-mangles any `__name`
 /// reference inside a class body, so a two-underscore name would break an
 /// extension call written in one
-pub(crate) fn backing_name(target: &str, ordinal: usize, member: &str) -> String {
+fn backing_name(target: &str, ordinal: usize, member: &str) -> String {
     if ordinal == 0 {
         format!("_by_ext__{target}__{member}")
     } else {

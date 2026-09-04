@@ -52,7 +52,7 @@ const STATIC_TAG: &str = "static";
 ///
 /// the indexes are read once here rather than once per check, since every one of
 /// them is a project-wide query.
-pub(crate) struct Checker<'a> {
+struct Checker<'a> {
     db: &'a dyn Db,
     file: File,
     index: &'a TemplateIndex,

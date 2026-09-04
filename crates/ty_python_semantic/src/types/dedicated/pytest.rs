@@ -68,7 +68,7 @@ pub(in crate::types) fn is_fixture_function<'db>(
 fn fixture_marker<'db>(db: &'db dyn Db, function: FunctionType<'db>) -> Option<FixtureMarker> {
     let file = function.file(db);
     let definition = function.definition(db);
-    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    let module = parsed_module(db, function.python_file(db)).load(db);
     let node = function.node(db, file, &module);
     let types = infer_definition_types(db, definition);
 
@@ -262,7 +262,7 @@ fn resolve_builtin_fixture<'db>(
 /// a yield fixture annotates its return as `Iterator[T]` / `Generator[T,
 /// ...]` (or the async variants); the provided value is the yielded `T`, so
 /// the generator wrapper is unwrapped. a plain `-> T` fixture provides `T`.
-pub(in crate::types) fn fixture_provided_type<'db>(
+fn fixture_provided_type<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     function: FunctionType<'db>,
@@ -299,11 +299,7 @@ fn unwrap_generator<'db>(
 
 /// `true` if `ty` is an instance of pytest's `MarkGenerator` — the type of
 /// `pytest.mark`, whose `.parametrize` attribute builds the decorator.
-pub(in crate::types) fn is_mark_generator<'db>(
-    db: &'db dyn Db,
-    env: &ProgramEnvironment<'db>,
-    ty: Type<'db>,
-) -> bool {
+fn is_mark_generator<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> bool {
     let Some(class) = ty
         .nominal_class(db, env)
         .and_then(|class| class.class_literal(db).as_static())
@@ -369,7 +365,7 @@ pub(in crate::types) fn parametrized_names(
 ) -> FxHashSet<Name> {
     let env = &ProgramEnvironment::from_file(function.program_file(db));
     let file = function.file(db);
-    let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
+    let module = parsed_module(db, function.python_file(db)).load(db);
     let mut names: FxHashSet<Name> = function
         .node(db, file, &module)
         .decorator_list
@@ -440,7 +436,7 @@ const COLLECTED_EXTENSIONS: [&str; 2] = ["py", "by"];
 
 /// `true` if `file` is collected by pytest under the default conventions:
 /// its name is `conftest`, `test_*`, or `*_test`.
-pub(in crate::types) fn is_test_file(db: &dyn Db, file: File) -> bool {
+fn is_test_file(db: &dyn Db, file: File) -> bool {
     let FilePath::System(path) = file.path(db) else {
         return false;
     };

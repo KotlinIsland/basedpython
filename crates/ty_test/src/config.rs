@@ -145,18 +145,18 @@ impl MarkdownTestConfig {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) struct Dependencies {
     /// `[project].name`, which is what decides the modules the project ships.
-    pub(crate) name: Option<String>,
+    name: Option<String>,
 
     /// `[project].dependencies`.
-    pub(crate) project: Option<Vec<String>>,
+    project: Option<Vec<String>>,
 
     /// `[project.optional-dependencies]`.
     #[serde(default)]
-    pub(crate) extras: BTreeMap<String, Vec<String>>,
+    extras: BTreeMap<String, Vec<String>>,
 
     /// `[dependency-groups]`.
     #[serde(default)]
-    pub(crate) groups: BTreeMap<String, Vec<String>>,
+    groups: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Default)]

@@ -47,15 +47,15 @@ pub(crate) struct CallableSyntax<'src> {
     /// would clobber the fold, so `rewrite` leaves it for the fold's own edit
     claimed_ranges: &'src [TextRange],
     float_literals: FloatLiteralLowering,
-    pub(crate) edits: Vec<Fix>,
-    pub(crate) needs_import: bool,
-    pub(crate) needs_concatenate_import: bool,
-    pub(crate) needs_protocol_import: bool,
-    pub(crate) needs_intersection_import: bool,
-    pub(crate) needs_typeof_import: bool,
-    pub(crate) needs_not_import: bool,
-    pub(crate) needs_annotated_import: bool,
-    pub(crate) needs_optional_runtime: bool,
+    edits: Vec<Fix>,
+    needs_import: bool,
+    needs_concatenate_import: bool,
+    needs_protocol_import: bool,
+    needs_intersection_import: bool,
+    needs_typeof_import: bool,
+    needs_not_import: bool,
+    needs_annotated_import: bool,
+    needs_optional_runtime: bool,
     /// shape → synthesized class name. used to dedupe identical
     /// non-denotable callable shapes
     protocol_shapes: HashMap<ProtocolShape, String>,
@@ -492,7 +492,7 @@ impl<'src> CallableSyntax<'src> {
         name
     }
 
-    pub(crate) fn rewrite(&mut self, expr: &Expr) -> Option<String> {
+    fn rewrite(&mut self, expr: &Expr) -> Option<String> {
         // a symbolic-fold-claimed sub-expression is opaque: the fold emits its
         // own edit over this exact range, so re-rendering here (and clobbering
         // it with a wider edit) must not happen
@@ -845,7 +845,7 @@ pub(crate) fn lower_type_expr_full(
 
 /// if `expr` is `Subscript(Name("__let__"|"__classvar__"|"__final__"), slice)`,
 /// returns the slice
-pub(crate) fn synthetic_let_slice(expr: &Expr) -> Option<&Expr> {
+fn synthetic_let_slice(expr: &Expr) -> Option<&Expr> {
     if let Expr::Subscript(s) = expr {
         if let Expr::Name(n) = s.value.as_ref() {
             if matches!(n.id.as_str(), "__let__" | "__classvar__" | "__final__") {

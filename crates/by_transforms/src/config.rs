@@ -168,7 +168,7 @@ impl SoundnessPositions {
     }
 
     /// whether any position is enabled
-    pub fn any(self) -> bool {
+    pub(crate) fn any(self) -> bool {
         self.generic_calls
             || self.projections
             || self.iterations
@@ -203,7 +203,8 @@ impl Config {
     /// `prune_unused_imports_after_reverse` disabled so test expected
     /// strings don't need to include the lazy preamble or worry about pruning,
     /// and all soundness checks off so plain output isn't peppered with them
-    pub fn test_default() -> Self {
+    #[cfg(test)]
+    pub(crate) fn test_default() -> Self {
         Self {
             lazy_imports: false,
             prune_unused_imports_after_reverse: false,

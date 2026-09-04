@@ -37,3 +37,18 @@ error[shadowed-type-variable]: Generic class `Bad1` uses type variable `T` alrea
   |           ^^^^ `T` used in class definition here
 
 ```
+
+```
+error[shadowed-type-variable]: Generic class `Bad2` uses type variable `T` already bound by an enclosing scope
+ --> src/mdtest_snippet.py:8:11
+  |
+3 | def f[T](x: T, y: T) -> None:
+  |     ------------------------ Type variable `T` is bound in this enclosing scope
+4 |     class Ok[S]: ...
+5 |     # error: [shadowed-type-variable]
+6 |     class Bad1[T]: ...
+7 |     # error: [shadowed-type-variable]
+8 |     class Bad2(Iterable[T]): ...
+  |           ^^^^^^^^^^^^^^^^^ `T` used in class definition here
+
+```

@@ -165,14 +165,6 @@ pub struct Options {
 }
 
 impl Options {
-    pub(super) fn file_options(&self) -> FileOptions {
-        FileOptions {
-            type_checking_preset: self.type_checking_preset.clone(),
-            rules: self.rules.clone(),
-            analysis: self.analysis.clone(),
-        }
-    }
-
     pub fn from_toml_str(content: &str, source: ValueSource) -> Result<Self, TyTomlError> {
         let _guard = ValueSourceGuard::new(source, true);
         let mut options: Self = toml::from_str(content)?;
@@ -627,7 +619,7 @@ impl Options {
     }
 
     /// The preset the project's other settings start from.
-    pub fn type_checking_preset(&self) -> TypeCheckingPreset {
+    fn type_checking_preset(&self) -> TypeCheckingPreset {
         self.configured_type_checking_preset().unwrap_or_default()
     }
 
@@ -2016,7 +2008,7 @@ pub struct CommonAliases {
 
 impl CommonAliases {
     /// The configured aliases, each paired with the module it names.
-    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
         self.inner
             .iter()
             .map(|(alias, module)| (alias.as_str(), module.as_str()))
@@ -2078,7 +2070,7 @@ pub struct ExperimentalOptions {
             module-api = true
         "#
     )]
-    pub module_api: Option<bool>,
+    module_api: Option<bool>,
 
     /// Whether a `build:` block declares build stamps.
     ///
@@ -2097,11 +2089,11 @@ pub struct ExperimentalOptions {
             build-stamps = true
         "#
     )]
-    pub build_stamps: Option<bool>,
+    build_stamps: Option<bool>,
 }
 
 impl ExperimentalOptions {
-    pub(super) fn to_settings(&self) -> ExperimentalSettings {
+    fn to_settings(&self) -> ExperimentalSettings {
         ExperimentalSettings {
             module_api: self.module_api.unwrap_or_default(),
             build_stamps: self.build_stamps.unwrap_or_default(),
@@ -3238,12 +3230,12 @@ impl ToOverride for RangedValue<OverrideOptions> {
 
 /// The options for an override but without the include/exclude patterns.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Combine, get_size2::GetSize)]
-pub(super) struct InnerOverrideOptions {
+pub(crate) struct InnerOverrideOptions {
     /// Raw rule options as specified in the configuration.
     /// Used when multiple overrides match a file and need to be merged.
-    pub(super) rules: Option<Rules>,
+    pub(crate) rules: Option<Rules>,
 
-    pub(super) analysis: Option<AnalysisOptions>,
+    pub(crate) analysis: Option<AnalysisOptions>,
 }
 
 /// A failure to resolve a project's or standalone script's program settings.
@@ -3264,17 +3256,6 @@ pub enum ToProgramSettingsError {
     /// One of the configured Python module search paths could not be resolved.
     #[error(transparent)]
     SearchPaths(#[from] SearchPathSettingsError),
-}
-
-/// The settings that can vary between individual files.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Combine, get_size2::GetSize)]
-pub(super) struct FileOptions {
-    pub(super) type_checking_preset: Option<RangedValue<TypeCheckingPreset>>,
-
-    /// Raw rule options, preserved so multiple configuration layers can be merged.
-    pub(super) rules: Option<Rules>,
-
-    pub(super) analysis: Option<AnalysisOptions>,
 }
 
 impl ToProgramSettingsError {

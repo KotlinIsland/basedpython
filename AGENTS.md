@@ -66,7 +66,7 @@ MDTEST_TEST_FILTER="<filter>" INSTA_FORCE_PASS=1 INSTA_UPDATE=always MDTEST_UPDA
 and they pick `python3` off the `PATH` unless `PYTHON` names one.
 
 A native build needs python 3.11 or later. The floor is stated once, as
-`by_build::MINIMUM_PYTHON`, and `Toolchain::probe` refuses anything below it by name, so
+`by_build::toolchain::MINIMUM_PYTHON`, and `Toolchain::probe` refuses anything below it by name, so
 on a host whose ambient `python3` is older the tests skip rather than fail. Above the
 floor there are still per-test gates, because a handful assert python's own wording,
 which changed in 3.12.

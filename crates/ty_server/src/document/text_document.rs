@@ -68,7 +68,7 @@ impl LanguageId {
     /// `.py` file with no diagnostics and every service reading the file as last
     /// saved rather than as the client has it. So a path python owns is python,
     /// exactly as a path django owns is a template.
-    pub(crate) fn new(language_id: &LanguageKind, path: &AnySystemPath) -> Self {
+    fn new(language_id: &LanguageKind, path: &AnySystemPath) -> Self {
         match language_id.as_str() {
             "python" | "by" | "basedpython" => Self::Python,
             "django-html" | "django-txt" | "htmldjango" | "django" => Self::DjangoTemplate,

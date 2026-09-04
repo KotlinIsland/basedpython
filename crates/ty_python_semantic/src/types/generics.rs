@@ -443,6 +443,11 @@ pub(super) fn walk_generic_context<'db, V: TypeVisitor<'db> + ?Sized>(
 // The Salsa heap is tracked separately.
 impl get_size2::GetSize for GenericContext<'_> {}
 
+/// basedpython: whether `ty` is, or contains, the synthetic `Self` type variable.
+fn references_self<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    matches!(ty, Type::TypeVar(typevar) if typevar.typevar(db).is_self(db))
+}
+
 impl<'db> GenericContext<'db> {
     /// Creates a generic context from a list of PEP-695 type parameters.
     pub(crate) fn from_type_params(
@@ -599,6 +604,28 @@ impl<'db> GenericContext<'db> {
         }
 
         remove_self_inner(db, self, binding_context)
+    }
+
+    /// basedpython: whether any variable here is bounded by `Self`.
+    ///
+    pub(crate) fn has_self_bounded_variable(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
+        self.variables(db).any(|bound_typevar| {
+            bound_typevar
+                .typevar(db)
+                .bound_or_constraints(db, env)
+                .is_some_and(|bound| match bound {
+                    TypeVarBoundOrConstraints::UpperBound(bound) => references_self(db, bound),
+                    TypeVarBoundOrConstraints::Constraints(constraints) => constraints
+                        .elements(db)
+                        .iter()
+                        .copied()
+                        .any(|constraint| references_self(db, constraint)),
+                })
+        })
     }
 
     /// Returns the typevars directly bound by this generic context.
@@ -1422,7 +1449,7 @@ impl<'db> Specialization<'db> {
             types.into_owned().into_boxed_slice(),
             self.materialization_kind(db),
             self.tuple_inner(db),
-            self.projections(db).clone(),
+            self.projections(db),
         )
     }
 
@@ -2040,6 +2067,23 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                     // projections in incompatible directions — e.g. `Container[out int]`
                     // vs `Container[in int]`. No subtyping relation possible.
                     return self.never();
+                };
+                // basedpython: a parameter only a private member mentions is bivariant, so a
+                // comparison against it normally adds nothing. That is the right answer to the
+                // yes-or-no question an eager comparison asks. A lazy one is not asking: it is
+                // recording what the two sides say about the type variables in the target, and
+                // the class does carry the argument such a solve is after — skipping the position
+                // hands it back no bound at all. Reading the position covariantly recovers the
+                // argument without making the relation stricter, since the recorded constraint
+                // still leaves the source assignable for some solution.
+                let effective = if matches!(effective, TypeVarVariance::Bivariant)
+                    && self.typevar_evaluation == TypeVarEvaluation::Lazy
+                    && bound_typevar.is_bivariant_by_privacy(db)
+                    && target_type.has_typevar(db, env)
+                {
+                    TypeVarVariance::Covariant
+                } else {
+                    effective
                 };
                 // Subtyping/assignability of each type in the specialization depends on the variance
                 // of the corresponding typevar:
@@ -2670,6 +2714,18 @@ impl<'db> ApplySpecialization<'_, 'db> {
         }
     }
 
+    /// The same mapping, but also rewriting the declared domain of a retained synthetic `Self`.
+    ///
+    /// Only a member projected out of its enclosing generic owner wants this: `Self`'s domain
+    /// names the owner's own variables, so on `Box[int].add` it has to become `Box[int]` along
+    /// with everything else. Everywhere else that domain is fixed evidence and must not move.
+    pub(crate) fn specialization_for_member(specialization: Specialization<'db>) -> Self {
+        Self::Specialization {
+            specialization,
+            specialize_self_domain: true,
+        }
+    }
+
     pub(crate) fn specialize_self_domain(self) -> bool {
         match self {
             Self::Specialization {
@@ -2783,7 +2839,7 @@ impl<'db> ApplySpecialization<'_, 'db> {
                     types,
                     specialization.materialization_kind(db),
                     specialization.tuple_inner(db),
-                    specialization.projections(db).clone(),
+                    specialization.projections(db),
                 ))
             }
         }
@@ -5113,7 +5169,8 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                             formal_specialization,
                             base_specialization
                         ) {
-                            let variance = typevar.variance_with_polarity(db, polarity);
+                            let variance = typevar
+                                .solving_variance_with_polarity(db, self.env, polarity, *formal_ty);
                             self.infer_map_impl(*formal_ty, *base_ty, variance, seen)?;
                         }
                         return Ok(());

@@ -99,7 +99,7 @@ impl DependencyManifest {
     ///
     /// A distribution can be in more than one — a test dependency that is also
     /// an extra, say — and then any one of them being available is enough.
-    pub fn groups_declaring<'a>(
+    fn groups_declaring<'a>(
         &'a self,
         distribution: &'a DistributionName,
     ) -> impl Iterator<Item = &'a GroupName> {
@@ -110,7 +110,7 @@ impl DependencyManifest {
     }
 
     /// Whether any group declares `distribution`.
-    pub fn declares(&self, distribution: &DistributionName) -> bool {
+    fn declares(&self, distribution: &DistributionName) -> bool {
         self.groups_declaring(distribution).next().is_some()
     }
 
@@ -218,7 +218,7 @@ impl AllowedGroups {
 }
 
 impl<'db> AvailableGroups<'db> {
-    pub fn manifest(&self) -> Option<&'db DependencyManifest> {
+    fn manifest(&self) -> Option<&'db DependencyManifest> {
         match self {
             AvailableGroups::Unknown => None,
             AvailableGroups::Known { manifest, .. } => Some(manifest),
@@ -307,7 +307,7 @@ pub fn import_standing<'db>(
 /// it is asked at the point of reporting rather than folded into
 /// [`import_standing`]: a project whose imports are all in order never pays for
 /// the requirement graph at all.
-pub fn installed_because<'db>(
+pub(crate) fn installed_because<'db>(
     db: &'db dyn Db,
     file: File,
     distribution: &DistributionName,

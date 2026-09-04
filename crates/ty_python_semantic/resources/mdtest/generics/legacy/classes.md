@@ -1123,7 +1123,7 @@ class ConstructorChild(ConstructorParent[T]): ...
 
 # revealed: def __new__[Self, T](cls, value: T) -> Self
 reveal_type(ConstructorChild.__new__)
-# revealed: def __init__[T](self, value: T) -> None
+# revealed: def __init__[T](self, value: T)
 reveal_type(ConstructorChild.__init__)
 reveal_type(ConstructorChild(1))  # revealed: ConstructorChild[int]
 ```
@@ -1220,7 +1220,7 @@ Stream = TypeVar("Stream", TextStream, BinaryStream)
 def use_stream(stream: Stream) -> Stream:
     # revealed: bool
     reveal_type(stream.closed)
-    # revealed: (bound method Stream@use_stream when TextStream.close() -> None) | (bound method Stream@use_stream when BinaryStream.close() -> None)
+    # revealed: (bound method Stream@use_stream when TextStream.close()) | (bound method Stream@use_stream when BinaryStream.close())
     reveal_type(stream.close)
     if not stream.closed:
         stream.close()
@@ -1276,7 +1276,7 @@ class B:
 T = TypeVar("T", A, B)
 
 def combine(left: T, right: T) -> None:
-    # revealed: (bound method T@combine when A.combine(other: A) -> None) | (bound method T@combine when B.combine(other: B) -> None)
+    # revealed: (bound method T@combine when A.combine(other: A)) | (bound method T@combine when B.combine(other: B))
     reveal_type(left.combine)
     # TODO: This should not error once callable binding preserves the receiver branch correlation.
     # error: [invalid-argument-type] "Argument to bound method `A.combine` is incorrect"

@@ -30,8 +30,7 @@ use crate::{
         ApplyTypeMappingVisitor, BindingContext, BoundTypeVarIdentity, BoundTypeVarInstance,
         CallableType, ClassBase, ClassType, DeferredOperation, DeferredType, ErrorContext,
         FindLegacyTypeVarsVisitor, GenericAlias, GenericContext,
-        InstanceFallbackShadowsNonDataDescriptor, IntersectionType, KnownFunction,
-        KnownInstanceType,
+        InstanceFallbackShadowsNonDataDescriptor, KnownFunction, KnownInstanceType,
         MaterializationKind, MemberLookupKey, MemberLookupPolicy, Parameter, PropertyInstanceType,
         ProtocolInstanceType, SelfBinding, Signature, StaticClassLiteral, Type, TypeMapping,
         TypeQualifiers, TypeVarVariance, UnionType, VarianceInferable, VarianceTerm,
@@ -990,7 +989,7 @@ impl<'db> ProtocolInterface<'db> {
 
     /// basedpython: whether `name` is an ordinary method member, the one kind whose access
     /// binds a receiver away.
-    pub(super) fn is_instance_method_member(self, db: &'db dyn Db, name: &str) -> bool {
+    fn is_instance_method_member(self, db: &'db dyn Db, name: &str) -> bool {
         ProtocolInterfaceView::new(self, None)
             .member_by_name(db, name)
             .is_some_and(|member| member.is_instance_method())

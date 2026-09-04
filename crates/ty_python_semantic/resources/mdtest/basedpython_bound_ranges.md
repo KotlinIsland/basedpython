@@ -201,6 +201,21 @@ def f(c: C):
     reveal_type(c)  # revealed: C[str]
 ```
 
+## a range accepts a default that names the type variable
+
+A later type parameter's default can be written in terms of an earlier one, as `B = Box[T]` is here.
+At the point that default is checked, `T` has no binding context yet, so the check binds a copy of
+the default before measuring it against the range. Without that, the bare type variable rather than
+the type it stands for reaches the lower end, and the specialization is rejected.
+
+```by
+class Box[T: str..object]: ...
+
+class Holder[T: str..object, B = Box[T]]: ...
+
+reveal_type(Holder[str]())  # revealed: final Holder[str, Box[str]]
+```
+
 ## `..` outside a bound says so
 
 Anywhere but a type parameter's bound, `Lower..Upper` is not a range. Left alone it parses as two

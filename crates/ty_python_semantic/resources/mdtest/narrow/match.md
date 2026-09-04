@@ -1931,6 +1931,9 @@ class CustomGet(Mapping[str, int | str]):
     def get(self, key: object) -> int | str | None: ...
     @overload
     def get(self, key: object, default: Default) -> int | str | Default: ...
+    # `Mapping.get`'s third overload takes a default of any type at all, and this one takes a
+    # `Default`, so it does not accept everything the method it overrides accepts
+    # error: [invalid-method-override] "Invalid override of method `get`: Definition is incompatible with `Mapping.get`"
     def get(self, key: object, default: Default | None = None) -> int | str | Default | None:
         if key == "item":
             return "custom value"
@@ -4072,8 +4075,9 @@ def _(x: Literal["foo", b"bar"] | int):
             pass
         case b"bar" if reveal_type(x):  # revealed: Literal[b"bar"]
             pass
-        # error: [overlapping-condition]
-        case _ if reveal_type(x):  # revealed: Literal["foo", b"bar"] | int
+        # the wildcard is reached only where the patterns above did not match, so the literals
+        # they named are gone from it and nothing overlaps
+        case _ if reveal_type(x):  # revealed: int & ~Literal[42]
             pass
 ```
 

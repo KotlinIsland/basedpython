@@ -58,15 +58,6 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/class/super.md
 # Diagnostics
 
 ```
-error[invalid-argument-type]: Argument expression after ** must be a mapping type
-  --> src/mdtest_snippet.py:15:42
-   |
-15 |         return super().__call__(*args, **kwargs)
-   |                                          ^^^^^^ Found `dict[str, Any]`
-
-```
-
-```
 error[invalid-super-argument]: `<class 'OtherBase'>` is not an instance or subclass of `<class 'Meta'>` in `super(<class 'Meta'>, <class 'OtherBase'>)` call
   --> src/mdtest_snippet.py:34:1
    |

@@ -90,6 +90,12 @@ hosting = ["github"]
 # github-hosted runners so the release works without a depot account
 global = "ubuntu-latest"
 
+# two edits to the generated `.github/workflows/release.yml` cannot be expressed here, so
+# `dist generate` reverts them. reapply both after regenerating:
+#   - `custom-publish-pypi`'s `if:` carries `always() && needs.host.result == 'success' &&
+#     needs.release-gate.result == 'success'`, so the release gate still holds
+#   - its `uses:` is the local `./.github/workflows/publish-pypi.yml`, not cargo-dist's `$/` form
+
 [dist.github-action-commits]
 "actions/checkout" = "de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
 "actions/upload-artifact" = "bbbca2ddaa5d8feaa63e36b76fdaad77386f024f" # v7.0.0

@@ -53,7 +53,7 @@ pub fn run() -> anyhow::Result<ExitStatus> {
 }
 
 /// run ty with an explicit arg list — used by `by` to pass remapped args without a subprocess
-pub fn run_from_args<I, T>(iter: I) -> anyhow::Result<ExitStatus>
+fn run_from_args<I, T>(iter: I) -> anyhow::Result<ExitStatus>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
@@ -72,7 +72,9 @@ where
     // platform default — 1 MiB on windows — and the commands that check on the
     // calling thread rather than through the pool (`run`, `build`, `transpile`,
     // `compile`) were overflowing it there. so the whole command runs on a thread
-    // this codebase has sized for the job, wherever it is dispatched to
+    // this codebase has sized for the job, wherever it is dispatched to. a command
+    // does more per term than a check does, since it lowers the expression as well
+    // as inferring it, and `STACK_SIZE` is sized to leave room for that
     std::thread::scope(|scope| {
         let command = std::thread::Builder::new()
             .stack_size(STACK_SIZE)

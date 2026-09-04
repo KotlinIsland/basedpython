@@ -32,7 +32,7 @@ use std::collections::{BTreeSet, HashSet};
 use by_ir::function::{Function, ModuleIr};
 use by_ir::ops::{BlockId, RegisterId};
 
-pub fn run(module: &mut ModuleIr) {
+pub(crate) fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
         let sets = release_sets(function);
         for (block, set) in function.blocks.iter_mut().zip(sets) {

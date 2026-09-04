@@ -35,7 +35,7 @@ use crate::{
             infer_function_default_types, infer_statement_types, nearest_enclosing_function,
             original_class_type,
         },
-        infer_definition_types, infer_expression_types, infer_scope_types,
+        infer_definition_types, infer_expression_types,
         inferred_signature::{can_implicitly_return_none, return_type_from_body},
         lifetimes::InheritedBorrow,
         relation::TypeRelation,
@@ -2310,7 +2310,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } = parameter_with_default;
 
         let env = &self.program_environment();
-        let default_expr = default.as_ref();
+        let _default_expr = default.as_ref();
         let ty = if let Some(parameter_type) = self.annotated_lambda_parameter_type(index, lambda) {
             parameter_type
         } else if let Some(default_expr) = default {

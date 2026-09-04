@@ -27,9 +27,8 @@ use crate::{
         DataclassParams, EnumLiteralType, GenericAlias, GenericContext, KnownClass,
         KnownInstanceType, MaterializationKind, MemberLookupPolicy, MetaclassCandidate,
         MetaclassTransformInfo, Parameter, Parameters, PropertyInstanceType, Signature,
-        SpecialFormType, StaticMroError, SubclassOfType, Truthiness, Type, TypeContext,
-        TypeMapping, TypeVarVariance, TypingModule, UnionBuilder, UnionType,
-        binding_type,
+        SpecialFormType, StaticMroError, SubclassOfType, Type, TypeContext, TypeMapping,
+        TypeVarVariance, TypingModule, UnionBuilder, UnionType, binding_type,
         bound_super::BoundSuperType,
         call::{CallError, CallErrorKind},
         callable::CallableTypeKind,
@@ -47,8 +46,8 @@ use crate::{
         enums::{enum_metadata, is_enum_class_by_inheritance, try_unwrap_nonmember_value},
         function::{DataclassTransformerParams, KnownFunction},
         generics::Specialization,
-        infer::{infer_definition_types, infer_unpack_types, original_class_type},
-        infer_expression_type, inferred_declaration,
+        infer::original_class_type,
+        inferred_declaration,
         known_instance::{DeprecatedInstance, FieldInstance},
         member::{Member, class_member},
         mro::{Mro, MroIterator},
@@ -146,11 +145,11 @@ impl<'db> StaticClassLiteral<'db> {
         self.flags(db).contains(ClassLiteralFlags::SEALED)
     }
 
-    pub(crate) fn has_decorators(self, db: &'db dyn Db) -> bool {
+    fn has_decorators(self, db: &'db dyn Db) -> bool {
         self.flags(db).contains(ClassLiteralFlags::HAS_DECORATORS)
     }
 
-    pub(crate) fn has_type_params(self, db: &'db dyn Db) -> bool {
+    fn has_type_params(self, db: &'db dyn Db) -> bool {
         self.flags(db).contains(ClassLiteralFlags::HAS_TYPE_PARAMS)
     }
 
@@ -3991,12 +3990,16 @@ impl<'db> StaticClassLiteral<'db> {
         db: &'db dyn Db,
         typevar: BoundTypeVarIdentity<'db>,
     ) -> bool {
-        self.variance_equation_with(db, typevar, false).evaluate(db)
-            == TypeVarVariance::Bivariant
+        self.variance_equation_with(db, typevar, false).evaluate(db) == TypeVarVariance::Bivariant
     }
 
-    /// The variance this class's own members require of `typevar`, ignoring its bases.
-    pub(crate) fn own_variance_of(
+    /// The variance this class's *non-method* members require of `typevar`, ignoring its bases.
+    ///
+    /// A method that contradicts the declared variance is reported against the method itself,
+    /// which names it and points at the offending annotation. Counting methods here as well would
+    /// report the same contradiction a second time against the class header, so this answers only
+    /// for the members nothing else covers.
+    pub(crate) fn own_non_method_variance_of(
         self,
         db: &'db dyn Db,
         typevar: BoundTypeVarIdentity<'db>,
@@ -4004,7 +4007,7 @@ impl<'db> StaticClassLiteral<'db> {
         let bivariant_private_attributes = db
             .analysis_settings(self.body_scope(db).file(db))
             .bivariant_private_attributes;
-        self.own_variance_of_with(db, typevar, bivariant_private_attributes)
+        self.own_variance_of_with(db, typevar, bivariant_private_attributes, false)
             .evaluate(db)
     }
 }
@@ -4061,8 +4064,13 @@ impl<'db> StaticClassLiteral<'db> {
 
         VarianceTerm::join(
             db,
-            std::iter::once(self.own_variance_of_with(db, typevar, bivariant_private_attributes))
-                .chain(explicit_bases_variances),
+            std::iter::once(self.own_variance_of_with(
+                db,
+                typevar,
+                bivariant_private_attributes,
+                true,
+            ))
+            .chain(explicit_bases_variances),
         )
     }
 }
@@ -4075,12 +4083,13 @@ impl<'db> StaticClassLiteral<'db> {
     /// This is what a declared variance has to agree with: an incompatible base is reported
     /// against that base instead, so folding the bases in here would report the same problem
     /// twice.
-    #[salsa::tracked(returns(copy), cycle_initial=|_, _, _, _, _| VarianceTerm::BIVARIANT, heap_size=ruff_memory_usage::heap_size)]
+    #[salsa::tracked(returns(copy), cycle_initial=|_, _, _, _, _, _| VarianceTerm::BIVARIANT, heap_size=ruff_memory_usage::heap_size)]
     pub(crate) fn own_variance_of_with(
         self,
         db: &'db dyn Db,
         typevar: BoundTypeVarIdentity<'db>,
         bivariant_private_attributes: bool,
+        include_methods: bool,
     ) -> VarianceTerm<'db> {
         let env = &ProgramEnvironment::from_file(self.program_file(db));
         let typevar_in_generic_context = self
@@ -4195,7 +4204,10 @@ impl<'db> StaticClassLiteral<'db> {
             .chain(attribute_places_and_qualifiers)
             .dedup()
             .filter_map(|(name, place_and_qual)| {
-                place_and_qual.ignore_possibly_undefined().map(|ty| {
+                place_and_qual.ignore_possibly_undefined().and_then(|ty| {
+                    if !include_methods && ty.is_function_literal() {
+                        return None;
+                    }
                     // A private member is invisible to external observers, so it can't be used to
                     // tell two specializations of its class apart, and therefore can't constrain
                     // the class's variance at all. Dunders are excluded: they are part of the
@@ -4234,7 +4246,7 @@ impl<'db> StaticClassLiteral<'db> {
                     } else {
                         default_attribute_variance
                     };
-                    ty.with_polarity(variance).variance_of(db, env, typevar)
+                    Some(ty.with_polarity(variance).variance_of(db, env, typevar))
                 })
             });
 
@@ -4475,7 +4487,6 @@ fn explicit_bases_cycle_fn<'db>(
         current
     }
 }
-
 
 /// If `definition` is an annotated assignment whose annotation is
 /// `Annotated[T, ..., <field specifier>(...), ...]`, return the field-specifier

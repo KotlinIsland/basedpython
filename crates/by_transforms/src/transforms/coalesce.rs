@@ -13,11 +13,11 @@ use crate::type_info::TypeInfo;
 pub(crate) struct NoneCoalesce<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
-    pub(crate) edits: Vec<(TextRange, Vec<Fragment>)>,
+    edits: Vec<(TextRange, Vec<Fragment>)>,
 }
 
 impl<'src> NoneCoalesce<'src> {
-    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
+    fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
         Self {
             source,
             types,

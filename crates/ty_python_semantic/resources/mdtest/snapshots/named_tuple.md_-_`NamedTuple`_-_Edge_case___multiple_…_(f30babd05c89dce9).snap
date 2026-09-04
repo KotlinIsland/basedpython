@@ -32,10 +32,30 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/named_tuple.md
 # Diagnostics
 
 ```
-error[unresolved-import]: Module `typing` has no member `NamedTuple`
- --> src/mdtest_snippet.py:1:20
+error[invalid-named-tuple]: NamedTuple field name cannot start with an underscore
+ --> src/mdtest_snippet.py:8:9
   |
-1 | from typing import NamedTuple
-  |                    ^^^^^^^^^^
+8 |         _asdict: bool  # error: [invalid-named-tuple] "NamedTuple field `_asdict` cannot start with an underscore"
+  |         ^^^^^^^^^^^^^ Class definition will raise `TypeError` at runtime due to this field
+
+```
+
+```
+error[invalid-named-tuple]: Cannot overwrite NamedTuple attribute `_asdict`
+  --> src/mdtest_snippet.py:14:9
+   |
+14 |         _asdict = True
+   |         ^^^^^^^
+info: This will cause the class creation to fail at runtime
+
+```
+
+```
+error[invalid-named-tuple]: Cannot overwrite NamedTuple attribute `_asdict`
+  --> src/mdtest_snippet.py:14:9
+   |
+14 |         _asdict = True
+   |         ^^^^^^^
+info: This will cause the class creation to fail at runtime
 
 ```

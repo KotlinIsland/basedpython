@@ -7,9 +7,7 @@ use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_python_ast::name::Name;
 use ruff_text_size::TextRange;
 use rustc_hash::FxHashSet;
-use ty_python_core::definition::{
-    DefinitionCategory, DefinitionKind, ParameterDefinitionNodeKind,
-};
+use ty_python_core::definition::{DefinitionCategory, DefinitionKind, ParameterDefinitionNodeKind};
 use ty_python_core::place::ScopedPlaceId;
 use ty_python_core::scope::{FileScopeId, ScopeKind};
 use ty_python_core::{ProgramFile, SemanticIndex, semantic_index};

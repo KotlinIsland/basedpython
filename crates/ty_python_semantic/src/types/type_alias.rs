@@ -158,7 +158,7 @@ impl<'db> PEP695TypeAliasType<'db> {
     /// first `case` whose pattern matches the subject, evaluated against this alias's own
     /// specialization. An application that cannot pick a case yet has no value, and is
     /// reported as `Unknown` while it waits to be specialized.
-    pub(crate) fn value_type(self, db: &'db dyn Db) -> Type<'db> {
+    fn value_type(self, db: &'db dyn Db) -> Type<'db> {
         if !self.is_match_type(db) {
             return apply_type_alias_specialization(
                 db,

@@ -23,12 +23,12 @@ use crate::types::diagnostic::{
     report_unsupported_binary_operation,
 };
 use crate::types::function::{FunctionDecorators, FunctionType};
+use crate::types::infer::builder::binary_expressions::BinaryInferenceState;
 use crate::types::infer::builder::subscript::AnnotatedExprContext;
 use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
 use crate::types::signatures::{ConcatenateTail, Signature};
 use crate::types::special_form::{AliasSpec, LegacyStdlibAlias};
 use crate::types::string_annotation::parse_string_annotation;
-use crate::types::infer::builder::binary_expressions::BinaryInferenceState;
 use crate::types::template::{Promotable, TemplateLiteralType, TemplatePart};
 use crate::types::tuple::{TupleSpec, TupleSpecBuilder, TupleType};
 use crate::types::type_fn::{
@@ -498,6 +498,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 // doesn't resolve, so dispatch on the flag directly
                 let value_ty = if *is_typeof {
                     Type::SpecialForm(crate::types::SpecialFormType::TypeOf)
+                } else if !is_dotted_name(value) && self.in_string_annotation() {
+                    // a string annotation subscripting anything but a name is already an error,
+                    // and inferring what it subscripts would report every name written inside it
+                    // as unresolved on top of that
+                    Type::unknown()
                 } else {
                     self.infer_expression(value, TypeContext::default())
                 };
@@ -543,7 +548,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     ty
                 } else {
                     if !self.in_string_annotation() {
-                        self.infer_expression(value, TypeContext::default());
+                        // `value` is already inferred above — the basedpython arms need its type
+                        // before this point, so unlike upstream it is not computed inside the
+                        // dotted-name branch. inferring it again would store a second type for
+                        // every expression inside it
                         self.infer_expression(slice, TypeContext::default());
                     }
                     self.report_invalid_type_expression(

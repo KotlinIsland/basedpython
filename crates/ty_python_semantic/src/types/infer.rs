@@ -277,7 +277,7 @@ impl<'db> FunctionDecoratorInference<'db> {
     }
 
     /// basedpython: the type the call a trailing lambda block stands for produces.
-    pub(crate) fn trailing_lambda_return(&self) -> Option<Type<'db>> {
+    fn trailing_lambda_return(&self) -> Option<Type<'db>> {
         self.trailing_lambda_return
     }
 
@@ -703,6 +703,37 @@ impl<'db> InferScope<'db> {
     }
 }
 
+/// Where a [`TypeContext`] came from, when it is a call argument's parameter type.
+#[derive(
+    Default, Copy, Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue,
+)]
+pub(crate) enum ArgumentContextOrigin {
+    /// Not a call argument's parameter type, or one the call left unspecialized.
+    #[default]
+    External,
+    /// A generic call's parameter type specialized by this very argument. Such a context is not
+    /// an external observer of the argument's type, so it must not adopt and lock a fluid
+    /// specialization.
+    Solved,
+    /// basedpython: as [`Self::Solved`], and the parameter spells the class's type argument out
+    /// rather than naming it with a type variable (see [`Type::prescribes_type_arguments`]). The
+    /// context then states what the parameter demands rather than what the argument holds, so a
+    /// fluid specialization must not read a widening out of it either.
+    Prescribed,
+}
+
+impl ArgumentContextOrigin {
+    /// whether the context was solved from the argument it types
+    const fn is_solved_from_argument(self) -> bool {
+        !matches!(self, Self::External)
+    }
+
+    /// whether the parameter spells the class's type argument out
+    const fn prescribes_type_arguments(self) -> bool {
+        matches!(self, Self::Prescribed)
+    }
+}
+
 /// The type context for a given expression, namely the type annotation
 /// in an annotated assignment.
 ///
@@ -719,11 +750,8 @@ pub(crate) struct TypeContext<'db> {
     /// specialization candidates, whose literal types are promoted lazily on the first
     /// widening event rather than at creation time.
     pub(crate) preserve_literals: bool,
-    /// This context was solved from the very expression it is used to infer — a
-    /// generic call's parameter type specialized by this argument. Such a context
-    /// is not an external observer of the argument's type, so it must not adopt
-    /// and lock a fluid specialization.
-    pub(crate) inferred_from_argument: bool,
+    /// How this context relates to the argument expression it is used to infer.
+    pub(crate) argument_origin: ArgumentContextOrigin,
     /// basedpython: [`Self::target`] is then the expected type of the value a *call*
     /// of this expression produces, carried into the callee so that
     /// [context-sensitive resolution] reaches a constructor
@@ -745,7 +773,7 @@ impl<'db> TypeContext<'db> {
         Self {
             target: annotation,
             preserve_literals: false,
-            inferred_from_argument: false,
+            argument_origin: ArgumentContextOrigin::External,
             describes_call_result: false,
         }
     }
@@ -754,12 +782,22 @@ impl<'db> TypeContext<'db> {
     /// annotation describes the call's result, not the callee, so it is marked
     /// [`Self::describes_call_result`], which hides it from [`Self::annotation`]
     /// and leaves only context-sensitive resolution reading it
-    pub(crate) fn for_callee(self) -> Self {
+    fn for_callee(self) -> Self {
         Self {
             target: self.annotation(),
             describes_call_result: true,
             ..Self::default()
         }
+    }
+
+    /// Whether this context was solved from the argument expression it types.
+    const fn inferred_from_argument(self) -> bool {
+        self.argument_origin.is_solved_from_argument()
+    }
+
+    /// Whether the parameter this context came from spells the class's type argument out.
+    const fn prescribes_type_arguments(self) -> bool {
+        self.argument_origin.prescribes_type_arguments()
     }
 
     /// The type annotation this expression is checked against, if any.
@@ -810,7 +848,7 @@ impl<'db> TypeContext<'db> {
         Self {
             target: self.target.map(f),
             preserve_literals: self.preserve_literals,
-            inferred_from_argument: self.inferred_from_argument,
+            argument_origin: self.argument_origin,
             describes_call_result: self.describes_call_result,
         }
     }
@@ -1759,7 +1797,7 @@ impl<'db> DefinitionInference<'db> {
             .get(&collection_def)
     }
 
-    pub(crate) fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
+    fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
         self.extra
             .as_deref()?
             .fluid_adoptions()?
@@ -1769,7 +1807,7 @@ impl<'db> DefinitionInference<'db> {
 
     /// The creation-time type of the fluid specialization candidate defined by this
     /// region, with literal types retained.
-    pub(crate) fn fluid_creation(&self) -> Option<Type<'db>> {
+    fn fluid_creation(&self) -> Option<Type<'db>> {
         self.extra
             .as_deref()
             .and_then(DefinitionInferenceExtra::fluid_creation)
@@ -1777,7 +1815,7 @@ impl<'db> DefinitionInference<'db> {
 
     /// The resolved event timeline of the fluid specialization candidate defined by
     /// this region, with cumulative solutions.
-    pub(crate) fn fluid_timeline(&self) -> Option<&FluidTimeline<'db>> {
+    fn fluid_timeline(&self) -> Option<&FluidTimeline<'db>> {
         self.extra
             .as_deref()
             .and_then(DefinitionInferenceExtra::fluid_timeline)
@@ -2167,7 +2205,7 @@ impl<'db> ExpressionInference<'db> {
             .get(&collection_def)
     }
 
-    pub(crate) fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
+    fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
         self.extra
             .as_ref()?
             .fluid_adoptions
@@ -2177,13 +2215,13 @@ impl<'db> ExpressionInference<'db> {
 
     /// The creation-time type of the fluid specialization candidate whose assigned
     /// value is this region, with literal types retained.
-    pub(crate) fn fluid_creation(&self) -> Option<Type<'db>> {
+    fn fluid_creation(&self) -> Option<Type<'db>> {
         self.extra.as_ref().and_then(|extra| extra.fluid_creation)
     }
 
     /// The resolved event timeline of the fluid specialization candidate whose
     /// assigned value is this region, with cumulative solutions.
-    pub(crate) fn fluid_timeline(&self) -> Option<&FluidTimeline<'db>> {
+    fn fluid_timeline(&self) -> Option<&FluidTimeline<'db>> {
         self.extra
             .as_ref()
             .and_then(|extra| extra.fluid_timeline.as_ref())
@@ -2231,7 +2269,7 @@ impl<'db> StatementInference<'db> {
         }
     }
 
-    pub(crate) fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
+    fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
         match self {
             StatementInference::Expression(inference) => inference.fluid_adoption(use_expression),
             StatementInference::Definition(_, inference) => {
@@ -2391,7 +2429,7 @@ impl<'db> StatementInferenceInner<'db> {
             .get(&collection_def)
     }
 
-    pub(crate) fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
+    fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
         self.extra
             .as_ref()?
             .fluid_adoptions

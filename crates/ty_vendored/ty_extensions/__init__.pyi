@@ -232,7 +232,7 @@ type JustFloat = _TypeOf[1.0]
 type JustComplex = _TypeOf[1.0j]
 
 class Character(str):
-    """a single extended grapheme cluster — one user-perceived character
+    r"""a single extended grapheme cluster — one user-perceived character
 
     `Character` is the element type of `str`: it is one user-perceived character
     (an extended grapheme cluster, per unicode UAX #29), which may span several

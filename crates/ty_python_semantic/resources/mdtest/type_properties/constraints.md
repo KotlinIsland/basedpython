@@ -1704,7 +1704,7 @@ def complete(value: int, /, text: str = "", *args: float, flag: bool = False, **
 
 def signature[**P]() -> None:
     constraints = ConstraintSet.range(RegularCallableTypeOf[complete], P, RegularCallableTypeOf[complete])
-    # revealed: ConstraintSet[(P@signature = (value: int, /, text: str = "", *args: float, flag: bool = False, **kwargs: bytes))]
+    # revealed: ConstraintSet[(P@signature = (value: int, /, text: str = "", *args: int | float, flag: bool = False, **kwargs: bytes))]
     reveal_type(constraints.with_detailed_display())
 ```
 

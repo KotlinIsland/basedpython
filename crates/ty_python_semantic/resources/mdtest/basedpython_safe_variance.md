@@ -75,10 +75,9 @@ Storage is invariant in its own type, so a write has to be valid for every type 
 could really have. Nothing is, which is why the write type is `Never`.
 
 Privacy is what exempts `t` from constraining variance; the public `g` below still consumes a `T`,
-so the class is separately reported for not honouring its own `out`.
+so `g` is separately reported for not honouring the class's own `out`.
 
 ```by
-# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `A`"
 class A[out T]:
     private t: T
 
@@ -86,7 +85,7 @@ class A[out T]:
         # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `Never`"
         other.t = 1
 
-    def g(self, other: A[object], t: T):
+    def g(self, other: A[object], t: T):  # error: [invalid-generic-class] "Variance of type variable `T` is incompatible with method `g`"
         # a real `T` gets no further: it is `self`'s parameter, and says nothing about the one
         # `other` is hiding
         # error: [invalid-assignment] "Object of type `T@A` is not assignable to attribute `t` of type `Never`"
@@ -98,11 +97,10 @@ class A[out T]:
 `a` below is an `A[object]` and its storage has nothing to do with `self`'s `T`.
 
 ```by
-# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `A`"
 class A[out T]:
     private t: T
 
-    def f(self, t: T):
+    def f(self, t: T):  # error: [invalid-generic-class] "Variance of type variable `T` is incompatible with method `f`"
         a = A[object]()
         # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `Never`"
         a.t = 1
@@ -117,17 +115,16 @@ parameters are that receiver's — so the member keeps its declared type, un-era
 can be written to it. This holds through a capture in a nested function too.
 
 ```by
-# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `A`"
 class A[out T]:
     private t: T
 
-    def f(self: A[object], t: T):
+    def f(self: A[object], t: T):  # error: [invalid-generic-class] "Variance of type variable `T` is incompatible with method `f`"
         reveal_type(self.t)  # revealed: T@A
         self.t = t
         # error: [invalid-assignment] "Object of type `"asdf"` is not assignable to attribute `t` of type `T@A`"
         self.t = "asdf"
 
-    def g(self: A[object], t: T):
+    def g(self: A[object], t: T):  # error: [invalid-generic-class] "Variance of type variable `T` is incompatible with method `g`"
         def inner():
             self.t = t
 ```
@@ -256,6 +253,49 @@ class A[T]:
 
 def f(a: A[int]):
     reveal_type(a._anything)  # revealed: int
+```
+
+## a generated member is not private
+
+A member a code generator supplies belongs to the surface that construct gives every one of its
+classes, so it is public however its name is spelled. A named tuple is the case that matters: Python
+underscores `_asdict`, `_replace`, `_make` and `_fields` to keep the field namespace clear, not to
+hide them. They specialize like any other member, through the class that declares the fields and
+through a subclass of it.
+
+```py
+from typing import NamedTuple
+
+class Box[T](NamedTuple):
+    value: T
+
+class Child[T](Box[T]):
+    pass
+
+def f(box: Box[int], child: Child[int]):
+    reveal_type(box._asdict())  # revealed: dict[str, Any]
+    reveal_type(child._asdict())  # revealed: dict[str, Any]
+    reveal_type(box._replace)  # revealed: (*, value: int = ...) -> Box[int]
+```
+
+## a declared member of the same name is still private
+
+The exemption turns on where the member comes from, not on what it is called. A subclass that
+declares a private member sharing a generated name is keeping a member of its own, so it erases like
+any other private attribute — a declaration in the class body is what the lookup resolves to, and
+the generator never supplies it.
+
+```py
+from typing import NamedTuple
+
+class Box[T](NamedTuple):
+    value: T
+
+class Shadow[T](Box[T]):
+    _replace: T
+
+def f(shadow: Shadow[int]):
+    reveal_type(shadow._replace)  # revealed: object
 ```
 
 ## a non-generic class is unaffected

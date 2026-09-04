@@ -235,7 +235,12 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
             )
         });
 
+        // basedpython: `report_refutable_unpacking` needs the value as the program wrote it —
+        // its type and the tuple its iterator yields. A literal sequence is written out at the
+        // assignment, so its length is not in doubt and it carries no source here.
+        let mut refutable_sources: Vec<Option<(Cow<'db, TupleSpec<'db>>, Type<'db>)>> = Vec::new();
         let sequences = if let Some(literal) = literal {
+            refutable_sources.push(None);
             vec![literal]
         } else {
             // N.B. `Type::try_iterate` internally handles unions, but in a lossy way.
@@ -250,11 +255,20 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
             unpack_types
                 .iter()
                 .map(|ty| {
-                    let tuple = ty.try_iterate(db, env).unwrap_or_else(|err| {
+                    // basedpython: unpacking a `Character` iterates it, which is what the rule is
+                    // about — its code points are not what a reader means by its parts
+                    report_iteration_over_character(&self.context, *ty, value_expr);
+                    // a value that is not iterable at all has already been reported as such, and
+                    // the homogeneous fallback below says nothing about its real length
+                    let iterated = ty.try_iterate(db, env);
+                    let value_is_iterable = iterated.is_ok();
+                    let tuple = iterated.unwrap_or_else(|err| {
                         err.report_diagnostic(&self.context, *ty, value_expr);
                         Cow::Owned(TupleSpec::homogeneous(err.fallback_element_type(db, env)))
                     });
-                    sequence_from_type(db, &tuple)
+                    let sequence = sequence_from_type(db, &tuple);
+                    refutable_sources.push(value_is_iterable.then_some((tuple, *ty)));
+                    sequence
                 })
                 .collect()
         };
@@ -269,7 +283,7 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                 )
             })
             .collect();
-        for sequence in sequences {
+        for (sequence, refutable_source) in sequences.into_iter().zip(&refutable_sources) {
             let matched = sequence.unpack(target_len, Clone::clone, |elements| {
                 UnpackElement::from_type(UnionType::from_elements_leave_aliases(
                     db,
@@ -300,6 +314,9 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                         // path combines multiple union arms, and those have no source expressions.
                         *expression = element.expression;
                         *promote_literals = element.promote_literals;
+                    }
+                    if let Some((tuple, ty)) = refutable_source {
+                        self.report_refutable_unpacking(target, target_len, tuple.as_ref(), *ty);
                     }
                 }
                 Err(err) => {

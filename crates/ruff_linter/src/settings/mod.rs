@@ -783,7 +783,7 @@ impl LinterSettings {
     /// binder](ruff_python_ast::is_destructure_binder) is not one: it stands for
     /// the value a pattern takes apart, the source refers to the pattern's
     /// captures instead, and no rename could make it read better.
-    pub fn ignores_unused_binding(&self, name: &str) -> bool {
+    pub(crate) fn ignores_unused_binding(&self, name: &str) -> bool {
         self.dummy_variable_rgx.is_match(name) || is_destructure_binder(name)
     }
 
@@ -993,6 +993,21 @@ mod tests {
         	airflow-xcom-pull-in-template-string (AIR201),
         	airflow-task-implicit-multiple-outputs (AIR202),
         	airflow3-dag-dynamic-value (AIR304),
+        	manual-none-coalesce (BY001),
+        	manual-optional-chain (BY002),
+        	manual-isinstance (BY003),
+        	manual-super-call (BY004),
+        	manual-any-annotation (BY007),
+        	manual-unpack-annotation (BY009),
+        	manual-typeof-annotation (BY010),
+        	manual-re-export (BY011),
+        	redundant-typing-import (BY012),
+        	unnecessary-stub-body (BY017),
+        	manual-sentinel (BY019),
+        	manual-cast-call (BY020),
+        	manual-property (BY021),
+        	manual-modifier (BY022),
+        	redundant-none-coalesce (BY101),
         	fast-api-redundant-response-model (FAST001),
         	fast-api-non-annotated-dependency (FAST002),
         	fast-api-unused-path-parameter (FAST003),

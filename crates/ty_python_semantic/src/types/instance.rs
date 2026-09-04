@@ -115,11 +115,7 @@ impl<'db> Type<'db> {
     /// This is a refinement of `Type::instance(db, class)`: it behaves as that
     /// instance everywhere, and only the `re` members that depend on the group
     /// shape consult the extra payload.
-    pub(crate) fn regex_instance(
-        db: &'db dyn Db,
-        class: ClassType<'db>,
-        groups: RegexGroups<'db>,
-    ) -> Self {
+    fn regex_instance(db: &'db dyn Db, class: ClassType<'db>, groups: RegexGroups<'db>) -> Self {
         Type::NominalInstance(NominalInstanceType(NominalInstanceInner::Regex(
             RegexInstanceClass::new(db, class, groups),
         )))
@@ -328,7 +324,7 @@ impl<'db> NominalInstanceType<'db> {
     /// As of 2026-02-16, this method is not used in any crates in the Ruff
     /// repo, but is exposed as a public API for external users of
     /// `ty_python_semantic`.
-    pub fn class_name(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> &'db Name {
+    pub(crate) fn class_name(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> &'db Name {
         self.class(db, env).name(db)
     }
 
@@ -342,7 +338,7 @@ impl<'db> NominalInstanceType<'db> {
     /// As of 2026-02-16, this method is not used in any crates in the Ruff
     /// repo, but is exposed as a public API for external users of
     /// `ty_python_semantic`.
-    pub fn class_module_name(
+    pub(crate) fn class_module_name(
         &self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,

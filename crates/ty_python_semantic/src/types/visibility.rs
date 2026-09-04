@@ -125,7 +125,7 @@ fn class_member<'db>(
 ///
 /// The rule is python's: leading underscores are stripped from the class name,
 /// and a class named only with underscores mangles nothing.
-pub(crate) fn mangled_private_name(class: &str, member: &str) -> String {
+fn mangled_private_name(class: &str, member: &str) -> String {
     let class = class.trim_start_matches('_');
     if class.is_empty() {
         return format!("__{member}");

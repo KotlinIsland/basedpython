@@ -855,8 +855,6 @@ from typing import Final, Protocol, TypeVar
 
 T = TypeVar("T")
 
-# `replace` takes a `T`, which a covariant type variable cannot appear in
-# error: [invalid-generic-class]
 class Owned(Protocol[T]):
     owner: Final[T]
 
@@ -1114,7 +1112,7 @@ attribute.
 from typing import Final
 
 class C:
-    value: Final[int]  # error: [final-without-value] "`Final` symbol `value` is not assigned a value"
+    value: Final[int]  # error: [final-without-value] "read-only symbol `value` is not assigned a value"
 
     def __init__(self, repeat: bool, replacement: "C") -> None:
         self.value

@@ -42,8 +42,8 @@ pub use self::diagnostic::{
 };
 use self::infer::infer_function_default_types;
 pub(crate) use self::infer::{
-    InferredDeclaration, TypeContext, infer_complete_scope_types, infer_deferred_types,
-    infer_definition_types, infer_expression_type, infer_expression_types,
+    ArgumentContextOrigin, InferredDeclaration, TypeContext, infer_complete_scope_types,
+    infer_deferred_types, infer_definition_types, infer_expression_type, infer_expression_types,
     infer_same_file_expression_type, infer_scope_types, is_discarded_dict_key_assignment,
 };
 pub(crate) use self::iteration::{
@@ -83,11 +83,12 @@ pub(crate) use crate::types::callable::{CallableType, CallableTypes};
 pub(crate) use crate::types::class_base::ClassBase;
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::context::{LintDiagnosticGuard, LintDiagnosticGuardBuilder};
+pub(crate) use crate::types::dedicated::role::function_framework_role;
 pub use crate::types::dedicated::role::{
-    FrameworkRole, FunctionFrameworkRole, class_body_annotation_is_semantic, class_framework_role,
-    function_framework_role,
+    FrameworkRole, class_body_annotation_is_semantic, class_framework_role,
 };
-pub use crate::types::deferred::{DeferredOperation, DeferredType};
+pub(crate) use crate::types::deferred::DeferredOperation;
+pub use crate::types::deferred::DeferredType;
 use crate::types::diagnostic::{
     AttributeAccessMethod, INVALID_AWAIT, INVALID_TYPE_FORM, report_bad_attribute_access_call,
     report_bad_dunder_get_call, report_bad_import_call,
@@ -2253,11 +2254,7 @@ impl<'db> Type<'db> {
     ///
     /// A marker stands for a type a cycle has not reached yet, so a type carrying one is not an
     /// answer — it is the shape of an answer with a hole where the cycle still is.
-    pub(crate) fn mentions_divergence(
-        self,
-        db: &'db dyn Db,
-        env: &ProgramEnvironment<'db>,
-    ) -> bool {
+    fn mentions_divergence(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
         any_over_type(db, env, self, false, |ty| ty.is_divergent())
     }
 
@@ -2735,7 +2732,7 @@ impl<'db> Type<'db> {
         UnionType::from_elements_cycle_recovery(db, env, kept)
     }
 
-    pub(crate) fn is_deeply_nested(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
+    fn is_deeply_nested(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
         nesting_depth(db, env, self, NESTING_LIMIT) == NESTING_LIMIT
     }
 
@@ -3249,7 +3246,7 @@ impl<'db> Type<'db> {
     /// basedpython: the protocol's data members, as `(name, instance-access type)` pairs —
     /// the keyword parameters `(**P) -> R` unpacks to. Methods are excluded: they describe
     /// how the value behaves, not a keyword a caller can pass.
-    pub(crate) fn protocol_data_members(
+    fn protocol_data_members(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -3341,7 +3338,7 @@ impl<'db> Type<'db> {
         )
     }
 
-    pub(crate) const fn as_literal_value(self) -> Option<LiteralValueType<'db>> {
+    const fn as_literal_value(self) -> Option<LiteralValueType<'db>> {
         match self {
             Type::LiteralValue(literal) => Some(literal),
             _ => None,
@@ -3399,7 +3396,7 @@ impl<'db> Type<'db> {
 
     /// basedpython: whether this is a symbolic type whose value is only known once its type
     /// parameters are, so reducing it before a comparison would lose what it names
-    pub(crate) const fn is_deferred(self) -> bool {
+    const fn is_deferred(self) -> bool {
         matches!(self, Type::Deferred(_))
     }
 
@@ -3492,7 +3489,7 @@ impl<'db> Type<'db> {
     }
 
     /// Detects types which are valid to appear inside a `Literal[…]` type annotation.
-    pub(crate) fn is_literal_or_union_of_literals(
+    fn is_literal_or_union_of_literals(
         &self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -3549,14 +3546,14 @@ impl<'db> Type<'db> {
 
     /// basedpython: create an unpromotable float literal, used for explicit
     /// `float.inf` / `float.nan` annotations that must not widen to `float`
-    pub(crate) fn unpromotable_float_literal(value: f64) -> Self {
+    fn unpromotable_float_literal(value: f64) -> Self {
         Self::LiteralValue(LiteralValueType::unpromotable(
             literal::FloatLiteralType::from_f64(value),
         ))
     }
 
     /// basedpython: create a promotable complex literal
-    pub(crate) fn complex_literal(db: &'db dyn Db, re: f64, im: f64) -> Self {
+    fn complex_literal(db: &'db dyn Db, re: f64, im: f64) -> Self {
         Self::LiteralValue(LiteralValueType::promotable(
             literal::ComplexLiteralType::from_parts(db, re, im),
         ))
@@ -3862,7 +3859,7 @@ impl<'db> Type<'db> {
 
     /// Returns the fallback instance type that a literal is an instance of, or `None` if the type
     /// is not a literal.
-    pub(crate) fn literal_fallback_instance(
+    fn literal_fallback_instance(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -3904,7 +3901,7 @@ impl<'db> Type<'db> {
     /// A `.by` file has that model by definition rather than by configuration, so it takes
     /// the strict path whatever `strict-float` says.
     #[must_use]
-    pub(crate) fn promote_in(
+    fn promote_in(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -3950,7 +3947,7 @@ impl<'db> Type<'db> {
     ///
     /// basedpython: promotion of an *inferred* element widens through the same numeric special
     /// case as an annotation would, so a module that opted out of it has to opt out here too.
-    pub(crate) fn promote_collection_element_type_in(
+    fn promote_collection_element_type_in(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -6074,6 +6071,60 @@ impl<'db> Type<'db> {
     /// `Box[int].value` and `Box[str].value` both refer to `Box.value` at runtime.
     /// A `type[Box[int]]` receiver can refer to a concrete subclass with its own attributes,
     /// so this restriction only applies to class literals and generic aliases.
+    /// basedpython: the same type seen through `projections`, when it is a generic instance whose
+    /// parameters they line up with.
+    ///
+    /// Substituting into a generic rebuilds its specialization from the arguments, which is where
+    /// a use-site projection would otherwise be dropped.
+    fn with_use_site_projections(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        projections: &[Option<ruff_python_ast::helpers::UseSiteVariance>],
+    ) -> Self {
+        if projections.iter().all(Option::is_none) {
+            return self;
+        }
+        let Some(instance) = self.as_nominal_instance() else {
+            return self;
+        };
+        let ClassType::Generic(alias) = instance.class(db, env) else {
+            return self;
+        };
+        let specialization = alias.specialization(db);
+        if specialization.types(db).len() != projections.len() {
+            return self;
+        }
+        let projected =
+            specialization.with_projections(db, projections.to_vec().into_boxed_slice());
+        Type::instance(
+            db,
+            env,
+            ClassType::Generic(GenericAlias::new(db, alias.origin(db), projected)),
+        )
+    }
+
+    /// basedpython: whether this type is a *view* of a generic instance rather than the plain
+    /// instance — `list[out int]`, which its holder has undertaken only to read.
+    ///
+    /// A projection changes what the members of the object offer, not which object it is, so
+    /// anything asking whether a type *is* something has to see past it.
+    fn has_use_site_projection(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
+        self.union_elements(db).any(|element| {
+            let Some(instance) = element.as_nominal_instance() else {
+                return false;
+            };
+            let ClassType::Generic(alias) = instance.class(db, env) else {
+                return false;
+            };
+            alias
+                .specialization(db)
+                .projections(db)
+                .iter()
+                .any(Option::is_some)
+        })
+    }
+
     fn has_generic_instance_attribute(
         self,
         db: &'db dyn Db,
@@ -6132,6 +6183,13 @@ impl<'db> Type<'db> {
             _ => std::slice::from_ref(&ty),
         };
         alternatives.iter().any(|ty| {
+            // basedpython: a class is not instance storage, and reading one off the class is how
+            // it is named. python cannot reach an enclosing class's type parameter from a nested
+            // class body, so only a lowered construct puts one here — an enum variant, whose
+            // `Tree.Leaf` mentions `Tree`'s own `T` because the variant subclasses the enum.
+            if matches!(ty, Type::ClassLiteral(_) | Type::GenericAlias(_)) {
+                return false;
+            }
             // Descriptors define their own class-access behavior, but do not exempt other
             // alternatives in a union from the restriction on generic instance storage.
             ty.class_member(db, env, "__get__").is_undefined()
@@ -7246,7 +7304,15 @@ impl<'db> Type<'db> {
                         {
                             specialized.overloads
                         } else {
-                            smallvec_inline![overload.clone()]
+                            // basedpython: a method type variable can be bounded by `Self` —
+                            // `def link[T: Self](self, other: T)`. The receiver is known here, so
+                            // the bound is settled here too; leaving `Self` standing in it makes
+                            // the receiver fail a bound derived from itself.
+                            smallvec_inline![overload.with_self_bounded_typevars(
+                                db,
+                                env,
+                                bound_method.typing_self_type(db),
+                            )]
                         }
                     });
 
@@ -9510,13 +9576,9 @@ impl<'db> Type<'db> {
             visitor: &ActiveRecursionDetector<TypeAliasType<'db>>,
         ) -> Type<'db> {
             match ty {
-                Type::Overlapping(overlapping) => to_meta_type_inner(
-                    db,
-                    env,
-                    overlapping.value_type(db, env),
-                    context,
-                    visitor,
-                ),
+                Type::Overlapping(overlapping) => {
+                    to_meta_type_inner(db, env, overlapping.value_type(db, env), context, visitor)
+                }
                 Type::Restricted(restricted) => {
                     to_meta_type_inner(db, env, restricted.value_type(db), context, visitor)
                 }
@@ -9734,31 +9796,59 @@ impl<'db> Type<'db> {
     /// Class-backed protocols return their structural `type[Protocol]` view.
     #[must_use]
     fn dunder_class(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
-        match self {
-            Type::Union(union) => union.map(db, env, |element| element.dunder_class(db, env)),
-            Type::UnsafeUnion(unsafe_union) => {
-                unsafe_union.map_elements(db, env, |element| element.dunder_class(db, env))
+        fn dunder_class_inner<'db>(
+            db: &'db dyn Db,
+            env: &ProgramEnvironment<'db>,
+            ty: Type<'db>,
+            visitor: &ActiveRecursionDetector<TypeAliasType<'db>>,
+        ) -> Type<'db> {
+            match ty {
+                Type::Union(union) => union.map(db, env, |element| {
+                    dunder_class_inner(db, env, *element, visitor)
+                }),
+                Type::UnsafeUnion(unsafe_union) => unsafe_union.map_elements(db, env, |element| {
+                    dunder_class_inner(db, env, element, visitor)
+                }),
+                Type::Intersection(intersection) => intersection
+                    .try_dunder_class(db, env)
+                    .unwrap_or_else(|| ty.to_meta_type(db, env)),
+                Type::ProtocolInstance(protocol) => protocol.to_meta_type(db, env),
+                Type::TypedDict(_) => KnownClass::Dict
+                    .to_specialized_class_type(
+                        db,
+                        env,
+                        &[KnownClass::Str.to_instance(db, env), Type::object()],
+                    )
+                    .map(Type::from)
+                    // Guard against user-customized typesheds with a broken `dict` class
+                    .unwrap_or_else(Type::unknown),
+                // An alias is only a name for its value, so `__class__` has to be
+                // answered by the value — otherwise the fallback below gives the
+                // *meta* type, which for a `TypedDict` is the class it is modelled
+                // by rather than the `dict` its inhabitants really are.
+                //
+                // An alias whose value names it again — `type R[T, U] = T | R[U, T]` — would
+                // expand forever, so each one is entered once. It is invalid either way, and
+                // the class of what it does hold is answered from the members that terminate.
+                //
+                // One whose arguments *grow* — `type R[T] = T | R[list[T]]` — is never the same
+                // alias twice, so entering each once is no bound at all. The meta type handles
+                // that shape already, and reaching it here means giving up the `TypedDict`
+                // reading above, which such an alias does not have anyway.
+                Type::TypeAlias(alias)
+                    if !matches!(ty.to_type_identity(db), TypeIdentity::GrowingTypeAlias(_)) =>
+                {
+                    visitor.visit(
+                        &alias,
+                        || Type::Never,
+                        || dunder_class_inner(db, env, alias.value_type(db), visitor),
+                    )
+                }
+                _ => ty.to_meta_type(db, env),
             }
-            Type::Intersection(intersection) => intersection
-                .try_dunder_class(db, env)
-                .unwrap_or_else(|| self.to_meta_type(db, env)),
-            Type::ProtocolInstance(protocol) => protocol.to_meta_type(db, env),
-            Type::TypedDict(_) => KnownClass::Dict
-                .to_specialized_class_type(
-                    db,
-                    env,
-                    &[KnownClass::Str.to_instance(db, env), Type::object()],
-                )
-                .map(Type::from)
-                // Guard against user-customized typesheds with a broken `dict` class
-                .unwrap_or_else(Type::unknown),
-            // An alias is only a name for its value, so `__class__` has to be
-            // answered by the value — otherwise the fallback below gives the
-            // *meta* type, which for a `TypedDict` is the class it is modelled
-            // by rather than the `dict` its inhabitants really are
-            Type::TypeAlias(alias) => alias.value_type(db).dunder_class(db, env),
-            _ => self.to_meta_type(db, env),
         }
+
+        dunder_class_inner(db, env, self, &ActiveRecursionDetector::default())
     }
 
     #[must_use]
@@ -9774,45 +9864,70 @@ impl<'db> Type<'db> {
         }
     }
 
-    /// basedpython: applies `specialization` to a member type, honoring any
-    /// use-site variance projections it carries. with no projections this is
-    /// exactly [`Type::apply_specialization`]; with projections, projected
-    /// typevars are substituted directionally by position — see
-    /// [`TypeMapping::ProjectUseSiteVariance`]. this is how `Container[out T]`
-    /// rejects writes (and `Container[in T]` rejects reads) through *methods*,
-    /// not just subscripts and attributes
+    /// basedpython: applies `specialization` at a member-projection boundary.
+    ///
+    /// This is the projecting counterpart of
+    /// [`Type::apply_optional_owner_specialization_to_member`], and carries the same extra duty:
+    /// the domain of a retained synthetic `Self` is rewritten along with everything else. Without
+    /// it a method reached through `Box[int]` keeps `Box[T@Box]` as its `Self` bound, and the
+    /// receiver then fails to satisfy a bound naming a variable the receiver has already fixed.
     #[must_use]
-    pub(crate) fn apply_projected_specialization(
+    fn apply_projected_owner_specialization_to_member(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         specialization: Specialization<'db>,
     ) -> Type<'db> {
+        self.apply_projected_specialization_impl(db, env, specialization, true)
+    }
+
+    /// basedpython: applies `specialization` to a member type, honoring any use-site variance
+    /// projections it carries. with no projections this is exactly
+    /// [`Type::apply_specialization`]; with projections, projected typevars are substituted
+    /// directionally by position — see [`TypeMapping::ProjectUseSiteVariance`]. this is how
+    /// `Container[out T]` rejects writes (and `Container[in T]` rejects reads) through
+    /// *methods*, not just subscripts and attributes
+    ///
+    /// `specialize_self_domain` additionally rewrites the domain of a retained synthetic `Self`,
+    /// which is what a projection boundary needs and what ordinary specialization must not do
+    fn apply_projected_specialization_impl(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        specialization: Specialization<'db>,
+        specialize_self_domain: bool,
+    ) -> Type<'db> {
         if specialization.projections(db).iter().any(Option::is_some) {
+            let specialization = if specialize_self_domain {
+                ApplySpecialization::specialization_for_member(specialization)
+            } else {
+                ApplySpecialization::specialization(specialization)
+            };
             self.apply_type_mapping(
                 db,
                 env,
                 &TypeMapping::ProjectUseSiteVariance {
-                    specialization: ApplySpecialization::specialization(specialization),
+                    specialization,
                     position: TypeVarVariance::Covariant,
                 },
                 TypeContext::default(),
             )
         } else {
-            self.apply_specialization(db, specialization)
+            self.apply_specialization_impl(db, specialization, specialize_self_domain)
         }
     }
 
-    /// basedpython: the `Option` analogue of [`Type::apply_projected_specialization`]
+    /// basedpython: the `Option` analogue of
+    /// [`Type::apply_projected_owner_specialization_to_member`]
     #[must_use]
-    pub(crate) fn apply_projected_optional_specialization(
+    fn apply_projected_optional_owner_specialization_to_member(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         specialization: Option<Specialization<'db>>,
     ) -> Type<'db> {
         if let Some(specialization) = specialization {
-            self.apply_projected_specialization(db, env, specialization)
+            self.apply_projected_owner_specialization_to_member(db, env, specialization)
         } else {
             self
         }
@@ -10260,9 +10375,13 @@ impl<'db> Type<'db> {
 
             Type::SlotDescriptor(descriptor) => Type::SlotDescriptor(SlotDescriptorType::new(
                 db,
-                descriptor
-                    .value_type(db)
-                    .apply_type_mapping_impl(db, env, type_mapping, tcx, visitor),
+                descriptor.value_type(db).apply_type_mapping_impl(
+                    db,
+                    env,
+                    type_mapping,
+                    tcx,
+                    visitor,
+                ),
             )),
 
             Type::Union(union) => union.map_leave_aliases(db, visitor.env, |element| {
@@ -11575,7 +11694,12 @@ impl<'db> VarianceInferable<'db> for Type<'db> {
             // basedpython: a template's holes each render through `str()`, which
             // reads its argument and produces a fresh string — a covariant use
             Type::LiteralValue(literal) if let Some(template) = literal.as_template() => {
-                VarianceTerm::join(db, template.holes(db).map(|hole| hole.variance_of(db, env, typevar)))
+                VarianceTerm::join(
+                    db,
+                    template
+                        .holes(db)
+                        .map(|hole| hole.variance_of(db, env, typevar)),
+                )
             }
 
             // Products are covariant in their conjuncts. For negative
@@ -11629,7 +11753,6 @@ impl<'db> VarianceInferable<'db> for Type<'db> {
             Type::Deferred(deferred) => deferred.reduced(db, env).variance_of(db, env, typevar),
             Type::KnownInstance(known_instance) => known_instance.variance_of(db, env, typevar),
             Type::TypeAlias(alias) => alias.variance_of(db, env, typevar),
-            Type::TypedDict(typed_dict) => typed_dict.variance_of(db, env, typevar),
             Type::Dynamic(_)
             | Type::Divergent(_)
             | Type::Never

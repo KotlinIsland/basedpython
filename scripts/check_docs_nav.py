@@ -9,6 +9,11 @@ and a page missing from `index.md` is undiscoverable from the reference index
 against the three drifting apart
 """
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+
 from __future__ import annotations
 
 import re

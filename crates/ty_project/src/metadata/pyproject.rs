@@ -264,7 +264,7 @@ pub struct Project {
     /// `PackageMetadata::from_pyproject` reports missing names.
     pub(crate) name: Option<RangedValue<PackageName>>,
     /// The version of the project
-    pub(crate) version: Option<RangedValue<Version>>,
+    version: Option<RangedValue<Version>>,
     /// The Python versions this project is compatible with.
     pub(crate) requires_python: Option<RangedValue<VersionSpecifiers>>,
     /// The requirements installed alongside the project.
@@ -272,9 +272,9 @@ pub struct Project {
     /// Kept as written rather than as parsed requirements: one entry ty cannot
     /// make sense of must not cost it the whole file, and a `[project]` table it
     /// fails to deserialize is a project it fails to load.
-    pub dependencies: Option<Vec<String>>,
+    dependencies: Option<Vec<String>>,
     /// The requirements of each extra, installed only when the extra is asked for.
-    pub optional_dependencies: Option<BTreeMap<String, Vec<String>>>,
+    optional_dependencies: Option<BTreeMap<String, Vec<String>>>,
 }
 
 pub(super) fn resolve_requires_python_lower_bound(
@@ -407,7 +407,7 @@ pub struct Tool {
 pub struct Uv {
     /// uv's own development dependencies, which predate PEP 735 and are still
     /// widely written. uv treats them as the `dev` group, and so does this.
-    pub dev_dependencies: Option<Vec<String>>,
+    dev_dependencies: Option<Vec<String>>,
 }
 
 /// One entry of a PEP 735 dependency group: a requirement, or another group.

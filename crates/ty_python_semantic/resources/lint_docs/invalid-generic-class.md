@@ -31,8 +31,8 @@ class D(Generic[U, T]): ...  # error
 
 
 # covariant type parameter used in a position that requires contravariance
-class E(Generic[V]):  # error
-    def set(self, value: V) -> None: ...
+class E(Generic[V]):
+    def set(self, value: V) -> None: ...  # error
 ```
 
 ## References

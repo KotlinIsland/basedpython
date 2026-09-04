@@ -40,7 +40,7 @@ use super::{MAX_INHERITANCE_DEPTH, template_index};
 pub(super) const URL_TAG: &str = "url";
 
 /// the tags that name another template
-pub(super) const TEMPLATE_TAGS: &[&str] = &["extends", "include"];
+const TEMPLATE_TAGS: &[&str] = &["extends", "include"];
 
 /// the tag that closes a `{% block %}`
 const END_BLOCK_TAG: &str = "endblock";

@@ -469,10 +469,10 @@ def f(repeat: bool):
     x = 1
     while repeat:
         reveal_type(x)  # revealed: Literal[1]
-        while x:
+        while x:  # error: [redundant-condition] "This condition is always true"
             if stop():
                 break
-            while x:
+            while x:  # error: [redundant-condition] "This condition is always true"
                 if stop():
                     break
                 if x == 4:
@@ -554,8 +554,7 @@ def advance(data: bytes, offset: int) -> None:
         if not 1 <= step <= 8:
             raise ValueError
         offset += step
-        # TODO: The offset should retain its `int` type.
-        reveal_type(offset)  # revealed: int | Unknown
+        reveal_type(offset)  # revealed: int
 ```
 
 ### Loop updates guarded by compound conditions converge
@@ -857,7 +856,7 @@ def f(box: Box):
     reveal_type(box.value)  # revealed: bool
 ```
 
-### Rebinding an object resets attribute narrowing across iterations
+## Rebinding an object resets attribute narrowing across iterations
 
 The first iteration sees the initial object's `int` value; later iterations see the replacement's
 `str` value. The type at the start of the body is therefore `int | str`. Rebinding restores the full
@@ -880,7 +879,7 @@ def example(box: Box):
         assert isinstance(box.value, str)
 ```
 
-### Rebinding an object affects the loop condition
+## Rebinding an object affects the loop condition
 
 A guard before the loop only constrains the initial object. Rebinding `box` can make `box.value`
 true on a later iteration, so the loop condition is not always true.
@@ -916,7 +915,7 @@ def normal_exit(box: Box, replacement: Box):
     reveal_type(box.value)  # revealed: Literal[True]
 ```
 
-### Rebinding an object before `continue`
+## Rebinding an object before `continue`
 
 Rebinding also invalidates attribute narrowing when the next iteration is reached through
 `continue`. A replacement whose `value` is `True` can end the loop.
@@ -936,7 +935,7 @@ def f(box: Box, replacement: Box):
     reveal_type(box.value)  # revealed: Literal[True]
 ```
 
-### Rebinding in an inner loop reaches the next outer iteration
+## Rebinding in an inner loop reaches the next outer iteration
 
 An inner loop can rebind `box` on one iteration, then exit through a `break` before reaching the
 assignment again. The replacement is visible both after the inner loop and on later outer
@@ -962,7 +961,7 @@ def f(box: Box, replacement: Box, repeat: bool):
         reveal_type(box.value)  # revealed: bool
 ```
 
-### Rebinding a member resets nested attribute narrowing
+## Rebinding a member resets nested attribute narrowing
 
 Replacing `wrapper.box` invalidates narrowing of `wrapper.box.value` on subsequent iterations, even
 though the outer `wrapper` object is unchanged.
@@ -984,7 +983,7 @@ def f(wrapper: Wrapper, replacement: Box):
     reveal_type(wrapper.box.value)  # revealed: Literal[True]
 ```
 
-### Rebinding a collection resets subscript narrowing
+## Rebinding a collection resets subscript narrowing
 
 A guard on the initial tuple's element does not constrain the corresponding element of a replacement
 tuple. The replacement can therefore end the loop.

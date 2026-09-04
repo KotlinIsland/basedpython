@@ -34,7 +34,7 @@ impl Request for ExplainTranspilationRequest {
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExplainTranspilationParams {
-    pub(crate) text_document: TextDocumentIdentifier,
+    text_document: TextDocumentIdentifier,
 }
 
 /// One construct found, and what the transpiler does with it.
@@ -42,13 +42,13 @@ pub(crate) struct ExplainTranspilationParams {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TranspilationNote {
     /// A short, stable name for the construct, e.g. `null-safe access`.
-    pub(crate) construct: String,
+    construct: String,
     /// The source it was written as.
-    pub(crate) snippet: String,
+    snippet: String,
     /// What it lowers to, in a sentence.
-    pub(crate) explanation: String,
+    explanation: String,
     /// The one-based line it is on.
-    pub(crate) line: u32,
+    line: u32,
 }
 
 pub(crate) struct ExplainTranspilationHandler;
@@ -82,7 +82,7 @@ impl RetriableRequestHandler for ExplainTranspilationHandler {}
 ///
 /// Parsed rather than scanned. A construct is only reported where the parser built the node for it,
 /// so the same characters inside a string, a comment or a type position are not mistaken for one.
-pub(crate) fn notes_in(source: &str) -> Vec<TranspilationNote> {
+fn notes_in(source: &str) -> Vec<TranspilationNote> {
     let parsed = ruff_python_parser::parse_unchecked_source(
         source,
         ruff_python_ast::PySourceType::BasedPython,

@@ -169,9 +169,29 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
         let constraints = ConstraintSetBuilder::new();
 
+        // TODO consider just accepting the given specialization without checking
+        // against bounds/constraints, but recording the expression for deferred
+        // checking at end of scope. This would avoid a lot of cycles caused by eagerly
+        // doing assignment checks here.
+        let lower_bound = typevar.typevar(db).lower_bound(db);
+        let bound_or_constraints = typevar.typevar(db).bound_or_constraints(db, env);
+        let provided_type = if lower_bound.is_some() || bound_or_constraints.is_some() {
+            // Defaults such as `Box[T]` may be inferred before `T` has a binding context.
+            // Bind only the copy used for validation, so the original default can later
+            // be bound to each generic that uses it.
+            provided_type.apply_type_mapping(
+                db,
+                env,
+                &TypeMapping::BindLegacyTypevars(BindingContext::Synthetic(env.program(db))),
+                TypeContext::default(),
+            )
+        } else {
+            provided_type
+        };
+
         // basedpython: a bound range `T: Lower..Upper` also puts a floor under the argument,
         // so check that end before the upper end below
-        if let Some(lower_bound) = typevar.typevar(db).lower_bound(db)
+        if let Some(lower_bound) = lower_bound
             && lower_bound
                 .when_assignable_to(db, env, provided_type, &constraints, TypeVarSet::None)
                 .is_never_satisfied(db, env)
@@ -191,24 +211,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return Some(ExplicitSpecializationError::UnsatisfiedBound);
         }
 
-        // TODO consider just accepting the given specialization without checking
-        // against bounds/constraints, but recording the expression for deferred
-        // checking at end of scope. This would avoid a lot of cycles caused by eagerly
-        // doing assignment checks here.
-        let bound_or_constraints = typevar.typevar(db).bound_or_constraints(db, env);
-        let provided_type = if bound_or_constraints.is_some() {
-            // Defaults such as `Box[T]` may be inferred before `T` has a binding context.
-            // Bind only the copy used for validation, so the original default can later
-            // be bound to each generic that uses it.
-            provided_type.apply_type_mapping(
-                db,
-                env,
-                &TypeMapping::BindLegacyTypevars(BindingContext::Synthetic(env.program(db))),
-                TypeContext::default(),
-            )
-        } else {
-            provided_type
-        };
         match bound_or_constraints {
             Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
                 if provided_type
@@ -958,7 +960,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         specialized
     }
 
-    pub(super) fn infer_explicit_function_specialization(
+    fn infer_explicit_function_specialization(
         &mut self,
         subscript: &ast::ExprSubscript,
         value_ty: Type<'db>,

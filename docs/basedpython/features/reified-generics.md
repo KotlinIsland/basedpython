@@ -388,17 +388,26 @@ f[int]()             # T is int, Args is ()
 
 a variadic never makes the specialization step mandatory the way a plain
 reified parameter does — supplying it nothing is a complete answer, not a
-missing one — so a bare call stays legal and binds the empty run. the run is
-not inferred from the call's arguments, so a non-empty one has to be written
-out:
+missing one — so a bare call stays legal. the run it binds is solved from the
+arguments, the same way a lone type parameter and a keyword pack are, so
+writing the step out and leaving it off reach the same answer:
 
 ```by
 def f[*Ts](*args: *Ts) -> None:
     print(Ts)
 
-f(1, "a")            # Ts is ()
+f(1, "a")            # Ts is (int, str)
 f[int, str](1, "a")  # Ts is (int, str)
 ```
+
+each element of the run is the argument's runtime type, so a literal widens to
+its class under the file's numeric model — `2.0` binds `float`, not the
+`int | float` that a float argument is merely *accepted* as
+
+inference can only fill the step with types that have a runtime spelling at the
+call site. a class local to a function does not, so rather than bind a run
+naming something the call cannot see, that call is rejected and the step has to
+be written out
 
 a [PEP 696] default is a run too, and fills the slot as one:
 

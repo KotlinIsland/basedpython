@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pep440_rs::VersionSpecifiers;
 use ruff_db::Db as SourceDb;
 use ruff_db::diagnostic::{
@@ -14,7 +16,7 @@ use ty_python_core::program::{FallibleStrategy, Program, ProgramSettings, UseDef
 use ty_python_semantic::PythonVersionWithSource;
 use ty_python_semantic::dependency::DependencyMetadata;
 
-use crate::metadata::options::{EnvironmentOptions, Options, OptionsContext};
+use crate::metadata::options::{EnvironmentOptions, InnerOverrideOptions, Options, OptionsContext};
 use crate::metadata::pyproject::Tool;
 use crate::metadata::settings::Settings;
 use crate::metadata::value::RelativePathBuf;
@@ -53,6 +55,15 @@ pub(crate) struct Script<'db> {
     #[tracked]
     #[returns(deref)]
     pub(crate) settings_diagnostics: Box<[Diagnostic]>,
+
+    /// The script's own `[tool.ty]` block, as a layer the project's `[[overrides]]` sit on top of.
+    ///
+    /// `settings` already has this folded in, but a file the project's `[[overrides]]` name is
+    /// resolved by replaying the layers in precedence order, so that path needs the block on its
+    /// own. `None` when the block configures nothing, or when an explicit `--config` outranks it.
+    #[tracked]
+    #[returns(ref)]
+    pub(crate) override_layer: Option<Arc<InnerOverrideOptions>>,
 }
 
 #[salsa::tracked]
@@ -118,7 +129,7 @@ pub(crate) fn script(db: &dyn Db, file: File) -> Option<Script<'_>> {
 
     let project_metadata = db.project().metadata(db);
 
-    let options = resolve_script_options(
+    let (options, override_layer) = resolve_script_options(
         project_metadata,
         &metadata,
         uv_metadata,
@@ -147,6 +158,7 @@ pub(crate) fn script(db: &dyn Db, file: File) -> Option<Script<'_>> {
         program_settings.python_version,
         !diagnostics.has_invalid_settings,
         diagnostics.diagnostics.into_boxed_slice(),
+        override_layer,
     ))
 }
 
@@ -217,7 +229,7 @@ fn resolve_script_options(
     uv_metadata: Option<&UvMetadata>,
     file: File,
     diagnostics: &mut ScriptConfigurationDiagnostics,
-) -> Options {
+) -> (Options, Option<Arc<InnerOverrideOptions>>) {
     // a script's own metadata block is one more configuration layer for that single
     // file — the highest-precedence one — and not a replacement for the project's
     // configuration. a script that says nothing about a rule is held to whatever the
@@ -245,10 +257,21 @@ fn resolve_script_options(
         ..Options::default()
     });
 
+    // the project's *search paths* are the one thing a script does not inherit. a script is
+    // resolved from where it sits, not from the project's source layout, so a `root` or
+    // `extra-paths` written for the project would point somewhere the script cannot reach —
+    // and a relative one is reported against the script as unresolvable. everything else the
+    // project says, rules and overrides included, still holds.
+    let mut project_options = project_metadata.options().clone();
+    if let Some(environment) = project_options.environment.as_mut() {
+        environment.root = None;
+        environment.extra_paths = None;
+    }
+
     let mut options = Options::default();
     // Merge the options with CLI, LSP, user configuration, and fallback options
     for layer in project_metadata.options_in_precedence_order_with_script(
-        project_metadata.options(),
+        &project_options,
         script_layer.as_ref(),
         uv_options.as_ref(),
     ) {
@@ -268,7 +291,18 @@ fn resolve_script_options(
         .root
         .get_or_insert_default();
 
-    options
+    // the block only becomes a layer if it actually configures something, so a script that
+    // merely declares dependencies does not displace anything
+    let override_layer = script_layer
+        .as_ref()
+        .map(|layer| InnerOverrideOptions {
+            rules: layer.rules.clone(),
+            analysis: layer.analysis.clone(),
+        })
+        .filter(|layer| layer.rules.is_some() || layer.analysis.is_some())
+        .map(Arc::new);
+
+    (options, override_layer)
 }
 
 fn resolve_script_settings(

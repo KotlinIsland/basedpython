@@ -1459,7 +1459,7 @@ reveal_type(Aliased().copy)
 class ParameterOnly:
     def consume(self, other: Identity[Self]) -> None: ...
 
-# revealed: bound method ParameterOnly.consume(other: ParameterOnly) -> None
+# revealed: bound method ParameterOnly.consume(other: ParameterOnly)
 reveal_type(ParameterOnly().consume)
 
 ParameterOnly().consume(ParameterOnly())

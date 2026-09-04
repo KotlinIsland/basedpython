@@ -502,14 +502,13 @@ async def main():
 ```
 
 ```snapshot
-error[invalid-context-manager]: Object of type `Manager` cannot be used with `async with` because `__aenter__` and `__aexit__` do not return awaitables
+error[invalid-context-manager]: Object of type `Manager` cannot be used with `async with` because `__aenter__` does not return an awaitable
  --> src/mdtest_snippet.py:9:16
   |
 9 |     async with Manager():
   |                ^^^^^^^^^
 info: `__aenter__` returns `int`, which is not awaitable
-info: `__aexit__` returns `CoroutineType[Any, Any, None]`, which is not awaitable
-info: Consider declaring the methods with `async def`
+info: Consider declaring the method with `async def`
 ```
 
 ## Non-awaitable `__aexit__`

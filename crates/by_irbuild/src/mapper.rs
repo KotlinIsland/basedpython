@@ -18,18 +18,18 @@ use ty_python_semantic::types::{KnownClass, Type};
 /// why a construct could not be lowered natively
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decline {
-    pub reason: String,
+    pub(crate) reason: String,
 }
 
 impl Decline {
-    pub fn new(reason: impl Into<String>) -> Self {
+    pub(crate) fn new(reason: impl Into<String>) -> Self {
         Self {
             reason: reason.into(),
         }
     }
 }
 
-pub type Lowered<T> = Result<T, Decline>;
+pub(crate) type Lowered<T> = Result<T, Decline>;
 
 /// the classes whose layout this compilation emitted, by name
 ///
@@ -40,7 +40,7 @@ pub type Lowered<T> = Result<T, Decline>;
 ///
 /// the *file* is carried beside them because a bare name is not an identity. every
 /// name in here came out of this module's own source, so a lookup keyed on one is
-/// safe wherever the name did too — but [`map_type_with`] starts from a ty type,
+/// safe wherever the name did too — but `map_type_with` starts from a ty type,
 /// which may be a class of the same name from anywhere. `csv` declares a `Dialect`
 /// and imports `_csv.Dialect` beside it, and asking the name alone gave the imported
 /// class this module's layout: `_Dialect(self)` was narrowed to a struct its answer
@@ -53,7 +53,7 @@ pub struct Layouts {
 
 impl Layouts {
     /// the classes `file` writes, each with no fields worked out yet
-    pub fn of(file: File, names: impl IntoIterator<Item = String>) -> Self {
+    pub(crate) fn of(file: File, names: impl IntoIterator<Item = String>) -> Self {
         Self {
             file,
             classes: names.into_iter().map(|name| (name, Vec::new())).collect(),
@@ -61,31 +61,31 @@ impl Layouts {
     }
 
     /// how many classes are in here, which bounds the rounds it takes to settle
-    pub fn count(&self) -> usize {
+    pub(crate) fn count(&self) -> usize {
         self.classes.len()
     }
 
-    pub fn contains_key(&self, name: &str) -> bool {
+    pub(crate) fn contains_key(&self, name: &str) -> bool {
         self.classes.contains_key(name)
     }
 
-    pub fn get(&self, name: &str) -> Option<&Vec<FieldDecl>> {
+    pub(crate) fn get(&self, name: &str) -> Option<&Vec<FieldDecl>> {
         self.classes.get(name)
     }
 
-    pub fn names(&self) -> impl Iterator<Item = &String> {
+    pub(crate) fn names(&self) -> impl Iterator<Item = &String> {
         self.classes.keys()
     }
 
-    pub fn insert(&mut self, name: String, fields: Vec<FieldDecl>) {
+    pub(crate) fn insert(&mut self, name: String, fields: Vec<FieldDecl>) {
         self.classes.insert(name, fields);
     }
 
-    pub fn remove(&mut self, name: &str) {
+    pub(crate) fn remove(&mut self, name: &str) {
         self.classes.remove(name);
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.classes.clear();
     }
 }
@@ -94,7 +94,7 @@ impl Layouts {
 ///
 /// a value whose class is one of them gets [`RType::Instance`], which is what
 /// turns an attribute read into a field read at a compile-time offset
-pub fn map_type_with(
+pub(crate) fn map_type_with(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
@@ -130,7 +130,7 @@ pub fn map_type_with(
 /// as a `PyObject *` each. it is only ever a local: a parameter arrives as a real
 /// list and a return has to be one, and converting either way is a copy — which
 /// would lose the list's *identity*, not just time
-pub fn map_local_type(
+pub(crate) fn map_local_type(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
@@ -154,7 +154,7 @@ pub fn map_local_type(
 /// keeps one has to build the real object first, and [`RType::Tuple`] is only
 /// reached where the lowering can prove that happens at most once. `tuple[int, int]`
 /// is `(tagged, tagged)`; `tuple[int, ...]` has no length and is not one of these
-pub fn map_fixed_tuple(
+pub(crate) fn map_fixed_tuple(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
@@ -184,7 +184,7 @@ pub fn map_fixed_tuple(
 /// nothing about this changes what compiles — a promoted place lands on the object
 /// protocol and works — so it is reported rather than declined. `strict-float` is
 /// what recovers it
-pub fn missed_representation(
+pub(crate) fn missed_representation(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
@@ -215,7 +215,7 @@ pub fn missed_representation(
 /// `float` is a union, and nothing about it proves a `double` representation —
 /// only the boundary can, one call at a time. `.by` opts out of the promotion, so
 /// this is never true there
-pub fn is_promoted_float(
+pub(crate) fn is_promoted_float(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
@@ -247,7 +247,12 @@ pub fn is_promoted_float(
 /// the order of the checks matters: `bool` is a subclass of `int` in python, so
 /// it has to be recognized first or every `bool` would be given the tagged
 /// integer representation
-pub fn map_type(
+// `RType::OBJECT` is a representation for anything, so this one never declines today.
+// it still answers in `Lowered` because that is the shape every entry point in this
+// module has, and a caller threading `?` through the three of them should not have to
+// know which of them can currently fail
+#[expect(clippy::unnecessary_wraps)]
+pub(crate) fn map_type(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
     ty: Type<'_>,
@@ -307,7 +312,8 @@ pub fn map_type(
 
 /// whether a place of this representation carries no static information, so an
 /// operation on it has to go through the abstract object protocol
-pub fn is_boxed(rtype: &RType) -> bool {
+#[cfg(test)]
+fn is_boxed(rtype: &RType) -> bool {
     *rtype == RType::OBJECT
 }
 

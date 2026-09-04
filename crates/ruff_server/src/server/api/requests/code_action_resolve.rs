@@ -259,9 +259,7 @@ pub(super) fn format_and_optimize_imports_edit(
 /// The same as [`format_and_optimize_imports_edit`] but for F401: laying a file out is not licence
 /// to delete anything from it, so *Reformat Code* sorts imports without pruning them. Dropping the
 /// unused ones is what *Optimize Imports* is for, and the user asks for that separately.
-pub(super) fn format_and_organize_imports_edit(
-    snapshot: &DocumentSnapshot,
-) -> crate::Result<Fixes> {
+fn format_and_organize_imports_edit(snapshot: &DocumentSnapshot) -> crate::Result<Fixes> {
     let settings = settings_for_rules(snapshot.query(), import_sorting_rules());
     format_and_imports_edit(snapshot, &settings)
 }

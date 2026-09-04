@@ -84,13 +84,13 @@ use crate::types::visitor::{
     walk_type_with_recursion_guard,
 };
 use crate::types::{
-    BindingContext, BoundMethodType, BoundTypeVarInstance, CallableType, CallableTypes,
-    ClassLiteral, DATACLASS_FLAGS, DataclassFlags, DataclassParams, DynamicType, GenericAlias,
-    InternedConstraintSet, IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType,
-    LiteralValueTypeKind, NominalInstanceType, PropertyInstanceType, SelfBinding, SpecialFormType,
-    TypeContext, TypeMapping, TypeVarBoundOrConstraints, TypeVarVariance, UnionAccumulator,
-    UnionBuilder, UnionType, UnsafeUnionType, WrapperDescriptorKind, enums, is_property_method,
-    list_members,
+    ArgumentContextOrigin, BindingContext, BoundMethodType, BoundTypeVarInstance, CallableType,
+    CallableTypes, ClassLiteral, DATACLASS_FLAGS, DataclassFlags, DataclassParams, DynamicType,
+    GenericAlias, InternedConstraintSet, IntersectionType, KnownBoundMethodType, KnownClass,
+    KnownInstanceType, LiteralValueTypeKind, NominalInstanceType, PropertyInstanceType,
+    SelfBinding, SpecialFormType, TypeContext, TypeMapping, TypeVarBoundOrConstraints,
+    TypeVarVariance, UnionAccumulator, UnionBuilder, UnionType, UnsafeUnionType,
+    WrapperDescriptorKind, enums, is_property_method, list_members,
 };
 use crate::{DisplaySettings, FxOrderSet};
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span, SubDiagnostic, SubDiagnosticSeverity};
@@ -494,7 +494,7 @@ struct BindingsElement<'db> {
     /// The callable type associated with this union element. For an intersection, retain the
     /// complete source type because its bindings can omit negative contributions or represent
     /// constructor methods instead of the called class objects.
-    pub(crate) callable_type: Type<'db>,
+    callable_type: Type<'db>,
     items: SmallVec<[CallableItem<'db>; 1]>,
     combination: ItemCombination,
 }
@@ -4976,7 +4976,7 @@ impl<'db> CallableBinding<'db> {
     }
 
     /// Whether this call returns `Never` only because it left a type variable unsolved.
-    pub(crate) fn returns_unsolved_typevar(&self, db: &'db dyn Db) -> bool {
+    fn returns_unsolved_typevar(&self, db: &'db dyn Db) -> bool {
         if let Some((_, first_overload)) = self.matching_overloads().next() {
             return first_overload.returns_unsolved_typevar(db);
         }
@@ -7829,6 +7829,9 @@ pub(crate) enum ArgumentTypeContext<'db> {
         /// The parameter type to use as context, possibly specialized from the call expression's
         /// declared type.
         parameter_type: Type<'db>,
+        /// basedpython: whether the raw parameter type spells out the class's type argument
+        /// rather than naming it with a type variable. See [`Type::prescribes_type_arguments`].
+        prescribes_type_arguments: bool,
     },
 
     ParamSpec {
@@ -7844,10 +7847,15 @@ impl<'db> ArgumentTypeContext<'db> {
     ///
     /// `raw_parameter_type` is the lookup key used by later type checking. `parameter_type` is the
     /// possibly-specialized context used to infer the argument expression.
-    fn standard(raw_parameter_type: Type<'db>, parameter_type: Type<'db>) -> Self {
+    fn standard(
+        raw_parameter_type: Type<'db>,
+        parameter_type: Type<'db>,
+        prescribes_type_arguments: bool,
+    ) -> Self {
         Self::Standard {
             raw_parameter_type,
             parameter_type,
+            prescribes_type_arguments,
         }
     }
 
@@ -7869,11 +7877,18 @@ impl<'db> ArgumentTypeContext<'db> {
             Self::Standard {
                 raw_parameter_type,
                 parameter_type,
+                prescribes_type_arguments,
             } => {
                 let mut tcx = TypeContext::new(Some(parameter_type));
                 // a generic parameter's context is specialized from the arguments of
                 // this very call, so it does not observe the argument from outside
-                tcx.inferred_from_argument = raw_parameter_type != parameter_type;
+                tcx.argument_origin = if prescribes_type_arguments {
+                    ArgumentContextOrigin::Prescribed
+                } else if raw_parameter_type != parameter_type {
+                    ArgumentContextOrigin::Solved
+                } else {
+                    ArgumentContextOrigin::External
+                };
                 tcx
             }
             Self::ParamSpec { declared_type, .. } => TypeContext::new(Some(declared_type)),
@@ -8502,6 +8517,7 @@ impl<'db> Binding<'db> {
             return Some(ArgumentTypeContext::standard(
                 original_parameter_type,
                 bound,
+                false,
             ));
         }
 
@@ -8556,6 +8572,7 @@ impl<'db> Binding<'db> {
         Some(ArgumentTypeContext::standard(
             original_parameter_type,
             parameter_type,
+            original_parameter_type.prescribes_type_arguments(db, env),
         ))
     }
 
@@ -8836,7 +8853,7 @@ impl<'db> Binding<'db> {
     ///
     /// Such a `Never` says that the call's result cannot be described, not that the call does not
     /// return, so it must not make the rest of the scope unreachable.
-    pub(crate) fn returns_unsolved_typevar(&self, db: &'db dyn Db) -> bool {
+    fn returns_unsolved_typevar(&self, db: &'db dyn Db) -> bool {
         self.return_ty.is_never()
             && self
                 .inference
@@ -9406,7 +9423,11 @@ impl<'db> CallableDescription<'db> {
                 kind: Some("class"),
                 name: settings
                     .map(|(env, settings)| {
-                        Cow::Owned(class_type.display_with(db, env, settings.clone()).to_string())
+                        Cow::Owned(
+                            class_type
+                                .display_with(db, env, settings.clone())
+                                .to_string(),
+                        )
                     })
                     .unwrap_or_else(|| Cow::Borrowed(class_type.name(db).as_str())),
             }),

@@ -41,8 +41,8 @@ const SETTINGS_CLASS: &str = "LazySettings";
 /// a file that points `DJANGO_SETTINGS_MODULE` somewhere, and where at
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 pub struct SettingsNaming {
-    pub file: File,
-    pub module: CompactString,
+    file: File,
+    module: CompactString,
 }
 
 /// every file of `files` that names a settings module, in path order

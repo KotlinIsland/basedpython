@@ -7030,7 +7030,7 @@ class Concrete[T](Chain[T]): ...
 def check[T](concrete: Concrete[int], symbolic: Concrete[T]) -> None:
     reveal_type(concrete.accumulate())  # revealed: Chain[int]
     reveal_type(symbolic.accumulate())  # revealed: Chain[T@check]
-    reveal_type(Concrete().accumulate())  # revealed: Chain[Unknown]
+    reveal_type(Concrete().accumulate())  # revealed: Chain[Never]
 ```
 
 ### Nested symbolic sources with constrained protocol receivers

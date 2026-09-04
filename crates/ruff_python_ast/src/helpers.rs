@@ -3013,7 +3013,7 @@ pub const INVALID_MODIFIER_MARKER: &str = "invalid_modifier";
 /// Spelled the same way as [`TYPE_FN_MARKER`] — a zero-binding `Name` with
 /// [`crate::ExprContext::Invalid`] — so that every consumer agrees on it rather
 /// than matching the string itself.
-pub const ENUM_DEF_MARKER: &str = "enum_def";
+const ENUM_DEF_MARKER: &str = "enum_def";
 
 /// Whether `class` came from basedpython's `enum class`, whose `case` members
 /// are its variants.

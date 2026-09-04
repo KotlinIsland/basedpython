@@ -17,6 +17,15 @@ keep it anchored:
 run directly, or through `prek`
 """
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pygments", "basedpython-pygments"]
+#
+# # the lexer under test is the one in this checkout, not a built copy of it
+# [tool.uv.sources]
+# basedpython-pygments = { path = "../python/basedpython-pygments", editable = true }
+# ///
+
 from __future__ import annotations
 
 import re

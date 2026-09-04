@@ -76,7 +76,7 @@ pub fn resource_document(db: &dyn Db, file: File) -> Option<File> {
 }
 
 /// whether `path` names a rendering rather than a file anyone wrote.
-pub fn is_resource_module(path: &SystemVirtualPath) -> bool {
+pub(crate) fn is_resource_module(path: &SystemVirtualPath) -> bool {
     path.as_str().starts_with(SCHEME)
 }
 

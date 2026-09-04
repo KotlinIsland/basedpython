@@ -20,7 +20,7 @@ use anyhow::Context;
 /// until one shadows a module that moved. The manifest is what makes the output a
 /// mirror rather than a pile: what the previous build wrote and this one did not
 /// is deleted.
-pub const MANIFEST_FILENAME: &str = ".by-manifest";
+const MANIFEST_FILENAME: &str = ".by-manifest";
 
 /// An output tree being written.
 pub struct Staging {
@@ -37,7 +37,7 @@ impl Staging {
         }
     }
 
-    pub fn out(&self) -> &Path {
+    pub(crate) fn out(&self) -> &Path {
         &self.out
     }
 
@@ -79,7 +79,7 @@ impl Staging {
     }
 
     /// Copy `source` to `relative` verbatim.
-    pub fn copy(&mut self, relative: &Path, source: &Path) -> anyhow::Result<()> {
+    pub(crate) fn copy(&mut self, relative: &Path, source: &Path) -> anyhow::Result<()> {
         self.claim(relative, Some(source))?;
         let destination = self.out.join(relative);
         create_parent(&destination)?;
@@ -195,7 +195,7 @@ fn portable(path: &Path) -> String {
 /// module is `src.pkg.main` — a name nothing imports, and one `run.main` cannot
 /// sensibly be set to. A file outside every module root keeps its place relative
 /// to the project.
-pub fn relative_destination(roots: &[PathBuf], root: &Path, source: &Path) -> PathBuf {
+pub(crate) fn relative_destination(roots: &[PathBuf], root: &Path, source: &Path) -> PathBuf {
     let relative = roots
         .iter()
         .find_map(|candidate| source.strip_prefix(candidate).ok())

@@ -232,9 +232,12 @@ Each clause of a `try` statement is its own block. An `except` clause is entered
 the `try` block, so it takes the names that block declared out of scope on that edge too.
 
 ```by
+def risky() -> int:
+    raise ValueError
+
 def f():
     try:
-        let attempted = 1
+        let attempted = risky()
     except ValueError:
         print(attempted)  # error: [unresolved-reference]
     else:
@@ -242,6 +245,9 @@ def f():
     finally:
         print(succeeded)  # error: [unresolved-reference]
 ```
+
+The `try` body has to be able to raise for any of this to matter: a handler for a body that cannot
+is never entered, and nothing in it is analysed at all.
 
 ## an exception raised inside a nested block still leaves it
 

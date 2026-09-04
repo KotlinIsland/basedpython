@@ -13,9 +13,9 @@ use anyhow::{Context, Result, bail};
 use by_ir::function::ModuleIr;
 use by_ir::verify::verify_module;
 
-pub use toolchain::{MINIMUM_PYTHON, Toolchain};
+pub use toolchain::Toolchain;
 
-pub mod annotate;
+pub(crate) mod annotate;
 
 /// what a build produced
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,7 +159,7 @@ pub struct Options {
     /// entirely", which also fails on a type the compiler simply does not
     /// represent yet
     pub require_native: bool,
-    /// write an [`annotate`] report next to the generated C.
+    /// write an `annotate` report next to the generated C.
     ///
     /// a decline is invisible unless you look, and the printed count says how many
     /// without saying which

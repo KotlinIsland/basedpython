@@ -954,11 +954,13 @@ Reporting a dynamic return must not eagerly infer a self-referential default. Ev
 assertion on the same name, the diagnostic identifies the function's signature.
 
 ```py
-def dynamic(function: object):
+from typing import Any
+
+def dynamic(function: object) -> Any:
     return function
 
 f = lambda: f
-assert f
+assert f  # error: [redundant-condition] "This condition is always true"
 
 # snapshot: dynamic-function-decorator-return
 @dynamic
@@ -966,19 +968,18 @@ def f(x=lambda: f): ...
 ```
 
 ```snapshot
-info[dynamic-function-decorator-return]: Decorator returns `Unknown`
- --> src/mdtest_snippet.py:8:1
-  |
-8 | @dynamic
-  | ^^^^^^^^
-9 | def f(x=lambda: f): ...
-  |     - Signature of `f` will be obscured by the decorator
-  |
- ::: src/mdtest_snippet.py:1:5
-  |
-1 | def dynamic(function: object):
-  |     ------------------------- `dynamic` defined here
-help: Add a return type annotation to `dynamic`
+info[dynamic-function-decorator-return]: Decorator returns `Any`
+  --> src/mdtest_snippet.py:10:1
+   |
+10 | @dynamic
+   | ^^^^^^^^
+11 | def f(x=lambda: f): ...
+   |     - Signature of `f` will be obscured by the decorator
+   |
+  ::: src/mdtest_snippet.py:3:5
+   |
+ 3 | def dynamic(function: object) -> Any:
+   |     -------------------------------- `dynamic` defined here
 ```
 
 ### Dynamic decorators implemented by callable instances
@@ -987,8 +988,10 @@ A callable-instance decorator points to its `__call__` method and suggests addin
 annotation when that method is unannotated.
 
 ```py
+from typing import Any
+
 class CallableDecorator:
-    def __call__(self, function: object):
+    def __call__(self, function: object) -> Any:
         return function
 
 # snapshot: dynamic-function-decorator-return
@@ -998,19 +1001,18 @@ def decorated(value: int) -> str:
 ```
 
 ```snapshot
-info[dynamic-function-decorator-return]: Decorator returns `Unknown`
- --> src/mdtest_snippet.py:6:1
+info[dynamic-function-decorator-return]: Decorator returns `Any`
+ --> src/mdtest_snippet.py:8:1
   |
-6 | @CallableDecorator()
+8 | @CallableDecorator()
   | ^^^^^^^^^^^^^^^^^^^^
-7 | def decorated(value: int) -> str:
+9 | def decorated(value: int) -> str:
   |     --------- Signature of `decorated` will be obscured by the decorator
   |
- ::: src/mdtest_snippet.py:2:9
+ ::: src/mdtest_snippet.py:4:9
   |
-2 |     def __call__(self, function: object):
-  |         -------------------------------- `CallableDecorator.__call__` defined here
-help: Add a return type annotation to `CallableDecorator.__call__`
+4 |     def __call__(self, function: object) -> Any:
+  |         --------------------------------------- `CallableDecorator.__call__` defined here
 ```
 
 ### Dynamic decorators on overloaded function implementations
@@ -1046,7 +1048,9 @@ triggered due to a missing return-type annotation, we suggest adding one:
 `decorator.py`:
 
 ```py
-def dynamic(value: object):
+from typing import Any
+
+def dynamic(value: object) -> Any:
     return value
 ```
 
@@ -1062,7 +1066,7 @@ def decorated(value: int) -> str:
 ```
 
 ```snapshot
-info[dynamic-function-decorator-return]: Decorator returns `Unknown`
+info[dynamic-function-decorator-return]: Decorator returns `Any`
  --> src/main.py:4:1
   |
 4 | @dynamic
@@ -1070,11 +1074,10 @@ info[dynamic-function-decorator-return]: Decorator returns `Unknown`
 5 | def decorated(value: int) -> str:
   |     --------- Signature of `decorated` will be obscured by the decorator
   |
- ::: src/decorator.py:1:5
+ ::: src/decorator.py:3:5
   |
-1 | def dynamic(value: object):
-  |     ---------------------- `dynamic` defined here
-help: Add a return type annotation to `dynamic`
+3 | def dynamic(value: object) -> Any:
+  |     ----------------------------- `dynamic` defined here
 ```
 
 But we refrain from suggesting the user add a return annotation to the implementation of an
@@ -1118,12 +1121,12 @@ The definition annotation points to the overload selected by the implicit decora
 that overload is not the first declaration.
 
 ```py
-from typing import overload
+from typing import overload, Any
 
 @overload
-def dynamic(function, extra): ...
+def dynamic(function, extra) -> Any: ...
 @overload
-def dynamic(function): ...
+def dynamic(function) -> Any: ...
 def dynamic(function, extra=None):
     return function
 
@@ -1134,7 +1137,7 @@ def decorated(value: int) -> str:
 ```
 
 ```snapshot
-info[dynamic-function-decorator-return]: Decorator returns `Unknown`
+info[dynamic-function-decorator-return]: Decorator returns `Any`
   --> src/mdtest_snippet.py:11:1
    |
 11 | @dynamic
@@ -1144,9 +1147,8 @@ info[dynamic-function-decorator-return]: Decorator returns `Unknown`
    |
   ::: src/mdtest_snippet.py:6:5
    |
- 6 | def dynamic(function): ...
-   |     ----------------- Matching overload defined here
-help: Add a return type annotation to `dynamic`
+ 6 | def dynamic(function) -> Any: ...
+   |     ------------------------ Matching overload defined here
 ```
 
 When multiple overloads match, the definition annotation spans every overload:
@@ -1171,7 +1173,7 @@ def decorated(value: Any) -> object:
 ```
 
 ```snapshot
-info[dynamic-function-decorator-return]: Decorator returns `Any`
+info[dynamic-function-decorator-return]: Decorator returns `Unknown`
   --> src/mdtest_snippet.py:27:1
    |
 27 |   @dynamic
@@ -1193,8 +1195,10 @@ help: Ensure all `dynamic` overloads have a return annotation
 
 ### Fully annotated decorators with multiple matching overloads
 
-Overload ambiguity can produce `Unknown` even when every overload already has a return annotation.
-In that case, we do not suggest adding annotations that already exist.
+Several overloads matching at once does not make the result dynamic here: basedpython answers with
+the union of what they return, as an `UnsafeUnion` — the caller may rely on any one member, and only
+one of them is actually true. So there is nothing for this rule to report, and the decorated
+function keeps a type precise enough to check calls against.
 
 ```py
 from collections.abc import Callable
@@ -1206,33 +1210,14 @@ def dynamic(function: Callable[[int], object]) -> int: ...
 def dynamic(function: None) -> None: ...
 @overload
 def dynamic(function: Callable[[str], object]) -> str: ...
-def dynamic(function):
+def dynamic(function: Any) -> Any:
     return function
 
-# snapshot: dynamic-function-decorator-return
 @dynamic
 def decorated(value: Any) -> object:
     return value
-```
 
-```snapshot
-info[dynamic-function-decorator-return]: Decorator returns `Unknown`
-  --> src/mdtest_snippet.py:14:1
-   |
-14 |   @dynamic
-   |   ^^^^^^^^
-15 |   def decorated(value: Any) -> object:
-   |       --------- Signature of `decorated` will be obscured by the decorator
-   |
-  ::: src/mdtest_snippet.py:4:1
-   |
- 4 | / @overload
- 5 | | def dynamic(function: Callable[[int], object]) -> int: ...
- 6 | | @overload
- 7 | | def dynamic(function: None) -> None: ...
- 8 | | @overload
- 9 | | def dynamic(function: Callable[[str], object]) -> str: ...
-   | |_____________________________________________________- Overloads of `dynamic` defined here
+reveal_type(decorated)  # revealed: UnsafeUnion[int, str]
 ```
 
 ### Dynamic decorators defined in third-party packages
@@ -1248,7 +1233,9 @@ python = "/.venv"
 `/.venv/<path-to-site-packages>/dependency.py`:
 
 ```py
-def dynamic(value: object):
+from typing import Any
+
+def dynamic(value: object) -> Any:
     return value
 ```
 
@@ -1264,7 +1251,7 @@ def decorated(value: int) -> str:
 ```
 
 ```snapshot
-info[dynamic-function-decorator-return]: Decorator returns `Unknown`
+info[dynamic-function-decorator-return]: Decorator returns `Any`
  --> src/main.py:4:1
   |
 4 | @dynamic
@@ -1272,10 +1259,10 @@ info[dynamic-function-decorator-return]: Decorator returns `Unknown`
 5 | def decorated(value: int) -> str:
   |     --------- Signature of `decorated` will be obscured by the decorator
   |
- ::: .venv/<path-to-site-packages>/dependency.py:1:5
+ ::: .venv/<path-to-site-packages>/dependency.py:3:5
   |
-1 | def dynamic(value: object):
-  |     ---------------------- `dynamic` defined here
+3 | def dynamic(value: object) -> Any:
+  |     ----------------------------- `dynamic` defined here
 ```
 
 ### Edge case: dynamic decorators defined in non-module scripts
@@ -1288,7 +1275,9 @@ path", but we nonetheless recognise it as a first-party file and offer the sugge
 `typed-script.py`:
 
 ```py
-def dynamic(function: object):
+from typing import Any
+
+def dynamic(function: object) -> Any:
     return function
 
 # snapshot: dynamic-function-decorator-return
@@ -1298,19 +1287,18 @@ def decorated(value: int) -> str:
 ```
 
 ```snapshot
-info[dynamic-function-decorator-return]: Decorator returns `Unknown`
- --> src/typed-script.py:5:1
+info[dynamic-function-decorator-return]: Decorator returns `Any`
+ --> src/typed-script.py:7:1
   |
-5 | @dynamic
+7 | @dynamic
   | ^^^^^^^^
-6 | def decorated(value: int) -> str:
+8 | def decorated(value: int) -> str:
   |     --------- Signature of `decorated` will be obscured by the decorator
   |
- ::: src/typed-script.py:1:5
+ ::: src/typed-script.py:3:5
   |
-1 | def dynamic(function: object):
-  |     ------------------------- `dynamic` defined here
-help: Add a return type annotation to `dynamic`
+3 | def dynamic(function: object) -> Any:
+  |     -------------------------------- `dynamic` defined here
 ```
 
 ### Edge case: the decorator has a union type
@@ -1325,7 +1313,7 @@ from typing import Any
 def annotated_dynamic(function: Callable[..., object]) -> Any:
     return function
 
-def unannotated_dynamic(function: Callable[..., object]):
+def unannotated_dynamic(function: Callable[..., object]) -> Any:
     return function
 
 def condition() -> bool:

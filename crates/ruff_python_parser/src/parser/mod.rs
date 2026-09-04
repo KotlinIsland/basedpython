@@ -103,7 +103,7 @@ pub(crate) struct Parser<'src> {
 
     /// basedpython: depth of nested class bodies currently being parsed.
     /// Used to recognise `init(...)` as a method shorthand only inside a class.
-    pub(super) class_body_depth: u32,
+    class_body_depth: u32,
 
     /// basedpython: extra class-body members a single `parse_statement` produced
     /// but could not return directly. A property accessor block lowers one
@@ -111,20 +111,20 @@ pub(crate) struct Parser<'src> {
     /// declaration statement is returned and these follow-on members are drained
     /// here by [`Parser::parse_block`]. Filled only by the property path (guarded
     /// by `class_body_depth > 0`), empty everywhere else.
-    pub(super) pending_members: Vec<Stmt>,
+    pending_members: Vec<Stmt>,
 
     /// basedpython: `(property, backing field)` pairs declared in the class body
     /// currently being parsed whose getter is a pure field read. In-class *reads*
     /// of those properties are retargeted at the backing field once the body is
     /// complete, so the class sees storage at its own type. Scoped per class body
     /// by [`Parser::parse_body`].
-    pub(super) pending_narrow_props: Vec<statement::PropertyRetarget>,
+    pending_narrow_props: Vec<statement::PropertyRetarget>,
 
     /// basedpython: set when a [statement expression](ruff_python_ast::ExprStatement)
     /// just parsed as part of a simple statement swallowed that statement's
     /// terminating newline along with its suite. The simple-statement parsers
     /// take this flag instead of demanding a newline of their own.
-    pub(super) expr_consumed_suite: bool,
+    expr_consumed_suite: bool,
 
     /// basedpython: how many destructuring binders have been named so far.
     /// Counting them in source order keeps their names stable across a

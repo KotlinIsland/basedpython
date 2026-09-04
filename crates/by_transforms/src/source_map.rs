@@ -20,7 +20,7 @@
 ///
 /// (Named rather than linked: this is public and that is not, and rustdoc rejects a
 /// link from one to the other.)
-pub fn line_table(source: &str, edits: &[(usize, usize, String)]) -> Vec<Option<u32>> {
+pub(crate) fn line_table(source: &str, edits: &[(usize, usize, String)]) -> Vec<Option<u32>> {
     let mut lines: Vec<Option<u32>> = Vec::new();
     let mut src_pos = 0usize;
     let mut input_line = 0u32;

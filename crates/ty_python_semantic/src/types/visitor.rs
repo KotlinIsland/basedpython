@@ -377,7 +377,7 @@ pub(super) fn walk_non_atomic_type<'db, V: TypeVisitor<'db> + ?Sized>(
     }
 }
 
-pub(crate) fn walk_template_literal_type<'db, V: TypeVisitor<'db> + ?Sized>(
+fn walk_template_literal_type<'db, V: TypeVisitor<'db> + ?Sized>(
     db: &'db dyn Db,
     template: TemplateLiteralType<'db>,
     visitor: &V,

@@ -43,7 +43,8 @@ pub(crate) use python::{
 };
 pub use rename::{PreparedTemplateRename, TemplateRename, TemplateRenameOutcome};
 pub use signature_help::TemplateSignature;
-pub use symbols::{DjangoSymbol, TemplateSymbol};
+pub(crate) use symbols::DjangoSymbol;
+pub use symbols::TemplateSymbol;
 
 use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::{File, system_path_to_file};
@@ -224,7 +225,7 @@ pub fn django_template_diagnostics(db: &dyn Db, file: File) -> Vec<Diagnostic> {
 /// the file's suppression comments are deliberately *not* applied: these are
 /// folded into the type checker's own diagnostics, which is where a `ty: ignore`
 /// is honoured and counted used — see [`ty_python_semantic::check_file_with`].
-pub fn django_python_diagnostics(
+pub(crate) fn django_python_diagnostics(
     db: &dyn Db,
     env: &ProgramEnvironment<'_>,
     file: File,

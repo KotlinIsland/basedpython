@@ -51,7 +51,7 @@ fn version_config(min_version: Option<&str>, cwd: &Path) -> anyhow::Result<Confi
     }
 }
 
-pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
+fn parse_version(s: &str) -> anyhow::Result<Config> {
     let version = s
         .parse::<PythonVersion>()
         .map_err(|_| anyhow::anyhow!("unknown Python version {s:?} — use e.g. 3.12"))?;
@@ -657,7 +657,7 @@ fn discover_interpreter(
 /// declares, which python it targets — has to be the same answer. Resolving it
 /// per question was not only repeated work: the copies disagreed about failure,
 /// one falling back to the working directory where another gave up.
-pub(crate) struct ResolvedProject {
+struct ResolvedProject {
     root: PathBuf,
     metadata: ProjectMetadata,
 }

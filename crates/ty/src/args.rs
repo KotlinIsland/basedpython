@@ -390,7 +390,7 @@ pub(crate) struct CheckCommand {
     /// `ty-compatible` uses ty's own defaults instead, leaving basedpython's diagnostics and
     /// analysis options off, so that a project reports what ty itself would report.
     #[arg(long, value_name = "PRESET", value_enum)]
-    pub(crate) type_checking_preset: Option<TypeCheckingPreset>,
+    type_checking_preset: Option<TypeCheckingPreset>,
 
     #[clap(flatten)]
     pub(crate) verbosity: Verbosity,

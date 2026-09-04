@@ -28,7 +28,7 @@ pub enum TypeCheckingPreset {
 }
 
 impl TypeCheckingPreset {
-    pub const fn is_strict(self) -> bool {
+    pub(crate) const fn is_strict(self) -> bool {
         matches!(self, Self::Strict)
     }
 
@@ -47,7 +47,7 @@ impl TypeCheckingPreset {
     }
 
     /// the level `lint` runs at under this preset, before any `rules` configuration
-    pub const fn level(self, lint: &LintMetadata) -> Level {
+    pub(crate) const fn level(self, lint: &LintMetadata) -> Level {
         match self {
             Self::Strict => lint.default_level,
             Self::TyCompatible => match lint.ty_compat {

@@ -349,8 +349,14 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -LsSf \
             "https://github.com/astral-sh/hawk/releases/download/${HAWK_VERSION}/cargo-hawk-installer.sh" | sh
+      # `hawk::dead_public` is a warning rather than an error here: the fork carries
+      # public items nothing reaches, and each one is a decision rather than a
+      # narrowing. some are deliberate — `by_irbuild::infallible` documents itself as
+      # unused until the `raises` analysis is wired in — and some are simply stale.
+      # they all predate the tool. the other two lints are clean and stay denied, so
+      # nothing new accumulates while that list is worked through
       - name: "Hawk"
-        run: cargo +1.98.0 hawk check --target-dir target/hawk -D warnings
+        run: cargo +1.98.0 hawk check --target-dir target/hawk -D warnings -W hawk::dead_public
 
   # upstream's `cargo-publish-dry-run` is dropped: the fork keeps ruff/ty crate
   # versions in lock-step with astral's published crates.io versions but modifies
@@ -421,9 +427,9 @@ jobs:
         with:
           tool: cargo-nextest
       - name: "Install uv"
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.11.31"
+          version: "0.12.9"
           enable-cache: "true"
       # `PYTHON` is the load-bearing pin: every harness that starts an interpreter reads
       # it first. `PATH` is set as well because each of those harnesses falls back to a
@@ -1174,10 +1180,13 @@ jobs:
 
   pgo:
     name: "PGO"
-    runs-on: depot-ubuntu-24.04-8
+    runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-24.04-8' || 'ubuntu-latest' }}
     needs: determine_changes
     if: ${{ needs.determine_changes.outputs.release == 'true' && !contains(github.event.pull_request.labels.*.name, 'no-build') }}
-    timeout-minutes: 20
+    # the pipeline builds the binary twice and lints the pinned training projects in
+    # between, which the fork's `ubuntu-latest` runner does not manage inside the
+    # depot-tuned 20 minutes
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1256,17 +1265,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           python-version: 3.13
-          version: "0.11.31"
+          version: "0.12.9"
           enable-cache: true
       - name: "Install docs dependencies"
-        run: uv sync --group docs --no-install-project --locked
+        run: uv sync --group basedpython-docs --no-install-project --locked
       - name: "Build docs"
         run: uv run --no-sync zensical build --clean --strict
 

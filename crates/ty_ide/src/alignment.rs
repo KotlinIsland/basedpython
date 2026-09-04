@@ -55,7 +55,7 @@ pub struct AlignmentMember {
 impl AlignmentMember {
     /// the spaces the author left between the target and the `=`, which is the room a hint has to
     /// spend before the line has to grow
-    pub(crate) fn gap(self) -> TextSize {
+    fn gap(self) -> TextSize {
         self.gap_end - self.gap_start
     }
 }

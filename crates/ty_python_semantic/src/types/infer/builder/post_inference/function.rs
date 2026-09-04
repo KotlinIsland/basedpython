@@ -121,6 +121,13 @@ fn check_method_typevar_variance<'db>(
         signature.clone()
     };
 
+    // basedpython: a private method is invisible to anything holding a widened reference, so it
+    // cannot be used to tell two specializations apart and constrains the class's variance not at
+    // all — the same reasoning that exempts a private attribute
+    if last_definition.has_known_decorator(db, FunctionDecorators::PRIVATE) {
+        return;
+    }
+
     // TODO: Validate the final class interface: decorators can replace a method, and later
     // statements in the class body can delete or overwrite it.
     for typevar in generic_context.variables(db) {

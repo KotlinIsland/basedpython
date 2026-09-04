@@ -407,7 +407,7 @@ fn variance_code(variance: ArgVariance) -> u8 {
 /// validates the same structural claim. each entry is a kind-tagged tuple:
 /// `(\"attr\", name, type, variance)` or `(\"method\", name, [(type, variance),
 /// …], return_or_None)`
-pub(crate) fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
+fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
     let type_variance = |(expected, variance): &(String, ArgVariance)| {
         format!("({expected}, {})", variance_code(*variance))
     };
@@ -656,7 +656,7 @@ pub(crate) fn build_predicate(
 }
 
 /// whether replacing an expression may drop it without losing effects
-pub(crate) fn effect_free(expr: &Expr) -> bool {
+fn effect_free(expr: &Expr) -> bool {
     matches!(expr, Expr::Name(_)) || expr.is_literal_expr()
 }
 

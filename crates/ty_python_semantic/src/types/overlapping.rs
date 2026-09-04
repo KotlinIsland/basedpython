@@ -19,7 +19,7 @@
 //! call-site relation (overlap vs. subtype)
 
 use super::variance::{VarianceInferable, VarianceTerm};
-use super::{BoundTypeVarIdentity, Type, TypeVarVariance, visitor};
+use super::{BoundTypeVarIdentity, Type, visitor};
 use crate::Db;
 use crate::types::ProgramEnvironment;
 

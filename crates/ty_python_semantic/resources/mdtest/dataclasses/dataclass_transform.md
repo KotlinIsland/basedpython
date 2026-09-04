@@ -1559,7 +1559,7 @@ class Base:
 class Child(Base):
     required: str
 
-reveal_type(Child.__init__)  # revealed: (self: Child, required: str, *, optional: float = ...) -> None
+reveal_type(Child.__init__)  # revealed: (self: Child, required: str, *, optional: int | float = ...) -> None
 
 Child("value")
 Child("value", optional=2.0)

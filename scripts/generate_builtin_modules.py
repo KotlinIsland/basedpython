@@ -59,7 +59,7 @@ def builtin_modules_on_version(minor_version: int) -> set[str]:
         f"python3.{minor_version}",
         "--upgrade",
     ]
-    run(command_1)
+    _ = run(command_1)
     command_2 = [
         "uvx",
         "--managed-python",

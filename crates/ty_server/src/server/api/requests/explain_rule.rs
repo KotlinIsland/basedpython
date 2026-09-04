@@ -32,7 +32,7 @@ impl Request for ExplainRuleRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ExplainRuleParams {
     /// A lint name, e.g. `redundant-return-annotation` — what a diagnostic reports under.
-    pub(crate) name: String,
+    name: String,
 }
 
 /// What the rule is, ready to show.
@@ -40,11 +40,11 @@ pub(crate) struct ExplainRuleParams {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuleExplanation {
     /// The lint's own name.
-    pub(crate) name: String,
+    name: String,
     /// A one-line summary.
-    pub(crate) summary: String,
+    summary: String,
     /// The full explanation, in markdown.
-    pub(crate) documentation: String,
+    documentation: String,
 }
 
 pub(crate) struct ExplainRuleHandler;

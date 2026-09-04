@@ -83,7 +83,7 @@ use crate::type_info::TypeInfo;
 /// raises rather than returning the `TypeVar` object the parameter would
 /// otherwise still name — whether because nothing specialized the class or
 /// because a base's argument was never filled in
-pub(crate) const GENERIC_CLASS_RUNTIME: &str = "\
+const GENERIC_CLASS_RUNTIME: &str = "\
 def generic_class(cls):
     cls.__class_getitem__ = classmethod(_specialize)
     return cls

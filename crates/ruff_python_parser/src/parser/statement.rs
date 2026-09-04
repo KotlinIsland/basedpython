@@ -291,12 +291,12 @@ fn is_pure_field_read(body: &[Stmt], backing: &Name) -> bool {
 #[derive(Debug)]
 pub(crate) struct PropertyRetarget {
     /// the name the author writes
-    pub(crate) public: Name,
+    public: Name,
     /// a read resolves here: the backing field when the getter only reads it (so
     /// the class sees storage at its own type), otherwise the property itself
-    pub(crate) read: Name,
+    read: Name,
     /// a write always resolves to the property, so a validating setter still runs
-    pub(crate) write: Name,
+    write: Name,
 }
 
 /// Retargets in-class accesses written under a property's public name.
@@ -6168,7 +6168,7 @@ impl<'src> Parser<'src> {
     /// annotated target are disjoint. Gated on basedpython mode rather than
     /// merely reported: the shape also shows up in `.py` error recovery, where
     /// consuming the suite would replace upstream's diagnostics.
-    pub(super) fn at_trailing_lambda_block(&mut self) -> bool {
+    fn at_trailing_lambda_block(&mut self) -> bool {
         self.options.is_basedpython
             && self.at(TokenKind::Colon)
             && self.peek2() == (TokenKind::Newline, TokenKind::Indent)

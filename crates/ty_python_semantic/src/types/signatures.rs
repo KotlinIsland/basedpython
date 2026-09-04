@@ -1422,9 +1422,7 @@ impl<'db> Signature<'db> {
         base: &Signature<'db>,
     ) {
         for parameter in &mut Arc::make_mut(&mut self.parameters.data).value {
-            if parameter.has_default()
-                || parameter.is_variadic()
-                || parameter.is_keyword_variadic()
+            if parameter.has_default() || parameter.is_variadic() || parameter.is_keyword_variadic()
             {
                 continue;
             }
@@ -1706,6 +1704,14 @@ impl<'db> Signature<'db> {
         if receiver.has_typevar(db, env) {
             return false;
         }
+        // basedpython: a use-site projection is a *view* of the receiver — `S[out int]` is an
+        // `S[int]` a caller has undertaken only to read. Whether it satisfies the domain is a
+        // question about the object, and the object is the same one, so a projected receiver is
+        // never provably in violation. Judging the view instead rejects every overload of every
+        // method reached through one.
+        if receiver.has_use_site_projection(db, env) {
+            return false;
+        }
 
         !match domain {
             TypeVarBoundOrConstraints::UpperBound(bound) => {
@@ -1961,6 +1967,51 @@ impl<'db> Signature<'db> {
                             .references_typevar_through_aliases(db, env, identity)
                     }))
         })
+    }
+
+    /// basedpython: this signature with `Self` substituted inside its type variables' bounds.
+    ///
+    /// Returns a clone unchanged where no bound names `Self`, which is nearly every signature.
+    pub(crate) fn with_self_bounded_typevars(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        self_type: Type<'db>,
+    ) -> Self {
+        let Some(generic_context) = self.generic_context else {
+            return self.clone();
+        };
+        if !generic_context.has_self_bounded_variable(db, env) {
+            return self.clone();
+        }
+        let binding_context = self.definition.map(BindingContext::Definition);
+        let bind_self =
+            TypeMapping::BindSelf(SelfBinding::new(db, env, self_type, binding_context));
+        let visitor = ApplyTypeMappingVisitor::new(env);
+
+        // The bound is read off the type variable wherever it turns up, not off this list, so
+        // every occurrence has to become the rewritten variable — in the parameters and the
+        // return as much as here.
+        let mut signature = self.clone();
+        for variable in generic_context.variables(db) {
+            let rewritten = variable.map_bound_or_constraints(db, |original| {
+                Some(original?.apply_type_mapping_impl(db, env, &bind_self, &visitor))
+            });
+            if rewritten == variable {
+                continue;
+            }
+            let substitute = TypeMapping::ApplySpecialization(ApplySpecialization::Single(
+                variable,
+                Type::TypeVar(rewritten),
+            ));
+            signature = signature.apply_type_mapping_impl(
+                db,
+                &substitute,
+                TypeContext::default(),
+                &visitor,
+            );
+        }
+        signature
     }
 
     pub(crate) fn has_implicit_positional_receiver_annotation(&self) -> bool {
@@ -2273,7 +2324,7 @@ impl<'db> Signature<'db> {
         }
     }
 
-    pub(crate) fn is_non_generic(&self) -> bool {
+    fn is_non_generic(&self) -> bool {
         self.generic_context.is_none()
     }
 
@@ -6216,7 +6267,7 @@ impl<'db> Parameter<'db> {
     ///
     /// A variadic parameter stands for a run of arguments rather than one, so there is nothing
     /// for a caller to leave out and nothing a default would mean.
-    pub(crate) fn set_default_type(&mut self, default: Type<'db>) {
+    fn set_default_type(&mut self, default: Type<'db>) {
         match &mut self.kind {
             ParameterKind::PositionalOnly { default_type, .. }
             | ParameterKind::PositionalOrKeyword { default_type, .. }
@@ -6714,15 +6765,6 @@ pub enum ParameterKind<'db> {
 }
 
 impl<'db> ParameterKind<'db> {
-    fn default(&self) -> Option<ParameterDefault<'db>> {
-        match self {
-            ParameterKind::PositionalOnly { default_type, .. }
-            | ParameterKind::PositionalOrKeyword { default_type, .. }
-            | ParameterKind::KeywordOnly { default_type, .. } => *default_type,
-            ParameterKind::Variadic { .. } | ParameterKind::KeywordVariadic { .. } => None,
-        }
-    }
-
     #[expect(clippy::ref_option)]
     fn cycle_normalized_default(
         db: &'db dyn Db,
@@ -6881,41 +6923,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected.iter().map(without_definition).collect::<Vec<_>>(),
         );
-    }
-
-    #[derive(Debug, Eq, PartialEq)]
-    struct ParameterWithoutDefinition<'a, 'db> {
-        annotated_type: &'a Type<'db>,
-        annotation_kind: ParameterAnnotationKind,
-        inferred_annotation: bool,
-        is_context: bool,
-        is_receiver: bool,
-        kind: &'a ParameterKind<'db>,
-    }
-
-    impl<'a, 'db> From<&'a Parameter<'db>> for ParameterWithoutDefinition<'a, 'db> {
-        fn from(parameter: &'a Parameter<'db>) -> Self {
-            let Parameter {
-                annotated_type,
-                definition: _,
-                annotation_kind,
-                inferred_annotation,
-                is_context,
-                is_receiver,
-                borrow: _,
-                source_parameter_index: _,
-                kind,
-            } = parameter;
-
-            Self {
-                annotated_type,
-                annotation_kind: *annotation_kind,
-                inferred_annotation: *inferred_annotation,
-                is_context: *is_context,
-                is_receiver: *is_receiver,
-                kind,
-            }
-        }
     }
 
     #[track_caller]

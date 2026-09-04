@@ -1015,7 +1015,10 @@ error[invalid-overload]: Implementation does not accept all arguments of this ov
 18 |     def inner(value: Pair[T] | str, later: str) -> None: ...
    |         ----- Implementation defined here
 info: Implementation signature `(value: Pair[T@outer] | str, later: str) -> None` is not assignable to overload signature `(value: Fixed, later: int) -> None`
-info: parameter `later` has an incompatible type: `int` is not assignable to `str`
+info: parameter `value` has an incompatible type: `Fixed` is not assignable to `Pair[T@outer] | str`
+info: └── type `Fixed` is not assignable to any element of the union `Pair[T@outer] | str`
+info:     ├── field "second" on TypedDict `Fixed` has type `str` which is not assignable to type `T@outer` expected by TypedDict `Pair`
+info:     └── ... omitted 1 union element without additional context
 ```
 
 ## Type variable upper bounds
@@ -1360,6 +1363,12 @@ error[invalid-assignment]: Object of type `Concrete[T@diagnose]` is not assignab
    |              ----------   ^^^^^ Incompatible value of type `Concrete[T@diagnose]`
    |              |
    |              Declared type
+info: type `Concrete[T@diagnose]` is not assignable to protocol `Chain[int]`
+info: └── protocol member `child` is incompatible
+info:     └── incompatible return types: `Concrete[str]` is not assignable to `Chain[int]`
+info:         └── type `Concrete[str]` is not assignable to protocol `Chain[int]`
+info:             └── protocol member `value` is incompatible
+info:                 └── incompatible return types: `str` is not assignable to `int`
 ```
 
 ## Recursive protocols in a union after overload comparison
@@ -1611,8 +1620,8 @@ error[invalid-assignment]: Object of type `Incompatible` is not assignable to `S
    |             |
    |             Declared type
 info: type `Incompatible` is not assignable to protocol `SupportsCheck`
-info: └── protocol member `check2` is incompatible
-info:     └── incompatible return types: `None` is not assignable to `bool`
+info: └── protocol member `check1` is incompatible
+info:     └── parameter `x` has an incompatible type: `str` is not assignable to `bytes`
 ```
 
 ## Failures for multiple union elements

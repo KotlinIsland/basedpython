@@ -88,7 +88,7 @@ pub(crate) struct Construct {
 impl Construct {
     /// the tag name, or `""` for a construct that has none
     #[cfg(test)]
-    pub(crate) fn name<'src>(&self, source: &'src str) -> &'src str {
+    fn name<'src>(&self, source: &'src str) -> &'src str {
         self.name.map_or("", |range| &source[range])
     }
 }

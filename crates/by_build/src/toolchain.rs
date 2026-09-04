@@ -25,7 +25,7 @@ use serde::Deserialize;
 ///
 /// the C half of the same fact is the `#error` at the top of `by.h`, which catches a
 /// compile driven by something other than `by compile`
-pub const MINIMUM_PYTHON: (u8, u8) = (3, 11);
+const MINIMUM_PYTHON: (u8, u8) = (3, 11);
 
 /// everything needed to compile and link an extension for one interpreter
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,7 +176,7 @@ impl Toolchain {
 
     /// parse a probe result. split out so the parsing is testable without an
     /// interpreter
-    pub fn from_probe(python: &str, json: &str) -> Result<Self> {
+    pub(crate) fn from_probe(python: &str, json: &str) -> Result<Self> {
         // a real json parser rather than a hand-rolled one: a windows path is full of
         // backslashes, every one of which `json.dumps` escapes, and reading the escape
         // as a literal character turns each separator into two

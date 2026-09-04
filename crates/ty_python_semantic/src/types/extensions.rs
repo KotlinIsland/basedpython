@@ -45,7 +45,7 @@ use crate::types::{MemberLookupPolicy, Type};
 use ty_module_resolver::ImportingFile;
 
 /// the symbol-name prefix the semantic index gives extension declarations
-pub(crate) const EXTENSION_SYMBOL_PREFIX: &str = "<extension:";
+const EXTENSION_SYMBOL_PREFIX: &str = "<extension:";
 
 /// the vendored basedpython prelude — a `.byi` stub of builtin `extension`
 /// declarations (the grapheme string surface, and the frozen containers'
@@ -56,7 +56,7 @@ const PRELUDE_MODULE: &str = "ty_extensions._prelude";
 
 /// the prelude module's file, resolved from `from_file`'s search paths. `None`
 /// when the vendored stub is unavailable
-pub(crate) fn prelude_file(db: &dyn Db, from_file: File) -> Option<File> {
+fn prelude_file(db: &dyn Db, from_file: File) -> Option<File> {
     let name = ModuleName::new_static(PRELUDE_MODULE)?;
     resolve_module(
         db,
@@ -505,7 +505,7 @@ fn is_conformance<'db>(db: &'db dyn Db, extension: StaticClassLiteral<'db>) -> b
 /// the attribute fallback. The precedence is the same one every extension
 /// member follows: a declared dunder wins, and an extension only answers what
 /// nothing else does.
-pub(crate) fn extension_operator<'db>(
+fn extension_operator<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
@@ -700,7 +700,7 @@ pub(crate) fn extension_applies<'db>(
 
 /// [`extension_applies`] once the extended class has been located, with the
 /// specialization the receiver gives it
-pub(crate) fn applied_at<'db>(
+fn applied_at<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     extension: StaticClassLiteral<'db>,

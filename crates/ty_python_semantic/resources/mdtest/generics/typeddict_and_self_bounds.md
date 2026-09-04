@@ -258,7 +258,7 @@ class Node:
 class Unrelated: ...
 
 def _(node: Node) -> None:
-    # error: [invalid-argument-type] "Argument type `Unrelated` does not satisfy upper bound `Self@link` of type variable `T`"
+    # error: [invalid-argument-type] "Argument type `Unrelated` does not satisfy upper bound `Node` of type variable `T`"
     node.link(Unrelated())
 ```
 

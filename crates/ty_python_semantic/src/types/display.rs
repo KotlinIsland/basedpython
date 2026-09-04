@@ -38,8 +38,8 @@ use crate::types::{
     KnownBoundMethodType, KnownClass, KnownInstanceType, KnownUnion, LiteralValueType,
     LiteralValueTypeKind, MaterializationKind, ParamSpecAttrKind, PropertyInstanceClass,
     PropertyInstanceType, Protocol, SpecialFormType, StringLiteralType, SubclassOfInner,
-    SubclassOfType, Type, TypeAliasType, TypeGuardLike, TypedDictType, TypingModule,
-    UnionType, WrapperDescriptorKind, template::TemplatePart, visitor,
+    SubclassOfType, Type, TypeAliasType, TypeGuardLike, TypedDictType, TypingModule, UnionType,
+    WrapperDescriptorKind, template::TemplatePart, visitor,
 };
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::Definition;
@@ -154,18 +154,18 @@ pub struct DisplaySettings<'db> {
     /// basedpython: whether the caller has already written the `def <name>` this signature
     /// belongs to, as the bound-method display does. Such a signature is a *declaration*, so it
     /// leaves out a `None` return the way the source may.
-    pub name_already_written: bool,
+    name_already_written: bool,
     /// basedpython: whether a specialization names the type parameter each of
     /// its arguments fills (`A[Key=str, Value=int]`), the way a keyword
     /// subscript writes it. Only ever set for `.by` output — python's subscript
     /// grammar has no keyword form.
-    pub name_type_arguments: bool,
+    name_type_arguments: bool,
     /// basedpython: whether a symbolic arithmetic operation is shown as the type it
     /// reduces to (`int`) rather than as the expression it stands for (`I + 1`). Only
     /// ever set by the transpiler: an expression reads better everywhere a human sees
     /// it, but emitting one as python would evaluate `_I + 1` on a `TypeVar` object at
     /// import time.
-    pub reduce_symbolic_operations: bool,
+    reduce_symbolic_operations: bool,
 }
 
 impl<'db> DisplaySettings<'db> {
@@ -781,7 +781,7 @@ impl<'db> Type<'db> {
     /// An expression that is not one of those — a list display, a call, a name — is left behind.
     /// basedpython re-evaluates such a default on every call, so what it stands for is the
     /// expression rather than any one value, and there is nothing to carry.
-    pub fn display_default_value(
+    pub(crate) fn display_default_value(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -916,7 +916,7 @@ thread_local! {
     static BASEDPYTHON_DISPLAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-pub(crate) fn basedpython_display_enabled() -> bool {
+fn basedpython_display_enabled() -> bool {
     BASEDPYTHON_DISPLAY.with(std::cell::Cell::get)
 }
 
@@ -1144,7 +1144,7 @@ fn importable_module_of<'db>(
 /// `Iterator`, …) are defined; `collections.abc` is nothing but `from _collections_abc import *`,
 /// and `typing` re-exports the same classes again. Naming the private module in a diagnostic
 /// would point at a spelling nobody writes.
-pub(super) fn public_module_name<'db>(db: &'db dyn Db, module: &Module<'db>) -> &'db str {
+fn public_module_name<'db>(db: &'db dyn Db, module: &Module<'db>) -> &'db str {
     if module.known(db) == Some(KnownModule::CollectionsAbcInternal) {
         KnownModule::CollectionsAbc.as_str()
     } else {
@@ -3693,6 +3693,16 @@ impl<'db> Parameter<'db> {
     }
 }
 
+/// Whether a type writes its own leading star, as a parameter pack's half does in basedpython.
+///
+/// `*args: *P` is the pack's positional half, and the star belongs to the *type*: the annotation
+/// renders it. A parameter that also wrote one for its starred annotation would spell `**P` there,
+/// which is the other half.
+fn writes_own_pack_star<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    basedpython_display_enabled()
+        && matches!(ty, Type::TypeVar(typevar) if typevar.paramspec_attr(db).is_some())
+}
+
 struct DisplayParameter<'a, 'db> {
     param: &'a Parameter<'db>,
     db: &'db dyn Db,
@@ -3708,7 +3718,9 @@ impl<'db> FmtDetailed<'db> for DisplayParameter<'_, 'db> {
             && self.param.is_variadic()
             && self.param.has_starred_annotation()
         {
-            f.write_str("*")?;
+            if !writes_own_pack_star(db, self.param.annotated_type()) {
+                f.write_str("*")?;
+            }
             self.param
                 .annotated_type()
                 .display_with(db, self.env, self.settings.clone())
@@ -3733,7 +3745,10 @@ impl<'db> FmtDetailed<'db> for DisplayParameter<'_, 'db> {
                     Some(SomeHoleBound::Unbounded) => {}
                     None => {
                         f.write_str(": ")?;
-                        if self.param.is_variadic() && self.param.has_starred_annotation() {
+                        if self.param.is_variadic()
+                            && self.param.has_starred_annotation()
+                            && !writes_own_pack_star(self.db, annotated_type)
+                        {
                             f.write_char('*')?;
                         }
                         annotated_type

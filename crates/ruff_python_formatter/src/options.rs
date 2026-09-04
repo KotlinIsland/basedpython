@@ -423,7 +423,7 @@ pub enum AssignmentAlignment {
 }
 
 impl AssignmentAlignment {
-    pub const fn is_enabled(self) -> bool {
+    pub(crate) const fn is_enabled(self) -> bool {
         matches!(self, AssignmentAlignment::Enabled)
     }
 }

@@ -29,7 +29,7 @@ use by_transforms::config::{Config, PythonVersion};
 use crate::staging::Staging;
 
 /// The name of the record, at the root of the output tree.
-pub const BY_BUILD_FILENAME: &str = "_by_build.json";
+const BY_BUILD_FILENAME: &str = "_by_build.json";
 
 /// Which build of `by` wrote this tree.
 ///
@@ -38,7 +38,7 @@ pub const BY_BUILD_FILENAME: &str = "_by_build.json";
 /// load-bearing. It is a constant of the crate `by` and `by server` share, so two
 /// binaries built together always agree and two built either side of a change
 /// never do.
-pub fn build_identity() -> &'static str {
+pub(crate) fn build_identity() -> &'static str {
     env!("BY_BUILD_IDENTITY")
 }
 
@@ -52,20 +52,20 @@ pub fn build_identity() -> &'static str {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConfigRecord {
     /// the python the emitted code must run on, as `major.minor`
-    pub min_version: String,
+    min_version: String,
     /// the `--soundness` spec, spelled the way the flag takes it
-    pub soundness: String,
-    pub runtime_raises_checks: bool,
-    pub unique_loop_bindings: bool,
+    soundness: String,
+    runtime_raises_checks: bool,
+    unique_loop_bindings: bool,
     /// how a float or complex literal type was spelled, as the option takes it
-    pub float_literals: String,
+    float_literals: String,
     /// the `build:` stamps the build settled, so a re-stage emits the same ones
     ///
     /// without this a re-staged file would fall back to the block's defaults and
     /// claim a different commit than the tree around it. defaulted, because a
     /// tree written before stamps existed genuinely had none
     #[serde(default)]
-    pub stamps: BTreeMap<String, String>,
+    stamps: BTreeMap<String, String>,
 }
 
 /// What a build tree records about itself.
@@ -73,29 +73,29 @@ pub struct ConfigRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BuildRecord {
     /// [`build_identity`] of the `by` that wrote the tree
-    pub by_version: String,
+    pub(crate) by_version: String,
     /// the project the tree was built from, absolute and canonical
-    pub project_root: PathBuf,
+    pub(crate) project_root: PathBuf,
     /// the module roots the tree's layout was derived from, deepest first —
     /// the same list and the same order [`relative_destination`] was given, so a
     /// re-stage puts a file exactly where the build put it
     ///
     /// [`relative_destination`]: crate::staging::relative_destination
-    pub module_roots: Vec<PathBuf>,
+    pub(crate) module_roots: Vec<PathBuf>,
     /// the module that runs as `__main__`, when the build has one
     ///
     /// `by run` always does. `by build` has one only when the project configures
     /// `run.main`, and `null` there is the honest answer: an output tree nobody
     /// has named an entry point for does not have one, and inventing a name would
     /// tell a debugger that a module it must not replace is safe to replace.
-    pub entry_module: Option<String>,
+    pub(crate) entry_module: Option<String>,
     /// whether the tree's modules were compiled to native extensions
     ///
     /// A compiled module has no `__code__` to assign, so a tree with this set can
     /// never be re-staged a file at a time. The record says so rather than
     /// leaving a caller to discover it from a failed replacement.
-    pub compiled: bool,
-    pub config: ConfigRecord,
+    pub(crate) compiled: bool,
+    pub(crate) config: ConfigRecord,
 }
 
 impl BuildRecord {
@@ -126,7 +126,7 @@ impl BuildRecord {
 
     /// The record as it is written into the tree: pretty-printed, newline
     /// terminated, so a person looking into a build directory can read it.
-    pub fn render(&self) -> String {
+    fn render(&self) -> String {
         let mut rendered = serde_json::to_string_pretty(self)
             .expect("a record of strings and bools always serializes");
         rendered.push('\n');
@@ -134,7 +134,7 @@ impl BuildRecord {
     }
 
     /// Read the record out of a build directory.
-    pub fn read(build_directory: &Path) -> anyhow::Result<Self> {
+    pub(crate) fn read(build_directory: &Path) -> anyhow::Result<Self> {
         let path = build_directory.join(BY_BUILD_FILENAME);
         let contents = std::fs::read_to_string(&path).map_err(|error| {
             anyhow::anyhow!(
@@ -150,7 +150,7 @@ impl BuildRecord {
     ///
     /// Everything the record does not carry comes from [`Config::default`],
     /// which is where the build got it too.
-    pub fn config(&self) -> anyhow::Result<Config> {
+    pub(crate) fn config(&self) -> anyhow::Result<Config> {
         let min_version = self
             .config
             .min_version
@@ -227,7 +227,7 @@ pub fn parse_soundness(spec: &str) -> anyhow::Result<SoundnessPositions> {
 /// python carries.
 /// The spelling a [`FloatLiteralLowering`] is written down as, matching the
 /// `lowering.float-literals` option a project sets it with.
-pub fn spell_float_literals(lowering: FloatLiteralLowering) -> String {
+fn spell_float_literals(lowering: FloatLiteralLowering) -> String {
     match lowering {
         FloatLiteralLowering::Nominal => "nominal".to_owned(),
         FloatLiteralLowering::Literal => "literal".to_owned(),
@@ -235,7 +235,7 @@ pub fn spell_float_literals(lowering: FloatLiteralLowering) -> String {
 }
 
 /// Read back what [`spell_float_literals`] wrote.
-pub fn parse_float_literals(spelled: &str) -> anyhow::Result<FloatLiteralLowering> {
+fn parse_float_literals(spelled: &str) -> anyhow::Result<FloatLiteralLowering> {
     match spelled {
         "nominal" => Ok(FloatLiteralLowering::Nominal),
         "literal" => Ok(FloatLiteralLowering::Literal),
@@ -246,7 +246,7 @@ pub fn parse_float_literals(spelled: &str) -> anyhow::Result<FloatLiteralLowerin
     }
 }
 
-pub fn spell_soundness(positions: SoundnessPositions) -> String {
+pub(crate) fn spell_soundness(positions: SoundnessPositions) -> String {
     if positions == SoundnessPositions::defaults() {
         return "default".to_owned();
     }

@@ -5,8 +5,15 @@ thread_local! {
     // Restrict each fixture's Rayon work to one thread so concurrent tests do not compete for the
     // same resources. When fixtures share a process, the harness reuses worker threads, so cache
     // one pool per worker.
+    //
+    // the whole of `ty_test::run` happens on this pool's worker, so it is the thread type
+    // inference recurses on and it needs the stack ty gives its own workers. left at the
+    // platform default, checking a real installed sqlalchemy overflowed it in an
+    // unoptimised build, where frames are far larger than in the optimised one developers
+    // usually run
     static RAYON_POOL: rayon::ThreadPool = rayon::ThreadPoolBuilder::new()
         .num_threads(1)
+        .stack_size(ruff_db::STACK_SIZE)
         .build()
         .unwrap();
 }

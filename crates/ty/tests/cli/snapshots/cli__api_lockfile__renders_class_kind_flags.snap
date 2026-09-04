@@ -22,8 +22,8 @@ kind.Enum:r=enum.Enum
 kind.F:c[]{final}
 kind.NT.x:v=builtins.int
 kind.NT.y:v=builtins.int
-kind.NT:c[<unresolved>]
-kind.NamedTuple:v=<unresolved>
+kind.NT:c[typing.NamedTuple]{named_tuple}
+kind.NamedTuple:v=typing.NamedTuple
 kind.P.m:d(self:P)->builtins.int
 kind.P:c[typing.Protocol]{protocol}
 kind.Protocol:v=typing.Protocol

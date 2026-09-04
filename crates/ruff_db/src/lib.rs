@@ -112,7 +112,18 @@ pub fn max_parallelism() -> NonZeroUsize {
 // binary operators (x + x + … + x) both during the AST walk in semantic index building as
 // well as during type checking. Using this stack size, we can handle handle expressions
 // that are several times larger than the corresponding limits in existing type checkers.
-pub const STACK_SIZE: usize = 16 * 1024 * 1024;
+//
+// basedpython raised it from upstream's 16 MiB. this fork's inference recurses through more
+// frames per term, and unoptimised builds — which is what CI tests with — make each of those
+// frames far larger: at 16 MiB `by check` on `1 + 1 + …` overflowed somewhere between 1900
+// and 2000 terms, and both `can_handle_large_binop_expressions` and the LSP's `stack_size`
+// use exactly 2000. that is not a margin, it is a coin toss. this carries the same file past
+// 7000 terms
+//
+// every thread that checks a file asks for this: the rayon workers, the LSP's worker pool and
+// scheduler, and the thread a `by` command runs on. it is reserved address space rather than
+// committed memory, so a worker that never recurses deeply costs nothing for the headroom
+pub const STACK_SIZE: usize = 64 * 1024 * 1024;
 
 /// Trait for types that can provide Rust documentation.
 ///

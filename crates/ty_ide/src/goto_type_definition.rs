@@ -76,10 +76,10 @@ mod tests {
         LL | descriptor = Slotted.value
            |                      ^^^^^ Clicking here
         info: Found 1 type definition
-          --> stdlib/types.pyi:LL:7
+          --> stdlib/types.byi:LL:13
            |
-        LL | class MemberDescriptorType:
-           |       --------------------
+        LL | final class MemberDescriptorType:
+           |             --------------------
         ");
     }
 

@@ -196,6 +196,7 @@ jobs:
             --render roundtrip-*.json \
             --old-label "${MERGE_BASE} (merge base)" \
             --new-label "${REF_NAME}" \
+            --render-full roundtrip-report.md \
             > comment.md
           cat comment.md >> "$GITHUB_STEP_SUMMARY"
 
@@ -211,3 +212,13 @@ jobs:
           path: |
             comment.md
             pr-number.txt
+
+      # the comment drops findings to fit GitHub's 65536-character limit and
+      # names this artifact as where the rest are. NOTE: the name is spelled out
+      # in `FULL_REPORT_ARTIFACT` in check_ecosystem_roundtrip.py, so renaming it
+      # here alone would send readers somewhere that does not exist
+      - name: Upload the full report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: roundtrip-report.md
+          path: roundtrip-report.md

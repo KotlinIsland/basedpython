@@ -113,7 +113,7 @@ pub(crate) fn scan(root: &Path) -> PrivateNames {
 
 /// an identifier typeshed hides by convention: exactly one leading underscore,
 /// and something after it
-pub(crate) fn is_underscore_private(name: &str) -> bool {
+fn is_underscore_private(name: &str) -> bool {
     name.len() > 1 && name.starts_with('_') && !name.starts_with("__")
 }
 
@@ -206,7 +206,7 @@ fn has_marker(class: &StmtClassDef, source: &str, name: &str) -> bool {
 
 /// every identifier-shaped token in `source`, including ones inside strings and
 /// comments — a rename has to consider forward references and `__all__` entries
-pub(crate) fn identifiers(source: &str) -> BTreeSet<String> {
+fn identifiers(source: &str) -> BTreeSet<String> {
     identifier_spans(source)
         .into_iter()
         .map(|(_, ident)| ident.to_string())
@@ -214,7 +214,7 @@ pub(crate) fn identifiers(source: &str) -> BTreeSet<String> {
 }
 
 /// `(offset, text)` for every identifier-shaped token in `source`
-pub(crate) fn identifier_spans(source: &str) -> Vec<(usize, &str)> {
+fn identifier_spans(source: &str) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
     let bytes = source.as_bytes();
     let mut start = None;

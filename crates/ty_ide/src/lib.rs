@@ -52,12 +52,11 @@ pub use completion::{
 pub use data_flow::{Finding, FindingKind, data_flow_at};
 pub use django_template::{
     DisplayTemplateHover, DjangoChecker, DjangoCodeLens, DjangoLensAction, DjangoLensTarget,
-    DjangoSymbol, PreparedTemplateRename, TemplateCompletion, TemplateEdit, TemplateHover,
-    TemplateInlayHint, TemplateInlayHintKind, TemplateRename, TemplateRenameOutcome,
-    TemplateSignature, TemplateSymbol, django_manage_script, django_prepare_rename,
-    django_python_code_lenses, django_python_diagnostics, django_references, django_rename,
-    django_template_code_lenses, django_template_completions, django_template_diagnostics,
-    django_template_document_symbols, django_template_folding_ranges,
+    PreparedTemplateRename, TemplateCompletion, TemplateEdit, TemplateHover, TemplateInlayHint,
+    TemplateInlayHintKind, TemplateRename, TemplateRenameOutcome, TemplateSignature,
+    TemplateSymbol, django_manage_script, django_prepare_rename, django_python_code_lenses,
+    django_references, django_rename, django_template_code_lenses, django_template_completions,
+    django_template_diagnostics, django_template_document_symbols, django_template_folding_ranges,
     django_template_goto_definition, django_template_hover, django_template_inlay_hints,
     django_template_semantic_tokens, django_template_signature_help, is_django_template_path,
 };
@@ -295,7 +294,7 @@ impl NavigationTargets {
         self.0.iter()
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 

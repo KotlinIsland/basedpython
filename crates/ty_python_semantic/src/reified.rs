@@ -346,7 +346,7 @@ fn body_span(function: &ast::StmtFunctionDef) -> Option<TextRange> {
 }
 
 /// names of the class's type parameters that are reified, in declaration order
-pub fn reified_class_type_param_names(
+pub(crate) fn reified_class_type_param_names(
     source: &str,
     source_type: PySourceType,
     class: &ast::StmtClassDef,

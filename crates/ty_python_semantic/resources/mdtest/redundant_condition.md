@@ -24,7 +24,7 @@ We catch testing a function without calling it:
 ```py
 def func(): ...
 
-if func:  # TODO: should error
+if func:  # error: [redundant-condition] "This condition is always true"
     pass
 ```
 
@@ -36,7 +36,7 @@ class Foo:
         return True
 
     def baz(self):
-        if self.bar:  # TODO: should error
+        if self.bar:  # error: [redundant-condition] "This condition is always true"
             pass
 ```
 
@@ -45,9 +45,9 @@ And testing a generator expression without executing it:
 ```py
 def work(items: list[int]):
     filtered = (item for item in items if item < 42)
-    if filtered:  # # TODO: should error
+    if filtered:  # error: [redundant-condition] "This condition is always true"
         pass
-    assert filtered  # # TODO: should error
+    assert filtered  # error: [redundant-condition] "This condition is always true"
 ```
 
 And testing an awaitable without awaiting it:
@@ -70,19 +70,19 @@ class Foo:
         self.no_elements: tuple[()] = ()
 
     def other_method(self):
-        if self.two_element_tuple:  # TODO: should error
+        if self.two_element_tuple:  # error: [redundant-condition] "This condition is always true"
             pass
-        if self.at_least_one_element:  # TODO: should error
+        if self.at_least_one_element:  # error: [redundant-condition] "This condition is always true"
             pass
-        if self.at_least_two_elements:  # TODO: should error
+        if self.at_least_two_elements:  # error: [redundant-condition] "This condition is always true"
             pass
-        if self.no_elements:  # TODO: should error
+        if self.no_elements:  # error: [redundant-condition] "This condition is always false"
             pass
 
         # TODO: should error
-        assert self.at_least_one_element
+        assert self.at_least_one_element  # error: [redundant-condition] "This condition is always true"
         # TODO: should error
-        assert self.at_least_two_elements
+        assert self.at_least_two_elements  # error: [redundant-condition] "This condition is always true"
 ```
 
 And testing `None`:
@@ -90,7 +90,7 @@ And testing `None`:
 ```py
 X = None
 
-if X:  # TODO: should error
+if X:  # error: [redundant-condition] "This condition is always false"
     pass
 ```
 
@@ -100,10 +100,10 @@ And testing a string that is known to always be truthy or always be falsy:
 x = "foo"
 y = ""
 
-if x:  # TODO: should error
+if x:  # error: [redundant-condition] "This condition is always true"
     pass
 
-if y:  # TODO: should error
+if y:  # error: [redundant-condition] "This condition is always false"
     pass
 ```
 
@@ -113,7 +113,7 @@ or even a union of strings that is known to always be truthy:
 from typing import Literal
 
 def f(x: Literal["a", "b"]):
-    if x:  # TODO: should error
+    if x:  # error: [redundant-condition] "This condition is always true"
         pass
 ```
 
@@ -141,10 +141,10 @@ def test(
     sometimes_empty: SometimesEmpty,
     also_sometimes_empty: AlsoSometimesEmpty,
 ):
-    if never_empty:  # TODO: should error
+    if never_empty:  # error: [redundant-condition] "This condition is always true"
         pass
 
-    if also_never_empty:  # TODO: should error
+    if also_never_empty:  # error: [redundant-condition] "This condition is always true"
         pass
 
     if sometimes_empty:  # no diagnostic
@@ -153,8 +153,8 @@ def test(
     if also_sometimes_empty:  # no diagnostic
         pass
 
-    assert never_empty  # TODO: should error
-    assert also_never_empty  # TODO: should error
+    assert never_empty  # error: [redundant-condition] "This condition is always true"
+    assert also_never_empty  # error: [redundant-condition] "This condition is always true"
     assert sometimes_empty  # no diagnostic
     assert also_sometimes_empty  # no diagnostic
 ```
@@ -184,7 +184,7 @@ class Record(TypedDict):
 
 def check(value: Record):
     if "x" in value:
-        if value:  # TODO: should error
+        if value:  # error: [redundant-condition] "This condition is always true"
             pass
 ```
 
@@ -201,7 +201,7 @@ class Choice(Enum):
     SECOND = 2
 
 def f(choice: Choice):
-    if choice:  # TODO: should error
+    if choice:  # error: [redundant-condition] "This condition is always true"
         pass
 ```
 
@@ -221,53 +221,53 @@ def coinflip() -> bool:
 
 def func(): ...
 
-if not func:  # TODO: should error
+if not func:  # error: [redundant-condition] "This condition is always false"
     pass
 
-if not not func:  # TODO: should error
+if not not func:  # error: [redundant-condition] "This condition is always true"
     pass
 
-a = True if func else False  # TODO: should error
+a = True if func else False  # error: [redundant-condition] "This condition is always true"
 
-if coinflip() if func else False:  # TODO: should error
+if coinflip() if func else False:  # error: [redundant-condition] "This condition is always true"
     pass
 
 b = func and coinflip()  # no diagnostic
 
-if func and coinflip():  # TODO: should error
+if func and coinflip():  # error: [redundant-condition] "This condition is always true"
     pass
 
 c = func or coinflip()  # no diagnostic
 
-if func or coinflip():  # TODO: should error
+if func or coinflip():  # error: [redundant-condition] "This condition is always true"
     pass
 
-[x for x in range(3) if func]  # TODO: should error
+[x for x in range(3) if func]  # error: [redundant-condition] "This condition is always true"
 
 def function(flag: bool):
     if flag:
         pass
-    elif func:  # TODO: should error
+    elif func:  # error: [redundant-condition] "This condition is always true"
         pass
 
 def _():
-    assert func  # TODO: should error
+    assert func  # error: [redundant-condition] "This condition is always true"
 
 def _():
-    while func and coinflip():  # TODO: should error
+    while func and coinflip():  # error: [redundant-condition] "This condition is always true"
         pass
 
 def _():
-    while not (func and coinflip()):  # TODO: should error
+    while not (func and coinflip()):  # error: [redundant-condition] "This condition is always false"
         pass
 
 def f(x: str | int):
     match x:
-        case str() if func:  # TODO: should error
+        case str() if func:  # error: [redundant-condition] "This condition is always true"
             pass
 
 def _():
-    while func:  # TODO: should error
+    while func:  # error: [redundant-condition] "This condition is always true"
         pass
 ```
 
@@ -279,28 +279,28 @@ condition overall is inferred as having ambiguous truthiness. We still report th
 ```py
 def func(): ...
 def compound_statement_conditions(flag: bool, other: bool):
-    if flag and func:  # TODO: should error
+    if flag and func:  # error: [redundant-condition] "This condition is always true"
         pass
 
     if other:
         pass
-    elif flag and func:  # TODO: should error
+    elif flag and func:  # error: [redundant-condition] "This condition is always true"
         pass
 
-    while flag and func:  # TODO: should error
+    while flag and func:  # error: [redundant-condition] "This condition is always true"
         break
 
     match flag:
-        case bool() if flag and func:  # TODO: should error
+        case bool() if flag and func:  # error: [redundant-condition] "This condition is always true"
             pass
 
 def compound_expression_conditions(flag: bool):
-    selected = True if flag and func else False  # TODO: should error
-    filtered = [value for value in range(1) if flag and func]  # TODO: should error
+    selected = True if flag and func else False  # error: [redundant-condition] "This condition is always true"
+    filtered = [value for value in range(1) if flag and func]  # error: [redundant-condition] "This condition is always true"
     result = flag and func
 
 def compound_assertion_condition(flag: bool):
-    assert flag and func  # TODO: should error
+    assert flag and func  # error: [redundant-condition] "This condition is always true"
 ```
 
 ## Chained comparison conditions
@@ -433,7 +433,7 @@ class FalsyTuple(tuple[int, int]):
         return False
 
 def check_falsy_tuple(value: FalsyTuple):
-    if value:  # TODO: should error
+    if value:  # error: [redundant-condition] "This condition is always false"
         pass
 ```
 
@@ -448,7 +448,7 @@ def f(x: Literal[1, 2]):
     if x > 5:  # TODO: should error
         pass
 
-    if x:  # TODO: should error
+    if x:  # error: [redundant-condition] "This condition is always true"
         pass
 
 def g(flag: bool, some_bytes: bytes):
@@ -619,10 +619,10 @@ diagnostic for the same subexpression.
 ```py
 def func(): ...
 def mixed_operands(value: object):
-    if func and False:  # TODO: should flag `func`
+    if func and False:  # error: [redundant-condition] "This condition is always true"
         pass
 
-    if not (value or func):  # TODO: should flag `func`
+    if not (value or func):  # error: [redundant-condition] "This condition is always false"
         pass
 ```
 
@@ -666,7 +666,7 @@ def nested_scopes():
         pass
     if accepts([item for item in (not func,)]):  # TODO: should error
         pass
-    if accepts([item for item in range(2) if not func]):  # TODO: should error
+    if accepts([item for item in range(2) if not func]):  # error: [redundant-condition] "This condition is always false"
         pass
 ```
 
@@ -773,7 +773,7 @@ neither rule checks its `and` or `or` operands:
 ```py
 def func(): ...
 def assertion_boundaries(x: str, flag: bool):
-    assert func and isinstance(x, str)  # TODO: should error
+    assert func and isinstance(x, str)  # error: [redundant-condition] "This condition is always true"
     
     # no diagnostic: `and` is used as a value expression here, not as a condition.
     assert flag, isinstance(x, str) and flag
@@ -953,7 +953,7 @@ if CHECKING:  # no diagnostic
 
 ORDINARY_CONSTANT = 1 == 1
 
-if ORDINARY_CONSTANT:  # TODO: should error
+if ORDINARY_CONSTANT:  # error: [redundant-condition] "This condition is always true"
     pass
 
 BAR = foo
@@ -965,7 +965,7 @@ if BAR >= (3, 14):  # no diagnostic
 
 reveal_type(TYPE_CHECKINGGGGG)  # revealed: Literal[True]
 
-if TYPE_CHECKINGGGGG:
+if TYPE_CHECKINGGGGG:  # error: [redundant-condition] "This condition is always true"
     pass
 
 reveal_type(sys_platform)  # revealed: Literal["linux"]
@@ -1027,11 +1027,11 @@ def rebound_receiver():
     config = PlatformConfig()
     if config.enabled:  # no diagnostic
         pass
-    if config.fixed:  # TODO: should error
+    if config.fixed:  # error: [redundant-condition] "This condition is always true"
         pass
 
     config = FixedConfig()
-    if config.enabled:  # TODO: should error
+    if config.enabled:  # error: [redundant-condition] "This condition is always true"
         pass
 
 def narrowed_receiver(config: PlatformConfig | FixedConfig):
@@ -1039,7 +1039,7 @@ def narrowed_receiver(config: PlatformConfig | FixedConfig):
         pass
 
     if isinstance(config, FixedConfig):
-        if config.enabled:  # TODO: should error
+        if config.enabled:  # error: [redundant-condition] "This condition is always true"
             pass
     else:
         if config.enabled:  # no diagnostic
@@ -1079,7 +1079,7 @@ def local_aliases():
 
 if ordinary := 1 == 1:  # TODO: should error
     pass
-if ordinary:  # TODO: should error
+if ordinary:  # error: [redundant-condition] "This condition is always true"
     pass
 ```
 
@@ -1112,7 +1112,7 @@ def plain_cycle(flag: bool):
     while flag:
         first = second
         second = first
-    if first:  # TODO: should error
+    if first:  # error: [redundant-condition] "This condition is always true"
         pass
 
 class AttributeCycle:
@@ -1155,7 +1155,7 @@ WINDOWS = sys.platform == "win32"
 
 def nested_guards(enabled: bool):
     if enabled:
-        if WINDOWS:
+        if WINDOWS:  # no diagnostic
             prefix = "\n"
         else:
             prefix = ""
@@ -1205,12 +1205,12 @@ def ordinary_guard(flag: bool):
         value = "ready"
     else:
         value = "ready"
-    if value:  # TODO: should error
+    if value:  # error: [redundant-condition] "This condition is always true"
         pass
 
 def recursive_guard():
     value = "ready"
-    if value:  # TODO: should error
+    if value:  # error: [redundant-condition] "This condition is always true"
         value = "still ready"
 ```
 
@@ -1223,7 +1223,7 @@ if sys.platform == "win32":
 
 print(sys.platform)
 fixed = "ready"
-if fixed:  # TODO: should error
+if fixed:  # error: [redundant-condition] "This condition is always true"
     pass
 ```
 
@@ -1260,10 +1260,10 @@ Loop and comprehension targets without an environment-dependent source still pro
 
 ```py
 for fixed in (True,):
-    if fixed:  # TODO: should error
+    if fixed:  # error: [redundant-condition] "This condition is always true"
         pass
 
-[fixed for fixed in (True,) if fixed]  # TODO: should error
+[fixed for fixed in (True,) if fixed]  # error: [redundant-condition] "This condition is always true"
 ```
 
 ## Environment-dependent pattern captures
@@ -1296,7 +1296,7 @@ A capture of an ordinary constant is not exempt.
 ```py
 match True:
     case fixed:
-        if fixed:  # TODO: should error
+        if fixed:  # error: [redundant-condition] "This condition is always true"
             pass
 ```
 
@@ -1313,7 +1313,7 @@ with nullcontext(sys.version_info) as version:
         pass
 
 with nullcontext((1,)) as fixed:
-    if fixed:  # TODO: should error
+    if fixed:  # error: [redundant-condition] "This condition is always true"
         pass
 ```
 
@@ -1547,7 +1547,7 @@ def predicate() -> bool:
 def uncalled_function(flag: bool):
     if flag:
         pass
-    elif predicate:  # TODO: should error
+    elif predicate:  # error: [redundant-condition] "This condition is always true"
         pass
     else:
         raise AssertionError

@@ -63,6 +63,32 @@ impl<'db> Type<'db> {
         any_over_type(db, env, self, false, |ty| matches!(ty, Type::TypeVar(_)))
     }
 
+    /// basedpython: whether this parameter type spells out a generic class's type argument
+    /// instead of naming it with a type variable.
+    ///
+    /// `items: list[T]` names it: `T` becomes whatever the argument's element type is, so
+    /// solving `T` reports what the argument holds. `container: Wrapper[Callable[Concatenate[object, P], R]]`
+    /// spells it out: the type argument has to be a callable of that shape, and the solved
+    /// `P` and `R` describe the parameter's own demand rather than the argument.
+    ///
+    /// A fluid specialization may adopt the first — the call is telling the binding what it
+    /// holds — but adopting the second would hand the argument the very type the parameter
+    /// asked for, so an invariant container would accept a type argument that does not match
+    /// it and nothing would report the mismatch.
+    pub(crate) fn prescribes_type_arguments(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> bool {
+        let Some((_, specialization)) = self.class_specialization(db, env) else {
+            return false;
+        };
+        specialization
+            .types(db)
+            .iter()
+            .any(|argument| !argument.is_type_var() && argument.has_typevar(db, env))
+    }
+
     pub(crate) fn references_typevar(
         self,
         db: &'db dyn Db,
@@ -391,11 +417,7 @@ impl<'db> TypeVarInstance<'db> {
     ///
     /// [`bound_or_constraints`](Self::bound_or_constraints) therefore hides it, and this is the
     /// only way to reach it.
-    pub(crate) fn pack_bound(
-        self,
-        db: &'db dyn Db,
-        env: &ProgramEnvironment<'db>,
-    ) -> Option<Type<'db>> {
+    fn pack_bound(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Option<Type<'db>> {
         if !self.is_pack(db) {
             return None;
         }
@@ -1517,7 +1539,34 @@ impl<'db> BoundTypeVarInstance<'db> {
                 specialization,
             ));
             let visitor = ApplyTypeMappingVisitor::new(env);
-            Some(original.apply_type_mapping_impl(db, env, &mapping, &visitor))
+            let bound = original.apply_type_mapping_impl(db, env, &mapping, &visitor);
+            // basedpython: substituting into `C[T]` rebuilds the specialization from the
+            // arguments alone, which loses the use-site projection the receiver was written
+            // with. `Self` stands for that receiver, so it has to keep the same view of it —
+            // otherwise the receiver fails its own `Self` bound at every call.
+            let projections = specialization.projections(db);
+            Some(match bound {
+                TypeVarBoundOrConstraints::UpperBound(bound) => {
+                    TypeVarBoundOrConstraints::UpperBound(bound.with_use_site_projections(
+                        db,
+                        env,
+                        projections,
+                    ))
+                }
+                TypeVarBoundOrConstraints::Constraints(constraints) => {
+                    let projected: Vec<_> = constraints
+                        .elements(db)
+                        .iter()
+                        .map(|constraint| {
+                            constraint.with_use_site_projections(db, env, projections)
+                        })
+                        .collect();
+                    TypeVarBoundOrConstraints::Constraints(TypeVarConstraints::new(
+                        db,
+                        projected.as_slice(),
+                    ))
+                }
+            })
         })
     }
 
@@ -1617,10 +1666,61 @@ impl<'db> BoundTypeVarInstance<'db> {
                         return TypeVarVariance::Invariant;
                     }
                     let env = ProgramEnvironment::from_definition(definition);
-                    binding_ty.variance_of(db, &env, self.identity(db)).evaluate(db)
+                    binding_ty
+                        .variance_of(db, &env, self.identity(db))
+                        .evaluate(db)
                 }
                 BindingContext::Synthetic(_) => TypeVarVariance::Invariant,
             },
+        }
+    }
+
+    /// basedpython: whether this parameter is bivariant only because nothing but a private
+    /// member mentions it.
+    ///
+    /// Inference reads this to tell the two sources of bivariance apart. A parameter declared
+    /// `in out`, and one no member mentions at all, are bivariant for good — there is no argument
+    /// hiding behind them to recover. A privately used one is different: the class really was
+    /// given an argument, and a solve that has to read it back gets nothing if the position is
+    /// skipped. Inference for a parameter no member mentions never reaches this: the spec's rule
+    /// reports it as covariant, so [`Self::variance`] never answers `Bivariant` for it.
+    pub(crate) fn is_bivariant_by_privacy(self, db: &'db dyn Db) -> bool {
+        self.typevar(db).explicit_variance(db).is_none()
+            && self.variance(db) == TypeVarVariance::Bivariant
+    }
+
+    /// basedpython: the variance a *solve* should read at this parameter's position.
+    ///
+    /// A bivariant position relates nothing, so descending into one recovers no type argument.
+    /// That is the right answer for a parameter that really is bivariant, and the wrong one for a
+    /// parameter that is bivariant only [by privacy](Self::is_bivariant_by_privacy): the class
+    /// was given an argument there, and reading it covariantly is what recovers it.
+    ///
+    /// Reading it is only free while it cannot make the call stricter, and it stops being free as
+    /// soon as the variable being solved has a domain. `C[str]` and `C[int]` are mutually
+    /// assignable when only a private member mentions `C`'s parameter, so every argument is a
+    /// valid solution — but recovering `str` for a `U: int` and then measuring it against that
+    /// bound rejects a call the checker elsewhere says is fine. A bounded or constrained target
+    /// therefore keeps the bivariant reading and is left to ordinary inference.
+    pub(crate) fn solving_variance_with_polarity(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        polarity: TypeVarVariance,
+        target: Type<'db>,
+    ) -> TypeVarVariance {
+        let variance = self.variance_with_polarity(db, polarity);
+        if variance == TypeVarVariance::Bivariant
+            && self.is_bivariant_by_privacy(db)
+            && !any_over_type(db, env, target, false, |ty| {
+                matches!(ty, Type::TypeVar(target_typevar)
+                    if target_typevar.typevar(db).bound_or_constraints(db, env).is_some())
+            })
+        {
+            // composing the polarity with covariance leaves the polarity itself
+            polarity
+        } else {
+            variance
         }
     }
 
@@ -1777,7 +1877,9 @@ impl<'db> BoundTypeVarInstance<'db> {
                 use ruff_python_ast::helpers::UseSiteVariance;
 
                 let Some(value) = mapped_specialization_type(specialization) else {
-                    return Type::TypeVar(self);
+                    // a projected mapping still crosses the member boundary, so a retained `Self`
+                    // has to have its domain rewritten here exactly as it would without projections
+                    return possibly_apply_to_self(specialization);
                 };
                 let projection = specialization
                     .as_specialization(db)
@@ -2146,11 +2248,11 @@ impl TypeVarKind {
         }
     }
 
-    pub(super) const fn is_paramspec(self) -> bool {
+    const fn is_paramspec(self) -> bool {
         matches!(self, Self::LegacyParamSpec | Self::Pep695ParamSpec)
     }
 
-    pub const fn is_keyword_variadic(self) -> bool {
+    pub(crate) const fn is_keyword_variadic(self) -> bool {
         matches!(self, Self::Pep695KeywordVariadic)
     }
 
@@ -2169,7 +2271,7 @@ impl TypeVarKind {
         matches!(self, Self::LegacyTypeVarTuple | Self::Pep695TypeVarTuple)
     }
 
-    pub const fn is_typing_self(self) -> bool {
+    const fn is_typing_self(self) -> bool {
         matches!(self, Self::TypingSelf)
     }
 }
@@ -2379,7 +2481,7 @@ impl<'db> BoundTypeVarIdentity<'db> {
         self.kind(db).is_paramspec()
     }
 
-    pub(crate) fn is_parameter_pack(self, db: &'db dyn Db) -> bool {
+    fn is_parameter_pack(self, db: &'db dyn Db) -> bool {
         self.kind(db).is_parameter_pack()
     }
 
@@ -2820,7 +2922,7 @@ impl<'db> TypeVarBoundOrConstraints<'db> {
         }
     }
 
-    fn apply_type_mapping_impl(
+    pub(crate) fn apply_type_mapping_impl(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,

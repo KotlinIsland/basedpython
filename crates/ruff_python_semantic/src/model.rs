@@ -2557,7 +2557,7 @@ impl<'a> SemanticModel<'a> {
     }
 
     /// Return `true` if the model is in a basedpython file (i.e., a `.by` or `.byi` file).
-    pub const fn in_basedpython_file(&self) -> bool {
+    const fn in_basedpython_file(&self) -> bool {
         self.flags.intersects(SemanticModelFlags::BASEDPYTHON_FILE)
     }
 

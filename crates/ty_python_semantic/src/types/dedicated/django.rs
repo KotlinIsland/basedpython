@@ -1093,7 +1093,7 @@ fn lookup_suffix(op: ast::CmpOp) -> Option<&'static str> {
 /// only the methods whose stub declares `*args` do. the `*_or_create` family is
 /// a lookup method too, but its first positional parameter is `defaults`, so an
 /// expression there would bind to that rather than to the keywords it lowers to
-pub(crate) fn accepts_lookup_expressions(method: &str) -> bool {
+fn accepts_lookup_expressions(method: &str) -> bool {
     matches!(method, "filter" | "exclude" | "get" | "aget")
 }
 
@@ -1546,7 +1546,7 @@ impl MetaFieldsDeclarer {
 ///
 /// the declared-field side is read out of the place tables rather than by
 /// member lookup: the declaring class's body is the scope this runs from
-pub(in crate::types) fn is_meta_fields_entry_valid<'db>(
+fn is_meta_fields_entry_valid<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     model: StaticClassLiteral<'db>,

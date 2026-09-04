@@ -902,7 +902,7 @@ fn nested_binding_remains_precise_after_many_module_calls() -> anyhow::Result<()
     let mut db = setup_db();
     let calls = "noop()\n".repeat(MANY_NON_TERMINAL_CALLS);
     let source = format!(
-        r#"def noop() -> None: ...
+        r#"def noop(): ...
 {calls}value = 1
 values = [(value := 'abc') for _ in range(2)]
 value.bit_count()
@@ -1100,7 +1100,9 @@ fn parameter_default_presence_invalidates_caller() -> anyhow::Result<()> {
     let with_default = "def f(x: int = 1) -> int: return x";
     db.write_files([
         ("/src/defaults.py", with_default),
-        ("/src/main.py", "from defaults import f\nf()"),
+        // the result is bound so `unused-return-value` does not report it: this test is
+        // about invalidation, not about the call
+        ("/src/main.py", "from defaults import f\nresult = f()"),
     ])?;
     assert_file_diagnostics(&db, "/src/main.py", &[]);
 
@@ -1137,7 +1139,7 @@ class Model(ModelBase):
     value: int = field()
 "#,
         ),
-        ("/src/main.py", "from model import Model\nModel()"),
+        ("/src/main.py", "from model import Model\nmodel = Model()"),
     ])?;
     assert_file_diagnostics(&db, "/src/main.py", &[]);
 
@@ -1149,7 +1151,7 @@ class Model(ModelBase):
     assert_file_diagnostics(
         &db,
         "/src/main.py",
-        &["No argument provided for required parameter `value`"],
+        &["No argument provided for required parameter `value` of class `Model`"],
     );
 
     db.write_file("/src/fields.py", field_source)?;

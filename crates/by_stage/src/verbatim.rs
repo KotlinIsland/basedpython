@@ -24,11 +24,11 @@ use crate::project::may_hold_build_content;
 use crate::staging::{Staging, relative_destination};
 
 /// One file carried into the output unchanged.
-pub struct Verbatim {
+struct Verbatim {
     /// where it lands, relative to the output root
-    pub relative: PathBuf,
+    relative: PathBuf,
     /// the file it is copied from
-    pub source: PathBuf,
+    source: PathBuf,
 }
 
 /// Every file the build carries over untouched, in walk order.
@@ -36,7 +36,7 @@ pub struct Verbatim {
 /// `out` is where the tree is being written, so that an output directory inside
 /// the project is not an input to itself. (`by run` stages into a temp directory,
 /// where the question never arises.)
-pub fn verbatim_files(
+fn verbatim_files(
     db: &ProjectDatabase,
     root: &Path,
     roots: &[PathBuf],
@@ -110,7 +110,7 @@ pub fn stage_verbatim(
 /// a `.by` in a build that does not ship sources, it is outside the project. A
 /// caller asking about a file it means to re-stage has to treat that as a
 /// refusal: a path the build never wrote is not a slot in the tree.
-pub fn verbatim_destination(
+pub(crate) fn verbatim_destination(
     db: &ProjectDatabase,
     root: &Path,
     roots: &[PathBuf],

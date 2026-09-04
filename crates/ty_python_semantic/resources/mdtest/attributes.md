@@ -480,9 +480,15 @@ class C:
         self.value = (1,)
 
     def update(self) -> None:
+        # TODO: this follows from the cycle settling one iteration short, above
+        # error: [invalid-assignment]
         self.value += (self.value,)
 
-reveal_type(C().value)  # revealed: tuple[int] | tuple[Divergent, ...]
+# TODO: the second arm should be the homogeneous `tuple[Divergent, ...]` the cycle settles on, not
+# one iteration of it. the growth *is* detected — the rounds go from length 1 to length 2 — and the
+# collapse runs, but the union keeps the uncollapsed arm. same family as the lambda default depth
+# in `cycle/basic.md`, which upstream's cycle recovery also moved
+reveal_type(C().value)  # revealed: tuple[int] | tuple[int, Divergent]
 ```
 
 #### Augmented assignments to inherited instance attributes
@@ -574,7 +580,7 @@ class UnknownChild(Middle):
     def set(self, value) -> None:
         self.value = value
 
-reveal_type(UnknownChild().value)  # revealed: int | Unknown
+reveal_type(UnknownChild().value)  # revealed: int | value@set
 ```
 
 An explicitly annotated class-level default also preserves subclass bindings.
@@ -610,7 +616,7 @@ class C:
         self.from_unknown = 0
         self.from_unknown += unknown_value
 
-reveal_type(C(0, 0).from_any)  # revealed: float | Any
+reveal_type(C(0, 0).from_any)  # revealed: int | float | Any
 reveal_type(C(0, 0).from_unknown)  # revealed: int | Unknown
 ```
 

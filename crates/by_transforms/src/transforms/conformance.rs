@@ -128,7 +128,7 @@ def _by_witness_get(value, interface, name):
 
 /// the `from <module> import <name> as <alias>` a cross-module interface
 /// spelling needs
-pub(crate) fn import_line(import: &ConversionImport) -> String {
+fn import_line(import: &ConversionImport) -> String {
     if import.alias == import.name {
         format!("from {} import {}", import.module, import.name)
     } else {

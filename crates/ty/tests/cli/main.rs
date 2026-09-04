@@ -9,8 +9,8 @@ mod python_environment;
 mod rule;
 mod rule_selection;
 mod scripts;
-mod type_checking_preset;
 mod server;
+mod type_checking_preset;
 mod uv_workspace;
 
 use anyhow::Context as _;

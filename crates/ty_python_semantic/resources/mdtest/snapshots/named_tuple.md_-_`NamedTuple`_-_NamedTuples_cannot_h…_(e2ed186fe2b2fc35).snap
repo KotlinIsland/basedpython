@@ -46,19 +46,46 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/named_tuple.md
 # Diagnostics
 
 ```
-error[unresolved-import]: Module `typing` has no member `NamedTuple`
- --> src/mdtest_snippet.py:1:20
+error[invalid-named-tuple]: NamedTuple field name cannot start with an underscore
+ --> src/mdtest_snippet.py:5:5
   |
-1 | from typing import NamedTuple
-  |                    ^^^^^^^^^^
+5 |     _bar: int
+  |     ^^^^^^^^^ Class definition will raise `TypeError` at runtime due to this field
 
 ```
 
 ```
-error[unresolved-import]: Module `typing` has no member `NamedTuple`
-  --> src/mdtest_snippet.py:12:20
+error[invalid-named-tuple]: Field name `_x` in `NamedTuple()` cannot start with an underscore
+  --> src/mdtest_snippet.py:15:39
    |
-12 | from typing import NamedTuple
-   |                    ^^^^^^^^^^
+15 | Underscore = NamedTuple("Underscore", [("_x", int), ("y", str)])
+   |                                       ^^^^^^^^^^^^^^^^^^^^^^^^^ Will raise `ValueError` at runtime
+
+```
+
+```
+error[invalid-named-tuple]: Field name `class` in `NamedTuple()` cannot be a Python keyword
+  --> src/mdtest_snippet.py:19:33
+   |
+19 | Keyword = NamedTuple("Keyword", [("x", int), ("class", str)])
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Will raise `ValueError` at runtime
+
+```
+
+```
+error[invalid-named-tuple]: Duplicate field name `x` in `NamedTuple()`
+  --> src/mdtest_snippet.py:23:37
+   |
+23 | Duplicate = NamedTuple("Duplicate", [("x", int), ("y", str), ("x", float)])
+   |                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Field `x` already defined; will raise `ValueError` at runtime
+
+```
+
+```
+error[invalid-named-tuple]: Field name `not valid` in `NamedTuple()` is not a valid identifier
+  --> src/mdtest_snippet.py:27:33
+   |
+27 | Invalid = NamedTuple("Invalid", [("not valid", int), ("ok", str)])
+   |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Will raise `ValueError` at runtime
 
 ```

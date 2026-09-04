@@ -585,7 +585,7 @@ impl<'db> TypedDictType<'db> {
 
     /// basedpython: the fields and still-pending `{**Kwargs}` packs of a dict-literal type, if
     /// this `TypedDict` was synthesized from one.
-    pub(crate) fn synthesized_shape(
+    fn synthesized_shape(
         self,
         db: &'db dyn Db,
     ) -> Option<(&'db TypedDictSchema<'db>, &'db [Type<'db>])> {

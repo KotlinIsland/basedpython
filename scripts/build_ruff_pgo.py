@@ -188,7 +188,7 @@ def main():
     environment = os.environ.copy()
     if args.prepare_corpus:
         corpus = ecosystem_python_files(target_dir / "corpus", environment=environment)
-        write_corpus_arguments(target_dir, corpus)
+        _ = write_corpus_arguments(target_dir, corpus)
         print(f"Prepared {len(corpus)} ecosystem Python files", flush=True)
         return
 

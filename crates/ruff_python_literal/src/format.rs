@@ -227,27 +227,27 @@ pub enum FormatSpec {
 #[derive(Debug, PartialEq)]
 pub struct StaticFormatSpec {
     // Ex) `!s` in `'{!s}'`
-    pub conversion: Option<FormatConversion>,
+    pub(crate) conversion: Option<FormatConversion>,
     // Ex) `*` in `'{:*^30}'`
-    pub fill: Option<char>,
+    pub(crate) fill: Option<char>,
     // Ex) `<` in `'{:<30}'`
-    pub align: Option<FormatAlign>,
+    pub(crate) align: Option<FormatAlign>,
     // Ex) `+` in `'{:+f}'`
-    pub sign: Option<FormatSign>,
+    pub(crate) sign: Option<FormatSign>,
     // Ex) `#` in `'{:#x}'`
-    pub alternate_form: bool,
+    pub(crate) alternate_form: bool,
     // Ex) the leading `0` in `'{:08.3f}'`. the zero is also folded into `fill`
     // and `align`, which is what formatting itself uses; this records whether
     // it was written, which the sign-aware-zero-padding rules need
-    pub zero: bool,
+    pub(crate) zero: bool,
     // Ex) `30` in `'{:<30}'`
-    pub width: Option<usize>,
+    pub(crate) width: Option<usize>,
     // Ex) `,` in `'{:,}'`
-    pub grouping_option: Option<FormatGrouping>,
+    pub(crate) grouping_option: Option<FormatGrouping>,
     // Ex) `2` in `'{:.2}'`
-    pub precision: Option<usize>,
+    pub(crate) precision: Option<usize>,
     // Ex) `f` in `'{:+f}'`
-    pub format_type: Option<FormatType>,
+    pub(crate) format_type: Option<FormatType>,
 }
 
 /// byte spans of the individual components of a [`StaticFormatSpec`], relative
@@ -258,16 +258,16 @@ pub struct StaticFormatSpec {
 /// part of the spec a given offset falls in
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FormatSpecSpans {
-    pub conversion: Option<Range<usize>>,
-    pub fill: Option<Range<usize>>,
-    pub align: Option<Range<usize>>,
-    pub sign: Option<Range<usize>>,
-    pub alternate_form: Option<Range<usize>>,
-    pub zero: Option<Range<usize>>,
-    pub width: Option<Range<usize>>,
-    pub grouping_option: Option<Range<usize>>,
-    pub precision: Option<Range<usize>>,
-    pub format_type: Option<Range<usize>>,
+    pub(crate) conversion: Option<Range<usize>>,
+    pub(crate) fill: Option<Range<usize>>,
+    pub(crate) align: Option<Range<usize>>,
+    pub(crate) sign: Option<Range<usize>>,
+    pub(crate) alternate_form: Option<Range<usize>>,
+    pub(crate) zero: Option<Range<usize>>,
+    pub(crate) width: Option<Range<usize>>,
+    pub(crate) grouping_option: Option<Range<usize>>,
+    pub(crate) precision: Option<Range<usize>>,
+    pub(crate) format_type: Option<Range<usize>>,
 }
 
 #[derive(Debug, PartialEq)]

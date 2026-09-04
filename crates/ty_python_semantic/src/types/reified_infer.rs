@@ -279,7 +279,9 @@ impl ParameterKind {
             Self::Variadic => {
                 let spellings = variadic_elements(db, env, ty)?
                     .into_iter()
-                    .map(|element| runtime_spelling(db, env, file, element.promote(db, env)))
+                    .map(|element| {
+                        runtime_spelling(db, env, file, element.promote_in(db, env, file))
+                    })
                     .collect::<Option<Vec<_>>>()?;
                 return Some(spellings.join(", "));
             }
@@ -290,7 +292,7 @@ impl ParameterKind {
             .map(|(name, field)| {
                 Some(format!(
                     "{name}={}",
-                    runtime_spelling(db, env, file, field.promote(db, env))?
+                    runtime_spelling(db, env, file, field.promote_in(db, env, file))?
                 ))
             })
             .collect::<Option<Vec<_>>>()?;
@@ -531,7 +533,7 @@ fn spell_specialization_arguments<'db>(
         let elements = fixed
             .elements_slice()
             .iter()
-            .map(|element| runtime_spelling(db, env, file, element.promote(db, env)))
+            .map(|element| runtime_spelling(db, env, file, element.promote_in(db, env, file)))
             .collect::<Option<Vec<_>>>()
             .ok_or(ReifiedInferenceError::NoBinding)?;
         return Ok(if elements.is_empty() {
@@ -839,12 +841,12 @@ pub(crate) fn erased_union<'db>(
 
     let arms = rows
         .iter()
-        .map(|row| runtime_spelling(db, env, file, row[position].promote(db, env)))
+        .map(|row| runtime_spelling(db, env, file, row[position].promote_in(db, env, file)))
         .collect::<Option<Vec<_>>>()?;
     let fixed = (0..width)
         .filter(|index| *index != position)
         .map(|index| {
-            runtime_spelling(db, env, file, rows[0][index].promote(db, env))
+            runtime_spelling(db, env, file, rows[0][index].promote_in(db, env, file))
                 .map(|text| (index, text))
         })
         .collect::<Option<Vec<_>>>()?;

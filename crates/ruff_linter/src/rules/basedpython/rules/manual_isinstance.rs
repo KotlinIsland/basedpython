@@ -3,8 +3,8 @@ use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::{self as ast, Expr, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::codes::Category;
 use crate::checkers::ast::Checker;
+use crate::codes::Category;
 use crate::rules::basedpython::helpers::{comparison_fits, comparison_operand_source};
 use crate::{AlwaysFixableViolation, Edit, Fix};
 

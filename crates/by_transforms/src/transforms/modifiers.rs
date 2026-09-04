@@ -77,30 +77,30 @@ fn base_head_name(base: &Expr) -> Option<&str> {
 #[expect(clippy::struct_excessive_bools)]
 pub(crate) struct Modifiers<'src> {
     source: &'src str,
-    pub(crate) edits: Vec<Fix>,
+    edits: Vec<Fix>,
     /// Needs `from typing import final` (decorator for classes/methods)
-    pub(crate) needs_final: bool,
+    needs_final: bool,
     /// Needs `from typing import Final` (type annotation for constants)
-    pub(crate) needs_final_annotation: bool,
-    pub(crate) needs_abstractmethod: bool,
-    pub(crate) needs_override: bool,
-    pub(crate) needs_dataclass: bool,
+    needs_final_annotation: bool,
+    needs_abstractmethod: bool,
+    needs_override: bool,
+    needs_dataclass: bool,
     /// a mutable field default was rewritten to a `default_factory`
-    pub(crate) needs_dataclass_field: bool,
-    pub(crate) needs_protocol: bool,
-    pub(crate) needs_classvar: bool,
-    pub(crate) needs_newtype: bool,
+    needs_dataclass_field: bool,
+    needs_protocol: bool,
+    needs_classvar: bool,
+    needs_newtype: bool,
     /// Names marked `export`/`public` at module level. Used to generate `__all__`.
-    pub(crate) exports: Vec<String>,
+    exports: Vec<String>,
     /// Module-level names renamed by `private` (original → `_original`).
-    pub(crate) private_renames: Vec<String>,
+    private_renames: Vec<String>,
     /// Module-level classes declared `sealed`, in source order. Each gets a
     /// `<name>.__sealed_members__` tuple of its same-module subclasses.
-    pub(crate) sealed_classes: Vec<String>,
+    sealed_classes: Vec<String>,
     /// Module-level `(class name, base head names, statement end offset)`
     /// triples, in source order. Used to resolve the subclasses of each sealed
     /// class and to place the `__sealed_members__` assignment after the last one.
-    pub(crate) class_bases: Vec<(String, Vec<String>, TextSize)>,
+    class_bases: Vec<(String, Vec<String>, TextSize)>,
     /// Tracks the current class-nesting depth so visibility modifiers can
     /// distinguish module-level declarations from class members.
     class_depth: u32,
@@ -113,7 +113,7 @@ pub(crate) struct Modifiers<'src> {
 }
 
 impl<'src> Modifiers<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
+    fn new(source: &'src str) -> Self {
         Self {
             source,
             edits: Vec::new(),
@@ -686,11 +686,11 @@ fn module_private_name(name: &str) -> String {
 
 pub(crate) struct NameRenamer {
     renames: HashMap<String, String>,
-    pub(crate) edits: Vec<Fix>,
+    edits: Vec<Fix>,
 }
 
 impl NameRenamer {
-    pub(crate) fn new(private_names: &[String]) -> Self {
+    fn new(private_names: &[String]) -> Self {
         let renames = private_names
             .iter()
             .map(|n| (n.clone(), module_private_name(n)))

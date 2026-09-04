@@ -168,7 +168,14 @@ impl<'db> Type<'db> {
         op: ast::Operator,
         right_ty: Type<'db>,
     ) -> Option<&'db BinaryOperationResult<'db>> {
-        Self::try_call_bin_op_result_with_tcx(db, env, left_ty, op, right_ty, TypeContext::default())
+        Self::try_call_bin_op_result_with_tcx(
+            db,
+            env,
+            left_ty,
+            op,
+            right_ty,
+            TypeContext::default(),
+        )
     }
 
     /// Like [`Self::try_call_bin_op_result`], but forwards the outer type context (the expected

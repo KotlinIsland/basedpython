@@ -4,12 +4,12 @@ preserve-uniform-field-visibility = true
 
 [[production]]
 package = "ruff"
-bin = "ruff"
+bin = "buff"
 reason = "shipped Ruff binary"
 
 [[production]]
 package = "ty"
-bin = "ty"
+bin = "by"
 reason = "shipped ty type checker binary"
 
 [[production]]
@@ -590,13 +590,6 @@ kind = "inherent_method"
 level = "expect"
 reason = "the AST name wrapper intentionally mirrors common string operations"
 
-[[override]]
-lint = "hawk::dead_public"
-crate = "ruff_python_ast"
-item = "token::TokenKind::is_non_soft_keyword"
-kind = "inherent_method"
-level = "expect"
-reason = "token kind predicates intentionally cover every keyword classification"
 
 [[override]]
 lint = "hawk::dead_public"
@@ -1017,13 +1010,6 @@ kind = "inherent_method"
 level = "expect"
 reason = "public Python version settings expose their numeric representation"
 
-[[override]]
-lint = "hawk::unnecessary_public"
-crate = "ruff_python_codegen"
-item = "generator::Generator::<'a>::with_mode"
-kind = "inherent_method"
-level = "expect"
-reason = "the public generator builder intentionally exposes its output mode"
 
 [[override]]
 lint = "hawk::unnecessary_public"

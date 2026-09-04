@@ -3,7 +3,7 @@
 //! `import "data/config.yaml" as config` says the file is a *static* resource:
 //! part of the program, fixed at build time, read through named attributes
 //! rather than opened at runtime. this crate is what that claim rests on. it
-//! reads the document ([`parse`]) and renders it as python ([`render`]) — a
+//! reads the document (`parse`) and renders it as python (`render`) — a
 //! mapping as a class, a sequence as a tuple, a scalar as a `Final` literal.
 //!
 //! both halves of the language read a resource through this one rendering: the
@@ -16,9 +16,10 @@ mod parse;
 mod render;
 mod value;
 
-pub use parse::{Format, ParseError, parse};
-pub use render::{REQUIRED_IMPORT, Rendered, binding_name, render};
-pub use value::Value;
+pub(crate) use parse::parse;
+pub use parse::{Format, ParseError};
+pub(crate) use render::render;
+pub use render::{REQUIRED_IMPORT, Rendered, binding_name};
 
 /// read `text` as `format` and render it as python bound to `root`.
 pub fn transpile(format: Format, text: &str, root: &str) -> Result<Rendered, ParseError> {

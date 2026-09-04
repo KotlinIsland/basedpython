@@ -68,7 +68,7 @@ class Foo:
 
 reveal_type(Foo(1))  # revealed: Foo
 
-# error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["x"]`"
+# error: [invalid-argument-type] "Argument to constructor `Foo.__new__` is incorrect: Expected `int`, found `Literal["x"]`"
 reveal_type(Foo("x"))  # revealed: Foo
 # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
@@ -160,8 +160,8 @@ def _(flag: bool) -> None:
             def __new__(cls, x: int, y: int = 1): ...
 
     reveal_type(Foo(1))  # revealed: Foo
-    # error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["1"]`"
-    # error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["1"]`"
+    # error: [invalid-argument-type] "Argument to constructor `Foo.__new__` is incorrect: Expected `int`, found `Literal["1"]`"
+    # error: [invalid-argument-type] "Argument to constructor `Foo.__new__` is incorrect: Expected `int`, found `Literal["1"]`"
     reveal_type(Foo("1"))  # revealed: Foo
     # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
     # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
@@ -615,7 +615,7 @@ class Foo:
     def __new__(cls, x: int):
         return object.__new__(cls)
 
-# error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `<class 'Foo'>`"
+# error: [invalid-argument-type] "Argument to bound method `Foo.__new__` is incorrect: Expected `int`, found `<class 'Foo'>`"
 # error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 0, got 1"
 Foo(1)
 
@@ -1977,8 +1977,8 @@ def _(flag: bool) -> None:
             def __init__(self, x: int, y: int = 1): ...
 
     reveal_type(Foo(1))  # revealed: Foo
-    # error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["1"]`"
-    # error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["1"]`"
+    # error: [invalid-argument-type] "Argument to `Foo.__init__` is incorrect: Expected `int`, found `Literal["1"]`"
+    # error: [invalid-argument-type] "Argument to `Foo.__init__` is incorrect: Expected `int`, found `Literal["1"]`"
     reveal_type(Foo("1"))  # revealed: Foo
     # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
     # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
@@ -2080,10 +2080,10 @@ class Foo:
     def __init__(self, x: str) -> None:
         self.x = x
 
-# error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `str`, found `Literal[1]`"
+# error: [invalid-argument-type] "Argument to `Foo.__init__` is incorrect: Expected `str`, found `Literal[1]`"
 Foo(1)
 
-# error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["x"]`"
+# error: [invalid-argument-type] "Argument to constructor `Foo.__new__` is incorrect: Expected `int`, found `Literal["x"]`"
 Foo("x")
 ```
 

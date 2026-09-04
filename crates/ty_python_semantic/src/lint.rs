@@ -22,7 +22,7 @@ pub struct LintMetadata {
     /// The default level of the lint if the user doesn't specify one.
     ///
     /// This is the level under the default [`TypeCheckingPreset`]; use
-    /// [`TypeCheckingPreset::level`] to resolve the level under any other preset.
+    /// `TypeCheckingPreset::level` to resolve the level under any other preset.
     pub default_level: Level,
 
     /// How the lint behaves under the `ty-compatible` [`TypeCheckingPreset`].

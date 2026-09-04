@@ -583,7 +583,7 @@ fn respond<Req>(
 /// shows that message where the user asked. A popup on top of it saying the server
 /// hit a problem would be a lie. This is the same line the request-routing path
 /// draws for the errors it handles.
-pub(super) fn report_unexpected_failure(client: &Client, error: &Error, log_guidance: &str) {
+fn report_unexpected_failure(client: &Client, error: &Error, log_guidance: &str) {
     if matches!(error.code, ErrorCode::InternalError) {
         client.show_error_message(format!("ty encountered a problem. {log_guidance}"));
     }

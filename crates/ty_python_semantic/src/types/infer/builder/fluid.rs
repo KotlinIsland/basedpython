@@ -56,21 +56,21 @@ use crate::types::{KnownFunction, Type, TypeContext, TypeVarVariance};
 
 /// the constraining and locking events of a fluid candidate binding that can
 /// have executed before a given program point
-pub(super) struct FluidConstraints<'db> {
+struct FluidConstraints<'db> {
     /// constraint types learned from widening uses, in flow order
-    pub(super) constraints: Vec<Type<'db>>,
+    constraints: Vec<Type<'db>>,
     /// whether the specialization is locked at this point
-    pub(super) locked: bool,
+    locked: bool,
     /// whether the lock promotes literal types: an escape promotes (the unknown
     /// observer sees the promoted type), while an adopting lock uses the observer's
     /// exact view, which is already part of `constraints`
-    pub(super) promote_on_lock: bool,
+    promote_on_lock: bool,
 }
 
 impl FluidConstraints<'_> {
     /// whether the specialization at this point is exactly the creation-time
     /// specialization, with literals retained
-    pub(super) fn is_creation(&self) -> bool {
+    fn is_creation(&self) -> bool {
         self.constraints.is_empty() && !self.locked
     }
 }
@@ -229,7 +229,6 @@ struct FluidView<'db> {
 struct FluidFold<'db, 'c> {
     builder: SpecializationBuilder<'db, 'c>,
     identity_instance: Type<'db>,
-    generic_context: GenericContext<'db>,
     /// the file being inferred, so a solved element type can honour `strict-float`
     file: ruff_db::files::File,
     /// whether an earlier constraint failed to fold: every solution from that
@@ -281,19 +280,17 @@ impl<'db> FluidFold<'db, '_> {
         promote: bool,
     ) -> Type<'db> {
         let file = self.file;
-        let specialization = self
-            .builder
-            .build_merged_with(|typevar, bounds| {
-                let lower = bounds?.evidence_lower()?;
-                Some(if promote && typevar.widens_literal_solutions(db) {
-                    // see the note in `solve_fluid_specialization`
-                    lower
-                        .promote_in(db, env, file)
-                        .promote_singletons_recursively(db, env)
-                } else {
-                    lower
-                })
-            });
+        let specialization = self.builder.build_merged_with(|typevar, bounds| {
+            let lower = bounds?.evidence_lower()?;
+            Some(if promote && typevar.widens_literal_solutions(db) {
+                // see the note in `solve_fluid_specialization`
+                lower
+                    .promote_in(db, env, file)
+                    .promote_singletons_recursively(db, env)
+            } else {
+                lower
+            })
+        });
         self.identity_instance
             .apply_specialization(db, specialization)
     }
@@ -341,7 +338,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     /// whether this definition can have a fluid specialization: a single unannotated
     /// assignment whose place has no declared type (a declared place has a declared
     /// specialization, which is never fluid)
-    pub(super) fn is_fluid_candidate(&self, candidate_def: Definition<'db>) -> bool {
+    fn is_fluid_candidate(&self, candidate_def: Definition<'db>) -> bool {
         let db = self.db();
 
         if !self.fluid_specializations_enabled() {
@@ -549,7 +546,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     ///
     /// this is the fallback for the rare views that [`Self::fluid_view_at`]
     /// cannot resolve from the recorded timeline
-    pub(super) fn gather_fluid_constraints(
+    fn gather_fluid_constraints(
         &self,
         candidate_def: Definition<'db>,
         identity_instance: Type<'db>,
@@ -711,7 +708,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     /// this mirrors [`Self::gather_fluid_constraints`] with no `upto`, doing the
     /// expensive per-event work (statement inference reads, typevar-binding
     /// checks, solving) exactly once per event instead of once per use
-    pub(super) fn build_fluid_timeline(
+    fn build_fluid_timeline(
         &self,
         candidate_def: Definition<'db>,
         identity_instance: Type<'db>,
@@ -729,7 +726,6 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let mut fold = FluidFold {
             builder: SpecializationBuilder::new(db, env, &constraint_sets, generic_context),
             identity_instance,
-            generic_context,
             file: self.file(),
             poisoned: false,
             events: Vec::new(),
@@ -1011,7 +1007,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
     /// solve the candidate's specialization from the given constraint instances.
     /// literal types are promoted only once the specialization is locked
-    pub(super) fn solve_fluid_specialization(
+    fn solve_fluid_specialization(
         &self,
         identity_instance: Type<'db>,
         generic_context: GenericContext<'db>,
@@ -1269,8 +1265,18 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // places no requirement on the specialization and observes the narrow
             // type as-is; a structured one (`def f[T](t: list[T])`) solves its
             // typevars against the promoted view.
-            if annotation.has_unspecialized_type_var(db, env)
-                && annotation.class_specialization(db, env).is_some()
+            //
+            // A parameter is recognized as parametric before its typevars are solved.
+            // By the time its context reaches the argument they have been, so an
+            // annotation like `Wrapper[Callable[Concatenate[object, P], R]]` arrives
+            // spelled out and would otherwise pass for a concrete declared type: the
+            // binding would adopt exactly the shape the parameter asked for, and an
+            // invariant `Wrapper` would accept a type argument that does not match it.
+            // [`TypeContext::prescribes_type_arguments`] remembers what the parameter
+            // looked like before it was solved.
+            if tcx.prescribes_type_arguments()
+                || (annotation.has_unspecialized_type_var(db, env)
+                    && annotation.class_specialization(db, env).is_some())
             {
                 if let (Some(timeline), Some(index)) = (timeline, snapshot) {
                     return timeline.solution(index, true).unwrap_or(fallback);

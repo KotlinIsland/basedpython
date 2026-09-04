@@ -399,12 +399,12 @@ first, *middle, last = (0, returns_any(), 1)  # snapshot: unsound-assignment
 
 ```snapshot
 error[unsound-assignment]: Unsound assignment
- --> src/mdtest_snippet.py:7:24
+ --> src/mdtest_snippet.py:7:28
   |
 6 | middle: list[int]
   |         --------- Expected a subtype of `list[int]` because of this annotation
 7 | first, *middle, last = (0, returns_any(), 1)  # snapshot: unsound-assignment
-  |         ------         ^^^^^^^^^^^^^^^^^^^^^ Inferred as `list[Any]`
+  |         ------             ^^^^^^^^^^^^^ Iterable element inferred as `Any` (expected a subtype of `int`)
   |         |
   |         Assigned to this variable
 info: `list[Any]` is assignable to `list[int]`, but not a subtype of `list[int]`
@@ -428,12 +428,12 @@ first, *middle, last = (0, 1, returns_any(), 2, 3)  # snapshot: unsound-assignme
 
 ```snapshot
 error[unsound-assignment]: Unsound assignment
- --> src/mdtest_snippet.py:7:24
+ --> src/mdtest_snippet.py:7:28
   |
 6 | middle: list[int]
   |         --------- Expected a subtype of `list[int]` because of this annotation
 7 | first, *middle, last = (0, 1, returns_any(), 2, 3)  # snapshot: unsound-assignment
-  |         ------         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Inferred as `list[int | Any]`
+  |         ------             ^^^^^^^^^^^^^^^^^^^ Iterable element inferred as `int | Any` (expected a subtype of `int`)
   |         |
   |         Assigned to this variable
 info: `list[int | Any]` is assignable to `list[int]`, but not a subtype of `list[int]`

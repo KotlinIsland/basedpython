@@ -43,12 +43,12 @@ pub(crate) struct TupleLiteralType<'src> {
     min_version: PythonVersion,
     float_literals: FloatLiteralLowering,
     /// set when a lowering spelled an `Unpack`, so the pass can ask for the import
-    pub(crate) needs_unpack_import: std::cell::Cell<bool>,
-    pub(crate) edits: Vec<Fix>,
+    needs_unpack_import: std::cell::Cell<bool>,
+    edits: Vec<Fix>,
 }
 
 impl<'src> TupleLiteralType<'src> {
-    pub(crate) fn new(
+    fn new(
         source: &'src str,
         types: &'src dyn TypeInfo,
         min_version: PythonVersion,

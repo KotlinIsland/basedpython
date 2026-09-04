@@ -187,7 +187,7 @@ fn root_type<'db>(
 }
 
 /// the names making up the dotted path covering `range` of the template
-pub(crate) fn path_segments<'src>(
+fn path_segments<'src>(
     index: &TemplateIndex,
     source: &'src str,
     range: TextRange,
@@ -213,7 +213,7 @@ pub(crate) fn path_segments<'src>(
 /// method.
 ///
 /// [resolved]: https://docs.djangoproject.com/en/stable/ref/templates/language/#variables
-pub(crate) fn member_type<'db>(
+fn member_type<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     ty: Type<'db>,

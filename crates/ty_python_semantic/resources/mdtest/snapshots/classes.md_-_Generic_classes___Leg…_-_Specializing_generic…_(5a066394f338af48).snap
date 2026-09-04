@@ -112,6 +112,35 @@ error[invalid-type-arguments]: Too many type arguments to class `C`: expected 1,
 ```
 
 ```
+error[invalid-type-arguments]: Type `str` is not assignable to upper bound `int` of type variable `BoundedT@Bounded`
+  --> src/mdtest_snippet.py:25:21
+   |
+25 | reveal_type(Bounded[str]())  # revealed: Bounded[Unknown]
+   |                     ^^^
+   |
+  ::: src/mdtest_snippet.py:14:1
+   |
+14 | BoundedT = TypeVar("BoundedT", bound=int)
+   | -------- Type variable defined here
+
+```
+
+```
+error[invalid-type-arguments]: Type `int | str` is not assignable to upper bound `int` of type variable `BoundedT@Bounded`
+  --> src/mdtest_snippet.py:28:21
+   |
+28 | reveal_type(Bounded[int | str]())  # revealed: Bounded[Unknown]
+   |                     ^^^^^^^^^
+   |
+  ::: src/mdtest_snippet.py:14:1
+   |
+14 | BoundedT = TypeVar("BoundedT", bound=int)
+   | -------- Type variable defined here
+info: element `str` of union `int | str` is not assignable to `int`
+
+```
+
+```
 error[invalid-type-arguments]: Type `object` does not satisfy constraints `int`, `str` of type variable `ConstrainedT@Constrained`
   --> src/mdtest_snippet.py:51:25
    |

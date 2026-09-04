@@ -188,7 +188,7 @@ def accept(value: Item[T]) -> None: ...
 
 item: Item[int] = {"value": 1}
 
-reveal_type(accept)  # revealed: def accept[T](value: Item[T]) -> None
+reveal_type(accept)  # revealed: def accept[T](value: Item[T])
 accept(item)
 ```
 

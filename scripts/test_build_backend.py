@@ -11,6 +11,15 @@ back out, and where a dynamic version comes from. The packaging itself is
 neither is tested here.
 """
 
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pytest"]
+#
+# # the backend under test is the one this checkout ships, not an installed copy
+# [tool.ty.environment]
+# extra-paths = ["../python"]
+# ///
+
 from __future__ import annotations
 
 import contextlib

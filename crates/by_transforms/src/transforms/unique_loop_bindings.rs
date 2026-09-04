@@ -58,7 +58,7 @@ use crate::type_info::{CaptureKind, TypeInfo};
 /// the iteration that defined it keeps its own values. cells the call does not
 /// name — outer locals, `__class__`, reified type parameters — are carried
 /// over, as are the attributes `FunctionType` does not copy
-pub(crate) const LOOP_BIND_RUNTIME: &str = "\
+const LOOP_BIND_RUNTIME: &str = "\
 def _by_loop_bind(**_by_values):
     def _by_rebind(_by_fn):
         _by_code = _by_fn.__code__

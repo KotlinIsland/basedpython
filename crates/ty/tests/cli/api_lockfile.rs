@@ -41,7 +41,7 @@ def _private() -> None:
     exit_code: 0
     ----- stdout -----
     #api-lock:v=1
-    #tool:by=0.0.8
+    #tool:by=0.0.12
     #python:default
     #modules:1
     module.CONST:v=builtins.int
@@ -90,7 +90,7 @@ class Dog(Animal):
     exit_code: 0
     ----- stdout -----
     #api-lock:v=1
-    #tool:by=0.0.8
+    #tool:by=0.0.12
     #python:default
     #modules:2
     base.Animal.speak:d(self:base.Animal)->builtins.str
@@ -127,7 +127,7 @@ def f(a: int, b: str = '', /, c: float = 0.0, *args: bytes, d: bool = False, **k
     exit_code: 0
     ----- stdout -----
     #api-lock:v=1
-    #tool:by=0.0.8
+    #tool:by=0.0.12
     #python:default
     #modules:1
     sigs.f:d(a:builtins.int,b:builtins.str=,/,c:builtins.float | builtins.int=,*args:builtins.bytes,d:builtins.bool=,**kwargs:builtins.int)->None
@@ -172,7 +172,7 @@ class D[T, U]:
     exit_code: 0
     ----- stdout -----
     #api-lock:v=1
-    #tool:by=0.0.8
+    #tool:by=0.0.12
     #python:default
     #modules:1
     g.A.f:d(self:Self)->T
@@ -224,7 +224,7 @@ class Mutable[T]:
     exit_code: 0
     ----- stdout -----
     #api-lock:v=1
-    #tool:by=0.0.8
+    #tool:by=0.0.12
     #python:default
     #modules:1
     fr.Frozen.x:v=T
@@ -273,7 +273,7 @@ class Cell(Generic[T]):
     exit_code: 0
     ----- stdout -----
     #api-lock:v=1
-    #tool:by=0.0.8
+    #tool:by=0.0.12
     #python:default
     #modules:1
     ex.Box.get:d(self:Self)->T_co

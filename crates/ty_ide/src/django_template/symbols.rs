@@ -100,15 +100,15 @@ pub(crate) fn document_symbols(index: &TemplateIndex) -> Vec<TemplateSymbol> {
 
 /// one django thing a workspace symbol search can find
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DjangoSymbol {
-    pub symbol: SymbolInfo<'static>,
-    pub file: File,
+pub(crate) struct DjangoSymbol {
+    pub(crate) symbol: SymbolInfo<'static>,
+    pub(crate) file: File,
     /// what django calls this kind of thing
     ///
     /// a model and an admin class are both classes python has already offered
     /// under the same name, and this is the whole of what tells them apart in a
     /// list of results.
-    pub container: &'static str,
+    pub(crate) container: &'static str,
 }
 
 impl DjangoSymbol {

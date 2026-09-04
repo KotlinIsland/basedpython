@@ -1171,6 +1171,54 @@ static_assert(not is_subtype_of(Contravariant[B], Contravariant[A]))
 static_assert(is_subtype_of(Contravariant[A], Contravariant[B]))
 ```
 
+#### A solve still reads the type argument back
+
+Bivariance says that no comparison against the parameter can fail. It does not say that the class
+was given no argument — a private member holds one, and inference reads it back, however deeply the
+parameter it is being matched against is nested.
+
+```py
+from typing import Iterable
+
+class C[T]:
+    _x: T
+
+def whole[U](c: C[U]) -> U:
+    raise NotImplementedError
+
+def element[U](c: C[Iterable[U]]) -> U:
+    raise NotImplementedError
+
+def ints() -> C[Iterable[int]]:
+    raise NotImplementedError
+
+reveal_type(whole(ints()))  # revealed: Iterable[int]
+reveal_type(element(ints()))  # revealed: int
+```
+
+Reading the argument does not make the comparison itself any stricter: an argument the parameter is
+bivariant in is still accepted for any other.
+
+```py
+def strings() -> C[Iterable[str]]:
+    raise NotImplementedError
+
+c: C[Iterable[int]] = strings()
+```
+
+That has to hold for a solve as well, which is where the reading actually happens. A variable
+carrying a bound is where it could go wrong: recovering `str` for a `U: int` and then measuring it
+against that bound would reject a call the assignment above says is fine. So a bounded or
+constrained variable keeps the bivariant reading, and goes unsolved rather than wrong.
+
+```py
+def bounded[U: int](c: C[U]) -> U:
+    raise NotImplementedError
+
+def f(c: C[str]):
+    reveal_type(bounded(c))  # revealed: Never
+```
+
 #### Explicit variance still wins
 
 ```py
@@ -2103,19 +2151,19 @@ a method that consumes an `out` parameter would let a caller pass a supertype of
 holds:
 
 ```by
-# snapshot: invalid-generic-class
 class BadProducer[out T]:
+    # snapshot: invalid-generic-class
     def set(self, value: T) -> None:
         pass
 ```
 
 ```snapshot
-error[invalid-generic-class]: Variance of type variable `T` is incompatible with its usage in `BadProducer`
- --> src/mdtest_snippet.by:2:19
+error[invalid-generic-class]: Variance of type variable `T` is incompatible with method `set`
+ --> src/mdtest_snippet.by:3:26
   |
-2 | class BadProducer[out T]:
-  |                   ^^^^^
-help: Type variable `T` is declared as covariant, but `BadProducer` uses it contravariantly
+3 |     def set(self, value: T) -> None:
+  |                          ^
+info: Type variable `T` is declared as covariant, but this method requires it to be contravariant
 ```
 
 #### `in` in a producing position
@@ -2123,8 +2171,8 @@ help: Type variable `T` is declared as covariant, but `BadProducer` uses it cont
 a method that produces an `in` parameter would hand back a subtype of what the caller wrote:
 
 ```by
-# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `BadConsumer`"
 class BadConsumer[in T]:
+    # error: [invalid-generic-class] "Variance of type variable `T` is incompatible with method `get`"
     def get(self) -> T:
         raise ValueError
 ```

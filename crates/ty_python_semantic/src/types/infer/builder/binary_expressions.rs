@@ -11,8 +11,8 @@ use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::diagnostic::{
     DIVISION_BY_ZERO, report_unsupported_augmented_assignment, report_unsupported_binary_operation,
 };
-use crate::types::inferred_signature::gradual_hole;
 use crate::types::function::OverloadLiteral;
+use crate::types::inferred_signature::gradual_hole;
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarConstraints;
@@ -949,24 +949,21 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             (Type::NominalInstance(_), _, ast::Operator::Mult)
                 if right_ty.as_int_like_literal().is_some() =>
             {
-                fold_tuple_repeat(db, env, left_ty, right_ty).or_else(|| {
-                    self.infer_binary_dunder(state, left_ty, op, right_ty, tcx)
-                })
+                fold_tuple_repeat(db, env, left_ty, right_ty)
+                    .or_else(|| self.infer_binary_dunder(state, left_ty, op, right_ty, tcx))
             }
             (_, Type::NominalInstance(_), ast::Operator::Mult)
                 if left_ty.as_int_like_literal().is_some() =>
             {
-                fold_tuple_repeat(db, env, right_ty, left_ty).or_else(|| {
-                    self.infer_binary_dunder(state, left_ty, op, right_ty, tcx)
-                })
+                fold_tuple_repeat(db, env, right_ty, left_ty)
+                    .or_else(|| self.infer_binary_dunder(state, left_ty, op, right_ty, tcx))
             }
 
             // fold `(a, b) + (c,)` into `(a, b, c)`. as with `*`, typeshed's `tuple.__add__`
             // otherwise widens the concatenation to `tuple[T, ...]`
             (Type::NominalInstance(_), Type::NominalInstance(_), ast::Operator::Add) => {
-                fold_tuple_concat(db, env, left_ty, right_ty).or_else(|| {
-                    self.infer_binary_dunder(state, left_ty, op, right_ty, tcx)
-                })
+                fold_tuple_concat(db, env, left_ty, right_ty)
+                    .or_else(|| self.infer_binary_dunder(state, left_ty, op, right_ty, tcx))
             }
 
             // We've handled all of the special cases that we support for literals, so we need to
@@ -1100,7 +1097,7 @@ fn as_complex_components<'db>(
 }
 
 /// basedpython literal-arithmetic outcome
-pub(crate) enum LiteralArithOutcome<'db> {
+enum LiteralArithOutcome<'db> {
     /// A literal value was computed
     Literal(Type<'db>),
     /// Arithmetic is defined but the result is undefined at runtime (NaN, division by zero).

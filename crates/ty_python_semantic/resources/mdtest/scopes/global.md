@@ -324,7 +324,7 @@ known_false_value = 0
 
 def known_false_global_factory(flag: Literal[False]):
     global known_false_value
-    if flag:
+    if flag:  # error: [redundant-condition] "This condition is always false"
         known_false_value = "updated"
 
     class Nested:

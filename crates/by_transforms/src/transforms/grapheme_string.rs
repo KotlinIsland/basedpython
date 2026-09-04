@@ -61,7 +61,7 @@ use crate::type_info::TypeInfo;
 /// runtime dependency of the grapheme surface: if it is missing we raise an
 /// actionable error rather than silently miscounting with `list()`, whose
 /// code-point split gives a wrong answer for any multi-code-point grapheme
-pub(crate) const GRAPHEME_HELPER: &str = "\
+const GRAPHEME_HELPER: &str = "\
 def _by_graphemes(_text):
     try:
         import regex as _regex
@@ -75,14 +75,14 @@ def _by_graphemes(_text):
 
 /// `s.prefix(n)` — the first `n` grapheme clusters, joined. clamps `n` to `>= 0`,
 /// so `prefix(0)` is empty and `prefix(large)` is the whole string
-pub(crate) const PREFIX_HELPER: &str = "\
+const PREFIX_HELPER: &str = "\
 def _by_prefix(_text, _n):
     return \"\".join(_by_graphemes(_text)[:max(0, _n)])
 ";
 
 /// `s.suffix(n)` — the last `n` grapheme clusters, joined. computed from the
 /// front (not `[-n:]`) so `suffix(0)` is empty rather than the whole string
-pub(crate) const SUFFIX_HELPER: &str = "\
+const SUFFIX_HELPER: &str = "\
 def _by_suffix(_text, _n):
     _g = _by_graphemes(_text)
     return \"\".join(_g[max(0, len(_g) - _n):])

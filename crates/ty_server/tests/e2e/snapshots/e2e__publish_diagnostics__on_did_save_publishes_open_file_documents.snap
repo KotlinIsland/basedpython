@@ -8,21 +8,21 @@ expression: diagnostics
     {
       "range": {
         "start": {
-          "line": 0,
-          "character": 19
+          "line": 3,
+          "character": 0
         },
         "end": {
-          "line": 0,
-          "character": 30
+          "line": 3,
+          "character": 19
         }
       },
       "severity": 1,
-      "code": "unresolved-import",
+      "code": "type-assertion-failure",
       "codeDescription": {
-        "href": "https://ty.dev/rules#unresolved-import"
+        "href": "https://ty.dev/rules#type-assertion-failure"
       },
       "source": "ty",
-      "message": "Module `typing` has no member `assert_type`"
+      "message": "Type `int` does not match asserted type `str`\n\ninfo: `str` and `int` are not equivalent types"
     }
   ],
   "vscode-notebook-cell://src/notebook.ipynb#0": [],
@@ -30,21 +30,21 @@ expression: diagnostics
     {
       "range": {
         "start": {
-          "line": 0,
-          "character": 19
+          "line": 2,
+          "character": 0
         },
         "end": {
-          "line": 0,
-          "character": 30
+          "line": 2,
+          "character": 19
         }
       },
       "severity": 1,
-      "code": "unresolved-import",
+      "code": "type-assertion-failure",
       "codeDescription": {
-        "href": "https://ty.dev/rules#unresolved-import"
+        "href": "https://ty.dev/rules#type-assertion-failure"
       },
       "source": "ty",
-      "message": "Module `typing` has no member `assert_type`"
+      "message": "Type `int` does not match asserted type `str`\n\ninfo: `str` and `int` are not equivalent types"
     }
   ]
 }

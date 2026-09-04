@@ -30,14 +30,11 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/with/async.md
 # Diagnostics
 
 ```
-error[invalid-context-manager]: Object of type `Manager1 | NotAContextManager` cannot be used with `async with` because `__aenter__` and `__aexit__` may be missing or return non-awaitables
+error[invalid-context-manager]: Object of type `Manager1 | NotAContextManager` cannot be used with `async with` because the methods `__aenter__` and `__aexit__` are possibly missing
   --> src/mdtest_snippet.py:11:16
    |
 11 |     async with context_expr as f:
    |                ^^^^^^^^^^^^
 info: `NotAContextManager` does not implement `__aenter__` or `__aexit__`
-info: `__aenter__` returns `CoroutineType[Any, Any, str]`, which is not awaitable
-info: `__aexit__` returns `CoroutineType[Any, Any, None]`, which is not awaitable
-info: Consider declaring the methods with `async def`
 
 ```

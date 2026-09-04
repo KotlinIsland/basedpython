@@ -37,7 +37,7 @@ impl Request for InjectionsRequest {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct InjectionsParams {
     /// The document to look in — its *buffer*, so a marker typed a moment ago counts.
-    pub(crate) text_document: TextDocumentIdentifier,
+    text_document: TextDocumentIdentifier,
 }
 
 /// Every fragment in the document, in source order.
@@ -46,7 +46,7 @@ pub(crate) struct InjectionsParams {
 pub(crate) struct InjectionsResponse {
     /// The fragments. A client keys its own state on a fragment's position in this list, which is
     /// source order and so is stable while the fragments are.
-    pub(crate) injections: Vec<InjectionFragment>,
+    injections: Vec<InjectionFragment>,
 }
 
 /// One fragment of another language.
@@ -55,19 +55,19 @@ pub(crate) struct InjectionsResponse {
 pub(crate) struct InjectionFragment {
     /// The language, as the marker spelled it. The server does not interpret it: matching it to a
     /// language the editor has is the client's, and an id it does not recognise is not an error.
-    pub(crate) language: String,
+    language: String,
 
     /// Where the fragment's text is, quotes excluded, one range per literal part.
     ///
     /// More than one means the fragment was written as several adjacent literals, and its text is
     /// their contents joined in this order.
-    pub(crate) ranges: Vec<Range>,
+    ranges: Vec<Range>,
 
     /// What decided the language: `comment`, `declared`, or `propagated`.
     ///
     /// A client shows this when a reader asks why a string is being treated as another language —
     /// `propagated` is the one whose reason is not visible at the string itself.
-    pub(crate) origin: String,
+    origin: String,
 }
 
 pub(crate) struct InjectionsRequestHandler;

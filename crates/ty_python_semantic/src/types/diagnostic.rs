@@ -4755,6 +4755,13 @@ pub(super) fn report_dynamic_function_decorator_return<'db>(
     decorated_function: &ast::StmtFunctionDef,
     return_ty: Type<'db>,
 ) {
+    // basedpython: a modifier keyword (`private def f()`, and a `context def f()` the parser has
+    // already rejected) parses as a synthetic decorator that decorates nothing. it resolves to
+    // `Unknown` because it refers to nothing, which is not a decorator losing a type
+    if matches!(&decorator.expression, ast::Expr::Name(name) if name.ctx.is_invalid()) {
+        return;
+    }
+
     let Some(builder) = context.report_lint(&DYNAMIC_FUNCTION_DECORATOR_RETURN, decorator) else {
         return;
     };
@@ -7475,7 +7482,9 @@ pub(super) fn report_incompatible_base_method<'db>(
     let selected_name = selected_owner
         .class_literal(db)
         .display_with(db, env, settings.clone());
-    let contract_name = contract_owner.class_literal(db).display_with(db, env, settings);
+    let contract_name = contract_owner
+        .class_literal(db)
+        .display_with(db, env, settings);
     let mut diagnostic = builder.into_diagnostic(format_args!(
         "Base classes for class `{class_name}` define method `{member}` incompatibly",
     ));

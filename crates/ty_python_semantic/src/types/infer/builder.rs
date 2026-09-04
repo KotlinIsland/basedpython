@@ -62,10 +62,10 @@ use crate::types::call::bind::{
 };
 use crate::types::call::{Argument, Binding, Bindings, CallArguments, CallError, CallErrorKind};
 use crate::types::callable::CallableTypeKind;
-use crate::types::class::{DynamicClassScopeOffset, 
-    ClassLiteral, CodeGeneratorKind, DynamicNamedTupleAnchor, DynamicNamedTupleLiteral,
-    DynamicTypedDictAnchor, DynamicTypedDictLiteral, FrozenDataclassDispatch, MethodDecorator,
-    NamedTupleField, NamedTupleSpec, StaticClassLiteral,
+use crate::types::class::{
+    ClassLiteral, CodeGeneratorKind, DynamicClassScopeOffset, DynamicNamedTupleAnchor,
+    DynamicNamedTupleLiteral, DynamicTypedDictAnchor, DynamicTypedDictLiteral,
+    FrozenDataclassDispatch, MethodDecorator, NamedTupleField, NamedTupleSpec, StaticClassLiteral,
 };
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
@@ -73,76 +73,29 @@ use crate::types::context_sensitive::{self, case_name_pattern_type};
 use crate::types::dedicated::{django, pydantic};
 use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::diagnostic::{
-    self,
-    AMBIGUOUS_EXTENSION_MEMBER,
-    autofix_with_notimplementederror,
-    CALL_NON_CALLABLE,
-    CONFLICTING_DECLARATIONS,
-    CYCLIC_TYPE_ALIAS_DEFINITION,
-    display_required_elements,
-    DYNAMIC_FUNCTION_DECORATOR_RETURN,
-    ERASED_CAST_ARGUMENT,
-    ERASED_TYPE_CHECK,
-    FINAL_ON_VARIABLE,
-    GeneratorMismatchKind,
-    hint_if_stdlib_attribute_exists_on_other_versions,
-    IMPLICIT_DECLARATION,
-    INEFFECTIVE_FINAL,
-    INVALID_ARGUMENT_TYPE,
-    INVALID_ASSIGNMENT,
-    INVALID_ATTRIBUTE_ACCESS,
-    INVALID_DECLARATION,
-    INVALID_ENUM_MEMBER_ANNOTATION,
-    INVALID_FIELD_LOOKUP,
-    INVALID_LEGACY_TYPE_VARIABLE,
-    INVALID_NEWTYPE,
-    INVALID_PARAMSPEC,
-    INVALID_REGEX,
-    INVALID_REIFIED_TYPE_PARAM,
-    INVALID_TYPE_ALIAS_TYPE,
-    INVALID_TYPE_FORM,
-    INVALID_TYPE_VARIABLE_BOUND,
-    INVALID_TYPE_VARIABLE_CONSTRAINTS,
-    INVALID_TYPE_VARIABLE_DEFAULT,
-    INVALID_VARIANCE_DECLARATION,
-    NARROWING_GUARD_AS_VALUE,
-    NON_EXHAUSTIVE_STATEMENT_EXPRESSION,
-    NON_OVERLAPPING_CAST,
-    NON_OVERLAPPING_TYPE_TEST,
-    OPTIONAL_OBJECT_CONVERSION,
-    POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE,
-    REFUTABLE_DESTRUCTURING,
-    REFUTABLE_UNPACKING,
-    refutable_unpacking_applies,
-    report_attempted_protocol_instantiation,
-    report_bad_dunder_delattr_call,
-    report_bad_dunder_delete_call,
-    report_bool_as_int,
-    report_bool_as_int_assignment,
-    report_call_to_abstract_method,
-    report_cannot_pop_required_field_on_typed_dict,
-    report_capturing_case_name,
-    report_capturing_case_name_alternative,
-    report_dynamic_function_decorator_return,
-    report_invalid_assignment,
-    report_invalid_class_match_pattern,
-    report_invalid_exception_caught,
-    TRAILING_LAMBDA_PARAMETERS,
-    TypeCheckDiagnostics,
-    UNANNOTATED_MODEL_FIELD,
-    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS,
-    UNDEFINED_REVEAL,
-    UNRESOLVED_ATTRIBUTE,
-    UNRESOLVED_GLOBAL,
-    UNRESOLVED_REFERENCE,
-    UNSOUND_ASSIGNMENT,
-    UNSOUND_CAST,
-    UNSOUND_YIELD,
-    UNSPECIALIZED_REIFIED_GENERIC,
-    UNSUPPORTED_OPERATOR,
-    UNUSED_AWAITABLE,
-    YieldKind,
+    self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
+    CYCLIC_TYPE_ALIAS_DEFINITION, DYNAMIC_FUNCTION_DECORATOR_RETURN, ERASED_CAST_ARGUMENT,
+    ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind, IMPLICIT_DECLARATION,
+    INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_ATTRIBUTE_ACCESS,
+    INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
+    INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX,
+    INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
+    INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
+    NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
+    NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
+    POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING,
+    TRAILING_LAMBDA_PARAMETERS, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
+    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
+    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_ASSIGNMENT, UNSOUND_CAST, UNSOUND_YIELD,
+    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, YieldKind,
+    autofix_with_notimplementederror, display_required_elements,
+    hint_if_stdlib_attribute_exists_on_other_versions, refutable_unpacking_applies,
+    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
+    report_bad_dunder_delete_call, report_bool_as_int, report_bool_as_int_assignment,
+    report_call_to_abstract_method, report_cannot_pop_required_field_on_typed_dict,
+    report_capturing_case_name, report_capturing_case_name_alternative,
+    report_dynamic_function_decorator_return, report_invalid_assignment,
+    report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
     report_invalid_exception_tuple_caught, report_invalid_generator_yield_type,
     report_invalid_key_on_typed_dict, report_invalid_match_args_type,
@@ -151,11 +104,8 @@ use crate::types::diagnostic::{
     report_match_pattern_against_typed_dict, report_mismatched_type_name,
     report_possibly_missing_attribute, report_possibly_unresolved_reference,
     report_too_many_positional_patterns_for_class_pattern,
-    report_unplaceable_starred_class_pattern,
-    report_unsound_assignment,
-    report_unsound_yield,
-    report_unsupported_augmented_assignment,
-    report_unsupported_comparison,
+    report_unplaceable_starred_class_pattern, report_unsound_assignment, report_unsound_yield,
+    report_unsupported_augmented_assignment, report_unsupported_comparison,
 };
 use crate::types::enums::{enum_ignored_names, is_enum_class_by_inheritance};
 use crate::types::extensions;
@@ -209,56 +159,17 @@ use crate::types::unpacker::{
 };
 use crate::types::{
     BindingContext, BoundTypeVarInstance, CallDunderError, CallableBinding, CallableType,
-    any_over_type,
-    binding_type,
-    CallableTypes,
-    ClassType,
-    DeferredOperation,
-    DeferredType,
-    DynamicType,
-    extract_fixed_length_iterable_element_types,
-    GeneratorTypeMode,
-    infer_complete_scope_types,
-    infer_scope_types,
-    InferenceFlags,
-    InstanceProjection,
-    InternedConstraintSet,
-    InternedType,
-    IntersectionBuilder,
-    IntersectionType,
-    is_discarded_dict_key_assignment,
-    KnownBoundMethodType,
-    KnownClass,
-    KnownInstanceType,
-    KnownUnion,
-    LiteralValueType,
-    LiteralValueTypeKind,
-    MemberLookupPolicy,
-    Parameter,
-    Parameters,
-    ParamSpecAttrKind,
-    ProgramEnvironment,
-    PropertyDeprecations,
-    report_iteration_over_character,
-    RestrictedType,
-    SentinelInstance,
-    Signature,
-    SpecialFormType,
-    SubclassOfType,
+    CallableTypes, ClassType, DeferredOperation, DeferredType, DynamicType, GeneratorTypeMode,
+    InferenceFlags, InstanceProjection, InternedConstraintSet, InternedType, IntersectionBuilder,
+    IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType, KnownUnion,
+    LiteralValueType, LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter,
+    Parameters, ProgramEnvironment, PropertyDeprecations, RestrictedType, SentinelInstance,
+    Signature, SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers,
+    TypeContext, TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
+    TypedDictType, TypingModule, UnionAccumulator, UnionBuilder, UnionType, any_over_type,
+    binding_type, extract_fixed_length_iterable_element_types, infer_complete_scope_types,
+    infer_scope_types, is_discarded_dict_key_assignment, report_iteration_over_character,
     todo_type,
-    Type,
-    TypeAliasType,
-    TypeAndQualifiers,
-    TypeContext,
-    TypingModule,
-    TypedDictType,
-    TypeQualifiers,
-    TypeVarBoundOrConstraints,
-    TypeVarKind,
-    TypeVarVariance,
-    UnionAccumulator,
-    UnionBuilder,
-    UnionType,
 };
 use crate::{AnalysisSettings, Db, DisplaySettings, FxIndexSet, FxOrderSet, SemanticModel};
 use fluid::FluidTimeline;
@@ -1966,7 +1877,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             declarations,
             self.reachability_cache(),
         );
-        let declaration = result.first_declaration;
         let (mut place_and_quals, conflicting) = result.into_place_and_conflicting_declarations();
 
         if let Some(conflicting) = conflicting {
@@ -2432,7 +2342,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // against, and an unpacked pack (`match *Shape:`) is the ordinary way to write one.
         // an ordinary alias's value is left alone — its flags are whatever the surrounding
         // inference set, and forcing one either way here would change unrelated behaviour
-        let value_ty = if type_alias.cases.is_empty() {
+        let _value_ty = if type_alias.cases.is_empty() {
             self.infer_type_expression(&type_alias.value)
         } else {
             let previously_in_valid_unpack_context = self
@@ -3786,7 +3696,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } = assignment;
 
         if let [ast::Expr::Name(name)] = targets.as_slice() {
+            // the single-name fast path skips the target walk, so the two things that walk does
+            // for a bare name happen here: `x = 1` is the shape `implicit-declaration` is about,
+            // and inside a trailing lambda block it writes the receiver's member rather than
+            // binding anything
+            self.report_implicit_declaration(&targets[0]);
             self.infer_definition(name);
+            self.validate_receiver_member_write(name, value);
             return;
         }
 
@@ -8005,7 +7921,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if self.fluid_specializations_enabled()
             && let Some(candidate_def) = self.index.fluid_candidate_binding(expression)
         {
-            if !tcx.inferred_from_argument
+            if !tcx.inferred_from_argument()
                 && let Some(annotation) = tcx.annotation()
             {
                 self.fluid_adoptions.insert(expression.into(), annotation);
@@ -8475,10 +8391,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// real `tuple[...]` type when it contains variadic markers. Returns
     /// `None` if the tuple has no variadic — caller falls back to the
     /// named-tuple synthesis path so the surface syntax round-trips
-    pub(super) fn lower_parameter_shape_to_tuple_type(
-        &mut self,
-        tuple: &ast::ExprTuple,
-    ) -> Option<Type<'db>> {
+    fn lower_parameter_shape_to_tuple_type(&mut self, tuple: &ast::ExprTuple) -> Option<Type<'db>> {
         use crate::types::tuple::{Tuple, TupleType};
 
         // detect variadic up-front without inferring — type inference must
@@ -8834,10 +8747,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         tuple: &ast::ExprTuple,
         tcx: TypeContext<'db>,
     ) -> Type<'db> {
-        /// If a tuple literal has more elements than this constant,
-        /// we promote `Literal` types when inferring the elements of the tuple.
-        /// This provides a huge speedup on files that have very large unannotated tuple literals.
-        const MAX_TUPLE_LENGTH_FOR_UNANNOTATED_LITERAL_INFERENCE: usize = 64;
         let env = self.program_environment();
         let db = self.db();
 
@@ -9201,12 +9110,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let mut item_types = FxHashMap::default();
 
         // Validate `TypedDict` dictionary literal assignments.
-        if let Some(annotation) = tcx.annotation().map(|annotation| {
-            match annotation.resolve_type_alias(self.db()) {
-                Type::Union(union) if union.has_aliases(db) => union.expand_aliases(db, env),
-                annotation => annotation,
-            }
-        })
+        if let Some(annotation) =
+            tcx.annotation().map(
+                |annotation| match annotation.resolve_type_alias(self.db()) {
+                    Type::Union(union) if union.has_aliases(db) => union.expand_aliases(db, env),
+                    annotation => annotation,
+                },
+            )
         {
             if let Some(typed_dict) = annotation.as_typed_dict() {
                 // If there is a single typed dict annotation, infer against it directly. Expanding
@@ -9832,6 +9742,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .origin(self.db())
             .apply_specialization(db, |_| {
                 builder.build_merged_with(|current_typevar, bounds| {
+                    // `PathBound` is private to `generics`, so the method cannot be named here
+                    #[expect(clippy::redundant_closure_for_method_calls)]
                     let Some(lower) = bounds.and_then(|bounds| bounds.evidence_lower()) else {
                         // In fluid mode, an element typevar with no constraints comes from an
                         // empty collection literal (e.g. `a = []`). Solve it to `Never` — the
@@ -14257,11 +14169,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         );
     }
 
-    pub(super) fn report_unresolved_reference(
-        &self,
-        expr_name_node: &ast::ExprName,
-        tcx: TypeContext<'db>,
-    ) {
+    fn report_unresolved_reference(&self, expr_name_node: &ast::ExprName, tcx: TypeContext<'db>) {
         let db = self.db();
         let env = self.program_environment();
         let Some(builder) = self
@@ -15303,7 +15211,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// no extension supplies it, or when the resolved member does not accept
     /// the call — each of which leaves the operator unsupported, exactly as it
     /// is without the extension
-    pub(super) fn try_unary_extension_operator(
+    fn try_unary_extension_operator(
         &self,
         op: ast::UnaryOp,
         operand: Type<'db>,
@@ -15322,7 +15230,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     /// basedpython: the type a binary operator evaluates to when an applicable
     /// extension supplies its dunder, on either operand
-    pub(super) fn try_binary_extension_operator(
+    fn try_binary_extension_operator(
         &self,
         left: Type<'db>,
         op: ast::Operator,
@@ -15343,7 +15251,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// extension supplies its dunder. A membership test coerces
     /// `__contains__`'s result, so it is a `bool` whatever the extension
     /// declares
-    pub(super) fn try_comparison_extension_operator(
+    fn try_comparison_extension_operator(
         &self,
         left: Type<'db>,
         op: ast::CmpOp,
@@ -15528,7 +15436,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 _ => fallback_unary_expression_type(),
             },
             (
-                ast::UnaryOp::UAdd | ast::UnaryOp::USub | ast::UnaryOp::Invert,
+                ast::UnaryOp::UAdd | ast::UnaryOp::USub,
                 Type::LiteralValue(literal),
             ) => {
                 // `~bool` is currently deprecated in typeshed. Technically we should similarly
@@ -17832,13 +17740,23 @@ impl<'db, 'ast> AddBinding<'db, 'ast> {
             }
         }
 
-        if !builder.validate_assignment_type(
+        if builder.validate_assignment_type(
             self.node,
             self.binding,
             self.declaration,
             declared_ty,
             bound_ty,
         ) {
+            // the assignment is valid, which is the only case `bool-as-int` speaks about: a
+            // `bool` *is* assignable to an `int`, and that is the point
+            report_bool_as_int_assignment(
+                &builder.context,
+                self.node,
+                self.binding,
+                declared_ty,
+                bound_ty,
+            );
+        } else {
             builder.discard_dict_key_assignments_for(self.binding);
 
             // Allow declarations to override inference in case of invalid assignment.

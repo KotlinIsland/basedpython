@@ -1,6 +1,6 @@
 pub mod config;
 mod reverse_transforms;
-pub mod source_map;
+pub(crate) mod source_map;
 mod transforms;
 pub(crate) mod type_info;
 
@@ -126,7 +126,7 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
 
 /// Like [`transpile`], and also reports what the emitted python needs installed
 /// to run.
-pub fn transpile_with_report(
+fn transpile_with_report(
     source: &str,
     config: &Config,
 ) -> Result<(String, RuntimeRequirements), String> {
@@ -248,7 +248,7 @@ pub fn transpile_typed(
 /// On failure, [`TranspileError::output_range`] (a span in the generated python)
 /// is mapped back to the originating `.by` range here, so the caller can render
 /// a source-annotated diagnostic.
-pub fn transpile_typed_with_map(
+pub(crate) fn transpile_typed_with_map(
     db: &dyn ty_python_semantic::Db,
     file: File,
     config: &Config,
@@ -301,7 +301,7 @@ impl RuntimeRequirements {
     }
 }
 
-/// Like [`transpile_typed_with_map`], and also reports what the emitted python
+/// Like `transpile_typed_with_map`, and also reports what the emitted python
 /// needs installed to run.
 pub fn transpile_typed_with_report(
     db: &dyn ty_python_semantic::Db,
@@ -929,12 +929,12 @@ fn output_offset_to_by_range(
 }
 
 /// Result of phase 1 (basedpython lowering)
-pub(crate) struct LoweringResult {
+struct LoweringResult {
     /// The full transformed source: preamble + body
-    pub(crate) output: String,
+    output: String,
     /// Hard transpile errors collected from individual transforms — abort the
     /// pipeline rather than emit partial / invalid output
-    pub(crate) errors: Vec<String>,
+    errors: Vec<String>,
 }
 
 /// Every basedpython transform now runs in `ast_driver`; this phase only
@@ -1212,10 +1212,10 @@ fn apply_transforms_once(source: &str, mut fixes: Vec<Fix>) -> (String, Vec<Edit
 }
 
 #[cfg(test)]
-pub mod python_passthrough {
+pub(crate) mod python_passthrough {
     use super::*;
 
-    pub fn py(source: &str) -> String {
+    fn py(source: &str) -> String {
         transpile(
             source,
             &Config {
@@ -1226,7 +1226,7 @@ pub mod python_passthrough {
         .unwrap()
     }
 
-    pub fn unchanged(source: &str) {
+    pub(crate) fn unchanged(source: &str) {
         assert_eq!(py(source), source);
     }
 
@@ -1234,7 +1234,7 @@ pub mod python_passthrough {
     /// `check` functions. The lazy-import transform only fires when
     /// `min_version >= 3.15`; tests that use `Config::default()` (3.10) get
     /// plain imports, so no adjustment is needed
-    pub fn lazify_expected(s: &str) -> String {
+    pub(crate) fn lazify_expected(s: &str) -> String {
         s.to_owned()
     }
 

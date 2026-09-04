@@ -570,7 +570,7 @@ impl ProjectMetadata {
     ///     merged.combine_with(layer.clone());
     /// }
     /// ```
-    pub(crate) fn options_in_precedence_order<'a>(
+    fn options_in_precedence_order<'a>(
         &'a self,
         options: &'a Options,
         uv_options: Option<&'a Options>,
