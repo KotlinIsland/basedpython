@@ -1966,6 +1966,146 @@ class Person:
         ");
     }
 
+    /// basedpython: the *name* of an accessor-block property. The construct
+    /// lowers to a `def` ranged over the accessor *below* the declaration, which
+    /// carries the name the author wrote on the line above — so the name sits
+    /// outside its own function and the covering-node walk has nothing
+    /// containing that offset to descend into
+    #[test]
+    fn goto_definition_property_declaration_name() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Person:
+    var a<CURSOR>ge: int = 0
+        get() = field
+        set(value):
+            field = value
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:3:9
+          |
+        3 |     var age: int = 0
+          |         ^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:3:9
+          |
+        3 |     var age: int = 0
+          |         ---
+        ");
+    }
+
+    /// The accessors may be written in either order, so neither the declaration
+    /// name nor a `field` may depend on the getter coming first
+    #[test]
+    fn goto_definition_property_with_the_setter_written_first() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Person:
+    var age: int = 0
+        set(value):
+            fie<CURSOR>ld = value
+        get() = field
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:5:13
+          |
+        5 |             field = value
+          |             ^^^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:3:5
+          |
+        3 |     var age: int = 0
+          |     -
+        ");
+    }
+
+    /// A property is one declaration in the source and several `def`s in the
+    /// tree, each carrying the same name range, so goto offered the same place
+    /// twice. Python's own getter/setter pair sit at two different `def`s and
+    /// stay the two targets they are — see
+    /// `goto_definition_property_getter_and_setter_are_both_offered`
+    #[test]
+    fn goto_definition_property_use_is_not_offered_twice() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+class Person:
+    var age: int = 0
+        get() = field
+        set(value):
+            field = value
+
+p = Person()
+print(p.a<CURSOR>ge)
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+         --> main.by:9:9
+          |
+        9 | print(p.age)
+          |         ^^^ Clicking here
+        info: Found 1 definition
+         --> main.by:3:9
+          |
+        3 |     var age: int = 0
+          |         ---
+        ");
+    }
+
+    #[test]
+    fn goto_definition_property_getter_and_setter_are_both_offered() {
+        let test = CursorTest::builder()
+            .source(
+                "main.py",
+                "
+class C:
+    @property
+    def p(self) -> int:
+        return self._p
+    @p.setter
+    def p(self, v: int) -> None:
+        self._p = v
+
+c = C()
+print(c.<CURSOR>p)
+",
+            )
+            .build();
+
+        assert_snapshot!(test.goto_definition(), @"
+        info[goto-definition]: Go to definition
+          --> main.py:11:9
+           |
+        11 | print(c.p)
+           |         ^ Clicking here
+        info: Found 2 definitions
+         --> main.py:4:9
+          |
+        4 |     def p(self) -> int:
+          |         -
+        5 |         return self._p
+        6 |     @p.setter
+        7 |     def p(self, v: int) -> None:
+          |         -
+        ");
+    }
+
     /// basedpython: an inline protocol's member. The type is structural — two
     /// written the same way anywhere are the same type — so it has no
     /// declaration of its own, and the annotation the receiver was declared with
