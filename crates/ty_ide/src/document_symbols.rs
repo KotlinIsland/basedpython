@@ -25,7 +25,9 @@ mod tests {
     ///
     /// An enum's variants and an extension's methods are already carried by the
     /// ordinary class walk, since both are classes by the time the outline sees
-    /// them.
+    /// them. An extension is named the way it is written, because its header
+    /// names the class it extends rather than declaring one — listed as a bare
+    /// `list` it was a second symbol indistinguishable from the real class.
     #[test]
     fn basedpython_symbols() {
         let test = CursorTest::builder()
@@ -61,7 +63,7 @@ class P:
                 "Class Circle",
                 "Field radius",
                 "Class Square",
-                "Class list",
+                "Class extension list",
                 "Method second",
                 "Class P",
                 "Property x",
