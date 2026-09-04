@@ -376,7 +376,7 @@ pub fn definitions_for_attribute<'db>(
 }
 
 /// basedpython: the declarations of an attribute that no *declared* member
-/// answers for — an [`extension`] member, or an implicit-receiver callable.
+/// answers for — an `extension` member, or an implicit-receiver callable.
 ///
 /// Neither is a member of the receiver's class. An extension declares its
 /// members in its own body, and a receiver callable is an ordinary name in an
@@ -392,7 +392,6 @@ pub fn definitions_for_attribute<'db>(
 /// `xs.second` has no call to go through, and neither does a property — which
 /// can never be a callee — so those answered nothing at all
 ///
-/// [`extension`]: crate::types::extensions
 fn definitions_for_fallback_attribute<'db>(
     model: &SemanticModel<'db>,
     attribute: &ast::ExprAttribute,
@@ -577,6 +576,14 @@ fn definitions_for_member<'db>(
         }
     }
 
+    // basedpython: a property accessor block is one declaration in the source
+    // and several `def`s in the tree, and each of them carries the *same* name
+    // range — the one the author wrote. Two entries pointing at one place are
+    // never a choice worth offering, so an editor should not open a
+    // disambiguation list to make it. Python's own getter/setter pair sit at
+    // two different `def`s and are left as the two targets they are
+    let mut seen = FxHashSet::default();
+    resolved.retain(|definition| seen.insert(definition.focus_range(db)));
     resolved
 }
 
@@ -683,13 +690,11 @@ fn inline_protocol_member_range(annotation: &ast::Expr, name: &str) -> Option<Te
 }
 
 /// basedpython: the declaration of the enum member a bare name resolves to
-/// through [context-sensitive resolution] — the `Red` of `c: Color = Red`.
+/// through context-sensitive resolution — the `Red` of `c: Color = Red`.
 ///
 /// Nothing in the enclosing scope binds that name; it is reached through the
 /// expected type, so an ordinary scope walk finds nothing to point at. Empty for
 /// every name that resolves the ordinary way.
-///
-/// [context-sensitive resolution]: crate::types::context_sensitive
 pub fn definitions_for_context_sensitive_name<'db>(
     model: &SemanticModel<'db>,
     name: &ast::ExprName,

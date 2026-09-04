@@ -1503,11 +1503,14 @@ fn find_goto_target_impl<'a>(
         return None;
     }
 
-    let covering_node = covering_node(syntax, token.range())
-        .find_first(|node| {
-            node.is_identifier() || node.is_expression() || node.is_stmt_import_from()
-        })
-        .ok()?;
+    // basedpython: when nothing containing this offset is a name or an
+    // expression, a property accessor block's declaration line is what it is —
+    // see `property_declaration_name`
+    let Ok(covering_node) = covering_node(syntax, token.range()).find_first(|node| {
+        node.is_identifier() || node.is_expression() || node.is_stmt_import_from()
+    }) else {
+        return property_declaration_name(syntax, offset);
+    };
 
     // basedpython: a synthesized marker's range deliberately spans the whole
     // construct it stands for. A property accessor block becomes a `def` carrying
@@ -1525,6 +1528,35 @@ fn find_goto_target_impl<'a>(
     }
 
     GotoTarget::from_covering_node(model, &covering_node, offset, tokens)
+}
+
+/// basedpython: the `def` an accessor-block property's declaration name belongs
+/// to — the `age` of `var age: int = 0`.
+///
+/// The construct lowers to a getter ranged over the accessor *below* the
+/// declaration, carrying the name the author wrote on the declaration line. That
+/// name is therefore outside its own function's range, and no node containing
+/// that offset exists for the covering-node walk to descend into — so hovering a
+/// property's own name answered nothing at all.
+///
+/// The getter is a member of the enclosing class body, which is where this looks
+/// for it. Answering with the `def` is what a python `@property` declaration
+/// answers with, and reaches the same hover and the same definition.
+fn property_declaration_name(syntax: AnyNodeRef<'_>, offset: TextSize) -> Option<GotoTarget<'_>> {
+    let token_range = TextRange::new(offset, offset);
+    let class = covering_node(syntax, token_range)
+        .ancestors()
+        .find_map(ruff_python_ast::AnyNodeRef::stmt_class_def)?;
+    class.body.iter().find_map(|member| {
+        let function = member.as_function_def_stmt()?;
+        // only a *synthesized* property answers: an ordinary `def` keeps its name
+        // inside its own range, so the walk above would already have found it
+        let is_property = function.decorator_list.iter().any(|decorator| {
+            matches!(&decorator.expression, ast::Expr::Name(name) if is_synthetic_marker(name.into()))
+        });
+        (is_property && function.name.range().contains_range(token_range))
+            .then_some(GotoTarget::FunctionDef(function))
+    })
 }
 
 /// Whether `node` is one of the marker expressions basedpython's parser

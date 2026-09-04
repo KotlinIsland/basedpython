@@ -852,7 +852,7 @@ impl<'a> SemanticModel<'a> {
     /// basedpython: whether a bare `case <name>:` names an `enum class` variant
     /// in this file rather than binding a capture.
     ///
-    /// The public form of [`Self::is_based_enum_variant`], for the one caller
+    /// The public form of `is_based_enum_variant`, for the one caller
     /// outside name resolution: a pattern name has to be *bound* either way,
     /// since python's grammar spells a member match as a capture, so the rules
     /// that read a capture as a variable need to be told which it is
