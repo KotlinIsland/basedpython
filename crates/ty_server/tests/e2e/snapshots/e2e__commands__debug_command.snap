@@ -40,7 +40,7 @@ Settings: WorkspaceSettings {
     },
     completions: CompletionSettings {
         auto_import: true,
-        complete_function_parentheses: false,
+        complete_function_parentheses: true,
     },
     configuration_file: None,
     override_options: None,

@@ -31,7 +31,7 @@ walktr
         "label": "walktree (import inspect)",
         "kind": 3,
         "sortText": "0",
-        "insertText": "walktree",
+        "insertText": "walktree()",
         "additionalTextEdits": [
           {
             "range": {
@@ -79,8 +79,11 @@ walktr
     Ok(())
 }
 
+/// basedpython enables callable parentheses by default where upstream ty leaves
+/// them off, so the no-options case is the *enabled* one — see
+/// `CompletionSettings::default`.
 #[test]
-fn complete_function_parentheses_disabled_by_default() -> Result<()> {
+fn complete_function_parentheses_enabled_by_default() -> Result<()> {
     let workspace_root = SystemPath::new("src");
     let foo = SystemPath::new("src/foo.py");
     let foo_content = "\
@@ -106,7 +109,9 @@ complete_parenth
         "label": "complete_parentheses",
         "kind": 3,
         "detail": "def complete_parentheses()",
-        "sortText": "0"
+        "sortText": "0",
+        "insertText": "complete_parentheses($0)",
+        "insertTextFormat": 2
       }
     ]
     "#);
@@ -343,7 +348,7 @@ TypedDi<CURSOR>
         "label": "typing.is_typeddict",
         "kind": 3,
         "sortText": "1",
-        "insertText": "typing.is_typeddict"
+        "insertText": "typing.is_typeddict()"
       },
       {
         "label": "TypedDict (import typing_extensions)",
@@ -370,7 +375,7 @@ TypedDi<CURSOR>
         "label": "TypedDictFallback (import _typeshed._type_checker_internals)",
         "kind": 7,
         "sortText": "3",
-        "insertText": "TypedDictFallback",
+        "insertText": "TypedDictFallback()",
         "additionalTextEdits": [
           {
             "range": {
@@ -391,7 +396,7 @@ TypedDi<CURSOR>
         "label": "is_typeddict (import typing_extensions)",
         "kind": 3,
         "sortText": "4",
-        "insertText": "is_typeddict",
+        "insertText": "is_typeddict()",
         "additionalTextEdits": [
           {
             "range": {
@@ -412,7 +417,7 @@ TypedDi<CURSOR>
         "label": "_FilterConfigurationTypedDict (import logging.config)",
         "kind": 7,
         "sortText": "5",
-        "insertText": "_FilterConfigurationTypedDict",
+        "insertText": "_FilterConfigurationTypedDict()",
         "additionalTextEdits": [
           {
             "range": {
@@ -526,7 +531,7 @@ TypedDi<CURSOR>
         "label": "is_typeddict (import typing)",
         "kind": 3,
         "sortText": "1",
-        "insertText": "is_typeddict",
+        "insertText": "is_typeddict()",
         "additionalTextEdits": [
           {
             "range": {
@@ -568,7 +573,7 @@ TypedDi<CURSOR>
         "label": "TypedDictFallback (import _typeshed._type_checker_internals)",
         "kind": 7,
         "sortText": "3",
-        "insertText": "TypedDictFallback",
+        "insertText": "TypedDictFallback()",
         "additionalTextEdits": [
           {
             "range": {
@@ -589,7 +594,7 @@ TypedDi<CURSOR>
         "label": "is_typeddict (import typing_extensions)",
         "kind": 3,
         "sortText": "4",
-        "insertText": "is_typeddict",
+        "insertText": "is_typeddict()",
         "additionalTextEdits": [
           {
             "range": {
@@ -610,7 +615,7 @@ TypedDi<CURSOR>
         "label": "_FilterConfigurationTypedDict (import logging.config)",
         "kind": 7,
         "sortText": "5",
-        "insertText": "_FilterConfigurationTypedDict",
+        "insertText": "_FilterConfigurationTypedDict()",
         "additionalTextEdits": [
           {
             "range": {
@@ -714,7 +719,8 @@ re.match('', '', fla<CURSOR>
           "kind": "plaintext",
           "value": "Floating-point operation failed.\n"
         },
-        "sortText": "1"
+        "sortText": "1",
+        "insertText": "FloatingPointError()"
       },
       {
         "label": "PythonFinalizationError",
@@ -724,7 +730,8 @@ re.match('', '', fla<CURSOR>
           "kind": "plaintext",
           "value": "Operation blocked during Python finalization.\n"
         },
-        "sortText": "2"
+        "sortText": "2",
+        "insertText": "PythonFinalizationError()"
       },
       {
         "label": "float",
@@ -734,7 +741,8 @@ re.match('', '', fla<CURSOR>
           "kind": "plaintext",
           "value": "Convert a string or number to a floating-point number, if possible.\n"
         },
-        "sortText": "3"
+        "sortText": "3",
+        "insertText": "float()"
       }
     ]
     "#);

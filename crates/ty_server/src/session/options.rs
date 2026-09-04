@@ -427,7 +427,8 @@ impl CompletionOptions {
     fn into_settings(self) -> CompletionSettings {
         CompletionSettings {
             auto_import: self.auto_import.unwrap_or(true),
-            complete_function_parentheses: self.complete_function_parentheses.unwrap_or(false),
+            // basedpython defaults this on — see `CompletionSettings::default`
+            complete_function_parentheses: self.complete_function_parentheses.unwrap_or(true),
         }
     }
 }
