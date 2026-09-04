@@ -57,6 +57,7 @@ pub use types::extensions::{ExtensionAttributeInfo, ExtensionMemberKind};
 pub use types::ide_support::{
     ImplementationsFinder, ImportAliasResolution, OverridableMember, ResolvedDefinition,
     TypeHierarchyClass, contains_identifier, definitions_for_attribute, definitions_for_bin_op,
+    definitions_for_case_name, definitions_for_context_sensitive_name,
     definitions_for_django_lookup_root, definitions_for_imported_symbol, definitions_for_name,
     definitions_for_unary_op, map_stub_definition, type_hierarchy_prepare, type_hierarchy_subtypes,
     type_hierarchy_supertypes,
