@@ -4,8 +4,9 @@ basedpython diverges from PEP 484 stringified-forward-reference and PEP 586 lite
 
 - a string in annotation/type position is `Literal[<str>]`, not a forward reference. forward refs
     are unnecessary because basedpython annotations are always deferred
-- float and complex literals are accepted in type position; they currently lower to the nominal
-    `float` / `complex` instance (no exact-literal narrowing yet)
+- float and complex literals are accepted in type position. python's `Literal[...]` has no spelling
+    for one, so what they lower to is the `lowering.float-literals` option's to say: the nominal
+    `float` / `complex` instance by default
 - `A[T=int]` is a keyword type-arg binding, equivalent to `A[int]` for single-typevar generics
 
 ```toml
@@ -45,6 +46,18 @@ def f(a: Name, b: "spam" | "eggs") -> None:
 
 # error: [invalid-assignment]
 c: Name = "baz"
+```
+
+## a float literal in a union is a union arm like any other
+
+left bare, `int | 3.5` would be a `TypeError` the moment python evaluated the annotation. the
+lowering is what keeps it running, and the checker reads the arm as the literal type it was written
+as either way.
+
+```by
+def f(a: int | 3.5, b: int | 2j) -> None:
+    reveal_type(a)  # revealed: int | 3.5
+    reveal_type(b)  # revealed: int | 2j
 ```
 
 ## float literal in annotation is the literal type

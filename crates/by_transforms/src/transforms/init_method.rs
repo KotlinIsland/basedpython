@@ -30,15 +30,20 @@ use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::callable::lower_type_expr_full;
 use super::mutable_defaults::parameter_guards;
 use super::source_util::{PrologueStatement, first_body_statement};
+use crate::config::FloatLiteralLowering;
 use crate::type_info::TypeInfo;
 
 pub(crate) struct InitMethod<'src> {
     source: &'src str,
+    float_literals: FloatLiteralLowering,
 }
 
 impl<'src> InitMethod<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, float_literals: FloatLiteralLowering) -> Self {
+        Self {
+            source,
+            float_literals,
+        }
     }
 }
 
@@ -48,6 +53,7 @@ impl TypeAwarePass for InitMethod<'_> {
             source: self.source,
             types,
             symbolic_substitutions: ctx.symbolic_substitutions.clone(),
+            float_literals: self.float_literals,
             edits: RefCell::new(Vec::new()),
             templates: RefCell::new(Vec::new()),
             errors: RefCell::new(Vec::new()),
@@ -92,6 +98,7 @@ struct State<'src> {
     /// line is fresh output, so a fold inside a parameter annotation is dropped
     /// unless it is spliced in here
     symbolic_substitutions: Vec<(TextRange, String)>,
+    float_literals: FloatLiteralLowering,
     edits: RefCell<Vec<(TextRange, String)>>,
     templates: RefCell<Vec<(TextRange, Vec<Fragment>)>>,
     errors: RefCell<Vec<String>>,
@@ -148,7 +155,14 @@ impl State<'_> {
             .filter(|(range, _)| ann.range().contains_range(*range))
             .cloned()
             .collect();
-        lower_type_expr_full(self.source, self.types, ann, &substitutions).unwrap_or_else(|| {
+        lower_type_expr_full(
+            self.source,
+            self.types,
+            ann,
+            &substitutions,
+            self.float_literals,
+        )
+        .unwrap_or_else(|| {
             self.source[usize::from(ann.range().start())..usize::from(ann.range().end())].to_owned()
         })
     }

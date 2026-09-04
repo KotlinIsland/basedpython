@@ -4,7 +4,7 @@ pub mod source_map;
 mod transforms;
 pub(crate) mod type_info;
 
-pub use config::{Config, PythonVersion, SoundnessPositions};
+pub use config::{Config, FloatLiteralLowering, PythonVersion, SoundnessPositions};
 
 use std::collections::{BTreeSet, HashSet};
 

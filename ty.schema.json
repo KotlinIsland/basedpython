@@ -46,6 +46,17 @@
         }
       ]
     },
+    "lowering": {
+      "description": "Configures how basedpython spells constructs python has no spelling of its own for.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/LoweringOptions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "overrides": {
       "description": "Override configurations for specific file patterns.\n\nEach override specifies include/exclude patterns and rule configurations\nthat apply to matching files. Multiple overrides can match the same file,\nwith later overrides taking precedence.",
       "anyOf": [
@@ -432,6 +443,23 @@
       },
       "additionalProperties": false
     },
+    "FloatLiteralLowering": {
+      "description": "How a float or complex literal type reaches the transpiled python.",
+      "oneOf": [
+        {
+          "title": "Nominal",
+          "description": "The type the literal is one of: `1.5` becomes `float`, `2j` becomes `complex`.",
+          "type": "string",
+          "const": "nominal"
+        },
+        {
+          "title": "Literal",
+          "description": "The literal itself, inside `Literal[...]`. Runs, but no checker accepts it.",
+          "type": "string",
+          "const": "literal"
+        }
+      ]
+    },
     "Level": {
       "oneOf": [
         {
@@ -453,6 +481,23 @@
           "const": "error"
         }
       ]
+    },
+    "LoweringOptions": {
+      "type": "object",
+      "properties": {
+        "float-literals": {
+          "description": "How a float or complex literal type is spelled in the transpiled python.\n\nbasedpython reads `a: 1.5` as a literal type, and python has no spelling for one:\nPEP 586 admits only `None`, `int`, `bool`, `str`, `bytes` and enum members into\n`Literal[...]`.\n\n* `nominal` (the default) writes the type the literal is one of — `a: 1.5` becomes\n  `a: float`, `a: 2j` becomes `a: complex`. The precision is lost, and every checker\n  that reads the output accepts it.\n* `literal` keeps the literal, writing `a: Literal[1.5]`. The precision survives and\n  the output still runs, because `typing` does not check what it is handed — but a\n  checker reading it reports the argument as invalid.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FloatLiteralLowering"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "OutputFormat": {
       "description": "The diagnostic output format.",

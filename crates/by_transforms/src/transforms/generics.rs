@@ -449,6 +449,7 @@ impl<'src> GenericPolyfill<'src> {
                                     self.types,
                                     bound,
                                     &self.subsume_within(bound.range()),
+                                    self.config.float_literals,
                                 )
                                 .unwrap_or_else(|| self.src(bound.range()).to_owned())
                             };
@@ -462,6 +463,7 @@ impl<'src> GenericPolyfill<'src> {
                             self.types,
                             default,
                             &self.subsume_within(default.range()),
+                            self.config.float_literals,
                         )
                         .unwrap_or_else(|| self.src(default.range()).to_owned());
                         if self.config.min_version < PythonVersion::PY313 {
@@ -894,8 +896,14 @@ impl<'src> GenericPolyfill<'src> {
         let substitutions: Vec<(TextRange, String)> =
             folded.iter().cloned().chain(renames).collect();
 
-        let value_src = lower_type_expr_full(self.source, self.types, &alias.value, &substitutions)
-            .unwrap_or(raw_value_src);
+        let value_src = lower_type_expr_full(
+            self.source,
+            self.types,
+            &alias.value,
+            &substitutions,
+            self.config.float_literals,
+        )
+        .unwrap_or(raw_value_src);
 
         self.needed_imports.typealias_type = true;
 

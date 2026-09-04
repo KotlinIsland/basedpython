@@ -1382,6 +1382,45 @@ bundled as a zip file in the binary
 
 ---
 
+## `lowering`
+
+### `float-literals`
+
+How a float or complex literal type is spelled in the transpiled python.
+
+basedpython reads `a: 1.5` as a literal type, and python has no spelling for one:
+PEP 586 admits only `None`, `int`, `bool`, `str`, `bytes` and enum members into
+`Literal[...]`.
+
+* `nominal` (the default) writes the type the literal is one of — `a: 1.5` becomes
+  `a: float`, `a: 2j` becomes `a: complex`. The precision is lost, and every checker
+  that reads the output accepts it.
+* `literal` keeps the literal, writing `a: Literal[1.5]`. The precision survives and
+  the output still runs, because `typing` does not check what it is handed — but a
+  checker reading it reports the argument as invalid.
+
+**Default value**: `"nominal"`
+
+**Type**: `"nominal" | "literal"`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.lowering]
+    float-literals = "literal"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [lowering]
+    float-literals = "literal"
+    ```
+
+---
+
 ## `overrides`
 
 Configuration override that applies to specific files based on glob patterns.

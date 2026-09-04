@@ -168,8 +168,8 @@ impl<'src> AnonNamedTuple<'src> {
         Self {
             source,
             types,
+            callable: CallableSyntax::new(source, config.float_literals).with_types(types),
             config,
-            callable: CallableSyntax::new(source).with_types(types),
             edits: Vec::new(),
             shapes: indexmap::IndexMap::new(),
             range_to_class: Vec::new(),

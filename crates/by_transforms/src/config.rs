@@ -52,6 +52,32 @@ pub struct Config {
     /// python leaves behind. Tests that compare exact transpile output should
     /// set this to `false` unless they exercise the capture itself
     pub unique_loop_bindings: bool,
+    /// how a float or complex literal written in a type position is spelled in
+    /// the emitted python. see [`FloatLiteralLowering`]
+    pub float_literals: FloatLiteralLowering,
+}
+
+/// What a float or complex literal type becomes in the emitted python.
+///
+/// basedpython reads `a: 1.5` as a literal type, and python has no spelling for
+/// one: PEP 586 admits only `None`, `int`, `bool`, `str`, `bytes` and enum
+/// members into `Literal[...]`, so `Literal[1.5]` — while perfectly happy at
+/// runtime, since `typing` does not check what it is handed — is rejected by
+/// every type checker that reads the output, ty included.
+///
+/// Leaving the literal bare is not an option: `a: int | 3.5` would be a
+/// `TypeError` the moment the annotation is evaluated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FloatLiteralLowering {
+    /// the nominal type the literal is one of — `a: 1.5` becomes `a: float`,
+    /// `a: 2j` becomes `a: complex`. precision is lost, and the output is
+    /// something every checker accepts
+    #[default]
+    Nominal,
+    /// the literal kept inside `Literal[...]` — `a: 1.5` becomes
+    /// `a: Literal[1.5]`. the precision survives and the output still runs, but
+    /// a checker reading it reports the argument as invalid
+    Literal,
 }
 
 /// Per-position toggles for the runtime type-soundness checks. Each field
@@ -149,6 +175,7 @@ impl Default for Config {
             soundness: SoundnessPositions::defaults(),
             runtime_raises_checks: false,
             unique_loop_bindings: true,
+            float_literals: FloatLiteralLowering::Nominal,
         }
     }
 }
