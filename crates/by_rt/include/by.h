@@ -148,6 +148,83 @@ typedef size_t ByTagged;
 #define BY_COLD static
 #endif
 
+/* ── retaining at the width the release reads ─────────────────────────────────
+ *
+ * python 3.12 split `ob_refcnt` in two so an immortal object could be recognised
+ * from the sign of its low half, and the two halves of a retain/release pair have
+ * disagreed on access width ever since. `Py_INCREF` reads and writes
+ * `ob_refcnt_split[PY_BIG_ENDIAN]`, a 32-bit field; `Py_DECREF` tests immortality
+ * over the full `Py_ssize_t` and then decrements it. a narrow store followed by a
+ * wider load of the same address cannot be served from the store buffer, so every
+ * retain a compiled function makes stalls the release after it until the store has
+ * reached L1. emitted modules are little else *but* retain/release pairs — one
+ * small module carried 82 of these 32-bit stores — so it is paid everywhere.
+ *
+ * so retain at 64 bits and keep the immortality check, asking for it with
+ * `_Py_IsImmortal`, which is the predicate `Py_DECREF` itself uses. that is the
+ * point: both halves of the pair now test the same bits the same way, and the two
+ * compile to the same instruction. this is not an invention but cpython's own
+ * `#else` arm of `Py_INCREF` — the one a 32-bit host takes — selected on a 64-bit
+ * host because the split it exists to avoid is exactly what costs us.
+ *
+ * that it is safe rests on one property rather than on the arithmetic matching:
+ * this skips the increment on a *superset* of the objects the split form skips,
+ * and every object in the difference is one `Py_DECREF` also declines to touch. so
+ * a reference can never be dropped that would otherwise have been held, and an
+ * immortal sentinel is never written. (an object past 2^31 live references is
+ * leaked instead of counted — but it already is upstream, by the same sign test.)
+ *
+ * mypyc goes further and drops the check outright, as `op->ob_refcnt++`. that is
+ * only sound for objects it has *proved* mortal, because a 64-bit increment of an
+ * immortal refcount corrupts the sentinel, and we have no such proof.
+ *
+ * the fast path is opt-in behind a positive test of every name it uses. a spelling
+ * missing in some configuration must not fail to compile *every* module, so
+ * anything unrecognised falls back to the ordinary macros, which are always right:
+ *
+ *   - `Py_GIL_DISABLED` — a free-threaded build counts in `ob_ref_local` and
+ *     `ob_ref_shared`, a different layout with no split to match
+ *   - `Py_REF_DEBUG`, `Py_TRACE_REFS`, `Py_STATS` — the macros keep books here
+ *   - `Py_LIMITED_API` — there `Py_INCREF` is a call, by design
+ *   - `SIZEOF_VOID_P > 4` — a 32-bit host has no split, so no mismatch
+ *   - 3.12 and 3.13 alone — 3.11 predates the split, and 3.14 removed it again:
+ *     its `Py_INCREF` already stores the whole `ob_refcnt`, so there is nothing
+ *     left to match and taking this path would only risk a layout we did not read
+ *   - `_Py_IsImmortal`, which is not stable api and moved header between versions
+ *
+ * where the fast path is declined these are exactly `Py_INCREF`/`Py_XINCREF`, so no
+ * caller has to know which it got. the release side needs no counterpart: it reads
+ * and writes the full width already, which is the half of the pair that was right.
+ *
+ * defining `BY_NO_WIDE_INCREF` forces the fallback. it is the escape hatch for a
+ * build that meets something none of the tests above anticipated, and it is also
+ * how the two legs of the disassembly check are taken from one emitted module */
+#if !defined(BY_NO_WIDE_INCREF) \
+    && PY_VERSION_HEX >= 0x030C0000 && PY_VERSION_HEX < 0x030E0000 \
+    && defined(_Py_IsImmortal) \
+    && !defined(Py_GIL_DISABLED) && !defined(Py_LIMITED_API) \
+    && !defined(Py_REF_DEBUG) && !defined(Py_TRACE_REFS) && !defined(Py_STATS) \
+    && defined(SIZEOF_VOID_P) && SIZEOF_VOID_P > 4
+#define BY_WIDE_INCREF 1
+#endif
+
+BY_HOT void By_IncRefObject(PyObject *o) {
+#ifdef BY_WIDE_INCREF
+    if (!_Py_IsImmortal(o)) o->ob_refcnt++;
+#else
+    Py_INCREF(o);
+#endif
+}
+
+BY_HOT void By_XIncRefObject(PyObject *o) {
+    if (o != NULL) By_IncRefObject(o);
+}
+
+/* an emitted register holding an instance is typed as that class's own struct, so
+ * these take the cast `Py_XINCREF` takes for the same reason */
+#define By_IncRef(op) By_IncRefObject((PyObject *)(op))
+#define By_XIncRef(op) By_XIncRefObject((PyObject *)(op))
+
 BY_HOT int By_IsShort(ByTagged x) { return (x & BY_INT_TAG) == 0; }
 
 BY_HOT Py_ssize_t By_ShortValue(ByTagged x) { return ((Py_ssize_t)x) >> 1; }
@@ -179,7 +256,7 @@ static inline PyObject *By_BoxInt(ByTagged x) {
         return PyLong_FromSsize_t(By_ShortValue(x));
     }
     PyObject *o = By_LongOf(x);
-    Py_INCREF(o);
+    By_IncRef(o);
     return o;
 }
 
@@ -214,7 +291,7 @@ static inline ByTagged By_TaggedFromLong(PyObject *o) {
         return By_ShortFrom((Py_ssize_t)value);
     }
     PyErr_Clear();
-    Py_INCREF(o);
+    By_IncRef(o);
     return ((ByTagged)(void *)o) | BY_INT_TAG;
     }
 }
@@ -235,7 +312,7 @@ BY_HOT void By_DecRefTagged(ByTagged x) {
 
 BY_HOT void By_IncRefTagged(ByTagged x) {
     if (BY_UNLIKELY(!By_IsShort(x))) {
-        Py_XINCREF(By_LongOf(x));
+        By_XIncRef(By_LongOf(x));
     }
 }
 
@@ -695,12 +772,12 @@ static inline PyObject *By_BoxFloat(double v) { return PyFloat_FromDouble(v); }
 
 static inline PyObject *By_BoxBool(char v) {
     PyObject *o = v ? Py_True : Py_False;
-    Py_INCREF(o);
+    By_IncRef(o);
     return o;
 }
 
 static inline PyObject *By_BoxNone(void) {
-    Py_INCREF(Py_None);
+    By_IncRef(Py_None);
     return Py_None;
 }
 
@@ -835,7 +912,7 @@ static inline char By_UnboxNone(PyObject *o) {
 /* widen a known-class object to `object`: the pointer is unchanged, but the
  * destination register owns what it holds, so it needs its own reference */
 static inline PyObject *By_NewRef(PyObject *o) {
-    Py_XINCREF(o);
+    By_XIncRef(o);
     return o;
 }
 

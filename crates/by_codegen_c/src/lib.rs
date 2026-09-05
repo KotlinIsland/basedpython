@@ -4432,7 +4432,9 @@ fn inc_ref(ty: &RType, expr: &str) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" "),
         RType::Array(_) => format!("By_ArrayIncRef((ByArrayHeader *){expr});"),
-        RType::Primitive(_) | RType::Instance { .. } => format!("Py_XINCREF({expr});"),
+        // `By_XIncRef` rather than `Py_XINCREF`: same immortality check, but the
+        // store is the width the matching release reads — see the comment on it
+        RType::Primitive(_) | RType::Instance { .. } => format!("By_XIncRef({expr});"),
     })
 }
 
@@ -9164,7 +9166,7 @@ mod tests {
             .and_then(|rest| rest.split("static PyObject *byw").next())
             .expect("the body is emitted");
         // the frame never owned it, so there is no reference of its own to hand on
-        assert!(body.contains("Py_XINCREF(by_ret);"), "{body}");
+        assert!(body.contains("By_XIncRef(by_ret);"), "{body}");
     }
 
     #[test]
@@ -9177,7 +9179,7 @@ mod tests {
         // claim nothing is owned at the exit: there is no release to cancel against
         module.functions[0].blocks[0].owned_at_exit = Some(Vec::new());
         let c = emit_module(&module);
-        assert!(c.contains("Py_XINCREF(by_ret);"), "{c}");
+        assert!(c.contains("By_XIncRef(by_ret);"), "{c}");
     }
 
     #[test]
@@ -9925,10 +9927,10 @@ mod tests {
         let text = emit_function(&ModuleIr::new("app"), &function);
         assert!(text.contains("r1 = r0->by_f_inner;"), "{text}");
         // the intermediate is neither retained nor released
-        assert!(!text.contains("Py_XINCREF(r0->by_f_inner)"), "{text}");
+        assert!(!text.contains("By_XIncRef(r0->by_f_inner)"), "{text}");
         assert!(!text.contains("Py_XDECREF(r1)"), "{text}");
         // the value that leaves still is
-        assert!(text.contains("Py_XINCREF(r1->by_f_label)"), "{text}");
+        assert!(text.contains("By_XIncRef(r1->by_f_label)"), "{text}");
     }
 
     #[test]
@@ -9950,7 +9952,7 @@ mod tests {
 
         let text = emit_function(&ModuleIr::new("app"), &function);
         assert!(text.contains("    r1 = r0;\n"), "{text}");
-        assert!(!text.contains("Py_XINCREF"), "{text}");
+        assert!(!text.contains("By_XIncRef"), "{text}");
         // and the frame does not give back what it never took, on either way out
         assert!(!text.contains("Py_XDECREF(r1)"), "{text}");
     }
@@ -9985,7 +9987,7 @@ mod tests {
 
         let text = emit_function(&ModuleIr::new("app"), &function);
         assert!(text.contains("    r2 = r1.f0;\n"), "{text}");
-        assert!(!text.contains("Py_XINCREF(r1.f0)"), "{text}");
+        assert!(!text.contains("By_XIncRef(r1.f0)"), "{text}");
         assert!(!text.contains("Py_XDECREF(r2)"), "{text}");
         // the tuple itself still owns what it holds, on either way out
         assert!(text.contains("Py_XDECREF(r1.f0)"), "{text}");
