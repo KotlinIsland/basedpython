@@ -820,6 +820,33 @@ pub fn basedpython_warnings_symbol<'db>(
         .ignore_possibly_undefined()
 }
 
+/// basedpython: the type of `name` in the namespace of the module `module` names.
+///
+/// The native backend has to recognise a handful of frame-walking standard-library
+/// functions by identity rather than by spelling, for the reason
+/// [`basedpython_warnings_symbol`] gives. They are spread over `sys`, `inspect` and
+/// `traceback`, and only two of those are [`KnownModule`]s — so the module is named
+/// here instead, and the backend can add one to its list without the type checker
+/// having to learn about it.
+///
+/// `None` where the module does not resolve, or does not bind the name. On a target
+/// version that predates the name that is the right answer rather than a failure:
+/// `sys._getframemodulename` arrived in 3.12, and below that there is nothing for the
+/// backend to recognise because there is nothing to call.
+pub fn basedpython_module_symbol<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    module: &str,
+    name: &str,
+) -> Option<Type<'db>> {
+    let module = ModuleName::new(module)?;
+    let module = resolve_module_confident(db, env.resolver_environment(db), &module)?;
+    let file = ProgramFile::new(db, module.file(db)?, env.program(db));
+    imported_symbol(db, env, Some(file), name, None)
+        .place
+        .ignore_possibly_undefined()
+}
+
 /// basedpython: the type of `name` in the `weakref` module namespace.
 ///
 /// The native backend has to recognise `weakref.ref` and `weakref.proxy` by identity

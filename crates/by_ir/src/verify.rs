@@ -974,6 +974,20 @@ impl Verifier<'_> {
             Op::LoadGlobal { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "a global read");
             }
+            Op::MakeSlice {
+                dest,
+                lower,
+                upper,
+                step,
+            } => {
+                for bound in [lower, upper, step] {
+                    self.expect(block, bound, &RType::OBJECT, "a slice bound");
+                }
+                self.expect_dest(block, *dest, &RType::OBJECT, "a slice");
+            }
+            Op::LoadEllipsis { dest } => {
+                self.expect_dest(block, *dest, &RType::OBJECT, "the ellipsis singleton");
+            }
             Op::ModuleDict { dest } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "the module namespace");
             }

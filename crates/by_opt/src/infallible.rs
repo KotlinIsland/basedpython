@@ -135,6 +135,9 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::FloatCompare { .. }
         | Op::TupleGet { .. }
         | Op::LoadClass { .. }
+        // the ellipsis is a singleton the interpreter already holds, so naming it is
+        // a reference count and nothing else
+        | Op::LoadEllipsis { .. }
         | Op::TupleBuild { .. } => false,
 
         // the boxed path of a tagged integer allocates, and allocation raises.
@@ -153,6 +156,8 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::CallPython { .. }
         | Op::CallValue { .. }
         | Op::LoadGlobal { .. }
+        // building a slice allocates, and allocation raises
+        | Op::MakeSlice { .. }
         | Op::StoreGlobal { .. }
         | Op::DeleteGlobal { .. }
         // unbinding a local that was already unbound is `UnboundLocalError`, exactly

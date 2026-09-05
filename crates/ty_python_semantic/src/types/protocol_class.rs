@@ -469,14 +469,67 @@ pub(super) fn symbolic_method_member<'db>(
     }
     structural_interface(db, env, ty)?
         .is_instance_method_member(db, name)
-        .then(|| {
-            DeferredType::build(
-                db,
-                env,
-                &DeferredOperation::Attribute(name.clone()),
-                Box::from([receiver]),
-            )
-        })
+        .then(|| symbolic_attribute(db, env, name, receiver))
+}
+
+/// basedpython: the same member, stated by a structural protocol that is one *element* of a type
+/// parameter's bound, for a lookup that has already come back with nothing.
+///
+/// An implicit dunder call — `x[k]`, `x + 1` — never reads instance members, so it resolves the
+/// method on the type. A structural protocol keeps its members on the instance and has no class
+/// object for them to be found on, which is why [`symbolic_method_member`] answers such a call
+/// where the whole bound is one.
+///
+/// A bound [signature recovery](crate::types::inferred_signature) writes is an intersection
+/// instead: the protocol the body's uses ask for, beside the types the parameter was forwarded
+/// into. Those other elements do have class objects, and where one of them states the method it is
+/// the more precise answer — so this states only what none of them did. In
+///
+/// ```python
+/// def readinto(self, buf):
+///     n = len(buf)
+///     buf[:] = self.file_read(n)
+/// ```
+///
+/// `len(buf)` bounds `buf` by `Sized` and the assignment asks for a `__setitem__` that only the
+/// recovered protocol beside it states.
+pub(super) fn intersected_symbolic_method_member<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    name: &Name,
+    receiver: Option<Type<'db>>,
+) -> Option<Type<'db>> {
+    let receiver = receiver.unwrap_or(ty);
+    if !is_symbolic_operand(receiver) {
+        return None;
+    }
+    let Type::TypeVar(bound_typevar) = ty else {
+        return None;
+    };
+    let Type::Intersection(intersection) = bound_typevar.typevar(db).upper_bound(db, env)? else {
+        return None;
+    };
+    intersection
+        .iter_positive(db)
+        .filter_map(|element| structural_interface(db, env, element))
+        .any(|interface| interface.is_instance_method_member(db, name))
+        .then(|| symbolic_attribute(db, env, name, receiver))
+}
+
+/// `receiver.name` as an attribute type, which names the member without resolving it.
+fn symbolic_attribute<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    name: &Name,
+    receiver: Type<'db>,
+) -> Type<'db> {
+    DeferredType::build(
+        db,
+        env,
+        &DeferredOperation::Attribute(name.clone()),
+        Box::from([receiver]),
+    )
 }
 
 /// The interface of `ty` when it is a structural protocol, looking through a type parameter to

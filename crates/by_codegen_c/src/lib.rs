@@ -1437,13 +1437,19 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             let Some(function) = body else { continue };
             // the *property's* name, not the half's: this def is what `__name__` and
             // `__qualname__` are read off, and both halves were written under the one
-            // name the class publishes them under
+            // name the class publishes them under.
+            //
+            // the docstring is the half's own, and it reaches two places: `fget.__doc__`,
+            // and — because `By_PublishProperty` passes `property` no doc of its own —
+            // `C.value.__doc__`, which python fills in from the getter. left NULL both
+            // answered `None` where the interpreted class answers the text
             let _ = writeln!(
                 out,
                 "static PyMethodDef {symbol}_{half}_def =\n\
-                 \x20   {{{}, (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS, NULL}};",
+                 \x20   {{{}, (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS, {}}};",
                 c_string(&property.name),
-                function.wrapper_symbol(module.name.dotted())
+                function.wrapper_symbol(module.name.dotted()),
+                method_doc(function)
             );
         }
     }
@@ -2536,39 +2542,61 @@ fn stands_on(class: &ClassIr, name: &str) -> bool {
         .is_some_and(|base| base.plain_names().any(|written| written == name))
 }
 
+/// whether `class` is one of the classes `unbuilt` holds, by identity
+///
+/// two classes in one module may be written with the same name, so the address is what
+/// says which one this is
+fn holds(unbuilt: &[&ClassIr], class: &ClassIr) -> bool {
+    unbuilt.iter().any(|held| ptr::eq(*held, class))
+}
+
 /// whether anything that still happens reaches into `name`'s storage
 ///
 /// `unbuilt` is the classes whose types module init is leaving NULL, so their methods can
 /// never be called and are not asked. everything else is: this module's own functions, and
-/// the methods and fields of every class that still gets a type — and, whatever is in
-/// `unbuilt`, every class that [stands on](stands_on) this one, because that read happens
-/// while the type is built rather than when an instance is made
+/// the methods and fields of every class that still gets a type — and every class outside
+/// `unbuilt` that [stands on](stands_on) this one, because that read happens while the
+/// other class's type is built rather than when an instance is made
 fn read_outside(module: &ModuleIr, unbuilt: &[&ClassIr], name: &str) -> bool {
     module
         .classes
         .iter()
-        .any(|candidate| stands_on(candidate, name))
+        .filter(|candidate| !holds(unbuilt, candidate))
+        .any(|candidate| {
+            stands_on(candidate, name)
+                || candidate
+                    .fields
+                    .iter()
+                    .any(|field| field.ty.instance_classes().contains(&name))
+                || candidate
+                    .methods
+                    .iter()
+                    .any(|method| method.names_class(name))
+        })
         || module
             .functions
             .iter()
             .any(|function| function.names_class(name))
-        || module
-            .classes
-            .iter()
-            .filter(|candidate| !unbuilt.iter().any(|held| ptr::eq(*held, *candidate)))
-            .any(|candidate| {
-                candidate
-                    .fields
-                    .iter()
-                    .any(|field| field.ty.instance_classes().contains(&name))
-                    || candidate
-                        .methods
-                        .iter()
-                        .any(|method| method.names_class(name))
-            })
 }
 
-/// the classes that go unbuilt with `class`, where it is left as its interpreted definition
+/// whether this class's own header names an in-module base that `unbuilt` does not hold
+///
+/// a class left as its interpreted definition keeps the base that definition was built
+/// on, which is whatever the base's *name* held while the module body ran — the
+/// interpreted base, always. where the base's emitted type is installed over that name
+/// afterwards the two part company, and `isinstance` answers False against the name with
+/// nothing reported. so a class may only be left interpreted alongside its in-module
+/// base, which is what makes the held set a whole inheritance component rather than an
+/// arbitrary collection
+fn stands_outside(module: &ModuleIr, unbuilt: &[&ClassIr], class: &ClassIr) -> bool {
+    module
+        .classes
+        .iter()
+        .any(|candidate| stands_on(class, &candidate.name) && !holds(unbuilt, candidate))
+}
+
+/// the classes this module can leave as their interpreted definitions together, with
+/// every compiled function in it still standing
 ///
 /// a spec class's own methods are not the only compiled code that reads its storage. a
 /// generator method's state object and a nested function's closure environment are each a
@@ -2580,37 +2608,107 @@ fn read_outside(module: &ModuleIr, unbuilt: &[&ClassIr], name: &str) -> bool {
 /// but neither is in the module namespace under any name, and neither is built by anything
 /// except the methods of the class it belongs to. where that class has no type its methods
 /// never run, so these are never constructed — and they are gathered up with it rather
-/// than held against it.
+/// than held against it. the same is true of a class in the namespace:
+/// `asyncio.unix_events` writes four classes on heap bases from other modules and only
+/// each other names them, so the whole family can stand down together where each on its
+/// own could not.
 ///
 /// computed by removal, which is also what makes a cycle come out right: two helpers that
 /// only ever build each other are reached from nothing and both stay. the set starts as
-/// everything that could go unbuilt and gives up whatever some still-running code turns
-/// out to reach, until it stops shrinking. that terminates because [`read_outside`] only
-/// ever becomes *more* true as the set shrinks, so nothing given up is ever taken back
-fn unbuilt_with<'a>(module: &'a ModuleIr, class: &'a ClassIr) -> Vec<&'a ClassIr> {
-    let mut held: Vec<&ClassIr> = vec![class];
-    held.extend(
-        module
-            .classes
-            .iter()
-            // by identity: two classes in one module may be written with the same name
-            .filter(|candidate| !ptr::eq(*candidate, class) && !candidate.exported),
-    );
+/// every class in the module and gives up whatever some still-running code turns out to
+/// reach, until it stops shrinking. that terminates because [`read_outside`] and
+/// [`stands_outside`] only ever become *more* true as the set shrinks, so nothing given
+/// up is ever taken back — which also makes the answer the one largest such set rather
+/// than an artefact of the order the removals happened in.
+///
+/// it is empty where the module cannot [answer for its own
+/// classes](answers_for_its_classes): a module that held together only because it gave
+/// itself up whole must go on doing so
+fn held_together(module: &ModuleIr) -> Vec<&ClassIr> {
+    if !answers_for_its_classes(module) {
+        return Vec::new();
+    }
+    let mut held: Vec<&ClassIr> = module.classes.iter().collect();
     loop {
-        let reached = held
-            .iter()
-            .position(|candidate| read_outside(module, &held, &candidate.name));
+        let reached = held.iter().position(|candidate| {
+            read_outside(module, &held, &candidate.name) || stands_outside(module, &held, candidate)
+        });
         match reached {
-            // the class being asked about is reached itself, so there is nothing to
-            // decide about the rest: the caller reads the set it is alone in as the
-            // whole-module refusal it always had
-            Some(0) => return vec![class],
             Some(index) => {
                 held.remove(index);
             }
             None => return held,
         }
     }
+}
+
+/// the classes whose types have to exist for this one's compiled halves to be installed
+///
+/// a method reaches another class's compiled code *directly*: `CallNative` names the
+/// owner and calls the emitted body, with no type object in between. so a class left
+/// interpreted is still reachable from one that was installed, and installing the second
+/// while the first stood down would run compiled code over an interpreted instance —
+/// which is the read the whole-module refusal exists to prevent. the closure is
+/// transitive for the same reason: a method that calls a method that reads such a class
+/// is as wrong as reading it itself.
+///
+/// the base relation is followed *both* ways, so a whole inheritance component moves as
+/// one. a class left interpreted while its base's emitted type took the base's name is
+/// standing on an orphaned copy, and `isinstance` answers False against that name where
+/// python answers True — so neither half of the pair can be installed without the other.
+///
+/// only classes inside `held` are followed. one outside it is always installed, so it can
+/// never be the thing that went missing
+fn depends_on<'a>(held: &[&'a ClassIr], class: &'a ClassIr) -> Vec<&'a ClassIr> {
+    let mut reached: Vec<&ClassIr> = vec![class];
+    let mut at = 0;
+    while at < reached.len() {
+        let current = reached[at];
+        at += 1;
+        for candidate in held {
+            if holds(&reached, candidate) {
+                continue;
+            }
+            let named = stands_on(current, &candidate.name)
+                || stands_on(candidate, &current.name)
+                || current.fields.iter().any(|field| {
+                    field
+                        .ty
+                        .instance_classes()
+                        .contains(&candidate.name.as_str())
+                })
+                || current
+                    .methods
+                    .iter()
+                    .any(|method| method.names_class(&candidate.name));
+            if named {
+                reached.push(candidate);
+            }
+        }
+    }
+    reached
+}
+
+/// the type objects module init has to have built before this class's own is installed
+///
+/// empty where nothing can have gone missing: a class outside the held set, or one whose
+/// dependencies are all classes module init builds unconditionally. otherwise it is every
+/// class in [`depends_on`] whose construction can refuse, in the module's own order so
+/// that the emitted test reads the way the constructions ran
+fn install_gate<'a>(
+    module: &'a ModuleIr,
+    held: &[&'a ClassIr],
+    class: &'a ClassIr,
+) -> Vec<&'a ClassIr> {
+    if !holds(held, class) {
+        return Vec::new();
+    }
+    let needed = depends_on(held, class);
+    module
+        .classes
+        .iter()
+        .filter(|candidate| holds(&needed, candidate) && built_ahead(module, candidate))
+        .collect()
 }
 
 /// whether a class this module could not build may be left out on its own, with the rest
@@ -2632,14 +2730,11 @@ fn unbuilt_with<'a>(module: &'a ModuleIr, class: &'a ClassIr) -> Vec<&'a ClassIr
 ///
 /// what counts as reaching into it is deliberately wide, because missing one costs a wrong
 /// answer or a segfault where an extra one costs only the whole-module refusal we already
-/// had. see [`read_outside`] for the three places, [`stands_on`] for the one that holds
-/// however little else runs, and [`unbuilt_with`] for the helper classes that go quiet
-/// along with it
-fn declines_on_its_own(module: &ModuleIr, class: &ClassIr) -> bool {
-    built_ahead(module, class) && answers_for_its_classes(module) && {
-        let unbuilt = unbuilt_with(module, class);
-        !read_outside(module, &unbuilt, &class.name)
-    }
+/// had. see [`read_outside`] for what reaching into one means, [`stands_outside`] for why
+/// a class goes with the base it was written on, and [`held_together`] for the rest of
+/// the family that stands down with it
+fn declines_on_its_own(module: &ModuleIr, held: &[&ClassIr], class: &ClassIr) -> bool {
+    built_ahead(module, class) && holds(held, class)
 }
 
 /// the emitted class an operand holds an instance of, where the walk in
@@ -2804,19 +2899,40 @@ fn decorates_a_method(class: &ClassIr) -> bool {
 /// every namespace entry this class takes off the interpreted body, the ones it cannot do
 /// without first
 ///
-/// `By_ClassConstants::required` counts from the front of the list, so a decorated
-/// method's name has to stand ahead of every constant's: a constant the body did not write
-/// leaves the class without the name, while a decorated method's absence would leave the
-/// method table's own undecorated entry answering for it
+/// `By_ClassConstants::required` counts from the front of the list, so a decorated method's
+/// name and a property's have to stand ahead of every constant's: a constant the body did
+/// not write leaves the class without the name, while a decorated method's absence would
+/// leave the method table's own undecorated entry answering for it.
+///
+/// a `@property` is required for a reason of its own. its halves are in no method table —
+/// the whole construct is one object written onto the *finished* type — so a metaclass
+/// handed the namespace would not see the name at all, and a metaclass that decides
+/// something from what the class defines then decides it wrong. `abc.ABCMeta` is the case
+/// that matters: a class overriding an abstract property of its base was still counted as
+/// abstract, and the emitted class refused to be instantiated where the interpreted one
+/// built. carrying the body's own `property` into the namespace is what a `class` statement
+/// hands the metaclass, and `By_PublishProperty` then leaves that object standing rather
+/// than replacing it — so such a class publishes what the source wrote, and runs it
+/// interpreted.
+///
+/// only a class with a base carries one, because only such a class reaches
+/// [`external_construction`] and so a namespace at all. a class with no base is built from
+/// its spec outright, where no metaclass runs and there is nothing to be handed
 fn carried_off_the_body(class: &ClassIr) -> (Vec<&str>, usize) {
-    let decorated: Vec<&str> = class
+    let properties = class
+        .base
+        .as_ref()
+        .map(|_| class.properties.as_slice())
+        .unwrap_or_default();
+    let needed: Vec<&str> = class
         .methods
         .iter()
         .filter(|method| !method.decorators.is_empty())
         .map(|method| method.name.as_str())
+        .chain(properties.iter().map(|property| property.name.as_str()))
         .collect();
-    let required = decorated.len();
-    let carried = decorated
+    let required = needed.len();
+    let carried = needed
         .into_iter()
         .chain(class.constants.iter().map(String::as_str))
         .collect();
@@ -5901,6 +6017,34 @@ fn emit_op(
             out.push_str(&commit_checked(function, *dest, error_target));
             out
         }
+        // `a[i:j:k]` builds an ordinary slice object. python's own compiler emits
+        // `BUILD_SLICE` for it rather than looking a name up, and this has to do the
+        // same: a module is free to bind `slice` to something of its own — `ast` binds
+        // a deprecated AST node class to it — and a name lookup would find that
+        Op::MakeSlice {
+            dest,
+            lower,
+            upper,
+            step,
+        } => assign_checked(
+            module,
+            function,
+            *dest,
+            &format!(
+                "PySlice_New({}, {}, {})",
+                value_expr(lower),
+                value_expr(upper),
+                value_expr(step)
+            ),
+            error_target,
+        ),
+        // and `...`, which python loads as a constant for the same reason
+        Op::LoadEllipsis { dest } => assign_owned(
+            module,
+            function,
+            *dest,
+            "(PyObject *)Py_NewRef(Py_Ellipsis)",
+        ),
         // `globals()`, which is the very dict the two halves above reach. calling the
         // builtin instead would answer about the *calling* frame, and a compiled
         // function pushes none — so it would hand back the caller's namespace, in
@@ -7316,6 +7460,9 @@ fn emit_module_init(module: &ModuleIr) -> String {
     // base's do. so a refusal is a whole-module one — the interpreted definition already
     // built the module, and it is left standing rather than made into a half-native
     // mixture
+    // the family that can stand down together, worked out once: both the layout guard's
+    // refusals below and the tests each install waits on are read off it
+    let held = held_together(module);
     let mut conditions = Vec::new();
     // below 3.12 there is no way to say where appended storage goes at all, so no such
     // class has a construction and the module has none either
@@ -7329,15 +7476,13 @@ fn emit_module_init(module: &ModuleIr) -> String {
     // whether the fallback source has to be run with its class bodies captured. the
     // capture costs a dict copy per class the body writes, so a module with nothing to
     // take out of one runs its body the plain way. a decorated method is taken out of a
-    // body too — the body is where the decorator's single application landed
-    let captures_bodies = module.classes.iter().any(|class| {
-        class.exported
-            && (!class.constants.is_empty()
-                || class
-                    .methods
-                    .iter()
-                    .any(|method| !method.decorators.is_empty()))
-    });
+    // body too — the body is where the decorator's single application landed — and so is
+    // a `@property`, which is one object the body folded its halves into. all three are
+    // named by the one list, so this asks that rather than repeating it
+    let captures_bodies = module
+        .classes
+        .iter()
+        .any(|class| class.exported && !carried_off_the_body(class).0.is_empty());
     let release_bodies = if captures_bodies {
         "    Py_XDECREF(by_bodies);\n"
     } else {
@@ -7385,7 +7530,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
             // NULL is carried forward, every step that would have installed it is
             // skipped, and its interpreted definition keeps the name. see
             // `declines_on_its_own`
-            if declines_on_its_own(module, class) {
+            if declines_on_its_own(module, &held, class) {
                 let _ = writeln!(layout_guard, "    {type_name} = {construction};");
                 continue;
             }
@@ -7423,13 +7568,41 @@ fn emit_module_init(module: &ModuleIr) -> String {
         .iter()
         .filter(|class| class.exported)
         .collect();
+    // and the module-level definitions the same thing happens to. the body binds every
+    // alias of one — `handler = fn`, a class body's `direct = fn`, a default argument —
+    // to the *interpreted* definition, and the name that definition came from goes on to
+    // answer the forwarder this module publishes. the two agree on every call and
+    // disagree on `is`, so only an identity test sees it: a dispatch table keyed on a
+    // function, an unregister, a `set` of callbacks all silently took the wrong branch.
+    //
+    // a decorated definition is left out. the twin's source has the decorators taken out
+    // of it — `decorated_at_init` — so what the body bound an alias to is not what the
+    // interpreted module would have bound it to either, and pairing it with the
+    // *undecorated* forwarder swaps one wrong answer for another rather than fixing it
+    let mut forwarder_twins: Vec<&str> = Vec::new();
+    for name in &forwarded {
+        if forwarder_twins.contains(name) {
+            continue;
+        }
+        let undecorated = module
+            .functions
+            .iter()
+            .all(|function| function.name != *name || function.decorators.is_empty());
+        if undecorated {
+            forwarder_twins.push(name);
+        }
+    }
     let mut twin_init = String::new();
     let mut adopt_init = String::new();
     // and the alias remap after that, once every decorator has settled what stands under
     // each class's own name — see `By_RemapTwinAliases` for why it waits that long
     let mut twin_remap = String::new();
-    if !twins.is_empty() {
-        let count = twins.len();
+    // pairing each interpreted definition with the forwarder built for its name, once the
+    // forwarders exist and while the definitions are still what their names hold
+    let mut forwarder_record = String::new();
+    if !twins.is_empty() || !forwarder_twins.is_empty() {
+        let classes = twins.len();
+        let count = classes + forwarder_twins.len();
         // the types are held alongside the twins from here rather than gathered at the
         // adoption, because a class constant is remapped against them as its class is
         // built. a slot is NULL until then, and `By_TwinReplacement` reads that as a
@@ -7437,12 +7610,14 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // copied across as the twin
         // the layouts run alongside, and a NULL entry is a class whose instances stay
         // where the body built them — see `By_MovedInstance` for what a non-NULL one buys
+        // a function pair has no instances to move, so its slot is NULL here
         let layouts = twins
             .iter()
             .map(|class| match instance_layout_symbol(module, class) {
                 Some(symbol) => symbol,
                 None => "NULL".to_string(),
             })
+            .chain(forwarder_twins.iter().map(|_| "NULL".to_string()))
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(
@@ -7457,16 +7632,13 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // constant's value comes from — the twin has been through its own decorators by
         // now, and `By_RunModuleBody` says what that costs. borrowed from `by_bodies`,
         // which is held for the whole of this function
-        // a decorated method takes its value from here too, so the bodies are needed
-        // whenever either asks for one
-        if twins.iter().any(|class| {
-            !class.constants.is_empty()
-                || class
-                    .methods
-                    .iter()
-                    .any(|method| !method.decorators.is_empty())
-        }) {
-            let _ = writeln!(twin_init, "    PyObject *by_body[{count}];");
+        // a decorated method and a `@property` take their values from here too, so the
+        // bodies are asked for through the one list that names all three
+        if twins
+            .iter()
+            .any(|class| !carried_off_the_body(class).0.is_empty())
+        {
+            let _ = writeln!(twin_init, "    PyObject *by_body[{classes}];");
             for (slot, class) in twins.iter().enumerate() {
                 let _ = writeln!(
                     twin_init,
@@ -7480,6 +7652,30 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 twin_init,
                 "    by_twin[{slot}] = By_ClassTwin(dict, {});",
                 c_string(&class.name)
+            );
+        }
+        // the definition still standing under the name, paired with the forwarder built
+        // for that name. a name the body went on to rebind to something that is not a
+        // function is not a definition this replaced, and is left unpaired rather than
+        // paired against whatever is there
+        //
+        // both halves are borrowed: `dict` holds the definition until the install at the
+        // end of init, and `by_built` holds the forwarder for at least as long
+        for (at, name) in forwarder_twins.iter().enumerate() {
+            let slot = classes + at;
+            let _ = writeln!(
+                forwarder_record,
+                "    by_twin[{slot}] = PyDict_GetItemString(dict, {name});\n\
+                 \x20   if (by_twin[{slot}] == NULL) PyErr_Clear();\n\
+                 \x20   if (by_twin[{slot}] != NULL && !PyFunction_Check(by_twin[{slot}])) {{\n\
+                 \x20       by_twin[{slot}] = NULL;\n\
+                 \x20   }}\n\
+                 \x20   Py_XINCREF(by_twin[{slot}]);\n\
+                 \x20   if (by_twin[{slot}] != NULL) {{\n\
+                 \x20       by_type[{slot}] = By_BuiltForwarder(by_built, {name});\n\
+                 \x20       if (by_type[{slot}] == by_twin[{slot}]) by_type[{slot}] = NULL;\n\
+                 \x20   }}",
+                name = c_string(name)
             );
         }
         let _ = writeln!(
@@ -7496,6 +7692,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
         let names = twins
             .iter()
             .map(|class| c_string(&class.name))
+            .chain(forwarder_twins.iter().map(|name| c_string(name)))
             .collect::<Vec<_>>()
             .join(", ");
         // a retained interpreted definition evaluated its defaults and closed over its
@@ -7509,6 +7706,30 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 twin_remap,
                 "    By_SettleTwins({}, &by_twins);",
                 function.interpreted_symbol(module.name.dotted())
+            );
+        }
+        // a forwarder is not bound under a name the walk below reaches — it is not bound
+        // at all until init is nearly over — and it took its defaults off the definition
+        // before any of this ran, so what it holds is settled here. every forwarder, not
+        // only the paired ones: a decorated definition has one too.
+        //
+        // its definition is settled separately rather than left to carry the answer over,
+        // because a defaults *tuple* cannot be written and each of the two gets a moved
+        // copy of its own. the definition is worth settling for the one reader that can
+        // still reach it — `__wrapped__` on the forwarder, which is where
+        // `inspect.signature` looks
+        for name in &forwarded {
+            let _ = writeln!(
+                twin_remap,
+                "    By_SettleTwins(By_BuiltForwarder(by_built, {}), &by_twins);",
+                c_string(name)
+            );
+        }
+        for at in 0..forwarder_twins.len() {
+            let slot = classes + at;
+            let _ = writeln!(
+                twin_remap,
+                "    By_SettleTwins(by_twin[{slot}], &by_twins);"
             );
         }
         let _ = writeln!(
@@ -7679,7 +7900,8 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 .join(", ");
             let _ = writeln!(
                 installed,
-                "    if (By_PublishProperty({type_name}_OBJ, {}, {defs}) < 0) return -1;",
+                "    if (By_PublishProperty({type_name}_OBJ, dict, {}, {}, {defs}) < 0) return -1;",
+                c_string(&class.name),
                 c_string(&property.name)
             );
         }
@@ -7815,17 +8037,28 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // class means from now on — so that definition is what stands for its own twin
         // in every remap below, rather than the nothing a never-filled slot would say.
         // its own decorators are applied either way, because `class_decorate` applies
-        // them to the namespace entry rather than to the type
-        if declines_on_its_own(module, class) {
+        // them to the namespace entry rather than to the type.
+        //
+        // the test is over everything this class's compiled halves would have reached,
+        // not over its own type alone: a method calls another class's emitted body
+        // directly, so installing this one while that one stood down would run compiled
+        // code over an interpreted instance. see `install_gate`
+        let gate = install_gate(module, &held, class);
+        if gate.is_empty() {
+            class_init.push_str(&installed);
+        } else {
             let stands = slot.map_or_else(String::new, |slot| {
                 format!("    else {{ by_type[{slot}] = by_twin[{slot}]; }}\n")
             });
+            let condition = gate
+                .iter()
+                .map(|needed| format!("{} != NULL", needed.type_name(module.name.dotted())))
+                .collect::<Vec<_>>()
+                .join(" && ");
             let _ = write!(
                 class_init,
-                "    if ({type_name} != NULL) {{\n{installed}    }}\n{stands}"
+                "    if ({condition}) {{\n{installed}    }}\n{stands}"
             );
-        } else {
-            class_init.push_str(&installed);
         }
     }
 
@@ -7947,22 +8180,41 @@ fn emit_module_init(module: &ModuleIr) -> String {
         strip_docs.push_str("    By_StripDocsAtOO(by_forwarded);\n");
     }
     for class in &module.classes {
-        let _ = writeln!(
-            strip_docs,
-            "    By_StripDocsAtOO({}_methods);",
-            class.type_name(module.name.dotted())
-        );
+        let type_name = class.type_name(module.name.dotted());
+        let _ = writeln!(strip_docs, "    By_StripDocsAtOO({type_name}_methods);");
+        // a property's halves are in no table, so each is named on its own
+        for property in &class.properties {
+            let symbol = property_symbol(&type_name, &property.name);
+            for (half, body) in property_halves(class, property) {
+                if body.is_some() {
+                    let _ = writeln!(strip_docs, "    By_StripDocAtOO(&{symbol}_{half}_def);");
+                }
+            }
+        }
     }
-    // the forwarders go in before the natives, and before the decorators: a decorator
-    // in python is handed the `function` the `def` made, and the forwarder is what
-    // stands in for that here
-    let publish_forwarders = match &module.shims {
-        Some(shims) => format!(
-            "    if (By_PublishForwarders(module, dict, by_forwarded, {}, {}) < 0) return -1;\n",
-            shims.functions.len(),
-            c_string(&shims.installer)
+    // the forwarders are *made* before the classes are built, because a class carries
+    // what its body bound across as its type is made and a definition the body bound has
+    // to have something to be replaced by. they are *bound* after everything init still
+    // does with the definitions' own names — a class decorator resolved out of the
+    // namespace above all — and before the natives and before the decorators, which is
+    // where they always went. `By_BuildForwarders` says why the two moments differ
+    let (build_forwarders, install_forwarders) = match &module.shims {
+        Some(shims) => (
+            format!(
+                "    PyObject *by_built = By_BuildForwarders(module, dict, by_forwarded, {}, {});\n\
+                 \x20   if (by_built == NULL) return -1;\n",
+                shims.functions.len(),
+                c_string(&shims.installer)
+            ),
+            format!(
+                "    {{ int by_installed = By_InstallForwarders(dict, by_built, by_forwarded, {}, {});\n\
+                 \x20     Py_DECREF(by_built);\n\
+                 \x20     if (by_installed < 0) return -1; }}\n",
+                shims.functions.len(),
+                c_string(&shims.installer)
+            ),
         ),
-        None => String::new(),
+        None => (String::new(), String::new()),
     };
     let _ = write!(
         out,
@@ -7987,13 +8239,15 @@ fn emit_module_init(module: &ModuleIr) -> String {
          {run_body}\
          {layout_guard}\
          {interpreted_init}\
+         {build_forwarders}\
          {twin_init}\
+         {forwarder_record}\
          {class_init}\
          {adopt_init}\
          {class_decorate}\
          {twin_remap}\
          {release_bodies}\
-         {publish_forwarders}\
+         {install_forwarders}\
          \x20   if (PyModule_AddFunctions(module, by_methods) < 0) return -1;\n\
          {decorators}\
          {arm_dispatch}\
@@ -8397,24 +8651,61 @@ mod tests {
         );
     }
 
-    /// the same pair, with nothing constructing either. `Wrapped` is still the whole
-    /// module's to refuse — `Deeper` is built on its type object, and a NULL there is not
-    /// something a bases tuple can be packed from — where `Deeper`, which nothing stands
-    /// on and nothing builds, is left out on its own
+    /// the same pair, with nothing constructing either. neither is the module's to
+    /// refuse: they stand down together, `Deeper` behind a test of the base it was
+    /// written on as well as of its own type
+    ///
+    /// the pair has to move as one, in both directions. leaving `Deeper` interpreted while
+    /// `Wrapped`'s emitted type took the name would leave `Deeper` standing on an orphaned
+    /// copy of its base, and `isinstance(Deeper(...), Wrapped)` would answer False where
+    /// python answers True — with nothing reported. taking both back to their interpreted
+    /// definitions is the answer that agrees with python, because that is the pair the
+    /// module body built, so the two share one test rather than one each
     #[test]
-    fn a_class_another_stands_on_refuses_the_whole_module() {
+    fn a_class_and_the_one_standing_on_it_stand_down_together() {
         let mut module = module_with(add());
         module.classes.push(appending_class());
         module.classes.push(deeper_class());
         let c = emit_module(&module);
 
         assert!(
-            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
-            "the base a class stands on refuses for the module: {c}"
+            !c.contains("== NULL) return 0;"),
+            "nothing outside the pair reads either, so the module is not refused: {c}"
+        );
+        let shared = "if (By_app_Wrapped_Type != NULL && By_app_Deeper_Type != NULL) {";
+        assert_eq!(
+            c.matches(shared).count(),
+            2,
+            "both halves of the pair wait on both types: {c}"
         );
         assert!(
-            !c.contains("if (By_app_Deeper_Type == NULL) return 0;"),
-            "nothing stands on the subclass, so it refuses alone: {c}"
+            !c.contains("if (By_app_Wrapped_Type != NULL) {"),
+            "so the base is never installed on its own: {c}"
+        );
+    }
+
+    /// and where something still running reads the base, the pair goes back to being the
+    /// whole module's to refuse
+    ///
+    /// a module-level function that builds a `Wrapped` reads its appended storage as its
+    /// own struct, at an offset only the emitted type lays out. that function is installed
+    /// whatever else is left out, so there is no set of classes that standing down would
+    /// make safe
+    #[test]
+    fn a_module_function_reading_the_base_refuses_for_the_pair() {
+        let mut module = module_with(constructs("Wrapped"));
+        module.classes.push(appending_class());
+        module.classes.push(deeper_class());
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
+            "the base a still-running function reads refuses for the module: {c}"
+        );
+        assert!(
+            c.contains("if (By_app_Deeper_Type == NULL) return 0;"),
+            "and the subclass goes with it, because it cannot stand alone on a base \
+             the module gave up: {c}"
         );
     }
 
@@ -8706,10 +8997,14 @@ mod tests {
         );
     }
 
-    /// a method of some *other* class that still gets a type is the same reader one step
-    /// along, and refuses the same way
+    /// a method of some *other* class reaching into it does not refuse for the module
+    /// either — the reader waits on what it reads
+    ///
+    /// `Reader` is installed only where `Wrapped` was built, so a `Reader` whose method
+    /// reads a `Wrapped` field never answers on a module where that field has no offset:
+    /// the name holds the interpreted definition and the interpreted method is what runs
     #[test]
-    fn a_class_a_method_of_another_class_reads_refuses_the_whole_module() {
+    fn a_class_a_method_of_another_class_reads_waits_on_it() {
         let mut module = module_with(add());
         module.classes.push(appending_class());
         let mut reader = appending_class();
@@ -8719,8 +9014,42 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
-            "another class's method reaching into it refuses for the module: {c}"
+            !c.contains("== NULL) return 0;"),
+            "nothing still running reads either, so the module is not refused: {c}"
+        );
+        assert!(
+            c.contains("if (By_app_Wrapped_Type != NULL && By_app_Reader_Type != NULL) {"),
+            "the reader waits on what it reads as well as on itself: {c}"
+        );
+    }
+
+    /// and the wait is transitive, because one compiled method calls another's emitted
+    /// body directly rather than through a type
+    ///
+    /// `Outer`'s method reads a `Reader`, whose method reads a `Wrapped`. installing
+    /// `Outer` where `Wrapped` had stood down would let `Outer` call `Reader`'s compiled
+    /// body — which nothing installed, and which reads a field at an offset the
+    /// interpreted `Wrapped` has no room for. so `Outer` waits on `Wrapped` too
+    #[test]
+    fn the_wait_reaches_through_a_class_that_reads_another() {
+        let mut module = module_with(add());
+        module.classes.push(appending_class());
+        let mut reader = appending_class();
+        reader.name = "Reader".to_string();
+        reader.methods.push(reads_a_field_of("Wrapped"));
+        module.classes.push(reader);
+        let mut outer = appending_class();
+        outer.name = "Outer".to_string();
+        outer.methods.push(reads_a_field_of("Reader"));
+        module.classes.push(outer);
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains(
+                "if (By_app_Wrapped_Type != NULL && By_app_Reader_Type != NULL \
+                 && By_app_Outer_Type != NULL) {"
+            ),
+            "the outer class waits on everything its methods can reach: {c}"
         );
     }
 
@@ -8752,11 +9081,11 @@ mod tests {
         );
     }
 
-    /// the same helper, put in the namespace. an exported class is reachable by name from
-    /// anywhere at all, so its methods may run whatever became of the class they read —
-    /// and the refusal goes back to being the module's
+    /// the same helper, put in the namespace. being reachable by name is not what makes a
+    /// reader dangerous — being *installed* is, and an exported class that waits on what
+    /// it reads is not installed where that class stood down
     #[test]
-    fn an_exported_helper_holds_the_whole_module() {
+    fn an_exported_helper_waits_on_the_class_it_reads() {
         let mut module = module_with(add());
         module.classes.push(appending_class());
         let mut state = appending_class();
@@ -8767,8 +9096,21 @@ mod tests {
         let c = emit_module(&module);
 
         assert!(
-            c.contains("if (By_app_Wrapped_Type == NULL) return 0;"),
-            "an exported reader holds the module: {c}"
+            !c.contains("== NULL) return 0;"),
+            "an exported reader no longer holds the module: {c}"
+        );
+        assert!(
+            c.contains(
+                "if (By_app_Wrapped_Type != NULL && By_app_Wrapped_step_gen_Type != NULL) {"
+            ),
+            "it waits on the class it reads: {c}"
+        );
+        assert!(
+            c.contains(
+                "if (PyDict_SetItemString(dict, \"Wrapped_step_gen\", \
+                 By_app_Wrapped_step_gen_Type_OBJ) < 0) return -1;"
+            ),
+            "and the name it publishes is inside that wait: {c}"
         );
     }
 
