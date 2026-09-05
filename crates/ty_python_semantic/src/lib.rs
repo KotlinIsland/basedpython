@@ -13,8 +13,8 @@ pub(crate) use diagnostic::add_inferred_python_version_hint_to_diagnostic;
 pub use diagnostic::inferred_python_version_source_annotation;
 pub use fixes::{fix_all_diagnostics, suppress_all_diagnostics};
 pub use place::{
-    basedpython_typing_added_in, basedpython_warnings_added_in, basedpython_warnings_symbol,
-    basedpython_weakref_symbol,
+    basedpython_module_symbol, basedpython_typing_added_in, basedpython_warnings_added_in,
+    basedpython_warnings_symbol, basedpython_weakref_symbol,
 };
 pub use preset::TypeCheckingPreset;
 use ruff_db::PythonFile;

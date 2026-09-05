@@ -702,6 +702,28 @@ pub enum Op {
     /// resolved on every read for the same reason a call is — a module global may
     /// be rebound, and python would see it
     LoadGlobal { dest: RegisterId, name: String },
+    /// the `slice` object `a[i:j:k]` subscripts with
+    ///
+    /// deliberately *not* a [`Self::CallPython`] of the name `slice`, which is what
+    /// this used to be. `str(n)` is a name in the source and resolving it through the
+    /// namespace is right; a slice is written as punctuation and python builds it from
+    /// the `BUILD_SLICE` instruction, never touching a name. `ast` defines a class of
+    /// its own called `slice`, and the name lookup found *that* — so `self._source[i:]`
+    /// inside its unparser built a deprecated AST node instead of a slice, and raised
+    ///
+    /// the three bounds are objects, `None` where the source left the bound out
+    MakeSlice {
+        dest: RegisterId,
+        lower: Value,
+        upper: Value,
+        step: Value,
+    },
+    /// the `Ellipsis` singleton, which is what `...` evaluates to
+    ///
+    /// the same rule as [`Self::MakeSlice`]: `...` is punctuation rather than a name,
+    /// so python loads the singleton as a constant and a module binding `Ellipsis` —
+    /// `ast` binds one — cannot change what it means
+    LoadEllipsis { dest: RegisterId },
     /// the module namespace itself, which is what `globals()` answers with
     ///
     /// the builtin cannot be called for it. `globals()` reads the *calling* frame's
@@ -1113,6 +1135,8 @@ impl Op {
             | Self::RaiseWith { .. }
             | Self::FinishFrame { .. }
             | Self::LoadGlobal { .. }
+            | Self::MakeSlice { .. }
+            | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::Warn { .. }
             | Self::StoreGlobal { .. }
@@ -1226,6 +1250,8 @@ impl Op {
             | Self::ImportFrom { dest, .. }
             | Self::CallValue { dest, .. }
             | Self::LoadGlobal { dest, .. }
+            | Self::MakeSlice { dest, .. }
+            | Self::LoadEllipsis { dest }
             | Self::ModuleDict { dest }
             | Self::Warn { dest, .. }
             | Self::StoreGlobal { dest, .. }
@@ -1329,6 +1355,8 @@ impl Op {
             | Self::ImportFrom { dest, .. }
             | Self::CallValue { dest, .. }
             | Self::LoadGlobal { dest, .. }
+            | Self::MakeSlice { dest, .. }
+            | Self::LoadEllipsis { dest }
             | Self::ModuleDict { dest }
             | Self::Warn { dest, .. }
             | Self::StoreGlobal { dest, .. }
@@ -1518,6 +1546,7 @@ impl Op {
             Self::RaiseStandard { .. }
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
+            | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }
             | Self::DeleteLocal { .. }
@@ -1548,6 +1577,9 @@ impl Op {
                 value,
                 ..
             } => vec![array, index, value],
+            Self::MakeSlice {
+                lower, upper, step, ..
+            } => vec![lower, upper, step],
             Self::ArrayLen { array, .. } => vec![array],
             Self::DeleteItem {
                 container, index, ..
@@ -1716,6 +1748,7 @@ impl Op {
             Self::RaiseStandard { .. }
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
+            | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }
             | Self::DeleteLocal { .. }
@@ -1746,6 +1779,9 @@ impl Op {
                 value,
                 ..
             } => vec![array, index, value],
+            Self::MakeSlice {
+                lower, upper, step, ..
+            } => vec![lower, upper, step],
             Self::DeleteItem {
                 container, index, ..
             } => vec![container, index],

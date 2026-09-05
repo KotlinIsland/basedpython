@@ -470,6 +470,19 @@ fn print_op(function: &Function, op: &Op) -> String {
         Op::LoadGlobal { dest, name: global } => {
             format!("{} = global {global}", name(*dest))
         }
+        Op::MakeSlice {
+            dest,
+            lower,
+            upper,
+            step,
+        } => format!(
+            "{} = slice {} {} {}",
+            name(*dest),
+            value(lower),
+            value(upper),
+            value(step)
+        ),
+        Op::LoadEllipsis { dest } => format!("{} = ellipsis", name(*dest)),
         Op::ModuleDict { dest } => format!("{} = globals", name(*dest)),
         Op::Warn {
             dest,

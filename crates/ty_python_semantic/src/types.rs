@@ -6807,8 +6807,24 @@ impl<'db> Type<'db> {
                         Place::Undefined.into(),
                         InstanceFallbackShadowsNonDataDescriptor::No,
                     );
-                    map_member_lookup_type(db, result, |ty| {
+                    let result = map_member_lookup_type(db, result, |ty| {
                         ty.bind_self_typevars(db, env, receiver)
+                    });
+                    // basedpython: a structural protocol that is one element of a type
+                    // parameter's bound has no class object for this lookup to have found the
+                    // method on — see `protocol_class::intersected_symbolic_method_member`
+                    member_lookup_or_fall_back_to(db, env, result, || {
+                        protocol_class::intersected_symbolic_method_member(
+                            db,
+                            env,
+                            this,
+                            name,
+                            Some(receiver),
+                        )
+                        .map_or_else(
+                            || Place::Undefined.into(),
+                            |member| Place::bound(member).into(),
+                        )
                     })
                 }
 

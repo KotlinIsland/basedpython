@@ -297,31 +297,58 @@ these before it installs anything of its own precisely so that it can give up
 there — the interpreted definition has already built the whole module, and leaving
 it standing is a module that is merely slow rather than a mixture that is wrong.
 
-but that refusal is only *necessary* where some compiled function would have read
-one of these instances. where nothing does, the class alone falls back and every
-compiled function in the module goes on standing. what counts as reaching into it
-is deliberately wide, because missing one costs a wrong answer or a segfault where
-an extra one costs only the whole-module refusal that was already the answer:
+but that refusal is only *necessary* where some compiled code that **still runs**
+would have read one of these instances. so the question is not asked of one class
+at a time: module init works out the largest family of classes it could leave
+interpreted together, and refuses only where even that is not enough. a class in
+that family is installed behind a test of every class it reaches, and where one of
+them refused, none of them is installed — the whole family keeps the definitions
+the module body built, and every compiled function in the module goes on standing.
+
+a class is out of the family, and its refusal is the module's again, when
+something outside the family reaches into it. what counts as reaching is
+deliberately wide, because missing one costs a wrong answer or a segfault where an
+extra one costs only the whole-module refusal that was already the answer:
 
 - any operation naming the class — a construction, a field read or write, a cell,
     a closure, the class object itself, a direct call to one of its methods
 - any register, return or field **typed** as an instance of it
-- any class naming it as a **base**. that reference is read while the other class's
+- any class **naming it as a base**. that reference is read while the other class's
     type is built, whether or not an instance of either is ever made, so it holds
     however little else runs
 
+the wait a class in the family is installed behind is transitive, for the reason
+that makes an outside reader fatal in the first place: one compiled method calls
+another's emitted body directly, with no type object in between. so installing a
+class whose method calls a method that reads a class that stood down is as wrong as
+reading it directly.
+
+the base relation is followed **both** ways. a class left interpreted while its
+base's emitted type took the base's name is standing on an orphaned copy of it, and
+`isinstance` answers False against that name where python answers True with nothing
+reported — so a whole inheritance family goes in or out together.
+
 a generator method's state object and a nested function's closure environment are
 each a class of their own, and each captures the `self` it was made from — so each
-names the class exactly as any other reader would. counting those against it would
-leave the narrower refusal firing on nothing, because almost every such class has
-one. neither is in the namespace under any name and neither is built by anything
-but the methods of the class it belongs to, so where that class has no type they
-are never constructed: they go unbuilt with it rather than holding it.
+names the class exactly as any other reader would. neither is in the namespace
+under any name and neither is built by anything but the methods of the class it
+belongs to, so where that class has no type they are never constructed: they are
+part of the family rather than a reason to refuse.
 
-`asyncio.unix_events` is the shape this is for. `_UnixSelectorEventLoop` stands on
-a heap base from another module and can never be built, and it used to take
-`PidfdChildWatcher`, `_UnixSubprocessTransport` and every compiled function in the
-module down with it
+`asyncio.unix_events` is the shape this is for. `_UnixSubprocessTransport` stands
+on a heap base from another module and can never be built, and
+`_UnixSelectorEventLoop._make_subprocess_transport` names it — so it used to take
+`PidfdChildWatcher`, `_UnixDefaultEventLoopPolicy` and every compiled function in
+the module down with it. the two event-loop classes stand on heap bases of their
+own and cannot be built either, so the family stands down and the rest of the
+module compiles.
+
+what is **not** recovered is a module that cannot answer for its own classes at
+all. `logging.handlers` writes fourteen handlers on `logging`'s own heap types, and
+none of them installs — but the reason is `DatagramHandler.__init__` writing
+`self.closeOnError`, a field its base declares, through the dynamic form. that is
+the guard above, and while a module holds one the whole-module answer stands
+however little else reads the class
 
 #### the twin arrives compiled
 

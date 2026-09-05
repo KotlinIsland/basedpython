@@ -290,17 +290,25 @@ pub fn build_module(
 
     // the bodies standing behind each `@property`, so a read or a write of one can call
     // the half directly instead of going the whole way round the descriptor protocol.
-    // only a group `property_groups` accepts is here, and it is asked the same question
-    // `lower_class` asks it, so a symbol named here is one that gets emitted.
-    //
-    // it is asked with a group of one *taken* where `lower_class` may leave it alone. what
-    // the two differ on is a class with a base or a class keyword, and such a class is
-    // `mutable`, which `property_half` refuses before it ever reads this table
+    // only a group `property_groups` accepts is here, and it is asked the *same* question
+    // `lower_class` asks it, class keyword and all — a symbol named here is one a direct
+    // call may be written to, and a group `lower_class` leaves alone has no body under that
+    // symbol for the call to reach
     let mut accessors: Accessors = HashMap::new();
     for stmt in suite {
         if let Stmt::ClassDef(class) = stmt
             && layouts.contains_key(class.name.as_str())
-            && let Ok(groups) = property_groups(db, model, class, LoneGroups::Taken)
+            && let Ok(keywords) = class_keywords(class)
+            && let Ok(groups) = property_groups(
+                db,
+                model,
+                class,
+                if keywords.is_empty() {
+                    LoneGroups::Taken
+                } else {
+                    LoneGroups::LeftAlone
+                },
+            )
         {
             let receiver = RType::Instance {
                 class: class.name.to_string(),
@@ -688,6 +696,22 @@ pub fn build_module(
             _ => None,
         })
         .collect();
+    // and the classes written *inside* a class body, under the name they are reached by.
+    // one of those is never emitted — it is copied off the interpreted definition whole —
+    // so the type it stands on is whatever its base name held while that body ran, which
+    // is the interpreted definition's own class. an emitted type under that name would
+    // leave the copy standing on a second, orphaned copy of a type this module also
+    // publishes, and `isinstance` would answer `False` where python answers `True`. it is
+    // the same situation a module-level class this module does not emit is in, and it
+    // takes the same answer: the base gives up its emission
+    let nested_extends: Vec<(String, Vec<String>)> = walk(suite)
+        .into_iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::ClassDef(class) => Some(class),
+            _ => None,
+        })
+        .flat_map(|class| classes_written_in(suite, &class.name, &class.body))
+        .collect();
     // a definition that keeps its decorator runs it where it stands, so which
     // definitions carry one at all is what says whose window a decline reopens
     let carries_a_written_decorator: HashSet<String> = suite
@@ -708,6 +732,7 @@ pub fn build_module(
         &mut module,
         &ranges,
         &extends,
+        &nested_extends,
         &disturbed_definitions(suite),
         &carries_a_written_decorator,
     );
@@ -751,10 +776,11 @@ fn disturbed_definitions(suite: &[Stmt]) -> Disturbed {
             _ => None,
         })
         .collect();
+    let mut declared = DeclaredGlobals::default();
+    ast::visitor::walk_body(&mut declared, suite);
     let mut bindings = ModuleBindings {
-        found: Vec::new(),
-        unbinds: false,
-        dunders: Vec::new(),
+        declared_global: declared.names,
+        ..ModuleBindings::default()
     };
     ast::visitor::walk_body(&mut bindings, suite);
     let classes: HashSet<&str> = suite
@@ -770,9 +796,9 @@ fn disturbed_definitions(suite: &[Stmt]) -> Disturbed {
         .filter(|(owner, _)| classes.contains(owner))
         .map(|(owner, attribute)| (owner.to_string(), attribute.to_string()))
         .collect();
-    // a name taken back out of the namespace object is a `del` whose target this cannot
-    // read — `ast` pops five of its own classes out through a comprehension — so every
-    // definition is treated as one it could have been
+    // a removal through the namespace object whose key this could not read is a `del`
+    // of a name it cannot name, so every definition is treated as the one that went.
+    // the ones it *can* read went into `found` where an ordinary `del` goes
     if bindings.unbinds {
         return Disturbed {
             rebound: defined.into_keys().map(str::to_string).collect(),
@@ -809,21 +835,120 @@ fn module_namespace(expr: &Expr) -> bool {
             && matches!(call.func.as_ref(), Expr::Name(name) if name.id.as_str() == "globals"))
 }
 
-/// whether an expression takes a binding back out of the module namespace
-fn unbinds_through_the_namespace(expr: &Expr) -> bool {
+/// what an expression takes back out of the module namespace
+#[derive(Clone, Copy)]
+enum NamespaceUnbind<'a> {
+    /// a removal of whatever key this expression evaluates to
+    Key(&'a Expr),
+    /// a removal that names no key at all: `globals().clear()` takes every name, and
+    /// `globals().popitem()` takes one it chooses itself
+    Unnamed,
+}
+
+/// what an expression takes back out of the module namespace, if anything
+fn unbinds_through_the_namespace(expr: &Expr) -> Option<NamespaceUnbind<'_>> {
     match expr {
         // `del globals()[name]`, which the store/delete context is the whole of
-        Expr::Subscript(subscript) => {
-            subscript.ctx == ExprContext::Del && module_namespace(&subscript.value)
+        Expr::Subscript(subscript)
+            if subscript.ctx == ExprContext::Del && module_namespace(&subscript.value) =>
+        {
+            Some(NamespaceUnbind::Key(&subscript.slice))
         }
         Expr::Call(call) => match call.func.as_ref() {
-            Expr::Attribute(attribute) => {
-                module_namespace(&attribute.value)
-                    && matches!(attribute.attr.as_str(), "pop" | "popitem" | "clear")
+            Expr::Attribute(attribute) if module_namespace(&attribute.value) => {
+                match attribute.attr.as_str() {
+                    // `pop` names its key first; a second argument is only the
+                    // fallback for a key that was not there. a keyword form is a
+                    // `TypeError` at runtime, but reading it as unnamed costs nothing
+                    "pop" if call.arguments.keywords.is_empty() => Some(
+                        call.arguments
+                            .args
+                            .first()
+                            .map_or(NamespaceUnbind::Unnamed, NamespaceUnbind::Key),
+                    ),
+                    "pop" | "popitem" | "clear" => Some(NamespaceUnbind::Unnamed),
+                    _ => None,
+                }
             }
-            _ => false,
+            _ => None,
         },
-        _ => false,
+        _ => None,
+    }
+}
+
+/// the strings a literal sequence holds, if every element is one this can read
+///
+/// only the displays, because only a display says its whole contents where it stands:
+/// a name holding a sequence can have been changed between the two points
+fn literal_strings(expr: &Expr) -> Option<Vec<&str>> {
+    let elements = match expr {
+        Expr::Tuple(tuple) => &tuple.elts,
+        Expr::List(list) => &list.elts,
+        Expr::Set(set) => &set.elts,
+        _ => return None,
+    };
+    elements
+        .iter()
+        .map(|element| match element {
+            Expr::StringLiteral(string) => Some(string.value.to_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// the strings a `for` target takes, when the loop walks a literal sequence of them
+///
+/// the whole construct is handed over as well, because the target is only readable
+/// while the loop is the one thing writing it: in
+/// `for name in ("a", "b"): name = pick(); del globals()[name]` the removal names
+/// something this cannot read. every binding of the target other than the target
+/// itself disqualifies it, which the target's own position is what distinguishes
+///
+/// a nested scope that declares the target `global` disqualifies it as well, and that
+/// one no position can distinguish: the write is in a frame of its own, and the module
+/// body only has to call it. `def rename(): global n; n = "Kept"` above
+/// `for n in ("Gone",): rename(); del globals()[n]` leaves the removal taking `Kept`
+/// while the tuple still says `Gone`
+fn literal_iteration<'a>(
+    target: &'a Expr,
+    iterated: &'a Expr,
+    scanned: Scanned<'a>,
+    declared_global: &HashSet<&'a str>,
+) -> Option<(&'a str, Vec<&'a str>)> {
+    let Expr::Name(target) = target else {
+        return None;
+    };
+    if declared_global.contains(target.id.as_str()) {
+        return None;
+    }
+    let strings = literal_strings(iterated)?;
+    let mut scan = ModuleBindings::default();
+    match scanned {
+        Scanned::Body(body) => ast::visitor::walk_body(&mut scan, body),
+        Scanned::Expr(expr) => ast::visitor::walk_expr(&mut scan, expr),
+    }
+    let written_elsewhere = scan
+        .found
+        .iter()
+        .any(|(bound, at)| *bound == target.id.as_str() && *at != target.range.start());
+    (!written_elsewhere).then(|| (target.id.as_str(), strings))
+}
+
+/// the part of the tree a loop's target has to stay untouched across
+#[derive(Clone, Copy)]
+enum Scanned<'a> {
+    Body(&'a [Stmt]),
+    Expr(&'a Expr),
+}
+
+/// the `for` clauses of a comprehension, for the four displays that carry them
+fn comprehension_generators(expr: &Expr) -> Option<&[ast::Comprehension]> {
+    match expr {
+        Expr::ListComp(comprehension) => Some(&comprehension.generators),
+        Expr::SetComp(comprehension) => Some(&comprehension.generators),
+        Expr::DictComp(comprehension) => Some(&comprehension.generators),
+        Expr::Generator(comprehension) => Some(&comprehension.generators),
+        _ => None,
     }
 }
 
@@ -832,12 +957,51 @@ fn unbinds_through_the_namespace(expr: &Expr) -> bool {
 /// the binding forms are asked about rather than enumerated: a store context covers
 /// assignment, unpacking, `for`, `with ... as` and the walrus alike, and the three
 /// that bind an identifier rather than an expression are the remaining cases
+#[derive(Default)]
 struct ModuleBindings<'a> {
     found: Vec<(&'a str, TextSize)>,
     /// whether the body took a name back out of its own namespace, without saying which
     unbinds: bool,
     /// the dunder attributes the body writes onto a name, as `(owner, attribute)`
     dunders: Vec<(&'a str, &'a str)>,
+    /// the loop targets currently walking a literal sequence of strings, innermost
+    /// last, which is what lets a removal spelled `globals().pop(name)` say a name
+    iterating: Vec<(&'a str, Vec<&'a str>)>,
+    /// every name some nested scope declares `global`, which no loop target may be one
+    /// of — see `literal_iteration`. the inner scan leaves it empty because it reads
+    /// only `found`, and a nested loop scoped there changes nothing it goes on to ask
+    declared_global: HashSet<&'a str>,
+}
+
+impl<'a> ModuleBindings<'a> {
+    /// the strings a removal's key expression can evaluate to, if this can read them
+    fn keys(&self, key: &'a Expr) -> Option<Vec<&'a str>> {
+        match key {
+            Expr::StringLiteral(string) => Some(vec![string.value.to_str()]),
+            Expr::Name(name) => self
+                .iterating
+                .iter()
+                .rev()
+                .find(|(bound, _)| *bound == name.id.as_str())
+                .map(|(_, strings)| strings.clone()),
+            _ => None,
+        }
+    }
+
+    /// record what a removal takes out of the namespace
+    ///
+    /// a key this can read is recorded as an ordinary unbinding of that name at that
+    /// position, which is the same thing a `del name` there would be. one it cannot
+    /// read leaves every definition looking like the one that went
+    fn removes(&mut self, unbind: NamespaceUnbind<'a>, at: TextSize) {
+        match unbind {
+            NamespaceUnbind::Unnamed => self.unbinds = true,
+            NamespaceUnbind::Key(key) => match self.keys(key) {
+                Some(names) => self.found.extend(names.into_iter().map(|name| (name, at))),
+                None => self.unbinds = true,
+            },
+        }
+    }
 }
 
 impl<'a> ast::visitor::Visitor<'a> for ModuleBindings<'a> {
@@ -847,6 +1011,26 @@ impl<'a> ast::visitor::Visitor<'a> for ModuleBindings<'a> {
         // because nothing has called the function yet
         match stmt {
             Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            // the loop's own header is read where it stands, and only the body runs
+            // with the target holding one of the strings. the `else` after it is left
+            // out on purpose: it runs once, with whatever the last iteration left
+            Stmt::For(loop_) => {
+                self.visit_expr(&loop_.iter);
+                self.visit_expr(&loop_.target);
+                let walked = literal_iteration(
+                    &loop_.target,
+                    &loop_.iter,
+                    Scanned::Body(&loop_.body),
+                    &self.declared_global,
+                );
+                let scoped = walked.is_some();
+                self.iterating.extend(walked);
+                self.visit_body(&loop_.body);
+                if scoped {
+                    self.iterating.pop();
+                }
+                self.visit_body(&loop_.orelse);
+            }
             _ => ast::visitor::walk_stmt(self, stmt),
         }
     }
@@ -865,8 +1049,27 @@ impl<'a> ast::visitor::Visitor<'a> for ModuleBindings<'a> {
             self.dunders
                 .push((owner.id.as_str(), attribute.attr.as_str()));
         }
-        self.unbinds |= unbinds_through_the_namespace(expr);
+        if let Some(unbind) = unbinds_through_the_namespace(expr) {
+            self.removes(unbind, expr.range().start());
+        }
+        let scoped = comprehension_generators(expr).map_or(0, |generators| {
+            let walked: Vec<_> = generators
+                .iter()
+                .filter_map(|generator| {
+                    literal_iteration(
+                        &generator.target,
+                        &generator.iter,
+                        Scanned::Expr(expr),
+                        &self.declared_global,
+                    )
+                })
+                .collect();
+            let scoped = walked.len();
+            self.iterating.extend(walked);
+            scoped
+        });
         ast::visitor::walk_expr(self, expr);
+        self.iterating.truncate(self.iterating.len() - scoped);
     }
 
     fn visit_alias(&mut self, alias: &'a ast::Alias) {
@@ -897,6 +1100,26 @@ impl<'a> ast::visitor::Visitor<'a> for ModuleBindings<'a> {
             self.found.push((name.as_str(), name.range.start()));
         }
         ast::visitor::walk_pattern(self, pattern);
+    }
+}
+
+/// every name a nested scope in the module declares `global`, at every depth
+///
+/// the default walk descends into a `def` and a `class` alike, which is the point: a
+/// `global` write is the one route a frame other than the module body has to a module
+/// name, so this is the walk that has to see the frames `ModuleBindings` skips
+#[derive(Default)]
+struct DeclaredGlobals<'a> {
+    names: HashSet<&'a str>,
+}
+
+impl<'a> ast::visitor::Visitor<'a> for DeclaredGlobals<'a> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if let Stmt::Global(node) = stmt {
+            self.names
+                .extend(node.names.iter().map(ast::Identifier::as_str));
+        }
+        ast::visitor::walk_stmt(self, stmt);
     }
 }
 
@@ -1431,6 +1654,7 @@ fn prune_unbuildable(
     module: &mut ModuleIr,
     ranges: &HashMap<String, (u32, u32)>,
     extends: &[(String, Vec<String>)],
+    nested_extends: &[(String, Vec<String>)],
     disturbed: &Disturbed,
     decorated: &HashSet<String>,
 ) {
@@ -1692,11 +1916,23 @@ fn prune_unbuildable(
                     }
                     Some(format!("`{base}` declined, so it is not a base to build on"))
                 });
-            // and the other way round. a class this module does not emit is still
-            // built — by the interpreted definition, on whatever its base name
-            // resolves to, which is the type emitted here. that is a subclass an
-            // emitted type cannot have: a static type object refuses to be a base at
-            // all, and the direct method call takes it that no override exists
+            // and the other way round. a class this module does not emit is still built
+            // by the interpreted definition, and *when* it is built is the whole of it:
+            // module init runs the entire fallback source first and installs the emitted
+            // types over the names afterwards. so that subclass has already been built on
+            // the interpreted definition of this class by the time the emitted type takes
+            // the name, and it is left standing on a second, orphaned copy — `isinstance`
+            // answers False where python answers True, with nothing reported. it is the
+            // same situation [`nested_subclass`] below is in, and it takes the same answer
+            //
+            // it is *not* that a type of ours cannot be a base. a class another emitted
+            // class already extends is a mutable heap type carrying `Py_TPFLAGS_BASETYPE`,
+            // and python subclasses one perfectly happily: the subclass builds, inherits
+            // the fields, and an override of a method is the one the base's own methods
+            // reach. relaxing this guard on that ground was tried and measured, and it is
+            // the identity that gives it away rather than any behaviour — `webbrowser`'s
+            // `MacOSXOSAScript`, written under `if sys.platform == 'darwin':`, answered
+            // every call the same and `isinstance(MacOSXOSAScript(), BaseBrowser)` False
             let interpreted_subclass = || {
                 extends.iter().find_map(|(name, bases)| {
                     (!classes.contains(name) && bases.contains(&class.name)).then(|| {
@@ -1706,11 +1942,29 @@ fn prune_unbuildable(
                     })
                 })
             };
+            // and the same again for a class written *inside* a class body. that one is
+            // never emitted whatever happens — it is copied off the interpreted
+            // definition whole — so it stands on whatever its base name held while that
+            // body ran, which is the interpreted definition's class. leaving an emitted
+            // type under the name would put a second, orphaned copy of it in the copy's
+            // bases, and `isinstance` would answer False where python answers True with
+            // nothing reported. `argparse`'s `_SubParsersAction._ChoicesPseudoAction`
+            // stands on `Action` this way
+            let nested_subclass = || {
+                nested_extends.iter().find_map(|(name, bases)| {
+                    bases.contains(&class.name).then(|| {
+                        format!(
+                            "`{name}` is written in a class body, so it stands on the interpreted definition rather than this type"
+                        )
+                    })
+                })
+            };
             match rebound(&class.name, class.exported)
                 .or_else(|| hung_on(&class.name, class.exported))
                 .or_else(|| below(&class.name))
                 .or(declined_base)
                 .or_else(interpreted_subclass)
+                .or_else(nested_subclass)
                 .or_else(|| class.methods.iter().find_map(&unbuildable))
             {
                 Some(reason) => {
@@ -2156,20 +2410,22 @@ fn lower_class<'a>(
     )?;
     // the `@property` groups, worked out before any method is lowered: the two halves of
     // a pair are both written `def value`, so a pass that took them one at a time would
-    // see a name defined twice rather than the single attribute python builds out of them
-    // a group of one is taken only where the class is built by `type` itself. a metaclass
-    // may compute anything it likes from the namespace it is handed, and a published
-    // property is not in that namespace — it is written into the type's dict afterwards,
-    // where the type already exists. `numbers.Integral` is the case: its `numerator` and
-    // `denominator` are lone getters over `Rational`'s abstract ones, and `ABCMeta` reads
-    // the namespace to work out what is still abstract, so taking them out of the method
-    // table without putting them anywhere it could see made the emitted type call both
-    // abstract and refuse to be instantiated.
+    // see a name defined twice rather than the single attribute python builds out of them.
     //
-    // an inherited metaclass is why this is not [`built_through_a_metaclass`], which is
-    // about the *construction* and does not fire on a class that names no metaclass of its
-    // own. `numbers` names one on `Number` and nowhere else
-    let lone_groups = if base.is_none() && class_keywords(class)?.is_empty() {
+    // a group of one is taken wherever the class writes no class keyword. which
+    // construction module init reaches for is a runtime answer — a base resolves to
+    // whatever the name meant, and a spec can only be built where every base's metaclass
+    // is `type` — so the two answers are settled there rather than here:
+    // `By_PublishProperty` publishes the compiled halves over a type a spec produced, and
+    // leaves the interpreted `property` standing where the metaclass was handed it.
+    //
+    // a class keyword is the one shape that stays out, and not because publishing it would
+    // be wrong. a keyword rules the spec out, so such a class is always built by calling
+    // its metaclass and its property always ends up the interpreted one — while a keyword
+    // written with no base leaves the class out of `mutable`, which is what licenses a
+    // compiled read to call the half outright. the two together are one attribute answering
+    // two ways, so the group is left where it stands instead
+    let lone_groups = if class_keywords(class)?.is_empty() {
         LoneGroups::Taken
     } else {
         LoneGroups::LeftAlone
@@ -2334,11 +2590,33 @@ fn lower_class<'a>(
                 let mut names = Vec::new();
                 nested_bindings(std::slice::from_ref(statement), &mut names)?;
                 for name in names {
-                    nested_binding_stands_alone(&class.body, name)?;
+                    nested_binding_stands_alone(&class.body, name, BOUND_BY_A_BLOCK)?;
                     let name = mangled(Some(&class.name), name);
                     if !constants.contains(&name) {
                         constants.push(name);
                     }
+                }
+            }
+            // a `class` in a class body is a binding like any other statement's, and the
+            // interpreted definition made it already — with the bases read, the decorators
+            // applied and the inner body run, all where python runs them:
+            //
+            //     class IMAP4:
+            //         class error(Exception): pass
+            //
+            // so the class object the body left behind is copied across the way every
+            // class-level constant is, and `IMAP4.error` is the very object python built.
+            // the inner class keeps its interpreted definition, which is what makes this
+            // sound rather than clever: it can still be subclassed, still answers
+            // `__qualname__` with `IMAP4.error`, and is identical to what every reference
+            // taken before the copy already names. what this buys is the *outer* class —
+            // `IMAP4` has 79 methods behind this one statement
+            Stmt::ClassDef(nested) => {
+                nested_binding_stands_alone(&class.body, &nested.name, WRITTEN_AS_A_CLASS)?;
+                nested_class_names_its_bases(nested)?;
+                let name = mangled(Some(&class.name), &nested.name);
+                if !constants.contains(&name) {
+                    constants.push(name);
                 }
             }
             Stmt::Pass(_) => {}
@@ -3315,6 +3593,27 @@ fn decorator_path(expression: &Expr) -> Lowered<Decorator> {
 /// `staticmethod`, `classmethod` — and each of those marks what it was handed and gives
 /// it back, with nothing for the rest of the module to notice either way. see
 /// [`Modifier::Written`]
+///
+/// # what it costs, measured
+///
+/// this gate is coarse on purpose and it looks expensive, so here is the price with it
+/// forced open, over the 42 standard-library modules that carry a decorator decline:
+/// **1244 compiled definitions become 1304**, and **three of the sixteen modules it moves
+/// stop importing at all** — `pkgutil` with `AttributeError: 'function' object has no
+/// attribute 'register'`, `email.policy` and `email._policybase` with `AttributeError:
+/// attribute '__doc__' of 'method_descriptor' objects is not writable`. `typing` is the
+/// module with the most rows here and it gains five, none of them a `@_SpecialForm`
+/// function: sixteen of those are held by the reopening rule in `prune_unbuildable`
+/// instead, because `SupportsIndex` declines below them and keeps its own decorator.
+///
+/// so the whole family is worth about sixty definitions and cannot be bought with a
+/// weaker version of this question. the two obvious weakenings were each tried and each
+/// fails on a module in that list: asking only whether the body **reads the decorated
+/// name** misses `pkgutil`, where what the body reads is an attribute that exists only on
+/// the object the decorator handed back, and restricting the move to decorators whose
+/// effect is confined to what they decorate still needs a call graph to say whether the
+/// body below can reach the object — `tracemalloc.Frame` is named inside
+/// `Traceback.__getitem__`, which nothing calls at import and no syntactic rule can say so
 fn decorator_effects_stay_unseen(
     watched: &BTreeSet<&str>,
     name: &str,
@@ -3616,14 +3915,14 @@ impl Half {
 /// python folds all of them into one `property` object bound once, under the name every
 /// `def` in the group was written as.
 ///
-/// the attribute it becomes is published by the *type spec*, so a class built through its
-/// metaclass instead — which is built out of a namespace and never consults the spec —
-/// would simply not have it. nothing here asks that question, because every half carries a
-/// decorator and [`metaclass_carries_the_body`] already turns such a class down for
-/// exactly that; relaxing that gate has to answer this one. a group of *one* is the
-/// exception, and it answers the question rather than dodging it: the caller says whether
-/// a published property is reached, and where it is not the group is left alone — see
-/// [`LoneGroups`]
+/// the attribute it becomes is not in the method table a type spec is built from — it is
+/// one object written onto the finished type — so a class built by calling its metaclass
+/// instead has to be handed the interpreted body's own `property` in the namespace, or the
+/// metaclass decides what the class defines without ever seeing the name. that is what
+/// `carried_off_the_body` writes in, and `By_PublishProperty` then leaves it standing
+/// rather than replacing it. [`metaclass_carries_the_body`] still turns a *pair* on such a
+/// class down, which is conservatism rather than a live reason now; a group of one is
+/// taken — see [`LoneGroups`]
 struct PropertyGroup<'a> {
     /// the name every half was written as, before private mangling
     name: &'a str,
@@ -3651,7 +3950,12 @@ impl<'a> PropertyGroup<'a> {
 /// this cannot read has to turn the class down. a lone getter is a single ordinary `def`
 /// carrying a single ordinary decorator, and the path that took it before this construct
 /// existed still works — it just runs the interpreted body. so wherever taking one over is
-/// not available, it is left alone rather than costing the class
+/// not available, it is left alone rather than costing the class.
+///
+/// two callers ask, and they ask different questions of the same walk. `lower_class` asks
+/// whether to *lower* the group, and takes one wherever the class writes no class keyword.
+/// [`metaclass_carries_the_body`] asks whether a group is a reason to turn the class down,
+/// and a lone one never is — so it asks with them left alone
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LoneGroups {
     Taken,
@@ -3661,10 +3965,12 @@ enum LoneGroups {
 /// whether this class is constructed by calling a metaclass rather than from a type spec
 ///
 /// a keyword goes to the metaclass, and so does a base of ours — see
-/// [`metaclass_carries_the_body`], which is where what that costs is written down. it
-/// matters to a property because a `property` reaches the type through the *spec*, which
-/// such a construction never consults, so the two places that decide whether a group is
-/// taken have to decide it the same way
+/// [`metaclass_carries_the_body`], which is where what that costs is written down.
+///
+/// it says nothing about a class on a base from *outside*, and cannot: whether a spec can
+/// be built on one depends on the metaclass its bases turn out to have, which only the
+/// running interpreter knows. so this is not the question "will the metaclass run", and
+/// nothing that has to be right about the metaclass may be settled from it
 fn built_through_a_metaclass(
     class: &ast::StmtClassDef,
     base: Option<&ClassBase>,
@@ -4026,6 +4332,13 @@ fn nested_bindings<'a>(body: &'a [Stmt], names: &mut Vec<&'a str>) -> Lowered<()
     for statement in body {
         match statement {
             Stmt::FunctionDef(node) => names.push(node.name.as_str()),
+            // the same binding the top of a class body makes with a `class`, and taken
+            // the same way — the interpreted definition ran the block, so whatever class
+            // object it left under this name is what the copy carries across
+            Stmt::ClassDef(node) => {
+                nested_class_names_its_bases(node)?;
+                names.push(node.name.as_str());
+            }
             Stmt::Assign(node) => {
                 for target in &node.targets {
                     bound_by_a_target(target, names)?;
@@ -4100,22 +4413,98 @@ fn bound_by_a_target<'a>(target: &'a Expr, names: &mut Vec<&'a str>) -> Lowered<
     Ok(())
 }
 
-/// whether a name a nested block binds is the only definition of that attribute
+/// whether the bases of a class written in a class body can be read off its header
+///
+/// such a class is never emitted: it is copied off the interpreted definition whole, so
+/// the type it stands on is whatever its name resolved to while that body ran. where that
+/// is a class this module emits, the base has to give up its own emission — an emitted
+/// type refuses to be a base, and the copy would otherwise stand on a second, orphaned
+/// copy of a type the module publishes, with `isinstance` answering `False` where python
+/// answers `True`. `prune_unbuildable` is where that is settled, off the bases collected
+/// beside `extends`.
+///
+/// it can only settle it for a base the header *names*. `class Inner(*bases)` reaches one
+/// without naming it, and no collected list would hold it — so the outer class is turned
+/// down here instead, which is the answer it had before any of this was lowered
+fn nested_class_names_its_bases(nested: &ast::StmtClassDef) -> Lowered<()> {
+    if nested.bases().iter().all(is_a_dotted_path) {
+        return Ok(());
+    }
+    Err(Decline::new(format!(
+        "a base of `{}` is worked out rather than named, so whether it is a class this module emits cannot be told",
+        nested.name
+    )))
+}
+
+/// every class written inside `body`, at any depth, with the module-level names its
+/// header stands on
+///
+/// the name is qualified with the class it is written in, because it is only ever used in
+/// a message — a class written in a class body binds no module-level name, so it can
+/// never be one of the classes this module emits.
+///
+/// a block in the body is walked too: a `class` under an `if` is written by the same body
+/// at the same time, the way [`nested_bindings`] takes it. what a nested `def` writes is
+/// not, which is [`walk`]'s own boundary and the reason it is used here
+fn classes_written_in(suite: &[Stmt], owner: &str, body: &[Stmt]) -> Vec<(String, Vec<String>)> {
+    walk(body)
+        .into_iter()
+        .filter_map(|statement| match statement {
+            Stmt::ClassDef(nested) => Some(nested),
+            _ => None,
+        })
+        .flat_map(|nested| {
+            let qualified = format!("{owner}.{}", nested.name);
+            let bases = nested
+                .bases()
+                .iter()
+                .filter_map(|base| match base {
+                    Expr::Name(name) => Some(
+                        base_stands_for(suite, name.id.as_str())
+                            .unwrap_or(name.id.as_str())
+                            .to_string(),
+                    ),
+                    _ => None,
+                })
+                .collect();
+            let mut found = classes_written_in(suite, &qualified, &nested.body);
+            found.push((qualified, bases));
+            found
+        })
+        .collect()
+}
+
+/// whether an expression is a plain name or a dotted path rooted at one
+fn is_a_dotted_path(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(_) => true,
+        Expr::Attribute(attribute) => is_a_dotted_path(&attribute.value),
+        _ => false,
+    }
+}
+
+/// how a name reached the class namespace without a `def` of its own, for
+/// [`nested_binding_stands_alone`]'s wording
+const BOUND_BY_A_BLOCK: &str = "bound by a block nested in";
+const WRITTEN_AS_A_CLASS: &str = "written as a class in";
+
+/// whether a name the class body binds without a `def` is the only definition of that
+/// attribute
 ///
 /// two ways it is not. a dunder decides a type slot, an instance layout, or what the
-/// class publishes about itself, and all three are settled from the body text while a
-/// nested block's binding is only known once the interpreter has run the block — so
-/// `__slots__` or `__init__` under a conditional would have the emitted class laid out
-/// for one answer and carrying the other.
+/// class publishes about itself, and all three are settled from the body text while such
+/// a binding is only known once the interpreter has run the body — so `__slots__` or
+/// `__init__` under a conditional would have the emitted class laid out for one answer
+/// and carrying the other.
 ///
 /// and a `def` in the same body binds the same attribute twice: the `def` is lowered
-/// into the method table while the block's binding is copied off the interpreted
+/// into the method table while the other binding is copied off the interpreted
 /// definition, so the type would answer with whichever landed in its dict last while a
 /// compiled call site still reached the method
-fn nested_binding_stands_alone(body: &[Stmt], name: &str) -> Lowered<()> {
+fn nested_binding_stands_alone(body: &[Stmt], name: &str, bound_by: &str) -> Lowered<()> {
     if name.starts_with("__") && name.ends_with("__") {
         return Err(Decline::new(format!(
-            "`{name}` is bound by a block nested in the class body, and a dunder is settled before one runs"
+            "`{name}` is {bound_by} the class body, and a dunder is settled before one runs"
         )));
     }
     if body
@@ -4123,7 +4512,7 @@ fn nested_binding_stands_alone(body: &[Stmt], name: &str) -> Lowered<()> {
         .any(|statement| matches!(statement, Stmt::FunctionDef(node) if node.name.as_str() == name))
     {
         return Err(Decline::new(format!(
-            "`{name}` is both defined by this class body and bound by a block nested in it"
+            "`{name}` is both defined by this class body and {bound_by} it"
         )));
     }
     Ok(())
@@ -4132,9 +4521,6 @@ fn nested_binding_stands_alone(body: &[Stmt], name: &str) -> Lowered<()> {
 /// what to call a statement in a decline, in the word python spells it with
 fn statement_word(statement: &Stmt) -> &'static str {
     match statement {
-        // the top of a class body does not lower one either, and a block is no place to
-        // settle a question the plain form has not been asked yet
-        Stmt::ClassDef(_) => "a class",
         Stmt::Try(_) => "`try`",
         Stmt::With(_) => "`with`",
         Stmt::Match(_) => "`match`",
@@ -4301,14 +4687,12 @@ fn base_class(
         // resolved rather than matched by name, because a module may bind `object`
         // to something else entirely
         ([base], _) if !keyed && is_builtin_object(db, env, model, base, layouts) => Ok(None),
+        // a keyword is no reason to turn such a base down. only a class placing storage
+        // of its own needs the spec a keyword has nowhere to sit in, and that is asked
+        // where the fields are known — see `spec_built_where_needed`. one that places
+        // none is built by calling its metaclass on this very base, which is what the
+        // keyword names
         ([Expr::Name(_)], [Some(name)]) if layouts.contains_key(name) => {
-            if keyed {
-                // the layout would have to be ours, which only the type spec lays out,
-                // and a spec has nowhere to put a keyword
-                return Err(Decline::new(
-                    "a class keyword on a base this module emits is not lowered yet",
-                ));
-            }
             Ok(Some(ClassBase::InModule((*name).to_string())))
         }
         // more than one base: python works out the mro and which of them owns the
@@ -4599,6 +4983,33 @@ fn builtins_file(
             .file(),
     )
 }
+
+/// the standard-library functions whose answer is about the frame of whoever called
+/// them, each paired with the module it is written in — see [`Lowering::a_frame_walk`]
+///
+/// the module is half of the entry because a name on its own is not an identity:
+/// `stack` and `currentframe` are short names any module may bind to something of its
+/// own, and refusing one of those would cost a compiled function for nothing.
+///
+/// `warnings.warn` is not here. it walks frames too, but it is filled in rather than
+/// refused — see [`Lowering::a_warning`]. neither is a function that only ever walks a
+/// frame it was *handed*, such as `inspect.getouterframes`: the frame it is given came
+/// from a walk of its own, and that walk is what this refuses.
+///
+/// the `traceback` entries all take an optional frame to start from, and a call that
+/// passes one has no need of a frame of its own. they are refused anyway, because a
+/// frame to pass has to have been obtained somewhere and every way of obtaining one is
+/// already on this list
+const FRAME_WALKERS: &[(&str, &str)] = &[
+    ("sys", "_getframe"),
+    ("sys", "_getframemodulename"),
+    ("inspect", "currentframe"),
+    ("inspect", "stack"),
+    ("traceback", "extract_stack"),
+    ("traceback", "format_stack"),
+    ("traceback", "print_stack"),
+    ("traceback", "walk_stack"),
+];
 
 /// the file `warnings.warn` is written in
 ///
@@ -4945,9 +5356,10 @@ fn finalizer_reaches_a_dealloc_of_ours(
 ///   definition what a `class` statement would have handed the metaclass. the price is
 ///   that such a method is the interpreted one
 ///
-/// a `@property` pair is what is left. the two halves become one `property` module init
-/// writes onto the *finished* type, which is past the point the metaclass decided
-/// anything — so a class with one is still turned down here.
+/// a `@property` pair is what is left. `carried_off_the_body` now writes the body's own
+/// `property` into the namespace with the rest, so the metaclass does see the name — this
+/// is conservatism rather than a live reason, and lifting it wants its own re-costing
+/// against the sweeps.
 ///
 /// this is asked while the layouts are still settling rather than while the body is
 /// lowered, and where it turns a class down that class leaves the layout set — so a
@@ -4969,10 +5381,10 @@ fn metaclass_carries_the_body(
     // on its own, with a reason of its own — so the question here is only about a pair it
     // *can* read, and the error is left to the place that reports it.
     //
-    // a group of *one* is asked for as left alone, and `lower_class` leaves it alone on
-    // this same condition: it is the one group that has somewhere to be left, so a class
-    // built through its metaclass keeps compiling and its lone getters keep answering
-    // through the `property` the interpreted body built
+    // a group of *one* is asked for as left alone, because it is never a reason to turn a
+    // class down: `lower_class` lowers one here too, and what the class answers with is
+    // settled at import — the compiled halves where a spec built the type, and the
+    // interpreted `property` the namespace carried where the metaclass built it
     if let Ok(groups) = property_groups(db, model, class, LoneGroups::LeftAlone)
         && !groups.is_empty()
     {
@@ -5075,25 +5487,38 @@ fn spec_built_where_needed(
                 "a class whose fields sit past a base's instance needs a base python frees itself, and one this module builds from a spec is the only one of ours that is",
             ));
         }
-        // the keyword such a class cannot carry is turned down earlier, where the base is
-        // resolved: a base of ours beside a keyword has no construction whatever the
-        // fields are, because the layout would have to be one only a spec lays out
-        return Ok(fields);
+        return keyword_free(class, fields);
     }
     if base.and_then(ClassBase::external).is_none() {
-        return Ok(fields);
+        return keyword_free(class, fields);
     }
-    if !class_keywords(class)?.is_empty() {
-        return Err(Decline::new(
-            "a class keyword on a class with fields of its own is not lowered yet",
-        ));
-    }
+    let fields = keyword_free(class, fields)?;
     if let Some(found) = base_with_another_metaclass(db, model, class) {
         return Err(Decline::new(format!(
             "a class with fields of its own needs `type` for every base's metaclass, and {found}"
         )));
     }
     Ok(fields)
+}
+
+/// the fields, unless a class keyword stands between them and the only construction that
+/// can place them
+///
+/// this is reached once the class is known to place storage of its own, which is what
+/// leaves the type spec as its one construction — and a spec takes no keywords and gives
+/// what it builds `type` for a metaclass. it is asked at each of the three ways out of
+/// [`spec_built_where_needed`] rather than at its head so that the layout reasons, which
+/// say something more specific about the class, are the ones reported where they apply
+fn keyword_free(
+    class: &ast::StmtClassDef,
+    fields: Vec<by_ir::function::FieldDecl>,
+) -> Lowered<Vec<by_ir::function::FieldDecl>> {
+    if class_keywords(class)?.is_empty() {
+        return Ok(fields);
+    }
+    Err(Decline::new(
+        "a class keyword on a class with fields of its own is not lowered yet",
+    ))
 }
 
 /// whether a class with storage of its own would keep it past an instance of a base this
@@ -11955,9 +12380,10 @@ impl Lowering<'_, '_> {
             },
             Expr::BooleanLiteral(node) => Ok((Value::Bool(node.value), RType::BOOL)),
             Expr::NoneLiteral(_) => Ok((Value::None, RType::NONE)),
-            // `...` is a singleton the module namespace already has
             // a slice is an ordinary `slice` object, and subscripting with one is
-            // the same `GetItem` as any other index
+            // the same `GetItem` as any other index. it is built rather than looked
+            // up: `a[i:j]` is punctuation, not a name, so a module binding `slice`
+            // for itself does not change what it means
             Expr::Slice(node) => {
                 // an absent bound is `None` the *object*, which the call wants
                 // boxed like every other argument
@@ -11972,10 +12398,11 @@ impl Lowering<'_, '_> {
                 let upper = part(&node.upper)?;
                 let step = part(&node.step)?;
                 let dest = self.builder.temp(RType::OBJECT);
-                self.builder.push(Op::CallPython {
+                self.builder.push(Op::MakeSlice {
                     dest,
-                    callee: "slice".to_string(),
-                    args: vec![lower, upper, step],
+                    lower,
+                    upper,
+                    step,
                 });
                 Ok((Value::Register(dest), RType::OBJECT))
             }
@@ -11991,10 +12418,7 @@ impl Lowering<'_, '_> {
             }
             Expr::EllipsisLiteral(_) => {
                 let dest = self.builder.temp(RType::OBJECT);
-                self.builder.push(Op::LoadGlobal {
-                    dest,
-                    name: "Ellipsis".to_string(),
-                });
+                self.builder.push(Op::LoadEllipsis { dest });
                 Ok((Value::Register(dest), RType::OBJECT))
             }
             Expr::StringLiteral(node) => {
@@ -12017,7 +12441,7 @@ impl Lowering<'_, '_> {
                             dest,
                             name: name.to_string(),
                         });
-                        self.narrow_call_result(dest, expr)
+                        self.narrow_global_read(dest, expr)
                     }
                     Some(place) => self.read_place(&place),
                 }
@@ -12883,6 +13307,37 @@ impl Lowering<'_, '_> {
             return Ok((Value::Register(narrowed), declared));
         }
         Ok((Value::Register(boxed), RType::OBJECT))
+    }
+
+    /// a module global read, narrowed only where the namespace can be trusted to hold the
+    /// representation the checker names
+    ///
+    /// the interpreted definitions run before anything of this module's own is installed,
+    /// and the whole module body binds its globals against them — so a name holding an
+    /// object of one of this module's own classes holds an instance of the *interpreted*
+    /// definition until the module init moves it onto the emitted type. that move is not
+    /// always available: a class taking its layout from a base outside the module has no
+    /// field table to move through, and one that does can still refuse a particular
+    /// instance. either way the name goes on holding an object the emitted type does not
+    /// recognise, for the life of the module
+    ///
+    /// narrowing such a read is then a check that refuses a value the program legitimately
+    /// has, and it refuses it under a name that prints the same on both sides:
+    /// `typing.Annotated` is one of these, and `annotation_origin is Annotated` inside
+    /// `_get_typeddict_qualifiers` raised
+    /// `TypeError: expected _TypedCacheSpecialForm, got _TypedCacheSpecialForm`, which is
+    /// every `TypedDict(...)` call broken
+    ///
+    /// so a global whose checker type names one of this module's classes is left an
+    /// object, and every use of it takes the path that answers the same for the
+    /// interpreted definition's instance and for the emitted type's. no other
+    /// representation is affected: `int`, `str`, `list` and the rest are python's own
+    /// types, which have no second definition to be confused with
+    fn narrow_global_read(&mut self, boxed: RegisterId, name: &Expr) -> Lowered<(Value, RType)> {
+        if !self.call_result_type(name)?.instance_classes().is_empty() {
+            return Ok((Value::Register(boxed), RType::OBJECT));
+        }
+        self.narrow_call_result(boxed, name)
     }
 
     /// a call with a `*` or a `**` in its arguments
@@ -13946,52 +14401,81 @@ impl Lowering<'_, '_> {
             == Some("dict")
     }
 
-    /// `sys._getframe()`, which hands back the frame of whoever called it
+    /// a call to a standard-library function whose answer is about the frame of
+    /// whoever called it
     ///
-    /// the same defect [`Self::frame_reading`] covers, one step further out: a
-    /// compiled function pushes no frame, so the frame this answers with is its
-    /// caller's — and `sys._getframe().f_globals` then reads another module's
-    /// namespace while looking exactly like it read this one's.
+    /// the same defect [`Self::frame_reading`] covers, one step further out. a compiled
+    /// function pushes no python frame, so each of these starts its walk one frame
+    /// beyond where the source meant, and the answer is about some other module's stack
+    /// while looking exactly like it was about this one's. measured on 3.13, with the
+    /// walking call in a compiled function and its caller interpreted:
     ///
-    /// and `warnings.warn`, which walks frames on this one's behalf. the frame it
-    /// blames is counted back from its own caller, so the count starts one frame
+    /// | written                     | compiled            | interpreted                    |
+    /// | --------------------------- | ------------------- | ------------------------------ |
+    /// | `sys._getframe().f_code`    | the caller's        | this function's                |
+    /// | `inspect.stack()`           | 2 entries           | 3 entries, this function first |
+    /// | `inspect.currentframe()`    | the caller's        | this function's                |
+    /// | `traceback.extract_stack()` | 2 entries           | 3 entries                      |
+    /// | `traceback.format_stack()`  | 2 entries           | 3 entries                      |
+    /// | `sys._getframemodulename()` | the caller's module | this module                    |
+    ///
+    /// nothing is raised and nothing is printed for any of them, which puts them on the
+    /// worst rung there is: a decline costs a compiled function, and this costs a wrong
+    /// answer that nothing marks as one.
+    ///
+    /// `warnings.warn` walks frames on this one's behalf and is the exception. the frame
+    /// it blames is counted back from its own caller, so the count starts one frame
     /// further out than the source meant and lands somewhere else entirely: what a
     /// warning names as its origin decides both the `file:line` it prints and, through
     /// that frame's `__name__`, whether the filters show it at all.
     /// `urllib.request.URLopener.__init__` warns with `stacklevel=3` and the compiled
-    /// leg printed nothing, because the frame three back was no longer python's.
+    /// leg printed nothing, because the frame three back was no longer python's. that
+    /// one missing frame is filled in rather than refused, at every stack level — see
+    /// [`Self::a_warning`], which is where the shapes that are still refused are listed.
     ///
-    /// that one missing frame is filled in rather than refused, at every stack level —
-    /// see [`Self::a_warning`], which is where the shapes that are still refused are
-    /// listed.
-    ///
-    /// a stdlib function that walks frames for some *other* purpose —
-    /// `inspect.stack`, `namedtuple` reading `__module__` off its caller — lands one
-    /// frame short in the same way, and no predicate over this function's own body can
-    /// see that
+    /// what is still uncovered is the walk a *callee* does on this frame's behalf
+    /// without saying so. `logging` is the one that is measured: `log.warning('…')`
+    /// reaches `Logger.findCaller`, and the record it builds carries the caller's
+    /// `funcName` and `lineno` rather than this function's. declining every call to a
+    /// logging method to reach it would cost a great deal of the corpus for a defect
+    /// confined to a record's metadata, so it is left. `collections.namedtuple` reads
+    /// `__module__` off its caller in the same way, and diverges only where the compiled
+    /// function's own caller is in another module.
     ///
     /// `Ok(None)` where the call is an ordinary one after all, and the lowering below
     /// carries on with it
     fn a_frame_walk(&mut self, node: &ast::ExprCall) -> Lowered<Option<(Value, RType)>> {
+        let env = &self.model.program_environment();
+        // identity, not spelling. what the call *writes* settles nothing:
+        // `from sys import _getframe as grab` reaches the very same function, and so
+        // does a local that was assigned it. the written-name filter this used to open
+        // with let both of those through and compiled them. asking the type instead
+        // sees every route to the function, and costs no parse of its own — each
+        // module lookup it makes is memoized
+        if let Some(called) = node.func.inferred_type(self.model)
+            && let Some((module, name)) = FRAME_WALKERS.iter().find(|(module, name)| {
+                ty_python_semantic::basedpython_module_symbol(self.db, env, module, name)
+                    == Some(called)
+            })
+        {
+            return Err(Decline::new(format!(
+                "`{module}.{name}()` answers about the frame that called it, and a compiled function pushes none"
+            )));
+        }
         let written = match node.func.as_ref() {
             Expr::Attribute(attribute) => attribute.attr.as_str(),
             Expr::Name(name) => name.id.as_str(),
             _ => return Ok(None),
         };
-        // a syntactic filter first: resolving a definition parses the module it is in,
-        // and that is not worth doing for every call in the unit
-        if !matches!(written, "_getframe" | "warn") {
+        // `warn` keeps a syntactic filter of its own: telling the real one apart reads
+        // the file its definition is written in, which parses that module, and that is
+        // not worth doing for every call in the unit
+        if written != "warn" {
             return Ok(None);
         }
-        let env = &self.model.program_environment();
         let Some(defined) = defined_as(self.db, env, self.model, &node.func, written) else {
             return Ok(None);
         };
-        if written == "_getframe" {
-            return Err(Decline::new(
-                "`_getframe()` answers with the calling frame, and a compiled function pushes none",
-            ));
-        }
         // `warn` is a name a great many modules bind to something of their own, so the
         // one that walks frames is told apart by where it is written rather than by how
         // the call spells it
@@ -14394,6 +14878,17 @@ impl Lowering<'_, '_> {
             || self.decorated.contains(name)
             || self.defers_call(name, node)
         {
+            // whatever the call names by keyword has to go with it. a keyword call to
+            // anything *but* a native callee was sent to python's own binding further
+            // up, so the only one that arrives here is a native callee this defers —
+            // and the positional-only call below would drop the keywords silently,
+            // leaving the callee to fall back on its own defaults. `ast.literal_eval`
+            // calls `parse(source, mode='eval')`, and `parse` has a computed default,
+            // so the deferred call reached `parse` in `exec` mode and every literal
+            // came back a `Module` the converter refused
+            if !node.arguments.keywords.is_empty() {
+                return self.call_unpacked(node);
+            }
             let mut args = Vec::with_capacity(node.arguments.args.len());
             for argument in &node.arguments.args {
                 let (value, ty) = self.expression(argument)?;

@@ -284,6 +284,8 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::CallPython { dest, .. }
         | Op::CallValue { dest, .. }
         | Op::LoadGlobal { dest, .. }
+        | Op::MakeSlice { dest, .. }
+        | Op::LoadEllipsis { dest }
         | Op::ModuleDict { dest }
         | Op::Warn { dest, .. }
         | Op::StoreGlobal { dest, .. }

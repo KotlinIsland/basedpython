@@ -527,6 +527,38 @@ g(1)  # ok
 h("anything")  # ok
 ```
 
+### a forwarded type and an operation both hold
+
+a parameter can be forwarded into a typed position *and* operated on, and the bound then states
+both: the type it was forwarded into, beside a protocol stating the operations. each of the two
+answers for what it states. `len(buf)` says `buf` is `Sized`, which has no `__setitem__`, so the
+slice assignment resolves through the protocol next to it
+
+```py
+def fill(buf):
+    n = len(buf)
+    buf[:] = [0] * n
+
+reveal_type(fill)  # revealed: def fill(buf: some <Protocol with members '__setitem__'> & Sized)
+
+fill([1, 2])  # ok
+fill(1)  # error: [invalid-argument-type]
+```
+
+where the forwarded type states the operation itself it is the more precise of the two, and the one
+the body reads: `xs[0]` is the `int` a `list[int]` holds rather than the `Unknown` the recovered
+protocol asks for
+
+```py
+def takes_list(a: list[int]) -> None: ...
+def first(xs):
+    takes_list(xs)
+    return xs[0]
+
+# revealed: def first(xs: some <Protocol with members '__getitem__'> & list[int]) -> int
+reveal_type(first)
+```
+
 ### an `assert` at the top of the body
 
 an `assert` holds for every call that returns normally, so it says what the author was prepared to

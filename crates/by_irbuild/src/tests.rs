@@ -375,6 +375,101 @@ def keyed(d: dict[str, int], k: str) -> int:
 }
 
 #[test]
+fn a_slice_and_an_ellipsis_are_built_rather_than_looked_up() {
+    // both are punctuation rather than names, and python builds them without reading
+    // the namespace: `BUILD_SLICE` for the one, a constant for the other. lowering
+    // them as a call to `slice` and a read of `Ellipsis` obeyed a module that binds
+    // either name for itself, where python does not — and `ast` binds both
+    with_source(
+        "\
+class slice:
+    pass
+
+
+class Ellipsis:
+    pass
+
+
+def part(xs: list[int], a: int, b: int) -> list[int]:
+    return xs[a:b]
+
+
+def dots() -> object:
+    return ...
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            let function = |name: &str| {
+                module
+                    .all_functions()
+                    .find(|function| function.name == name)
+                    .expect("the function is compiled")
+            };
+            let part = function("part");
+            assert!(
+                has_op(part, |op| matches!(op, Op::MakeSlice { .. })),
+                "{}",
+                print_function(part)
+            );
+            assert!(
+                !has_op(part, |op| matches!(op, Op::CallPython { callee, .. }
+                    if callee == "slice")),
+                "{}",
+                print_function(part)
+            );
+            let dots = function("dots");
+            assert!(
+                has_op(dots, |op| matches!(op, Op::LoadEllipsis { .. })),
+                "{}",
+                print_function(dots)
+            );
+            assert!(
+                !has_op(dots, |op| matches!(op, Op::LoadGlobal { .. })),
+                "{}",
+                print_function(dots)
+            );
+        },
+    );
+}
+
+#[test]
+fn a_deferred_call_carries_its_keywords_to_the_interpreted_definition() {
+    // `-1` is a negation rather than a literal, so only the interpreted definition
+    // holds that default and a call omitting it has to reach one. the hand-back is a
+    // call through the name, and it has to be the *unpacked* form: the plain one takes
+    // positional arguments only, and a keyword written at the call would be dropped
+    with_source(
+        "\
+def deferring(a: str, b: str = \"B\", c: int = -1) -> str:
+    return a + b + str(c)
+
+
+def by_keyword(x: str) -> str:
+    return deferring(x, b=\"b\")
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            let caller = module
+                .all_functions()
+                .find(|function| function.name == "by_keyword")
+                .expect("by_keyword is compiled");
+            assert!(
+                has_op(caller, |op| matches!(op, Op::CallUnpacked { .. })),
+                "{}",
+                print_function(caller)
+            );
+            assert!(
+                !has_op(caller, |op| matches!(op, Op::CallPython { .. })),
+                "{}",
+                print_function(caller)
+            );
+        },
+    );
+}
+
+#[test]
 fn a_comparison_of_two_strs_leaves_the_object_protocol() {
     with_source(
         "\
@@ -3450,8 +3545,8 @@ class Held(Wrapper):
 fn a_class_keyword_on_a_class_appended_over_a_base_of_ours_declines() {
     // a spec has nowhere to put a class keyword, and a class whose fields sit past a
     // base's instance has no other construction — so the keyword is what it gives up.
-    // the refusal comes from resolving the base rather than from placing the fields,
-    // because a base of ours beside a keyword has none whatever the fields are
+    // the fields are what rules the keyword out, so the same reason answers here as for
+    // a class over a base from outside
     let reasons = declines(
         "\
 class Meta(type):
@@ -3472,8 +3567,37 @@ class Held(Wrapper, metaclass=Meta):
     assert!(
         reasons.contains(&(
             "Held".to_string(),
-            "a class keyword on a base this module emits is not lowered yet".to_string()
+            "a class keyword on a class with fields of its own is not lowered yet".to_string()
         )),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_class_keyword_over_a_base_of_ours_is_kept_where_the_class_places_no_fields() {
+    // the keyword names the metaclass that builds the class, and a class with no storage
+    // of its own is built by calling exactly that — on the base this module emitted, which
+    // is in the namespace by then like any other name. `_collections_abc.ByteString` is
+    // the shape: `class ByteString(Sequence, metaclass=_DeprecateByteStringMeta)` over a
+    // `Sequence` this module emits
+    let reasons = declines(
+        "\
+class Meta(type):
+    pass
+
+
+class Wrapper(OSError):
+    def __init__(self, code: int) -> None:
+        self.code = code
+
+
+class Marked(Wrapper, metaclass=Meta):
+    def note(self) -> int:
+        return self.code
+",
+    );
+    assert!(
+        !reasons.iter().any(|(name, _)| name == "Marked"),
         "{reasons:?}"
     );
 }
@@ -4045,6 +4169,168 @@ Marker = Marker()
         ready,
         "`Ready = None` comes first, so the class overwrites it"
     );
+}
+
+/// two classes, so a removal that reaches one can be told from one that reaches all
+const TWO_CLASSES: &str = "\
+class Gone:
+    def tag(self) -> str:
+        return \"gone\"
+
+
+class Kept:
+    def tag(self) -> str:
+        return \"kept\"
+";
+
+/// which of [`TWO_CLASSES`] survives the module body that follows it
+fn survives_the_removal(body: &str) -> (bool, bool) {
+    with_source(
+        &format!("{TWO_CLASSES}\n{body}"),
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            let named = |name: &str| module.classes.iter().any(|class| class.name == name);
+            (named("Gone"), named("Kept"))
+        },
+    )
+}
+
+#[test]
+fn a_removal_through_the_namespace_reaches_the_name_it_spells() {
+    let (gone, kept) = survives_the_removal("del globals()[\"Gone\"]\n");
+    assert!(!gone, "the removal spells `Gone`");
+    assert!(kept, "and says nothing about `Kept`");
+}
+
+#[test]
+fn a_removal_through_the_namespace_reaches_the_names_a_literal_loop_walks() {
+    // `ast` pops five of its own classes out this way, through a dict comprehension over
+    // a tuple of string literals. the loop variable is not a name in the ordinary sense,
+    // but the sequence it walks says where it has been, so the removal does name a set
+    let (gone, kept) =
+        survives_the_removal("HIDDEN = {n: globals().pop(n) for n in (\"Gone\",)}\n");
+    assert!(!gone, "the tuple the comprehension walks holds `Gone`");
+    assert!(kept, "and holds nothing else");
+}
+
+#[test]
+fn a_removal_a_statement_loop_drives_reaches_the_names_it_walks() {
+    let (gone, kept) = survives_the_removal(
+        "\
+for n in [\"Gone\"]:
+    del globals()[n]
+",
+    );
+    assert!(!gone, "the list the loop walks holds `Gone`");
+    assert!(kept, "and holds nothing else");
+}
+
+#[test]
+fn a_removal_before_the_definition_leaves_it_alone() {
+    // the same forward declaration a plain `X = None` ahead of the class is: whatever
+    // the removal took, the definition below it put a definition back
+    let (gone, kept) = with_source(
+        &format!("del globals()[\"Gone\"]\n\n\n{TWO_CLASSES}"),
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            let named = |name: &str| module.classes.iter().any(|class| class.name == name);
+            (named("Gone"), named("Kept"))
+        },
+    );
+    assert!(gone, "the class comes after the removal");
+    assert!(kept);
+}
+
+#[test]
+fn a_removal_whose_key_this_cannot_read_reaches_every_definition() {
+    // a key computed at runtime names nothing here, so every definition the module wrote
+    // is treated as the one that went
+    let (gone, kept) = survives_the_removal(
+        "\
+def pick() -> str:
+    return \"Gone\"
+
+
+HIDDEN = globals().pop(pick())
+",
+    );
+    assert!(!gone);
+    assert!(!kept, "the key could have been `Kept` just as easily");
+}
+
+#[test]
+fn a_loop_that_writes_its_own_target_is_a_removal_this_cannot_read() {
+    // the sequence only says where the target has been while the loop is the one thing
+    // writing it. a body that assigns the target has made the removal's key arbitrary
+    // again, and reading the tuple would be reading the wrong thing
+    let (gone, kept) = survives_the_removal(
+        "\
+def pick() -> str:
+    return \"Kept\"
+
+
+for n in (\"Gone\",):
+    n = pick()
+    del globals()[n]
+",
+    );
+    assert!(!gone);
+    assert!(!kept);
+}
+
+#[test]
+fn a_target_a_nested_scope_declares_global_is_a_removal_this_cannot_read() {
+    // a `global` write is the one route a nested scope has to the loop's own target, and
+    // the module body can call the function that makes it. `rename` runs between the
+    // header and the removal, so the key there is `Kept` and the tuple says `Gone` —
+    // reading the tuple would install a compiled `Kept` over a name the module removed
+    let (gone, kept) = survives_the_removal(
+        "\
+def rename() -> None:
+    global n
+    n = \"Kept\"
+
+
+for n in (\"Gone\",):
+    rename()
+    del globals()[n]
+",
+    );
+    assert!(!gone);
+    assert!(!kept, "the removal could have taken `Kept` just as easily");
+}
+
+#[test]
+fn emptying_the_namespace_reaches_every_definition() {
+    let (gone, kept) = survives_the_removal("globals().clear()\n");
+    assert!(!gone);
+    assert!(!kept, "`clear` takes every name there is");
+}
+
+#[test]
+fn a_removal_of_a_name_this_cannot_read_reaches_every_definition() {
+    // `popitem` removes one binding and chooses which itself
+    let (gone, kept) = survives_the_removal("HIDDEN = globals().popitem()\n");
+    assert!(!gone);
+    assert!(!kept);
+}
+
+#[test]
+fn a_loop_over_something_other_than_a_literal_names_nothing() {
+    // a name holding the sequence can have been changed between the two points, so only
+    // a display says its whole contents where it stands
+    let (gone, kept) = survives_the_removal(
+        "\
+NAMES = [\"Gone\"]
+
+for n in NAMES:
+    del globals()[n]
+",
+    );
+    assert!(!gone);
+    assert!(!kept);
 }
 
 #[test]
@@ -8429,11 +8715,9 @@ def read(box: Box) -> int:
 /// that took it before this construct existed still works — it runs the interpreted body,
 /// which is what the whole class did a moment ago.
 ///
-/// the first two cost a real module when they declined instead: a getter that suspends is
+/// both cost a real module when they declined instead: a getter that suspends is
 /// `email._header_value_parser.MimeParameters`, and the construction through a metaclass
-/// is `urllib.parse._NetlocResultMixinStr`, which took three more classes down with it.
-/// the third is a class whose *base* may carry a metaclass — which is a wrong answer
-/// rather than a decline, so it is the one that has to be got right
+/// is `urllib.parse._NetlocResultMixinStr`, which took three more classes down with it
 #[test]
 fn a_lone_property_getter_that_cannot_be_published_is_left_alone() {
     let suspends = "\
@@ -8460,25 +8744,7 @@ class Box(metaclass=ABCMeta):
     def plain(self) -> int:
         return 2
 ";
-    // a base may carry a metaclass of its own, and this class never names it — `numbers`
-    // writes `metaclass=ABCMeta` on `Number` and on nothing below it, and `Integral`'s two
-    // lone getters were called abstract by the emitted type once they left the method
-    // table for a `property` written on afterwards
-    let over_a_base = "\
-class Held:
-    def held(self) -> int:
-        return 1
-
-
-class Box(Held):
-    @property
-    def value(self) -> int:
-        return 1
-
-    def plain(self) -> int:
-        return 2
-";
-    for source in [suspends, through_a_metaclass, over_a_base] {
+    for source in [suspends, through_a_metaclass] {
         with_source(source, |db, env, model, suite| {
             let module =
                 crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
@@ -8505,6 +8771,57 @@ class Box(Held):
             );
         });
     }
+}
+
+/// a group of one on a class with a base is lowered too
+///
+/// which construction module init reaches for is a runtime answer — a spec can only be
+/// built where every base's metaclass turns out to be `type` — so this class's `value` may
+/// end up either the compiled halves or the `property` the interpreted body built. what is
+/// settled here is that the halves exist to be reached: the group leaves the method table
+/// and a `PropertyIr` names its getter.
+///
+/// the base is what used to stop it, because a base may carry a metaclass this class never
+/// names — `numbers` writes `metaclass=ABCMeta` on `Number` and on nothing below it, and
+/// `Integral`'s two lone getters were called abstract by the emitted type once they left
+/// the method table for a `property` written on afterwards. `carried_off_the_body` answers
+/// that now, by writing the body's own `property` into the namespace the metaclass reads
+#[test]
+fn a_lone_property_getter_over_a_base_is_lowered() {
+    let source = "\
+class Held:
+    def held(self) -> int:
+        return 1
+
+
+class Box(Held):
+    @property
+    def value(self) -> int:
+        return 1
+
+    def plain(self) -> int:
+        return 2
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Box")
+            .expect("Box is emitted");
+        assert_eq!(class.properties.len(), 1, "{:?}", class.properties);
+        assert_eq!(class.properties[0].name, "value");
+        assert_eq!(class.properties[0].getter.as_deref(), Some("value$get"));
+        assert_eq!(
+            class
+                .table_methods()
+                .map(|method| method.name.clone())
+                .collect::<Vec<_>>(),
+            vec!["plain".to_string()]
+        );
+    });
 }
 
 /// a `def` written once under something that is not `@property` is not one of these
@@ -9145,6 +9462,48 @@ snapshot = len(registry)
     );
 }
 
+/// a decorated definition the body reaches back through the decorator's own answer
+///
+/// this is the shape the standard library actually breaks on, and it is the sharpest of
+/// the three: what the window hides is not the definition and not a registry somewhere
+/// else, but an attribute that exists **only** on the object the decorator handed back.
+/// `pkgutil` writes it as `@simplegeneric def iter_importer_modules` with
+/// `@iter_importer_modules.register` below, and the standard-library idiom is
+/// `functools.singledispatch`. move the first decorator to init and the name is still the
+/// plain function the `def` made when the second one is evaluated, so the import stops
+/// with `AttributeError: 'function' object has no attribute 'register'` — measured, on
+/// `pkgutil` itself, with this gate lifted
+#[test]
+fn a_decorated_definition_the_body_reaches_through_the_decorators_answer_declines() {
+    let reasons = declines(
+        "\
+class Table:
+    def register(self, case: object) -> object:
+        return case
+
+
+def dispatcher(f: object) -> Table:
+    return Table()
+
+
+@dispatcher
+def render() -> str:
+    return 'default'
+
+
+@render.register
+def other() -> str:
+    return 'other'
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "render" && reason.contains("goes on running below it")),
+        "{reasons:?}"
+    );
+}
+
 /// a definition with nothing running below it keeps its decorator moved to init
 ///
 /// this is the other half of [`a_decorated_definition_declines_over_a_statement_that_never_names_it`]:
@@ -9512,6 +9871,72 @@ fn the_frame_reading_builtins_are_declined() {
         let reason = decline(&format!("def f() -> object:\n    return {call}\n"));
         assert!(reason.contains("calling frame"), "{call} gave `{reason}`");
     }
+}
+
+/// the standard library reaches the calling frame under several names, and each one
+/// answers about the caller's frame in a compiled function without raising or printing
+/// anything to say so
+#[test]
+fn the_frame_walking_stdlib_functions_are_declined() {
+    for (import, call) in [
+        ("sys", "sys._getframe()"),
+        ("sys", "sys._getframemodulename(1)"),
+        ("inspect", "inspect.currentframe()"),
+        ("inspect", "inspect.stack()"),
+        ("traceback", "traceback.extract_stack()"),
+        ("traceback", "traceback.format_stack()"),
+        ("traceback", "traceback.walk_stack(None)"),
+    ] {
+        let reason = decline(&format!(
+            "import {import}\n\n\ndef f() -> object:\n    return {call}\n"
+        ));
+        assert!(
+            reason.contains("the frame that called it"),
+            "{call} gave `{reason}`"
+        );
+    }
+}
+
+/// and the callee is what settles it, not what the call says: a rename at the import
+/// and a local holding the function both reach the same walk
+#[test]
+fn a_frame_walker_reached_under_another_name_is_declined() {
+    for body in [
+        "    return grab()",
+        "    reader = grab\n    return reader()",
+    ] {
+        let reason = decline(&format!(
+            "from sys import _getframe as grab\n\n\ndef f() -> object:\n{body}\n"
+        ));
+        assert!(
+            reason.contains("`sys._getframe()`"),
+            "{body} gave `{reason}`"
+        );
+    }
+}
+
+/// a name of one's own is not one of these, however it is spelled. the modules the
+/// walkers live in are half of each entry precisely so that a `stack` written here
+/// costs nothing
+#[test]
+fn a_function_of_ones_own_named_after_a_frame_walker_stays_compiled() {
+    assert_eq!(
+        declines(
+            "\
+def stack() -> int:
+    return 1
+
+
+def currentframe() -> int:
+    return 2
+
+
+def f() -> int:
+    return stack() + currentframe()
+"
+        ),
+        vec![]
+    );
 }
 
 /// `warnings.warn` blames a frame counted back from its own caller, and the count
