@@ -53,7 +53,8 @@ use crate::types::function::{
     OverloadLiteral,
 };
 use crate::types::generics::{
-    GenericContext, Specialization, SpecializationBuilder, SpecializationError, TypeVarInference,
+    ApplySpecialization, GenericContext, Specialization, SpecializationBuilder,
+    SpecializationError, TypeVarInference,
 };
 use crate::types::infer::original_class_type;
 use crate::types::known_instance::{FieldInstance, InternedConstraintSetSolution};
@@ -6627,7 +6628,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             // literal values are kept unpromoted.
             if self.call_expression_tcx.preserve_literals
                 && let Some(lower) = bounds.evidence_lower()
-                && crate::types::visitor::any_over_type(self.db, self.env, lower, false, |ty| {
+                && any_over_type(self.db, self.env, lower, false, |ty| {
                     ty.as_literal_value().is_some()
                 })
             {
@@ -6728,9 +6729,97 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             inference,
             &self.typevars_reached_by_arguments,
         );
+        self.check_declared_typevar_relations(generic_context, specialization);
 
         self.return_ty = self.return_ty.apply_specialization(db, specialization);
         self.inference = Some(inference);
+    }
+
+    /// Reports an argument that puts a type variable outside a bound naming another type
+    /// variable.
+    ///
+    /// Such a bound is a relation between two variables, so whether it holds is only decided once
+    /// both are solved — `def f[T, R: T](t: list[T], r: R)` pins `T` through the invariant
+    /// `list[T]`, and whether `r` fits is a question about the pair, not about either argument on
+    /// its own. The relation is conjoined into the constraint set, where an unsatisfiable one
+    /// simply yields no solution rather than an error, so the report is made here against the
+    /// argument that supplied the type variable at fault.
+    fn check_declared_typevar_relations(
+        &mut self,
+        generic_context: GenericContext<'db>,
+        specialization: Specialization<'db>,
+    ) {
+        let db = self.db;
+        let env = self.env;
+        for bound_typevar in generic_context.variables(db) {
+            let typevar = bound_typevar.typevar(db);
+            // a pack's bound may not name a type parameter, so `pack_bound` has already
+            // discarded it and only an ordinary bound reaches here
+            if !typevar.bound_mentions_typevars(db) {
+                continue;
+            }
+            let solved = Type::TypeVar(bound_typevar).apply_specialization(db, specialization);
+            let upper = match typevar.bound_or_constraints(db, env) {
+                Some(TypeVarBoundOrConstraints::UpperBound(bound)) => Some((bound, false)),
+                _ => None,
+            };
+            // basedpython: a bound range's lower end is a second bound, and it is checked the
+            // same way with the two sides swapped
+            let lower = typevar.lower_bound(db).map(|lower| (lower, true));
+            for (declared, is_lower) in upper.into_iter().chain(lower) {
+                let bound = declared.apply_specialization(db, specialization);
+                // when the named type variable had no solution of its own the substitution
+                // collapses to `Never`, which names nothing the reader wrote. fall back to what
+                // the declarations say — `R: T` where `T: int` reads as `int`
+                let bound = if bound.is_never() || bound.has_typevar(db, env) {
+                    declared_bound_ceiling(db, env, generic_context, declared)
+                } else {
+                    bound
+                };
+                let (source, target) = if is_lower {
+                    (bound, solved)
+                } else {
+                    (solved, bound)
+                };
+                if source.is_assignable_to(db, env, target) {
+                    continue;
+                }
+                // blame the argument that actually falls outside the bound. several arguments
+                // can fill the same type variable, and the ones that fit are not at fault
+                let mut blamed = None;
+                for relation in self.argument_relations() {
+                    if !any_over_type(db, env, relation.declared_type, false, |ty| {
+                        ty == Type::TypeVar(bound_typevar)
+                    }) {
+                        continue;
+                    }
+                    let candidate = (relation.adjusted_argument_index, relation.argument_type);
+                    let outside = if is_lower {
+                        !bound.is_assignable_to(db, env, relation.argument_type)
+                    } else {
+                        !relation.argument_type.is_assignable_to(db, env, bound)
+                    };
+                    if outside {
+                        blamed = Some(candidate);
+                        break;
+                    }
+                    blamed.get_or_insert(candidate);
+                }
+                // a type variable can be solved without any argument mentioning it — through the
+                // relation alone, or from the type context — and then the solution is all there
+                // is to report
+                let (argument_index, argument) = blamed.unwrap_or((None, solved));
+                self.errors.push(BindingError::SpecializationError {
+                    error: SpecializationError::MismatchedRelation {
+                        bound_typevar,
+                        argument,
+                        bound,
+                        is_lower,
+                    },
+                    argument_index,
+                });
+            }
+        }
     }
 
     /// Infers a variadic type variable tuple from every argument matched to `*args`.
@@ -8174,6 +8263,34 @@ fn call_specialization<'db>(
             Some(Type::Never)
         }
     })
+}
+
+/// What a bound naming other type parameters says when only the declarations are known.
+///
+/// A relation like `R: T` is reported against the solved `T`, but when `T` had no solution of its
+/// own the substitution collapses to `Never`, which names nothing anybody wrote. Replacing each
+/// named parameter with its own declared ceiling recovers something the reader can act on:
+/// `def f[T: int, R: T]` reads as `int`.
+fn declared_bound_ceiling<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    generic_context: GenericContext<'db>,
+    bound: Type<'db>,
+) -> Type<'db> {
+    let ceilings: Box<[Type<'db>]> = generic_context
+        .variables(db)
+        .map(|variable| variable.typevar(db).declared_ceiling(db, env))
+        .collect();
+    bound.apply_type_mapping(
+        db,
+        env,
+        &TypeMapping::ApplySpecialization(ApplySpecialization::Partial {
+            generic_context,
+            types: &ceilings,
+            skip: None,
+        }),
+        TypeContext::default(),
+    )
 }
 
 /// Binding information for one of the overloads of a callable.
@@ -10573,6 +10690,20 @@ impl<'db> BindingError<'db> {
                                     satisfy upper bound `{bound}` of type variable `{typevar_name}`"
                             ));
                         }
+                    }
+                    SpecializationError::MismatchedRelation {
+                        bound_typevar,
+                        bound,
+                        is_lower,
+                        ..
+                    } => {
+                        let typevar_name = bound_typevar.typevar(context.db()).name(context.db());
+                        let bound = bound.display(context.db(), env);
+                        let end = if *is_lower { "lower" } else { "upper" };
+                        diag.set_primary_annotation_message(format_args!(
+                            "Argument type `{argument_ty_display}` does not satisfy \
+                                {end} bound `{bound}` of type variable `{typevar_name}`"
+                        ));
                     }
                     SpecializationError::UnsatisfiedPackBound {
                         bound_typevar,
