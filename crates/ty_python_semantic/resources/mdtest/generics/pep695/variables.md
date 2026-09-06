@@ -1188,7 +1188,7 @@ reveal_type(C[int]().y)  # revealed: int
 class D[T = T]:
     x: T
 
-reveal_type(D().x)  # revealed: Unknown
+reveal_type(D().x)  # revealed: Never
 ```
 
 ## basedpython: type mappings

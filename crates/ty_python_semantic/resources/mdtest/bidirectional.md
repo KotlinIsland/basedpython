@@ -1327,8 +1327,9 @@ from collections import defaultdict
 from collections.abc import Mapping
 from typing import Any, Callable, overload
 
-# the fork's covariant `Mapping` key places no lower bound on the key typevar
-x1: Mapping[str, list[str]] = reveal_type(defaultdict(list))  # revealed: defaultdict[Unknown, list[str]]
+# the fork's covariant `Mapping` key places no lower bound on the key typevar, and no argument
+# reaches it, so it is left unsolved
+x1: Mapping[str, list[str]] = reveal_type(defaultdict(list))  # revealed: defaultdict[Never, list[str]]
 x1["key"].append(1)  # error: [invalid-argument-type]
 
 x2: Callable[[], list[str]] = reveal_type(list)  # revealed: <class 'list[str]'>

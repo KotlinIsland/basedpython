@@ -2309,7 +2309,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if is_valid_assignment
             && self.fluid_specializations_enabled()
             && let Some(collection_def) = self.index.fluid_candidate_binding(object)
-            && let Some((class_literal, _)) = object_ty.class_specialization(db, env)
+            && let Some((class_literal, _)) = self.fluid_class_specialization(object_ty)
         {
             let identity_instance =
                 Type::instance(db, env, class_literal.identity_specialization(db));
