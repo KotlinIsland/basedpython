@@ -97,9 +97,26 @@ pub fn implicit_typing_name(name: &str) -> Option<&'static str> {
         .map(|index| IMPLICIT_TYPING_NAMES[index])
 }
 
+/// whether `private` on a class member named `name` actually hides it — that is,
+/// whether python would name-mangle the `__{name}` the lowering renames it to
+///
+/// python's rule is two or more leading underscores and at most one trailing
+/// one, so a name that already ends in `__` is looked up verbatim. every name of
+/// two or more underscores already ends in `__`; the one that does not is `_`,
+/// which prefixes to `___` and is looked up verbatim just the same
+///
+/// this is the single source of truth for the rule. the transpiler skips the
+/// rename where it answers `false`, and the type checker reports the modifier as
+/// having no effect at exactly the same names
+pub fn private_mangles(name: &str) -> bool {
+    !name.ends_with("__") && name != "_"
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{IMPLICIT_TYPING_NAMES, implicit_typing_name, is_implicit_typing_name};
+    use super::{
+        IMPLICIT_TYPING_NAMES, implicit_typing_name, is_implicit_typing_name, private_mangles,
+    };
 
     #[test]
     fn implicit_typing_names_sorted() {
@@ -124,5 +141,17 @@ mod tests {
         let entry: Option<&'static str> = implicit_typing_name(&String::from("Mapping"));
         assert_eq!(entry, Some("Mapping"));
         assert_eq!(implicit_typing_name("cast"), None);
+    }
+
+    #[test]
+    fn a_name_python_looks_up_verbatim_is_not_mangled() {
+        assert!(private_mangles("helper"));
+        assert!(private_mangles("trailing_"));
+        // `__` + the name is what python is asked about, so a name that is only
+        // underscores lands on the same rule a dunder does
+        assert!(!private_mangles("_"));
+        assert!(!private_mangles("__"));
+        assert!(!private_mangles("__init__"));
+        assert!(!private_mangles("__repr__"));
     }
 }

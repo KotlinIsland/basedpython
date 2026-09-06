@@ -1060,6 +1060,16 @@
             }
           ]
         },
+        "ineffective-private": {
+          "title": "detects a `private` modifier on a name it cannot hide",
+          "description": "## What it does\nChecks for the `private` modifier on a class member whose name it cannot\nhide.\n\n## Why is this bad?\n`private` hides a class member by renaming it so python's name-mangling\napplies, and python mangles only a name with at most one trailing\nunderscore. A dunder is therefore left with the name it was written\nwith, and the modifier does nothing — which is worse than an error,\nbecause the declaration reads as though the member were hidden.\n\n`init` is the exception. It is the one dunder `private` says something\nabout, and it is enforced at the construction site rather than by hiding\na name: see [`private-constructor`](private-constructor.md).\n\n## Example\n\n```by\nclass Point:\n    private def __repr__(self) -> str:  # error: `private` does nothing here\n        return \"Point()\"\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "instance-layout-conflict": {
           "title": "detects class definitions that raise `TypeError` due to instance layout conflict",
           "description": "## What it does\n\nChecks for classes definitions which will fail at runtime due to \"instance memory layout conflicts\".\n\nThis error is usually caused by attempting to combine multiple classes that define non-empty\n`__slots__` in a class's [Method Resolution Order][method-resolution-order] (MRO), or by attempting\nto combine multiple builtin classes in a class's MRO.\n\n## Why is this bad?\n\nInheriting from bases with conflicting instance memory layouts will lead to a `TypeError` at\nruntime.\n\nAn instance memory layout conflict occurs when CPython cannot determine the memory layout instances\nof a class should have, because the instance memory layout of one of its bases conflicts with the\ninstance memory layout of one or more of its other bases.\n\nFor example, if a Python class defines non-empty `__slots__`, this will impact the memory layout of\ninstances of that class. Multiple inheritance from more than one different class defining non-empty\n`__slots__` is not allowed:\n\n```python\nclass A:\n    __slots__ = (\"a\", \"b\")\n\n\nclass B:\n    __slots__ = (\"a\", \"b\")  # Even if the values are the same\n\n\n# TypeError: multiple bases have instance lay-out conflict\nclass C(A, B): ...  # error\n```\n\nAn instance layout conflict can also be caused by attempting to use multiple inheritance with two\nbuiltin classes, due to the way that these classes are implemented in a CPython C extension:\n\n```python\n# TypeError: multiple bases have instance lay-out conflict\nclass A(int, float): ...  # error\n```\n\nNote that pure-Python classes with no `__slots__`, or pure-Python classes with empty `__slots__`,\nare always compatible:\n\n```python\nclass A: ...\n\n\nclass B:\n    __slots__ = ()\n\n\nclass C:\n    __slots__ = (\"a\", \"b\")\n\n\n# fine\nclass D(A, B, C): ...\n```\n\n## Known problems\n\nClasses whose `__slots__` values cannot be determined statically are not always considered disjoint\nbases by ty. Static definitions can include string literals, fixed-length tuples, and literal lists,\nsets, or dictionaries of string literals.\n\nAdditionally, this check is not exhaustive: many C extensions (including several in the standard\nlibrary) define classes that use extended memory layouts and thus cannot coexist in a single MRO.\nSince it is currently not possible to represent this fact in stub files, having a full knowledge of\nthese classes is also impossible. When it comes to classes that do not define `__slots__` at the\nPython level, therefore, ty, currently only hard-codes a number of cases where it knows that a class\nwill produce instances with an atypical memory layout.\n\n## Further reading\n\n- [CPython documentation: `__slots__`](https://docs.python.org/3/reference/datamodel.html#slots)\n- [CPython documentation: Method Resolution Order](https://docs.python.org/3/glossary.html#term-method-resolution-order)\n\n[method-resolution-order]: https://docs.python.org/3/glossary.html#term-method-resolution-order",
@@ -2063,6 +2073,16 @@
         "possibly-unresolved-reference": {
           "title": "detects references to possibly undefined names",
           "description": "## What it does\n\nChecks for references to names that are possibly not defined.\n\n## Why is this bad?\n\nUsing an undefined variable will raise a `NameError` at runtime.\n\n## Rule status\n\nThis rule is currently disabled by default because of the number of false positives it can produce.\n\n## Example\n\n```python\nfor i in range(int(input())):\n    x = i\n\n# NameError: name 'x' is not defined\nprint(x)  # error\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "private-constructor": {
+          "title": "detects construction of a class with a `private` constructor",
+          "description": "## What it does\nChecks for constructing a class whose `init` is declared `private`, from\noutside that class's own body.\n\n## Why is this bad?\nA `private` constructor says the class decides how its instances are\nmade: callers go through a factory the class provides, which can pick a\nsubclass, return a cached instance, or reject the arguments. Calling the\nconstructor directly bypasses that.\n\nA subclass is outside the class's body too, so it cannot construct the\nbase either.\n\n## Example\n\n```by\nclass Id:\n    private init(let raw: str)\n\n    @classmethod\n    def parse(cls, text: str) -> Id:\n        return Id(text.strip())  # ok: inside the class\n\nId(\"x\")  # error: `Id`'s constructor is private\n```",
           "default": "error",
           "oneOf": [
             {

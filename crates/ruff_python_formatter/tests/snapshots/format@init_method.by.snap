@@ -26,6 +26,15 @@ class PlainParams:
     init(self, a: int, let b: int)
 
 
+class DefinitionModifiers:
+    private init(self, let a: int)
+
+
+class ChainedDefinitionModifiers:
+    private final init(self, let a: int):
+        print(a)
+
+
 class Defaults:
     init(self, let a: int = 0, var b: list[int] = [], *args: int, **kwargs: str)
 
@@ -87,6 +96,15 @@ class Modifiers:
 
 class PlainParams:
     init(self, a: int, let b: int)
+
+
+class DefinitionModifiers:
+    private init(self, let a: int)
+
+
+class ChainedDefinitionModifiers:
+    private final init(self, let a: int):
+        print(a)
 
 
 class Defaults:
