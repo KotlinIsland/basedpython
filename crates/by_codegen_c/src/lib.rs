@@ -259,6 +259,13 @@ pub fn emit_module(module: &ModuleIr) -> String {
             dispatch_licence(module, &class, &method)
         );
     }
+    for (class, name) in accessor_licences(module) {
+        let _ = writeln!(
+            out,
+            "static ByAccessorLicence {} = BY_ACCESSOR_LICENCE_INIT;",
+            accessor_licence(module, &class, &name)
+        );
+    }
     if !module.classes.is_empty() {
         out.push('\n');
     }
@@ -2974,6 +2981,32 @@ fn dispatch_licences(module: &ModuleIr) -> BTreeSet<(String, String)> {
     wanted
 }
 
+/// the static holding one site's licence to reach a compiled property half without the
+/// descriptor protocol — see `By_ArmAccessor`
+fn accessor_licence(module: &ModuleIr, class: &str, name: &str) -> String {
+    format!(
+        "by_prop_stands_{}_{}_{}",
+        mangle(module.name.dotted()),
+        mangle(class),
+        mangle(name)
+    )
+}
+
+/// every `(class, property)` pair some read or write in this module tests
+fn accessor_licences(module: &ModuleIr) -> BTreeSet<(String, String)> {
+    let mut wanted = BTreeSet::new();
+    for function in module.all_functions() {
+        for block in &function.blocks {
+            for op in &block.ops {
+                if let Op::AccessorStands { class, name, .. } = op {
+                    wanted.insert((class.clone(), name.clone()));
+                }
+            }
+        }
+    }
+    wanted
+}
+
 /// the field storage of `object`, as an expression of type `Fields *`
 ///
 /// for a class that owns its layout the object *is* the storage and this is the cast
@@ -4370,36 +4403,54 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
         out.push('\n');
     }
 
+    let entered = written_on_entry(function);
+    // what the shared error label has to release, accumulated as the body is
+    // written — see [`note_shared_error_jump`]. `None` where the refcount pass did
+    // not run, which leaves the emitter its conservative answer
+    let mut at_error: Option<HashSet<RegisterId>> = entered.as_ref().map(|_| HashSet::new());
+
     for (index, block) in function.blocks.iter().enumerate() {
         // a label immediately before a declaration is invalid in C89 and merely
         // ugly later; the empty statement keeps it valid everywhere
         let _ = writeln!(out, "b{index}: ;");
         out.push_str(&line_directive(module, block.range));
+        let mut written: HashSet<RegisterId> = entered
+            .as_ref()
+            .and_then(|sets| sets.get(index).cloned())
+            .unwrap_or_default();
         for op in &block.ops {
-            out.push_str(&guard_unassigned(
-                function,
-                &op.operands(),
-                block.error_target,
-            ));
-            out.push_str(&emit_op(module, function, op, block.error_target));
+            let mut fragment = guard_unassigned(function, &op.operands(), block.error_target);
+            fragment.push_str(&emit_op(module, function, op, block.error_target));
+            if let Some(at_error) = at_error.as_mut() {
+                note_shared_error_jump(&fragment, &written, op.dest(), at_error);
+            }
+            out.push_str(&fragment);
             out.push_str(&mark_assigned(function, op));
+            if let Some(dest) = op.dest() {
+                written.insert(dest);
+            }
         }
-        out.push_str(&guard_unassigned(
-            function,
-            &block.terminator.operands(),
-            block.error_target,
-        ));
-        out.push_str(&emit_terminator(
+        let mut fragment =
+            guard_unassigned(function, &block.terminator.operands(), block.error_target);
+        fragment.push_str(&emit_terminator(
             module,
             function,
             &block.terminator,
             block.owned_at_exit.as_deref(),
         ));
+        if let Some(at_error) = at_error.as_mut() {
+            note_shared_error_jump(&fragment, &written, None, at_error);
+        }
+        out.push_str(&fragment);
     }
 
     if function.convention.can_fail() {
-        // the error label is shared by every block, so it cannot use a
-        // block-specific live set
+        let at_error = at_error.map(|set| {
+            // ordered, so that the same function emits the same C on two runs
+            let mut set: Vec<RegisterId> = set.into_iter().collect();
+            set.sort_unstable();
+            set
+        });
         out.push_str("by_error: ;\n");
         // a coroutine's body raising `StopIteration` is forging the exhaustion the
         // await protocol reports with one, and python replaces it with `RuntimeError`
@@ -4413,12 +4464,76 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
                 frame_kind(by_ir::function::Surface::Coroutine)
             );
         }
-        out.push_str(&emit_cleanup(function, "    ", None, None));
+        out.push_str(&emit_cleanup(function, "    ", at_error.as_deref(), None));
         let _ = writeln!(out, "    return {};", undefined(module, &function.ret));
     }
 
     out.push_str("}\n");
     out
+}
+
+/// which registers may already have been written when each block starts
+///
+/// the refcount pass's own fixed point, read back off what it left on the blocks:
+/// `owned_at_exit` is everything some path could have written by the end of a
+/// block, so what a block starts holding is the union of its predecessors'
+/// answers. `None` where the pass did not run
+fn written_on_entry(function: &Function) -> Option<Vec<HashSet<RegisterId>>> {
+    let mut entered: Vec<HashSet<RegisterId>> = vec![HashSet::new(); function.blocks.len()];
+    // a parameter holds a value from the first instruction
+    if let Some(entry) = entered.first_mut() {
+        entry.extend((0..function.param_count).map(RegisterId));
+    }
+    for block in &function.blocks {
+        let exit = block.owned_at_exit.as_ref()?;
+        for successor in block.successors() {
+            if let Some(slot) = entered.get_mut(successor.index()) {
+                slot.extend(exit.iter().copied());
+            }
+        }
+    }
+    Some(entered)
+}
+
+/// record what a jump to the shared error label could find the frame holding
+///
+/// the label is shared by every block, so no one block's release set describes
+/// it, and the emitter used to release every register the frame owns there. that
+/// is correct and it is not free: the error path is dead code the C compiler
+/// still has to *cost*, and that cost is what decides whether a caller inlines
+/// the function. `split` in the `pairs` benchmark came to 240 against clang's
+/// threshold of 225 — and 35 of that was releasing a register that cannot be
+/// holding anything at the only point in the function that jumps there.
+///
+/// so the set is narrowed to the registers some jump could really find holding a
+/// reference: the union, over every fragment that jumps there, of what may have
+/// been written by then.
+///
+/// the fragment answers both halves of that itself, which is the point. only the
+/// emitter knows where it jumps, and it says so by writing `goto by_error;` — a
+/// text nothing else produces — so a new operation that jumps there is counted
+/// without anything having to be kept in step with it. and the one register
+/// `written` cannot speak for is the fragment's own destination, because the
+/// fragment is what writes it: [`commit_checked`] stores after its check, so a
+/// store that plainly follows the last jump has not happened yet. anything less
+/// plain counts as written, which releases more rather than less
+fn note_shared_error_jump(
+    fragment: &str,
+    written: &HashSet<RegisterId>,
+    dest: Option<RegisterId>,
+    at_error: &mut HashSet<RegisterId>,
+) {
+    let Some(jump) = fragment.rfind(&format!("goto {};", error_label(None))) else {
+        return;
+    };
+    at_error.extend(written.iter().copied());
+    if let Some(dest) = dest
+        && fragment
+            .find(&format!("{} = ", local(dest)))
+            .is_none_or(|store| store < jump)
+    {
+        at_error.insert(dest);
+    }
 }
 
 /// release the registers an exit in `block` owns
@@ -4790,6 +4905,17 @@ fn assign_checked(
     )
 }
 
+/// wrap a context-manager protocol call in a block holding its own memo
+///
+/// one `with` block enters and leaves the same manager every pass, so the site is
+/// per *call site* rather than per module: a file that holds a lock in one function
+/// and opens a file in another would otherwise have the two managers evicting each
+/// other. the memo is block-scoped, so two of these in one function are two memos
+/// even though both are spelled `by_ps`
+fn protocol_site(body: &str) -> String {
+    format!("    {{ static ByProtocolSite by_ps = BY_PROTOCOL_SITE_INIT;\n{body}    }}\n")
+}
+
 /// the tail of an operation that has computed its result into `by_t`: the error
 /// edge, then the release and the store
 ///
@@ -5050,13 +5176,19 @@ fn emit_op(
         } => {
             let expr = match exception {
                 Some(exception) => format!(
-                    "By_AsyncExit({}, {})",
+                    "By_AsyncExit(&by_ps, {}, {})",
                     value_expr(manager),
                     value_expr(exception)
                 ),
-                None => format!("By_AsyncEnter({})", value_expr(manager)),
+                None => format!("By_AsyncEnter(&by_ps, {})", value_expr(manager)),
             };
-            assign_checked(module, function, *dest, &expr, error_target)
+            protocol_site(&assign_checked(
+                module,
+                function,
+                *dest,
+                &expr,
+                error_target,
+            ))
         }
         Op::AsyncIter { dest, src, next } => {
             let expr = format!("By_AsyncIter({}, {})", value_expr(src), i32::from(*next));
@@ -5106,6 +5238,23 @@ fn emit_op(
                 value_expr(src),
                 owner.type_name(module.name.dotted()),
                 dispatch_licence(module, class, method),
+            )
+        }
+        Op::AccessorStands {
+            dest,
+            src,
+            class,
+            name,
+        } => {
+            let Some(owner) = class_named(module, class) else {
+                return format!("    {} = 0;\n", local(*dest));
+            };
+            format!(
+                "    {} = By_AccessorStands((PyObject *){}, {}_OBJ, &{});\n",
+                local(*dest),
+                value_expr(src),
+                owner.type_name(module.name.dotted()),
+                accessor_licence(module, class, name),
             )
         }
         Op::DictShadows {
@@ -5852,8 +6001,14 @@ fn emit_op(
             out
         }
         Op::Enter { dest, manager } => {
-            let call = format!("By_Enter({})", value_expr(manager));
-            assign_checked(module, function, *dest, &call, error_target)
+            let call = format!("By_Enter(&by_ps, {})", value_expr(manager));
+            protocol_site(&assign_checked(
+                module,
+                function,
+                *dest,
+                &call,
+                error_target,
+            ))
         }
         Op::ExitContext {
             dest,
@@ -5863,7 +6018,7 @@ fn emit_op(
             // -1 means `__exit__` itself raised, which is the error path. 0 and 1 are
             // "re-raise" and "suppressed", and both are ordinary control flow
             let mut out = format!(
-                "    {{ int by_r = By_ExitContext({}, {});\n",
+                "    {{ int by_r = By_ExitContext(&by_ps, {}, {});\n",
                 value_expr(manager),
                 value_expr(exception)
             );
@@ -5873,7 +6028,7 @@ fn emit_op(
                 error_label(error_target)
             );
             let _ = writeln!(out, "      {} = (char)by_r; }}", local(*dest));
-            out
+            protocol_site(&out)
         }
         Op::DelegateIter {
             dest,
@@ -8145,6 +8300,34 @@ fn emit_module_init(module: &ModuleIr) -> String {
             ))
         })
         .collect();
+    // for the reason the dispatch licences are armed here, and one more: the property is
+    // put into the type's dict by `class_init`, so nothing can be asked about it before
+    // that has run
+    let arm_accessors: String = accessor_licences(module)
+        .iter()
+        .filter_map(|(class, name)| {
+            let owner = class_named(module, class)?;
+            let property = owner
+                .properties
+                .iter()
+                .find(|property| property.name == *name)?;
+            let type_name = owner.type_name(module.name.dotted());
+            let symbol = property_symbol(&type_name, name);
+            // the two halves as `By_PublishProperty` was handed them, so that the licence
+            // asks about the very descriptors the type was given
+            let mut halves = property_halves(owner, property).map(|(half, body)| match body {
+                Some(_) => format!("&{symbol}_{half}_def"),
+                None => "NULL".to_string(),
+            });
+            let get = halves.next()?;
+            let set = halves.next()?;
+            Some(format!(
+                "    By_ArmAccessor(&{}, {type_name}_OBJ, {}, {get}, {set});\n",
+                accessor_licence(module, class, name),
+                c_string(name),
+            ))
+        })
+        .collect();
     // a class holding instance memory back holds it for as long as it might be asked
     // for another instance, which is as long as the module stands. handing it back when
     // the module goes is what keeps the whole scheme from being a leak
@@ -8251,6 +8434,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
          \x20   if (PyModule_AddFunctions(module, by_methods) < 0) return -1;\n\
          {decorators}\
          {arm_dispatch}\
+         {arm_accessors}\
          \x20   return 0;\n\
          }}\n\n\
          static PyModuleDef_Slot by_slots[] = {{\n\
@@ -9494,6 +9678,44 @@ mod tests {
         assert!(!returned.contains("By_IncRefTagged"), "{returned}");
         assert!(!returned.contains("By_DecRefTagged(r2);"), "{returned}");
         assert!(c.contains("by_error: ;\n    By_DecRefTagged(r2);"), "{c}");
+    }
+
+    #[test]
+    fn the_error_label_leaves_alone_a_register_no_jump_to_it_can_find_written() {
+        // `a + b` fails before it stores, so the only jump to the error label reaches
+        // it with the sum still unwritten. releasing it there is dead code the c
+        // compiler nonetheless has to cost, and that cost decides whether a caller
+        // inlines the function
+        let mut module = module_with(add());
+        module.functions[0].blocks[0].owned_at_exit = Some(vec![RegisterId(2)]);
+        let c = emit_module(&module);
+        assert!(
+            c.contains("by_error: ;\n    return BY_INT_ERROR;"),
+            "the error path releases a register that cannot hold anything: {c}"
+        );
+    }
+
+    #[test]
+    fn the_error_label_still_releases_a_register_an_earlier_op_wrote() {
+        // the same function with something to hold before the operation that can
+        // fail: `s` is written, then the addition raises, and the error path is the
+        // only place that reference is given back
+        let mut builder = FunctionBuilder::new("add", RType::INT);
+        let a = builder.param("a", RType::INT);
+        let s = builder.temp(RType::STR);
+        let sum = builder.temp(RType::INT);
+        builder.assign(s, Value::Str("x".to_string()));
+        builder.push(Op::IntBinary {
+            dest: sum,
+            op: BinOp::Add,
+            lhs: Value::Register(a),
+            rhs: Value::Int(1),
+        });
+        builder.terminate(Terminator::Return(Value::Register(sum)));
+        let mut module = module_with(builder.finish());
+        module.functions[0].blocks[0].owned_at_exit = Some(vec![RegisterId(1), RegisterId(2)]);
+        let c = emit_module(&module);
+        assert!(c.contains("by_error: ;\n    Py_XDECREF(r1);"), "{c}");
     }
 
     #[test]

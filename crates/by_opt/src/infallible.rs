@@ -251,7 +251,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         // an attribute lookup reaches `__getattr__`, and `__match_args__` with it
         Op::MatchAttr { .. } => true,
         // a pointer comparison against a singleton
-        Op::IsMissing { .. } | Op::MethodStands { .. } => false,
+        Op::IsMissing { .. } | Op::MethodStands { .. } | Op::AccessorStands { .. } => false,
         // reading the instance's own dict. the lookup can raise on an unhashable key,
         // and `By_DictShadows` answers that with the refusal rather than the error
         Op::DictShadows { .. } => false,

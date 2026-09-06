@@ -756,6 +756,53 @@ def _run_nested(m):
     a, b = _Recording(), _Recording()
     return (m.nested(a, b), a.seen, b.seen)
 
+# a `with` site memoises what `__enter__` and `__exit__` resolved to, keyed on the
+# manager's type and that type's version tag. every way the pair can move after the
+# memo has been armed is asked here, and asked after enough passes to have armed it
+def _rebound(m):
+    class Base:
+        def __enter__(self): return 'base enter'
+        def __exit__(self, *a): return False
+
+    class Mgr(Base):
+        pass
+
+    class Other:
+        def __enter__(self): return 'other enter'
+        def __exit__(self, *a): return False
+
+    out = []
+    mgr = Mgr()
+    for _ in range(20):
+        out.append(m.held(mgr))
+    # a site that has settled on one class still has to notice the compiled class
+    # arriving at it, and then notice the first one arriving back
+    out.append(m.held(m.Own()))
+    out.append(m.held(mgr))
+    # what the memo holds is declared on the *base*, and rebinding it there is the
+    # invalidation that has to reach the subclass
+    Base.__enter__ = lambda self: 'rebound on base'
+    out.append(m.held(mgr))
+    # then on the class itself, where it now shadows the base's
+    Mgr.__enter__ = lambda self: 'rebound on class'
+    out.append(m.held(mgr))
+    # `__exit__`'s answer is what decides whether the exception leaves the block, so
+    # a rebinding that changes its truthiness changes the program's control flow
+    out.append(repr(_capture(m.swallowed, mgr)))
+    Base.__exit__ = lambda self, *a: True
+    out.append(m.swallowed(mgr))
+    Base.__exit__ = lambda self, *a: False
+    out.append(repr(_capture(m.swallowed, mgr)))
+    # a manager whose class was reassigned reaches the same site as a different type
+    mgr.__class__ = Other
+    out.append(m.held(mgr))
+    # past the miss cap a site gives up memoising and looks the name up every time,
+    # and that path owes the same answers
+    for i in range(12):
+        Other.__enter__ = (lambda n: lambda self: 'late %d' % n)(i)
+        out.append(m.held(mgr))
+    return out
+
 def _chain(e):
     out = []
     while e is not None:
@@ -10652,6 +10699,137 @@ def entered(mgr: object) -> object:
 }
 
 #[test]
+fn a_with_block_sees_its_manager_rebound_after_it_first_ran() {
+    // a `with` site remembers what the two protocol names resolved to, so the answer
+    // it holds can be made stale by a write it was not present for. a memo that
+    // missed one would go on calling the method that has been replaced — and for
+    // `__exit__` that is not a stale value but a live exception either swallowed or
+    // let out against the program's wishes
+    agree_with_declines(
+        "withrebound",
+        "\
+class Own:
+    def __enter__(self) -> str:
+        return \"own enter\"
+
+    def __exit__(self, kind: object, value: object, tb: object) -> bool:
+        return False
+
+def held(mgr: object) -> object:
+    with mgr as value:
+        return value
+    return None
+
+def swallowed(mgr: object) -> str:
+    with mgr:
+        raise ValueError(\"boom\")
+    return \"suppressed\"
+",
+        &["_rebound(m)"],
+    );
+}
+
+#[test]
+fn a_with_block_over_a_class_the_module_declares_reaches_both_halves_of_it() {
+    // a manager the compiler knows the class of reaches `__enter__` and `__exit__`
+    // without asking the object protocol for either, the way `o.m()` already does. all
+    // three exits have to arrive at the same `__exit__`: falling off the end of the
+    // block, leaving it by `return`, and unwinding out of it
+    agree_python(
+        "ownctx",
+        "\
+class Guard:
+    def __init__(self) -> None:
+        self.log: list[str] = []
+
+    def __enter__(self) -> str:
+        self.log.append('enter')
+        return 'held'
+
+    def __exit__(self, kind: object, value: object, tb: object) -> bool:
+        self.log.append('exit ' + str(kind is None))
+        return False
+
+
+class Swallow:
+    def __enter__(self) -> str:
+        return 'held'
+
+    # a truthy answer suppresses an exception that is there, and suppresses nothing
+    # on the way out of a block that raised none
+    def __exit__(self, kind: object, value: object, tb: object) -> bool:
+        return True
+
+
+def fallen_off() -> list[str]:
+    guard = Guard()
+    with guard as name:
+        guard.log.append('body ' + name)
+    return guard.log
+
+
+def returned() -> list[str]:
+    guard = Guard()
+    with guard as name:
+        guard.log.append('body ' + name)
+        return guard.log
+    return []
+
+
+def broken(n: int) -> list[str]:
+    guard = Guard()
+    i = 0
+    while i < n:
+        with guard:
+            if i == 1:
+                break
+        i = i + 1
+    return guard.log
+
+
+def unwound() -> list[str]:
+    guard = Guard()
+    try:
+        with guard:
+            raise ValueError('boom')
+    except ValueError:
+        guard.log.append('caught')
+    return guard.log
+
+
+def nested() -> list[str]:
+    outer = Guard()
+    with outer:
+        inner = Guard()
+        with inner:
+            outer.log.append('inner ' + str(len(inner.log)))
+    return outer.log
+
+
+def suppressed() -> str:
+    with Swallow():
+        raise ValueError('boom')
+    return 'suppressed'
+
+
+def not_suppressing() -> str:
+    with Swallow():
+        pass
+    return 'fell off'
+",
+        &[
+            "m.fallen_off()",
+            "m.returned()",
+            "m.broken(4)",
+            "m.unwound()",
+            "m.nested()",
+            "m.suppressed()",
+            "m.not_suppressing()",
+        ],
+    );
+}
+
+#[test]
 fn an_early_exit_runs_the_finally_it_is_leaving() {
     // this was a silent wrong answer in a shipped feature: a `return` or a `break`
     // inside `try` skipped the `finally` entirely
@@ -11124,6 +11302,89 @@ def refused(reading: Reading) -> str:
             "m.refused(m.Reading(3))",
             // and the refusal left the field the getter reads alone
             "(lambda r: (m.refused(r), r.value))(m.Reading(3))",
+        ],
+    );
+}
+
+/// a property on a class another class extends is still whatever the receiver's type
+/// says it is
+///
+/// `Cell` has an in-module subclass, so it is emitted as a heap type an interpreted class
+/// may subclass and whose attributes may be rebound — and a compiled read or write of the
+/// pair is a *tested* call to the compiled half rather than a direct one. these are the
+/// receivers the test has to send back round the descriptor protocol, and each of them
+/// arrives after this module has been imported and its licence taken out: a subclass
+/// written in the interpreter that overrides a half, one that overrides the pair, and a
+/// half rebound on the class itself
+#[test]
+fn a_property_on_an_extended_class_sees_a_later_override() {
+    agree_python(
+        "propopen",
+        "\
+class Cell:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def v(self) -> int:
+        return self._n
+
+    @v.setter
+    def v(self, given: int) -> None:
+        self._n = given
+
+
+class Sized(Cell):
+    def width(self) -> int:
+        return 1
+
+
+class Fixed:
+    def __init__(self, n: int) -> None:
+        self._n = n
+
+    @property
+    def v(self) -> int:
+        return self._n
+
+
+class Wider(Fixed):
+    def width(self) -> int:
+        return 2
+
+
+def read(cell: Cell) -> int:
+    return cell.v
+
+
+def write(cell: Cell, given: int) -> None:
+    cell.v = given
+
+
+def read_fixed(fixed: Fixed) -> int:
+    return fixed.v
+",
+        &[
+            // the shape the licence is for: an exact `Cell`, read and written
+            "m.read(m.Cell(3))",
+            "(lambda c: (m.write(c, 4), m.read(c)))(m.Cell(0))",
+            // an interpreted subclass overriding the getter, built after import
+            "m.read(type('Get', (m.Cell,), {'v': property(lambda self: 99)})(1))",
+            // one overriding both halves, so that the write lands where it says
+            "(lambda t: (lambda c: (m.write(c, 4), c.seen))(t(0)))\
+             (type('Both', (m.Cell,), \
+             {'v': property(lambda self: 0, lambda self, given: setattr(self, 'seen', given * 2))}))",
+            // the in-module subclass inherits the pair, and reaches it the same way
+            "m.read(m.Sized(5))",
+            // a group with no setter written under it is licensed on the same terms, and
+            // the receivers that have to go round the protocol are the same ones
+            "m.read_fixed(m.Fixed(6))",
+            "m.read_fixed(type('Given', (m.Fixed,), \
+             {'v': property(lambda self: 0, lambda self, g: None)})(6))",
+            // and the pair rebound on the class itself, which no receiver's type shows
+            "(lambda _: m.read(m.Cell(3)))(setattr(m.Cell, 'v', property(lambda self: 77)))",
+            "(lambda _: m.read_fixed(m.Fixed(6)))\
+             (setattr(m.Fixed, 'v', property(lambda self: 8, lambda self, g: None)))",
         ],
     );
 }
@@ -11863,6 +12124,144 @@ class Wide:
         \x20     type(m.Restated.value).__name__)\n",
     );
     assert_eq!(out, "2 3 5 property");
+}
+
+/// a property written as a `get`/`set` block answers exactly as the pair it lowers to
+///
+/// the surface is the only difference: the transpiler emits the same `@property` and
+/// `@value.setter` over the same backing storage, so the compiled class has to publish
+/// the same object over the same halves. every reflective way of reaching a property is
+/// asked here, because a construct the backend recognises through parser markers rather
+/// than through written decorators could publish something that reads right and reflects
+/// wrong
+#[test]
+fn an_accessor_block_agrees() {
+    agree(
+        "accessorblock",
+        "\
+class Cell:
+    var v: int
+        get():
+            \"\"\"what the cell holds\"\"\"
+            return field
+        set(given):
+            field = given
+
+    let doubled: int
+        get() = self.v * 2
+
+
+def store(cell: Cell, given: int) -> int:
+    cell.v = given
+    return cell.v
+
+
+def raised(fn: object) -> str:
+    try:
+        fn()
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
+",
+        &[
+            "m.store(m.Cell(), 5)",
+            "(lambda c: (m.store(c, 5), c.v, c.doubled))(m.Cell())",
+            // what the type holds under each name, and what the object it holds is made of
+            "type(vars(m.Cell)['v']).__name__",
+            "isinstance(vars(m.Cell)['v'], property)",
+            "(vars(m.Cell)['v'].fget.__name__, vars(m.Cell)['v'].fget.__qualname__)",
+            "vars(m.Cell)['v'].fget.__doc__",
+            "vars(m.Cell)['v'].__doc__",
+            "vars(m.Cell)['v'].fdel",
+            "vars(m.Cell)['doubled'].fset",
+            // reached as a descriptor rather than through the instance
+            "(lambda c: (m.store(c, 3), vars(m.Cell)['v'].__get__(c, m.Cell)))(m.Cell())",
+            // the refusals name the property, which is what says `__set_name__` reached it
+            "m.raised(lambda: delattr(m.Cell(), 'v'))",
+            "m.raised(lambda: setattr(m.Cell(), 'doubled', 1))",
+            // the storage is the property's own, and a read before the first write
+            // raises rather than answering some class-level value
+            "m.raised(lambda: m.Cell().v)",
+            // each verb builds a new property and leaves the class holding the old one
+            "(lambda p: (type(p.deleter(lambda self: None)).__name__, p is vars(m.Cell)['v']))(vars(m.Cell)['v'])",
+        ],
+    );
+}
+
+/// and the halves the published property holds are this module's own bodies
+///
+/// [`an_accessor_block_agrees`] cannot say that: an interpreted fallback publishes a
+/// `property` that answers every one of those questions the same way. what tells the two
+/// apart is the half inside — a `method_descriptor` is compiled, a `function` is the
+/// interpreted definition
+#[test]
+fn an_accessor_blocks_halves_are_the_compiled_bodies() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_accessorhalves");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Cell:
+    var v: int
+        get() = field
+        set(given):
+            field = given
+";
+    let built = match build_source(
+        source,
+        "by_diff_accessorhalves",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_accessorhalves as m\n\
+         p = m.Cell.__dict__['v']\n\
+         print(type(p).__name__, type(p.fget).__name__, type(p.fset).__name__)\n",
+    );
+    assert_eq!(out, "property method_descriptor method_descriptor");
+}
+
+/// an accessor block whose storage carries an initialiser is left interpreted
+///
+/// the transpiler moves that initialiser into `__init__`, and the emitted class has no
+/// constructor of its own to write it in — so the class is declined and its interpreted
+/// definition is what runs, which still answers exactly as the source says
+#[test]
+fn an_accessor_block_with_an_initialiser_agrees() {
+    agree_with_declines(
+        "accessorinit",
+        "\
+class Cell:
+    var v: int = 4
+        get() = field
+        set(given):
+            field = given
+
+
+def store(cell: Cell, given: int) -> int:
+    cell.v = given
+    return cell.v
+",
+        &[
+            "m.Cell().v",
+            "m.store(m.Cell(), 5)",
+            "type(vars(m.Cell)['v']).__name__",
+            "vars(m.Cell)['v'].fget(m.Cell())",
+            "hasattr(m.Cell, '_Cell__v')",
+        ],
+    );
 }
 
 #[test]
@@ -21640,6 +22039,173 @@ def mixed(v: object) -> str:
 }
 
 #[test]
+fn class_patterns_over_an_emitted_layout_agree() {
+    // a class pattern over a class the compiler emitted reads the subject's *fields*
+    // rather than looking its attributes up, and binds them in the representation the
+    // layout holds them in — so `a` and `b` here are machine integers and `a > b` is an
+    // integer comparison.
+    //
+    // the three functions are the places that can go wrong. `classify` binds under a
+    // guard that both succeeds and fails, and a failed guard has to leave the next case
+    // free to read the same fields again. `named` binds one name from an `int` field in
+    // one case and from a `str` field in another, so the name has to hold whichever
+    // arrives. `nothing` never matches at all
+    agree_python(
+        "layoutclass",
+        "\
+class Point:
+    __match_args__ = ('x', 'y')
+
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+
+class Tagged:
+    __match_args__ = ('name',)
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def classify(v: object) -> int:
+    match v:
+        case Point(a, b) if a > b:
+            return a - b
+        case Point(a, b):
+            return a + b
+        case _:
+            return -1
+
+
+def named(v: object) -> str:
+    match v:
+        case Point(x=a):
+            return 'point ' + str(a)
+        case Tagged(a):
+            return 'tag ' + a
+        case _:
+            return 'other'
+
+
+def nothing(v: object) -> str:
+    match v:
+        case Point(a, b):
+            return str(a) + str(b)
+        case _:
+            return 'no'
+",
+        &[
+            "[m.classify(v) for v in [m.Point(5, 2), m.Point(2, 5), m.Point(3, 3)]]",
+            "[m.classify(v) for v in [7, 'hi', None, m.Tagged('t')]]",
+            "[m.named(v) for v in [m.Point(1, 2), m.Tagged('t'), 9]]",
+            "[m.nothing(v) for v in [None, 'x', m.Point(1, 2)]]",
+        ],
+    );
+}
+
+#[test]
+fn a_class_pattern_over_a_base_agrees() {
+    // a class another one in the module extends is emitted as a mutable heap type:
+    // python can write to it, and `__match_args__` is one of the names it could rebind.
+    // so neither class reads fields here, and both patterns go out through the lookup.
+    //
+    // what this establishes is that the *answers* still agree, subclass included:
+    // `case Shape(n)` matches a `Square`, and the case order is what decides which of
+    // the two arms a `Square` reaches
+    agree_python(
+        "baseclass",
+        "\
+class Shape:
+    __match_args__ = ('size',)
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+
+
+class Square(Shape):
+    pass
+
+
+def kind(v: object) -> str:
+    match v:
+        case Square(n):
+            return 'square ' + str(n)
+        case Shape(n):
+            return 'shape ' + str(n)
+        case _:
+            return 'other'
+
+
+def base_first(v: object) -> str:
+    match v:
+        case Shape(n):
+            return 'shape ' + str(n)
+        case Square(n):
+            return 'square ' + str(n)
+        case _:
+            return 'other'
+",
+        &[
+            "[m.kind(v) for v in [m.Square(2), m.Shape(3), 7, None]]",
+            "[m.base_first(v) for v in [m.Square(2), m.Shape(3), 7, None]]",
+            "isinstance(m.Square(1), m.Shape)",
+        ],
+    );
+}
+
+#[test]
+fn a_class_pattern_over_an_attribute_that_is_not_a_field_agrees() {
+    // `__match_args__` may name anything the subject answers to. a `@property` is
+    // computed rather than stored, and an attribute `__init__` assigns on only some
+    // paths may not be there at all — python answers an absent one in a class pattern
+    // by moving to the next case rather than by raising, which a field read at a fixed
+    // offset has no way to say. both stay on the lookup
+    agree_python(
+        "notafield",
+        "\
+class Boxed:
+    __match_args__ = ('doubled',)
+
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    @property
+    def doubled(self) -> int:
+        return self.n * 2
+
+
+class Maybe:
+    __match_args__ = ('v',)
+
+    def __init__(self, present: bool) -> None:
+        if present:
+            self.v = 1
+
+
+def peek(v: object) -> int:
+    match v:
+        case Boxed(d):
+            return d
+        case _:
+            return -1
+
+
+def look(v: object) -> str:
+    match v:
+        case Maybe(n):
+            return 'has ' + str(n)
+        case _:
+            return 'none'
+",
+        &[
+            "[m.peek(v) for v in [m.Boxed(4), 7, None]]",
+            "[m.look(v) for v in [m.Maybe(True), m.Maybe(False), 7]]",
+        ],
+    );
+}
+
+#[test]
 fn starred_class_patterns_agree() {
     // basedpython's `case Cls(a, *_, b)` reads `b` from the *end* of the class's
     // `__match_args__`, which only the runtime knows the length of. the compiled
@@ -22332,6 +22898,149 @@ class Vec:
             "type(_capture(lambda a, b: a - b, m.Vec(1, 2), m.Vec(1, 2))).__name__",
             "type(_capture(lambda a, b: a / b, 2, m.Vec(1, 2))).__name__",
             "sum([m.Vec(1, 1), m.Vec(2, 2)], m.Vec(0, 0))",
+        ],
+    );
+}
+
+#[test]
+fn an_operator_between_two_of_one_class_answers_from_that_class() {
+    // an operator between two operands of one emitted class is the class's own body and
+    // nothing else, so it is called directly rather than through the number and
+    // comparison slots. what that has to keep is everything the slots would have done:
+    //
+    // `Widened` overrides its base's `__add__`, and `sum_bases` takes the base — so an
+    // operator on a class something extends is still the receiver's own body, not the
+    // one the declared type names. `Loose` answers `NotImplemented` for an operand it
+    // does not recognise, which is python's way of asking the *other* operand, so its
+    // operator keeps the slot too — including when the operand is an `int`, a pair of
+    // two types where the reflected direction is still live
+    //
+    // `Odd` is the one that changes: it refuses even itself, and `refuses_itself`
+    // answered `True` compiled against `False` interpreted, because the slot was reached
+    // through `PyObject_RichCompareBool`, which takes identity as equality before it
+    // asks the type at all
+    agree_python(
+        "directoperators",
+        "\
+class Money:
+    def __init__(self, cents: int) -> None:
+        self.cents = cents
+
+    def __add__(self, other: 'Money') -> 'Money':
+        return Money(self.cents + other.cents)
+
+    def __lt__(self, other: 'Money') -> bool:
+        return self.cents < other.cents
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Money) and self.cents == other.cents
+
+    def __hash__(self) -> int:
+        return self.cents
+
+    def __repr__(self) -> str:
+        return 'Money(' + str(self.cents) + ')'
+
+
+class Odd:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __eq__(self, other: object) -> bool:
+        return False
+
+    def __hash__(self) -> int:
+        return 0
+
+
+class Opened:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __add__(self, other: 'Opened') -> int:
+        return self.n + other.n
+
+
+class Widened(Opened):
+    def __add__(self, other: 'Opened') -> int:
+        return self.n * other.n
+
+
+class Loose:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __add__(self, other: object) -> object:
+        if isinstance(other, Loose):
+            return Loose(self.n + other.n)
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return 'Loose(' + str(self.n) + ')'
+
+
+def total(a: Money, b: Money) -> Money:
+    return a + b
+
+
+def under(a: Money, b: Money) -> bool:
+    return a < b
+
+
+def over(a: Money, b: Money) -> bool:
+    return a > b
+
+
+def equal(a: Money, b: Money) -> bool:
+    return a == b
+
+
+def differs(a: Money, b: Money) -> bool:
+    return a != b
+
+
+def accumulate(a: Money, b: Money) -> Money:
+    a += b
+    return a
+
+
+def refuses_itself(a: Odd) -> bool:
+    return a == a
+
+
+def sum_bases(a: Opened, b: Opened) -> int:
+    return a + b
+
+
+def loose_total(a: Loose, b: Loose) -> object:
+    return a + b
+
+",
+        &[
+            "m.total(m.Money(1), m.Money(2))",
+            "m.under(m.Money(1), m.Money(2))",
+            "m.under(m.Money(2), m.Money(1))",
+            // no `__gt__` is written, so python swaps and uses the other operand's `__lt__`
+            "m.over(m.Money(2), m.Money(1))",
+            "m.equal(m.Money(1), m.Money(1))",
+            "m.equal(m.Money(1), m.Money(2))",
+            // no `__ne__` is written either, so this is `object`'s: negate `__eq__`
+            "m.differs(m.Money(1), m.Money(1))",
+            "m.differs(m.Money(1), m.Money(2))",
+            // no `__iadd__`, so `+=` is `__add__` and leaves the operand alone
+            "m.accumulate(m.Money(1), m.Money(2))",
+            "m.refuses_itself(m.Odd(1))",
+            // the receiver's own override, not the base's, on a receiver typed as the base
+            "m.sum_bases(m.Widened(3), m.Widened(4))",
+            "m.sum_bases(m.Opened(3), m.Opened(4))",
+            "m.loose_total(m.Loose(1), m.Loose(2))",
+            "type(_capture(m.loose_total, m.Loose(1), 1)).__name__",
+            // and the operators still read the same way from outside the module
+            "m.Money(1) + m.Money(2)",
+            "m.Money(1) == m.Money(1)",
+            "m.Odd(1) == m.Odd(1)",
+            "m.Widened(3) + m.Widened(4)",
+            "sorted([m.Money(3), m.Money(1), m.Money(2)])",
         ],
     );
 }

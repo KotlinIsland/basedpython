@@ -229,11 +229,13 @@ it says exactly what the type parameter costs. same for `mandel` against
 `mandel_inline`, and for `objects` against `alloc`, `fields` and `methods`
 
 `props_ext` is `props` with one line added — a class in the same module that
-extends the one holding the pair. that makes the holder a mutable heap type,
-because a subclass could override a half, so every read and write goes round the
-descriptor protocol instead of calling the half. the difference between the two
-rows is what that costs, and `fields` is the floor under both: the same reads and
-writes done directly
+extends the one holding the pair. that makes the holder a mutable heap type an
+interpreted class may subclass and whose attributes may be rebound, so the direct
+call `props` gets is not licensed: each read and write asks first whether the
+receiver is exactly that class and the pair is still the one that was compiled,
+and takes the descriptor protocol when it is not. the difference between the two
+rows is what that question costs, and `fields` is the floor under both: the same
+reads and writes done directly
 
 `props_get` is the third of that set: the same read through a `@property` with no
 setter written under it. python folds a group of one into a `property` just as it

@@ -22,9 +22,9 @@ use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
 use crate::types::{
-    ClassPatternPositionalResult, CycleDetector, ProgramEnvironment, SpecialFormType, Type,
-    TypeQualifiers, binding_type, class_pattern_positional_result, infer_complete_scope_types,
-    inferred_declaration,
+    ClassPatternPositionalResult, ClassPatternPositionalSource, CycleDetector, ProgramEnvironment,
+    SpecialFormType, Type, TypeQualifiers, binding_type, class_pattern_positional_result,
+    class_pattern_positional_sources, infer_complete_scope_types, inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::node_key::NodeKey;
@@ -124,6 +124,51 @@ impl<'db> SemanticModel<'db> {
             ClassPatternPositionalResult::Limit(limit) => Some(limit),
             ClassPatternPositionalResult::InvalidType(_) => None,
         }
+    }
+
+    /// basedpython: the subject attribute each positional subpattern of a class pattern
+    /// reads, resolved through `cls`'s `__match_args__`.
+    ///
+    /// One entry per subpattern, in the order they are written. `None` where the position
+    /// names no attribute: python's match-self classes hand the subject over whole, and a
+    /// `__match_args__` that is not a fixed tuple of string literals settles nothing.
+    ///
+    /// `from_end` is how many of the subpatterns stand after a basedpython `*_`, and so
+    /// count back from the last entry rather than forward from the first.
+    ///
+    /// The native backend reads this to turn `case Point(a, b)` over a class it emitted
+    /// into two field loads at compile-time offsets.
+    pub fn class_pattern_positional_attributes(
+        &self,
+        cls: &ast::Expr,
+        count: usize,
+        from_end: usize,
+    ) -> Vec<Option<Name>> {
+        let Some(class) = cls.inferred_type(self).and_then(Type::as_class_literal) else {
+            return vec![None; count];
+        };
+        class_pattern_positional_sources(
+            self.db,
+            &self.program_environment(),
+            class,
+            count,
+            from_end,
+        )
+        .into_iter()
+        .map(|source| match source {
+            ClassPatternPositionalSource::Attribute(name) => Some(name),
+            ClassPatternPositionalSource::MatchSelf | ClassPatternPositionalSource::Unknown => None,
+        })
+        .collect()
+    }
+
+    /// basedpython: the instance type a class pattern's class stands for — what a subject
+    /// that passes the pattern's `isinstance` test is.
+    ///
+    /// `None` where the pattern's class is not a class at all.
+    pub fn class_pattern_instance_type(&self, cls: &ast::Expr) -> Option<Type<'db>> {
+        cls.inferred_type(self)?
+            .to_instance_approximation(self.db, &self.program_environment())
     }
 
     /// basedpython: the source text of the specialization step the transpiler

@@ -1082,6 +1082,23 @@ static inline PyObject *By_InternedStr(const char *data, Py_ssize_t size) {
     return text;
 }
 
+/* a name a runtime helper always looks up under, interned once for the life of the
+ * module and kept in the caller's own static
+ *
+ * `PyObject_GetAttrString` builds a fresh `str` for every call it is given. that
+ * string is hashed from scratch, compared byte for byte in each dict along the mro,
+ * and freed again — and its *address* is new every time, which is what the
+ * interpreter's type attribute cache is keyed on, so a lookup made that way can never
+ * hit that cache. an interned name carries its hash with it and is found by pointer.
+ *
+ * the reference is deliberately never released: the name is wanted for as long as the
+ * module can run, and an interned string is one object however many times it is asked
+ * for */
+static inline PyObject *By_FixedName(PyObject **slot, const char *name, Py_ssize_t size) {
+    if (*slot == NULL) *slot = By_InternedStr(name, size);
+    return *slot;
+}
+
 /* the builtins namespace this module's compiled code falls back to
  *
  * one per emitted module, because each is its own translation unit — which is the
@@ -2825,6 +2842,102 @@ static inline char By_MethodStands(PyObject *o, PyObject *type,
     return (char)(licence->version != 0u && o != NULL && (PyObject *)Py_TYPE(o) == type
                   && ((PyTypeObject *)type)->tp_version_tag == licence->version
                   && !By_DictShadowsAt(o, licence->dict_offset, licence->name));
+}
+
+/* a read or a write of one `@property`, licensed to go straight to the compiled half
+ *
+ * a class another class extends is emitted as a heap type that sets
+ * `Py_TPFLAGS_BASETYPE`, so a class written in the interpreter may subclass it and
+ * override a half — which is why the direct call a class nothing extends gets is not
+ * available here. without a middle option the read and the write go the whole way round
+ * the descriptor protocol, by name, which on the `props_ext` benchmark is 28 times what
+ * the same loop costs with this test in front of the halves.
+ *
+ * this is that middle option, and it is the [`ByMethodLicence`] question with one part
+ * of it gone. a *different class* is caught by comparing the receiver's type, which is
+ * exact: an interpreted subclass has a type object of its own, whether or not it
+ * overrides anything. a half *rebound* on the class — `C.v = property(...)`, or a write
+ * to any base — is caught by the version tag, which the interpreter zeroes on the type
+ * and on every subclass of it whenever one of them is written to.
+ *
+ * what is *not* asked, and does not need to be, is whether the instance shadows the
+ * name. a `property` is a data descriptor, so `PyObject_GenericGetAttr` takes it from
+ * the type and never consults the instance dict — a method needs that question only
+ * because it is a non-data descriptor a value on the instance can sit in front of.
+ *
+ * a zero version means the licence was refused, and no version tag is ever zero, so a
+ * site armed with zero takes the protocol for the life of the process */
+typedef struct {
+    unsigned int version;
+} ByAccessorLicence;
+
+#define BY_ACCESSOR_LICENCE_INIT { 0u }
+
+/* whether `property_object`'s `half` is the descriptor `def` was published under
+ *
+ * both halves are asked about even where the site only reads one, because what this has
+ * to establish is that the object standing under the name is the one this module built —
+ * a decorator that wrapped only the setter leaves the getter reachable and the pair no
+ * longer ours. `def` is NULL for a half the class never wrote, and python answers `None`
+ * for one a `property` was not given, so absence has to match absence too */
+static inline int By_AccessorHalfIs(PyObject *property_object, const char *half,
+                                    PyMethodDef *def) {
+    PyObject *found = PyObject_GetAttrString(property_object, half);
+    int matches;
+    if (found == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    if (def == NULL) {
+        matches = found == Py_None;
+    } else {
+        matches = Py_IS_TYPE(found, &PyMethodDescr_Type)
+                  && ((PyMethodDescrObject *)found)->d_method == def;
+    }
+    Py_DECREF(found);
+    return matches;
+}
+
+/* work out, once at import, whether `type`'s `name` is still the pair this module
+ * compiled — and record the version that held when it was
+ *
+ * the type is asked rather than trusted, so a decorator that replaced the property, a
+ * twin whose own `property` was carried over, or a base that answers the name first all
+ * refuse the licence instead of being called past */
+static inline void By_ArmAccessor(ByAccessorLicence *licence, PyObject *type, const char *name,
+                                  PyMethodDef *get, PyMethodDef *set) {
+    licence->version = 0u;
+    if (type == NULL || !PyType_Check(type)) return;
+    PyTypeObject *owner = (PyTypeObject *)type;
+    /* the licence skips the whole lookup, so a type that answers a read or a write with
+     * anything of its own is not one this can speak for */
+    if (owner->tp_getattro != PyObject_GenericGetAttr) return;
+    if (owner->tp_setattro != PyObject_GenericSetAttr) return;
+    PyObject *found = PyObject_GetAttrString(type, name);
+    if (found == NULL) {
+        PyErr_Clear();
+        return;
+    }
+    /* a `property` reached through the type hands back itself rather than calling a
+     * half, which is what makes the two halves readable off it here */
+    int published = Py_IS_TYPE(found, &PyProperty_Type) && By_AccessorHalfIs(found, "fget", get)
+                    && By_AccessorHalfIs(found, "fset", set);
+    Py_DECREF(found);
+    if (!published) return;
+#if PY_VERSION_HEX >= 0x030C0000
+    /* from 3.12 the tag is handed out on request rather than by whoever looks an
+     * attribute up, and a request is the only thing that reliably produces one */
+    if (!PyUnstable_Type_AssignVersionTag(owner)) return;
+#endif
+    /* zero is both "never given a tag" and "written to since", and either is a refusal */
+    licence->version = owner->tp_version_tag;
+}
+
+/* whether `o` is exactly `type` and `type` still answers as [`By_ArmAccessor`] found */
+static inline char By_AccessorStands(PyObject *o, PyObject *type,
+                                     const ByAccessorLicence *licence) {
+    return (char)(licence->version != 0u && o != NULL && (PyObject *)Py_TYPE(o) == type
+                  && ((PyTypeObject *)type)->tp_version_tag == licence->version);
 }
 
 /* what one call site remembers about the method name it keeps calling
@@ -5032,6 +5145,8 @@ static inline int By_MatchesSelf(PyObject *class_) {
  */
 static inline PyObject *By_MatchPositional(PyObject *subject, PyObject *class_,
                                            Py_ssize_t index, Py_ssize_t count) {
+    static PyObject *by_match_args = NULL;
+    PyObject *key;
     if (subject == NULL || class_ == NULL) return NULL;
     const char *class_name = ((PyTypeObject *)class_)->tp_name;
     if (By_MatchesSelf(class_)) {
@@ -5043,7 +5158,11 @@ static inline PyObject *By_MatchPositional(PyObject *subject, PyObject *class_,
         }
         return By_NewRef(subject);
     }
-    PyObject *names = PyObject_GetAttrString(class_, "__match_args__");
+    key = By_FixedName(&by_match_args, "__match_args__", 14);
+    if (key == NULL) return NULL;
+    /* one of these per positional sub-pattern, so `case Point(x, y)` asks twice for
+     * every subject that reaches the arm */
+    PyObject *names = PyObject_GetAttr(class_, key);
     if (names == NULL) {
         if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return NULL;
         PyErr_Clear();
@@ -6672,9 +6791,12 @@ static inline ByArrayHeader *By_ArrayGrow(ByArrayHeader *array, size_t width) {
  * the type errors are python's own, wording included. the harness compares
  * exception text, so a difference there is one a user would see */
 static inline char By_Extend(PyObject *container, PyObject *source, int mapping) {
+    static PyObject *by_keys = NULL;
     if (container == NULL || source == NULL) return 2;
     if (mapping) {
-        PyObject *keys = PyObject_GetAttrString(source, "keys");
+        PyObject *name = By_FixedName(&by_keys, "keys", 4);
+        if (name == NULL) return 2;
+        PyObject *keys = PyObject_GetAttr(source, name);
         if (keys == NULL) {
             PyErr_Clear();
             PyErr_Format(PyExc_TypeError, "'%.200s' object is not a mapping",
@@ -8263,14 +8385,120 @@ static inline int By_BindArgs(PyObject *const *args, Py_ssize_t nargs, PyObject 
 
 /* `with EXPR`: the manager's `__enter__`, looked up on the *type* the way the
  * interpreter does rather than on the instance */
+/* what one `with` block's protocol lookup resolved to last time
+ *
+ * interning the name took the lookup down from three quarters of the `with_`
+ * benchmark's compiled loop to a quarter of it, and a quarter is still more than
+ * either of the calls it resolves costs. the same block enters and leaves the same
+ * manager every pass, so the answer is the same answer every time.
+ *
+ * this is a cache with a validity test rather than an assumption, and the test is the
+ * one the interpreter's own specialiser makes: the receiver's type, and that type's
+ * version tag. rebinding `__enter__` on the class — or on any of its bases — runs
+ * `PyType_Modified`, which zeroes the tag on the class and on every subclass, so a
+ * site holding the old answer stops matching at the very next call. a manager whose
+ * `__class__` was reassigned since arrives with a different type and misses on the
+ * pointer.
+ *
+ * the type is compared and never dereferenced, so a type freed since cannot be read
+ * through the pointer; and a version tag is drawn from a counter that only ever rises,
+ * so a type built where a freed one stood cannot answer to the freed one's version.
+ *
+ * on a free-threaded build there is no site at all: the fields cannot be read or
+ * written as one, and an emitted module says `Py_MOD_GIL_NOT_USED`, so two threads
+ * arming at once could otherwise leave one type's version paired with another type's
+ * method — which is not a wrong answer but a call into the wrong object */
+typedef struct {
+    PyObject *type;
+    unsigned int version;
+    /* borrowed. what is kept is the entry the type's own dict holds, and the version
+     * tag is what stands for that entry not having moved — see [`By_ArmProtocolSite`] */
+    PyObject *method;
+    unsigned int misses;
+} ByProtocolSite;
+
+#define BY_PROTOCOL_SITE_INIT { NULL, 0u, NULL, 0u }
+
+/* how many types a site sees before it settles for the ordinary lookup, on the same
+ * reasoning as [`BY_METHOD_SITE_MISSES`]: a site still re-deriving by now is one whose
+ * managers vary, and each further attempt is a lookup on top of the one it saves */
+#define BY_PROTOCOL_SITE_MISSES 8u
+
+#ifndef Py_GIL_DISABLED
+
+/* work out what `name` on `tp` is, and record it — or record that it cannot be served
+ *
+ * the type and its version are recorded before the first thing that can refuse, so a
+ * manager this site will never be able to serve is asked about once and then costs the
+ * same two comparisons as a hit */
+static void By_ArmProtocolSite(ByProtocolSite *site, PyTypeObject *tp, PyObject *name) {
+    PyObject *found;
+    int stands;
+    site->type = (PyObject *)tp;
+    site->version = tp->tp_version_tag;
+    site->method = NULL;
+    /* a metaclass can answer the name with something the class's own version tag says
+     * nothing about: `PyType_Modified` on a metaclass reaches that metaclass's
+     * subclasses, and not the classes that are instances of it. refusing anything but a
+     * plain `type` also pins the lookup below to `type.__getattribute__`, so nothing of
+     * the class's own can run inside it */
+    if (!Py_IS_TYPE(tp, &PyType_Type)) return;
+    found = PyObject_GetAttr((PyObject *)tp, name);
+    if (found == NULL) {
+        PyErr_Clear();
+        return;
+    }
+    /* what is kept is borrowed, so it has to be the object the type's dict holds rather
+     * than something a `__get__` built on the way out and handed over. these two are
+     * the ones that give themselves back when the name is read off the class, where a
+     * `classmethod` or a `property` would build something */
+    stands = PyFunction_Check(found) || Py_IS_TYPE(found, &PyMethodDescr_Type);
+    Py_DECREF(found);
+    if (!stands) return;
+#if PY_VERSION_HEX >= 0x030C0000
+    /* from 3.12 the tag is handed out on request rather than by whoever reads an
+     * attribute, and a request is the only thing that reliably produces one */
+    if (!PyUnstable_Type_AssignVersionTag(tp)) return;
+#endif
+    site->version = tp->tp_version_tag;
+    /* zero is both "never given a tag" and "written to since", and either is a refusal */
+    if (site->version == 0u) return;
+    site->method = found;
+}
+
+#endif /* Py_GIL_DISABLED */
+
+/* `getattr(type(manager), name)` through a memo of what it last answered */
+static inline PyObject *By_ProtocolMethod(ByProtocolSite *site, PyObject *manager,
+                                          PyObject *name) {
+    PyTypeObject *tp = Py_TYPE(manager);
+#ifndef Py_GIL_DISABLED
+    if (BY_UNLIKELY((PyObject *)tp != site->type || tp->tp_version_tag != site->version)) {
+        if (site->misses >= BY_PROTOCOL_SITE_MISSES) {
+            return PyObject_GetAttr((PyObject *)tp, name);
+        }
+        site->misses++;
+        By_ArmProtocolSite(site, tp, name);
+    }
+    if (BY_LIKELY(site->method != NULL)) return By_NewRef(site->method);
+#else
+    (void)site;
+#endif
+    return PyObject_GetAttr((PyObject *)tp, name);
+}
+
 /* `__aenter__` and `__aexit__`, which hand back *awaitables* rather than answers
  *
  * so these only start the call — the caller awaits what comes back, and only then
  * has the value `async with` binds or the answer that decides suppression
  */
-static inline PyObject *By_AsyncEnter(PyObject *manager) {
+static inline PyObject *By_AsyncEnter(ByProtocolSite *site, PyObject *manager) {
+    static PyObject *by_aenter = NULL;
+    PyObject *name;
     if (manager == NULL) return NULL;
-    PyObject *method = PyObject_GetAttrString((PyObject *)Py_TYPE(manager), "__aenter__");
+    name = By_FixedName(&by_aenter, "__aenter__", 10);
+    if (name == NULL) return NULL;
+    PyObject *method = By_ProtocolMethod(site, manager, name);
     if (method == NULL) {
         PyErr_Format(PyExc_TypeError,
                      "'%s' object does not support the asynchronous context manager protocol",
@@ -8283,9 +8511,14 @@ static inline PyObject *By_AsyncEnter(PyObject *manager) {
     return result;
 }
 
-static inline PyObject *By_AsyncExit(PyObject *manager, PyObject *exception) {
+static inline PyObject *By_AsyncExit(ByProtocolSite *site, PyObject *manager,
+                                     PyObject *exception) {
+    static PyObject *by_aexit = NULL;
+    PyObject *name;
     if (manager == NULL) return NULL;
-    PyObject *method = PyObject_GetAttrString((PyObject *)Py_TYPE(manager), "__aexit__");
+    name = By_FixedName(&by_aexit, "__aexit__", 9);
+    if (name == NULL) return NULL;
+    PyObject *method = By_ProtocolMethod(site, manager, name);
     if (method == NULL) {
         PyErr_Format(PyExc_TypeError,
                      "'%s' object does not support the asynchronous context manager protocol "
@@ -8310,9 +8543,13 @@ static inline PyObject *By_AsyncExit(PyObject *manager, PyObject *exception) {
     return result;
 }
 
-static inline PyObject *By_Enter(PyObject *manager) {
+static inline PyObject *By_Enter(ByProtocolSite *site, PyObject *manager) {
+    static PyObject *by_enter = NULL;
+    PyObject *name;
     if (manager == NULL) return NULL;
-    PyObject *method = PyObject_GetAttrString((PyObject *)Py_TYPE(manager), "__enter__");
+    name = By_FixedName(&by_enter, "__enter__", 9);
+    if (name == NULL) return NULL;
+    PyObject *method = By_ProtocolMethod(site, manager, name);
     if (method == NULL) {
         PyErr_Format(PyExc_TypeError, "'%s' object does not support the context manager protocol",
                      Py_TYPE(manager)->tp_name);
@@ -8329,9 +8566,14 @@ static inline PyObject *By_Enter(PyObject *manager) {
  * returns 1 when the exception was *suppressed*, 0 when it was not, and -1 when
  * `__exit__` itself raised. the caller re-raises on 0, which is what makes
  * `with` transparent to an exception it does not swallow */
-static inline int By_ExitContext(PyObject *manager, PyObject *exception) {
+static inline int By_ExitContext(ByProtocolSite *site, PyObject *manager,
+                                 PyObject *exception) {
+    static PyObject *by_exit = NULL;
+    PyObject *name;
     if (manager == NULL) return -1;
-    PyObject *method = PyObject_GetAttrString((PyObject *)Py_TYPE(manager), "__exit__");
+    name = By_FixedName(&by_exit, "__exit__", 8);
+    if (name == NULL) return -1;
+    PyObject *method = By_ProtocolMethod(site, manager, name);
     if (method == NULL) return -1;
     /* `None` is the normal path just as NULL is: the frontend hands over a boxed
        `None`, and reading a traceback off it would be a wild pointer */

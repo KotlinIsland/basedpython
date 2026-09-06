@@ -158,6 +158,16 @@ fn print_op(function: &Function, op: &Op) -> String {
             name(*dest),
             value(src)
         ),
+        Op::AccessorStands {
+            dest,
+            src,
+            class,
+            name: attribute,
+        } => format!(
+            "{} = accessor-stands {} {class}.{attribute}",
+            name(*dest),
+            value(src)
+        ),
         Op::DictShadows {
             dest,
             src,
