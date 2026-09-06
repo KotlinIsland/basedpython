@@ -1704,6 +1704,11 @@ impl<'db> Signature<'db> {
         if receiver.has_typevar(db, env) {
             return false;
         }
+        // a bound naming another type variable describes a relation, not a domain the receiver
+        // can be measured against on its own
+        if typevar.typevar(db).bound_mentions_typevars(db) {
+            return false;
+        }
         // basedpython: a use-site projection is a *view* of the receiver — `S[out int]` is an
         // `S[int]` a caller has undertaken only to read. Whether it satisfies the domain is a
         // question about the object, and the object is the same one, so a projected receiver is

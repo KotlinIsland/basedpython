@@ -164,13 +164,46 @@ a parameter list is not a type, so it cannot cap a range of types.
 class C[T: int..(*: *, **: *)]: ...
 ```
 
-## a generic lower bound is rejected
+## either end can name a type parameter already in scope
+
+both ends follow the same scope rule as a plain upper bound: they may name a type parameter that
+precedes them in the same list, or one belonging to an enclosing list.
 
 ```by
 class C[T]:
-    # error: [invalid-type-variable-bound] "TypeVar lower bound cannot be generic"
     def f[U: T..object](self, x: U) -> U:
         return x
+
+def g[T, U: T..object](t: T, u: U) -> U:
+    return u
+```
+
+a later parameter is not in scope yet, at either end.
+
+```by
+# error: [invalid-type-variable-bound] "TypeVar lower bound cannot reference later type parameter `U`"
+def h[T: U..object, U](t: T) -> T:
+    return t
+```
+
+## a range a named parameter cannot inhabit
+
+a range whose ends name a type parameter is read at its widest: whatever that parameter is, is there
+room between the two ends? `T` could be `bool`, so this range is inhabited.
+
+```by
+def f[T, R: T..int](t: T, r: R) -> R:
+    return r
+```
+
+`str` and `int` share no value, so the only `T` that leaves anything between the ends is `Never`,
+and every call would be rejected from one side or the other. a declaration nothing can use is
+reported where it is written.
+
+```by
+# error: [invalid-type-variable-bound] "TypeVar bound range `T@f..int` is inhabited only by `Never`"
+def f[T: str, R: T..int](t: T, r: R) -> R:
+    return r
 ```
 
 ## both ends are required

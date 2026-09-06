@@ -37,11 +37,11 @@ use crate::types::typed_dict::{
 use crate::types::typevar::pack_bound_violation;
 use crate::types::typevar::{BindingContext, TypeVarSet};
 use crate::types::{
-    BoundTypeVarInstance, CallArguments, CallDunderError, CallableBinding, CycleDetector,
-    DisplaySettings, DynamicType, InternedType, KnownClass, KnownInstanceType, LintDiagnosticGuard,
-    MemberLookupPolicy, Parameter, Parameters, SpecialFormType, StaticClassLiteral, Type,
-    TypeAliasType, TypeAndQualifiers, TypeContext, TypeMapping, TypeVarBoundOrConstraints,
-    UnionType, UnionTypeInstance, any_over_type, todo_type,
+    ApplySpecialization, BoundTypeVarInstance, CallArguments, CallDunderError, CallableBinding,
+    CycleDetector, DisplaySettings, DynamicType, InternedType, KnownClass, KnownInstanceType,
+    LintDiagnosticGuard, MemberLookupPolicy, Parameter, Parameters, SpecialFormType,
+    StaticClassLiteral, Type, TypeAliasType, TypeAndQualifiers, TypeContext, TypeMapping,
+    TypeVarBoundOrConstraints, UnionType, UnionTypeInstance, any_over_type, todo_type,
 };
 use crate::{Db, FxOrderSet, ProgramEnvironment};
 use ty_python_core::definition::Definition;
@@ -107,6 +107,42 @@ fn add_typevar_definition<'db>(
     );
 }
 
+/// The type arguments already bound to the type parameters that precede the one being checked.
+///
+/// A type parameter's bound may name one that precedes it, so it has to be read with those
+/// arguments substituted in. Both specialization pipelines build their argument list in
+/// declaration order, so the prefix is whatever they have accumulated when the check runs.
+#[derive(Clone, Copy)]
+struct TypeArgumentPrefix<'a, 'db> {
+    generic_context: GenericContext<'db>,
+    provided: &'a [Option<Type<'db>>],
+}
+
+impl<'db> TypeArgumentPrefix<'_, 'db> {
+    fn substitute(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        ty: Option<Type<'db>>,
+    ) -> Option<Type<'db>> {
+        let ty = ty?;
+        if !ty.has_typevar(db, env) {
+            return Some(ty);
+        }
+        let types = self.generic_context.provided_prefix(db, self.provided);
+        Some(ty.apply_type_mapping(
+            db,
+            env,
+            &TypeMapping::ApplySpecialization(ApplySpecialization::Partial {
+                generic_context: self.generic_context,
+                types: &types,
+                skip: None,
+            }),
+            TypeContext::default(),
+        ))
+    }
+}
+
 enum ExplicitSpecializationError {
     InvalidParamSpec,
     ParamSpecForTypeVar,
@@ -164,6 +200,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         typevar: BoundTypeVarInstance<'db>,
         provided_type: Type<'db>,
         node: impl Ranged + Copy,
+        prefix: TypeArgumentPrefix<'_, 'db>,
     ) -> Option<ExplicitSpecializationError> {
         let env = self.program_environment();
         let db = self.db();
@@ -173,8 +210,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // against bounds/constraints, but recording the expression for deferred
         // checking at end of scope. This would avoid a lot of cycles caused by eagerly
         // doing assignment checks here.
-        let lower_bound = typevar.typevar(db).lower_bound(db);
-        let bound_or_constraints = typevar.typevar(db).bound_or_constraints(db, env);
+        // a bound may name a type parameter that precedes this one, and what it means here is
+        // the argument that filled that parameter — not the parameter itself
+        let lower_bound = prefix.substitute(db, env, typevar.typevar(db).lower_bound(db));
+        let bound_or_constraints =
+            typevar
+                .typevar(db)
+                .bound_or_constraints(db, env)
+                .map(|bound_or_constraints| match bound_or_constraints {
+                    TypeVarBoundOrConstraints::UpperBound(bound) => {
+                        TypeVarBoundOrConstraints::UpperBound(
+                            prefix.substitute(db, env, Some(bound)).unwrap_or(bound),
+                        )
+                    }
+                    constraints @ TypeVarBoundOrConstraints::Constraints(_) => constraints,
+                });
         let provided_type = if lower_bound.is_some() || bound_or_constraints.is_some() {
             // Defaults such as `Box[T]` may be inferred before `T` has a binding context.
             // Bind only the copy used for validation, so the original default can later
@@ -1253,7 +1303,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     KeywordSlot::Bound(expr) => {
                         let provided_type = self.infer_type_expression(expr);
                         if self
-                            .check_type_argument_bounds(*typevar, provided_type, *expr)
+                            .check_type_argument_bounds(
+                                *typevar,
+                                provided_type,
+                                *expr,
+                                TypeArgumentPrefix {
+                                    generic_context,
+                                    provided: &specialization_types,
+                                },
+                            )
                             .is_some()
                         {
                             specialization_types.push(Some(Type::unknown()));
@@ -1693,9 +1751,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         continue;
                     }
 
-                    if let Some(failure) =
-                        self.check_type_argument_bounds(typevar, provided_type, type_argument.node)
-                    {
+                    if let Some(failure) = self.check_type_argument_bounds(
+                        typevar,
+                        provided_type,
+                        type_argument.node,
+                        TypeArgumentPrefix {
+                            generic_context,
+                            provided: &specialization_types,
+                        },
+                    ) {
                         error = Some(failure);
                         specialization_types.push(Some(Type::unknown()));
                     } else {

@@ -12010,7 +12010,15 @@ impl<'db> TypeMapping<'_, 'db> {
                         Some(_) => false, // Specialized to a concrete type, filter out
                     }
                 });
-                if specialization.specialize_self_domain() {
+                // a retained variable is rewritten when the mapping reaches inside it — a
+                // `Self` domain, or a bound naming a type parameter the specialization names.
+                // the list has to carry the same variable the parameters and return type do, or
+                // the two halves of the signature disagree about what it is bounded by
+                if specialization.specialize_self_domain()
+                    || kept
+                        .clone()
+                        .any(|bound_typevar| bound_typevar.typevar(db).bound_mentions_typevars(db))
+                {
                     let kept = kept.filter_map(|bound_typevar| {
                         Type::TypeVar(bound_typevar)
                             .apply_type_mapping(

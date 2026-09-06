@@ -75,10 +75,18 @@ class C[T: str..object = int]: ...   # error: default `int` is not assignable fr
 class D[T: str..str = object]: ...   # error: default `object` is not assignable to upper bound `str`
 ```
 
-## `Self` is a valid lower end
+## either end can name a type parameter already in scope
 
-`Self` is bound by the enclosing class, not by the generic context being declared, so it is exempt
-from the rule that a bound cannot be generic — at either end:
+both ends follow the same scope rule as a plain upper bound — see
+[generic parameter syntax](generics.md#a-bound-can-name-another-type-parameter):
+
+```by
+def g[T, U: T..object](t: T, u: U) -> U:
+    return u
+```
+
+`Self` is not one of those names: it is bound by the enclosing class rather than by the list being
+declared, and binding the receiver settles it. it is a valid lower end:
 
 ```by
 class C:

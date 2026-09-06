@@ -11334,6 +11334,21 @@ def f[T: str](msg: T):
     }
 
     #[test]
+    fn typevar_bounded_by_another_type_parameter() {
+        // a bound may name a type parameter that precedes it, and completions have to reach
+        // through both hops to the type that parameter is itself bounded by
+        let builder = completion_test_builder(
+            "\
+def f[T: str, R: T](msg: R):
+    msg.<CURSOR>
+",
+        );
+        let test = builder.build();
+        test.contains("upper");
+        test.contains("capitalize");
+    }
+
+    #[test]
     fn typevar_with_constraints() {
         // Test TypeVar with constraints
         let builder = completion_test_builder(
