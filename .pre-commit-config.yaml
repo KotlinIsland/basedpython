@@ -183,3 +183,19 @@ repos:
         files: '^crates/.*/resources/(mdtest|lint_docs)/.*\.md$'
         pass_filenames: true
         priority: 2
+
+  # Priority 3: regeneration runs after everything that rewrites a codegen input.
+  # A lint doc's bytes are copied verbatim into `ty.schema.json` and
+  # `crates/ty/docs/rules.md`, and three earlier hooks reformat those docs
+  # (mdformat, markdownlint-fix, `mdtest format`). Regenerating before them
+  # leaves both artifacts holding the unformatted text, which `ruff_dev`'s
+  # `generate_ty_schema` and `ty_rules_up_to_date` tests then fail on.
+  - repo: local
+    hooks:
+      - id: generate-all
+        name: regenerate schemas and docs from the lint docs
+        entry: cargo dev generate-all
+        language: system
+        files: '^crates/.*/resources/lint_docs/.*\.md$'
+        pass_filenames: false
+        priority: 3
