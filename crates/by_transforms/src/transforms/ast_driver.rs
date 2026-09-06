@@ -52,6 +52,7 @@ use super::{
     unpack, use_site_variance,
 };
 use crate::Config;
+use crate::source_map::Replacement;
 use crate::type_info::TypeInfo;
 
 /// Holds the db backing the type-aware passes. `Local` owns a single-file
@@ -249,16 +250,22 @@ fn template_claimees(
 /// Materialize a template's fragments into `out`. `Src` passthrough spans are
 /// emitted from original source with the contained sub-edits (indices into
 /// `all`) applied.
+///
+/// `anchor` is the start of the edit the template belongs to. Its literal text
+/// is charged to that offset in the line table: a hoisted `def` header, an
+/// injected keyword argument, a `nonlocal` line — none of them has a line of
+/// its own, and the construct the edit rewrites is the one they stand for.
 fn materialize_fragments(
-    out: &mut String,
+    out: &mut Replacement,
     frags: &[Fragment],
     source: &str,
     all: &[(usize, usize, SubPatch)],
     contained: &[usize],
+    anchor: usize,
 ) {
     for (i, frag) in frags.iter().enumerate() {
         match frag {
-            Fragment::Lit(s) => out.push_str(s),
+            Fragment::Lit(s) => out.push_generated(s, anchor),
             Fragment::Src(span) => {
                 // a zero-width insertion at this span's end is normally deferred
                 // to the *next* `Src` span (which re-emits it at its start), so
@@ -296,7 +303,7 @@ fn materialize_fragments(
 /// whether a zero-width insertion exactly at `e0` is emitted here (see
 /// [`materialize_fragments`]).
 fn apply_within(
-    out: &mut String,
+    out: &mut Replacement,
     source: &str,
     s0: usize,
     e0: usize,
@@ -315,22 +322,22 @@ fn apply_within(
             k += 1;
             continue;
         }
-        out.push_str(&source[cursor..s]);
+        out.push_source(source, cursor, s);
         match &all[idx].2 {
-            SubPatch::Text(t) => out.push_str(t),
+            SubPatch::Text(t) => out.push_generated(t, s),
             SubPatch::Template(frags) | SubPatch::Statement(frags) => {
                 let inner: Vec<usize> = contained[k + 1..]
                     .iter()
                     .copied()
                     .filter(|&m| all[m].0 >= s && all[m].1 <= e && all[m].0 != e)
                     .collect();
-                materialize_fragments(out, frags, source, all, &inner);
+                materialize_fragments(out, frags, source, all, &inner, s);
             }
         }
         cursor = cursor.max(e);
         k += 1;
     }
-    out.push_str(&source[cursor..e0]);
+    out.push_source(source, cursor, e0);
 }
 
 /// Coalesce repeated `from <module> import X` lines into a single
@@ -1001,7 +1008,7 @@ pub(crate) fn run_against_source<'a>(
         occupied_ranges.iter().any(|(s, e)| start < *e && *s < end)
     };
 
-    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    let mut edits: Vec<(usize, usize, Replacement)> = Vec::new();
     for idx in all_idx.iter().copied() {
         let (start, end) = original_ranges[idx];
         let line_indent = {
@@ -1033,11 +1040,13 @@ pub(crate) fn run_against_source<'a>(
             } else {
                 block.push_str(&rendered);
             }
-            edits.push((start, end, block));
+            // a re-rendered statement is printed from its AST, which keeps no
+            // source ranges: every line of it is charged to the statement
+            edits.push((start, end, Replacement::generated(&block, start)));
         } else if !block.is_empty() {
             // hoist-only: insert the hoisted lines before the statement and
             // leave its source bytes (and any edits inside them) in place
-            edits.push((start, start, block));
+            edits.push((start, start, Replacement::generated(&block, start)));
         }
     }
     // ruff-style first-wins dedup for sub-statement edits. sort by start; skip
@@ -1167,12 +1176,12 @@ pub(crate) fn run_against_source<'a>(
         // pass pushes its slice in left-to-right intent order, and we
         // splice them as one contiguous string
         if end == start {
-            let mut combined = String::new();
+            let mut combined = Replacement::default();
             let mut j = i;
             while j < sub_edits.len() && sub_edits[j].0 == start && sub_edits[j].1 == start {
                 if !claimed[j] {
                     match &sub_edits[j].2 {
-                        SubPatch::Text(t) => combined.push_str(t),
+                        SubPatch::Text(t) => combined.push_generated(t, start),
                         SubPatch::Template(frags) | SubPatch::Statement(frags) => {
                             let contained = template_claimees(frags, &sub_edits, &claimed, j, None);
                             materialize_fragments(
@@ -1181,6 +1190,7 @@ pub(crate) fn run_against_source<'a>(
                                 source_ref,
                                 &sub_edits,
                                 &contained,
+                                start,
                             );
                         }
                     }
@@ -1193,14 +1203,14 @@ pub(crate) fn run_against_source<'a>(
         }
         let repl = match &sub_edits[i].2 {
             // a plain-text replacement wins over anything inside it
-            SubPatch::Text(t) => t.clone(),
+            SubPatch::Text(t) => Replacement::generated(t, start),
             SubPatch::Template(frags) | SubPatch::Statement(frags) => {
                 // the claimees nested in this span materialize inside the
                 // template's `Src` passthrough fragments
                 let contained =
                     template_claimees(frags, &sub_edits, &claimed, i, Some((start, end)));
-                let mut out = String::new();
-                materialize_fragments(&mut out, frags, source_ref, &sub_edits, &contained);
+                let mut out = Replacement::default();
+                materialize_fragments(&mut out, frags, source_ref, &sub_edits, &contained, start);
                 out
             }
         };
@@ -1215,8 +1225,8 @@ pub(crate) fn run_against_source<'a>(
     // rather than letting it surface as a confusing syntax error downstream
     for (start, end) in dropped_by_splice {
         let construct = &source_ref[start..end];
-        let leaked = edits.iter().any(|(bs, be, btext)| {
-            *be > *bs && *bs <= start && end <= *be && btext.contains(construct)
+        let leaked = edits.iter().any(|(bs, be, replacement)| {
+            *be > *bs && *bs <= start && end <= *be && replacement.text().contains(construct)
         });
         if leaked {
             let preview: String = construct.chars().take(40).collect();
@@ -1240,7 +1250,7 @@ pub(crate) fn run_against_source<'a>(
 
     let mut out = source_ref.to_owned();
     for (start, end, repl) in edits {
-        out.replace_range(start..end, &repl);
+        out.replace_range(start..end, repl.text());
     }
     // an entry may be multi-line (runtime helper defs), so the table prefix
     // counts the lines each entry emits, not the entries themselves
@@ -1350,9 +1360,9 @@ mod driver_tests {
             Fragment::Src(TextRange::new(TextSize::from(0u32), TextSize::from(3u32))),
             Fragment::Lit("Y".to_owned()),
         ];
-        let mut out = String::new();
-        materialize_fragments(&mut out, &frags, source, &all, &[0]);
-        assert_eq!(out, "[1])Y");
+        let mut out = Replacement::default();
+        materialize_fragments(&mut out, &frags, source, &all, &[0], 0);
+        assert_eq!(out.text(), "[1])Y");
     }
 
     /// between two adjacent `Src` spans the shared boundary insertion is
@@ -1366,8 +1376,8 @@ mod driver_tests {
             Fragment::Src(TextRange::new(TextSize::from(0u32), TextSize::from(3u32))),
             Fragment::Src(TextRange::new(TextSize::from(3u32), TextSize::from(4u32))),
         ];
-        let mut out = String::new();
-        materialize_fragments(&mut out, &frags, source, &all, &[0]);
-        assert_eq!(out, "[1])W");
+        let mut out = Replacement::default();
+        materialize_fragments(&mut out, &frags, source, &all, &[0], 0);
+        assert_eq!(out.text(), "[1])W");
     }
 }

@@ -484,6 +484,65 @@ fn run_still_rewrites_traceback_frames_to_by_lines() {
     );
 }
 
+/// a frame inside a trailing-lambda block is reported at the block's own `.by`
+/// line. the block's suite is hoisted into a `def` ahead of the call it hung
+/// off, and the map used to charge every line of that `def` — header and body
+/// alike — to the statement owning the block, so an exception raised in a
+/// handler named the widget call instead of the line that raised
+#[test]
+fn run_reports_a_handler_blocks_own_line_for_an_exception_raised_in_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def handle(fn: () -> None):
+    fn()
+
+def main():
+    handle:
+        print(\"handling\")
+        raise ValueError(\"boom\")
+
+main()
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected a non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("main.by\", line 7, in _trailing_lambda_0")
+            && stderr.contains("raise ValueError(\"boom\")"),
+        "the raise inside the block should map to its own .by line 7:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("main.by\", line 2, in handle") && stderr.contains("fn()"),
+        "the callee's frame should map to .by line 2:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("main.by\", line 5, in main") && stderr.contains("handle:"),
+        "the statement owning the block should map to .by line 5:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("main.by\", line 9, in <module>"),
+        "the module-level call should map to .by line 9:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains(".py\""),
+        "traceback should not leak generated .py paths:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("ValueError: boom"),
+        "exception type should be preserved:\n{stderr}"
+    );
+}
+
 /// inference recurses with the shape of the expression it is checking, and `run`
 /// checks on the thread it was dispatched to rather than through the rayon pool.
 /// on the stack a process starts with — 1 MiB on windows — a file like this one
