@@ -42,11 +42,12 @@ impl fmt::Display for VerifyError {
 
 /// verify every function in a module
 pub fn verify_module(module: &ModuleIr) -> Result<(), Vec<VerifyError>> {
-    let errors: Vec<VerifyError> = module
+    let mut errors: Vec<VerifyError> = module
         .all_functions()
         .filter_map(|function| verify_in(function, Some(module)).err())
         .flatten()
         .collect();
+    errors.extend(check_accessor_coverage(module));
     if errors.is_empty() {
         Ok(())
     } else {
@@ -75,6 +76,106 @@ fn verify_in(function: &Function, module: Option<&ModuleIr>) -> Result<(), Vec<V
     } else {
         Err(verifier.errors)
     }
+}
+
+/// every register an operation mentions must be one its accessors report
+///
+/// `Op::dest`, `Op::operands`, `Op::loop_cursor` and `Op::unbinds` are four
+/// hand-written matches over ninety-odd variants, and every analysis in the compiler
+/// is built on them: a field one of them forgets is a register the renumbering
+/// misses, liveness calls dead, and the borrow pass counts as never written. that has
+/// happened — `ArraySet` did not report the value it writes — and the failure is
+/// silent, because a pass reading a short list is not wrong about the operands it
+/// does see.
+///
+/// the check is the derived `Debug`, which cannot forget a field: every
+/// `RegisterId(n)` in an operation's own rendering has to be one the accessors named.
+/// one operation of each *shape* is enough, because a forgotten field is a property
+/// of the shape and not of the value — so this stays at a few dozen renderings per
+/// module however large the module is
+///
+/// it is the one check here that says nothing about the module in front of it — a
+/// forgotten field is the same defect whatever is being compiled — so it is asked only
+/// of a compiler built with debug assertions, where the test suite and every sweep
+/// against the corpus already put it. a release build would pay for the same answer on
+/// every module and learn nothing the first one did not say
+fn check_accessor_coverage(module: &ModuleIr) -> Vec<VerifyError> {
+    let mut errors = Vec::new();
+    if !cfg!(debug_assertions) {
+        return errors;
+    }
+    let mut seen: HashSet<OpShape> = HashSet::new();
+    for function in module.all_functions() {
+        for (index, block) in function.blocks.iter().enumerate() {
+            for op in &block.ops {
+                if !seen.insert(shape_of(op)) {
+                    continue;
+                }
+                let mut reported: HashSet<usize> = op
+                    .operands()
+                    .into_iter()
+                    .filter_map(|value| match value {
+                        Value::Register(id) => Some(id.0),
+                        _ => None,
+                    })
+                    .collect();
+                reported.extend(op.dest().map(|id| id.0));
+                reported.extend(op.loop_cursor().map(|id| id.0));
+                reported.extend(op.unbinds().map(|id| id.0));
+                for id in rendered_registers(&format!("{op:?}")) {
+                    if !reported.contains(&id) {
+                        errors.push(VerifyError {
+                            function: function.name.clone(),
+                            block: Some(BlockId(index)),
+                            message: format!(
+                                "this operation mentions r{id}, which none of `dest`, \
+                                 `operands`, `loop_cursor` or `unbinds` reports: {op:?}"
+                            ),
+                            about_the_source: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    errors
+}
+
+/// what makes two operations the same shape for [`check_accessor_coverage`]
+///
+/// the variant alone is not enough: an operand held in an `Option` — a class pattern's
+/// class, an async context's exception, a call's destination — is a *different* arm of
+/// the same accessor, and deduplicating on the variant would check whichever arm the
+/// module happened to use first. the counts say which arm this is. a variadic
+/// operation's operand count is capped, because a display of nine items exercises
+/// nothing a display of three does not
+type OpShape = (std::mem::Discriminant<Op>, usize, bool, bool, bool);
+
+fn shape_of(op: &Op) -> OpShape {
+    (
+        std::mem::discriminant(op),
+        op.operands().len().min(3),
+        op.dest().is_some(),
+        op.loop_cursor().is_some(),
+        op.unbinds().is_some(),
+    )
+}
+
+/// the register indices a derived `Debug` rendering names
+///
+/// `BlockId` renders the same way and must not be mistaken for one, so the prefix is
+/// matched in full rather than looking for a bare number
+fn rendered_registers(rendered: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut rest = rendered;
+    while let Some(at) = rest.find("RegisterId(") {
+        rest = &rest[at + "RegisterId(".len()..];
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(id) = digits.parse() {
+            out.push(id);
+        }
+    }
+    out
 }
 
 /// whether `from` can be stored where `to` is expected with no conversion at all
@@ -237,6 +338,71 @@ impl Verifier<'_> {
 
         self.check_definite_assignment();
         self.check_release_sets();
+        self.check_borrowed_writes();
+    }
+
+    /// a borrowed register may only be filled by an operation that *lends*
+    ///
+    /// `borrowed` means the frame never took a reference and so never gives one back:
+    /// the emitter writes a plain store and the cleanup skips the register entirely.
+    /// that is only true of the four shapes the emitter recognises — a copy, a
+    /// narrowing test, an element read off a tuple, and a field read — each of which
+    /// leaves some other place still owning the value. every *other* operation
+    /// produces a reference of its own, and storing one into a register nothing
+    /// releases leaks it.
+    ///
+    /// the narrowings are the sharp edge here, and `by_opt::borrow` says so in its own
+    /// words: an unbox to a `str`, a `list` or a native class hands back the very
+    /// object it was given, while an unbox to an `int` or a `float` *builds* a machine
+    /// value out of one. a future unbox that converts rather than tests would be a
+    /// use-after-free with nobody having decided it, which is what this is here to
+    /// stop.
+    ///
+    /// this is a check on the shape and not a proof of the lifetime — that the source
+    /// really does outlive every use is the borrow pass's own analysis, and restating
+    /// it here would only be the same code twice
+    fn check_borrowed_writes(&mut self) {
+        let borrowed: HashSet<RegisterId> = self
+            .function
+            .registers
+            .iter()
+            .enumerate()
+            .filter(|(_, decl)| decl.borrowed)
+            .map(|(index, _)| RegisterId(index))
+            .collect();
+        if borrowed.is_empty() {
+            return;
+        }
+        let mut bad: Vec<(BlockId, RegisterId, String)> = Vec::new();
+        for (index, block) in self.function.blocks.iter().enumerate() {
+            for op in &block.ops {
+                let Some(dest) = op.dest() else { continue };
+                if !borrowed.contains(&dest) {
+                    continue;
+                }
+                let lends = match op {
+                    Op::Assign { .. } | Op::TupleGet { .. } | Op::GetField { .. } => true,
+                    Op::Unbox { to, .. } => matches!(
+                        to,
+                        RType::Primitive(Primitive::Str | Primitive::List) | RType::Instance { .. }
+                    ),
+                    _ => false,
+                };
+                if !lends {
+                    bad.push((BlockId(index), dest, format!("{op:?}")));
+                }
+            }
+        }
+        for (block, dest, op) in bad {
+            self.error(
+                Some(block),
+                format!(
+                    "r{} is borrowed, so nothing releases it, but this operation gives \
+                     it a reference of its own: {op}",
+                    dest.0
+                ),
+            );
+        }
     }
 
     /// every refcounted register that could already hold a reference at an exit
@@ -337,6 +503,21 @@ impl Verifier<'_> {
         let Some(block) = self.function.block(id) else {
             return;
         };
+        // an exception edge is a real edge, and it is the one `Terminator::successors`
+        // does not name — so a pass that renumbers blocks can leave it pointing at
+        // nothing and every check that walks the terminators still passes. `unswitch`
+        // copies a loop body and remaps the copy's edges, this one among them
+        if let Some(target) = block.error_target
+            && self.function.block(target).is_none()
+        {
+            self.error(
+                Some(id),
+                format!(
+                    "the error edge leads to b{}, which does not exist",
+                    target.0
+                ),
+            );
+        }
         for op in &block.ops {
             self.check_op(id, op);
         }
@@ -511,6 +692,17 @@ impl Verifier<'_> {
                     self.expect(block, src, &RType::OBJECT, "a property test");
                 }
                 self.expect_dest(block, *dest, &RType::BIT, "a property test");
+            }
+            Op::LicenceHolds { src, .. } => {
+                // as `AccessorStands` does: the check reads the receiver's type and
+                // stores the pointer nowhere, so an emitted class's own pointer is taken
+                // as it stands rather than through a `box`
+                if !matches!(
+                    self.operand_type(block, src),
+                    None | Some(RType::Instance { .. })
+                ) {
+                    self.expect(block, src, &RType::OBJECT, "a licence re-check");
+                }
             }
             Op::DictShadows { dest, src, .. } => {
                 // the test reads the instance's type and its dict slot and stores the
@@ -1312,6 +1504,36 @@ impl Verifier<'_> {
                         "a consuming concatenation needs a register of its own to take over",
                     );
                 }
+                // and the register it empties has to be one the *frame* owns. a
+                // parameter's reference belongs to the caller, and handing one to an
+                // in-place append is a release nobody asked for: removing that guard
+                // from the pass once moved a count 4 → 4389120980. a borrowed
+                // register holds nothing of its own to give away at all
+                if *consumes_lhs && let Value::Register(source) = lhs {
+                    if source.index() < self.function.param_count {
+                        self.error(
+                            Some(block),
+                            format!(
+                                "a consuming concatenation takes over r{}, whose reference \
+                                 belongs to the caller",
+                                source.0
+                            ),
+                        );
+                    } else if self
+                        .function
+                        .register(*source)
+                        .is_some_and(|decl| decl.borrowed)
+                    {
+                        self.error(
+                            Some(block),
+                            format!(
+                                "a consuming concatenation takes over r{}, which is borrowed \
+                                 and owns nothing to hand over",
+                                source.0
+                            ),
+                        );
+                    }
+                }
             }
             Op::StrConcatInt { dest, lhs, value } => {
                 self.expect(block, lhs, &RType::STR, "concatenating the str of an int");
@@ -2015,6 +2237,7 @@ mod tests {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         };
         let errors = verify_module(&module).unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -2052,6 +2275,7 @@ mod tests {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         };
         let errors = verify_module(&module).unwrap_err();
         assert!(
@@ -2183,5 +2407,179 @@ mod tests {
         let function = builder.finish();
         assert!(function.blocks[0].owned_at_exit.is_none());
         assert_eq!(verify(&function), Ok(()));
+    }
+
+    #[test]
+    fn an_error_edge_to_a_block_that_does_not_exist_is_rejected() {
+        let mut builder = FunctionBuilder::new("f", RType::NONE);
+        builder.terminate(Terminator::Return(Value::None));
+        let mut function = builder.finish();
+        function.blocks[0].error_target = Some(BlockId(7));
+        let errors = verify(&function).unwrap_err();
+        assert_eq!(errors[0].block, Some(BlockId(0)));
+        assert!(errors[0].message.contains("b7"), "{errors:?}");
+    }
+
+    #[test]
+    fn a_borrowed_register_may_only_be_filled_by_a_lending_operation() {
+        // a field read lends: the receiver goes on holding the value, so the frame
+        // never takes a reference and never has to give one back
+        let mut builder = FunctionBuilder::new("f", RType::NONE);
+        let receiver = builder.param(
+            "self",
+            RType::Instance {
+                class: "Node".to_string(),
+                exact: false,
+            },
+        );
+        let inner = builder.temp(RType::STR);
+        builder.push(Op::GetField {
+            dest: inner,
+            receiver: Value::Register(receiver),
+            class: "Node".to_string(),
+            field: "label".to_string(),
+        });
+        builder.terminate(Terminator::Return(Value::None));
+        let mut function = builder.finish();
+        function.registers[inner.index()].borrowed = true;
+        function.blocks[0].owned_at_exit = Some(vec![receiver]);
+        assert_eq!(verify(&function), Ok(()));
+
+        // formatting builds a string nothing else owns, so borrowing its
+        // destination would drop the only reference on the floor
+        function.blocks[0].ops[0] = Op::Format {
+            dest: inner,
+            value: Value::Register(receiver),
+            spec: None,
+            conversion: crate::ops::Conversion::Str,
+        };
+        let errors = verify(&function).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("is borrowed")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_unbox_that_converts_may_not_fill_a_borrowed_register() {
+        // narrowing an object to a `str` hands back the object it was given, so the
+        // source goes on owning it; narrowing one to an `int` builds a machine value
+        // and leaves nothing holding what the destination holds
+        let mut builder = FunctionBuilder::new("f", RType::NONE);
+        let whole = builder.param("whole", RType::OBJECT);
+        let part = builder.temp(RType::STR);
+        builder.push(Op::Unbox {
+            dest: part,
+            src: Value::Register(whole),
+            to: RType::STR,
+        });
+        builder.terminate(Terminator::Return(Value::None));
+        let mut function = builder.finish();
+        function.registers[part.index()].borrowed = true;
+        function.blocks[0].owned_at_exit = Some(vec![whole]);
+        assert_eq!(verify(&function), Ok(()));
+
+        function.registers[part.index()].ty = RType::INT;
+        function.blocks[0].ops[0] = Op::Unbox {
+            dest: part,
+            src: Value::Register(whole),
+            to: RType::INT,
+        };
+        let errors = verify(&function).unwrap_err();
+        assert!(errors[0].message.contains("is borrowed"), "{errors:?}");
+    }
+
+    #[test]
+    fn a_consuming_concatenation_may_not_take_over_a_parameter() {
+        // the caller owns a parameter's reference, so handing it to an in-place
+        // append is a release nobody asked for
+        let mut builder = FunctionBuilder::new("f", RType::STR);
+        let head = builder.param("head", RType::STR);
+        let tail = builder.param("tail", RType::STR);
+        let out = builder.local("out", RType::STR);
+        builder.assign(out, Value::Str("x".to_string()));
+        builder.push(Op::StrConcat {
+            dest: out,
+            lhs: Value::Register(head),
+            rhs: Value::Register(tail),
+            consumes_lhs: true,
+        });
+        builder.terminate(Terminator::Return(Value::Register(out)));
+        let mut function = builder.finish();
+        function.blocks[0].owned_at_exit = Some(vec![head, tail, out]);
+        let errors = verify(&function).unwrap_err();
+        assert!(
+            errors[0].message.contains("belongs to the caller"),
+            "{errors:?}"
+        );
+
+        // the same concatenation over a register the frame owns is what the pass
+        // exists to produce
+        function.blocks[0].ops[1] = Op::StrConcat {
+            dest: out,
+            lhs: Value::Register(out),
+            rhs: Value::Register(tail),
+            consumes_lhs: true,
+        };
+        assert_eq!(verify(&function), Ok(()));
+    }
+
+    #[test]
+    fn a_consuming_concatenation_may_not_take_over_a_borrowed_register() {
+        let mut builder = FunctionBuilder::new("f", RType::STR);
+        let tail = builder.param("tail", RType::STR);
+        let held = builder.local("held", RType::STR);
+        let out = builder.local("out", RType::STR);
+        builder.assign(held, Value::Str("x".to_string()));
+        builder.push(Op::StrConcat {
+            dest: out,
+            lhs: Value::Register(held),
+            rhs: Value::Register(tail),
+            consumes_lhs: true,
+        });
+        builder.terminate(Terminator::Return(Value::Register(out)));
+        let mut function = builder.finish();
+        function.blocks[0].owned_at_exit = Some(vec![tail, held, out]);
+        assert_eq!(verify(&function), Ok(()));
+
+        function.registers[held.index()].borrowed = true;
+        function.blocks[0].owned_at_exit = Some(vec![tail, out]);
+        let errors = verify(&function).unwrap_err();
+        assert!(errors[0].message.contains("owns nothing"), "{errors:?}");
+    }
+
+    #[test]
+    fn an_operand_no_accessor_reports_is_rejected() {
+        // the check reads the derived `Debug`, so this stands in for a field one of
+        // the accessors forgets: the operation names r9 and nothing reports it
+        let mut builder = FunctionBuilder::new("f", RType::NONE);
+        builder.terminate(Terminator::Return(Value::None));
+        let function = builder.finish();
+        let module = ModuleIr {
+            name: crate::ModuleName::new("app"),
+            functions: vec![function],
+            declined: Vec::new(),
+            classes: Vec::new(),
+            gradual: Vec::new(),
+            promoted: Vec::new(),
+            lines: None,
+            fallback_source: None,
+            fallback_code: None,
+            shims: None,
+            verify_install: true,
+        };
+        assert_eq!(verify_module(&module), Ok(()));
+
+        assert_eq!(
+            rendered_registers("Assign { dest: RegisterId(9) }"),
+            vec![9]
+        );
+        // a block index renders the same way and must not be counted as a register
+        assert_eq!(
+            rendered_registers("Branch { then_block: BlockId(3), cond: RegisterId(4) }"),
+            vec![4]
+        );
     }
 }

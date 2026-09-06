@@ -931,6 +931,15 @@ pub struct ModuleIr {
     /// `function` objects, written into the interpreted twin's source so that the
     /// interpreter compiles them, and installed over the native objects at init
     pub shims: Option<ShimInstall>,
+    /// whether module init ends by checking that what it installed is what it meant
+    /// to install.
+    ///
+    /// on by default, and `by compile --no-verify-install` is the way off. a class
+    /// that reports as compiled and then leaves its interpreted definition standing
+    /// answers identically to the twin every sweep compares it against, so nothing
+    /// else here can see one — see `By_VerifyClass` in the runtime header for the four
+    /// questions it asks and why each of them is a wrong answer already shipped
+    pub verify_install: bool,
 }
 
 /// what the artefact has to do to publish a module's forwarders
@@ -1167,6 +1176,7 @@ impl ModuleIr {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         }
     }
 

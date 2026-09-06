@@ -66,11 +66,26 @@ pub(crate) fn report(module: &ModuleIr) -> String {
             .map(|field| format!("{}: {}", field.name, field.ty))
             .collect::<Vec<_>>()
             .join(", ");
+        // a closure's environment and a generator's state are real emitted classes with
+        // real layouts, and nothing can name either: they are never bound in the module
+        // namespace. saying so is what lets a build compare this report against what an
+        // import actually stood a type under — see `BY_INSTALL_CENSUS` in the runtime
+        // header. left unsaid, the two sets could never be equal and the comparison that
+        // holds the report to what ran had nothing to compare
+        let notes = [
+            class.immutable.then_some("frozen"),
+            (!class.exported).then_some("not published"),
+        ];
+        let notes = notes.into_iter().flatten().collect::<Vec<_>>();
         let _ = writeln!(
             out,
             "## class {}{}\n\nfixed layout: {{{fields}}}\n",
             class.name,
-            if class.immutable { " (frozen)" } else { "" }
+            if notes.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", notes.join(", "))
+            }
         );
         // a property is not in the layout — it is a pair of compiled bodies behind one
         // attribute — so it would otherwise be invisible here
@@ -174,6 +189,25 @@ frozen data class Point:
         assert!(text.contains("fixed layout: {x: int, y: int}"), "{text}");
         // a method is a function too, and appears under its qualified name
         assert!(text.contains("### Point.total"), "{text}");
+    }
+
+    #[test]
+    fn a_class_no_name_can_reach_says_so() {
+        // a closure's environment is a real emitted class with a real layout, and the
+        // module namespace never holds it. left unmarked it counted towards a figure
+        // that was being read as "classes an import stands a type under", which no
+        // import ever does for one of these
+        let module = lowered(
+            "\
+def make(n: int) -> (int) -> int:
+    def add(k: int) -> int:
+        return k + n
+
+    return add
+",
+        );
+        let text = report(&module);
+        assert!(text.contains("## class make$env (not published)"), "{text}");
     }
 
     #[test]

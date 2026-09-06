@@ -2940,6 +2940,150 @@ static inline char By_AccessorStands(PyObject *o, PyObject *type,
                   && ((PyTypeObject *)type)->tp_version_tag == licence->version);
 }
 
+/* ── the licence re-check mode ──────────────────────────────────────────────────
+ *
+ * a *licence* is a compile-time decision that a call may go straight to a compiled
+ * body. some of them rest on nothing at runtime at all — a class the emitter laid out
+ * as a static type refuses both subclassing and `setattr`, so the compiler concludes
+ * that no override and no rebinding can exist and emits the call bare. the others stand
+ * behind the tests above, which are a type-pointer comparison and a cached version tag:
+ * cheap stand-ins for the lookup, not the lookup.
+ *
+ * either way the licence is a claim nothing checks, and a licence that is wrong is a
+ * wrong answer with nothing to report it — an override that stops being seen, a
+ * rebinding nothing notices. the checks below are that claim asked out loud, against
+ * the receiver in hand, at the moment the licensed call is about to run: they do the
+ * whole lookup the call skipped and compare where it lands with the body about to be
+ * called.
+ *
+ * they cost a lookup per call, which is the entire thing a licence exists to avoid, so
+ * `by compile --licence-recheck` is what turns them on and nothing else defines
+ * `BY_LICENCE_RECHECK`. the generated C says which mode it was written in, so a build
+ * and its own source never disagree about it */
+#ifdef BY_LICENCE_RECHECK
+
+#include <stdio.h>
+#include <stdlib.h>
+
+/* what a licensed call site does when the lookup it skipped would have reached
+ * something other than the body it is about to run
+ *
+ * there is no answer left to give: the fast arm has already been chosen and the next
+ * instruction runs a body that is not what the name means. so it names the class, the
+ * member and what changed, and stops the process */
+static void By_LicenceFailed(const char *class_name, const char *member, const char *what,
+                             const char *detail) {
+    /* whatever the program has already printed goes out first, so the abort lands after
+     * the output that led to it rather than in place of it. python's `sys.stdout` does
+     * its own buffering above the C stream, so both layers have to be asked — and a
+     * failure to flush is nothing to report on top of what is already being reported */
+    PyErr_Clear();
+    PyObject *out = PySys_GetObject("stdout");
+    if (out != NULL) {
+        PyObject *flushed = PyObject_CallMethod(out, "flush", NULL);
+        Py_XDECREF(flushed);
+        PyErr_Clear();
+    }
+    fflush(NULL);
+    fprintf(stderr, "by: licence re-check failed on %s.%s: %s", class_name, member, what);
+    if (detail != NULL) fprintf(stderr, " (%s)", detail);
+    fprintf(stderr,
+            "\nby: the compiled call was licensed to skip this lookup, and the lookup no "
+            "longer agrees\n");
+    fflush(stderr);
+    abort();
+}
+
+/* re-ask the method lookup a licensed direct call skipped
+ *
+ * `body` is the compiled entry point the call is about to run. it is NULL for a member
+ * the emitted type answers through a *slot* — an operator dunder, say: `PyType_Ready`
+ * publishes a wrapper around the slot under that name rather than the `tp_methods`
+ * entry, so there is no `PyMethodDef` to compare against and what remains checkable is
+ * the receiver's class, which for an operator is the whole of the licence anyway */
+static void By_RecheckMethod(PyObject *o, PyObject *type, const char *class_name,
+                             const char *member, PyCFunction body) {
+    if (o == NULL) {
+        By_LicenceFailed(class_name, member, "the receiver is NULL", NULL);
+        return;
+    }
+    if ((PyObject *)Py_TYPE(o) != type) {
+        By_LicenceFailed(class_name, member, "the receiver is not this class",
+                         Py_TYPE(o)->tp_name);
+        return;
+    }
+    if (body == NULL) return;
+    /* the instance is asked, not the type: a method is a non-data descriptor, so a
+     * value stored on the instance under the same name is what a lookup answers with,
+     * and that is one of the three ways a licence goes wrong */
+    PyObject *found = PyObject_GetAttrString(o, member);
+    if (found == NULL) {
+        PyErr_Clear();
+        By_LicenceFailed(class_name, member, "the name no longer resolves on the receiver",
+                         NULL);
+        return;
+    }
+    /* the lookup hands back a *bound* method, so both halves are asked about: the
+     * definition it carries has to be the compiled body, and it has to be bound to this
+     * receiver rather than to something the lookup found on the way */
+    int compiled = (Py_IS_TYPE(found, &PyCFunction_Type) || Py_IS_TYPE(found, &PyCMethod_Type))
+                   && ((PyCFunctionObject *)found)->m_ml != NULL
+                   && ((PyCFunctionObject *)found)->m_ml->ml_meth == body
+                   && ((PyCFunctionObject *)found)->m_self == o;
+    /* the name of a type outlives the reference the lookup took: a bound builtin's type
+     * is one of the interpreter's own statics */
+    const char *reached = Py_TYPE(found)->tp_name;
+    Py_DECREF(found);
+    if (!compiled) {
+        By_LicenceFailed(class_name, member,
+                         "the lookup reaches something other than the compiled body",
+                         reached);
+    }
+}
+
+/* re-ask the property lookup a licensed direct call to one half skipped
+ *
+ * the *descriptor* is resolved and left alone rather than invoked: calling a half here
+ * would run a body the program is already running, and a getter that writes to `self`
+ * would then have done it twice. resolving is enough, because resolving is the whole of
+ * what the licensed call skipped — a `property` is a data descriptor, so where the
+ * descriptor comes from decides the answer */
+static void By_RecheckAccessor(PyObject *o, PyObject *type, const char *class_name,
+                               const char *name, PyMethodDef *get, PyMethodDef *set) {
+    if (o == NULL) {
+        By_LicenceFailed(class_name, name, "the receiver is NULL", NULL);
+        return;
+    }
+    if ((PyObject *)Py_TYPE(o) != type) {
+        By_LicenceFailed(class_name, name, "the receiver is not this class",
+                         Py_TYPE(o)->tp_name);
+        return;
+    }
+    PyTypeObject *owner = (PyTypeObject *)type;
+    if (owner->tp_getattro != PyObject_GenericGetAttr
+        || owner->tp_setattro != PyObject_GenericSetAttr) {
+        By_LicenceFailed(class_name, name,
+                         "the class answers reads or writes with a hook of its own", NULL);
+        return;
+    }
+    PyObject *found = PyObject_GetAttrString(type, name);
+    if (found == NULL) {
+        PyErr_Clear();
+        By_LicenceFailed(class_name, name, "the name no longer resolves on the class", NULL);
+        return;
+    }
+    int published = Py_IS_TYPE(found, &PyProperty_Type) && By_AccessorHalfIs(found, "fget", get)
+                    && By_AccessorHalfIs(found, "fset", set);
+    const char *reached = Py_TYPE(found)->tp_name;
+    Py_DECREF(found);
+    if (!published) {
+        By_LicenceFailed(class_name, name,
+                         "the class no longer publishes the compiled property", reached);
+    }
+}
+
+#endif /* BY_LICENCE_RECHECK */
+
 /* what one call site remembers about the method name it keeps calling
  *
  * `line.split(" ")`, `part.startswith("w")`, `part.upper()` — a loop over strings
@@ -4709,6 +4853,197 @@ static inline int By_RemapTwinAliases(PyObject *module_dict, const By_Twins *twi
     return 0;
 }
 
+/* ── what the module installed, against what it meant to install ─────────────────────
+ *
+ * a class that reports as compiled and then does not stand under its own name is the
+ * one failure nothing else here can see. every sweep compares the compiled leg against
+ * the interpreted twin, and a class that fell back to its interpreted definition
+ * answers *identically* — so it agrees with every rung at once, while `--annotate` goes
+ * on reporting it as compiled. that made every coverage figure this project has quoted
+ * an upper bound rather than a count, and the first proof of it was a `MutableMapping`
+ * subclass whose report said `6 compiled, 0 left interpreted` while `type(m.D)` was
+ * `abc.ABCMeta` at import.
+ *
+ * so init ends by asking the finished namespace what is actually in it. four questions,
+ * each of them a wrong answer that has already been shipped from here:
+ *
+ *   the module's own name holds the emitted type, rather than the interpreted
+ *   definition still sitting behind it
+ *
+ *   `__bases__` holds the emitted base by identity, where this module emitted one. a
+ *   class left standing on an orphaned copy of its base answers `isinstance` False
+ *   where python answers True
+ *
+ *   `_abc_impl` is the twin's object, where the twin had one. `X.register(Y)` records
+ *   `Y` inside `X`'s own registry and the module body ran against the twin, so a type
+ *   holding the fresh empty one it was built with answers `issubclass(dict, Mapping)`
+ *   False against an interpreted leg that answers True
+ *
+ *   a method the class lowered answers as a descriptor. a `function` under that name is
+ *   the interpreted definition carried across, and it takes no receiver from a slot
+ *
+ * a class the module *deliberately* stood down is none of those. the layout guard and
+ * the install gate exist to leave a class interpreted where installing it would be
+ * wrong, and there the interpreted definition keeping the name is the answer — so that
+ * is recorded rather than raised. what is raised is a class that was installed and then
+ * does not hold up, which is a wrong answer the program has simply not reached yet */
+
+/* the environment variable a build sets to collect the census, naming a file to append
+ * to. the census is what closes the measurement hole: `--annotate` says which classes a
+ * module *meant* to compile, this says which ones an import actually stood a type
+ * under, and a build that compares the two is holding the report to what ran */
+#define BY_INSTALL_CENSUS_ENV "BY_INSTALL_CENSUS"
+
+/* one census row, appended. reopened per row on purpose: a module init that fails after
+ * this point must still leave what it had already found on disk, and there is no later
+ * moment in the extension's life at which a held file would be closed */
+static void By_RecordInstall(const char *module, const char *name, const char *verdict) {
+    const char *path = getenv(BY_INSTALL_CENSUS_ENV);
+    FILE *out;
+    if (path == NULL || path[0] == '\0') return;
+    out = fopen(path, "a");
+    if (out == NULL) return;
+    fprintf(out, "%s\t%s\t%s\n", module, name, verdict);
+    fclose(out);
+}
+
+/* whether `wanted` is among the type's own bases, by identity */
+static int By_HasBase(PyObject *type, PyObject *wanted) {
+    PyObject *chain = ((PyTypeObject *)type)->tp_bases;
+    Py_ssize_t at;
+    if (chain == NULL || !PyTuple_Check(chain)) return 0;
+    for (at = 0; at < PyTuple_GET_SIZE(chain); at++) {
+        if (PyTuple_GET_ITEM(chain, at) == wanted) return 1;
+    }
+    return 0;
+}
+
+/* whether the class settled this name itself after the type was built, so that what is
+ * under it is no longer the descriptor the method table put there — a decorated method
+ * above all, whose value is whatever the decorator returned */
+static int By_SettledMember(const char *const *settled, Py_ssize_t count, const char *name) {
+    Py_ssize_t at;
+    for (at = 0; at < count; at++) {
+        if (strcmp(settled[at], name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* one class, checked against what the module emitted for it. 0 when it holds up or was
+ * stood down on purpose, -1 with an `ImportError` set when it does not
+ *
+ * `stands` is what this class's name means when init has finished — init's own
+ * `by_type` slot, which holds the emitted type where the class installed and the
+ * interpreted definition where it did not. `emitted` is the type object the module
+ * built, which is *not* the same question: the install gate stands a whole family down
+ * together, so a class whose own construction worked can still be left interpreted
+ * because another in its family refused. `twin` is the interpreted definition, borrowed
+ * and still alive at this point.
+ *
+ * `bases` are what this module's own bases for the class *mean*, taken from the same
+ * `by_type` slots — so a family that stood down together is checked against its own
+ * standing definitions rather than against types nothing can reach. `methods` is the
+ * class's `tp_methods` table, which is exactly the set of names lowered into
+ * descriptors, and `settled` names the entries a decorator has since replaced */
+static int By_VerifyClass(const char *module, PyObject *dict, const char *name,
+                          PyObject *stands, PyObject *emitted, PyObject *twin,
+                          PyObject *const *bases, Py_ssize_t base_count,
+                          PyMethodDef *methods, const char *const *settled,
+                          Py_ssize_t settled_count, int decorated) {
+    PyObject *published, *target, *source, *held;
+    Py_ssize_t at;
+    /* `emitted != twin` because a construction that could not be rebuilt hands the
+     * interpreted definition back to stand as the class — see `By_TypeThroughMetaclass`.
+     * that leaves the name holding what it already held, and reading it as an install
+     * would be the very lie this exists to catch */
+    int installed =
+        emitted != NULL && emitted != twin && stands == emitted && PyType_Check(emitted);
+
+    /* `interpreted` where no type was built and `twin` where one was and then was not
+     * what took the name — the second being the one the report has no idea about */
+    By_RecordInstall(module, name,
+                     installed ? "installed" : (emitted == NULL ? "interpreted" : "twin"));
+
+    if (installed) {
+        published = PyDict_GetItemString(dict, name);
+        /* a class decorator is arbitrary python handed the class, and it is entitled to
+         * publish something else entirely under that name. so the name is held to the
+         * type only where nothing decorated it */
+        if (!decorated && published != emitted) {
+            PyErr_Format(PyExc_ImportError,
+                         "%s.%s was compiled but did not install: the module publishes %s "
+                         "under that name%s",
+                         module, name,
+                         published == NULL ? "nothing" : Py_TYPE(published)->tp_name,
+                         published != NULL && published == twin
+                             ? ", which is the interpreted definition"
+                             : "");
+            return -1;
+        }
+    }
+
+    /* asked of a standing interpreted definition too, and against what each base means
+     * rather than against the type built for it. a class left standing while the class
+     * below it was replaced is on an orphaned copy of that base, and `isinstance` then
+     * answers False where python answers True — a wrong answer whichever of the two
+     * objects is under the name */
+    if (stands != NULL && PyType_Check(stands)) {
+        for (at = 0; at < base_count; at++) {
+            if (bases[at] == NULL || !PyType_Check(bases[at])) continue;
+            if (!By_HasBase(stands, bases[at])) {
+                PyErr_Format(PyExc_ImportError,
+                             "%s.%s stands on an orphaned base: %s is what this module's "
+                             "own base of that name means and is not among its __bases__, "
+                             "so isinstance answers False where python answers True",
+                             module, name, ((PyTypeObject *)bases[at])->tp_name);
+                return -1;
+            }
+        }
+    }
+
+    /* the two below are about what an emitted type holds, and an interpreted definition
+     * standing in for one holds neither: its registry *is* the twin's, and its methods
+     * are the functions the `class` statement wrote */
+    if (!installed) return 0;
+
+    target = ((PyTypeObject *)emitted)->tp_dict;
+    if (twin != NULL && PyType_Check(twin) && target != NULL) {
+        source = ((PyTypeObject *)twin)->tp_dict;
+        held = source == NULL ? NULL : PyDict_GetItemString(source, "_abc_impl");
+        if (held != NULL && PyDict_GetItemString(target, "_abc_impl") != held) {
+            PyErr_Format(PyExc_ImportError,
+                         "%s.%s was compiled without the abstract-base registry its "
+                         "interpreted definition holds: every register() the module body "
+                         "made is invisible to it",
+                         module, name);
+            return -1;
+        }
+    }
+
+    for (at = 0; methods != NULL && methods[at].ml_name != NULL; at++) {
+        PyObject *entry;
+        if (By_SettledMember(settled, settled_count, methods[at].ml_name)) continue;
+        entry = target == NULL ? NULL : PyDict_GetItemString(target, methods[at].ml_name);
+        if (entry == NULL) {
+            PyErr_Format(PyExc_ImportError,
+                         "%s.%s was compiled but publishes nothing under %s, which it "
+                         "lowered", module, name, methods[at].ml_name);
+            return -1;
+        }
+        /* the interpreted definition, standing where a descriptor was lowered. it is
+         * not merely slow: a `function` in a type's dict binds through the descriptor
+         * protocol at every call, and the compiled body it shadows is never reached */
+        if (PyFunction_Check(entry)) {
+            PyErr_Format(PyExc_ImportError,
+                         "%s.%s.%s answers as a python function where a descriptor was "
+                         "lowered: the interpreted definition is what runs",
+                         module, name, methods[at].ml_name);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /* record one class body against its name, or -1 with an exception set */
 static int By_RecordClassBody(PyObject *state, PyObject *name, PyObject *body) {
     PyObject *bodies = PyDict_GetItemString(state, "bodies");
@@ -6440,6 +6775,30 @@ static inline PyObject *By_GetItemTagged(PyObject *container, ByTagged index) {
     if (BY_LIKELY(By_IsShort(index))) {
         PyObject *item = By_ListItemAt(container, (int64_t)By_ShortValue(index));
         if (BY_LIKELY(item != NULL)) return item;
+    }
+    return By_ItemSlow(container, index);
+}
+
+/* `args[i]` where `args` is the function's own `*args` parameter
+ *
+ * the one arm [`By_GetItemTagged`] keeps inline answers a `list`, and a `*args` is
+ * never one — so that read misses the head every time and pays the call into the
+ * tail, which then tests the `list` again before reaching the tuple. a call site
+ * that knows which container it has takes the arm that suits it, exactly as
+ * `By_StrItemTagged` does for a `str`.
+ *
+ * the exact type is still tested rather than assumed. the calling convention builds
+ * that tuple, so the parameter holds one on entry — but a body is free to rebind the
+ * name, and a subclass of `tuple` bound there may have overridden `__getitem__`.
+ * anything the test turns down takes the same tail as before */
+static inline PyObject *By_TupleItemTagged(PyObject *container, ByTagged index) {
+    if (BY_LIKELY(container != NULL && By_IsShort(index) && PyTuple_CheckExact(container))) {
+        Py_ssize_t i = (Py_ssize_t)By_ShortValue(index);
+        Py_ssize_t n = PyTuple_GET_SIZE(container);
+        if (i < 0) i += n;
+        if (BY_LIKELY(i >= 0 && i < n)) {
+            return By_NewRef(PyTuple_GET_ITEM(container, i));
+        }
     }
     return By_ItemSlow(container, index);
 }
@@ -8381,6 +8740,31 @@ static inline int By_BindArgs(PyObject *const *args, Py_ssize_t nargs, PyObject 
     PyErr_Clear();
     return By_BindArgsPlain(args, nargs, kwnames, names, count, required, posonly, kwonly,
                             out, variadic, extras, fname, receiver);
+}
+
+/* the binding for a boundary whose parameters are all required and all reachable
+ * positionally: no `*args` or `**kwargs` to collect into, and no positional-only or
+ * keyword-only run
+ *
+ * such a boundary handed exactly one positional argument per parameter and no
+ * keywords is what [`By_BindArgsPlain`] would have walked its way to: the vector is
+ * copied across unchanged and nothing is missing. saying so directly is worth about
+ * a tenth of what it costs to reach a compiled function through its wrapper at all,
+ * which is the whole of the gap on a call whose body is one arithmetic operation
+ *
+ * every other call — a keyword, too few arguments, too many — goes the long way, so
+ * the refusals and their wording are still decided in exactly one place */
+static inline int By_BindArgsQuick(PyObject *const *args, Py_ssize_t nargs,
+                                   PyObject *kwnames, const char *const *names,
+                                   Py_ssize_t count, const unsigned char *required,
+                                   PyObject **out, const char *fname,
+                                   Py_ssize_t receiver) {
+    if (BY_LIKELY(nargs == count && kwnames == NULL)) {
+        for (Py_ssize_t i = 0; i < count; i++) out[i] = args[i];
+        return 0;
+    }
+    return By_BindArgs(args, nargs, kwnames, names, count, required, 0, 0, out, 0, 0, fname,
+                       receiver);
 }
 
 /* `with EXPR`: the manager's `__enter__`, looked up on the *type* the way the

@@ -13,6 +13,7 @@ mod generators;
 pub mod mapper;
 pub mod shims;
 pub mod single_file;
+mod surface;
 
 pub use single_file::module_from_source;
 
@@ -29,12 +30,45 @@ pub enum Language {
     Python,
 }
 
+/// what a lowering is asked for beyond translating the source
+///
+/// a [`Language`] converts into one, so every caller with nothing more to say goes on
+/// passing the language it always passed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LowerOptions {
+    pub language: Language,
+    /// have each licensed direct call re-ask, at runtime, the lookup it skips — and
+    /// abort where the two disagree. see [`by_ir::ops::Op::LicenceHolds`]
+    ///
+    /// off by default, because the lookup it re-asks is the whole cost a licence
+    /// exists to avoid
+    pub recheck_licences: bool,
+}
+
+impl From<Language> for LowerOptions {
+    fn from(language: Language) -> Self {
+        Self {
+            language,
+            recheck_licences: false,
+        }
+    }
+}
+
 impl Language {
     /// the extension a source of this language is written in
     pub fn extension(self) -> &'static str {
         match self {
             Self::BasedPython => "by",
             Self::Python => "py",
+        }
+    }
+
+    /// how the parser was asked to read the source, which is what decides whether a
+    /// basedpython-only marker can be on the tree at all
+    fn source_type(self) -> ast::PySourceType {
+        match self {
+            Self::BasedPython => ast::PySourceType::BasedPython,
+            Self::Python => ast::PySourceType::Python,
         }
     }
 
@@ -70,8 +104,8 @@ use by_ir::function::{
     KeywordValue, ModuleIr, ModuleName, SlotAlias, qualify,
 };
 use by_ir::ops::{
-    BinOp, BlockId, CmpOp, Conversion, Mutation, Op, RegisterId, StandardError, Terminator,
-    UnaryOp, Value,
+    BinOp, BlockId, CmpOp, Conversion, LicenceKind, Mutation, Op, RegisterId, StandardError,
+    Terminator, UnaryOp, Value,
 };
 use by_ir::rtype::{Primitive, RType};
 use mapper::{Decline, Layouts, Lowered, map_fixed_tuple, map_type, map_type_with};
@@ -95,8 +129,12 @@ pub fn build_module(
     model: &SemanticModel<'_>,
     suite: &[Stmt],
     module_name: impl Into<ModuleName>,
-    language: Language,
+    options: impl Into<LowerOptions>,
 ) -> ModuleIr {
+    let LowerOptions {
+        language,
+        recheck_licences,
+    } = options.into();
     let mut module = ModuleIr::new(module_name);
 
     // a call is only lowered natively when the callee is a module-level function
@@ -540,6 +578,7 @@ pub fn build_module(
         properties: &properties,
         accessors: &accessors,
         language,
+        recheck_licences,
         db,
         env,
         model,
@@ -1477,6 +1516,7 @@ fn lower_resume(
         ),
         comprehensions: 0,
         language: unit.language,
+        recheck_licences: unit.recheck_licences,
         environment: None,
         captures: Some(Captured {
             class: class.to_string(),
@@ -2387,6 +2427,7 @@ fn lower_class<'a>(
     unit: Unit<'a>,
     class: &'a ast::StmtClassDef,
 ) -> Lowered<(by_ir::function::ClassIr, Vec<by_ir::function::ClassIr>)> {
+    surface::gate_class(unit.language.source_type(), class)?;
     let Unit {
         env,
         db,
@@ -6508,6 +6549,7 @@ fn lower_function_with_receiver(
     arrays: &[(usize, RType)],
     frame: Frame,
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
+    surface::gate_function(unit.language.source_type(), function)?;
     let Unit {
         env,
         db,
@@ -7048,6 +7090,7 @@ fn lower_function_with_receiver(
         owner: unit.owner.map(str::to_string),
         zero_super,
         language: unit.language,
+        recheck_licences: unit.recheck_licences,
         comprehensions: 0,
         generator: None,
         delegations: 0,
@@ -7207,6 +7250,9 @@ struct Unit<'a> {
     /// about: whether a captured loop target is a shared cell or a per-closure copy,
     /// and whether a computed parameter default is snapshotted at the `def`
     language: Language,
+    /// whether each licensed direct call re-asks the lookup it skips — see
+    /// [`LowerOptions::recheck_licences`]
+    recheck_licences: bool,
     db: &'a dyn ty_python_semantic::Db,
     model: &'a SemanticModel<'a>,
     native_callees: &'a HashSet<String>,
@@ -8932,6 +8978,9 @@ struct Lowering<'a, 'db> {
     owned_cells: Option<Captured>,
     /// the language the body is written in, for the lowerings whose answer it decides
     language: Language,
+    /// whether each licensed direct call re-asks the lookup it skips — see
+    /// [`LowerOptions::recheck_licences`]
+    recheck_licences: bool,
     ret: RType,
     /// `(continue target, break target, cleanup depth)` for each enclosing loop,
     /// innermost last. the depth is what `break` unwinds to
@@ -11434,6 +11483,24 @@ impl Lowering<'_, '_> {
         self.property_half_body(class, name, half)
     }
 
+    /// have the licensed call about to be emitted re-ask, at runtime, the lookup it
+    /// skips — and abort where the two disagree
+    ///
+    /// nothing at all unless the re-check mode is on, and a shipping build never turns
+    /// it on: the lookup this re-asks is the whole cost the licence exists to avoid.
+    /// see [`LowerOptions::recheck_licences`]
+    fn licence_holds(&mut self, src: &Value, class: &str, member: &str, kind: LicenceKind) {
+        if !self.recheck_licences {
+            return;
+        }
+        self.builder.push(Op::LicenceHolds {
+            src: src.clone(),
+            class: class.to_string(),
+            member: member.to_string(),
+            kind,
+        });
+    }
+
     /// the property half a read or a write of a *mutable* class's attribute can call
     /// behind a test, answering as [`Lowering::property_half`] does
     ///
@@ -11492,6 +11559,7 @@ impl Lowering<'_, '_> {
             else_block: miss,
         });
         self.builder.switch_to(hit);
+        self.licence_holds(&receiver, class, name, LicenceKind::Accessor);
         self.builder.push(Op::CallNative {
             dest: Some(dest),
             owner: Some(owner),
@@ -11561,6 +11629,7 @@ impl Lowering<'_, '_> {
             else_block: miss,
         });
         self.builder.switch_to(hit);
+        self.licence_holds(&receiver, class, name, LicenceKind::Accessor);
         let status = self.builder.temp(RType::BIT);
         self.builder.push(Op::CallNative {
             dest: Some(status),
@@ -11874,6 +11943,8 @@ impl Lowering<'_, '_> {
                     && let Some((owner, symbol, _, ret)) =
                         self.property_half(class, name, Half::Get)
                 {
+                    let class = class.clone();
+                    self.licence_holds(receiver, &class, name, LicenceKind::Accessor);
                     let dest = self.builder.temp(ret.clone());
                     self.builder.push(Op::CallNative {
                         dest: Some(dest),
@@ -11967,6 +12038,8 @@ impl Lowering<'_, '_> {
                     && let Some(param) = params.first()
                 {
                     let value = self.coerce(value, ty, param)?;
+                    let class = class.clone();
+                    self.licence_holds(receiver, &class, name, LicenceKind::Accessor);
                     let dest = self.builder.temp(ret);
                     self.builder.push(Op::CallNative {
                         dest: Some(dest),
@@ -13473,6 +13546,12 @@ impl Lowering<'_, '_> {
             self.coerce(lhs, lhs_ty, &call.params[0])?,
             self.coerce(rhs, rhs_ty, &call.params[1])?,
         ];
+        // both operands, because the licence rests on both: cpython hands a pair sharing
+        // one class to the left type's slot alone, and a right-hand operand of some
+        // other class would have had a second body to try
+        for operand in &args {
+            self.licence_holds(operand, &call.owner, &call.callee, LicenceKind::Method);
+        }
         let dest = self.builder.temp(call.ret.clone());
         self.builder.push(Op::CallNative {
             dest: Some(dest),
@@ -13732,6 +13811,7 @@ impl Lowering<'_, '_> {
         node: &ast::ExprCall,
         attribute: &ast::ExprAttribute,
     ) -> Lowered<(Value, RType)> {
+        self.refuse_extension_member(attribute)?;
         let (receiver, receiver_ty) = self.expression(&attribute.value)?;
         let name = self.attribute_name(&attribute.attr);
 
@@ -13799,6 +13879,7 @@ impl Lowering<'_, '_> {
             direct.push(receiver.clone());
             direct.extend(args.iter().cloned());
             if !shadowable {
+                self.licence_holds(&receiver, &class, &name, LicenceKind::Method);
                 let dest = self.builder.temp(ret.clone());
                 self.builder.push(Op::CallNative {
                     dest: Some(dest),
@@ -13816,7 +13897,7 @@ impl Lowering<'_, '_> {
             self.builder.push(Op::DictShadows {
                 dest: shadowed,
                 src: receiver.clone(),
-                class,
+                class: class.clone(),
                 method: name.clone(),
             });
             let dest = self.builder.temp(ret.clone());
@@ -13830,6 +13911,7 @@ impl Lowering<'_, '_> {
             });
 
             self.builder.switch_to(compiled);
+            self.licence_holds(&receiver, &class, &name, LicenceKind::Method);
             self.builder.push(Op::CallNative {
                 dest: Some(dest),
                 owner: Some(owner),
@@ -14071,6 +14153,7 @@ impl Lowering<'_, '_> {
                 else_block: next,
             });
             self.builder.switch_to(hit);
+            self.licence_holds(&object, candidate, &name, LicenceKind::Method);
             // the receiver reaches a *subclass*'s body, which is a narrowing the test has
             // just proved and nothing downstream can see it prove. so it is written out
             // as the ordinary checked one — the pointer arithmetic differs between a
@@ -15069,7 +15152,25 @@ impl Lowering<'_, '_> {
     }
 
     /// `receiver.name`
+    /// an attribute an `extension` supplies is not on the receiver at runtime
+    ///
+    /// an extension member — the user's own, or one of the prelude's, which is where
+    /// the grapheme string surface lives — is rewritten by the transpiler into a call
+    /// to a module-level backing function. nothing rewrites it here, so the attribute
+    /// read stands as written and finds nothing: `values.second()` raises
+    /// `AttributeError` off a plain `list`
+    fn refuse_extension_member(&self, node: &ast::ExprAttribute) -> Lowered<()> {
+        if self.model.resolves_through_extension(node) {
+            return Err(Decline::new(format!(
+                "`{}` is supplied by an `extension`, and the receiver does not carry it at runtime",
+                node.attr
+            )));
+        }
+        Ok(())
+    }
+
     fn attribute(&mut self, node: &ast::ExprAttribute) -> Lowered<(Value, RType)> {
+        self.refuse_extension_member(node)?;
         let (receiver, receiver_ty) = self.expression(&node.value)?;
 
         // a receiver whose class the compiler emitted reads the field directly:
@@ -15098,6 +15199,8 @@ impl Lowering<'_, '_> {
         if let RType::Instance { class, .. } = &receiver_ty
             && let Some((owner, symbol, _, ret)) = self.property_half(class, &name, Half::Get)
         {
+            let class = class.clone();
+            self.licence_holds(&receiver, &class, &name, LicenceKind::Accessor);
             let dest = self.builder.temp(ret.clone());
             self.builder.push(Op::CallNative {
                 dest: Some(dest),
@@ -15960,14 +16063,13 @@ impl Lowering<'_, '_> {
                         "`{name}` has no parameter `{keyword_name}`"
                     )));
                 }
-                let key = self.builder.temp(RType::OBJECT);
-                self.builder.push(Op::Assign {
-                    dest: key,
-                    src: Value::Str(keyword_name.to_string()),
-                });
                 let (value, ty) = self.expression(&keyword.value)?;
                 let value = self.widen_to_object(value, &ty);
-                extra_keywords.push(Value::Register(key));
+                // the name goes into the dict as the literal it is. a register
+                // holding it would be filled from the module's interned string on
+                // every call, so a keyword passed in a loop retained and released
+                // one object per trip for the sake of a name that never changes
+                extra_keywords.push(Value::Str(keyword_name.to_string()));
                 extra_keywords.push(value);
                 continue;
             };

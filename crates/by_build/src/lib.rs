@@ -154,7 +154,16 @@ fn create_parent(path: &Path) -> Result<()> {
 }
 
 /// what a build is allowed to leave interpreted
-#[derive(Debug, Clone, Default)]
+///
+/// [`Default`] is written out rather than derived because one of these is on by
+/// default: a derived `false` for [`Self::verify_install`] would take the check out of
+/// every build that did not name it, which is every build in the workspace
+#[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each is one independent `by compile` switch, and grouping them would only \
+              put a name between the flag and the field it sets"
+)]
 pub struct Options {
     /// reject a function declined because a type was gradual, instead of
     /// quietly leaving it interpreted.
@@ -184,6 +193,16 @@ pub struct Options {
     /// trip through a different program — the transpiler inserts soundness checks
     /// and sentinels of its own — so it is used verbatim
     pub language: by_irbuild::Language,
+    /// have each licensed direct call re-ask, at runtime, the lookup it skips, and
+    /// abort where the two disagree.
+    ///
+    /// a *licence* is the compiler's decision that a call may go straight to a
+    /// compiled body because nothing can have put something else under the name. it
+    /// is a claim nothing checks, and one that is wrong is a wrong answer with
+    /// nothing to report it. this is that claim asked out loud, at every call it was
+    /// taken at — which costs the lookup the licence exists to avoid, so it is a
+    /// mode rather than the default
+    pub recheck_licences: bool,
     /// the transpiler configuration for the interpreted fallback, when there is
     /// one to transpile
     ///
@@ -191,6 +210,39 @@ pub struct Options {
     /// from this source, so a build that means to insert extra soundness checks
     /// has to insert them here too or the two halves of the module disagree
     pub fallback: Option<by_transforms::Config>,
+    /// have module init end by checking that every class it reported as compiled is
+    /// the class standing under its own name when the import returns.
+    ///
+    /// on by default. a class that quietly leaves its interpreted definition standing
+    /// answers exactly as the twin does, so it agrees with every differential rung at
+    /// once while `--annotate` goes on reporting it compiled — which is how a coverage
+    /// figure becomes an upper bound without anyone noticing. the check runs once per
+    /// module at import rather than per call
+    pub verify_install: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            no_any: false,
+            require_native: false,
+            annotate: false,
+            language: by_irbuild::Language::default(),
+            fallback: None,
+            recheck_licences: false,
+            verify_install: true,
+        }
+    }
+}
+
+impl Options {
+    /// what these options ask the lowering itself for
+    pub fn lowering(&self) -> by_irbuild::LowerOptions {
+        by_irbuild::LowerOptions {
+            language: self.language,
+            recheck_licences: self.recheck_licences,
+        }
+    }
 }
 
 /// write the `--annotate` report, when one was asked for
@@ -225,7 +277,7 @@ fn lower(
     toolchain: Option<&Toolchain>,
 ) -> Result<by_ir::function::ModuleIr> {
     finish(
-        by_irbuild::module_from_source(source, module_name, options.language),
+        by_irbuild::module_from_source(source, module_name, options.lowering()),
         source,
         options,
         toolchain,
@@ -254,6 +306,8 @@ fn finish(
             source,
         ));
     }
+
+    module.verify_install = options.verify_install;
 
     if options.require_native && !module.declined.is_empty() {
         bail!(
@@ -535,6 +589,7 @@ mod tests {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         };
         let dir = std::env::temp_dir().join("by_build_refuses_test");
         let _ = fs::remove_dir_all(&dir);

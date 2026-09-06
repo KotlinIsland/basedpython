@@ -428,6 +428,45 @@ impl<'db> SemanticModel<'db> {
         self.extension_rewrite(&resolution, attribute.attr.as_str(), receiver_is_class)
     }
 
+    /// basedpython: whether this attribute access is answered by an `extension`
+    /// rather than by the receiver's own class.
+    ///
+    /// [`extension_attribute_info`](Self::extension_attribute_info) answers only
+    /// where there is a backing function to call, which leaves out the prelude's
+    /// own extensions — the grapheme string surface among them. a consumer that
+    /// has to know whether the member exists at runtime at all wants every
+    /// extension, because none of them is a real attribute: reading one off the
+    /// receiver raises `AttributeError`
+    pub fn resolves_through_extension(&self, attribute: &ast::ExprAttribute) -> bool {
+        let db = self.db;
+        let file = self.file();
+        // the cheapest question first, because a caller may ask this of every attribute
+        // it sees: a file with no extensions in scope — every python file, for one —
+        // can answer without inferring or looking anything up
+        if crate::types::extensions::applicable_extensions(db, file).is_empty() {
+            return false;
+        }
+        let env = self.program_environment();
+        let Some(receiver_ty) = attribute.value.inferred_type(self) else {
+            return false;
+        };
+        let Some(_) = crate::types::extensions::resolve_extension_member(
+            db,
+            &env,
+            file,
+            receiver_ty,
+            attribute.attr.as_str(),
+        ) else {
+            return false;
+        };
+        // an extension never shadows a declared member, so one the receiver's own class
+        // supplies is an ordinary attribute however many extensions also name it
+        receiver_ty
+            .member(db, &env, attribute.attr.as_str())
+            .place
+            .is_undefined()
+    }
+
     /// basedpython: when this attribute access resolves to a conversion dunder
     /// the *prelude* declares, how it was reached.
     ///

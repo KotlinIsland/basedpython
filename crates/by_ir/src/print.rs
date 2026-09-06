@@ -7,7 +7,7 @@
 use std::fmt::Write;
 
 use crate::function::{Function, ModuleIr};
-use crate::ops::{Mutation, Op, RegisterId, Terminator, UnaryOp, Value};
+use crate::ops::{LicenceKind, Mutation, Op, RegisterId, Terminator, UnaryOp, Value};
 
 /// render a whole module
 pub fn print_module(module: &ModuleIr) -> String {
@@ -168,6 +168,18 @@ fn print_op(function: &Function, op: &Op) -> String {
             name(*dest),
             value(src)
         ),
+        Op::LicenceHolds {
+            src,
+            class,
+            member,
+            kind,
+        } => {
+            let kind = match kind {
+                LicenceKind::Method => "method",
+                LicenceKind::Accessor => "accessor",
+            };
+            format!("licence-holds {kind} {} {class}.{member}", value(src))
+        }
         Op::DictShadows {
             dest,
             src,
@@ -843,6 +855,7 @@ b2:
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         };
         let text = print_module(&module);
         assert!(text.starts_with("module app\n"));

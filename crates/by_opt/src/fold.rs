@@ -572,6 +572,7 @@ mod tests {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         }
     }
 

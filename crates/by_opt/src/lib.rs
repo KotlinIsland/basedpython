@@ -203,6 +203,7 @@ mod tests {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         };
         assert!(optimize(&mut module).is_ok());
         let fixed = |id: by_ir::ops::RegisterId| {
@@ -240,6 +241,7 @@ mod tests {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         };
         assert!(optimize(&mut module).is_ok());
         // both passes fired: the copy is gone and the function is infallible
