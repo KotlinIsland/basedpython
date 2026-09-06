@@ -22,10 +22,20 @@ the method it enforces is written up in
   import as a real extension module, from a file inside this run's own root,
   newer than this run's build, and it has to return the same answer as the
   interpreted one. every one of those is a refusal rather than a warning
+- **a row measures the one thing it is named for.** a benchmark with inputs to
+  build hands them to a `setup` the harness calls outside every clock, and says
+  so in `programs.toml`. the declaration is checked by withholding the setup: a
+  `bench()` that has quietly gone back to building its own inputs answers the
+  same either way, and that is a refusal
 - **a decline is a failure, not a footnote.** `programs.toml` records how many
   functions each benchmark is expected to leave interpreted, and a run where the
   count moved either way fails. otherwise a benchmark can quietly stop measuring
   compiled code and go on posting numbers
+- **a basedpython benchmark is compared three ways.** a program written as
+  `.by` is compiled from its own source by `by compile`, while the interpreted
+  and mypyc builds run the python `by transpile` lowers it to. the lowering is a
+  build step and happens outside every clock, and a lowering that fails is a
+  refusal rather than a row that quietly compares two builds instead of four
 - **the harness cannot match nothing.** an unknown benchmark name, a program
   with no manifest entry, a manifest entry with no program, an empty selection:
   all of them exit non-zero. a measurement harness that cannot fail loudly is
@@ -68,6 +78,29 @@ MANIFEST = HERE / "programs.toml"
 # target buys the tail rather than the median
 SAMPLE_TARGET = 0.050
 MAX_CALLS = 1_000_000
+
+# the lowering every build of every benchmark is produced with, given to
+# `by compile` and `by transpile` alike so that the two halves of a `.by` row
+# cannot disagree about what they are running
+#
+# soundness checks are off because leaving them on would put work on one side of
+# the quotient and not the other. `by compile` emits none of them into native
+# code — measured: `total`'s BIR for the payload-enum row is a bare `call area`
+# — while the python the same source transpiles to gets an `isinstance` per call
+# under the default set. that is the `setup()` problem again, a fixed extra cost
+# sitting in the interpreted build only, and it would inflate every basedpython
+# row's speedup by an amount the table could not show
+#
+# measured rather than reasoned, and it is not a rounding error: `payloads` reads
+# 0.90x with the checks off and 1.16x with them on, which is the difference
+# between reporting that compiling that program hurts and reporting that it
+# helps. `destructure` and `accessors` are unmoved, because both decline the
+# functions the checks would have sat in
+#
+# it is a no-op for a `.py` benchmark: a `.py` source is its own interpreted
+# fallback, and all 33 of them compile to a byte-identical `--annotate` report
+# either way
+LOWERING = ["--soundness", "none"]
 
 # below this the median's confidence interval degenerates to the full range of
 # what was seen, which is not a confidence interval. a table built from three
@@ -204,6 +237,44 @@ class Program:
     measures: str
     declines: int
     mypyc: bool
+    setup: bool
+    # `py` or `by`, taken from the file on disk. the extension is what decides
+    # how a benchmark is built, so it is also what the harness reads to find
+    # out — see `discover`
+    language: str
+
+    @property
+    def source(self) -> Path:
+        return PROGRAMS / f"{self.name}.{self.language}"
+
+
+def discover(directory: Path) -> dict[str, str]:
+    """the programs on disk, and which language each is written in
+
+    the language is read off the extension rather than declared in the manifest.
+    the extension is already the thing that decides how a program is built — a
+    `.by` file is compiled from its own source and *transpiled* for the two
+    builds that need python — so making it the single source of truth removes a
+    way for the manifest and the disk to disagree. a `source = "by"` key would be
+    a second statement of the same fact, and this harness's experience of two
+    lists that are meant to agree is that they drift and that the drift is
+    silent, which is why `load_manifest` and the decline ledger both check theirs
+    exactly
+
+    a name that exists both ways is the one case an extension cannot decide, so
+    it is refused rather than resolved by whichever `glob` ran first
+    """
+    found: dict[str, str] = {}
+    for path in sorted(directory.iterdir()):
+        if path.suffix not in (".py", ".by"):
+            continue
+        if path.stem in found:
+            raise Failure(
+                f"{path.stem} is on disk as both a .py and a .by program, and the "
+                "extension is what says how a benchmark is built — leave one"
+            )
+        found[path.stem] = path.suffix[1:]
+    return found
 
 
 def load_manifest(selected: list[str]) -> list[Program]:
@@ -214,7 +285,8 @@ def load_manifest(selected: list[str]) -> list[Program]:
     and so is unguarded; an entry with no file quietly measures nothing
     """
     entries = tomllib.loads(MANIFEST.read_text())["programs"]
-    on_disk = {path.stem for path in PROGRAMS.glob("*.py")}
+    languages = discover(PROGRAMS)
+    on_disk = set(languages)
     declared = set(entries)
 
     if undeclared := on_disk - declared:
@@ -241,9 +313,42 @@ def load_manifest(selected: list[str]) -> list[Program]:
             measures=entries[name]["measures"],
             declines=entries[name]["declines"],
             mypyc=entries[name].get("mypyc", True),
+            setup=entries[name].get("setup", False),
+            language=languages[name],
         )
         for name in wanted
     ]
+
+
+def setup_verdict(
+    declared: bool, present: bool, bare: str | None, answer: str | None
+) -> str | None:
+    """why one build's setup declaration does not hold, or `None` when it does
+
+    eight benchmarks here once built their inputs inside `bench()`, so the clock
+    that was meant to be over a dot product was over a dot product and the two
+    lists it read. that is not a slow row, it is a row measuring two things and
+    reporting one — and it is worse than it sounds for a *ratio*, because the
+    preparation does not speed up by anything like what the work does, so it
+    weighs far more on the compiled build than on the interpreted one and caps
+    the speedup the row can report
+
+    the fix is a `setup` the harness calls outside the clock, and the reason
+    this function exists is that the fix is silently reversible: fold the build
+    back into `bench()` and everything goes on running, with a `setup` left
+    behind that no longer does anything. so a declared setup has to be *shown*
+    to matter — with it withheld, `bench()` must answer differently, or raise
+    """
+    if declared and not present:
+        return "programs.toml declares setup = true, but the module has no setup()"
+    if present and not declared:
+        return "the module has a setup() that programs.toml does not declare"
+    if declared and bare == answer:
+        return (
+            f"bench() answered {answer} both before and after setup(), so it builds "
+            "its own inputs inside the timed region"
+        )
+    return None
 
 
 # ── staging and building ─────────────────────────────────────────────────────
@@ -271,18 +376,15 @@ class Leg:
         }
 
 
-def stage(root: Path, program: Program, leg: str, python_version: str) -> Path:
-    """lay one build out as a project of its own, under a name of its own
+def write_project(directory: Path, python_version: str) -> None:
+    """the project file every staged build is checked, lowered and compiled under
 
-    the name is what makes the whole method possible: four builds of the same
-    benchmark have to coexist in one process to be timed against each other, and
-    an extension module's init hook is found by its name, so they cannot share
-    one
+    one function rather than one per caller, because a `.by` program is
+    transpiled in a directory of its own before any leg is staged, and the
+    python it lowers to has to have been produced under the same settings the
+    legs are then built under. two copies of this that drifted would put a
+    different program in the interpreted build than in the compiled one
     """
-    directory = root / program.name / leg
-    (directory / "dist").mkdir(parents=True)
-    module = f"{program.name}_{leg}"
-    shutil.copy(PROGRAMS / f"{program.name}.py", directory / f"{module}.py")
     (directory / "pyproject.toml").write_text(
         f'[project]\nname = "bench"\nversion = "0"\n'
         f'requires-python = ">={python_version}"\n\n'
@@ -294,13 +396,80 @@ def stage(root: Path, program: Program, leg: str, python_version: str) -> Path:
         f"[tool.ty.analysis]\nstrict-float = true\n\n"
         f'[tool.ty.environment]\npython-version = "{python_version}"\n'
     )
+
+
+def lower(by: Path, source: Path, python: str) -> tuple[Path | None, str | None]:
+    """transpile a basedpython program to the python two of its four builds run
+
+    a `.by` row is a genuine three-way comparison: `by compile` takes the
+    basedpython source as written, while the interpreted and mypyc builds run
+    the python it lowers to. so the row says both what the native backend makes
+    of our own syntax and what that syntax costs against the python it replaces
+
+    the lowering is a *build* step and belongs outside every clock, like
+    `setup()`. it happens once per program, before anything is staged, and the
+    python it writes is kept beside the source so that a row whose number is
+    surprising can be read rather than guessed at
+
+    a lowering that fails is a refusal. the alternative is a row that quietly
+    compares two of its four builds — or worse, one whose interpreted baseline
+    is last run's python — and a harness that cannot fail loudly is worse than
+    none
+    """
+    lowered = source.with_suffix(".py")
+    result = subprocess.run(
+        [str(by), "transpile", source.name, *LOWERING],
+        cwd=source.parent,
+        env={**os.environ, "PYTHON": python},
+        capture_output=True,
+        text=True,
+    )
+    (source.parent / "transpile.log").write_text(result.stderr)
+    if result.returncode != 0:
+        return None, (
+            f"`by transpile` exited {result.returncode}: "
+            f"{result.stderr.strip() or '(no output)'}"
+        )
+    if not result.stdout.strip():
+        return None, "`by transpile` succeeded but wrote no python to stdout"
+    lowered.write_text(result.stdout)
+    return lowered, None
+
+
+def stage(
+    root: Path, program: Program, leg: str, python_version: str, lowered: Path
+) -> Path:
+    """lay one build out as a project of its own, under a name of its own
+
+    the name is what makes the whole method possible: four builds of the same
+    benchmark have to coexist in one process to be timed against each other, and
+    an extension module's init hook is found by its name, so they cannot share
+    one
+
+    `lowered` is the python this build's module name is given: the program
+    itself for a `.py` benchmark, and the transpiler's output for a `.by` one.
+    every leg is staged the same way, including the two that go on to compile
+    the basedpython source instead — staging that differed per leg is how a
+    build ends up measuring something the others are not
+    """
+    directory = root / program.name / leg
+    (directory / "dist").mkdir(parents=True)
+    module = f"{program.name}_{leg}"
+    shutil.copy(lowered, directory / f"{module}.py")
+    if program.language == "by":
+        shutil.copy(program.source, directory / f"{module}.by")
+    write_project(directory, python_version)
     return directory
 
 
 def build_by(
-    by: Path, directory: Path, module: str, python: str
+    by: Path, directory: Path, source: str, python: str
 ) -> tuple[bool, str | None, list[str]]:
     """compile one build, and read back what it refused to compile
+
+    `source` carries its extension because a basedpython benchmark is compiled
+    from the `.by` it was written as, not from the python it was lowered to —
+    that lowering is what the *interpreted* build runs
 
     the decline list comes from the `--annotate` report rather than from the
     diagnostics: the diagnostic renderer wraps and truncates, and a count taken
@@ -308,7 +477,7 @@ def build_by(
     """
     log = directory / "build.log"
     result = subprocess.run(
-        [str(by), "compile", f"{module}.py", "-o", "out", "--annotate"],
+        [str(by), "compile", source, "-o", "out", "--annotate", *LOWERING],
         cwd=directory,
         env={**os.environ, "PYTHON": python},
         capture_output=True,
@@ -393,7 +562,16 @@ def drive(python: str, spec: dict[str, Any], work: Path, tag: str) -> dict[str, 
         raise Failure(
             f"the timer failed for {tag} (exit {result.returncode}):\n{result.stderr}"
         )
-    return json.loads(result.stdout)
+    # the timer's whole answer is one line of json on stdout, so anything a
+    # benchmark or an emitted module writes there lands in the middle of it. say
+    # what came back rather than letting a decoder error stand in for it
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise Failure(
+            f"the timer's answer for {tag} was not json ({error}). something wrote to "
+            f"stdout:\n{result.stdout[:2000]}"
+        ) from None
 
 
 # ── the run ──────────────────────────────────────────────────────────────────
@@ -450,7 +628,20 @@ def run_program(
 ) -> Result:
     legs: dict[str, Leg] = {}
 
-    directory = stage(root, program, "cpython", python_version)
+    # a `.py` benchmark is its own python. a `.by` one is transpiled first, in a
+    # directory of its own above the four legs, so that one lowering serves all
+    # of them and is kept where it can be read afterwards
+    shared = root / program.name
+    shared.mkdir(parents=True, exist_ok=True)
+    lowered: Path | None = program.source
+    if program.language == "by":
+        write_project(shared, python_version)
+        shutil.copy(program.source, shared / program.source.name)
+        lowered, error = lower(args.by, shared / program.source.name, python)
+        if lowered is None:
+            return Result(program, "transpile", legs, notes=[str(error)])
+
+    directory = stage(root, program, "cpython", python_version, lowered)
     shutil.copy(
         directory / f"{program.name}_cpython.py",
         directory / "dist" / f"{program.name}_cpython.py",
@@ -464,9 +655,11 @@ def run_program(
     # suite reports between them is noise it invented. that number is printed on
     # every row, and nothing smaller than it is a finding
     for leg in ("by", "control"):
-        directory = stage(root, program, leg, python_version)
+        directory = stage(root, program, leg, python_version, lowered)
         module = f"{program.name}_{leg}"
-        built, error, declines = build_by(args.by, directory, module, python)
+        built, error, declines = build_by(
+            args.by, directory, f"{module}.{program.language}", python
+        )
         legs[leg] = Leg(
             leg,
             module,
@@ -479,7 +672,7 @@ def run_program(
         )
 
     if program.mypyc and not args.no_mypyc:
-        directory = stage(root, program, "mypyc", python_version)
+        directory = stage(root, program, "mypyc", python_version, lowered)
         module = f"{program.name}_mypyc"
         built, error = build_mypyc(directory, module, python)
         legs["mypyc"] = Leg(
@@ -529,6 +722,21 @@ def run_program(
             return result
         result.notes.append(f"{name}: {why}")
         live = [leg for leg in live if leg.name != name]
+
+    # checked per build rather than once for the program: the source is the same
+    # four times over, so a build that lost its `setup` lost it in translation
+    with_setup = set(probe["has_setup"])
+    for leg in live:
+        wrong = setup_verdict(
+            program.setup,
+            leg.name in with_setup,
+            probe["bare"].get(leg.name),
+            probe["answers"].get(leg.name),
+        )
+        if wrong is not None:
+            result.status = "setup"
+            result.notes.append(f"{leg.name}: {wrong}")
+            return result
 
     # a build that got a different answer is not a faster build. `bigint` leans
     # on this: a compiler that wrapped at 64 bits fails here rather than posting
@@ -592,7 +800,8 @@ def render(
     )
     print(
         f"method  {metadata['rounds']} rounds after {metadata['warmup']} warmup, "
-        f"{metadata['sample_target'] * 1000:.0f}ms samples, paired medians, strict-float on"
+        f"{metadata['sample_target'] * 1000:.0f}ms samples, paired medians, strict-float on, "
+        f"lowered with `{metadata['lowering']}`"
     )
     print()
     print(header)
@@ -632,6 +841,7 @@ def render(
             print(f"{'':<25}note: {note}")
 
     print()
+    note_lowered(results)
     floors = [r.noise for r in results if r.status == "ok" and r.noise is not None]
     if floors:
         print(
@@ -662,6 +872,25 @@ def render(
                     print(f"  {decline}")
 
 
+def note_lowered(results: list[Result]):
+    """say which rows were written in basedpython, because their columns mean
+    something slightly different
+
+    on a `.by` row the `cpython` and `mypyc` columns are the *transpiled* python
+    rather than the source as written, and the `by` column is `by compile` over
+    the basedpython source itself. that is the whole point of such a row — it
+    reads as what our own syntax costs against the python it replaces — but it is
+    not something the table can be read off without being told
+    """
+    lowered = [r.program.name for r in results if r.program.language == "by"]
+    if lowered:
+        print(
+            f"lowered from basedpython ({len(lowered)}): {', '.join(lowered)} — for "
+            f"these, `cpython` and `mypyc` ran the transpiled python and `by` "
+            f"compiled the `.by` source"
+        )
+
+
 def render_verification(results: list[Result]):
     """everything the suite checks that does not involve a clock
 
@@ -679,6 +908,7 @@ def render_verification(results: list[Result]):
         )
     failed = [r for r in results if r.status != "ok"]
     print(f"\n{len(results) - len(failed)}/{len(results)} verified")
+    note_lowered(results)
 
 
 def compare(
@@ -785,8 +1015,8 @@ def self_check(by: Path, python: str, python_version: str) -> int:
         else:
             print(f"  refused {what}: {refusal}")
 
-    def refusal_for(leg: dict[str, Any], built_after: float = 0.0) -> str | None:
-        answer = drive(
+    def probe_for(leg: dict[str, Any], built_after: float = 0.0) -> dict[str, Any]:
+        return drive(
             python,
             {
                 "mode": "probe",
@@ -797,7 +1027,54 @@ def self_check(by: Path, python: str, python_version: str) -> int:
             root,
             "selfcheck",
         )
-        return answer["refused"].get(leg["name"])
+
+    def refusal_for(leg: dict[str, Any], built_after: float = 0.0) -> str | None:
+        return probe_for(leg, built_after)["refused"].get(leg["name"])
+
+    def verdict_for(source: str, declared: bool) -> str | None:
+        """stage one interpreted module and run the setup guard over it
+
+        end to end rather than by assertion: the guard's answer depends on what
+        the timer reports for a module whose setup was withheld, so a canary
+        that is really wrong in that way is the only thing that proves it
+        """
+        where = root / f"setup-{hashlib.sha256(source.encode()).hexdigest()[:8]}"
+        where.mkdir(exist_ok=True)
+        (where / "canary.py").write_text(source)
+        answer = probe_for(
+            {
+                "name": "cpython",
+                "module": "canary",
+                "compiled": False,
+                "dir": str(where),
+            }
+        )
+        return setup_verdict(
+            declared,
+            "cpython" in answer["has_setup"],
+            answer["bare"].get("cpython"),
+            answer["answers"].get("cpython"),
+        )
+
+    # a benchmark whose inputs really are built in `setup`, and its twin that
+    # builds them inside `bench()` and keeps a `setup` that does nothing. the
+    # second is the shape this guard exists to catch, and it is indistinguishable
+    # from the first by anything except withholding the setup
+    hoisted = (
+        "_xs: list[int] = []\n\n\n"
+        "def setup() -> None:\n"
+        "    _xs.append(1)\n\n\n"
+        "def bench() -> int:\n"
+        "    return len(_xs)\n"
+    )
+    folded_back = (
+        "def setup() -> None:\n"
+        "    return None\n\n\n"
+        "def bench() -> int:\n"
+        "    xs = [1]\n"
+        "    return len(xs)\n"
+    )
+    no_setup = "def bench() -> int:\n    return 1\n"
 
     # a real extension module to be wrong about
     stage = root / "real"
@@ -806,7 +1083,7 @@ def self_check(by: Path, python: str, python_version: str) -> int:
     (stage / "pyproject.toml").write_text(
         f'[project]\nname = "c"\nversion = "0"\nrequires-python = ">={python_version}"\n'
     )
-    built, error, _ = build_by(by, stage, "canary", python)
+    built, error, _ = build_by(by, stage, "canary.py", python)
     if not built:
         print(
             f"error: the self-check could not build its own canary: {error}",
@@ -872,6 +1149,75 @@ def self_check(by: Path, python: str, python_version: str) -> int:
         "import failed",
     )
 
+    expect(
+        "a benchmark that builds its own inputs inside the timed region",
+        verdict_for(folded_back, declared=True),
+        "inside the timed region",
+    )
+    expect(
+        "a declared setup that the module does not have",
+        verdict_for(no_setup, declared=True),
+        "has no setup()",
+    )
+    expect(
+        "a setup the manifest does not declare",
+        verdict_for(hoisted, declared=False),
+        "does not declare",
+    )
+    # the honest shape has to pass, or the guard above is only saying no to
+    # everything
+    if (held := verdict_for(hoisted, declared=True)) is not None:
+        failures.append(
+            f"a benchmark whose setup is genuinely hoisted: refused with {held!r}"
+        )
+    else:
+        print("  accepted a benchmark whose inputs are built in setup()")
+
+    # the lowering a `.by` benchmark's interpreted and mypyc builds run. a
+    # program that will not transpile has no python baseline to be compared
+    # against, so the row cannot be measured — and a skip there would leave a
+    # `.by` row silently comparing two of its four builds
+    def lower_canary(where: str, source: str) -> tuple[Path | None, str | None]:
+        directory = root / where
+        directory.mkdir(exist_ok=True)
+        write_project(directory, python_version)
+        (directory / "canary.by").write_text(source)
+        return lower(by, directory / "canary.by", python)
+
+    expect(
+        "a basedpython program that will not transpile",
+        lower_canary("unlowerable", "def bench() -> int\n    return 1\n")[1],
+        "`by transpile`",
+    )
+    # and the honest shape passes, or the guard above is only saying no to
+    # everything — a transpile the harness refused every time would take every
+    # `.by` row out of the suite without anyone noticing they had gone
+    lowered, refusal = lower_canary("lowerable", "def bench() -> int:\n    return 1\n")
+    if refusal is not None:
+        failures.append(f"a basedpython program that does transpile: {refusal}")
+    elif lowered is None or "def bench" not in lowered.read_text():
+        failures.append("a transpiled program left no python behind to be timed")
+    else:
+        print("  accepted a basedpython program and kept the python it lowered to")
+
+    # one name cannot be two programs. the extension is what says how a
+    # benchmark is built, so a name carrying both is the one thing it cannot
+    # decide, and the harness says so rather than building whichever it globbed
+    both = root / "both"
+    both.mkdir()
+    (both / "canary.py").write_text("")
+    (both / "canary.by").write_text("")
+    try:
+        _ = discover(both)
+        failures.append("a name on disk as both .py and .by: was accepted")
+    except Failure as failure:
+        if "both a .py and a .by" not in str(failure):
+            failures.append(
+                f"a name on disk as both .py and .by: refused with {failure!r}"
+            )
+        else:
+            print(f"  refused a name on disk as both .py and .by: {failure}")
+
     # and the corpus guards, which are what stops a run measuring nothing
     for what, selection, wanted in (
         ("an unknown benchmark name", ["nosuchbenchmark"], "no such benchmark"),
@@ -907,8 +1253,8 @@ def main() -> int:
     parser.add_argument(
         "--by",
         type=Path,
-        default=ROOT / "target" / "release" / "by",
-        help="the compiler to measure (default: this checkout's release build)",
+        default=ROOT / "target" / "debug" / "by",
+        help="the compiler to measure (default: this checkout's debug build)",
     )
     parser.add_argument(
         "--python",
@@ -976,8 +1322,10 @@ def main() -> int:
 
     if not args.by.is_file() or not os.access(args.by, os.X_OK):
         raise Failure(
-            f"no compiler at {args.by} — build one with `cargo build --release --bin by`.\n"
-            "a debug build is far too slow to measure anything with"
+            f"no compiler at {args.by} — build one with `cargo build --bin by`.\n"
+            "a debug build is the right one: what this suite times is the extension "
+            "module `by` emitted, and the emitted C is byte-identical across the two "
+            "profiles. a release `by` only stages a little faster, which is not timed"
         )
 
     if Path(args.python).is_absolute():
@@ -1065,6 +1413,7 @@ def main() -> int:
             "rounds": args.rounds,
             "warmup": args.warmup,
             "strict_float": True,
+            "lowering": " ".join(LOWERING),
         }
     )
 
@@ -1098,6 +1447,10 @@ def main() -> int:
             result.program.name: {
                 "status": result.status,
                 "group": result.program.group,
+                # what the program was written in, so a table read back off an
+                # old run says whether its `cpython` column was the source or
+                # the python that source was lowered to
+                "language": result.program.language,
                 "notes": result.notes,
                 "calls": result.calls,
                 "load": result.load,

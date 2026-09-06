@@ -234,10 +234,14 @@ plain double instructions per iteration, the same as mypyc's; what is left is th
 tagged integer counter, which both compilers still carry — mypyc simply spends
 fewer instructions on it
 
-on array work the buffer wins outright: `dot` 6.8ms against mypyc's 9.7ms, and
-`prefix` 0.7ms against 3.5ms, which is hand-written C speed. mypyc's erased
+on array work the buffer wins outright on `dot` and `prefix`. mypyc's erased
 generics make its `list[float]` a `PyListObject` of boxed floats, so it cannot
 reach that shape at all
+
+the millisecond figures that stood here were withdrawn rather than carried
+forward: both rows built their inputs inside the timed region when they were
+taken, so they measured the build as well as the kernel. what those rows measure
+today is not the same quantity, and no replacement has been taken
 
 ### what has shipped
 

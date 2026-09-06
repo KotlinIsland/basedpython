@@ -4,6 +4,9 @@ the call site cannot know which body it runs, so the direct call `methods`
 measures is not available to it. every other object benchmark here has exactly
 one candidate; this is the one that does not, which is the case a devirtualising
 compiler has to get right and a direct-calling one has to get wrong loudly
+
+the mixed list is built by `setup`, so the two hundred allocations that fill it
+are not counted against the sixty thousand dispatches that read it
 """
 
 
@@ -32,13 +35,18 @@ def total(shapes: list[Shape], passes: int) -> int:
     return running
 
 
-def bench() -> int:
-    shapes: list[Shape] = []
+_shapes: list[Shape] = []
+
+
+def setup() -> None:
     i = 0
     while i < 200:
         if i % 2 == 0:
-            shapes.append(Shape(i))
+            _shapes.append(Shape(i))
         else:
-            shapes.append(Square(i))
+            _shapes.append(Square(i))
         i = i + 1
-    return total(shapes, 300)
+
+
+def bench() -> int:
+    return total(_shapes, 300)

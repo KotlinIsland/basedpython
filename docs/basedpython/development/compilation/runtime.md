@@ -78,10 +78,12 @@ untouched. what it costs is allocation: the pre-header and the two words a
 collected type carries grow every instance, and a dict of arbitrary values has to
 be one the collector can reach. that is four extra words, which for a two-field
 class is a doubling — `alloc` went 7.38x → 5.62x against cpython and `objects`
-17.23x → 12.48x, both about a quarter. `fields`, `methods`, `inherit`, `dot` and
-`generic` do not move at all: a declared field is read and written at the offset
-it always was, and the interpreted side still reaches it through a data
-descriptor, which wins over the dict.
+17.23x → 12.48x, both about a quarter. `fields`, `methods` and `generic` do not
+move at all: a declared field is read and written at the offset it always was,
+and the interpreted side still reaches it through a data descriptor, which wins
+over the dict. `inherit` and `dot` were observed not to move either, but that was
+before their inputs were built outside the timed region, so the observation is
+against a row that no longer measures the same work.
 
 it is only allocation, so `__slots__` gets all of it back — the same source built
 with the declaration times identically to the same source built before the dict

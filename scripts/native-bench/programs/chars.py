@@ -2,6 +2,12 @@
 
 the text is made by repetition rather than by concatenation so that `words` —
 which is the concatenation benchmark — cannot leak into this measurement
+
+it is also made by `setup`, outside the clock. `str.__mul__` is one call into
+cpython and runs at the same speed in every build, so leaving it inside
+`bench()` put a fixed cost in the numerator and the denominator of a ratio whose
+denominator this row is trying to make small — which caps the speedup the row
+can report regardless of how fast the scan gets
 """
 
 
@@ -27,11 +33,18 @@ def longest_run(line: str) -> int:
     return best
 
 
+_line: str = ""
+
+
+def setup() -> None:
+    global _line
+    _line = text(2000)
+
+
 def bench() -> int:
-    line = text(2000)
     total = 0
     r = 0
     while r < 10:
-        total = total + longest_run(line)
+        total = total + longest_run(_line)
         r = r + 1
     return total

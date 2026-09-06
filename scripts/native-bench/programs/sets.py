@@ -3,16 +3,10 @@
 the hash container without a value, which `dict` does not stand in for: the
 membership test is the whole operation rather than a step before a read. the
 shape is a short build and a long test phase, so the answer is about `in`
+
+the build is in `setup`, so "short" now means it costs this row nothing at all
+rather than a few per cent of it
 """
-
-
-def build(n: int) -> set[int]:
-    seen: set[int] = set()
-    i = 0
-    while i < n:
-        seen.add(i * 3)
-        i = i + 1
-    return seen
 
 
 def hits(seen: set[int], n: int, passes: int) -> int:
@@ -28,6 +22,15 @@ def hits(seen: set[int], n: int, passes: int) -> int:
     return found
 
 
+_seen: set[int] = set()
+
+
+def setup() -> None:
+    i = 0
+    while i < 2000:
+        _seen.add(i * 3)
+        i = i + 1
+
+
 def bench() -> int:
-    seen = build(2000)
-    return hits(seen, 2000, 30)
+    return hits(_seen, 2000, 30)

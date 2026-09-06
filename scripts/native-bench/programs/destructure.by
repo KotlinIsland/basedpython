@@ -1,0 +1,50 @@
+"""a pattern binding where a name could have gone
+
+basedpython lets a `match` pattern bind in the places an ordinary name binds —
+a `let` statement, a `for` target, a `with` item, a parameter. each one is a
+single `match` case in disguise, so the binding is a type test and a set of
+field reads rather than the store an assignment would be
+
+both binders in the loop below are the same one construct in two positions: the
+`for` target takes a `Rect` apart on every element, and the `let` takes a tuple
+apart inside it. `tuples` is the row to read this against — it unpacks the same
+shape with plain assignment, which is what a reader is deciding between
+
+the rectangles are built by `setup`, so the row times the binding rather than
+the two hundred allocations that fill the list
+"""
+
+
+class Rect:
+    w: int
+    h: int
+    __match_args__ = ("w", "h")
+
+    def __init__(self, w: int, h: int):
+        self.w = w
+        self.h = h
+
+
+def total(rects: list[Rect], passes: int) -> int:
+    running = 0
+    p = 0
+    while p < passes:
+        for Rect(w, h) in rects:
+            let (short, tall) := (w, h)
+            running = running + short * tall
+        p = p + 1
+    return running
+
+
+_rects: list[Rect] = []
+
+
+def setup():
+    i = 0
+    while i < 200:
+        _rects.append(Rect(i, i + 1))
+        i = i + 1
+
+
+def bench() -> int:
+    return total(_rects, 100)

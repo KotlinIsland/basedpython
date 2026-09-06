@@ -1,0 +1,58 @@
+"""a sum type matched over, variant by variant, with the payload read out
+
+the first row here written in basedpython rather than in python. an
+`enum class` lowers to a sealed hierarchy — one frozen, slotted dataclass per
+variant, subclassing the enum — so a `match` over it is a type test followed by
+reads of the matched variant's fields, and that pair is the whole operation this
+times
+
+nothing else in the set does either half. `inherit` is the nearest thing and
+asks the opposite question: it dispatches on the receiver, and never looks at
+what the receiver holds. here the dispatch is the `match` and the fields come
+out of it
+
+the two hundred shapes are built by `setup`, so what is timed is the matching
+and not the allocation `alloc` already measures
+"""
+
+
+enum class Shape:
+    case Circle(radius: int)
+    case Rect(width: int, height: int)
+
+
+def area(shape: Shape) -> int:
+    match shape:
+        case Shape.Circle(r):
+            return r * r * 3
+        case Shape.Rect(w, h):
+            return w * h
+
+
+def total(shapes: list[Shape], passes: int) -> int:
+    running = 0
+    p = 0
+    while p < passes:
+        i = 0
+        while i < len(shapes):
+            running = running + area(shapes[i])
+            i = i + 1
+        p = p + 1
+    return running
+
+
+_shapes: list[Shape] = []
+
+
+def setup():
+    i = 0
+    while i < 200:
+        if i % 2 == 0:
+            _shapes.append(Shape.Circle(i))
+        else:
+            _shapes.append(Shape.Rect(i, 3))
+        i = i + 1
+
+
+def bench() -> int:
+    return total(_shapes, 100)
