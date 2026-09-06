@@ -256,6 +256,71 @@ def f(s: str):
     reveal_type(a)  # revealed: int
 ```
 
+## a suite ends the statement it is written in
+
+A suite runs to the end of its last line, taking with it the newline that would otherwise terminate
+the statement the suite is written in. The line after it therefore begins a new statement, even when
+that line opens with a token the expression parser would otherwise read as a continuation of the
+value — here the `if` that would be a conditional expression anywhere else.
+
+```by
+import json
+
+def f(text: str) -> object:
+    parsed = try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+```
+
+The other continuations are held apart the same way: a call's `(`, a subscript's `[`, a binary
+operator, and a walrus each start the next statement rather than extending the one the suite ended.
+
+```by
+def g(c: bool, xs: list[int]):
+    a = if c:
+        1
+    else:
+        2
+    (xs).append(a)
+
+    b = if c:
+        1
+    else:
+        2
+    [b]
+
+    d = if c:
+        1
+    else:
+        2
+    -d
+
+    e = if c:
+        1
+    else:
+        2
+    (f := e)
+    reveal_type(f)  # revealed: 1 | 2
+```
+
+a comma is held apart too, so the line after a suite is a statement of its own rather than the tail
+of a tuple. `g` is bound to the branch's value, and the `2,` below it is a statement in its own
+right.
+
+```by
+def h(c: bool):
+    g = if c:
+        1
+    else:
+        2
+    2, 3
+    reveal_type(g)  # revealed: 1 | 2
+```
+
 ## narrowing inside a branch applies to its value
 
 ```by
