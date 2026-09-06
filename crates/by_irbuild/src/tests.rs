@@ -8944,13 +8944,18 @@ def store(box: Box) -> None:
     });
 }
 
-/// a property on a class another class in the module extends keeps the protocol
+/// a property on a class another class in the module extends is tested before it is
+/// called
 ///
-/// a subclass may override either half, and a receiver typed as the base cannot see
-/// which one it got — the same reason a method on such a class is not called directly.
-/// the layout pass makes both classes *mutable*, and that is what this rests on
+/// a subclass may override either half — `Narrow` does — and a receiver typed as the
+/// base cannot see which one it got, so the direct call a class nothing extends gets is
+/// not licensed here. the layout pass makes both classes *mutable*, and that is what this
+/// rests on. what the site gets instead is `accessor-stands`: the direct call on the arm
+/// where the receiver is exactly a `Base` and the pair still stands, and the protocol on
+/// the arm where it is not — which is the arm a `Narrow`, or an interpreted subclass, or
+/// a half rebound after import, all arrive on
 #[test]
-fn a_property_on_an_extended_class_stays_on_the_protocol() {
+fn a_property_on_an_extended_class_is_tested_before_it_is_called() {
     let source = "\
 class Base:
     def __init__(self) -> None:
@@ -8984,10 +8989,18 @@ def read(base: Base) -> int:
             .expect("read is emitted");
         let text = print_function(read);
         assert!(
+            has_op(read, |op| matches!(
+                op,
+                Op::AccessorStands { class, name, .. } if class == "Base" && name == "v"
+            )),
+            "{text}"
+        );
+        // both arms, and the protocol is the one nothing proved its way off
+        assert!(text.contains("call Base.v$get"), "{text}");
+        assert!(
             has_op(read, |op| matches!(op, Op::GetAttr { .. })),
             "{text}"
         );
-        assert!(!text.contains("v$get"), "{text}");
     });
 }
 
@@ -9281,6 +9294,110 @@ class Box:
             .iter()
             .any(|(_, reason)| reason.contains("defined more than once")),
         "{stacked:?}"
+    );
+}
+
+/// an accessor block is the same one attribute, written with a `get`/`set` suite
+///
+/// the parser turns `var v: int` and the suite under it into the members a hand-written
+/// pair has: a getter, a setter, and the storage they share. the markers it puts on the
+/// two halves are decorators no source spelled, so a lowering that recognised only
+/// written ones saw two `def v`s in one body and turned the whole class down for a name
+/// defined twice
+#[test]
+fn an_accessor_block_is_lowered_as_one_attribute() {
+    let source = "\
+class Cell:
+    var v: int
+        get() = field
+        set(given):
+            field = given
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Cell")
+            .expect("Cell is emitted");
+        assert_eq!(class.properties.len(), 1, "{:?}", class.properties);
+        assert_eq!(class.properties[0].name, "v");
+        assert_eq!(class.properties[0].getter.as_deref(), Some("v$get"));
+        assert_eq!(class.properties[0].setter.as_deref(), Some("v$set"));
+        assert_eq!(class.properties[0].deleter, None);
+        // the storage the suite writes through is the field, under the dunder name the
+        // construct gives it — and `v` itself is reached through the descriptor
+        assert!(
+            class.fields.iter().any(|field| field.name == "_Cell__v"),
+            "{:?}",
+            class.fields
+        );
+        assert!(
+            class.fields.iter().all(|field| field.name != "v"),
+            "{:?}",
+            class.fields
+        );
+    });
+}
+
+/// an accessor block that declares no storage is the group of one it lowers to
+#[test]
+fn a_computed_accessor_block_is_lowered_as_one_attribute() {
+    let source = "\
+class Box:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    let doubled: int
+        get() = self.n * 2
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Box")
+            .expect("Box is emitted");
+        assert_eq!(class.properties.len(), 1, "{:?}", class.properties);
+        assert_eq!(class.properties[0].getter.as_deref(), Some("doubled$get"));
+        assert_eq!(class.properties[0].setter, None);
+    });
+}
+
+/// an accessor block whose storage carries an initialiser declines saying so
+///
+/// the transpiler does not leave that initialiser in the class body: it moves it into
+/// `__init__`, so every instance gets storage of its own rather than sharing one object.
+/// the emitted class has neither half of that — a class-level value is read back off the
+/// twin's body, which no longer holds one, and a class that wrote no `__init__` has no
+/// constructor to write the field in instead. so the decline is the answer, and what it
+/// must not be is the message about a name written twice that stood here before
+#[test]
+fn an_accessor_blocks_initialised_storage_is_declined() {
+    let declined = declines(
+        "\
+class Cell:
+    var v: int = 0
+        get() = field
+        set(given):
+            field = given
+",
+    );
+    assert!(
+        declined
+            .iter()
+            .any(|(_, reason)| reason.contains("gives its storage an initialiser")),
+        "{declined:?}"
+    );
+    assert!(
+        !declined
+            .iter()
+            .any(|(_, reason)| reason.contains("defined more than once")),
+        "{declined:?}"
     );
 }
 
@@ -10335,4 +10452,240 @@ def outer(n: int) -> int:
 fn exec_handed_none_for_a_namespace_is_declined() {
     let reason = decline("def f() -> None:\n    exec(\"a = 1\", None)\n");
     assert!(reason.contains("calling frame"), "{reason}");
+}
+
+/// a class filling one arithmetic slot and one comparison slot
+///
+/// both operands being `Money` is the whole of what licenses reaching these bodies
+/// directly: python hands a same-typed pair to the left type's slot and to nothing else
+const MONEY_OPERATORS: &str = "\
+class Money:
+    def __init__(self, amount: int) -> None:
+        self.amount = amount
+
+    def __add__(self, other: Money) -> Money:
+        return Money(self.amount + other.amount)
+
+    def __lt__(self, other: Money) -> bool:
+        return self.amount < other.amount
+";
+
+#[test]
+fn an_operator_between_two_of_one_class_calls_the_body_directly() {
+    // python looks an operator up on the *type*, so nothing stored on the instance can
+    // shadow it and there is no test to write — unlike the call by name, which has to
+    // ask. and a pair of one class leaves the reflected operand nothing to answer:
+    // cpython calls the left type's slot alone when both slots are the same function
+    let rendered = ir(&format!(
+        "{MONEY_OPERATORS}
+def total(a: Money, b: Money) -> Money:
+    return a + b
+
+
+def under(a: Money, b: Money) -> bool:
+    return a < b
+"
+    ));
+    assert!(rendered.contains("call Money.__add__("), "{rendered}");
+    assert!(rendered.contains("call Money.__lt__("), "{rendered}");
+}
+
+#[test]
+fn an_augmented_operator_goes_through_the_protocol() {
+    // `a += b` asks for `__iadd__` before `__add__`, and only the plain form is modelled
+    let rendered = ir(&format!(
+        "{MONEY_OPERATORS}
+def accumulate(a: Money, b: Money) -> Money:
+    a += b
+    return a
+"
+    ));
+    assert!(rendered.contains("a: Money"), "{rendered}");
+    assert!(!rendered.contains("call Money.__add__("), "{rendered}");
+}
+
+#[test]
+fn an_operator_on_a_class_that_can_be_subclassed_goes_through_the_protocol() {
+    // a class another extends is emitted as a mutable heap type, and the subclass
+    // overrides the operator. the operands here are typed as the base, so a direct call
+    // would run the base's body on instances that have one of their own
+    let rendered = ir("\
+class Base:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __add__(self, other: Base) -> int:
+        return self.n + other.n
+
+
+class Sub(Base):
+    def __add__(self, other: Base) -> int:
+        return self.n * other.n
+
+
+def total(a: Base, b: Base) -> int:
+    return a + b
+");
+    assert!(rendered.contains("a: Base"), "{rendered}");
+    assert!(!rendered.contains("call Base.__add__("), "{rendered}");
+    assert!(!rendered.contains("call Sub.__add__("), "{rendered}");
+}
+
+#[test]
+fn an_operator_whose_body_can_answer_not_implemented_goes_through_the_protocol() {
+    // a body producing `object` has room for `NotImplemented`, which is python's way of
+    // saying "ask the other operand". the direct call has nowhere to send that on to, so
+    // the return representation is what licenses skipping the protocol
+    let rendered = ir("\
+class Vec:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __add__(self, other: Vec) -> object:
+        if self.n < 0:
+            return NotImplemented
+        return self.n + other.n
+
+    def __lt__(self, other: Vec) -> bool:
+        return self.n < other.n
+
+
+def total(a: Vec, b: Vec) -> object:
+    return a + b
+
+
+def under(a: Vec, b: Vec) -> bool:
+    return a < b
+");
+    // the two differ in nothing but what they hand back, and `__lt__` is reached
+    // directly — so it is the return representation turning `__add__` away
+    assert!(rendered.contains("call Vec.__lt__("), "{rendered}");
+    assert!(!rendered.contains("call Vec.__add__("), "{rendered}");
+}
+
+#[test]
+fn an_operator_between_two_classes_goes_through_the_protocol() {
+    // the operands differ, so python's whole ordering applies: the right operand's
+    // reflected method answers when the left one declines, and is tried *first* where
+    // its type descends from the left one's. only a same-typed pair collapses to one call
+    let rendered = ir("\
+class Metres:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __add__(self, other: Feet) -> int:
+        return self.n + other.n
+
+
+class Feet:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+
+def total(a: Metres, b: Feet) -> int:
+    return a + b
+");
+    assert!(rendered.contains("a: Metres"), "{rendered}");
+    assert!(!rendered.contains("call Metres.__add__("), "{rendered}");
+}
+
+#[test]
+fn a_comparison_the_class_leaves_out_goes_through_the_protocol() {
+    // `a > b` on a class writing only `__lt__` is python swapping the operands and using
+    // that: the name the operator dispatches to has to be one the class actually wrote
+    let rendered = ir(&format!(
+        "{MONEY_OPERATORS}
+def over(a: Money, b: Money) -> bool:
+    return a > b
+"
+    ));
+    assert!(rendered.contains("a: Money"), "{rendered}");
+    assert!(!rendered.contains("call Money.__gt__("), "{rendered}");
+    assert!(!rendered.contains("call Money.__lt__("), "{rendered}");
+}
+
+/// a class with two integer fields and the `__match_args__` a positional class pattern
+/// reads them through
+const A_MATCHABLE_POINT: &str = "\
+class Point:
+    __match_args__ = (\"x\", \"y\")
+
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+";
+
+/// the classifier the cases below are lowered from, over whichever classes the module
+/// in front of it declares
+const A_POSITIONAL_CLASSIFIER: &str = "
+def classify(v: object) -> int:
+    match v:
+        case Point(a, b):
+            return a - b
+        case _:
+            return 0
+";
+
+#[test]
+fn a_class_pattern_over_an_emitted_layout_reads_fields() {
+    // the pattern's `isinstance` has already said the subject is a `Point`, and a
+    // `Point` is a sealed static type — python can neither write to it nor derive from
+    // it — so what passed that test is exactly this layout. the two positions
+    // `__match_args__` names are then loads at compile-time offsets, and each carries
+    // the field's own representation, which is what makes `a - b` integer arithmetic
+    // rather than a call into the object protocol
+    let rendered = ir(&format!("{A_MATCHABLE_POINT}{A_POSITIONAL_CLASSIFIER}"));
+    assert!(rendered.contains("let a: int"), "{rendered}");
+    assert!(rendered.contains("let b: int"), "{rendered}");
+    assert!(rendered.contains("<Point.x>"), "{rendered}");
+    assert!(rendered.contains("<Point.y>"), "{rendered}");
+    assert!(!rendered.contains("<positional>"), "{rendered}");
+    // nothing runs past a `match` whose last case takes anything and whose every body
+    // returns, so the return is the `int` all four of them agree on rather than the
+    // `object` a body that might also fall out of its end would need
+    assert!(
+        rendered.contains("def classify(v: object) -> int"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn a_class_pattern_over_a_base_does_not_read_fields() {
+    // a class another one extends is emitted as a mutable heap type, and
+    // `__match_args__` is a name python can rebind on one of those — so which attribute
+    // a *position* names is no longer settled, and the read goes back out through the
+    // lookup
+    let rendered = ir(&format!(
+        "{A_MATCHABLE_POINT}
+class Corner(Point):
+    pass
+{A_POSITIONAL_CLASSIFIER}"
+    ));
+    assert!(rendered.contains("<positional>"), "{rendered}");
+    assert!(!rendered.contains("<Point.x>"), "{rendered}");
+}
+
+#[test]
+fn a_class_pattern_over_an_attribute_a_constructor_may_skip_does_not_read_fields() {
+    // `__init__` writes `v` on one path only, so the attribute may not be there — and
+    // python answers an absent one in a class pattern by moving to the next case rather
+    // than by raising. a field read at a fixed offset has no way to say that, so the
+    // position stays on the lookup, where *absent* is an answer
+    let rendered = ir("\
+class Maybe:
+    __match_args__ = (\"v\",)
+
+    def __init__(self, present: bool) -> None:
+        if present:
+            self.v = 1
+
+def look(o: object) -> int:
+    match o:
+        case Maybe(n):
+            return 1
+        case _:
+            return 0
+");
+    assert!(rendered.contains("<positional>"), "{rendered}");
+    assert!(!rendered.contains("<Maybe.v>"), "{rendered}");
 }

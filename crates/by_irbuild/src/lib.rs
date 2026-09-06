@@ -481,6 +481,12 @@ pub fn build_module(
     // each emitted class's base, so an upcast to it is recognised as free
     let owned_mutable: HashSet<String> = mutable.iter().map(|name| (*name).to_string()).collect();
 
+    let sealed: HashSet<String> = layouts
+        .names()
+        .filter(|name| !owned_mutable.contains(*name))
+        .cloned()
+        .collect();
+
     let slotted: HashSet<String> = declared
         .iter()
         .filter(|class| declared_slots(class).is_some())
@@ -527,6 +533,7 @@ pub fn build_module(
     let no_directs: HashSet<String> = HashSet::new();
     let unit = Unit {
         mutable: &owned_mutable,
+        sealed: &sealed,
         slotted: &slotted,
         constructs: &constructs,
         bases: &bases,
@@ -1164,8 +1171,15 @@ fn lower_generator(
     // a declared `global` is not one of them: it lives in the module namespace, which
     // already outlives every suspension
     let declared_global = declared_globals(&function.body);
-    let mut representations =
-        local_representations(db, env, model, &function.body, layouts, unit.arrays);
+    let mut representations = local_representations(
+        db,
+        env,
+        model,
+        &function.body,
+        layouts,
+        unit.sealed,
+        unit.arrays,
+    );
     representations.retain(|(name, _)| !declared_global.contains(name));
     let locals: Vec<String> = representations
         .iter()
@@ -1437,6 +1451,7 @@ fn lower_resume(
         directs: unit.directs,
         in_range: Vec::new(),
         mutable: unit.mutable,
+        sealed: unit.sealed,
         slotted: unit.slotted,
         constructs: unit.constructs,
         bases: unit.bases,
@@ -4037,7 +4052,7 @@ fn property_groups<'a>(
             && (written.len() < 2
                 || !written[1..]
                     .iter()
-                    .any(|later| written_half(db, model, later).is_some()))
+                    .any(|later| written_half(later).is_some()))
         {
             continue;
         }
@@ -4056,7 +4071,7 @@ fn property_groups<'a>(
             deleter: None,
         };
         for accessor in &written[1..] {
-            let half = accessor_half(db, model, accessor)?;
+            let half = accessor_half(accessor)?;
             let slot = match half {
                 Half::Get => &mut group.getter,
                 Half::Set => &mut group.setter,
@@ -4104,7 +4119,20 @@ fn property_groups<'a>(
 /// whether this definition is the `@property` a group starts with
 ///
 /// matched by the bare name, the way `@staticmethod` and `@classmethod` are — and with
-/// the class body already ruled out as having bound it
+/// the class body already ruled out as having bound it.
+///
+/// a basedpython accessor block is the same construct written differently:
+///
+/// ```text
+/// var v: int = 0
+///     get() = field
+///     set(given):
+///         field = given
+/// ```
+///
+/// the parser turns that into the members a hand-written pair has, and the getter it
+/// makes carries `__property__` where the hand-written one carries `@property`. the
+/// marker is a name no source spelled, which is what [`is_written_decorator`] answers
 fn is_property_getter(
     db: &dyn ty_python_semantic::Db,
     model: &SemanticModel<'_>,
@@ -4113,8 +4141,79 @@ fn is_property_getter(
     let [decorator] = function.decorator_list.as_slice() else {
         return false;
     };
-    matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "property")
-        && is_written_decorator(db, model, decorator)
+    (matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "property")
+        && is_written_decorator(db, model, decorator))
+        || is_accessor_marker(db, model, decorator)
+}
+
+/// whether this is the marker the parser leaves on a basedpython accessor block's `get`
+///
+/// `__static_property__` is deliberately not one of these: a `static let` with a `get`
+/// block is a class-level descriptor rather than a `property`, and folding it into one
+/// would publish an attribute the twin reaches a different way
+fn is_accessor_marker(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    decorator: &ast::Decorator,
+) -> bool {
+    matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "__property__")
+        && !is_written_decorator(db, model, decorator)
+}
+
+/// the storage an accessor block declared with an initialiser, where the class body has one
+///
+/// the three members `var v: int = 0` with a suite under it is parsed into include the
+/// backing storage, as a class-body declaration under a name no source spelled — which is
+/// why its target has no width. the transpiler does not leave it there: it moves the
+/// initialiser into `__init__`, so each instance gets storage of its own and a mutable
+/// initialiser is not one object every instance shares.
+///
+/// that leaves the twin's class body with no such name and the emitted class with nowhere
+/// to take the value from. a class-level value is read back off the twin's body, and a
+/// class that wrote no `__init__` has no constructor of its own to write the field in
+/// instead — so a read before the first write would raise where the twin answers with the
+/// initialiser.
+///
+/// there are class shapes the transpiler cannot inject an `__init__` into and leaves the
+/// declaration where it stands, and those would be lowerable. nothing here tells them
+/// apart from the rest without deciding the placement a second time, and a decline is the
+/// safe way to be wrong about which shape this is.
+///
+/// a declaration with no initialiser is not this at all. the transpiler leaves that one in
+/// the class body exactly as the parser wrote it, and the two bodies say the same thing
+fn accessor_storage_with_an_initialiser<'a>(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    class: &'a ast::StmtClassDef,
+) -> Option<&'a str> {
+    let holds_a_block = class.body.iter().any(|statement| {
+        matches!(statement, Stmt::FunctionDef(function)
+            if function
+                .decorator_list
+                .iter()
+                .any(|decorator| is_accessor_marker(db, model, decorator)))
+    });
+    if !holds_a_block {
+        return None;
+    }
+    class.body.iter().find_map(|statement| {
+        let (target, value) = match statement {
+            Stmt::AnnAssign(node) => (node.target.as_ref(), node.value.is_some()),
+            Stmt::Assign(node) => match node.targets.as_slice() {
+                [target] => (target, true),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let Expr::Name(name) = target else {
+            return None;
+        };
+        // the storage is named after the property, two underscores deeper, so the name
+        // the message carries is the one the source actually wrote
+        (value && name.range.is_empty())
+            .then(|| name.id.as_str().trim_start_matches('_'))
+            .filter(|written| !written.is_empty())
+    })
 }
 
 /// which half `@value.setter` and its siblings name, wherever the decorator stands
@@ -4123,16 +4222,14 @@ fn is_property_getter(
 /// rather than insisting on a list of one. a half written `@value.setter` over
 /// `@abc.abstractmethod` is still plainly a half of `value`, and a group holding one has
 /// to decline saying so — the lowering turns it down either way, but reading the list
-/// strictly here made it fall through to a message about a name written twice
-fn written_half(
-    db: &dyn ty_python_semantic::Db,
-    model: &SemanticModel<'_>,
-    function: &ast::StmtFunctionDef,
-) -> Option<Half> {
+/// strictly here made it fall through to a message about a name written twice.
+///
+/// an attribute standing here is either a decorator somebody wrote or the marker the
+/// parser leaves on a basedpython accessor block's `set`. every other marker the parser
+/// makes is a bare name — `function_modifier` reads them all that way — so there is no
+/// third thing to tell apart, and the two that are here mean the same half
+fn written_half(function: &ast::StmtFunctionDef) -> Option<Half> {
     function.decorator_list.iter().find_map(|decorator| {
-        if !is_written_decorator(db, model, decorator) {
-            return None;
-        }
         let Expr::Attribute(attribute) = &decorator.expression else {
             return None;
         };
@@ -4155,12 +4252,8 @@ fn written_half(
 }
 
 /// which half `@value.setter` and its siblings write, where the half is one this lowers
-fn accessor_half(
-    db: &dyn ty_python_semantic::Db,
-    model: &SemanticModel<'_>,
-    function: &ast::StmtFunctionDef,
-) -> Lowered<Half> {
-    let Some(half) = written_half(db, model, function) else {
+fn accessor_half(function: &ast::StmtFunctionDef) -> Lowered<Half> {
+    let Some(half) = written_half(function) else {
         return Err(Decline::new(format!(
             "`{}` is written more than once, and the second is not a half of the property above it",
             function.name
@@ -4622,7 +4715,12 @@ fn function_modifier(
     model: &SemanticModel<'_>,
     decorator: &ast::Decorator,
 ) -> Lowered<Modifier> {
-    if is_written_decorator(db, model, decorator) {
+    // an attribute standing here that no source wrote is the marker the parser leaves on
+    // a basedpython accessor block's `set`, and it stands for what the twin has there: a
+    // `@value.setter` rooted at the name the class body bound. so it is read as the
+    // written one, and the same check turns it down where the group it belongs to was not
+    // folded — every other marker the parser makes is a bare name
+    if is_written_decorator(db, model, decorator) || decorator.expression.is_attribute_expr() {
         return decorator_path(&decorator.expression).map(Modifier::Written);
     }
     let Expr::Name(name) = &decorator.expression else {
@@ -4634,6 +4732,12 @@ fn function_modifier(
         "abstract" => Ok(Modifier::Apply(Decorator::name("abstractmethod"))),
         "final" => Ok(Modifier::Apply(Decorator::name("final"))),
         "override" => Ok(Modifier::Apply(Decorator::name("override"))),
+        // the marker on an accessor block's `get`, which the transpiler writes out as
+        // the `@property` it means. a group `property_groups` folded has its halves'
+        // decorators taken off before this ever matters; one it left standing — a class
+        // written with a keyword — is then decorated at init exactly as a hand-written
+        // `@property` under the same keyword is
+        "__property__" => Ok(Modifier::Apply(Decorator::name("property"))),
         // neither reaches the interpreted twin as a decorator
         "open" | "export" => Ok(Modifier::Erased),
         // `private` mangles the name the definition is bound under, which is a
@@ -5203,6 +5307,11 @@ fn class_fields(
         return Err(Decline::new(
             "a `setattr` on the receiver names its attribute at runtime",
         ));
+    }
+    if let Some(written) = accessor_storage_with_an_initialiser(db, model, class) {
+        return Err(Decline::new(format!(
+            "the accessor block for `{written}` gives its storage an initialiser, which the twin writes in a constructor this class does not have"
+        )));
     }
     let (is_data, _, wrote_a_decorator) = class_modifiers(db, model, class)?;
     // this class's own decorators are applied at init and taken out of the twin's source,
@@ -6510,8 +6619,15 @@ fn lower_function_with_receiver(
     // a nested function lives on a generated environment class, whose fields are
     // the captures. it has to exist before the body is lowered, because the `def`
     // statement allocates it
-    let mut locals_here =
-        local_representations(db, env, model, &function.body, layouts, unit.arrays);
+    let mut locals_here = local_representations(
+        db,
+        env,
+        model,
+        &function.body,
+        layouts,
+        unit.sealed,
+        unit.arrays,
+    );
     locals_here.retain(|(name, _)| !declared_global.contains(name));
     let bound: HashSet<String> = params
         .iter()
@@ -6909,6 +7025,7 @@ fn lower_function_with_receiver(
         directs: unit.directs,
         in_range: Vec::new(),
         mutable: unit.mutable,
+        sealed: unit.sealed,
         slotted: unit.slotted,
         constructs: unit.constructs,
         bases: unit.bases,
@@ -7123,6 +7240,11 @@ struct Unit<'a> {
     /// or subclass it, so a call on one goes through a test rather than straight to a
     /// body — see [`Lowering::dispatch_candidates`]
     mutable: &'a HashSet<String>,
+    /// the emitted classes that are *not* mutable heap types: a static type python can
+    /// neither write to nor derive from, so a value that passes an `isinstance` against
+    /// one is exactly that layout. it is what licenses a class pattern to read fields —
+    /// see [`class_pattern_reads`]
+    sealed: &'a HashSet<String>,
     /// the classes whose body declares `__slots__`, and whose instances therefore have
     /// no dict to hold a value shadowing a method — see
     /// [`Lowering::keeps_instance_dict`]
@@ -7259,7 +7381,13 @@ enum Cleanup {
     /// has to survive every suspension the body makes — and a register does not
     /// come back from one. the flag says which protocol: leaving an `async with`
     /// by `return` still has to *await* the exit
-    Context(Place, bool),
+    Context {
+        manager: Place,
+        is_async: bool,
+        /// the class whose `__exit__` this reaches, where the block's manager was
+        /// known to be one the compiler emitted — see [`Lowering::protocol_owner`]
+        direct: Option<String>,
+    },
     /// an `except` block's handled exception, put back on the way out
     Handled(RegisterId),
 }
@@ -7378,6 +7506,17 @@ struct Signature {
     ///
     /// see [`by_ir::function::Function::computed_defaults`]
     computed_defaults: Vec<usize>,
+}
+
+/// the compiled body an operator reaches directly, and the representations it speaks
+///
+/// see [`Lowering::operator_dunder`], which is the only thing that builds one
+struct OperatorCall {
+    owner: String,
+    callee: String,
+    /// the receiver's representation and the operand's, in that order
+    params: Vec<RType>,
+    ret: RType,
 }
 
 /// the chain a call site writes out in place of asking the object protocol
@@ -7585,12 +7724,18 @@ fn signature(
     // in an unboxed buffer is still being settled when the signature tables are built,
     // so consulting them here would make a signature depend on *when* it was computed.
     // a parameter that already is a buffer is left alone below for the same reason
+    //
+    // no class counts as sealed here either, so no class pattern narrows a binding. the
+    // set that says which classes are sealed is not settled until every layout is, and a
+    // name a pattern binds is only asked about here to *widen* the parameter of the same
+    // name — which the boxed answer already does
     let rebound: HashMap<String, RType> = local_representations(
         db,
         env,
         model,
         &function.body,
         layouts,
+        &HashSet::new(),
         &ArrayEditions::new(),
     )
     .into_iter()
@@ -7733,6 +7878,24 @@ fn reaches_the_end(body: &[Stmt]) -> bool {
                     .elif_else_clauses
                     .iter()
                     .any(|clause| reaches_the_end(&clause.body))
+        }
+        // a `match` covers everything once an unguarded pattern that matches anything
+        // stands in it: nothing below that case can run, and nothing after the statement
+        // can either unless one of the bodies falls out of its own end. this is the same
+        // question [`Lowering::match_statement`] settles as `fell_through`, and the two
+        // have to agree — a `match` read as falling through when the lowering builds no
+        // such edge widens the return of a function whose every case returns an `int`
+        Some(Stmt::Match(node)) => {
+            match node
+                .cases
+                .iter()
+                .position(|case| case.guard.is_none() && irrefutable(&case.pattern))
+            {
+                None => true,
+                Some(covering) => node.cases[..=covering]
+                    .iter()
+                    .any(|case| reaches_the_end(&case.body)),
+            }
         }
         Some(_) => true,
     }
@@ -8081,6 +8244,173 @@ fn covering(left: &RType, right: &RType) -> RType {
     RType::OBJECT
 }
 
+/// the field a class pattern's subpattern reads, one entry per subpattern in the order
+/// [`Lowering::pattern_branch`] reads them: the positional ones first, then the keywords
+///
+/// `Some((class, field, representation))` says the read is a load at a compile-time
+/// offset into an emitted layout rather than an attribute lookup, and that what comes
+/// out is held in the field's own representation — which is what lets
+/// `case Point(a, b)` bind two machine integers instead of two boxed objects.
+///
+/// three things have to hold for that, and any one of them missing leaves the position
+/// reading a boxed attribute like every other pattern:
+///
+/// - the pattern names a class **this module emits**, as the checker sees it. that is
+///   the same identity [`Lowering::attribute`] reads a field on, and it is what says the
+///   `isinstance` the pattern runs is a test against the emitted layout
+/// - the class is not a mutable heap type. python can write to one of those, and
+///   `__match_args__` is a name it could rebind — so which attribute a *position* names
+///   is only settled for a class that is sealed
+/// - the position resolves to a field the layout always has. an optional field may be
+///   absent, and python answers an absent attribute in a class pattern by moving to the
+///   next case rather than by raising, which a field read has no way to say
+fn class_pattern_reads(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    layouts: &Layouts,
+    sealed: &HashSet<String>,
+    node: &ast::PatternMatchClass,
+) -> Vec<Option<(String, String, RType)>> {
+    let env = &model.program_environment();
+    let positional = node
+        .arguments
+        .patterns
+        .iter()
+        .filter(|pattern| !pattern.is_match_star())
+        .count();
+    let total = positional + node.arguments.keywords.len();
+    let unresolved = || vec![None; total];
+
+    let Some(instance) = model.class_pattern_instance_type(&node.cls) else {
+        return unresolved();
+    };
+    let Ok(RType::Instance { class, .. }) = map_type_with(db, env, instance, layouts) else {
+        return unresolved();
+    };
+    if !sealed.contains(&class) {
+        return unresolved();
+    }
+    let Some(fields) = layouts.get(&class) else {
+        return unresolved();
+    };
+    // by the written name rather than the mangled one: a private name a class body
+    // writes is stored under `_Owner__name`, and matching the raw name exactly is what
+    // says no mangling stands between the pattern and the field
+    let read = |name: &str| {
+        fields
+            .iter()
+            .find(|field| field.name == name && !field.optional)
+            .map(|field| (class.clone(), field.name.clone(), field.ty.clone()))
+    };
+
+    // the subpatterns after a basedpython `*_` name the *last* entries of
+    // `__match_args__`, which is the count the checker resolves them against
+    let star = node
+        .arguments
+        .patterns
+        .iter()
+        .position(ast::Pattern::is_match_star);
+    let from_end = star.map_or(0, |at| {
+        node.arguments.patterns[at + 1..]
+            .iter()
+            .filter(|pattern| !pattern.is_match_star())
+            .count()
+    });
+
+    model
+        .class_pattern_positional_attributes(&node.cls, positional, from_end)
+        .iter()
+        .map(|attribute| attribute.as_ref().and_then(|name| read(name.as_str())))
+        .chain(
+            node.arguments
+                .keywords
+                .iter()
+                .map(|keyword| read(keyword.attr.as_str())),
+        )
+        .collect()
+}
+
+/// the representation each name a `case` pattern binds is held in
+///
+/// almost every binding holds a boxed object: a sequence element, a mapping value and
+/// the subject itself all arrive as one. the exception is a class pattern over a class
+/// this module emits, whose subpatterns read fields — see [`class_pattern_reads`].
+///
+/// [`local_representations`] and [`Lowering::pattern_branch`] both walk a pattern
+/// through here, and they have to agree. a local declared narrower than the value the
+/// lowering binds into it narrows with a check, and that check raises where python
+/// simply binds
+fn pattern_bindings<'a>(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    layouts: &Layouts,
+    sealed: &HashSet<String>,
+    pattern: &'a ast::Pattern,
+    subject: &RType,
+    out: &mut Vec<(&'a str, RType)>,
+) {
+    let recurse = |pattern: &'a ast::Pattern, subject: &RType, out: &mut _| {
+        pattern_bindings(db, model, layouts, sealed, pattern, subject, out);
+    };
+    match pattern {
+        // `case P as x:` binds the same value `P` was tested against
+        ast::Pattern::MatchAs(node) => {
+            if let Some(inner) = &node.pattern {
+                recurse(inner, subject, out);
+            }
+            if let Some(name) = &node.name {
+                out.push((name.as_str(), subject.clone()));
+            }
+        }
+        ast::Pattern::MatchClass(node) => {
+            let reads = class_pattern_reads(db, model, layouts, sealed, node);
+            let subpatterns = node
+                .arguments
+                .patterns
+                .iter()
+                .filter(|pattern| !pattern.is_match_star())
+                .chain(
+                    node.arguments
+                        .keywords
+                        .iter()
+                        .map(|keyword| &keyword.pattern),
+                );
+            for (subpattern, read) in subpatterns.zip(reads) {
+                let held = read.map_or(RType::OBJECT, |(_, _, rtype)| rtype);
+                recurse(subpattern, &held, out);
+            }
+        }
+        // every alternative of `P | Q` is tested against the same value, and so is every
+        // conjunct of `P and Q`
+        ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+        | ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
+            for alternative in patterns {
+                recurse(alternative, subject, out);
+            }
+        }
+        ast::Pattern::MatchSequence(node) => {
+            for element in &node.patterns {
+                recurse(element, &RType::OBJECT, out);
+            }
+        }
+        ast::Pattern::MatchMapping(node) => {
+            for value in &node.patterns {
+                recurse(value, &RType::OBJECT, out);
+            }
+            if let Some(rest) = &node.rest {
+                out.push((rest.as_str(), RType::OBJECT));
+            }
+        }
+        // `*rest` binds a fresh `list`, whatever the sequence it came out of was
+        ast::Pattern::MatchStar(node) => {
+            if let Some(name) = &node.name {
+                out.push((name.as_str(), RType::OBJECT));
+            }
+        }
+        ast::Pattern::MatchValue(_) | ast::Pattern::MatchSingleton(_) => {}
+    }
+}
+
 /// the representation each local needs, covering every value assigned to it
 ///
 /// computed before any lowering, because a register is declared once and every
@@ -8091,6 +8421,7 @@ fn local_representations(
     model: &SemanticModel<'_>,
     body: &[Stmt],
     layouts: &Layouts,
+    sealed: &HashSet<String>,
     arrays: &ArrayEditions,
 ) -> Vec<(String, RType)> {
     let mut order: Vec<String> = Vec::new();
@@ -8290,17 +8621,25 @@ fn local_representations(
             Stmt::FunctionDef(node) => {
                 record(node.name.as_str(), RType::OBJECT, &mut found);
             }
-            // a `case` pattern binds the subject, or a piece of it, and
-            // [`Lowering::bind_pattern_name`] writes it as a plain object — so this is
-            // the other write whose representation is known without asking the checker.
-            // it has to be recorded because this is what says a name is a *local* of the
+            // a `case` pattern binds the subject, or a piece of it. every name it binds
+            // has to be recorded, because this is what says a name is a *local* of the
             // frame: a name bound only by a pattern and left out here was read out of
             // the module namespace by anything nested inside
             Stmt::Match(node) => {
+                let mut bound = Vec::new();
                 for case in &node.cases {
-                    for name in crate::closures::pattern_names(&case.pattern) {
-                        record(name, RType::OBJECT, &mut found);
-                    }
+                    pattern_bindings(
+                        db,
+                        model,
+                        layouts,
+                        sealed,
+                        &case.pattern,
+                        &RType::OBJECT,
+                        &mut bound,
+                    );
+                }
+                for (name, rtype) in bound {
+                    record(name, rtype, &mut found);
                 }
             }
             _ => {}
@@ -8558,6 +8897,8 @@ struct Lowering<'a, 'db> {
     directs: &'a HashSet<String>,
     bases: &'a HashMap<String, String>,
     mutable: &'a HashSet<String>,
+    /// the emitted classes a class pattern may read fields off — see [`Unit::sealed`]
+    sealed: &'a HashSet<String>,
     slotted: &'a HashSet<String>,
     /// the classes whose body writes a `__new__` — see [`Lowering::construct`]
     constructs: &'a HashSet<String>,
@@ -9135,7 +9476,13 @@ impl Lowering<'_, '_> {
         for case in &node.cases {
             let body_block = self.builder.new_block();
             let next_block = self.builder.new_block();
-            self.pattern_branch(&case.pattern, &subject, body_block, next_block)?;
+            self.pattern_branch(
+                &case.pattern,
+                &subject,
+                &RType::OBJECT,
+                body_block,
+                next_block,
+            )?;
 
             self.builder.switch_to(body_block);
             if let Some(guard) = &case.guard {
@@ -9190,23 +9537,28 @@ impl Lowering<'_, '_> {
         &mut self,
         pattern: &ast::Pattern,
         subject: &Value,
+        subject_ty: &RType,
         matched: by_ir::ops::BlockId,
         unmatched: by_ir::ops::BlockId,
     ) -> Lowered<()> {
+        // every test below asks the object protocol something, so it wants the subject
+        // boxed. only the two lowerings that can answer without it — the binding a
+        // capture makes, and a comparison against a literal — read `subject_ty`
+        let boxed = |lowering: &mut Self| lowering.widen_to_object(subject.clone(), subject_ty);
         match pattern {
             // `case P as x:` — `P`'s test, then the binding on the way through
             ast::Pattern::MatchAs(node) => {
                 let bound = match &node.pattern {
                     Some(inner) => {
                         let inner_matched = self.builder.new_block();
-                        self.pattern_branch(inner, subject, inner_matched, unmatched)?;
+                        self.pattern_branch(inner, subject, subject_ty, inner_matched, unmatched)?;
                         self.builder.switch_to(inner_matched);
                         inner_matched
                     }
                     None => self.builder.current_block(),
                 };
                 let _ = bound;
-                self.bind_pattern_name(node.name.as_ref(), subject)?;
+                self.bind_pattern_name(node.name.as_ref(), subject, subject_ty)?;
                 self.builder.terminate(Terminator::Goto(matched));
                 Ok(())
             }
@@ -9214,7 +9566,7 @@ impl Lowering<'_, '_> {
                 let (value, value_ty) = self.expression(&node.value)?;
                 let cond = self.emit_compare(
                     AstCmpOp::Eq,
-                    (subject.clone(), RType::OBJECT),
+                    (subject.clone(), subject_ty.clone()),
                     (value, value_ty),
                 )?;
                 self.builder.terminate(Terminator::Branch {
@@ -9237,10 +9589,11 @@ impl Lowering<'_, '_> {
                     _ => RType::BOOL,
                 };
                 let literal = self.widen_to_object(literal, &rtype);
+                let lhs = boxed(self);
                 let dest = self.builder.temp(RType::BIT);
                 self.builder.push(Op::Identity {
                     dest,
-                    lhs: subject.clone(),
+                    lhs,
                     rhs: literal,
                     negated: false,
                 });
@@ -9268,6 +9621,7 @@ impl Lowering<'_, '_> {
                 {
                     return Err(Decline::new("a sequence pattern with two stars"));
                 }
+                let subject = &boxed(self);
                 let shaped = self.builder.temp(RType::BIT);
                 self.builder.push(Op::IsSequence {
                     dest: shaped,
@@ -9343,11 +9697,21 @@ impl Lowering<'_, '_> {
                     // a star's own pattern is the name it binds, if it has one
                     match element {
                         ast::Pattern::MatchStar(starred) => {
-                            self.bind_pattern_name(starred.name.as_ref(), &Value::Register(read))?;
+                            self.bind_pattern_name(
+                                starred.name.as_ref(),
+                                &Value::Register(read),
+                                &RType::OBJECT,
+                            )?;
                             self.builder.terminate(Terminator::Goto(next));
                         }
                         _ => {
-                            self.pattern_branch(element, &Value::Register(read), next, unmatched)?;
+                            self.pattern_branch(
+                                element,
+                                &Value::Register(read),
+                                &RType::OBJECT,
+                                next,
+                                unmatched,
+                            )?;
                         }
                     }
                     if next != matched {
@@ -9377,6 +9741,7 @@ impl Lowering<'_, '_> {
                     literals.push(literal);
                 }
 
+                let subject = &boxed(self);
                 let shaped = self.builder.temp(RType::BIT);
                 self.builder.push(Op::IsMapping {
                     dest: shaped,
@@ -9420,7 +9785,13 @@ impl Lowering<'_, '_> {
                     } else {
                         self.builder.new_block()
                     };
-                    self.pattern_branch(value, &Value::Register(read), next, unmatched)?;
+                    self.pattern_branch(
+                        value,
+                        &Value::Register(read),
+                        &RType::OBJECT,
+                        next,
+                        unmatched,
+                    )?;
                     if next != matched {
                         self.builder.switch_to(next);
                     }
@@ -9438,7 +9809,7 @@ impl Lowering<'_, '_> {
                         map: subject.clone(),
                         keys: Value::Register(named),
                     });
-                    self.bind_pattern_name(Some(rest), &Value::Register(read))?;
+                    self.bind_pattern_name(Some(rest), &Value::Register(read), &RType::OBJECT)?;
                     self.builder.terminate(Terminator::Goto(matched));
                 } else if node.keys.is_empty() {
                     self.builder.terminate(Terminator::Goto(matched));
@@ -9447,6 +9818,7 @@ impl Lowering<'_, '_> {
             }
             // `case Point(x=1):` — the class, then each attribute it names
             ast::Pattern::MatchClass(node) => {
+                let subject = &boxed(self);
                 let (class, class_ty) = self.expression(&node.cls)?;
                 let class = self.widen_to_object(class, &class_ty);
                 let is_instance = self.builder.temp(RType::BIT);
@@ -9462,6 +9834,29 @@ impl Lowering<'_, '_> {
                     else_block: unmatched,
                 });
                 self.builder.switch_to(attributes);
+
+                // which of the reads below are loads into an emitted layout rather than
+                // attribute lookups. asked once, before any of them is emitted, because
+                // taking the layout means holding the subject as that layout — see
+                // [`class_pattern_reads`]
+                let reads =
+                    class_pattern_reads(self.db, self.model, self.layouts, self.sealed, node);
+                // the subject as the layout the pattern named. the `isinstance` above has
+                // already said it is one, so this narrowing never fails — but it is a
+                // *checked* one all the same, which is what keeps a namespace entry that
+                // is no longer the emitted class a `TypeError` rather than a struct read
+                // through the wrong pointer
+                let held = match reads.iter().flatten().next() {
+                    Some((layout, _, _)) => {
+                        let layout = RType::Instance {
+                            class: layout.clone(),
+                            exact: false,
+                        };
+                        let narrowed = self.coerce(subject.clone(), &RType::OBJECT, &layout)?;
+                        Some(narrowed)
+                    }
+                    None => None,
+                };
 
                 // a positional sub-pattern names its attribute through the
                 // class's `__match_args__`, which only exists at runtime
@@ -9488,7 +9883,8 @@ impl Lowering<'_, '_> {
                 let total = positional.len() + keywords.len();
                 let mut done = 0;
                 let branch_to_sub = |lowering: &mut Self,
-                                     read: RegisterId,
+                                     read: Value,
+                                     read_ty: &RType,
                                      sub: &ast::Pattern,
                                      done: &mut usize| {
                     *done += 1;
@@ -9497,38 +9893,66 @@ impl Lowering<'_, '_> {
                     } else {
                         lowering.builder.new_block()
                     };
-                    lowering.pattern_branch(sub, &Value::Register(read), next, unmatched)?;
+                    lowering.pattern_branch(sub, &read, read_ty, next, unmatched)?;
                     if next != matched {
                         lowering.builder.switch_to(next);
                     }
                     Ok::<(), Decline>(())
                 };
+                // a field the layout always has is read at a compile-time offset, in the
+                // representation the field holds it in. an attribute the pattern names
+                // any other way still goes out through the lookup, where *absent* is an
+                // answer rather than an error
+                let field_read = |lowering: &mut Self, index: usize| {
+                    let receiver = held.clone()?;
+                    let (class, field, rtype) = reads.get(index)?.clone()?;
+                    let dest = lowering.builder.temp(rtype.clone());
+                    lowering.builder.push(Op::GetField {
+                        dest,
+                        receiver,
+                        class,
+                        field,
+                    });
+                    Some((Value::Register(dest), rtype))
+                };
                 for (index, sub) in positional.iter().enumerate() {
-                    let position = i64::try_from(index).unwrap_or(0);
-                    let read = self.read_match_attr(
-                        &subject.clone(),
-                        None,
-                        Some(class.clone()),
-                        if index < before_star {
-                            position
-                        } else {
-                            position - count
-                        },
-                        count,
-                        unmatched,
-                    );
-                    branch_to_sub(self, read, sub, &mut done)?;
+                    let (read, read_ty) = match field_read(self, index) {
+                        Some(field) => field,
+                        None => {
+                            let position = i64::try_from(index).unwrap_or(0);
+                            let read = self.read_match_attr(
+                                &subject.clone(),
+                                None,
+                                Some(class.clone()),
+                                if index < before_star {
+                                    position
+                                } else {
+                                    position - count
+                                },
+                                count,
+                                unmatched,
+                            );
+                            (Value::Register(read), RType::OBJECT)
+                        }
+                    };
+                    branch_to_sub(self, read, &read_ty, sub, &mut done)?;
                 }
-                for keyword in keywords {
-                    let read = self.read_match_attr(
-                        &subject.clone(),
-                        Some(self.attribute_name(&keyword.attr)),
-                        None,
-                        0,
-                        0,
-                        unmatched,
-                    );
-                    branch_to_sub(self, read, &keyword.pattern, &mut done)?;
+                for (index, keyword) in keywords.iter().enumerate() {
+                    let (read, read_ty) = match field_read(self, positional.len() + index) {
+                        Some(field) => field,
+                        None => {
+                            let read = self.read_match_attr(
+                                &subject.clone(),
+                                Some(self.attribute_name(&keyword.attr)),
+                                None,
+                                0,
+                                0,
+                                unmatched,
+                            );
+                            (Value::Register(read), RType::OBJECT)
+                        }
+                    };
+                    branch_to_sub(self, read, &read_ty, &keyword.pattern, &mut done)?;
                 }
                 if total == 0 {
                     self.builder.terminate(Terminator::Goto(matched));
@@ -9544,10 +9968,10 @@ impl Lowering<'_, '_> {
                 };
                 for pattern in rest {
                     let next = self.builder.new_block();
-                    self.pattern_branch(pattern, subject, next, unmatched)?;
+                    self.pattern_branch(pattern, subject, subject_ty, next, unmatched)?;
                     self.builder.switch_to(next);
                 }
-                self.pattern_branch(last, subject, matched, unmatched)
+                self.pattern_branch(last, subject, subject_ty, matched, unmatched)
             }
             ast::Pattern::MatchOr(node) => {
                 let Some((last, rest)) = node.patterns.split_last() else {
@@ -9562,7 +9986,7 @@ impl Lowering<'_, '_> {
                         ));
                     }
                     let try_next = self.builder.new_block();
-                    self.pattern_branch(alternative, subject, matched, try_next)?;
+                    self.pattern_branch(alternative, subject, subject_ty, matched, try_next)?;
                     self.builder.switch_to(try_next);
                 }
                 if binds_a_name(last) {
@@ -9570,7 +9994,7 @@ impl Lowering<'_, '_> {
                         "an alternative pattern that binds a name is not lowered yet",
                     ));
                 }
-                self.pattern_branch(last, subject, matched, unmatched)
+                self.pattern_branch(last, subject, subject_ty, matched, unmatched)
             }
             ast::Pattern::MatchStar(_) => {
                 Err(Decline::new("a star pattern outside a sequence pattern"))
@@ -9621,10 +10045,11 @@ impl Lowering<'_, '_> {
         &mut self,
         name: Option<&ast::Identifier>,
         subject: &Value,
+        subject_ty: &RType,
     ) -> Lowered<()> {
         let Some(name) = name else { return Ok(()) };
-        let place = self.binding(name.as_str(), &RType::OBJECT);
-        self.write_place(&place, subject.clone(), &RType::OBJECT)
+        let place = self.binding(name.as_str(), subject_ty);
+        self.write_place(&place, subject.clone(), subject_ty)
     }
 
     fn if_statement(&mut self, node: &ast::StmtIf) -> Lowered<()> {
@@ -9778,7 +10203,7 @@ impl Lowering<'_, '_> {
         let suspends = self
             .cleanups
             .iter()
-            .any(|cleanup| matches!(cleanup, Cleanup::Context(_, true)));
+            .any(|cleanup| matches!(cleanup, Cleanup::Context { is_async: true, .. }));
         let held = self.builder.temp(RType::OBJECT);
         self.builder.assign(held, value);
         if suspends {
@@ -9800,23 +10225,163 @@ impl Lowering<'_, '_> {
                 Cleanup::Handled(handled) => self.builder.push(Op::PopHandled {
                     value: Value::Register(handled),
                 }),
-                Cleanup::Context(manager, is_async) => {
+                Cleanup::Context {
+                    manager,
+                    is_async,
+                    direct,
+                } => {
                     let (manager, _) = self.read_place(&manager)?;
                     let ignored = self.builder.temp(RType::BIT);
-                    let none = self.widen_to_object(Value::None, &RType::NONE);
                     if is_async {
+                        let none = self.widen_to_object(Value::None, &RType::NONE);
                         self.await_exit(manager, none, ignored)?;
                     } else {
-                        self.builder.push(Op::ExitContext {
-                            dest: ignored,
-                            manager,
-                            exception: none,
-                        });
+                        self.leave_context(manager, ignored, direct.as_deref());
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    /// the emitted class a `with` block reaches `name` on directly, where there is one
+    ///
+    /// this is the licence [`Self::method_call`] already relies on for `o.m()`, and it
+    /// rests on the same two facts: an emitted class does not set `Py_TPFLAGS_BASETYPE`,
+    /// so no override of the method can exist, and it is an immutable type, so `C.m = f`
+    /// raises rather than rebinding it. what makes the licence *simpler* here is that
+    /// python reaches `__enter__` and `__exit__` on the type and never on the instance,
+    /// so a value stored on the instance under either name is not what a `with` block
+    /// calls — and there is nothing for an instance-dict test to guard against
+    ///
+    /// `arity` counts the receiver, so `__exit__`'s is four. every parameter but the
+    /// receiver has to be an `object`: the arguments are the three python hands a
+    /// `__exit__`, and a body wanting them in some narrower representation is one this
+    /// cannot fill without a conversion the protocol call does not make either
+    fn protocol_owner(&self, manager: &RType, name: &str, arity: usize) -> Option<String> {
+        let RType::Instance { class, .. } = manager else {
+            return None;
+        };
+        if self.mutable.contains(class) {
+            return None;
+        }
+        let mut current = Some(class.clone());
+        while let Some(candidate) = current {
+            if let Some(signature) = self
+                .methods
+                .get(&candidate)
+                .and_then(|table| table.get(name))
+            {
+                let fits = signature.params.len() == arity
+                    && signature
+                        .params
+                        .iter()
+                        .skip(1)
+                        .all(|(_, rtype)| *rtype == RType::OBJECT);
+                return fits.then_some(candidate);
+            }
+            current = self.bases.get(&candidate).cloned();
+        }
+        None
+    }
+
+    /// the manager as the class it is known to be, for a call that takes it directly
+    ///
+    /// the narrowing is checked, as every narrowing is. it cannot fail here — the
+    /// manager was widened out of exactly this class a few instructions ago — but the
+    /// register it was parked in is an `object`, and this is what reads it back
+    fn narrow_manager(&mut self, manager: Value, class: &str) -> Value {
+        let ty = RType::Instance {
+            class: class.to_string(),
+            exact: false,
+        };
+        let narrowed = self.builder.temp(ty.clone());
+        self.builder.push(Op::Unbox {
+            dest: narrowed,
+            src: manager,
+            to: ty,
+        });
+        Value::Register(narrowed)
+    }
+
+    /// `__enter__`, reached directly where the class licenses it
+    fn enter_context(&mut self, manager: Value, dest: RegisterId, direct: Option<&str>) {
+        let Some(class) = direct else {
+            self.builder.push(Op::Enter { dest, manager });
+            return;
+        };
+        let Some(owner) = self.protocol_owner(
+            &RType::Instance {
+                class: class.to_string(),
+                exact: false,
+            },
+            "__enter__",
+            1,
+        ) else {
+            self.builder.push(Op::Enter { dest, manager });
+            return;
+        };
+        let ret = self
+            .methods
+            .get(&owner)
+            .and_then(|table| table.get("__enter__"))
+            .map_or(RType::OBJECT, |signature| signature.ret.clone());
+        let receiver = self.narrow_manager(manager, class);
+        let answered = self.builder.temp(ret.clone());
+        self.builder.push(Op::CallNative {
+            dest: Some(answered),
+            owner: Some(owner),
+            callee: "__enter__".to_string(),
+            args: vec![receiver],
+        });
+        let widened = self.widen_to_object(Value::Register(answered), &ret);
+        self.builder.assign(dest, widened);
+    }
+
+    /// `__exit__(None, None, None)` — the exit that is not unwinding an exception
+    ///
+    /// the answer is deliberately dropped rather than tested. python only lets
+    /// `__exit__` suppress an exception that is *there*, so on this path a truthy
+    /// answer suppresses nothing, and `dest` is the "not suppressed" bit either way.
+    /// that is what [`by_rt`]'s `By_ExitContext` does with it too
+    fn leave_context(&mut self, manager: Value, dest: RegisterId, direct: Option<&str>) {
+        let owner = direct.and_then(|class| {
+            self.protocol_owner(
+                &RType::Instance {
+                    class: class.to_string(),
+                    exact: false,
+                },
+                "__exit__",
+                4,
+            )
+        });
+        let (Some(class), Some(owner)) = (direct, owner) else {
+            let no_exception = self.widen_to_object(Value::None, &RType::NONE);
+            self.builder.push(Op::ExitContext {
+                dest,
+                manager,
+                exception: no_exception,
+            });
+            return;
+        };
+        let ret = self
+            .methods
+            .get(&owner)
+            .and_then(|table| table.get("__exit__"))
+            .map_or(RType::OBJECT, |signature| signature.ret.clone());
+        let receiver = self.narrow_manager(manager, class);
+        let mut args = vec![receiver];
+        for _ in 0..3 {
+            args.push(self.widen_to_object(Value::None, &RType::NONE));
+        }
+        let answered = self.builder.temp(ret);
+        self.builder.push(Op::CallNative {
+            dest: Some(answered),
+            owner: Some(owner),
+            callee: "__exit__".to_string(),
+            args,
+        });
+        self.builder.assign(dest, Value::Bit(false));
     }
 
     /// `with EXPR as VAR: BLOCK`
@@ -9832,6 +10397,20 @@ impl Lowering<'_, '_> {
         };
 
         let (manager, manager_ty) = self.expression(&item.context_expr)?;
+        // a manager whose class the compiler emitted reaches both halves of the
+        // protocol without asking the object protocol for either. the two names are
+        // asked about together so that a class answering one and not the other takes
+        // the ordinary path for both, and the block has one shape rather than two
+        let direct = if node.is_async {
+            None
+        } else {
+            self.protocol_owner(&manager_ty, "__enter__", 1)
+                .and(self.protocol_owner(&manager_ty, "__exit__", 4))
+                .and(match &manager_ty {
+                    RType::Instance { class, .. } => Some(class.clone()),
+                    _ => None,
+                })
+        };
         let manager = self.widen_to_object(manager, &manager_ty);
         // the manager is read again on both exits, so it lives in a register of its
         // own rather than being re-evaluated
@@ -9859,10 +10438,7 @@ impl Lowering<'_, '_> {
             let value = self.widen_to_object(value, &ty);
             self.builder.assign(entered, value);
         } else {
-            self.builder.push(Op::Enter {
-                dest: entered,
-                manager: live,
-            });
+            self.enter_context(live, entered, direct.as_deref());
         }
         if let Some(target) = &item.optional_vars {
             match target.as_ref() {
@@ -9884,8 +10460,11 @@ impl Lowering<'_, '_> {
         self.builder.terminate(Terminator::Goto(body_block));
         self.builder.switch_to(body_block);
         let previous = self.builder.set_error_target(Some(handler));
-        self.cleanups
-            .push(Cleanup::Context(held.clone(), node.is_async));
+        self.cleanups.push(Cleanup::Context {
+            manager: held.clone(),
+            is_async: node.is_async,
+            direct: direct.clone(),
+        });
         let body_result = if rest.is_empty() {
             self.block(&node.body)
         } else {
@@ -9907,16 +10486,12 @@ impl Lowering<'_, '_> {
         // the normal exit: `__exit__(None, None, None)`, and its answer is ignored
         self.builder.switch_to(success);
         let ignored = self.builder.temp(RType::BIT);
-        let no_exception = self.widen_to_object(Value::None, &RType::NONE);
         let (live, _) = self.read_place(&held)?;
         if node.is_async {
+            let no_exception = self.widen_to_object(Value::None, &RType::NONE);
             self.await_exit(live, no_exception, ignored)?;
         } else {
-            self.builder.push(Op::ExitContext {
-                dest: ignored,
-                manager: live,
-                exception: no_exception,
-            });
+            self.leave_context(live, ignored, direct.as_deref());
         }
         self.builder.terminate(Terminator::Goto(after));
 
@@ -10839,7 +11414,8 @@ impl Lowering<'_, '_> {
     /// than putting a different object under the name. and it sets no
     /// `Py_TPFLAGS_BASETYPE`, so nothing can subclass it and override the half. a
     /// *mutable* class has given up the last two, exactly as it has given up the direct
-    /// method call, so it is excluded here for the same reason.
+    /// method call, so it is excluded here for the same reason — it takes the tested
+    /// call [`Lowering::guarded_property_half`] licenses instead.
     ///
     /// there is no walk up the bases, and there is nothing to inherit: a class with an
     /// in-module base is made *mutable* when the layouts are worked out, and so is the
@@ -10855,6 +11431,167 @@ impl Lowering<'_, '_> {
         if self.mutable.contains(class) {
             return None;
         }
+        self.property_half_body(class, name, half)
+    }
+
+    /// the property half a read or a write of a *mutable* class's attribute can call
+    /// behind a test, answering as [`Lowering::property_half`] does
+    ///
+    /// the two things the immutable class settles once, a mutable one has to ask on every
+    /// access: that the receiver is exactly this class rather than a subclass that
+    /// overrode the half, and that the class still answers the name with the pair this
+    /// module compiled. `Op::AccessorStands` is both questions, and the protocol arm is
+    /// where a receiver that fails either goes — so this changes what a read costs and
+    /// never what it answers.
+    ///
+    /// the class has to hold the property in its *own* table, for the reason
+    /// [`Lowering::property_half`] gives: what a class's body binds is not knowable from
+    /// a base's entry
+    fn guarded_property_half(
+        &self,
+        class: &str,
+        name: &str,
+        half: Half,
+    ) -> Option<(String, String, Vec<RType>, RType)> {
+        if !self.mutable.contains(class) {
+            return None;
+        }
+        self.property_half_body(class, name, half)
+    }
+
+    /// `receiver.name` as a test on the getter, with the descriptor protocol left as the
+    /// arm the test did not take
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one call site, all of it the read"
+    )]
+    fn guarded_property_read(
+        &mut self,
+        receiver: Value,
+        receiver_ty: &RType,
+        class: &str,
+        owner: String,
+        symbol: String,
+        name: &str,
+        ret: RType,
+    ) -> (Value, RType) {
+        let dest = self.builder.temp(ret.clone());
+        let hit = self.builder.new_block();
+        let miss = self.builder.new_block();
+        let join = self.builder.new_block();
+        let stands = self.builder.temp(RType::BIT);
+        self.builder.push(Op::AccessorStands {
+            dest: stands,
+            src: receiver.clone(),
+            class: class.to_string(),
+            name: name.to_string(),
+        });
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(stands),
+            then_block: hit,
+            else_block: miss,
+        });
+        self.builder.switch_to(hit);
+        self.builder.push(Op::CallNative {
+            dest: Some(dest),
+            owner: Some(owner),
+            callee: symbol,
+            args: vec![receiver.clone()],
+        });
+        self.builder.terminate(Terminator::Goto(join));
+        self.builder.switch_to(miss);
+        // the reference the protocol call needs is taken here rather than before the
+        // test, so the arm that does not need one does not pay for it
+        let object = self.widen_to_object(receiver, receiver_ty);
+        let answer = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::GetAttr {
+            dest: answer,
+            receiver: object,
+            name: name.to_string(),
+        });
+        // the protocol arm is where an override reached through a base-typed name
+        // arrives, and it answers with an object. narrowing it to what the getter this
+        // module compiled would have answered is the checked unbox every other call
+        // result takes: the checker says the attribute is a `ret`, and a receiver that
+        // makes that false is told so rather than read as one
+        if ret == RType::OBJECT {
+            self.builder.assign(dest, Value::Register(answer));
+        } else {
+            self.builder.push(Op::Unbox {
+                dest,
+                src: Value::Register(answer),
+                to: ret.clone(),
+            });
+        }
+        self.builder.terminate(Terminator::Goto(join));
+        self.builder.switch_to(join);
+        (Value::Register(dest), ret)
+    }
+
+    /// `receiver.name = value` as a test on the setter, with the descriptor protocol left
+    /// as the arm the test did not take
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one call site, all of it the write"
+    )]
+    fn guarded_property_write(
+        &mut self,
+        receiver: Value,
+        receiver_ty: &RType,
+        class: &str,
+        owner: String,
+        symbol: String,
+        name: &str,
+        value: Value,
+        param: &RType,
+    ) {
+        let hit = self.builder.new_block();
+        let miss = self.builder.new_block();
+        let join = self.builder.new_block();
+        let stands = self.builder.temp(RType::BIT);
+        self.builder.push(Op::AccessorStands {
+            dest: stands,
+            src: receiver.clone(),
+            class: class.to_string(),
+            name: name.to_string(),
+        });
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(stands),
+            then_block: hit,
+            else_block: miss,
+        });
+        self.builder.switch_to(hit);
+        let status = self.builder.temp(RType::BIT);
+        self.builder.push(Op::CallNative {
+            dest: Some(status),
+            owner: Some(owner),
+            callee: symbol,
+            args: vec![receiver.clone(), value.clone()],
+        });
+        self.builder.terminate(Terminator::Goto(join));
+        self.builder.switch_to(miss);
+        // as the read does: the reference the protocol call needs is the slow arm's cost
+        let object = self.widen_to_object(receiver, receiver_ty);
+        let boxed = self.widen_to_object(value, param);
+        let refused = self.builder.temp(RType::BIT);
+        self.builder.push(Op::SetAttr {
+            dest: refused,
+            receiver: object,
+            name: name.to_string(),
+            value: boxed,
+        });
+        self.builder.terminate(Terminator::Goto(join));
+        self.builder.switch_to(join);
+    }
+
+    /// the compiled body behind one half of `class`'s own `name`, with no question asked
+    /// about what licenses reaching it
+    fn property_half_body(
+        &self,
+        class: &str,
+        name: &str,
+        half: Half,
+    ) -> Option<(String, String, Vec<RType>, RType)> {
         let halves = self
             .accessors
             .get(class)
@@ -11146,6 +11883,24 @@ impl Lowering<'_, '_> {
                     });
                     return Ok((Value::Register(dest), ret));
                 }
+                // the same call on a class another one extends, behind the test that
+                // says the receiver is not one of those others and the pair still stands
+                if let RType::Instance { class, .. } = receiver_ty
+                    && let Some((owner, symbol, _, ret)) =
+                        self.guarded_property_half(class, name, Half::Get)
+                    && (ret == RType::OBJECT || self.narrowable_here(&ret))
+                {
+                    let class = class.clone();
+                    return Ok(self.guarded_property_read(
+                        receiver.clone(),
+                        receiver_ty,
+                        &class,
+                        owner,
+                        symbol,
+                        name,
+                        ret,
+                    ));
+                }
                 let receiver = self.widen_to_object(receiver.clone(), receiver_ty);
                 let dest = self.builder.temp(RType::OBJECT);
                 self.builder.push(Op::GetAttr {
@@ -11219,6 +11974,27 @@ impl Lowering<'_, '_> {
                         callee: symbol,
                         args: vec![receiver.clone(), value],
                     });
+                    return Ok(());
+                }
+                // the setter of a class another one extends, behind the same test the
+                // read takes
+                if let RType::Instance { class, .. } = receiver_ty
+                    && let Some((owner, symbol, params, _)) =
+                        self.guarded_property_half(class, name, Half::Set)
+                    && let Some(param) = params.first().cloned()
+                {
+                    let class = class.clone();
+                    let value = self.coerce(value, ty, &param)?;
+                    self.guarded_property_write(
+                        receiver.clone(),
+                        receiver_ty,
+                        &class,
+                        owner,
+                        symbol,
+                        name,
+                        value,
+                        &param,
+                    );
                     return Ok(());
                 }
                 // the dynamic form is where a write goes when the compiler does not know
@@ -12622,10 +13398,98 @@ impl Lowering<'_, '_> {
         }
     }
 
+    /// the compiled body that answers an operator between two operands of one emitted
+    /// class, where python's protocol has nothing else it could reach
+    ///
+    /// an operator is not a call by name, and the two differ in both directions. python
+    /// looks an operator's method up on the *type*, never on the instance, so the test a
+    /// call by name has to write — has something been stored on this object under that
+    /// name — has no operator counterpart and is not emitted here. what an operator adds
+    /// instead is the *other* operand: a body may answer `NotImplemented` to send python
+    /// to the reflected method, and a subclass of the right-hand type gets its reflected
+    /// method tried before the left one at all
+    ///
+    /// a pair sharing one class settles both. cpython hands such a pair to the left
+    /// type's slot alone — `binary_op1` drops the right slot when it is the same
+    /// function, and `do_richcompare` skips the reflected try when the types are
+    /// identical — so `a + b` is `C.__add__(a, b)` and there is no second call to model.
+    /// the one escape left is that body answering `NotImplemented`, and a return
+    /// representation other than `object` has no room to express one
+    ///
+    /// the class also has to be one nothing can subclass or rebind a method on, which is
+    /// the same static-type license the direct call by name runs on. that is what makes
+    /// "both operands are `C`" a statement about the runtime types and not just the
+    /// declared ones
+    fn operator_dunder(&self, lhs: &RType, rhs: &RType, name: &str) -> Option<OperatorCall> {
+        let (
+            RType::Instance { class, .. },
+            RType::Instance {
+                class: other_class, ..
+            },
+        ) = (lhs, rhs)
+        else {
+            return None;
+        };
+        if class != other_class || self.mutable.contains(class) {
+            return None;
+        }
+        let signature = self.methods.get(class)?.get(name)?;
+        if signature.params.len() != 2
+            || signature.vararg
+            || signature.kwarg
+            || signature.kwonly != 0
+            || signature.ret == RType::OBJECT
+        {
+            return None;
+        }
+        // only the two coercions that cannot fail: the operand as it stands, or widened
+        // to `object`. anything else would have to emit before it could find out, and a
+        // failure there would turn a function that compiles today into a decline
+        let takes = |param: &RType| {
+            *param == RType::OBJECT
+                || matches!(param, RType::Instance { class: want, .. } if want == class)
+        };
+        let (Some(receiver), Some(operand)) = (signature.params.first(), signature.params.get(1))
+        else {
+            return None;
+        };
+        (takes(&receiver.1) && takes(&operand.1)).then(|| OperatorCall {
+            owner: class.clone(),
+            callee: name.to_string(),
+            params: vec![receiver.1.clone(), operand.1.clone()],
+            ret: signature.ret.clone(),
+        })
+    }
+
+    /// the two operands handed straight to the class's own body
+    fn direct_operator(
+        &mut self,
+        call: OperatorCall,
+        lhs: (Value, &RType),
+        rhs: (Value, &RType),
+    ) -> Lowered<(Value, RType)> {
+        let ((lhs, lhs_ty), (rhs, rhs_ty)) = (lhs, rhs);
+        let args = vec![
+            self.coerce(lhs, lhs_ty, &call.params[0])?,
+            self.coerce(rhs, rhs_ty, &call.params[1])?,
+        ];
+        let dest = self.builder.temp(call.ret.clone());
+        self.builder.push(Op::CallNative {
+            dest: Some(dest),
+            owner: Some(call.owner),
+            callee: call.callee,
+            args,
+        });
+        Ok((Value::Register(dest), call.ret))
+    }
+
     fn binary(&mut self, node: &ast::ExprBinOp) -> Lowered<(Value, RType)> {
         let (lhs, lhs_ty) = self.expression(&node.left)?;
         let (rhs, rhs_ty) = self.expression(&node.right)?;
         let op = binary_op(node.op)?;
+        if let Some(call) = self.operator_dunder(&lhs_ty, &rhs_ty, binary_dunder(op)) {
+            return self.direct_operator(call, (lhs, &lhs_ty), (rhs, &rhs_ty));
+        }
         let mut result_ty = binary_result(op, &lhs_ty, &rhs_ty);
         // a double meeting an object is an `object` result as far as the
         // representations go, but the pair may still be provably a float — and
@@ -12818,6 +13682,18 @@ impl Lowering<'_, '_> {
                 negated,
             });
             return Ok(Value::Register(dest));
+        }
+        // the class's own comparison, where the pair licenses reaching it directly. a
+        // body answering anything but a `bool` is left to the protocol: the value this
+        // produces is a bit, and collapsing something else to one is a decision
+        // `PyObject_RichCompareBool` is already making on its own terms
+        if let Some(call) = comparison_dunder(op).and_then(|name| {
+            self.operator_dunder(&lhs_ty, &rhs_ty, name).filter(|call| {
+                matches!(call.ret, RType::Primitive(Primitive::Bool | Primitive::Bit))
+            })
+        }) {
+            let (value, ret) = self.direct_operator(call, (lhs, &lhs_ty), (rhs, &rhs_ty))?;
+            return Ok(self.truthy(value, &ret));
         }
         let op = compare_op(op)?;
         let dest = self.builder.temp(RType::BIT);
@@ -14232,6 +15108,25 @@ impl Lowering<'_, '_> {
             return Ok((Value::Register(dest), ret));
         }
 
+        // the same call on a class another one extends, behind the test that says the
+        // receiver is not one of those others and the pair still stands
+        if let RType::Instance { class, .. } = &receiver_ty
+            && let Some((owner, symbol, _, ret)) =
+                self.guarded_property_half(class, &name, Half::Get)
+            && (ret == RType::OBJECT || self.narrowable_here(&ret))
+        {
+            let class = class.clone();
+            return Ok(self.guarded_property_read(
+                receiver,
+                &receiver_ty,
+                &class,
+                owner,
+                symbol,
+                &name,
+                ret,
+            ));
+        }
+
         // every other name on an emitted instance still goes out through the dynamic
         // form, because the type is where a method and a class-level constant live and
         // the lookup finds them there. these two are the exception: `__dict__` stands for
@@ -15158,6 +16053,46 @@ fn binary_op(op: Operator) -> Lowered<BinOp> {
         Operator::LShift => BinOp::Shl,
         Operator::RShift => BinOp::Shr,
         other => return Err(Decline::new(format!("`{other:?}` is not lowered yet"))),
+    })
+}
+
+/// the method a class defines to answer this operator on its left-hand operand
+///
+/// `__pow__` is here with the rest even though its slot is ternary: `a ** b` passes
+/// `None` for the modulus, and the emitted adapter sends that to the two-parameter
+/// `__pow__`. a class writing the three-parameter form is turned away by the arity
+/// check in [`Lowering::operator_dunder`] rather than here
+fn binary_dunder(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "__add__",
+        BinOp::Sub => "__sub__",
+        BinOp::Mul => "__mul__",
+        BinOp::FloorDiv => "__floordiv__",
+        BinOp::Mod => "__mod__",
+        BinOp::TrueDiv => "__truediv__",
+        BinOp::Pow => "__pow__",
+        BinOp::BitAnd => "__and__",
+        BinOp::BitOr => "__or__",
+        BinOp::BitXor => "__xor__",
+        BinOp::Shl => "__lshift__",
+        BinOp::Shr => "__rshift__",
+    }
+}
+
+/// the method `tp_richcompare` dispatches this comparison to
+///
+/// `in`, `not in`, `is` and `is not` are not comparisons in this sense — python answers
+/// them through the container protocol and through identity — and they are handled
+/// before this is reached
+fn comparison_dunder(op: AstCmpOp) -> Option<&'static str> {
+    Some(match op {
+        AstCmpOp::Eq => "__eq__",
+        AstCmpOp::NotEq => "__ne__",
+        AstCmpOp::Lt => "__lt__",
+        AstCmpOp::LtE => "__le__",
+        AstCmpOp::Gt => "__gt__",
+        AstCmpOp::GtE => "__ge__",
+        AstCmpOp::In | AstCmpOp::NotIn | AstCmpOp::Is | AstCmpOp::IsNot => return None,
     })
 }
 

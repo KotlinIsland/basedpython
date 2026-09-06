@@ -274,4 +274,7 @@ setup = true
 [programs.accessors]
 group = "dispatch"
 measures = "the `props` pair written as a `get`/`set` block — the pair isolates the syntax"
-declines = 3
+# the one remaining decline is the class, on `var v: int = 0`: the transpiler moves that
+# initialiser into `__init__`, so the twin's class body no longer binds the name, and an
+# emitted class has no constructor to write it instead. the accessor pair itself lowers
+declines = 1

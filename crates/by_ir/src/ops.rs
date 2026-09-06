@@ -383,6 +383,20 @@ pub enum Op {
         class: String,
         method: String,
     },
+    /// whether a read or a write of `name` on `src` may go straight to the property
+    /// half this module emitted for `class`, rather than round the descriptor protocol
+    ///
+    /// the same two questions [`Op::MethodStands`] asks, and for the same reasons: `src`
+    /// has to be *exactly* a `class`, since an interpreted subclass may override a half,
+    /// and `class` has to still answer `name` with the pair that was compiled. a
+    /// `property` is a *data* descriptor, so there is no third question about the
+    /// instance — what it holds under the name is never what a lookup answers with
+    AccessorStands {
+        dest: RegisterId,
+        src: Value,
+        class: String,
+        name: String,
+    },
     /// whether `src`'s own dict holds `method`, so that the body this module emitted
     /// for `class` is *not* what an attribute lookup would answer with
     ///
@@ -1098,6 +1112,7 @@ impl Op {
             | Self::IsInstance { .. }
             | Self::MatchAttr { .. }
             | Self::MethodStands { .. }
+            | Self::AccessorStands { .. }
             | Self::DictShadows { .. }
             | Self::IsMissing { .. }
             | Self::MatchSlice { .. }
@@ -1222,6 +1237,7 @@ impl Op {
             | Self::IsMapping { dest, .. }
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
+            | Self::AccessorStands { dest, .. }
             | Self::DictShadows { dest, .. }
             | Self::IsMissing { dest, .. }
             | Self::MatchSlice { dest, .. }
@@ -1327,6 +1343,7 @@ impl Op {
             | Self::IsMapping { dest, .. }
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
+            | Self::AccessorStands { dest, .. }
             | Self::DictShadows { dest, .. }
             | Self::IsMissing { dest, .. }
             | Self::MatchSlice { dest, .. }
@@ -1426,6 +1443,7 @@ impl Op {
             Self::Assign { src, .. }
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
+            | Self::AccessorStands { src, .. }
             | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
@@ -1626,6 +1644,7 @@ impl Op {
             Self::Assign { src, .. }
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
+            | Self::AccessorStands { src, .. }
             | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
