@@ -198,6 +198,11 @@ impl InstanceDictionary {
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
             | KnownClass::SqlalchemyMapped
+            | KnownClass::BasedpythonUiState
+            | KnownClass::BasedpythonUiStateList
+            | KnownClass::BasedpythonUiStateDict
+            | KnownClass::BasedpythonUiDerived
+            | KnownClass::BasedpythonUiAmbient
             | KnownClass::Character => None,
         }
     }

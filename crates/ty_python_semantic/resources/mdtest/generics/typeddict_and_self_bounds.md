@@ -362,7 +362,12 @@ def _(s: Sub) -> None:
     reveal_type(s.clone())  # revealed: Sub
 ```
 
-### Other type variables are still rejected as a bound
+### A legacy type variable is still rejected as a bound
+
+A legacy `TypeVar` is declared by an assignment rather than by a type-parameter list, so there is no
+position for it to precede the parameter it bounds — and one `TypeVar` object can be reused by two
+unrelated generics, so it names nothing in particular here. A PEP 695 parameter that precedes the
+one being bounded is fine.
 
 ```py
 from typing import TypeVar
@@ -373,7 +378,6 @@ S = TypeVar("S")
 def f[T: S](x: T) -> T:
     return x
 
-# error: [invalid-type-variable-bound] "TypeVar upper bound cannot be generic"
 def g[U, T: U](x: T) -> T:
     return x
 ```

@@ -77,6 +77,33 @@ assert Starred.__type_params__ != (), "the variadic reached `type_params`"
 print("ok")
 "#;
 
+/// a bound or default naming another type parameter. the `TypeVar` call evaluates both, so an
+/// unmangled name here is a `NameError` at import — which a text assertion on the lowered output
+/// cannot see, because the text it asserts on is what raises
+const DEPENDENT_BOUNDS: &str = r#"
+def pick[T, R: T](t: T, r: R) -> R:
+    return r
+
+def fallback[T, R = T](t: T, r: R) -> R:
+    return r
+
+class Owner[T]:
+    def narrow[U: T](self, u: U) -> U:
+        return u
+
+assert pick(object(), 1) == 1, "a bound naming an earlier parameter imports"
+assert fallback(object(), 1) == 1, "so does a default naming one"
+assert Owner().narrow(2) == 2, "and a bound naming an enclosing list's parameter"
+
+# the bound has to resolve to the very TypeVar the earlier parameter emitted, not to some
+# other object that merely happens to be in scope
+import typing
+hints = typing.get_type_hints(pick)
+assert hints["r"].__bound__ == hints["t"], "the bound resolves to the earlier parameter"
+
+print("ok")
+"#;
+
 /// The polyfilled output imports `typing_extensions` for `TypeAliasType`, so an
 /// interpreter without it can only run the rename half.
 fn python_with_typing_extensions(python: &str) -> bool {
@@ -136,4 +163,23 @@ fn polyfilled_aliases_and_bounds_run() {
         return;
     }
     run_polyfilled(&python, ALIASES);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn polyfilled_dependent_bounds_run() {
+    let Some(python) = python() else {
+        eprintln!("skipping polyfill runtime test: no `python3` interpreter found");
+        return;
+    };
+    if !python_with_typing_extensions(&python) {
+        eprintln!(
+            "skipping polyfill dependent-bound runtime test: {python} has no `typing_extensions`"
+        );
+        return;
+    }
+    run_polyfilled(&python, DEPENDENT_BOUNDS);
 }

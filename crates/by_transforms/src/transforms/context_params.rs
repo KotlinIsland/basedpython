@@ -336,6 +336,66 @@ mod tests {
     }
 
     #[test]
+    fn block_carrying_call_receives_implicit_argument() {
+        // a call that carries a trailing block is still a call: its `context`
+        // parameter is filled like any other, ahead of the block's own keyword
+        check(
+            indoc! {r#"
+                def Card(title: str, context theme: str, once content: () -> None):
+                    content()
+
+                context theme = "dark"
+
+                Card("x"):
+                    pass
+            "#},
+            indoc! {r#"
+                from typing import Callable
+                def Card(title: str, theme: str, content: Callable[[], None]):
+                    content()
+
+                theme = "dark"
+
+                def _trailing_lambda_0(it=None):
+                    pass
+                Card("x", theme=theme, content=_trailing_lambda_0)
+            "#},
+        );
+    }
+
+    #[test]
+    fn block_carrying_call_with_no_written_arguments_separates_them() {
+        // the block's keyword and the implicit `context` argument are spliced
+        // in at the same point — before the closing paren — and each decides
+        // its own separator from the source, which has nothing between the
+        // parens to separate from. without one of them accounting for the
+        // other the two run together as `Card(theme=themecontent=...)`, which
+        // is not python
+        check(
+            indoc! {r#"
+                def Card(context theme: str, once content: () -> None):
+                    content()
+
+                context theme = "dark"
+
+                Card():
+                    pass
+            "#},
+            indoc! {r#"
+                from typing import Callable
+                def Card(theme: str, content: Callable[[], None]):
+                    content()
+
+                theme = "dark"
+
+                def _trailing_lambda_0(it=None):
+                    pass
+                Card(theme=theme, content=_trailing_lambda_0)
+            "#},
+        );
+    }
+
+    #[test]
     fn trailing_lambda_receiver_fills_a_context_parameter() {
         // the block's receiver is spelled `self` in the source but has a name of
         // its own in the lowering, which is what the injected argument must use

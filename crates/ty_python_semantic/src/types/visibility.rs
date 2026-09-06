@@ -11,7 +11,16 @@
 //! is name-mangled rather than renamed, and is unreachable through an import
 //! anyway.
 //!
+//! A dunder is the exception, and the rest of this module is about it. Python
+//! mangles only a name with at most one trailing underscore, so a `private`
+//! dunder keeps the name it was written with. For every dunder but one that
+//! makes `private` a no-op, which the parser reports. The one it does not is
+//! `__init__`: [`private_constructor`] answers which class declared a private
+//! one, so that construction can be refused wherever the declaring class's own
+//! body does not reach — see [`PRIVATE_CONSTRUCTOR`].
+//!
 //! [`PRIVATE_IMPORT`]: super::diagnostic::PRIVATE_IMPORT
+//! [`PRIVATE_CONSTRUCTOR`]: super::diagnostic::PRIVATE_CONSTRUCTOR
 
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
@@ -80,6 +89,77 @@ pub(crate) fn private_method_name<'db>(
     let index = crate::semantic_index(db, scope.program_file(db));
     let class = super::infer::nearest_enclosing_class(db, index, scope)?;
     Some(mangled_private_name(class.name(db).as_str(), member))
+}
+
+/// basedpython: the class that declares `class`'s `private` constructor — the
+/// only class whose body may construct it. `None` when the constructor is not
+/// private.
+///
+/// The declaring class answers rather than `class` itself, so a subclass that
+/// inherits a private `__init__` is reported at its own construction sites: the
+/// constructor is the base's implementation detail, and a subclass is outside
+/// the base's body like any other caller.
+pub(crate) fn private_constructor<'db>(
+    db: &'db dyn Db,
+    class: crate::types::ClassType<'db>,
+) -> Option<PrivateConstructor<'db>> {
+    // the specialization says nothing about which `__init__` is found or how it
+    // was declared, so the question is asked of the class itself and the answer
+    // is shared by every specialization of it
+    *private_constructor_of(db, class.class_literal(db).as_static()?)
+}
+
+/// Tracked for two reasons. It is asked at every construction site in the
+/// program, and answering it walks an MRO. More importantly, the answer is read
+/// off the *declaring* module — its `__init__`, and the semantic index that
+/// says which class encloses it — so without a query boundary here, checking
+/// one module would depend on the index of every module it constructs
+/// something from.
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+fn private_constructor_of<'db>(
+    db: &'db dyn Db,
+    class: super::class::StaticClassLiteral<'db>,
+) -> Option<PrivateConstructor<'db>> {
+    let env = &crate::types::ProgramEnvironment::from_file(class.program_file(db));
+    let init = class
+        .identity_specialization(db)
+        .class_member(db, env, "__init__", super::MemberLookupPolicy::default())
+        .place
+        .ignore_possibly_undefined()?;
+    let function = declared_function(db, init)?;
+    if !function.has_known_decorator(db, super::function::FunctionDecorators::PRIVATE) {
+        return None;
+    }
+    let scope = function.definition(db).scope(db);
+    let index = crate::semantic_index(db, scope.program_file(db));
+    let owner = super::infer::nearest_enclosing_class(db, index, scope)?;
+    Some(PrivateConstructor { owner, function })
+}
+
+/// A `private` constructor, and the class that declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) struct PrivateConstructor<'db> {
+    pub(crate) owner: super::class::StaticClassLiteral<'db>,
+    pub(crate) function: super::function::FunctionType<'db>,
+}
+
+/// Whether `scope` lies within the body of `class` — the test for "this code is
+/// the class's own", which a nested function or a nested class passes too.
+pub(crate) fn scope_is_within_class<'db>(
+    db: &'db dyn Db,
+    index: &ty_python_core::SemanticIndex<'db>,
+    scope: ty_python_core::scope::ScopeId<'db>,
+    class: super::class::StaticClassLiteral<'db>,
+) -> bool {
+    index
+        .ancestor_scopes(scope.file_scope_id(db))
+        .filter_map(|(_, ancestor)| ancestor.node().as_class())
+        .any(|ancestor| {
+            let definition = index.expect_single_definition(ancestor);
+            super::infer::original_class_type(db, definition)
+                .and_then(super::class::ClassLiteral::as_static)
+                == Some(class)
+        })
 }
 
 /// The function a member's type stands for — the member itself, or the getter

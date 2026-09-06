@@ -209,6 +209,29 @@ fn find_typevar_binding<'db>(
             }
             continue;
         }
+        // A class's or alias's own type-parameter scope binds the parameters declared in it, the
+        // same way a function's does. Reaching them through the generic context instead does not
+        // work from inside that scope: the context is what is being built, and a bound naming an
+        // earlier parameter (`class Pair[S, T: Sequence[S]]`) is inferred while it is still
+        // incomplete, which would leave `S` unbound.
+        if let NodeWithScopeKind::ClassTypeParameters(class) = ancestor_scope.node()
+            && !crossed_class_scope
+            && typevar
+                .definition(db)
+                .is_some_and(|definition| definition.file_scope(db) == ancestor_scope_id)
+        {
+            let definition = index.expect_single_definition(class);
+            return Some(typevar.with_binding_context(db, definition));
+        }
+        if let NodeWithScopeKind::TypeAliasTypeParameters(type_alias) = ancestor_scope.node()
+            && !crossed_class_scope
+            && typevar
+                .definition(db)
+                .is_some_and(|definition| definition.file_scope(db) == ancestor_scope_id)
+        {
+            let definition = index.expect_single_definition(type_alias);
+            return Some(typevar.with_binding_context(db, definition));
+        }
         // basedpython: a match type's `case` captures are type variables defined in the
         // alias's own value scope — not in its type-parameter list — so the alias itself is
         // what binds them
@@ -1250,6 +1273,48 @@ impl<'db> GenericContext<'db> {
         }
 
         expanded.into_boxed_slice()
+    }
+
+    /// The types bound to the type parameters that precede the one at `provided.len()`, with any
+    /// left to its default filled in.
+    ///
+    /// A type parameter's bound may name a parameter that precedes it (`class Pair[S, T:
+    /// Sequence[S]]`), so checking an argument against that bound means substituting the
+    /// arguments already chosen into it first. Those are exactly this prefix: a bound naming a
+    /// parameter later in the list is rejected where it is written, so nothing beyond it is
+    /// needed.
+    ///
+    /// This is [`Self::fill_in_defaults`] restricted to a prefix, and fills a defaulted slot the
+    /// same way — by substituting the slots before it into the default.
+    pub(crate) fn provided_prefix(
+        self,
+        db: &'db dyn Db,
+        provided: &[Option<Type<'db>>],
+    ) -> Box<[Type<'db>]> {
+        let env = ProgramEnvironment::from_program(self.program(db));
+        let mut prefix: Vec<Type<'db>> = Vec::with_capacity(provided.len());
+        for (idx, (provided, typevar)) in provided.iter().zip(self.variables(db)).enumerate() {
+            let filled = match provided {
+                Some(ty) => *ty,
+                None => typevar
+                    .default_type(db)
+                    .map(|default| {
+                        default.apply_type_mapping(
+                            db,
+                            &env,
+                            &TypeMapping::ApplySpecialization(ApplySpecialization::Partial {
+                                generic_context: self,
+                                types: &prefix[0..idx],
+                                skip: None,
+                            }),
+                            TypeContext::default(),
+                        )
+                    })
+                    .unwrap_or_else(Type::unknown),
+            };
+            prefix.push(filled);
+        }
+        prefix.into_boxed_slice()
     }
 
     /// Creates a specialization of this generic context. Panics if the length of `types` does not
@@ -3138,6 +3203,50 @@ fn relation_directions<T: Copy>(
     .flatten()
 }
 
+/// The relations a generic context's own declarations impose between its type variables.
+///
+/// A bound that names another type parameter — `def f[T, R: T]` — says `R <= T`, which is a
+/// relation between two variables rather than a ceiling made of concrete types. The constraint
+/// set already represents such a relation, and solving it there is what lets `T` be found from
+/// `R` when nothing else mentions `T`, and what makes the relation hold transitively. So it is
+/// conjoined once, here, and every path that treats a declared bound as a concrete type leaves a
+/// generic one alone.
+///
+/// A bound naming only `Self` is not one of these: `Self` is bound by the receiver rather than by
+/// the context being solved, and has its own substitution.
+fn declared_bound_constraints<'db, 'c>(
+    db: &'db dyn Db,
+    env: &'c ProgramEnvironment<'db>,
+    constraints: &'c ConstraintSetBuilder<'db>,
+    generic_context: GenericContext<'db>,
+) -> ConstraintSet<'db, 'c> {
+    let mut declared = ConstraintSet::from_bool(constraints, true);
+    for bound_typevar in generic_context.variables(db) {
+        let typevar = bound_typevar.typevar(db);
+        // a pack's bound is not an interval on the pack's own value and may not name a type
+        // parameter at all, so `pack_bound` has already discarded it and this is only reached for
+        // an ordinary bound
+        if !typevar.bound_mentions_typevars(db) {
+            continue;
+        }
+        let upper = match typevar.bound_or_constraints(db, env) {
+            Some(TypeVarBoundOrConstraints::UpperBound(bound)) => Some(bound),
+            _ => None,
+        };
+        let lower = typevar.lower_bound(db);
+        let bounds = ConstraintSet::constrain_typevar_declared_bounds(
+            db,
+            env,
+            constraints,
+            bound_typevar,
+            lower,
+            upper,
+        );
+        declared.intersect(db, constraints, bounds);
+    }
+    declared
+}
+
 impl<'db, 'c> SpecializationBuilder<'db, 'c> {
     pub(crate) fn new(
         db: &'db dyn Db,
@@ -3151,7 +3260,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             constraints,
             generic_context,
             inferable: generic_context.inferable_typevars(db),
-            pending: ConstraintSet::from_bool(constraints, true),
+            pending: declared_bound_constraints(db, env, constraints, generic_context),
             types: LegacyTypeMappings::Available(FxHashMap::default()),
             unconstrained: FxHashSet::default(),
             paramspec_seen: FxHashSet::default(),
@@ -3985,6 +4094,12 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         } else {
             ConstraintFailureVariance::Contravariant
         };
+        // a bound naming another type variable is a relation in the constraint set, and an
+        // unsatisfied relation between two variables is not a violation of either one's
+        // declaration — the path is simply not a solution
+        if bound_typevar.typevar(db).bound_mentions_typevars(db) {
+            return None;
+        }
         let error = match bound_typevar
             .typevar(db)
             .bound_or_constraints(db, self.env)?
@@ -4672,6 +4787,17 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                     self.add_type_mapping(bound_typevar, ty, polarity);
                     return Ok(());
                 }
+                // a bound naming another type variable is conjoined into the constraint set
+                // instead: checking it here would compare an argument against a variable that is
+                // still being solved, and intersecting it into the mapping below would leave that
+                // variable inside this one's solution
+                if bound_typevar
+                    .typevar(self.db)
+                    .bound_mentions_typevars(self.db)
+                {
+                    self.add_type_mapping(bound_typevar, ty, polarity);
+                    return Ok(());
+                }
                 match bound_typevar
                     .typevar(self.db)
                     .bound_or_constraints(self.db, env)
@@ -5239,6 +5365,17 @@ pub(crate) enum SpecializationError<'db> {
         argument: Type<'db>,
         violation: PackBoundViolation<'db>,
     },
+    /// A bound that names another type parameter (`def f[T, R: T]`) is a relation between two
+    /// variables, so it is only decided once both are solved. It carries the bound with the
+    /// solved specialization already substituted in, because the bound as written names a type
+    /// variable and would tell the reader nothing.
+    MismatchedRelation {
+        bound_typevar: BoundTypeVarInstance<'db>,
+        argument: Type<'db>,
+        bound: Type<'db>,
+        /// Whether `bound` is the lower end of a basedpython bound range rather than the upper.
+        is_lower: bool,
+    },
 }
 
 impl<'db> SpecializationError<'db> {
@@ -5246,7 +5383,8 @@ impl<'db> SpecializationError<'db> {
         match self {
             Self::MismatchedBound { bound_typevar, .. }
             | Self::MismatchedConstraint { bound_typevar, .. }
-            | Self::UnsatisfiedPackBound { bound_typevar, .. } => *bound_typevar,
+            | Self::UnsatisfiedPackBound { bound_typevar, .. }
+            | Self::MismatchedRelation { bound_typevar, .. } => *bound_typevar,
         }
     }
 
@@ -5254,7 +5392,8 @@ impl<'db> SpecializationError<'db> {
         match self {
             Self::MismatchedBound { argument, .. }
             | Self::MismatchedConstraint { argument, .. }
-            | Self::UnsatisfiedPackBound { argument, .. } => *argument,
+            | Self::UnsatisfiedPackBound { argument, .. }
+            | Self::MismatchedRelation { argument, .. } => *argument,
         }
     }
 }

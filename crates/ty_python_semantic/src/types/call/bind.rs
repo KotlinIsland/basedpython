@@ -53,7 +53,8 @@ use crate::types::function::{
     OverloadLiteral,
 };
 use crate::types::generics::{
-    GenericContext, Specialization, SpecializationBuilder, SpecializationError, TypeVarInference,
+    ApplySpecialization, GenericContext, Specialization, SpecializationBuilder,
+    SpecializationError, TypeVarInference,
 };
 use crate::types::infer::original_class_type;
 use crate::types::known_instance::{FieldInstance, InternedConstraintSetSolution};
@@ -2616,6 +2617,14 @@ impl<'db> Bindings<'db> {
                             if let [Some(ty)] = overload.parameter_types() {
                                 overload.set_return_type(Type::bool_literal(
                                     ty.project_type_form(db, env).is_singleton(db, env),
+                                ));
+                            }
+                        }
+
+                        Some(KnownFunction::IsDeeplyImmutable) => {
+                            if let [Some(ty)] = overload.parameter_types() {
+                                overload.set_return_type(Type::bool_literal(
+                                    ty.project_type_form(db, env).is_deeply_immutable(db, env),
                                 ));
                             }
                         }
@@ -6036,6 +6045,10 @@ struct ArgumentTypeChecker<'a, 'db> {
     inferable_typevars: TypeVarSet<'db>,
     inference: Option<TypeVarInference<'db>>,
 
+    /// basedpython: the type variables the call's explicit arguments could have constrained.
+    /// See [`typevars_reached_by_arguments`].
+    typevars_reached_by_arguments: Box<[BoundTypeVarIdentity<'db>]>,
+
     /// Argument indices for which specialization inference has already produced a sufficiently
     /// precise argument mismatch. We can then silence `check_argument_type` for those arguments to
     /// avoid duplicate diagnostics.
@@ -6142,6 +6155,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         return_ty: Type<'db>,
         errors: &'a mut Vec<BindingError<'db>>,
         is_partial_application: bool,
+        typevars_reached_by_arguments: Box<[BoundTypeVarIdentity<'db>]>,
     ) -> Self {
         Self {
             db,
@@ -6159,6 +6173,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             is_partial_application,
             inferable_typevars: TypeVarSet::None,
             inference: None,
+            typevars_reached_by_arguments,
             constraint_set_errors: vec![false; arguments.len()],
         }
     }
@@ -6391,8 +6406,15 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
 
     fn merged_specialization(&self) -> Option<Specialization<'db>> {
         let env = self.env;
-        self.inference
-            .map(|inference| call_specialization(self.db, env, self.signature, inference))
+        self.inference.map(|inference| {
+            call_specialization(
+                self.db,
+                env,
+                self.signature,
+                inference,
+                &self.typevars_reached_by_arguments,
+            )
+        })
     }
 
     /// The call's specialization with a type variable the call left unsolved kept gradual.
@@ -6614,7 +6636,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             // literal values are kept unpromoted.
             if self.call_expression_tcx.preserve_literals
                 && let Some(lower) = bounds.evidence_lower()
-                && crate::types::visitor::any_over_type(self.db, self.env, lower, false, |ty| {
+                && any_over_type(self.db, self.env, lower, false, |ty| {
                     ty.as_literal_value().is_some()
                 })
             {
@@ -6708,10 +6730,104 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                 choose,
             ),
         };
-        let specialization = call_specialization(self.db, env, self.signature, inference);
+        let specialization = call_specialization(
+            self.db,
+            env,
+            self.signature,
+            inference,
+            &self.typevars_reached_by_arguments,
+        );
+        self.check_declared_typevar_relations(generic_context, specialization);
 
         self.return_ty = self.return_ty.apply_specialization(db, specialization);
         self.inference = Some(inference);
+    }
+
+    /// Reports an argument that puts a type variable outside a bound naming another type
+    /// variable.
+    ///
+    /// Such a bound is a relation between two variables, so whether it holds is only decided once
+    /// both are solved — `def f[T, R: T](t: list[T], r: R)` pins `T` through the invariant
+    /// `list[T]`, and whether `r` fits is a question about the pair, not about either argument on
+    /// its own. The relation is conjoined into the constraint set, where an unsatisfiable one
+    /// simply yields no solution rather than an error, so the report is made here against the
+    /// argument that supplied the type variable at fault.
+    fn check_declared_typevar_relations(
+        &mut self,
+        generic_context: GenericContext<'db>,
+        specialization: Specialization<'db>,
+    ) {
+        let db = self.db;
+        let env = self.env;
+        for bound_typevar in generic_context.variables(db) {
+            let typevar = bound_typevar.typevar(db);
+            // a pack's bound may not name a type parameter, so `pack_bound` has already
+            // discarded it and only an ordinary bound reaches here
+            if !typevar.bound_mentions_typevars(db) {
+                continue;
+            }
+            let solved = Type::TypeVar(bound_typevar).apply_specialization(db, specialization);
+            let upper = match typevar.bound_or_constraints(db, env) {
+                Some(TypeVarBoundOrConstraints::UpperBound(bound)) => Some((bound, false)),
+                _ => None,
+            };
+            // basedpython: a bound range's lower end is a second bound, and it is checked the
+            // same way with the two sides swapped
+            let lower = typevar.lower_bound(db).map(|lower| (lower, true));
+            for (declared, is_lower) in upper.into_iter().chain(lower) {
+                let bound = declared.apply_specialization(db, specialization);
+                // when the named type variable had no solution of its own the substitution
+                // collapses to `Never`, which names nothing the reader wrote. fall back to what
+                // the declarations say — `R: T` where `T: int` reads as `int`
+                let bound = if bound.is_never() || bound.has_typevar(db, env) {
+                    declared_bound_ceiling(db, env, generic_context, declared)
+                } else {
+                    bound
+                };
+                let (source, target) = if is_lower {
+                    (bound, solved)
+                } else {
+                    (solved, bound)
+                };
+                if source.is_assignable_to(db, env, target) {
+                    continue;
+                }
+                // blame the argument that actually falls outside the bound. several arguments
+                // can fill the same type variable, and the ones that fit are not at fault
+                let mut blamed = None;
+                for relation in self.argument_relations() {
+                    if !any_over_type(db, env, relation.declared_type, false, |ty| {
+                        ty == Type::TypeVar(bound_typevar)
+                    }) {
+                        continue;
+                    }
+                    let candidate = (relation.adjusted_argument_index, relation.argument_type);
+                    let outside = if is_lower {
+                        !bound.is_assignable_to(db, env, relation.argument_type)
+                    } else {
+                        !relation.argument_type.is_assignable_to(db, env, bound)
+                    };
+                    if outside {
+                        blamed = Some(candidate);
+                        break;
+                    }
+                    blamed.get_or_insert(candidate);
+                }
+                // a type variable can be solved without any argument mentioning it — through the
+                // relation alone, or from the type context — and then the solution is all there
+                // is to report
+                let (argument_index, argument) = blamed.unwrap_or((None, solved));
+                self.errors.push(BindingError::SpecializationError {
+                    error: SpecializationError::MismatchedRelation {
+                        bound_typevar,
+                        argument,
+                        bound,
+                        is_lower,
+                    },
+                    argument_index,
+                });
+            }
+        }
     }
 
     /// Infers a variadic type variable tuple from every argument matched to `*args`.
@@ -8019,6 +8135,81 @@ fn inferable_typevar_occurrences<'db>(
     visitor.count.get()
 }
 
+/// basedpython: whether `signature`'s calls solve an unsolved type variable precisely.
+///
+/// The module that declares the callable governs its calls; a synthesized signature declared by
+/// no module follows the default.
+fn precise_unsolved_typevars<'db>(db: &'db dyn Db, signature: &Signature<'db>) -> bool {
+    signature.definition().is_none_or(|definition| {
+        db.analysis_settings(definition.file(db))
+            .precise_unsolved_typevars
+    })
+}
+
+/// basedpython: the type variables an argument of this call could have constrained — those
+/// named by a parameter the call actually matched an argument to.
+///
+/// A type variable outside this set was handed nothing to infer from. One inside it was, and
+/// the solve still came back empty, which means inference gave up rather than that the value
+/// genuinely holds nothing.
+///
+/// A gradual parameter puts every type variable in the set: the argument went somewhere the
+/// annotation does not describe, so nothing about it has been established.
+fn typevars_reached_by_arguments<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    signature: &Signature<'db>,
+    arguments: &CallArguments<'_, 'db>,
+    argument_matches: &[MatchedArgument<'db>],
+) -> Box<[BoundTypeVarIdentity<'db>]> {
+    // only a generic signature is ever specialized, and `infer_specialization` leaves the
+    // inference empty for any other, so nothing reads this set for a non-generic call.
+    // `call_specialization` is the sole reader, and it answers from the inference alone
+    // unless the precise solve is on, so there is nothing to collect for anyone else
+    let Some(generic_context) = signature.generic_context else {
+        return Box::from([]);
+    };
+    if !precise_unsolved_typevars(db, signature) {
+        return Box::from([]);
+    }
+    let reached = std::cell::RefCell::new(FxHashSet::default());
+    let parameters = signature.parameters();
+    let explicit_matches = arguments
+        .iter()
+        .zip(argument_matches)
+        // a synthetic argument is not something the caller wrote: for a constructor it is the
+        // instance being initialised, and the parameter it fills is declared in terms of the
+        // very type variables being solved
+        .filter(|((argument, _), _)| !matches!(argument, Argument::Synthetic))
+        .map(|(_, matched)| matched);
+    for matched_parameter in explicit_matches.flat_map(|matched| matched.parameters.iter()) {
+        let Some(parameter) = parameters.get(matched_parameter.index) else {
+            continue;
+        };
+        let annotated_type = parameter.annotated_type();
+        // a gradual parameter swallows the argument and says nothing about it. the
+        // catch-all `__new__(cls, /, *args: Any, **kwargs: Any)` that `dict` and its
+        // subclasses inherit is the one that matters: the arguments really did go
+        // somewhere, so concluding that the instance holds nothing is unfounded, and
+        // every type parameter counts as reached
+        if annotated_type.is_dynamic() {
+            return generic_context
+                .variables(db)
+                .map(|typevar| typevar.identity(db))
+                .collect();
+        }
+        any_over_type(db, env, annotated_type, false, |ty: Type<'db>| {
+            if let Type::TypeVar(typevar) = ty {
+                reached.borrow_mut().insert(typevar.identity(db));
+            }
+            false
+        });
+    }
+    // a boxed slice rather than the set: this rides along in a `Binding`, it is only ever
+    // scanned for membership, and it holds a handful of entries at most
+    reached.into_inner().into_iter().collect()
+}
+
 /// Project a call's type-variable inference into a specialization.
 ///
 /// basedpython: a type variable that the call left entirely unsolved is solved to `Never` — the
@@ -8026,11 +8217,17 @@ fn inferable_typevar_occurrences<'db>(
 /// This mirrors what fluid specializations already do for an empty collection literal, and is
 /// disabled by `analysis.precise-unsolved-typevars`.
 ///
-/// Variance decides where that is the right answer. Where the type variable is only ever read out
-/// of the call's result, `Never` describes a value nobody can observe. Where it is also written or
-/// passed back in — an invariant `list[T]`, a contravariant `(T) -> None` — the same substitution
-/// would instead say that nothing can ever be put there, turning a failure to infer into an error
-/// at every later use of the result, so those keep the gradual `Unknown`.
+/// Variance decides where that is the right answer for a type variable bound to a *function*.
+/// Where it is only ever read out of the call's result, `Never` describes a value nobody can
+/// observe. Where it is also written or passed back in — an invariant `list[T]`, a contravariant
+/// `(T) -> None` — the same substitution would instead say that nothing can ever be put there,
+/// turning a failure to infer into an error at every later use of the result, so those keep the
+/// gradual `Unknown`.
+///
+/// A *class* type parameter is the specialization of the instance the call builds. Whatever the
+/// class declared, an instance built without anything reaching that parameter holds nothing, so
+/// `A()` is `A[Never]` for the same reason `[]` is `list[Never]`. That only applies to a parameter
+/// no argument reached: see [`typevars_reached_by_arguments`].
 ///
 /// Every consumer of a call's specialization must go through here, or the return type and the
 /// binding's reported specialization would disagree about the same call. The one exception is
@@ -8040,14 +8237,9 @@ fn call_specialization<'db>(
     env: &ProgramEnvironment<'db>,
     signature: &Signature<'db>,
     inference: TypeVarInference<'db>,
+    typevars_reached_by_arguments: &[BoundTypeVarIdentity<'db>],
 ) -> Specialization<'db> {
-    // the module that declares the callable governs its calls; a synthesized signature declared by
-    // no module follows the default
-    let precise_unsolved_typevars = signature.definition().is_none_or(|definition| {
-        db.analysis_settings(definition.file(db))
-            .precise_unsolved_typevars
-    });
-    if !precise_unsolved_typevars {
+    if !precise_unsolved_typevars(db, signature) {
         return inference.merged_specialization(db);
     }
 
@@ -8059,16 +8251,54 @@ fn call_specialization<'db>(
             || typevar.is_paramspec(db)
             || typevar.is_parameter_pack(db)
             || typevar.is_typevartuple(db)
-            || !matches!(
-                typevar.positional_variance(db, env),
-                TypeVarVariance::Covariant | TypeVarVariance::Bivariant
-            )
+            // the variance rule is about *function* type parameters: `Never` in an input
+            // position says "nothing can ever go here", and the error that produces lands
+            // far from the call that failed to infer. a class type parameter no argument
+            // could have constrained is a different thing — it is the specialization of the
+            // instance the call just built, and that instance really does hold nothing yet,
+            // which is why `A()` is `A[Never]` for the same reason `[]` is `list[Never]`.
+            // one an argument *did* reach stays gradual: an empty solve there means
+            // inference gave up, not that the value is empty
+            || !((typevar.binds_class_specialization(db)
+                && !typevars_reached_by_arguments.contains(&typevar.identity(db)))
+                || matches!(
+                    typevar.positional_variance(db, env),
+                    TypeVarVariance::Covariant | TypeVarVariance::Bivariant
+                ))
         {
             None
         } else {
             Some(Type::Never)
         }
     })
+}
+
+/// What a bound naming other type parameters says when only the declarations are known.
+///
+/// A relation like `R: T` is reported against the solved `T`, but when `T` had no solution of its
+/// own the substitution collapses to `Never`, which names nothing anybody wrote. Replacing each
+/// named parameter with its own declared ceiling recovers something the reader can act on:
+/// `def f[T: int, R: T]` reads as `int`.
+fn declared_bound_ceiling<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    generic_context: GenericContext<'db>,
+    bound: Type<'db>,
+) -> Type<'db> {
+    let ceilings: Box<[Type<'db>]> = generic_context
+        .variables(db)
+        .map(|variable| variable.typevar(db).declared_ceiling(db, env))
+        .collect();
+    bound.apply_type_mapping(
+        db,
+        env,
+        &TypeMapping::ApplySpecialization(ApplySpecialization::Partial {
+            generic_context,
+            types: &ceilings,
+            skip: None,
+        }),
+        TypeContext::default(),
+    )
 }
 
 /// Binding information for one of the overloads of a callable.
@@ -8108,6 +8338,10 @@ pub(crate) struct Binding<'db> {
 
     /// The type-variable inference result for this binding, if the callable is generic.
     inference: Option<TypeVarInference<'db>>,
+
+    /// basedpython: the type variables the call's explicit arguments could have constrained.
+    /// See [`typevars_reached_by_arguments`].
+    typevars_reached_by_arguments: Box<[BoundTypeVarIdentity<'db>]>,
 
     /// Whether these arguments construct a partial instead of completing a call.
     is_partial_application: bool,
@@ -8205,6 +8439,7 @@ impl<'db> Binding<'db> {
             inference: None,
             is_partial_application: false,
             argument_matches: Box::from([]),
+            typevars_reached_by_arguments: Box::from([]),
             variadic_argument_matched_to_variadic_parameter: false,
             parameter_tys: Box::from([]),
             errors: vec![],
@@ -8748,6 +8983,13 @@ impl<'db> Binding<'db> {
         self.variadic_argument_matched_to_variadic_parameter =
             matcher.variadic_argument_matched_to_variadic_parameter;
         self.argument_matches = matcher.finish(db, env);
+        self.typevars_reached_by_arguments = typevars_reached_by_arguments(
+            db,
+            env,
+            &self.signature,
+            arguments,
+            &self.argument_matches,
+        );
     }
 
     fn check_types(
@@ -8789,6 +9031,7 @@ impl<'db> Binding<'db> {
             self.return_ty,
             &mut self.errors,
             self.is_partial_application,
+            self.typevars_reached_by_arguments.clone(),
         );
 
         // If this overload is generic, first see if we can infer a specialization of the function
@@ -9192,8 +9435,15 @@ impl<'db> Binding<'db> {
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
     ) -> Option<Specialization<'db>> {
-        self.inference
-            .map(|inference| call_specialization(db, env, &self.signature, inference))
+        self.inference.map(|inference| {
+            call_specialization(
+                db,
+                env,
+                &self.signature,
+                inference,
+                &self.typevars_reached_by_arguments,
+            )
+        })
     }
 
     pub(crate) fn errors(&self) -> &[BindingError<'db>] {
@@ -10449,6 +10699,20 @@ impl<'db> BindingError<'db> {
                             ));
                         }
                     }
+                    SpecializationError::MismatchedRelation {
+                        bound_typevar,
+                        bound,
+                        is_lower,
+                        ..
+                    } => {
+                        let typevar_name = bound_typevar.typevar(context.db()).name(context.db());
+                        let bound = bound.display(context.db(), env);
+                        let end = if *is_lower { "lower" } else { "upper" };
+                        diag.set_primary_annotation_message(format_args!(
+                            "Argument type `{argument_ty_display}` does not satisfy \
+                                {end} bound `{bound}` of type variable `{typevar_name}`"
+                        ));
+                    }
                     SpecializationError::UnsatisfiedPackBound {
                         bound_typevar,
                         violation,
@@ -10663,13 +10927,17 @@ impl<'db> BindingError<'db> {
         argument_index: Option<usize>,
     ) -> Option<ArgOrKeyword<'_>> {
         match (node, argument_index) {
-            (ast::AnyNodeRef::ExprCall(call_node), Some(argument_index)) => Some(
-                call_node
-                    .arguments
-                    .iter_source_order()
-                    .nth(argument_index)
-                    .expect("argument index should not be out of range"),
-            ),
+            // basedpython: a call carrying a trailing block binds one argument
+            // more than it writes — the block, which has no node. An index past
+            // the written arguments is that block, and reports on the whole call.
+            //
+            // Any *other* out-of-range index would be a bug in argument
+            // matching. This returns `None` for that too rather than panicking:
+            // the cost is a diagnostic anchored on the call instead of on one
+            // argument, which is what the block case wants anyway
+            (ast::AnyNodeRef::ExprCall(call_node), Some(argument_index)) => {
+                call_node.arguments.iter_source_order().nth(argument_index)
+            }
             // If we've been passed a `ClassDef` node, it indicates that we're reporting an error
             // relating to the class's keyword arguments. Keyword arguments are passed to `__init_subclass__`,
             // or `__new__`/`__prepare__` on the metaclass -- but positional arguments are not, and neither

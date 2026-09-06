@@ -209,6 +209,15 @@ bitflags! {
         /// basedpython: `@must_use_return_value` — a call to this function must
         /// have its result used, even where the enclosing class says otherwise
         const MUST_USE_RETURN_VALUE = 1 << 12;
+        /// basedpython-ui: the function is decorated with the framework's
+        /// `@composable` — its body is a composition scope. The decorator is
+        /// identity-typed (`[F](fn: F) -> F`), so the function keeps its literal
+        /// type and this flag is the only trace the decorator leaves
+        const COMPOSABLE = 1 << 13;
+        /// basedpython-ui: the function is decorated with the framework's
+        /// `@builder` — a widget builder, which emits into the composition being
+        /// built and so, like a composable, can only be called while composing
+        const UI_BUILDER = 1 << 14;
     }
 }
 
@@ -230,6 +239,8 @@ impl FunctionDecorators {
                 Some(KnownFunction::MustUseReturnValue) => {
                     FunctionDecorators::MUST_USE_RETURN_VALUE
                 }
+                Some(KnownFunction::BasedpythonUiComposable) => FunctionDecorators::COMPOSABLE,
+                Some(KnownFunction::BasedpythonUiBuilder) => FunctionDecorators::UI_BUILDER,
                 _ => FunctionDecorators::empty(),
             },
             Type::ClassLiteral(class) => match class.known(db) {
@@ -3246,6 +3257,49 @@ pub enum KnownFunction {
     #[strum(serialize = "yield_fixture")]
     PytestYieldFixture,
 
+    /// `basedpython_ui.runtime.composable` — the framework's `@composable`
+    /// decorator, which marks a function as a composition scope
+    #[strum(serialize = "composable")]
+    BasedpythonUiComposable,
+    /// `basedpython_ui.runtime.builder` — the framework's `@builder` decorator,
+    /// which marks a widget builder: a function that emits into the composition
+    /// being built
+    #[strum(serialize = "builder")]
+    BasedpythonUiBuilder,
+    /// `basedpython_ui.runtime.state` — remembers a `State[T]` cell for the
+    /// enclosing composition scope
+    #[strum(serialize = "state")]
+    BasedpythonUiState,
+    /// `basedpython_ui.runtime.state_list`
+    #[strum(serialize = "state_list")]
+    BasedpythonUiStateList,
+    /// `basedpython_ui.runtime.state_dict`
+    #[strum(serialize = "state_dict")]
+    BasedpythonUiStateDict,
+    /// `basedpython_ui.runtime.derived` — a memoised `Derived[T]` over state
+    #[strum(serialize = "derived")]
+    BasedpythonUiDerived,
+    /// `basedpython_ui.runtime.remember` — a value computed once per scope
+    #[strum(serialize = "remember")]
+    BasedpythonUiRemember,
+    /// `basedpython_ui.runtime.launched_effect`
+    #[strum(serialize = "launched_effect")]
+    BasedpythonUiLaunchedEffect,
+    /// `basedpython_ui.runtime.disposable_effect`
+    #[strum(serialize = "disposable_effect")]
+    BasedpythonUiDisposableEffect,
+    /// `basedpython_ui.runtime.side_effect`
+    #[strum(serialize = "side_effect")]
+    BasedpythonUiSideEffect,
+    /// `basedpython_ui.runtime.provide` — overrides an `Ambient[T]` for a subtree
+    #[strum(serialize = "provide")]
+    BasedpythonUiProvide,
+    /// `basedpython_ui.app.run_app` — composes its `root` block into a window
+    #[strum(serialize = "run_app")]
+    BasedpythonUiRunApp,
+    /// `basedpython_ui.app.compose_test` — composes its `root` block headlessly
+    #[strum(serialize = "compose_test")]
+    BasedpythonUiComposeTest,
     /// `functools.total_ordering`
     TotalOrdering,
 
@@ -3270,6 +3324,8 @@ pub enum KnownFunction {
     IsDisjointFrom,
     /// `ty_extensions._internal.is_singleton`
     IsSingleton,
+    /// `ty_extensions._internal.is_deeply_immutable` (basedpython)
+    IsDeeplyImmutable,
     /// `ty_extensions._internal.generic_context`
     GenericContext,
     /// `ty_extensions._internal.into_callable`
@@ -3372,6 +3428,20 @@ impl KnownFunction {
                 matches!(module, KnownModule::Dataclasses)
             }
             Self::PydanticField => matches!(module, KnownModule::PydanticFields),
+            Self::BasedpythonUiComposable
+            | Self::BasedpythonUiBuilder
+            | Self::BasedpythonUiState
+            | Self::BasedpythonUiStateList
+            | Self::BasedpythonUiStateDict
+            | Self::BasedpythonUiDerived
+            | Self::BasedpythonUiRemember
+            | Self::BasedpythonUiLaunchedEffect
+            | Self::BasedpythonUiDisposableEffect
+            | Self::BasedpythonUiSideEffect
+            | Self::BasedpythonUiProvide => matches!(module, KnownModule::BasedpythonUiRuntime),
+            Self::BasedpythonUiRunApp | Self::BasedpythonUiComposeTest => {
+                matches!(module, KnownModule::BasedpythonUiApp)
+            }
             Self::PydanticFieldValidator => {
                 matches!(module, KnownModule::PydanticFunctionalValidators)
             }
@@ -3388,6 +3458,7 @@ impl KnownFunction {
             | Self::IsDisjointFrom
             | Self::IsEquivalentTo
             | Self::IsSingleton
+            | Self::IsDeeplyImmutable
             | Self::IsSubtypeOf
             | Self::GenericContext
             | Self::IntoCallable
@@ -4078,6 +4149,20 @@ pub(crate) mod tests {
                 KnownFunction::PytestFixture | KnownFunction::PytestYieldFixture => {
                     KnownModule::PytestFixtures
                 }
+                KnownFunction::BasedpythonUiComposable
+                | KnownFunction::BasedpythonUiBuilder
+                | KnownFunction::BasedpythonUiState
+                | KnownFunction::BasedpythonUiStateList
+                | KnownFunction::BasedpythonUiStateDict
+                | KnownFunction::BasedpythonUiDerived
+                | KnownFunction::BasedpythonUiRemember
+                | KnownFunction::BasedpythonUiLaunchedEffect
+                | KnownFunction::BasedpythonUiDisposableEffect
+                | KnownFunction::BasedpythonUiSideEffect
+                | KnownFunction::BasedpythonUiProvide => KnownModule::BasedpythonUiRuntime,
+                KnownFunction::BasedpythonUiRunApp | KnownFunction::BasedpythonUiComposeTest => {
+                    KnownModule::BasedpythonUiApp
+                }
 
                 KnownFunction::GetattrStatic => KnownModule::Inspect,
 
@@ -4102,6 +4187,7 @@ pub(crate) mod tests {
                 | KnownFunction::MustUseReturnValue => KnownModule::TyExtensions,
 
                 KnownFunction::IsSingleton
+                | KnownFunction::IsDeeplyImmutable
                 | KnownFunction::IsSubtypeOf
                 | KnownFunction::GenericContext
                 | KnownFunction::IntoCallable

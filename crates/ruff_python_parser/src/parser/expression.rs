@@ -152,6 +152,19 @@ impl<'src> Parser<'src> {
         self.current_token_kind().is_soft_keyword()
     }
 
+    /// basedpython: whether the expression just parsed ended with a suite, which
+    /// makes it the last thing in the statement it belongs to.
+    ///
+    /// A suite swallows the newline that terminates its statement, so the parser
+    /// is left on the first token of the *next* line. Every continuation the
+    /// expression parser would otherwise accept there — a conditional
+    /// expression's `if`, a binary operator, a call's `(`, a subscript's `[` —
+    /// would splice that next statement onto this one, so each of them stops
+    /// when this holds.
+    const fn expression_ended_with_suite(&self) -> bool {
+        self.expr_consumed_suite
+    }
+
     /// Returns `true` if the current token is the start of an expression.
     pub(super) fn at_expr(&self) -> bool {
         self.at_ts(EXPR_SET)
@@ -385,7 +398,7 @@ impl<'src> Parser<'src> {
         let start = self.node_start();
         let parsed_expr = self.parse_conditional_expression_or_higher_impl(context);
 
-        if self.at(TokenKind::Comma) {
+        if self.at(TokenKind::Comma) && !self.expression_ended_with_suite() {
             let subsequent_context = context.disallow_yield_expressions();
             Expr::Tuple(self.parse_tuple_expression(
                 parsed_expr.expr,
@@ -415,7 +428,7 @@ impl<'src> Parser<'src> {
         let start = self.node_start();
         let parsed_expr = self.parse_conditional_expression_or_higher_impl(context);
 
-        if self.at(TokenKind::ColonEqual) {
+        if self.at(TokenKind::ColonEqual) && !self.expression_ended_with_suite() {
             Expr::Named(self.parse_named_expression(parsed_expr.expr, start)).into()
         } else {
             parsed_expr
@@ -448,7 +461,7 @@ impl<'src> Parser<'src> {
             let start = self.node_start();
             let parsed_expr = self.parse_simple_expression(context);
 
-            if self.at(TokenKind::If) {
+            if self.at(TokenKind::If) && !self.expression_ended_with_suite() {
                 Expr::If(self.parse_if_expression(parsed_expr.expr, start, context)).into()
             } else {
                 parsed_expr
@@ -498,6 +511,10 @@ impl<'src> Parser<'src> {
 
         loop {
             progress.assert_progressing(self);
+
+            if self.expression_ended_with_suite() {
+                break;
+            }
 
             let current_token = self.current_token_kind();
 
@@ -879,6 +896,10 @@ impl<'src> Parser<'src> {
         }
 
         let lhs = self.parse_atom(context);
+
+        if self.expression_ended_with_suite() {
+            return lhs;
+        }
 
         ParsedExpr {
             expr: self.parse_postfix_expression(lhs.expr, start, context),

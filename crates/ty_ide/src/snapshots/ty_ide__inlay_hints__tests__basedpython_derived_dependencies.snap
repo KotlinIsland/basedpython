@@ -1,0 +1,91 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ derived_dependencies: true, ..InlayHintSettings::none() })"
+---
+
+from basedpython_ui import State, composable, derived, remember, state, state_list
+
+def validate(value: str) -> str?:
+    return None if value else "required"
+
+def total_of(cell: State[int]) -> int:
+    return cell.value
+
+@composable
+def Form():
+    let name = state("")
+    let email = state("")
+    let count = state(0)
+    let items = state_list([1])
+    let name_error = derived(lambda: validate(name.value))[ depends on name]
+    let full = derived(lambda: name.value + email.value)[ depends on name, email]
+    let total = derived(lambda: total_of(count) + sum(1 for item in items if item))[ depends on count, items]
+    let cached = remember(lambda: count.value * 2)[ depends on count]
+    let constant = derived(lambda: 1)
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:12:9
+   |
+12 |     let name = state("")
+   |         ^^^^
+info: Source
+  --> main2.py:16:72
+   |
+16 |     let name_error = derived(lambda: validate(name.value))[ depends on name]
+   |                                                                        ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:12:9
+   |
+12 |     let name = state("")
+   |         ^^^^
+info: Source
+  --> main2.py:17:70
+   |
+17 |     let full = derived(lambda: name.value + email.value)[ depends on name, email]
+   |                                                                      ^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:13:9
+   |
+13 |     let email = state("")
+   |         ^^^^^
+info: Source
+  --> main2.py:17:76
+   |
+17 |     let full = derived(lambda: name.value + email.value)[ depends on name, email]
+   |                                                                            ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:14:9
+   |
+14 |     let count = state(0)
+   |         ^^^^^
+info: Source
+  --> main2.py:18:97
+   |
+18 |     let total = derived(lambda: total_of(count) + sum(1 for item in items if item))[ depends on count, items]
+   |                                                                                                 ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:15:9
+   |
+15 |     let items = state_list([1])
+   |         ^^^^^
+info: Source
+  --> main2.py:18:104
+   |
+18 |     let total = derived(lambda: total_of(count) + sum(1 for item in items if item))[ depends on count, items]
+   |                                                                                                        ^^^^^
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> main.by:14:9
+   |
+14 |     let count = state(0)
+   |         ^^^^^
+info: Source
+  --> main2.py:19:64
+   |
+19 |     let cached = remember(lambda: count.value * 2)[ depends on count]
+   |                                                                ^^^^^

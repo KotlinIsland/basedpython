@@ -153,6 +153,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SHADOWED_TYPE_VARIABLE);
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
+    registry.register_lint(&PRIVATE_CONSTRUCTOR);
+    registry.register_lint(&INEFFECTIVE_PRIVATE);
     registry.register_lint(&PRIVATE_IMPORT);
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
@@ -183,6 +185,14 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNRESOLVED_NARROWING_GUARD);
     registry.register_lint(&NARROWING_GUARD_AS_VALUE);
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
+    registry.register_lint(&MUTABLE_STATE_VALUE);
+    registry.register_lint(&SILENT_MUTATION);
+    registry.register_lint(&STATE_WRITE_IN_COMPOSITION);
+    registry.register_lint(&CONDITIONAL_SLOT);
+    registry.register_lint(&CONTENT_BLOCK_CONTROL_FLOW);
+    registry.register_lint(&UNSTABLE_PARAMETER);
+    registry.register_lint(&COMPOSABLE_OUTSIDE_COMPOSITION);
+    registry.register_lint(&UNOBSERVABLE_DEPENDENCY);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&UNSOUND_CAST);
     registry.register_lint(&NON_OVERLAPPING_CAST);
@@ -1116,6 +1126,71 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
+    /// Checks for constructing a class whose `init` is declared `private`, from
+    /// outside that class's own body.
+    ///
+    /// ## Why is this bad?
+    /// A `private` constructor says the class decides how its instances are
+    /// made: callers go through a factory the class provides, which can pick a
+    /// subclass, return a cached instance, or reject the arguments. Calling the
+    /// constructor directly bypasses that.
+    ///
+    /// A subclass is outside the class's body too, so it cannot construct the
+    /// base either.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class Id:
+    ///     private init(let raw: str)
+    ///
+    ///     @classmethod
+    ///     def parse(cls, text: str) -> Id:
+    ///         return Id(text.strip())  # ok: inside the class
+    ///
+    /// Id("x")  # error: `Id`'s constructor is private
+    /// ```
+    pub(crate) static PRIVATE_CONSTRUCTOR = {
+        summary: "detects construction of a class with a `private` constructor",
+        status: LintStatus::stable("0.0.79"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for the `private` modifier on a class member whose name it cannot
+    /// hide.
+    ///
+    /// ## Why is this bad?
+    /// `private` hides a class member by renaming it so python's name-mangling
+    /// applies, and python mangles only a name with at most one trailing
+    /// underscore. A dunder is therefore left with the name it was written
+    /// with, and the modifier does nothing — which is worse than an error,
+    /// because the declaration reads as though the member were hidden.
+    ///
+    /// `init` is the exception. It is the one dunder `private` says something
+    /// about, and it is enforced at the construction site rather than by hiding
+    /// a name: see [`private-constructor`](private-constructor.md).
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class Point:
+    ///     private def __repr__(self) -> str:  # error: `private` does nothing here
+    ///         return "Point()"
+    /// ```
+    pub(crate) static INEFFECTIVE_PRIVATE = {
+        summary: "detects a `private` modifier on a name it cannot hide",
+        status: LintStatus::stable("0.0.79"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
     /// Checks for imports of a symbol another module declared `private`.
     ///
     /// ## Why is this bad?
@@ -1988,6 +2063,322 @@ declare_lint! {
     pub(crate) static ESCAPING_LOOP_VARIABLE = {
         summary: "detects a trailing-lambda block capturing a loop variable with a non-borrow callee",
         status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    ///
+    /// Checks for a value that is not deeply immutable being placed in `basedpython_ui` state: the
+    /// initial value of `state(...)` / `State(...)`, the elements of `state_list(...)` / `StateList(...)`,
+    /// the value computed by `derived(...)` / `remember(...)`, a value assigned to a `State`'s `.value`,
+    /// appended to or inserted into a `StateList`, stored into a `StateDict`, or given to `provide(...)`.
+    ///
+    /// ## Why is this bad?
+    ///
+    /// A `State` notifies its readers when it is *assigned*. A change made *inside* the held value —
+    /// `items.append(1)` on a held `list`, a field written on a held plain class — notifies nobody, so the
+    /// ui keeps showing the old value until something unrelated recomposes it. The runtime refuses such a
+    /// value with a `TypeError`; this check reports it at the source.
+    ///
+    /// A value is deeply immutable when nothing reachable from it can change: the scalars, enum members, a
+    /// `tuple` or `frozenset` of immutable elements, a `frozen data class` or `NamedTuple` of immutable
+    /// fields, a type object, a callable, or one of the framework's own observables (`State`, `StateList`,
+    /// `StateDict`, `Derived`, `Ambient`).
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// from basedpython_ui import composable, state, state_list
+    ///
+    /// frozen data class Todo:
+    ///     title: str
+    ///
+    /// @composable
+    /// def App():
+    ///     let items = state([1, 2])           # error: `list[int]` cannot be held in state
+    ///     let names = state((1, 2))           # ok: a tuple of immutables
+    ///     let todos = state_list([Todo("a")]) # ok: an observable list of frozen records
+    /// ```
+    pub(crate) static MUTABLE_STATE_VALUE = {
+        summary: "detects a mutable value held in basedpython-ui state",
+        status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    ///
+    /// Checks for an in-place mutation written inside a `basedpython_ui` composable — in its body, in a
+    /// `once` content block written in it, or in a handler block, lambda or nested `def` written in it: a
+    /// mutating method call (`append`, `extend`, `insert`, `pop`, `remove`, `clear`, `sort`, `reverse`,
+    /// `update`, `setdefault`, `popitem`, `add`, `discard`, …) on a builtin mutable container, an in-place
+    /// operator (`+=`, `|=`, …) on one, a subscript store or delete on one, or an attribute store on an
+    /// instance of a class that is not frozen and not an observable.
+    ///
+    /// A container the same body creates itself — bound to a display, a comprehension or a constructor
+    /// call — is a fresh local, and mutating it is allowed.
+    ///
+    /// ## Why is this bad?
+    ///
+    /// A composition re-runs when an observable it read is written. A `list` or a plain object is not
+    /// observable: mutating it in place changes what the ui *should* show without telling the runtime,
+    /// so the change is not seen until something unrelated recomposes the scope. Mutate a `StateList` /
+    /// `StateDict`, or rebuild an immutable value and assign it to a `State`, and the change notifies.
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// from basedpython_ui import composable, state_list, Button
+    ///
+    /// @composable
+    /// def TodoList(items: list[str]):
+    ///     Button("add"):
+    ///         items.append("x")     # error: mutates `list[str]` in place
+    ///
+    /// @composable
+    /// def Observed():
+    ///     let items = state_list(["a"])
+    ///     Button("add"):
+    ///         items.append("x")     # ok: a `StateList` write notifies its readers
+    /// ```
+    pub(crate) static SILENT_MUTATION = {
+        summary: "detects an in-place mutation a basedpython-ui composition cannot observe",
+        status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    ///
+    /// Checks for a write to `basedpython_ui` state made while a composition is running: in a composable's
+    /// body or in a `once` content block written in it, an assignment to a `State`'s `.value` (plain or
+    /// augmented), a call to `State.set` / `State.update`, or a mutating call, subscript store or delete
+    /// on a `StateList` / `StateDict`.
+    ///
+    /// Writes made from a handler block, a lambda, a nested `def` or an effect block are not in
+    /// composition: those run later, in response to an event, and are the right place for them.
+    ///
+    /// ## Why is this bad?
+    ///
+    /// Composition is a pure description of the ui for the current state. A write made while composing
+    /// invalidates the very scope being composed (or one already composed this frame), which would loop
+    /// or show a frame that is half old and half new. The runtime raises `CompositionError` before
+    /// applying such a write; this check reports it at the source.
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// from basedpython_ui import composable, state, Button, Text
+    ///
+    /// @composable
+    /// def Counter():
+    ///     let count = state(0)
+    ///     count.value = 1           # error: written while `Counter` is composing
+    ///     Text(f"{count.value}")
+    ///     Button("+"):
+    ///         count.value += 1      # ok: a handler runs after composition
+    /// ```
+    pub(crate) static STATE_WRITE_IN_COMPOSITION = {
+        summary: "detects a basedpython-ui state write made while composing",
+        status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    ///
+    /// Checks for a `basedpython_ui` slot — `state`, `state_list`, `state_dict`, `derived`, `remember`,
+    /// `launched_effect`, `disposable_effect`, `side_effect` — created under a condition in a composable:
+    /// inside an `if`, `for`, `while`, `try` or `match`, inside a comprehension, or inside a block that is
+    /// not a `once` content block (a handler block, a lambda, a nested `def`).
+    ///
+    /// ## Why is this bad?
+    ///
+    /// A slot lives as long as its enclosing composition scope and is identified by its call site, so a
+    /// conditional slot is created when the condition first holds and disposed — its state lost, its
+    /// effect cancelled — as soon as it stops holding. That is rarely what the code means: state that
+    /// should outlive a condition belongs above it, and a slot created from a handler has no scope to live
+    /// in at all. The runtime keys slots by call site, so this is safe at runtime; the check makes the
+    /// lifetime visible.
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// from basedpython_ui import composable, state, Text
+    ///
+    /// @composable
+    /// def Profile(show: bool):
+    ///     if show:
+    ///         let clicks = state(0)   # warning: created and disposed as `show` changes
+    ///         Text(f"{clicks.value}")
+    ///
+    /// @composable
+    /// def Fixed(show: bool):
+    ///     let clicks = state(0)       # ok: lives as long as `Fixed`
+    ///     if show:
+    ///         Text(f"{clicks.value}")
+    /// ```
+    pub(crate) static CONDITIONAL_SLOT = {
+        summary: "detects a basedpython-ui slot created under a condition",
+        status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/content-block-control-flow.md")]
+    pub(crate) static CONTENT_BLOCK_CONTROL_FLOW = {
+        summary: "detects a `return` inside a nested `once` content block",
+        status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    ///
+    /// Checks for a parameter of a `basedpython_ui` composable whose declared type is not *stable*:
+    /// not deeply immutable, and not a read-only view of immutable elements (`list[out int]`).
+    ///
+    /// ## Why is this bad?
+    ///
+    /// A composable is skipped on recomposition only when every argument is stable and equal to the last
+    /// one. A `list`, `dict`, `set` or non-frozen class can be changed behind the composable's back, so the
+    /// runtime cannot compare it and never skips the scope: the composable re-runs on every recomposition
+    /// of its parent, however little changed. Prefer an immutable spelling (`tuple[int, ...]`, a
+    /// `frozen data class`) or an observable (`state_list`, `state_dict`).
+    ///
+    /// This is a warning about skipping alone: a mutable parameter that only a handler touches never
+    /// triggers a re-render, but does not make the composition stale on its own. Reading one while
+    /// composing is what does that, and is reported as an `unobservable-dependency`. A read-only view
+    /// (`list[out int]`) is stable for skipping — the runtime compares it structurally at recomposition —
+    /// but is still unobservable when read, so it is not the spelling to reach for.
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// from basedpython_ui import composable, StateList
+    ///
+    /// @composable
+    /// def TodoList(items: list[int]): ...        # warning: never skipped
+    ///
+    /// @composable
+    /// def Skippable(items: tuple[int, ...]): ...  # ok
+    ///
+    /// @composable
+    /// def Observed(items: StateList[int]): ...   # ok: an observable handle
+    /// ```
+    pub(crate) static UNSTABLE_PARAMETER = {
+        summary: "detects a composable parameter whose type is not stable",
+        status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    ///
+    /// Checks for a call to a `basedpython_ui` composable (a function decorated `@composable`) or to one
+    /// of the framework's widget builders (`Text`, `Button`, `Column`, …) from somewhere that is not a
+    /// composition: a function that is not itself a composable, a handler block, a lambda or a nested
+    /// `def`. A composable's body, the `once` content blocks and `local` blocks written in it, and the
+    /// `root` block of `run_app` / `compose_test` are compositions.
+    ///
+    /// ## Why is this bad?
+    ///
+    /// A composable opens a scope in the composition being built and a builder emits into it; neither has
+    /// anything to build into outside of one. The runtime raises `CompositionError` at the call; this
+    /// check reports it at the source.
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// from basedpython_ui import composable, run_app, Button, Text
+    ///
+    /// @composable
+    /// def Counter(): ...
+    ///
+    /// def helper():
+    ///     Counter()                 # error: `helper` is not a composable
+    ///
+    /// @composable
+    /// def App():
+    ///     Button("x"):
+    ///         Text("clicked")       # error: a handler runs after composition
+    ///
+    /// def main():
+    ///     run_app("app"):
+    ///         App()                 # ok: the root of the composition
+    /// ```
+    pub(crate) static COMPOSABLE_OUTSIDE_COMPOSITION = {
+        summary: "detects a composable or builder called outside a composition",
+        status: LintStatus::stable("0.0.1-alpha.40"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    ///
+    /// Checks for a read, made while a `basedpython_ui` composition runs, of a value it cannot observe:
+    /// a load of a parameter of the composable (a `context` parameter included), of a module global, or
+    /// of a local captured from an enclosing function, whose type is neither deeply immutable nor one of
+    /// the framework's observables (`State`, `StateList`, `StateDict`, `Derived`, `Ambient`).
+    ///
+    /// What runs while composing is the composable's body, the `once` content blocks and `local` blocks
+    /// written in it, and the lambda given to `derived(...)` / `remember(...)`. A handler block, a lambda,
+    /// a nested `def` or an effect block runs later, so a read there is not a dependency of the
+    /// composition. A name the composition binds itself — a local of the body or of a block, a `for`
+    /// target, a comprehension variable — is this run's own value and is not reported, whatever its
+    /// type; a `dynamic` value is exempt, as everywhere. A read-only view (`list[out str]`) is reported
+    /// like a plain `list`: it restricts this reader, not the other holders of the list.
+    ///
+    /// ## Why is this bad?
+    ///
+    /// A mutation of non-observable data is never a trigger: an immutable value cannot change, an
+    /// observable notifies its readers when it does, and a mutable value changes without telling anyone.
+    /// A composition that reads a mutable parameter or global therefore shows a stale ui after any change
+    /// to it — wherever that change is made: another module, a `.py` caller, a `dynamic` value, a
+    /// callback. `silent-mutation` reports the writes it can see; this check is what makes the guarantee
+    /// general, by keeping a composition from depending on such a value in the first place.
+    ///
+    /// Hold the value in state (`state_list`, `state_dict`), pass an immutable value (a `tuple`, a
+    /// `frozen data class`), or read it only in a handler.
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// from basedpython_ui import composable, state_list, Text
+    ///
+    /// @composable
+    /// def Names(items: list[str]):
+    ///     Text(str(len(items)))       # error: read while `Names` composes, but nothing observes it
+    ///
+    /// @composable
+    /// def Frozen(items: tuple[str, ...]):
+    ///     Text(str(len(items)))       # ok: a tuple cannot change
+    ///
+    /// @composable
+    /// def Held():
+    ///     let items = state_list(["a"])
+    ///     Text(str(len(items)))       # ok: a `StateList` notifies its readers
+    /// ```
+    pub(crate) static UNOBSERVABLE_DEPENDENCY = {
+        summary: "detects a basedpython-ui composition reading a value it cannot observe",
+        status: LintStatus::stable("0.0.1-alpha.40"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }
@@ -6052,6 +6443,48 @@ fn add_non_runtime_checkable_protocol_context<'db>(
             .message(format_args!("`{class_name}` declared here")),
     );
     diagnostic.sub(class_def_diagnostic);
+}
+
+/// basedpython: `A(...)` where `A`'s constructor is declared `private` and the
+/// call is not inside `A`'s own body.
+pub(crate) fn report_private_constructor<'db>(
+    context: &InferContext<'db, '_>,
+    call: &ast::ExprCall,
+    class: ClassType<'db>,
+    constructor: crate::types::visibility::PrivateConstructor<'db>,
+) {
+    let Some(builder) = context.report_lint(&PRIVATE_CONSTRUCTOR, call) else {
+        return;
+    };
+    let db = context.db();
+    let class_name = class.name(db);
+    let owner_name = constructor.owner.name(db);
+    // naming the owner is only informative for a subclass, which is being
+    // refused over a constructor it did not declare. the classes are compared
+    // by identity, not by name: a subclass is free to reuse its base's name,
+    // and then the two messages would read the same while meaning different
+    // things
+    let inherited = class.class_literal(db).as_static() != Some(constructor.owner);
+    let mut diagnostic = if inherited {
+        builder.into_diagnostic(format_args!(
+            "Cannot construct `{class_name}`: it inherits `{owner_name}`'s private constructor"
+        ))
+    } else {
+        builder.into_diagnostic(format_args!(
+            "Cannot construct `{class_name}`: its constructor is private"
+        ))
+    };
+
+    let mut declaration = SubDiagnostic::new(
+        SubDiagnosticSeverity::Info,
+        format_args!("Only code inside `{owner_name}` may construct it"),
+    );
+    declaration.annotate(
+        Annotation::secondary(constructor.function.spans(db).name).message(format_args!(
+            "`{owner_name}`'s constructor declared private here"
+        )),
+    );
+    diagnostic.sub(declaration);
 }
 
 pub(crate) fn report_attempted_protocol_instantiation(

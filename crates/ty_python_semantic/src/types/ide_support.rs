@@ -60,6 +60,8 @@ pub use stub_mapping::map_stub_definition;
 pub use unreachable_code::{UnreachableKind, UnreachableRange, unreachable_ranges};
 pub use unused_binding_support::{UnusedBinding, unused_bindings};
 
+pub use crate::types::state_invalidations::WriteSite;
+
 /// Get the primary definition kind for a name expression within a specific file.
 /// Returns the first definition kind that is reachable for this name in its scope.
 /// This is useful for IDE features like semantic tokens.
@@ -2815,6 +2817,176 @@ pub fn inferred_raises<'db>(
     (!raised.is_never()).then_some(raised)
 }
 
+/// basedpython-ui: one observable a function reads while composing, as the
+/// IDE shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateRead {
+    /// the place as it is written: the root name and the attribute path read
+    /// from it (`count`, `self.model.count`)
+    pub name: String,
+    /// where the root name is declared
+    pub declaration: FileRange,
+}
+
+/// basedpython-ui: the observables a function or a `derived` computation
+/// reads while composing.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InferredStateReads {
+    /// the reads, in declaration order of their roots
+    pub reads: Vec<StateRead>,
+    /// whether a callee could not be followed, so the set may be missing
+    /// something — shown as `…`
+    pub opaque: bool,
+}
+
+impl InferredStateReads {
+    fn from_reads(db: &dyn Db, reads: &crate::types::state_reads::StateReads<'_>) -> Self {
+        Self {
+            reads: reads
+                .places
+                .iter()
+                .map(|place| StateRead {
+                    name: place.display_name(),
+                    declaration: place.declaration(db),
+                })
+                .collect(),
+            opaque: reads.opaque,
+        }
+    }
+}
+
+/// basedpython-ui: the observables a call to `function` reads while
+/// composing, when it reads any.
+///
+/// A set with nothing in it but the opaque marker is shown for a composable
+/// alone: that its dependencies cannot be seen is worth saying of a
+/// composition, while a plain `def` that reaches a `dynamic` value — every
+/// `main` that starts an app does — would only be told what it already knows.
+///
+/// Resolving the set follows every call into its callee, so a body whose own
+/// effects are empty is answered without touching the call graph — which keeps
+/// the common case, a `def` that composes nothing, cheap.
+pub fn inferred_state_reads<'db>(
+    db: &'db dyn Db,
+    function: Type<'db>,
+) -> Option<InferredStateReads> {
+    let Type::FunctionLiteral(function) = function else {
+        return None;
+    };
+    let literal = function.literal(db);
+    if literal
+        .iter_overloads_and_implementation(db)
+        .all(|overload| crate::types::state_reads::body_state_read_effects(db, overload).is_empty())
+    {
+        return None;
+    }
+
+    let reads = crate::types::state_reads::function_state_reads(db, literal);
+    let shown = !reads.places.is_empty()
+        || (reads.opaque && crate::types::dedicated::basedpython_ui::is_composable(db, function));
+    shown.then(|| InferredStateReads::from_reads(db, &reads))
+}
+
+/// basedpython-ui: what the computation of a `derived(lambda: ...)` or
+/// `remember(lambda: ...)` call depends on — the observables the lambda's body
+/// reads, its callees followed. `None` for any other call, for a computation
+/// that is not written as a lambda, and when nothing is read.
+pub fn inferred_derived_dependencies(
+    model: &SemanticModel<'_>,
+    call: &ast::ExprCall,
+) -> Option<InferredStateReads> {
+    let db = model.db();
+    let callee = call.func.inferred_type(model)?;
+    if !matches!(
+        callee
+            .as_function_literal()
+            .and_then(|function| function.known(db)),
+        Some(KnownFunction::BasedpythonUiDerived | KnownFunction::BasedpythonUiRemember)
+    ) {
+        return None;
+    }
+    let ast::Expr::Lambda(lambda) = call.arguments.find_argument_value("compute", 0)? else {
+        return None;
+    };
+
+    let program_file = model.program_file();
+    let index = semantic_index(db, program_file);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let reads =
+        crate::types::state_reads::lambda_state_reads(db, program_file, index, &module, lambda);
+    (!reads.is_empty()).then(|| InferredStateReads::from_reads(db, &reads))
+}
+
+/// basedpython-ui: the composition scopes a state write invalidates, as the
+/// IDE shows them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InferredInvalidations {
+    /// the scopes, in declaration order with the write's own file first, each
+    /// named as the runtime's trace names it — the composable's name, `root`,
+    /// the name a `derived` is bound to — and navigable to its declaration
+    pub scopes: Vec<StateRead>,
+    /// whether a reader may have been missed — a caller or a reader of a
+    /// module-level slot in another file, a callee that cannot be followed —
+    /// shown as `…`
+    pub opaque: bool,
+    /// where the last write of the site is spelled, for placing the hint on
+    /// its line
+    pub anchor: TextRange,
+}
+
+/// basedpython-ui: the composition scopes the observable writes of `site`
+/// invalidate — the composables, root blocks and `derived` computations whose
+/// composition depends on what is written. `None` when the site writes no
+/// observable, and for a write made while composing, which is a diagnostic
+/// rather than something to trace.
+///
+/// An empty set is an answer: a write nobody observes is worth seeing.
+pub fn inferred_invalidations(
+    model: &SemanticModel<'_>,
+    site: WriteSite<'_>,
+) -> Option<InferredInvalidations> {
+    let db = model.db();
+    let invalidations =
+        crate::types::state_invalidations::site_invalidations(db, model.program_file(), site)?;
+    Some(InferredInvalidations {
+        scopes: invalidations
+            .scopes
+            .iter()
+            .map(|scope| StateRead {
+                name: scope.name.to_string(),
+                declaration: FileRange::new(scope.file(db), scope.declaration),
+            })
+            .collect(),
+        opaque: invalidations.opaque,
+        anchor: invalidations.anchor,
+    })
+}
+
+/// basedpython-ui: whether a composable parameter of type `ty` is *stable* —
+/// deeply immutable, or a read-only view of immutable elements — so that two
+/// equal arguments let the runtime skip the composable. `None` when nothing is
+/// known of the type, which says nothing about the parameter.
+pub fn parameter_stability<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Option<bool> {
+    if ty.is_unknown() {
+        return None;
+    }
+    Some(crate::types::immutability::is_stable_parameter_type(
+        db, env, ty,
+    ))
+}
+
+/// basedpython-ui: whether `function` is decorated with the framework's
+/// `@composable`.
+pub fn is_composable_function<'db>(db: &'db dyn Db, function: Type<'db>) -> bool {
+    function.as_function_literal().is_some_and(|function| {
+        crate::types::dedicated::basedpython_ui::is_composable(db, function)
+    })
+}
+
 /// basedpython: the variance ty infers for the type parameter named `name` of
 /// the generic `owner`, in its surface spelling (`out` / `in` / `in out`).
 ///
@@ -3094,10 +3266,8 @@ pub fn trailing_lambda_implicit_parameters<'db>(
     function: &ast::StmtFunctionDef,
 ) -> Vec<(&'static str, Option<Type<'db>>)> {
     let db = model.db();
-    let Some(callee) = function
-        .trailing_lambda_callee()
-        .and_then(|callee| callee.inferred_type(model))
-    else {
+    let index = semantic_index(db, db.program_file(model.file()));
+    let Some(callee) = crate::types::trailing_lambda::block_callee(db, index, function) else {
         return Vec::new();
     };
     // the block has an `it` parameter whatever its callback does, because the lambda the

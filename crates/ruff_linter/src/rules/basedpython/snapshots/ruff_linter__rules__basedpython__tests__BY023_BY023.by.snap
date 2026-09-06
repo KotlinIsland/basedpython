@@ -1,0 +1,314 @@
+---
+source: crates/ruff_linter/src/rules/basedpython/mod.rs
+---
+BY023 [*] `tuple[…]` can be written as `(…)`
+ --> BY023.by:3:8
+  |
+1 | from typing import TypeAlias
+2 |
+3 | point: tuple[int, int]
+  |        ^^^^^^^^^^^^^^^
+4 | single: tuple[int]
+5 | already_comma: tuple[int,]
+  |
+help: Replace with `(…)`
+  |
+2 |
+  - point: tuple[int, int]
+3 + point: (int, int)
+4 | single: tuple[int]
+  |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+ --> BY023.by:4:9
+  |
+3 | point: tuple[int, int]
+4 | single: tuple[int]
+  |         ^^^^^^^^^^
+5 | already_comma: tuple[int,]
+6 | unpacked: tuple[*Ts]
+  |
+help: Replace with `(…)`
+  |
+3 | point: tuple[int, int]
+  - single: tuple[int]
+4 + single: (int,)
+5 | already_comma: tuple[int,]
+  |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+ --> BY023.by:5:16
+  |
+3 | point: tuple[int, int]
+4 | single: tuple[int]
+5 | already_comma: tuple[int,]
+  |                ^^^^^^^^^^^
+6 | unpacked: tuple[*Ts]
+7 | after_a_prefix: tuple[int, *Ts]
+  |
+help: Replace with `(…)`
+  |
+4 | single: tuple[int]
+  - already_comma: tuple[int,]
+5 + already_comma: (int,)
+6 | unpacked: tuple[*Ts]
+  |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+ --> BY023.by:6:11
+  |
+4 | single: tuple[int]
+5 | already_comma: tuple[int,]
+6 | unpacked: tuple[*Ts]
+  |           ^^^^^^^^^^
+7 | after_a_prefix: tuple[int, *Ts]
+8 | nested: tuple[int, tuple[str, float]]
+  |
+help: Replace with `(…)`
+  |
+5 | already_comma: tuple[int,]
+  - unpacked: tuple[*Ts]
+6 + unpacked: (*Ts,)
+7 | after_a_prefix: tuple[int, *Ts]
+  |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+ --> BY023.by:7:17
+  |
+5 | already_comma: tuple[int,]
+6 | unpacked: tuple[*Ts]
+7 | after_a_prefix: tuple[int, *Ts]
+  |                 ^^^^^^^^^^^^^^^
+8 | nested: tuple[int, tuple[str, float]]
+9 | in_a_union: tuple[int, str] | None
+  |
+help: Replace with `(…)`
+  |
+6 | unpacked: tuple[*Ts]
+  - after_a_prefix: tuple[int, *Ts]
+7 + after_a_prefix: (int, *Ts)
+8 | nested: tuple[int, tuple[str, float]]
+  |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:8:9
+   |
+ 6 | unpacked: tuple[*Ts]
+ 7 | after_a_prefix: tuple[int, *Ts]
+ 8 | nested: tuple[int, tuple[str, float]]
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 9 | in_a_union: tuple[int, str] | None
+10 | in_a_subscript: list[tuple[int, str]]
+   |
+help: Replace with `(…)`
+  |
+7 | after_a_prefix: tuple[int, *Ts]
+  - nested: tuple[int, tuple[str, float]]
+8 + nested: (int, tuple[str, float])
+9 | in_a_union: tuple[int, str] | None
+  |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:8:20
+   |
+ 6 | unpacked: tuple[*Ts]
+ 7 | after_a_prefix: tuple[int, *Ts]
+ 8 | nested: tuple[int, tuple[str, float]]
+   |                    ^^^^^^^^^^^^^^^^^
+ 9 | in_a_union: tuple[int, str] | None
+10 | in_a_subscript: list[tuple[int, str]]
+   |
+help: Replace with `(…)`
+  |
+7 | after_a_prefix: tuple[int, *Ts]
+  - nested: tuple[int, tuple[str, float]]
+8 + nested: tuple[int, (str, float)]
+9 | in_a_union: tuple[int, str] | None
+  |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:9:13
+   |
+ 7 | after_a_prefix: tuple[int, *Ts]
+ 8 | nested: tuple[int, tuple[str, float]]
+ 9 | in_a_union: tuple[int, str] | None
+   |             ^^^^^^^^^^^^^^^
+10 | in_a_subscript: list[tuple[int, str]]
+   |
+help: Replace with `(…)`
+   |
+8  | nested: tuple[int, tuple[str, float]]
+   - in_a_union: tuple[int, str] | None
+9  + in_a_union: (int, str) | None
+10 | in_a_subscript: list[tuple[int, str]]
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:10:22
+   |
+ 8 | nested: tuple[int, tuple[str, float]]
+ 9 | in_a_union: tuple[int, str] | None
+10 | in_a_subscript: list[tuple[int, str]]
+   |                      ^^^^^^^^^^^^^^^
+11 |
+12 | multiline: tuple[
+   |
+help: Replace with `(…)`
+   |
+9  | in_a_union: tuple[int, str] | None
+   - in_a_subscript: list[tuple[int, str]]
+10 + in_a_subscript: list[(int, str)]
+11 |
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:12:12
+   |
+10 |   in_a_subscript: list[tuple[int, str]]
+11 |
+12 |   multiline: tuple[
+   |  ____________^
+13 | |     int,  # a comment among the elements survives
+14 | |     str,
+15 | | ]
+   | |_^
+help: Replace with `(…)`
+   |
+11 |
+   - multiline: tuple[
+12 + multiline: (
+13 |     int,  # a comment among the elements survives
+14 |     str,
+   - ]
+15 + )
+16 |
+   |
+note: This is an unsafe fix and may change runtime behavior
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:18:10
+   |
+18 | def f(x: tuple[int, str]) -> tuple[bool]: ...
+   |          ^^^^^^^^^^^^^^^
+help: Replace with `(…)`
+   |
+17 |
+   - def f(x: tuple[int, str]) -> tuple[bool]: ...
+18 + def f(x: (int, str)) -> tuple[bool]: ...
+19 |
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:18:30
+   |
+18 | def f(x: tuple[int, str]) -> tuple[bool]: ...
+   |                              ^^^^^^^^^^^
+help: Replace with `(…)`
+   |
+17 |
+   - def f(x: tuple[int, str]) -> tuple[bool]: ...
+18 + def f(x: tuple[int, str]) -> (bool,): ...
+19 |
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:21:10
+   |
+21 | def g[T: tuple[int, str], U = tuple[str]](y: T) -> U: ...
+   |          ^^^^^^^^^^^^^^^
+help: Replace with `(…)`
+   |
+20 |
+   - def g[T: tuple[int, str], U = tuple[str]](y: T) -> U: ...
+21 + def g[T: (int, str), U = tuple[str]](y: T) -> U: ...
+22 |
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:21:31
+   |
+21 | def g[T: tuple[int, str], U = tuple[str]](y: T) -> U: ...
+   |                               ^^^^^^^^^^
+help: Replace with `(…)`
+   |
+20 |
+   - def g[T: tuple[int, str], U = tuple[str]](y: T) -> U: ...
+21 + def g[T: tuple[int, str], U = (str,)](y: T) -> U: ...
+22 |
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:24:14
+   |
+24 | type Alias = tuple[int, str]
+   |              ^^^^^^^^^^^^^^^
+25 | Legacy: TypeAlias = tuple[int, str]
+   |
+help: Replace with `(…)`
+   |
+23 |
+   - type Alias = tuple[int, str]
+24 + type Alias = (int, str)
+25 | Legacy: TypeAlias = tuple[int, str]
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:25:21
+   |
+24 | type Alias = tuple[int, str]
+25 | Legacy: TypeAlias = tuple[int, str]
+   |                     ^^^^^^^^^^^^^^^
+help: Replace with `(…)`
+   |
+24 | type Alias = tuple[int, str]
+   - Legacy: TypeAlias = tuple[int, str]
+25 + Legacy: TypeAlias = (int, str)
+26 |
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:28:12
+   |
+28 | class C[T: tuple[int, str]](tuple[str, int]):
+   |            ^^^^^^^^^^^^^^^
+29 |     field: tuple[int, str]
+   |
+help: Replace with `(…)`
+   |
+27 |
+   - class C[T: tuple[int, str]](tuple[str, int]):
+28 + class C[T: (int, str)](tuple[str, int]):
+29 |     field: tuple[int, str]
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:29:12
+   |
+28 | class C[T: tuple[int, str]](tuple[str, int]):
+29 |     field: tuple[int, str]
+   |            ^^^^^^^^^^^^^^^
+help: Replace with `(…)`
+   |
+28 | class C[T: tuple[int, str]](tuple[str, int]):
+   -     field: tuple[int, str]
+29 +     field: (int, str)
+30 |
+   |
+
+BY023 [*] `tuple[…]` can be written as `(…)`
+  --> BY023.by:37:23
+   |
+35 | # only the outer tuple here: the element list is rewritable, and the homogeneous
+36 | # tuple unpacked into it stays as it is
+37 | unpacked_homogeneous: tuple[int, *tuple[str, ...]]
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+38 |
+39 | # `tuple[()]` is the empty tuple, which basedpython does spell `()` — the slice is
+   |
+help: Replace with `(…)`
+   |
+36 | # tuple unpacked into it stays as it is
+   - unpacked_homogeneous: tuple[int, *tuple[str, ...]]
+37 + unpacked_homogeneous: (int, *tuple[str, ...])
+38 |
+   |

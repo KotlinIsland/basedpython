@@ -6,13 +6,13 @@ use crate::{
         SubclassOfType, Type, TypeContext, TypeVarKind, UnionType,
         class::ClassLiteral,
         constraints::ConstraintSetBuilder,
-        dedicated::pytest,
+        dedicated::{pytest, role::FunctionFrameworkRole},
         diagnostic::{
-            ABSTRACT_AND_FINAL_METHOD, FINAL_ON_NON_METHOD, INVALID_FIXTURE_TYPE,
-            INVALID_PARAMETER_DEFAULT, INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM,
-            REDUNDANT_RETURN_ANNOTATION, REIFIED_CLASSMETHOD, TRAILING_LAMBDA_PARAMETERS,
-            TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE, UNSOUND_RETURN_STATEMENT,
-            USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
+            ABSTRACT_AND_FINAL_METHOD, FINAL_ON_NON_METHOD, INEFFECTIVE_PRIVATE,
+            INVALID_FIXTURE_TYPE, INVALID_PARAMETER_DEFAULT, INVALID_PARAMETRIZE,
+            INVALID_PARAMSPEC, INVALID_TYPE_FORM, REDUNDANT_RETURN_ANNOTATION, REIFIED_CLASSMETHOD,
+            TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE,
+            UNSOUND_RETURN_STATEMENT, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
             is_invalid_typed_dict_literal, report_bool_as_int, report_implicit_return_type,
             report_invalid_generator_function_return_type, report_invalid_return_type,
             report_shadowed_type_variable, report_unsound_return_statement,
@@ -35,13 +35,14 @@ use crate::{
             infer_function_default_types, infer_statement_types, nearest_enclosing_function,
             original_class_type,
         },
-        infer_definition_types, infer_expression_types,
+        infer_definition_types,
         inferred_signature::{can_implicitly_return_none, return_type_from_body},
         lifetimes::InheritedBorrow,
         relation::TypeRelation,
         signatures::{ReturnCallableTypeVarScope, function_signature_expression_type},
         trailing_lambda::{
-            UnbindableParameters, trailing_lambda_it_borrow, trailing_lambda_it_type,
+            BlockCallee, UnbindableParameters, block_callee, trailing_lambda_it_borrow,
+            trailing_lambda_it_type,
         },
         tuple::{TupleSpecBuilder, TupleType},
         typed_dict::extract_unpacked_typed_dict_keys_from_kwargs_annotation,
@@ -669,7 +670,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let Some(function) = self.current_function_type() else {
             return;
         };
-        if function_framework_role(db, function).is_none() {
+        if !function_framework_role(db, function).is_some_and(FunctionFrameworkRole::is_pytest) {
             return;
         }
 
@@ -856,6 +857,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let mut function_decorators = FunctionDecorators::empty();
         let mut dataclass_transformer_params = None;
         let mut final_decorator = None;
+        let mut private_modifier = None;
 
         for decorator in decorator_list {
             // basedpython: a trailing lambda block's synthetic decorator holds the
@@ -888,6 +890,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             {
                 if n.id.as_str() == "private" {
                     function_decorators |= FunctionDecorators::PRIVATE;
+                    private_modifier = Some(decorator);
                 }
                 continue;
             }
@@ -974,6 +977,32 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 "`@final` cannot be applied to non-method function `{name}`",
             ));
             diagnostic.info("`@final` is only meaningful on methods and classes");
+        }
+
+        // basedpython: a `private` the lowering cannot act on hides nothing. it is
+        // reported here rather than left to the lowering, which can only silently
+        // do nothing with it
+        if let Some(private_modifier) = private_modifier
+            && !ruff_python_stdlib::basedpython::private_mangles(&name.id)
+            && name.id != "__init__"
+            && self
+                .index
+                .scope(self.scope().file_scope_id(db))
+                .kind()
+                .is_class()
+            && let Some(builder) = self
+                .context
+                .report_lint(&INEFFECTIVE_PRIVATE, private_modifier)
+        {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`private` has no effect on `{name}`",
+                name = name.id
+            ));
+            diagnostic.info(
+                "`private` renames a member to `__<name>` so python's name-mangling hides it, \
+                 and python mangles only a name with at most one trailing underscore",
+            );
+            diagnostic.info("`init` is the one dunder `private` says something about");
         }
 
         // basedpython: a classmethod cannot have reified type parameters — the
@@ -1355,7 +1384,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let previous_typevar_binding_context =
             self.typevar_binding_context.replace(binding_context);
         self.infer_function_signature_annotations(function, binding_context);
-        self.infer_raises_clause(function);
         self.typevar_binding_context = previous_typevar_binding_context;
     }
 
@@ -1936,15 +1964,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         function.is_trailing_lambda.then_some(function)
     }
 
-    /// basedpython: the type of the expression a trailing lambda block is
-    /// attached to, read from its standalone-expression inference (registered by
-    /// the semantic index builder — independent of the enclosing definition's
-    /// inference, so no cycle)
-    fn trailing_lambda_callee_type(&self, function: &ast::StmtFunctionDef) -> Option<Type<'db>> {
-        let callee = function.trailing_lambda_callee()?;
-        let expression = self.index.try_expression(callee)?;
-        infer_expression_types(self.db(), expression, TypeContext::default())
-            .try_expression_type(callee)
+    /// basedpython: the callee a trailing lambda block is attached to, with what
+    /// the block's call solves for it — read from the standalone-expression
+    /// inferences the semantic index builder registers for the callee and the
+    /// written arguments (independent of the enclosing definition's inference,
+    /// so no cycle)
+    fn trailing_lambda_block_callee(
+        &self,
+        function: &ast::StmtFunctionDef,
+    ) -> Option<BlockCallee<'db>> {
+        block_callee(self.db(), self.index, function)
     }
 
     /// basedpython: the type of a trailing lambda's implicit `it` parameter.
@@ -1954,7 +1983,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         &self,
         function: &ast::StmtFunctionDef,
     ) -> Option<Type<'db>> {
-        trailing_lambda_it_type(self.db(), self.trailing_lambda_callee_type(function)?)
+        trailing_lambda_it_type(self.db(), self.trailing_lambda_block_callee(function)?)
     }
 
     /// basedpython: the borrow a trailing-lambda block's implicit `it` inherits
@@ -1974,10 +2003,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
         let db = self.db();
         let callee = function.trailing_lambda_callee()?;
-        let expression = self.index.try_expression(callee)?;
-        let callee_ty = infer_expression_types(db, expression, TypeContext::default())
-            .try_expression_type(callee)?;
-        let borrow = trailing_lambda_it_borrow(db, callee_ty);
+        let borrow = trailing_lambda_it_borrow(db, self.trailing_lambda_block_callee(function)?);
         if !borrow.is_borrow() {
             return None;
         }
@@ -1997,9 +2023,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// parameter `once` — the block then runs exactly once (`with`-like). Anything
     /// unresolvable is treated as not-`once` (the restricted default).
     fn trailing_lambda_callee_is_once(&self, function: &ast::StmtFunctionDef) -> bool {
-        self.trailing_lambda_callee_type(function)
-            .is_some_and(|callee_ty| {
-                crate::types::trailing_lambda::callee_callback_is_once(self.db(), callee_ty)
+        self.trailing_lambda_block_callee(function)
+            .is_some_and(|callee| {
+                crate::types::trailing_lambda::callee_callback_is_once(self.db(), callee.ty)
             })
     }
 
@@ -2032,7 +2058,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let Some(callee) = function.trailing_lambda_callee() else {
             return;
         };
-        let Some(callee_ty) = self.trailing_lambda_callee_type(function) else {
+        let Some(callee_ty) = self.trailing_lambda_block_callee(function) else {
             return;
         };
         let Some(unbindable) =
@@ -2068,7 +2094,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let Some(callee) = function.trailing_lambda_callee() else {
             return;
         };
-        let Some(callee_ty) = self.trailing_lambda_callee_type(function) else {
+        let Some(callee_ty) = self.trailing_lambda_block_callee(function) else {
             return;
         };
         let Some(return_ty) =

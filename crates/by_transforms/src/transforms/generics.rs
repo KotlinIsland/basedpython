@@ -52,6 +52,11 @@ pub(crate) struct GenericPolyfill<'src> {
     /// alias value is subsumed by this pass's whole-statement replacement, so
     /// the rename has to be reapplied there
     private_aliases: HashMap<String, String>,
+    /// the `T`→`_T` maps of the type-parameter lists this pass is currently inside,
+    /// outermost first. a bound or default may name a parameter of an enclosing list
+    /// (`class Owner[T]: def narrow[U: T]`), and that name is mangled by the enclosing
+    /// list, not by the one being processed
+    enclosing_renames: Vec<HashMap<String, String>>,
     /// `(range, rendered)` for every symbolic fold in the module. A fold inside a
     /// statement this pass replaces wholesale is dropped unless spliced in here
     symbolic_substitutions: Vec<(TextRange, String)>,
@@ -158,6 +163,7 @@ impl<'src> GenericPolyfill<'src> {
             parameters_targets: HashSet::new(),
             needed_imports_any: false,
             generic_class_renames: HashMap::new(),
+            enclosing_renames: Vec::new(),
             private_aliases: HashMap::new(),
             symbolic_substitutions,
             pending_edits,
@@ -375,6 +381,16 @@ impl<'src> GenericPolyfill<'src> {
         let mut param_names: Vec<String> = Vec::new();
         let mut defs: Vec<String> = Vec::new();
         let mut renames: HashMap<String, String> = HashMap::new();
+        // a bound or default may name a type parameter that is already in scope — an earlier
+        // entry in this list, or one of an enclosing list. those names are mangled, so the text
+        // spliced into `bound=` / `default=` has to be mangled with them or the emitted module
+        // raises `NameError` on import. an inner list shadows an outer one, and this list's own
+        // entries are added as they are processed, so a bound only ever sees names declared
+        // before it
+        let mut visible: HashMap<String, String> = HashMap::new();
+        for enclosing in &self.enclosing_renames {
+            visible.extend(enclosing.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
 
         for param in params {
             match param {
@@ -388,6 +404,7 @@ impl<'src> GenericPolyfill<'src> {
                     {
                         let mangled = self.unique_typevar_name(name, "ParamSpec");
                         renames.insert(name.to_owned(), mangled.clone());
+                        visible.insert(name.to_owned(), mangled.clone());
                         defs.push(format!("{mangled} = ParamSpec(\"{mangled}\")"));
                         self.needed_imports.paramspec = true;
                         param_names.push(mangled.clone());
@@ -415,7 +432,7 @@ impl<'src> GenericPolyfill<'src> {
                                 other => self.src(other.range()).to_owned(),
                             };
                             if !inner.is_empty() {
-                                extra_args.push(inner);
+                                extra_args.push(apply_renames_to_rendered(&inner, &visible));
                             }
                         } else {
                             // basedpython parameter-shape tuple bound — lower to
@@ -453,7 +470,10 @@ impl<'src> GenericPolyfill<'src> {
                                 )
                                 .unwrap_or_else(|| self.src(bound.range()).to_owned())
                             };
-                            extra_args.push(format!("bound={bound_src}"));
+                            extra_args.push(format!(
+                                "bound={}",
+                                apply_renames_to_rendered(&bound_src, &visible)
+                            ));
                         }
                     }
 
@@ -469,7 +489,10 @@ impl<'src> GenericPolyfill<'src> {
                         if self.config.min_version < PythonVersion::PY313 {
                             self.needed_imports.typevar_needs_ext = true;
                         }
-                        extra_args.push(format!("default={default_src}"));
+                        extra_args.push(format!(
+                            "default={}",
+                            apply_renames_to_rendered(&default_src, &visible)
+                        ));
                     }
 
                     // basedpython variance keywords: forward `out`/`in`/`in out`
@@ -496,6 +519,7 @@ impl<'src> GenericPolyfill<'src> {
                     let signature_args = extra_args.join(", ");
                     let mangled = self.unique_typevar_name(name, &signature_args);
                     renames.insert(name.to_owned(), mangled.clone());
+                    visible.insert(name.to_owned(), mangled.clone());
                     let mut args: Vec<String> = vec![format!("\"{mangled}\"")];
                     args.extend(extra_args);
                     let def = format!("{mangled} = TypeVar({})", args.join(", "));
@@ -510,6 +534,7 @@ impl<'src> GenericPolyfill<'src> {
                     let name = tvt.name.id.as_str();
                     let mangled = self.unique_typevar_name(name, "TypeVarTuple");
                     renames.insert(name.to_owned(), mangled.clone());
+                    visible.insert(name.to_owned(), mangled.clone());
                     defs.push(format!("{mangled} = TypeVarTuple(\"{mangled}\")"));
                     self.needed_imports.typevar_tuple = true;
                     self.needed_imports.unpack = true;
@@ -529,6 +554,7 @@ impl<'src> GenericPolyfill<'src> {
                     let name = ps.name.id.as_str();
                     let mangled = self.unique_typevar_name(name, "ParamSpec");
                     renames.insert(name.to_owned(), mangled.clone());
+                    visible.insert(name.to_owned(), mangled.clone());
                     defs.push(format!("{mangled} = ParamSpec(\"{mangled}\")"));
                     self.needed_imports.paramspec = true;
                     param_names.push(mangled.clone());
@@ -609,13 +635,13 @@ impl<'src> GenericPolyfill<'src> {
         }
     }
 
-    fn process_class(&mut self, class: &StmtClassDef) {
+    fn process_class(&mut self, class: &StmtClassDef) -> HashMap<String, String> {
         let Some(tp) = &class.type_params else {
             // a based-enum variant lowers to a module-level subclass of the enum
             // with no type params of its own; rename the enum's params in its
             // field annotations using the enum's recorded map
             self.rename_variant_of_generic_enum(class);
-            return;
+            return HashMap::new();
         };
         if has_parameters_bound(&tp.type_params) {
             self.parameters_targets
@@ -635,7 +661,7 @@ impl<'src> GenericPolyfill<'src> {
                     tp.range().end(),
                 )));
             }
-            return;
+            return HashMap::new();
         }
 
         let ProcessedTypeParams {
@@ -712,6 +738,7 @@ impl<'src> GenericPolyfill<'src> {
             rename_in_stmt(stmt, &rename_map, &mut self.edits);
         }
         self.reconcile_pending(&rename_map, mark);
+        rename_map
     }
 
     /// Rename a generic enum's type params in a module-level variant subclass.
@@ -732,14 +759,14 @@ impl<'src> GenericPolyfill<'src> {
         }
     }
 
-    fn process_function(&mut self, func: &StmtFunctionDef) {
+    fn process_function(&mut self, func: &StmtFunctionDef) -> HashMap<String, String> {
         let Some(tp) = &func.type_params else {
-            return;
+            return HashMap::new();
         };
         // basedpython: a `type def` is erased by its own pass, so polyfilling its
         // type parameters would leave an orphan `TypeVar` behind
         if ruff_python_ast::helpers::is_type_def(func) {
-            return;
+            return HashMap::new();
         }
         if has_parameters_bound(&tp.type_params) {
             self.parameters_targets
@@ -748,7 +775,7 @@ impl<'src> GenericPolyfill<'src> {
         // PEP 695 function type params are native syntax in 3.12+ (3.13+ with defaults)
         if self.supports_native_type_params(&tp.type_params) {
             self.lower_type_param_bounds(&tp.type_params);
-            return;
+            return HashMap::new();
         }
 
         let ProcessedTypeParams {
@@ -800,6 +827,7 @@ impl<'src> GenericPolyfill<'src> {
             rename_in_stmt(stmt, &rename_map, &mut self.edits);
         }
         self.reconcile_pending(&rename_map, mark);
+        rename_map
     }
 
     fn process_type_alias(&mut self, alias: &StmtTypeAlias) {
@@ -1013,16 +1041,25 @@ impl GenericPolyfill<'_> {
 
 impl<'ast> Visitor<'ast> for GenericPolyfill<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        match stmt {
-            Stmt::ClassDef(class) => self.process_class(class),
-            Stmt::FunctionDef(func) => self.process_function(func),
+        // a nested type-parameter list can name a parameter of an enclosing one in its bounds
+        // and defaults, and that name carries the enclosing list's mangling, so the maps stay
+        // on a stack for the length of the walk through the body that declared them
+        let scoped_renames = match stmt {
+            Stmt::ClassDef(class) => Some(self.process_class(class)),
+            Stmt::FunctionDef(func) => Some(self.process_function(func)),
             Stmt::TypeAlias(alias) => {
                 self.process_type_alias(alias);
                 return; // don't recurse into the alias value
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(renames) = scoped_renames {
+            self.enclosing_renames.push(renames);
+            walk_stmt(self, stmt);
+            self.enclosing_renames.pop();
+        } else {
+            walk_stmt(self, stmt);
         }
-        walk_stmt(self, stmt);
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
@@ -1511,6 +1548,58 @@ mod tests {
                 from typing_extensions import TypeVar
                 _T = TypeVar(\"_T\", bound=Literal[1, 2], default=Literal[1, 2])
                 class A(Generic[_T]): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn bound_naming_an_earlier_type_parameter() {
+        // the name a bound refers to is mangled by the list that declares it, so the text
+        // spliced into `bound=` has to be mangled too — an unrenamed `T` here is a `NameError`
+        // when the emitted module is imported, because the `TypeVar` call evaluates its bound
+        check(
+            indoc! {"
+                def f[T, R: T](t: T, r: R) -> None: ...
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _T = TypeVar(\"_T\")
+                _R = TypeVar(\"_R\", bound=_T)
+                def f(t: _T, r: _R) -> None: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn default_naming_an_earlier_type_parameter() {
+        check(
+            indoc! {"
+                def f[T, R = T](t: T, r: R) -> None: ...
+            "},
+            indoc! {"
+                from typing_extensions import TypeVar
+                _T = TypeVar(\"_T\")
+                _R = TypeVar(\"_R\", default=_T)
+                def f(t: _T, r: _R) -> None: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn bound_naming_an_enclosing_type_parameter() {
+        // `T` belongs to the class's list, so the method's own list does not mangle it; the
+        // enclosing list's map has to reach the method's `TypeVar` call
+        check(
+            indoc! {"
+                class Owner[T]:
+                    def narrow[U: T](self, u: U) -> None: ...
+            "},
+            indoc! {"
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\")
+                class Owner(Generic[_T]):
+                    _U = TypeVar(\"_U\", bound=_T)
+                    def narrow(self, u: _U) -> None: ...
             "},
         );
     }

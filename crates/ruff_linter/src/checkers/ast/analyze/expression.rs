@@ -32,6 +32,9 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
             if checker.is_rule_enabled(Rule::ManualTypeofAnnotation) {
                 basedpython::rules::manual_typeof_annotation(checker, subscript);
             }
+            if checker.is_rule_enabled(Rule::ManualTupleAnnotation) {
+                basedpython::rules::manual_tuple_annotation(checker, subscript);
+            }
             // Ex) Optional[...], Union[...]
             if checker.any_rule_enabled(&[
                 Rule::FutureRewritableTypeAnnotation,

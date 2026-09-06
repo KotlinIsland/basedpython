@@ -241,6 +241,16 @@ fn clean_mdtest_blocks_run() {
         .output()
         .is_ok_and(|o| o.status.success());
 
+    // the basedpython-ui suite needs the framework installed to execute: its
+    // blocks import `basedpython_ui`, and the mocks the mdtests declare live in
+    // the checker's own file system rather than on disk. skipped exactly like
+    // the other frameworks; run them locally against an interpreter that has
+    // basedpython_ui to enforce the contract
+    let has_basedpython_ui = Command::new(&python)
+        .args(["-c", "import basedpython_ui"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
     // `frozendict` is a 3.15 builtin, so on the 3.13 floor this harness targets
     // its blocks cannot run at all. skipped exactly like a missing third-party
     // dependency; run them locally against a 3.15 interpreter to enforce the
@@ -271,12 +281,36 @@ fn clean_mdtest_blocks_run() {
     // work can be spread across a pool of workers rather than run serially. each
     // block is an independent `by transpile` + python subprocess pair, so the
     // harness is dominated by process spawn latency and parallelises cleanly.
+    //
+    // a block naming a module this interpreter does not have is dropped here rather
+    // than after transpiling it. the checks below still have to run, because the
+    // transpiler can *introduce* one of these — lowering `float` pulls in
+    // `ty_extensions` — but it never drops an import the source wrote, so a source
+    // mention is a subset of what those checks would catch. transpiling one only to
+    // throw the result away costs a `by` spawn, which reads typeshed at startup and
+    // is the single most expensive thing this harness does per block
+    let unavailable: Vec<&str> = [
+        (!has_typing_extensions).then_some("typing_extensions"),
+        (!has_frozendict).then_some("frozendict"),
+        (!has_pydantic).then_some("pydantic"),
+        (!has_sqlalchemy).then_some("sqlalchemy"),
+        (!has_pytest).then_some("pytest"),
+        (!has_basedpython_ui).then_some("basedpython_ui"),
+        Some("ty_extensions"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
     let mut items: Vec<(String, usize, String)> = Vec::new();
     for file in &files {
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
         let markdown = fs::read_to_string(file).expect("read mdtest");
         for (i, (block, multi_file)) in by_blocks(&markdown).into_iter().enumerate() {
             if has_expected_diagnostics(&block) || multi_file {
+                continue;
+            }
+            if unavailable.iter().any(|module| block.contains(module)) {
                 continue;
             }
             items.push((name.clone(), i, block));
@@ -322,6 +356,16 @@ fn clean_mdtest_blocks_run() {
                             continue;
                         }
                     };
+                    // `ty_extensions` is a checker-only surface: the predicates
+                    // a block asserts with it (`static_assert`,
+                    // `is_deeply_immutable`) are answered during checking and
+                    // there is no runtime module behind them, on any
+                    // interpreter. such a block has no runtime behaviour to
+                    // diverge, so it is skipped outright rather than gated on a
+                    // dependency that could never be installed
+                    if transpiled.contains("ty_extensions") {
+                        continue;
+                    }
                     if !has_typing_extensions && transpiled.contains("typing_extensions") {
                         continue;
                     }
@@ -335,6 +379,9 @@ fn clean_mdtest_blocks_run() {
                         continue;
                     }
                     if !has_pytest && transpiled.contains("pytest") {
+                        continue;
+                    }
+                    if !has_basedpython_ui && transpiled.contains("basedpython_ui") {
                         continue;
                     }
                     let py = tmp.path().join(format!(

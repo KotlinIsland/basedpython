@@ -1098,16 +1098,15 @@ def constrained[T: (int, str)](x: T):
 
 ### Bounds and constraints
 
-A typevar's bounds and constraints cannot be generic, cyclic or otherwise:
+A bound may name a typevar that precedes it, but not itself — a typevar is not in scope inside its
+own bound, so nothing would ground the recursion. Constraints may not name a typevar at all.
 
 ```py
 from typing import Any
 
-# error: [invalid-type-variable-bound]
 def f[S, T: list[S]](x: S, y: T) -> S | T:
     return x or y
 
-# error: [invalid-type-variable-bound]
 class C[S, T: list[S]]:
     x: S
     y: T
@@ -1188,7 +1187,7 @@ reveal_type(C[int]().y)  # revealed: int
 class D[T = T]:
     x: T
 
-reveal_type(D().x)  # revealed: Unknown
+reveal_type(D().x)  # revealed: Never
 ```
 
 ## basedpython: type mappings

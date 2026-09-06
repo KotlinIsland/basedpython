@@ -575,10 +575,12 @@ class D(Generic[DefaultT]): ...
 reveal_type(D())  # revealed: D[int]
 ```
 
-If a typevar does not provide a default, we use `Unknown`:
+A typevar with no default and nothing to infer from is left unsolved. Under the fork's
+`precise-unsolved-typevars` that is `Never` — the instance holds nothing — rather than python's
+gradual `Unknown`:
 
 ```py
-reveal_type(C())  # revealed: C[Unknown]
+reveal_type(C())  # revealed: C[Never]
 ```
 
 ## Inferring generic class parameters from constructors
@@ -950,7 +952,8 @@ reveal_type(generic_context(into_regular_callable(C)))
 
 reveal_type(C("string"))  # revealed: C[str]
 reveal_type(C(b"bytes"))  # revealed: C[bytes]
-reveal_type(C(12))  # revealed: C[Unknown]
+# the matched overload's `x: int` parameter says nothing about `T`, so it is left unsolved
+reveal_type(C(12))  # revealed: C[Never]
 
 C[str]("string")
 C[str](b"bytes")  # error: [no-matching-overload]
@@ -1022,7 +1025,7 @@ reveal_type(generic_context(C))
 # revealed: ty_extensions._internal.GenericContext[T@C, U@C]
 reveal_type(generic_context(into_regular_callable(C)))
 
-reveal_type(C())  # revealed: C[Unknown, Unknown]
+reveal_type(C())  # revealed: C[Never, Never]
 
 class D(Generic[T, U]):
     def __init__(self) -> None: ...
@@ -1032,7 +1035,7 @@ reveal_type(generic_context(D))
 # revealed: ty_extensions._internal.GenericContext[T@D, U@D]
 reveal_type(generic_context(into_regular_callable(D)))
 
-reveal_type(D())  # revealed: D[Unknown, Unknown]
+reveal_type(D())  # revealed: D[Never, Never]
 ```
 
 ## Generic subclass

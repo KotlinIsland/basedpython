@@ -30,17 +30,17 @@ use ruff_python_ast::visitor::{Visitor, walk_expr};
 use ruff_python_ast::{self as ast, Expr, ExprContext, ExprName, ParameterBorrow, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
-use ty_python_core::SemanticIndex;
 use ty_python_core::scope::{FileScopeId, NodeWithScopeKind};
+use ty_python_core::{SemanticIndex, semantic_index};
 
 use crate::Db;
 
-use super::Type;
 use super::context::InferContext;
 use super::diagnostic::{
     ESCAPING_LOCAL, ESCAPING_LOOP_VARIABLE, INVALID_ASSIGNMENT, ONCE_CALLED_TWICE, ONCE_NOT_CALLED,
     TRAILING_LAMBDA_CONTROL_FLOW,
 };
+use super::{Type, TypeContext, infer_expression_types};
 
 /// basedpython: where a parameter's borrow was declared, and how the diagnostic
 /// should describe that declaration.
@@ -1087,11 +1087,18 @@ fn walk_for_blocks<'db, 'ast, F>(
                 walk_for_blocks(context, &while_.body, &assigned, true, callee_type);
                 walk_for_blocks(context, &while_.orelse, loop_assigned, in_loop, callee_type);
             }
-            // a trailing-lambda block is the case we check; its own body is a
-            // separate scope, so we do not descend into it here
+            // a trailing-lambda block is the case we check. its body is a scope
+            // of its own — but a `once` block runs inline, exactly once, so a
+            // block nested inside it sits inside the loop as much as the `once`
+            // block does, and its own callee decides whether it is confined.
+            // (a non-borrow block already reports every capture in its body,
+            // nested blocks included, so only a `once` one is entered)
             Stmt::FunctionDef(func) if func.is_trailing_lambda => {
                 if in_loop {
                     check_block_capture(context, func, loop_assigned, callee_type);
+                    if block_callee_is_once(context, func, callee_type) {
+                        walk_for_blocks(context, &func.body, loop_assigned, in_loop, callee_type);
+                    }
                 }
             }
             // an ordinary nested function / class is its own scope
@@ -1130,6 +1137,44 @@ fn walk_for_blocks<'db, 'ast, F>(
     }
 }
 
+/// The type of `block`'s callee. A block directly in the body being checked has
+/// it in that body's inference (`callee_type`); one nested inside a `once` block
+/// has its callee in the `once` block's own scope, which that inference never
+/// enters — so it is read from the callee's standalone inference instead, which
+/// the semantic index registers for every trailing-lambda callee (and which the
+/// block's own `it` typing already reads, so it is not a cycle).
+fn block_callee_type<'db, 'ast, F>(
+    context: &InferContext<'db, 'ast>,
+    block: &'ast ast::StmtFunctionDef,
+    callee_type: &F,
+) -> Option<Type<'db>>
+where
+    F: Fn(&'ast Expr) -> Option<Type<'db>>,
+{
+    let callee = block.trailing_lambda_callee()?;
+    if let Some(ty) = callee_type(callee) {
+        return Some(ty);
+    }
+    let db = context.db();
+    let expression = semantic_index(db, context.program_file()).try_expression(callee)?;
+    infer_expression_types(db, expression, TypeContext::default()).try_expression_type(callee)
+}
+
+/// Whether `block`'s callee marks its callback `once` — the block then runs
+/// inline, exactly once. Anything unresolvable is not `once`.
+fn block_callee_is_once<'db, 'ast, F>(
+    context: &InferContext<'db, 'ast>,
+    block: &'ast ast::StmtFunctionDef,
+    callee_type: &F,
+) -> bool
+where
+    F: Fn(&'ast Expr) -> Option<Type<'db>>,
+{
+    block_callee_type(context, block, callee_type).is_some_and(|callee| {
+        crate::types::trailing_lambda::callee_callback_is_once(context.db(), callee)
+    })
+}
+
 /// Reports each loop variable a trailing-lambda block captures, unless its callee
 /// confines the block (a `local` / `once` callee) or cannot be resolved.
 fn check_block_capture<'db, 'ast, F>(
@@ -1142,9 +1187,7 @@ fn check_block_capture<'db, 'ast, F>(
 {
     // a `local` / `once` callee runs the block synchronously (safe); an opaque
     // callee is left alone. only a resolved non-borrow callee is a concern
-    let resolved_non_borrow = block
-        .trailing_lambda_callee()
-        .and_then(callee_type)
+    let resolved_non_borrow = block_callee_type(context, block, callee_type)
         .and_then(|callee| {
             crate::types::trailing_lambda::callee_callback_is_borrowed(context.db(), callee)
         })

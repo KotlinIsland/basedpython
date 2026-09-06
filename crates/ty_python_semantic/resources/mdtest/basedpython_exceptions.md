@@ -183,6 +183,27 @@ def main():
     anything(False)
 ```
 
+## a generic function's clause is inferred once
+
+A generic function's signature is inferred in its type-parameter scope, while a non-generic one's is
+deferred to the enclosing scope. Both reach the same inference, so the clause must not also be
+inferred on the way there. `raises ...` is the case that shows it: the ellipsis is the gradual
+exception set rather than a type expression, so it is inferred as the plain value it is, and
+inferring one expression twice in a single region is a hard error.
+
+```by
+def gradual[T](value: T) -> T raises ...:
+    raise TypeError
+```
+
+The clause still reaches the check on the body, which is what says it was inferred at all.
+
+```by
+def declared[T](value: T) -> T raises TypeError:
+    # error: [undeclared-raise] "`declared` can raise `ValueError`, which its `raises` clause does not include"
+    raise ValueError
+```
+
 ## a negated clause is checked, but strictly
 
 `not TypeError` is the ordinary negation type, and the body is checked against it with ordinary

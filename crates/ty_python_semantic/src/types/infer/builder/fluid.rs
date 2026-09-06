@@ -36,6 +36,7 @@
 
 use itertools::Itertools;
 use ruff_python_ast as ast;
+use ruff_python_ast::helpers::TypeModifier;
 use rustc_hash::FxHashSet;
 
 use ty_python_core::Statement;
@@ -52,7 +53,10 @@ use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::generics::{GenericContext, SpecializationBuilder};
 use crate::types::infer::{InferenceRegion, infer_expression_types, infer_statement_types};
 use crate::types::infer_definition_types;
-use crate::types::{KnownFunction, Type, TypeContext, TypeVarVariance};
+use crate::types::{
+    KnownFunction, RestrictedType, Specialization, StaticClassLiteral, Type, TypeContext,
+    TypeVarVariance,
+};
 
 /// the constraining and locking events of a fluid candidate binding that can
 /// have executed before a given program point
@@ -357,6 +361,60 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             .any(|declaration| declaration.declaration.definition().is_some())
     }
 
+    /// basedpython: take the use-site modifier off a fluid candidate's type
+    ///
+    /// a constructor call is inferred `final A` (exact construction), and the whole
+    /// fluid machinery below asks what class an instance is and how it is
+    /// specialized — questions the wrapper answers with "none of the above". the
+    /// modifier is split off on the way in and put back on the way out, because
+    /// widening only changes the specialization: a value built by `A()` is still
+    /// exactly an `A` once its element type has widened
+    fn split_fluid_restriction(&self, ty: Type<'db>) -> (Option<TypeModifier>, Type<'db>) {
+        match ty {
+            Type::Restricted(restricted) => (
+                Some(restricted.modifier(self.db())),
+                restricted.value_type(self.db()),
+            ),
+            _ => (None, ty),
+        }
+    }
+
+    /// basedpython: the class and specialization of a type a fluid path is holding
+    ///
+    /// Every question the fluid machinery asks — which class is this, how is it
+    /// specialized — is about the value, and a use-site modifier says nothing
+    /// about either. In a basedpython file a constructor call is inferred
+    /// `final A`, and an annotation may be written `final A[int]`, so asking
+    /// [`Type::class_specialization`] directly would answer "not a class
+    /// instance" for exactly the values this module exists to widen. Ask through
+    /// here instead.
+    pub(super) fn fluid_class_specialization(
+        &self,
+        ty: Type<'db>,
+    ) -> Option<(StaticClassLiteral<'db>, Specialization<'db>)> {
+        ty.erase_restriction(self.db())
+            .class_specialization(self.db(), self.program_environment())
+    }
+
+    /// put back the modifier [`Self::split_fluid_restriction`] took off, replacing
+    /// any modifier `ty` still carries rather than stacking a second one on it
+    fn restore_fluid_restriction(
+        &self,
+        modifier: Option<TypeModifier>,
+        ty: Type<'db>,
+    ) -> Type<'db> {
+        let Some(modifier) = modifier else {
+            return ty;
+        };
+        let db = self.db();
+        RestrictedType::from_type_expression(
+            db,
+            self.program_environment(),
+            modifier,
+            ty.erase_restriction(db),
+        )
+    }
+
     /// infer a constructor call that may be the assigned value of a fluid candidate:
     /// the inferred specialization retains literal types, and constraints from later
     /// uses of the binding are combined with it. only direct constructor calls
@@ -381,8 +439,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // fluid-specialization performance investigation.
         let ty = self.infer_call_expression_impl(call_expr, callable_type, tcx);
 
+        // the class and its generic context are read off the instance itself: in a
+        // basedpython file `ty` is `final A`, and the restriction is put back by
+        // `fluid_eventual_type`, which is handed the creation type as it stands
+        let instance = ty.erase_restriction(self.db());
+
         if let Some(fluid_def) = fluid_def
-            && let Some((class_literal, _)) = ty.class_specialization(self.db(), env)
+            && let Some((class_literal, _)) = self.fluid_class_specialization(instance)
             && let Some(generic_context) = class_literal.generic_context(self.db())
         {
             let identity_instance = Type::instance(
@@ -1058,6 +1121,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     ) -> Type<'db> {
         let env = self.program_environment();
         self.fluid_creation = Some(creation);
+        let (restriction, creation) = self.split_fluid_restriction(creation);
 
         let timeline =
             self.build_fluid_timeline(candidate_def, identity_instance, generic_context, creation);
@@ -1091,10 +1155,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // for flow-sensitive uses (recorded above as `fluid_creation`). Its public
             // type — what untracked escapes such as multi-binding uses or other scopes
             // observe — must stay gradual, so present an empty collection as `Unknown`.
-            return self.promote_empty_specialization(identity_instance, generic_context, creation);
+            let promoted =
+                self.promote_empty_specialization(identity_instance, generic_context, creation);
+            return self.restore_fluid_restriction(restriction, promoted);
         }
 
-        match eventual {
+        let eventual = match eventual {
             Some(solution) => solution.unwrap_or(creation),
             None => self
                 .solve_fluid_specialization(
@@ -1104,7 +1170,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     promote,
                 )
                 .unwrap_or(creation),
-        }
+        };
+        self.restore_fluid_restriction(restriction, eventual)
     }
 
     /// If `creation` is an empty collection — every element typevar solved to `Never`,
@@ -1117,9 +1184,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         generic_context: GenericContext<'db>,
         creation: Type<'db>,
     ) -> Type<'db> {
-        let env = self.program_environment();
         let db = self.db();
-        let Some((_, specialization)) = creation.class_specialization(db, env) else {
+        let Some((_, specialization)) = self.fluid_class_specialization(creation) else {
             return creation;
         };
         if !specialization.types(db).iter().all(Type::is_never) {
@@ -1217,8 +1283,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let Some(creation) = creation else {
             return fallback;
         };
+        let (restriction, creation) = self.split_fluid_restriction(creation);
 
-        let Some((class_literal, _)) = creation.class_specialization(db, env) else {
+        let Some((class_literal, _)) = self.fluid_class_specialization(creation) else {
             // The creation type contains a cycle-recovery placeholder; fall back
             // until the fixpoint converges.
             return fallback;
@@ -1276,10 +1343,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // looked like before it was solved.
             if tcx.prescribes_type_arguments()
                 || (annotation.has_unspecialized_type_var(db, env)
-                    && annotation.class_specialization(db, env).is_some())
+                    && self.fluid_class_specialization(annotation).is_some())
             {
                 if let (Some(timeline), Some(index)) = (timeline, snapshot) {
-                    return timeline.solution(index, true).unwrap_or(fallback);
+                    return timeline.solution(index, true).map_or(fallback, |solution| {
+                        self.restore_fluid_restriction(restriction, solution)
+                    });
                 }
                 return self
                     .solve_fluid_specialization(
@@ -1288,7 +1357,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         creation_constraint.into_iter().chain(gathered.constraints),
                         true,
                     )
-                    .unwrap_or(fallback);
+                    .map_or(fallback, |solution| {
+                        self.restore_fluid_restriction(restriction, solution)
+                    });
             }
 
             if self.fluid_constraint_binds_typevars(identity_instance, generic_context, annotation)
@@ -1300,7 +1371,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
 
         if gathered.is_creation() {
-            return creation;
+            return self.restore_fluid_restriction(restriction, creation);
         }
 
         // Literal types accumulate through widening events and are promoted once
@@ -1308,7 +1379,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // view instead.
         let promote = gathered.locked && gathered.promote_on_lock;
         if let (Some(timeline), Some(index)) = (timeline, snapshot) {
-            return timeline.solution(index, promote).unwrap_or(fallback);
+            return timeline
+                .solution(index, promote)
+                .map_or(fallback, |solution| {
+                    self.restore_fluid_restriction(restriction, solution)
+                });
         }
         self.solve_fluid_specialization(
             identity_instance,
@@ -1316,6 +1391,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             creation_constraint.into_iter().chain(gathered.constraints),
             promote,
         )
-        .unwrap_or(fallback)
+        .map_or(fallback, |solution| {
+            self.restore_fluid_restriction(restriction, solution)
+        })
     }
 }

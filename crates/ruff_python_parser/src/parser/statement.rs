@@ -692,7 +692,7 @@ impl<'src> Parser<'src> {
                     self.error_if_not_basedpython(
                         "`init(...)` method shorthand is not valid in .py files".to_string(),
                     );
-                    return Stmt::FunctionDef(self.parse_init_method(start));
+                    return Stmt::FunctionDef(self.parse_init_method(start, DecoratorList::new()));
                 }
 
                 // Handle basedpython modifier keywords and introducer keywords:
@@ -994,6 +994,15 @@ impl<'src> Parser<'src> {
                         ));
                         return Some(self.parse_with_modifier(start, DecoratorList::new()));
                     }
+                    // `private init(...)`, `final init(...)` — the `init` shorthand
+                    // is a `def __init__`, so a modifier chain reaches it the same
+                    // way it reaches any other method
+                    if self.class_body_depth > 0 && text == "init" && following == TokenKind::Lpar {
+                        self.error_if_not_basedpython(format!(
+                            "`{kw}` is a basedpython modifier and is not valid in .py files"
+                        ));
+                        return Some(self.parse_with_modifier(start, DecoratorList::new()));
+                    }
                     return match following {
                         TokenKind::Equal if idx > 0 => {
                             self.error_if_not_basedpython(format!(
@@ -1105,6 +1114,15 @@ impl<'src> Parser<'src> {
             self.peek_nth(idx - 1).1
         };
         matches!(self.src_text(range), "private" | "public" | "export")
+    }
+
+    /// Whether the parser is sitting on the `init(...)` constructor shorthand:
+    /// the name `init` followed by a parameter list, inside a class body.
+    fn at_init_shorthand(&mut self) -> bool {
+        self.class_body_depth > 0
+            && self.at(TokenKind::Name)
+            && self.src_text(self.current_token_range()) == "init"
+            && self.peek() == TokenKind::Lpar
     }
 
     /// Parses a basedpython modifier keyword statement such as `final class Foo:`,
@@ -1230,7 +1248,8 @@ impl<'src> Parser<'src> {
         // modifier that reads on the other kind decides nothing here, and was
         // being carried into a lowering that had no arm for it and left the
         // keyword in the emitted python
-        let target = if self.at(TokenKind::Async) || self.at(TokenKind::Def) {
+        let at_init = self.at_init_shorthand();
+        let target = if self.at(TokenKind::Async) || self.at(TokenKind::Def) || at_init {
             ModifierTarget::Function
         } else {
             ModifierTarget::Class
@@ -1257,6 +1276,33 @@ impl<'src> Parser<'src> {
                 ParseErrorType::OtherError(format!("`{kw}` is not a modifier on {modified}")),
                 range,
             );
+        }
+
+        if at_init {
+            // a constructor is neither a free function nor a class-level one, so
+            // the two modifiers that say which of those a `def` is have nothing
+            // to say here
+            let misplaced_on_init: Vec<TextRange> = decorators
+                .iter()
+                .filter(|dec| match &dec.expression {
+                    Expr::Name(name) => {
+                        name.ctx == ExprContext::Invalid
+                            && matches!(name.id.as_str(), "static" | "classmethod")
+                    }
+                    _ => false,
+                })
+                .map(Ranged::range)
+                .collect();
+            for range in misplaced_on_init {
+                let kw = self.src_text(range).trim_end().to_owned();
+                self.add_error(
+                    ParseErrorType::OtherError(format!(
+                        "`{kw}` is not a modifier on an `init(...)` constructor"
+                    )),
+                    range,
+                );
+            }
+            return Stmt::FunctionDef(self.parse_init_method(start, decorators));
         }
 
         if self.at(TokenKind::Async) {
@@ -5252,11 +5298,19 @@ impl<'src> Parser<'src> {
     /// The function is named `__init__` directly so ty's semantic analysis (which
     /// scans `__init__` body for `self.X = ...` assignments) sees the synthesised
     /// body statements created from each `let` parameter
-    fn parse_init_method(&mut self, start: TextSize) -> ast::StmtFunctionDef {
+    ///
+    /// `decorators` holds any modifier chain written in front of the keyword
+    /// (`private init(...)`, `final init(...)`); the `__init_method__` marker is
+    /// appended after it, so the modifiers keep their source order.
+    fn parse_init_method(
+        &mut self,
+        start: TextSize,
+        mut decorator_list: DecoratorList,
+    ) -> ast::StmtFunctionDef {
         let init_range = self.current_token_range();
         self.bump(TokenKind::Name); // consume "init"
 
-        let decorator = ast::Decorator {
+        decorator_list.push(ast::Decorator {
             expression: Expr::Name(ast::ExprName {
                 id: Name::new_static("__init_method__"),
                 ctx: ExprContext::Invalid,
@@ -5265,7 +5319,7 @@ impl<'src> Parser<'src> {
             }),
             range: init_range,
             node_index: AtomicNodeIndex::NONE,
-        };
+        });
 
         let name = ast::Identifier {
             id: Name::new_static("__init__"),
@@ -5334,7 +5388,7 @@ impl<'src> Parser<'src> {
             type_params: None,
             parameters: Box::new(parameters),
             body,
-            decorator_list: vec![decorator].into(),
+            decorator_list,
             is_async: false,
             // `init(...)` is a `__init__`, which returns `None`. synthesise the
             // annotation (zero-width, after the parameter list) so ty sees
@@ -8196,11 +8250,43 @@ impl<'src> Parser<'src> {
                 );
             }
         }
+        // one exception: the last parameter may be the callback a trailing block
+        // (`f(...):`) fills, which the call passes by keyword — so a component
+        // can declare both a `context` parameter and a content block:
+        // `def Card(title: str, context theme: Theme, once content: () -> None)`
+        //
+        // A callable annotation alone is not enough to earn the exemption. An
+        // ordinary callable parameter *can* take a positional argument, and
+        // exempting it would let `Card("x", handler)` bind `handler` to the
+        // `context` parameter instead — the very thing this rule exists to stop.
+        // The `local` / `once` modifier is what marks a parameter as a borrowed
+        // callback rather than a value the caller hands over, so that is what is
+        // required here. Anything else after a `context` parameter can still be
+        // written keyword-only, after a bare `*`.
+        let trailing_callback_index = parameters
+            .args
+            .last()
+            .filter(|param| {
+                matches!(
+                    param.parameter.annotation.as_deref(),
+                    Some(ruff_python_ast::Expr::CallableType(_))
+                ) && {
+                    // `local` / `once` on a `def` parameter carry no AST field:
+                    // they live in the span between the parameter's start and
+                    // its name (see `parameter_modifiers`)
+                    let modifiers = ruff_python_ast::helpers::parameter_modifiers(
+                        self.source,
+                        &param.parameter,
+                    );
+                    modifiers.local || modifiers.once
+                }
+            })
+            .map(|_| parameters.args.len() - 1);
         let mut seen_context_param = false;
-        for param in &parameters.args {
+        for (index, param) in parameters.args.iter().enumerate() {
             if param.parameter.is_context {
                 seen_context_param = true;
-            } else if seen_context_param {
+            } else if seen_context_param && trailing_callback_index != Some(index) {
                 self.add_error(
                     ParseErrorType::OtherError(
                         "parameter after a `context` parameter must also be `context`".to_string(),

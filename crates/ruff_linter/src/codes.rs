@@ -1290,6 +1290,7 @@ pub fn code_to_rule(linter: Linter, code: &str) -> Option<(RuleStatus, Rule)> {
         (Basedpython, "020") => rules::basedpython::rules::ManualCastCall,
         (Basedpython, "021") => rules::basedpython::rules::ManualProperty,
         (Basedpython, "022") => rules::basedpython::rules::ManualModifier,
+        (Basedpython, "023") => rules::basedpython::rules::ManualTupleAnnotation,
         (Basedpython, "101") => rules::basedpython::rules::RedundantNoneCoalesce,
 
         // airflow

@@ -780,6 +780,26 @@
             }
           ]
         },
+        "composable-outside-composition": {
+          "title": "detects a composable or builder called outside a composition",
+          "description": "## What it does\n\nChecks for a call to a `basedpython_ui` composable (a function decorated `@composable`) or to one\nof the framework's widget builders (`Text`, `Button`, `Column`, …) from somewhere that is not a\ncomposition: a function that is not itself a composable, a handler block, a lambda or a nested\n`def`. A composable's body, the `once` content blocks and `local` blocks written in it, and the\n`root` block of `run_app` / `compose_test` are compositions.\n\n## Why is this bad?\n\nA composable opens a scope in the composition being built and a builder emits into it; neither has\nanything to build into outside of one. The runtime raises `CompositionError` at the call; this\ncheck reports it at the source.\n\n## Examples\n\n```by\nfrom basedpython_ui import composable, run_app, Button, Text\n\n@composable\ndef Counter(): ...\n\ndef helper():\n    Counter()                 # error: `helper` is not a composable\n\n@composable\ndef App():\n    Button(\"x\"):\n        Text(\"clicked\")       # error: a handler runs after composition\n\ndef main():\n    run_app(\"app\"):\n        App()                 # ok: the root of the composition\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "conditional-slot": {
+          "title": "detects a basedpython-ui slot created under a condition",
+          "description": "## What it does\n\nChecks for a `basedpython_ui` slot — `state`, `state_list`, `state_dict`, `derived`, `remember`,\n`launched_effect`, `disposable_effect`, `side_effect` — created under a condition in a composable:\ninside an `if`, `for`, `while`, `try` or `match`, inside a comprehension, or inside a block that is\nnot a `once` content block (a handler block, a lambda, a nested `def`).\n\n## Why is this bad?\n\nA slot lives as long as its enclosing composition scope and is identified by its call site, so a\nconditional slot is created when the condition first holds and disposed — its state lost, its\neffect cancelled — as soon as it stops holding. That is rarely what the code means: state that\nshould outlive a condition belongs above it, and a slot created from a handler has no scope to live\nin at all. The runtime keys slots by call site, so this is safe at runtime; the check makes the\nlifetime visible.\n\n## Examples\n\n```by\nfrom basedpython_ui import composable, state, Text\n\n@composable\ndef Profile(show: bool):\n    if show:\n        let clicks = state(0)   # warning: created and disposed as `show` changes\n        Text(f\"{clicks.value}\")\n\n@composable\ndef Fixed(show: bool):\n    let clicks = state(0)       # ok: lives as long as `Fixed`\n    if show:\n        Text(f\"{clicks.value}\")\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "conflicting-declarations": {
           "title": "detects conflicting declarations",
           "description": "## What it does\n\nChecks whether a variable has been declared as two conflicting types.\n\n## Why is this bad\n\nA variable with two conflicting declarations likely indicates a mistake. Moreover, it could lead to\nincorrect or ill-defined type inference for other code that relies on these variables.\n\n## Examples\n\n```python\nif __name__ == \"__main__\":\n    a: int\nelse:\n    a: str\n\na = 1  # error\n```",
@@ -793,6 +813,16 @@
         "conflicting-metaclass": {
           "title": "detects conflicting metaclasses",
           "description": "## What it does\n\nChecks for class definitions where the metaclass of the class being created would not be a subclass\nof the metaclasses of all the class's bases.\n\n## Why is it bad?\n\nSuch a class definition raises a `TypeError` at runtime.\n\n## Examples\n\n```pyi\nclass M1(type): ...\nclass M2(type): ...\nclass A(metaclass=M1): ...\nclass B(metaclass=M2): ...\n\n# TypeError: metaclass conflict\nclass C(A, B): ...  # error\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "content-block-control-flow": {
+          "title": "detects a `return` inside a nested `once` content block",
+          "description": "## What it does\n\nChecks for a `return` inside a `once` content block that is itself written inside another\ntrailing-lambda block.\n\n## Why is this bad?\n\nA `once` block runs exactly once, inline, so a `return` inside it is allowed to leave the enclosing\nscope — but only one level: the language propagates a block's `return` to the scope the block is\nwritten in. When that scope is itself a block, the `return` leaves the inner block and stops there;\nthe enclosing function keeps running, and the returned value is silently discarded.\n\n(A `break` or `continue` inside any block is already rejected as `break` outside loop: a block is\nits own function.)\n\n## Examples\n\n```by\ndef Column(once content: () -> None):\n    content()\n\ndef Row(once content: () -> None):\n    content()\n\ndef App(done: bool) -> int:\n    Column:\n        Row:\n            if done:\n                return 1  # error: [content-block-control-flow]\n        return 2  # ok: one level, leaves `App`\n    return 0\n```",
           "default": "error",
           "oneOf": [
             {
@@ -1054,6 +1084,16 @@
           "title": "detects calls to `final()` that type checkers cannot interpret",
           "description": "## What it does\n\nChecks for calls to `final()` that type checkers cannot interpret.\n\n## Why is this bad?\n\nThe `final()` function is designed to be used as a decorator. When called directly as a function\n(e.g., `final(type(...))`), type checkers will not understand the application of `final` and will\nnot prevent subclassing.\n\n## Example\n\n```python\nfrom typing import final\n\n# Incorrect: type checkers will not prevent subclassing\nMyClass = final(type(\"MyClass\", (), {}))  # error\n\n\n# Correct: use `final` as a decorator\n@final\nclass MyClass: ...\n```",
           "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "ineffective-private": {
+          "title": "detects a `private` modifier on a name it cannot hide",
+          "description": "## What it does\nChecks for the `private` modifier on a class member whose name it cannot\nhide.\n\n## Why is this bad?\n`private` hides a class member by renaming it so python's name-mangling\napplies, and python mangles only a name with at most one trailing\nunderscore. A dunder is therefore left with the name it was written\nwith, and the modifier does nothing — which is worse than an error,\nbecause the declaration reads as though the member were hidden.\n\n`init` is the exception. It is the one dunder `private` says something\nabout, and it is enforced at the construction site rather than by hiding\na name: see [`private-constructor`](private-constructor.md).\n\n## Example\n\n```by\nclass Point:\n    private def __repr__(self) -> str:  # error: `private` does nothing here\n        return \"Point()\"\n```",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -1642,7 +1682,7 @@
         },
         "invalid-type-variable-bound": {
           "title": "detects invalid type variable bounds",
-          "description": "## What it does\n\nChecks for [type variables][type variable] whose bounds reference type variables.\n\n## Why is this bad?\n\nThe bound of a type variable must be a concrete type.\n\n## Examples\n\n```toml\n[environment]\npython-version = \"3.12\"\n```\n\n```python\nfrom typing import TypeVar\n\n# error: [invalid-type-variable-bound]\nRecursiveT = TypeVar(\"RecursiveT\", bound=list[\"RecursiveT\"])\nU = TypeVar(\"U\")\n# error: [invalid-type-variable-bound]\nBoundT = TypeVar(\"BoundT\", bound=U)\n\n\ndef f[T: list[T]](): ...  # error: [invalid-type-variable-bound]\ndef g[U, T: U](): ...  # error: [invalid-type-variable-bound]\n```\n\n[type variable]: https://docs.python.org/3/library/typing.html#typing.TypeVar",
+          "description": "## What it does\n\nChecks for [type variables][type variable] whose bounds reference type variables that are not in\nscope where the bound is written.\n\n## Why is this bad?\n\nA type parameter's bound may reference a type parameter that is already in scope *and* substituted\nwhere the bound is used: an earlier entry in the same type parameter list, or — for a method — an\nentry in its class's list, which binding the receiver settles.\n\nAnything else has nothing to resolve to. A later entry is not yet in scope, a parameter is not in\nscope inside its own bound, and a legacy `TypeVar` is declared by an assignment, so it has no list\nto hold a position in. A nested class or nested function is in scope but is never substituted, so\nthe reference would still be standing at every use of the generic. A variadic pack's bound describes\nits members rather than the pack's own value, so it cannot reference a type parameter at all.\n\n## Examples\n\n```toml\n[environment]\npython-version = \"3.12\"\n```\n\n```python\nfrom typing import TypeVar\n\n# error: [invalid-type-variable-bound]\nRecursiveT = TypeVar(\"RecursiveT\", bound=list[\"RecursiveT\"])\nU = TypeVar(\"U\")\n# error: [invalid-type-variable-bound]\nBoundT = TypeVar(\"BoundT\", bound=U)\n\n\ndef f[T: list[T]](): ...  # error: [invalid-type-variable-bound]\ndef g[T: U, U](): ...  # error: [invalid-type-variable-bound]\n\n\n# `U` precedes `T`, so `T`'s bound can name it\ndef h[U, T: U](x: U, y: T): ...\n\n\nclass Owner[U]:\n    # the receiver settles `U`, so a method's bound can name it\n    def narrow[T: U](self, x: T) -> U:\n        return x\n\n    # nothing settles `U` for a nested class\n    class Inner[T: U]: ...  # error: [invalid-type-variable-bound]\n```\n\n[type variable]: https://docs.python.org/3/library/typing.html#typing.TypeVar",
           "default": "error",
           "oneOf": [
             {
@@ -1843,6 +1883,16 @@
         "missing-typed-dict-key": {
           "title": "detects missing required keys in `TypedDict` constructors",
           "description": "## What it does\n\nDetects missing required keys in `TypedDict` constructor calls.\n\n## Why is this bad?\n\n`TypedDict` requires all non-optional keys to be provided during construction. Missing items can\nlead to a `KeyError` at runtime.\n\n## Example\n\n```python\nfrom typing import TypedDict\n\n\nclass Person(TypedDict):\n    name: str\n    age: int\n\n\n# missing required key 'age'\nalice: Person = {\"name\": \"Alice\"}  # error\n\nalice[\"age\"]  # KeyError\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "mutable-state-value": {
+          "title": "detects a mutable value held in basedpython-ui state",
+          "description": "## What it does\n\nChecks for a value that is not deeply immutable being placed in `basedpython_ui` state: the\ninitial value of `state(...)` / `State(...)`, the elements of `state_list(...)` / `StateList(...)`,\nthe value computed by `derived(...)` / `remember(...)`, a value assigned to a `State`'s `.value`,\nappended to or inserted into a `StateList`, stored into a `StateDict`, or given to `provide(...)`.\n\n## Why is this bad?\n\nA `State` notifies its readers when it is *assigned*. A change made *inside* the held value —\n`items.append(1)` on a held `list`, a field written on a held plain class — notifies nobody, so the\nui keeps showing the old value until something unrelated recomposes it. The runtime refuses such a\nvalue with a `TypeError`; this check reports it at the source.\n\nA value is deeply immutable when nothing reachable from it can change: the scalars, enum members, a\n`tuple` or `frozenset` of immutable elements, a `frozen data class` or `NamedTuple` of immutable\nfields, a type object, a callable, or one of the framework's own observables (`State`, `StateList`,\n`StateDict`, `Derived`, `Ambient`).\n\n## Examples\n\n```by\nfrom basedpython_ui import composable, state, state_list\n\nfrozen data class Todo:\n    title: str\n\n@composable\ndef App():\n    let items = state([1, 2])           # error: `list[int]` cannot be held in state\n    let names = state((1, 2))           # ok: a tuple of immutables\n    let todos = state_list([Todo(\"a\")]) # ok: an observable list of frozen records\n```",
           "default": "error",
           "oneOf": [
             {
@@ -2070,6 +2120,16 @@
             }
           ]
         },
+        "private-constructor": {
+          "title": "detects construction of a class with a `private` constructor",
+          "description": "## What it does\nChecks for constructing a class whose `init` is declared `private`, from\noutside that class's own body.\n\n## Why is this bad?\nA `private` constructor says the class decides how its instances are\nmade: callers go through a factory the class provides, which can pick a\nsubclass, return a cached instance, or reject the arguments. Calling the\nconstructor directly bypasses that.\n\nA subclass is outside the class's body too, so it cannot construct the\nbase either.\n\n## Example\n\n```by\nclass Id:\n    private init(let raw: str)\n\n    @classmethod\n    def parse(cls, text: str) -> Id:\n        return Id(text.strip())  # ok: inside the class\n\nId(\"x\")  # error: `Id`'s constructor is private\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "private-import": {
           "title": "detects imports of another module's `private` symbols",
           "description": "## What it does\nChecks for imports of a symbol another module declared `private`.\n\n## Why is this bad?\nA `private` declaration is part of its module's implementation, not its\ninterface. It is renamed with a leading underscore by the lowering, so an\nimporting module is reaching past a boundary the author drew explicitly,\nand the symbol may be renamed or removed without notice.\n\n## Example\n\n```by\n# helpers.by\nprivate type Key = str | int\n\n# main.by\nfrom helpers import Key  # error: `Key` is private to `helpers`\n```",
@@ -2203,6 +2263,26 @@
         "shadowed-type-variable": {
           "title": "detects type variables that shadow type variables from outer scopes",
           "description": "## What it does\n\nChecks for type variables in nested generic classes or functions that shadow type variables from an\nenclosing scope.\n\n## Why is this bad?\n\nShadowing type variables makes the code confusing and is disallowed by the typing spec.\n\n## Examples\n\n```toml\n[environment]\npython-version = \"3.12\"\n```\n\n```python\nclass Outer[T]:\n    # `T` is already used by `Outer`\n    class Inner[T]: ...  # error\n\n    # `T` is already used by `Outer`\n    def method[T](self, x: T) -> T:  # error\n        return x\n```\n\n## References\n\n- [Typing spec: Generics](https://typing.python.org/en/latest/spec/generics.html#introduction)",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "silent-mutation": {
+          "title": "detects an in-place mutation a basedpython-ui composition cannot observe",
+          "description": "## What it does\n\nChecks for an in-place mutation written inside a `basedpython_ui` composable — in its body, in a\n`once` content block written in it, or in a handler block, lambda or nested `def` written in it: a\nmutating method call (`append`, `extend`, `insert`, `pop`, `remove`, `clear`, `sort`, `reverse`,\n`update`, `setdefault`, `popitem`, `add`, `discard`, …) on a builtin mutable container, an in-place\noperator (`+=`, `|=`, …) on one, a subscript store or delete on one, or an attribute store on an\ninstance of a class that is not frozen and not an observable.\n\nA container the same body creates itself — bound to a display, a comprehension or a constructor\ncall — is a fresh local, and mutating it is allowed.\n\n## Why is this bad?\n\nA composition re-runs when an observable it read is written. A `list` or a plain object is not\nobservable: mutating it in place changes what the ui *should* show without telling the runtime,\nso the change is not seen until something unrelated recomposes the scope. Mutate a `StateList` /\n`StateDict`, or rebuild an immutable value and assign it to a `State`, and the change notifies.\n\n## Examples\n\n```by\nfrom basedpython_ui import composable, state_list, Button\n\n@composable\ndef TodoList(items: list[str]):\n    Button(\"add\"):\n        items.append(\"x\")     # error: mutates `list[str]` in place\n\n@composable\ndef Observed():\n    let items = state_list([\"a\"])\n    Button(\"add\"):\n        items.append(\"x\")     # ok: a `StateList` write notifies its readers\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "state-write-in-composition": {
+          "title": "detects a basedpython-ui state write made while composing",
+          "description": "## What it does\n\nChecks for a write to `basedpython_ui` state made while a composition is running: in a composable's\nbody or in a `once` content block written in it, an assignment to a `State`'s `.value` (plain or\naugmented), a call to `State.set` / `State.update`, or a mutating call, subscript store or delete\non a `StateList` / `StateDict`.\n\nWrites made from a handler block, a lambda, a nested `def` or an effect block are not in\ncomposition: those run later, in response to an event, and are the right place for them.\n\n## Why is this bad?\n\nComposition is a pure description of the ui for the current state. A write made while composing\ninvalidates the very scope being composed (or one already composed this frame), which would loop\nor show a frame that is half old and half new. The runtime raises `CompositionError` before\napplying such a write; this check reports it at the source.\n\n## Examples\n\n```by\nfrom basedpython_ui import composable, state, Button, Text\n\n@composable\ndef Counter():\n    let count = state(0)\n    count.value = 1           # error: written while `Counter` is composing\n    Text(f\"{count.value}\")\n    Button(\"+\"):\n        count.value += 1      # ok: a handler runs after composition\n```",
           "default": "error",
           "oneOf": [
             {
@@ -2500,6 +2580,16 @@
             }
           ]
         },
+        "unobservable-dependency": {
+          "title": "detects a basedpython-ui composition reading a value it cannot observe",
+          "description": "## What it does\n\nChecks for a read, made while a `basedpython_ui` composition runs, of a value it cannot observe:\na load of a parameter of the composable (a `context` parameter included), of a module global, or\nof a local captured from an enclosing function, whose type is neither deeply immutable nor one of\nthe framework's observables (`State`, `StateList`, `StateDict`, `Derived`, `Ambient`).\n\nWhat runs while composing is the composable's body, the `once` content blocks and `local` blocks\nwritten in it, and the lambda given to `derived(...)` / `remember(...)`. A handler block, a lambda,\na nested `def` or an effect block runs later, so a read there is not a dependency of the\ncomposition. A name the composition binds itself — a local of the body or of a block, a `for`\ntarget, a comprehension variable — is this run's own value and is not reported, whatever its\ntype; a `dynamic` value is exempt, as everywhere. A read-only view (`list[out str]`) is reported\nlike a plain `list`: it restricts this reader, not the other holders of the list.\n\n## Why is this bad?\n\nA mutation of non-observable data is never a trigger: an immutable value cannot change, an\nobservable notifies its readers when it does, and a mutable value changes without telling anyone.\nA composition that reads a mutable parameter or global therefore shows a stale ui after any change\nto it — wherever that change is made: another module, a `.py` caller, a `dynamic` value, a\ncallback. `silent-mutation` reports the writes it can see; this check is what makes the guarantee\ngeneral, by keeping a composition from depending on such a value in the first place.\n\nHold the value in state (`state_list`, `state_dict`), pass an immutable value (a `tuple`, a\n`frozen data class`), or read it only in a handler.\n\n## Examples\n\n```by\nfrom basedpython_ui import composable, state_list, Text\n\n@composable\ndef Names(items: list[str]):\n    Text(str(len(items)))       # error: read while `Names` composes, but nothing observes it\n\n@composable\ndef Frozen(items: tuple[str, ...]):\n    Text(str(len(items)))       # ok: a tuple cannot change\n\n@composable\ndef Held():\n    let items = state_list([\"a\"])\n    Text(str(len(items)))       # ok: a `StateList` notifies its readers\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "unresolved-attribute": {
           "title": "detects references to unresolved attributes",
           "description": "## What it does\n\nChecks for unresolved attributes.\n\n## Why is this bad?\n\nAccessing an unbound attribute will raise an `AttributeError` at runtime. An unresolved attribute is\nnot guaranteed to exist from the type alone, so this could also indicate that the object is not of\nthe type that the user expects.\n\n## Examples\n\n```python\nclass A: ...\n\n\n# AttributeError: 'A' object has no attribute 'foo'\nA().foo  # error\n```",
@@ -2624,6 +2714,16 @@
           "title": "detects reified generics used without their specialization",
           "description": "## What it does\nChecks for calls to a basedpython reified generic function whose\nspecialization is neither written explicitly nor inferable from the\narguments.\n\n## Why is this bad?\nA function whose type parameter is referenced in a value position is\n*reified*: the type parameter behaves like a positional parameter that\nis filled by the `[...]` specialization step, and a reified generic\n*class* records its type arguments on the specialization its instances\nare built from. Either is legal without writing the step only when the\ntranspiler can inject it — every type parameter must solve, from the\narguments or its PEP 696 default, to a type with a runtime spelling\nthere. Otherwise the parameter has no value at runtime.\n\n## Example\n\n```by\ndef f[T](t: object):\n    print(T)\n\nf[int](1)  # ok\nf(1)       # error: `T` appears nowhere in the signature\n\ndef g[T](t: T):\n    print(T)\n\ng(1)       # ok — transpiles to g[int](1)\n\nclass A[T]:\n    def kind(self) -> type[T]:\n        return T\n\na: A[int] = A()  # ok — transpiles to A[int]()\nA()              # error: nothing says which specialization this is\n```",
           "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unstable-parameter": {
+          "title": "detects a composable parameter whose type is not stable",
+          "description": "## What it does\n\nChecks for a parameter of a `basedpython_ui` composable whose declared type is not *stable*:\nnot deeply immutable, and not a read-only view of immutable elements (`list[out int]`).\n\n## Why is this bad?\n\nA composable is skipped on recomposition only when every argument is stable and equal to the last\none. A `list`, `dict`, `set` or non-frozen class can be changed behind the composable's back, so the\nruntime cannot compare it and never skips the scope: the composable re-runs on every recomposition\nof its parent, however little changed. Prefer an immutable spelling (`tuple[int, ...]`, a\n`frozen data class`) or an observable (`state_list`, `state_dict`).\n\nThis is a warning about skipping alone: a mutable parameter that only a handler touches never\ntriggers a re-render, but does not make the composition stale on its own. Reading one while\ncomposing is what does that, and is reported as an `unobservable-dependency`. A read-only view\n(`list[out int]`) is stable for skipping — the runtime compares it structurally at recomposition —\nbut is still unobservable when read, so it is not the spelling to reach for.\n\n## Examples\n\n```by\nfrom basedpython_ui import composable, StateList\n\n@composable\ndef TodoList(items: list[int]): ...        # warning: never skipped\n\n@composable\ndef Skippable(items: tuple[int, ...]): ...  # ok\n\n@composable\ndef Observed(items: StateList[int]): ...   # ok: an observable handle\n```",
+          "default": "warn",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"

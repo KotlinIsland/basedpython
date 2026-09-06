@@ -433,6 +433,17 @@ pub enum KnownModule {
     SqlalchemyOrmBase,
     #[strum(serialize = "sqlalchemy.orm.decl_api")]
     SqlalchemyOrmDeclApi,
+    // basedpython-ui framework modules. unlike the third-party modules above
+    // these are recognised on *any* search path: the framework is developed in
+    // place as a first-party package, and installed as a third-party one
+    #[strum(serialize = "basedpython_ui")]
+    BasedpythonUi,
+    #[strum(serialize = "basedpython_ui.runtime")]
+    BasedpythonUiRuntime,
+    #[strum(serialize = "basedpython_ui.widgets")]
+    BasedpythonUiWidgets,
+    #[strum(serialize = "basedpython_ui.app")]
+    BasedpythonUiApp,
 }
 
 impl KnownModule {
@@ -493,6 +504,10 @@ impl KnownModule {
             Self::PytestMarkStructures => "_pytest.mark.structures",
             Self::SqlalchemyOrmBase => "sqlalchemy.orm.base",
             Self::SqlalchemyOrmDeclApi => "sqlalchemy.orm.decl_api",
+            Self::BasedpythonUi => "basedpython_ui",
+            Self::BasedpythonUiRuntime => "basedpython_ui.runtime",
+            Self::BasedpythonUiWidgets => "basedpython_ui.widgets",
+            Self::BasedpythonUiApp => "basedpython_ui.app",
         }
     }
 
@@ -504,13 +519,32 @@ impl KnownModule {
     fn try_from_search_path_and_name(search_path: &SearchPath, name: &ModuleName) -> Option<Self> {
         let known_module = Self::from_str(name.as_str()).ok()?;
 
-        let is_expected_search_path = if known_module.is_third_party() {
+        let is_expected_search_path = if known_module.is_framework() {
+            // a framework module is accepted wherever it resolves from: it is
+            // developed in place (first-party) as well as installed
+            true
+        } else if known_module.is_third_party() {
             search_path.can_contain_third_party_code()
         } else {
             search_path.is_standard_library()
         };
 
         is_expected_search_path.then_some(known_module)
+    }
+
+    /// basedpython: return `true` if this module belongs to a framework that is
+    /// recognised on every search path — first-party as well as third-party —
+    /// so it can be developed in place. Every framework module is also
+    /// [`is_third_party`](Self::is_third_party): it is never part of the
+    /// standard library
+    const fn is_framework(self) -> bool {
+        matches!(
+            self,
+            Self::BasedpythonUi
+                | Self::BasedpythonUiRuntime
+                | Self::BasedpythonUiWidgets
+                | Self::BasedpythonUiApp
+        )
     }
 
     /// Return `true` if this module is provided by a supported third-party package.
@@ -534,7 +568,11 @@ impl KnownModule {
             | Self::PytestFixtures
             | Self::PytestMarkStructures
             | Self::SqlalchemyOrmBase
-            | Self::SqlalchemyOrmDeclApi => true,
+            | Self::SqlalchemyOrmDeclApi
+            | Self::BasedpythonUi
+            | Self::BasedpythonUiRuntime
+            | Self::BasedpythonUiWidgets
+            | Self::BasedpythonUiApp => true,
             Self::Builtins
             | Self::Enum
             | Self::Types
@@ -633,5 +671,50 @@ mod tests {
                 "The strum `EnumString` implementation appears to be incorrect for `{module_name}`"
             );
         }
+    }
+
+    /// basedpython: a framework module is recognised from a first-party search
+    /// path as well as from site-packages, unlike an ordinary third-party one
+    #[test]
+    fn framework_module_recognised_on_every_search_path() {
+        use ruff_db::Db as _;
+
+        use crate::testing::{TestCase, TestCaseBuilder};
+
+        let TestCase {
+            db,
+            src,
+            site_packages,
+            ..
+        } = TestCaseBuilder::new().build();
+        let first_party = SearchPath::first_party(db.system(), src)
+            .expect("first-party search path should be valid");
+        let site_packages = SearchPath::site_packages(db.system(), site_packages)
+            .expect("site-packages search path should be valid");
+
+        for module in KnownModule::iter().filter(|module| module.is_framework()) {
+            let module_name = module.name();
+            assert!(
+                module.is_third_party(),
+                "`{module_name}` is not standard library"
+            );
+            assert_eq!(
+                KnownModule::try_from_search_path_and_name(&first_party, &module_name),
+                Some(module),
+                "`{module_name}` should be recognised on a first-party search path"
+            );
+            assert_eq!(
+                KnownModule::try_from_search_path_and_name(&site_packages, &module_name),
+                Some(module),
+                "`{module_name}` should be recognised in site-packages"
+            );
+        }
+
+        // an ordinary third-party module keeps its restriction
+        let pydantic = KnownModule::PydanticMain;
+        assert_eq!(
+            KnownModule::try_from_search_path_and_name(&first_party, &pydantic.name()),
+            None
+        );
     }
 }

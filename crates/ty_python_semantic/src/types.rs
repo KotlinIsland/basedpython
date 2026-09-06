@@ -177,6 +177,7 @@ mod callable;
 pub mod character;
 mod class;
 mod class_base;
+pub(crate) mod composition;
 pub(crate) mod conformance;
 mod constraints;
 pub(crate) mod context;
@@ -197,6 +198,7 @@ pub mod format;
 pub(crate) mod function;
 mod generics;
 pub mod ide_support;
+pub(crate) mod immutability;
 pub(crate) mod implicit_names;
 mod infer;
 pub(crate) mod inferred_narrowing;
@@ -231,6 +233,8 @@ mod set_theoretic;
 mod signatures;
 pub mod soundness;
 mod special_form;
+pub(crate) mod state_invalidations;
+pub(crate) mod state_reads;
 pub mod static_resource;
 mod string_annotation;
 mod subclass_of;
@@ -4316,6 +4320,13 @@ impl<'db> Type<'db> {
                 ty.visit_specialization_impl(db, env, variance, f, visitor);
             });
         }
+    }
+
+    /// basedpython-ui: whether no value of this type can change after it is
+    /// created — the framework's notion of a *stable* value, one that may be
+    /// held in state. See the `immutability` module for exactly what counts.
+    fn is_deeply_immutable(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
+        immutability::is_deeply_immutable(db, env, self)
     }
 
     /// Return true if there is just a single inhabitant for this type.
@@ -12010,7 +12021,15 @@ impl<'db> TypeMapping<'_, 'db> {
                         Some(_) => false, // Specialized to a concrete type, filter out
                     }
                 });
-                if specialization.specialize_self_domain() {
+                // a retained variable is rewritten when the mapping reaches inside it — a
+                // `Self` domain, or a bound naming a type parameter the specialization names.
+                // the list has to carry the same variable the parameters and return type do, or
+                // the two halves of the signature disagree about what it is bounded by
+                if specialization.specialize_self_domain()
+                    || kept
+                        .clone()
+                        .any(|bound_typevar| bound_typevar.typevar(db).bound_mentions_typevars(db))
+                {
                     let kept = kept.filter_map(|bound_typevar| {
                         Type::TypeVar(bound_typevar)
                             .apply_type_mapping(

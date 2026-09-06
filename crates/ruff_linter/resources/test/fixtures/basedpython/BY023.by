@@ -1,0 +1,64 @@
+from typing import TypeAlias
+
+point: tuple[int, int]
+single: tuple[int]
+already_comma: tuple[int,]
+unpacked: tuple[*Ts]
+after_a_prefix: tuple[int, *Ts]
+nested: tuple[int, tuple[str, float]]
+in_a_union: tuple[int, str] | None
+in_a_subscript: list[tuple[int, str]]
+
+multiline: tuple[
+    int,  # a comment among the elements survives
+    str,
+]
+
+
+def f(x: tuple[int, str]) -> tuple[bool]: ...
+
+
+def g[T: tuple[int, str], U = tuple[str]](y: T) -> U: ...
+
+
+type Alias = tuple[int, str]
+Legacy: TypeAlias = tuple[int, str]
+
+
+class C[T: tuple[int, str]](tuple[str, int]):
+    field: tuple[int, str]
+
+
+# a homogeneous tuple is spelled `(*: int)`, which is not this rule's rewrite
+homogeneous: tuple[int, ...]
+
+# only the outer tuple here: the element list is rewritable, and the homogeneous
+# tuple unpacked into it stays as it is
+unpacked_homogeneous: tuple[int, *tuple[str, ...]]
+
+# `tuple[()]` is the empty tuple, which basedpython does spell `()` — the slice is
+# already a parenthesized tuple, and the rewrite has nothing left to do
+empty: tuple[()]
+# likewise a slice written with its own parentheses
+parenthesized: tuple[(int, str)]
+
+# `typing.Tuple` is left to UP006, which rewrites it to the builtin; this rule
+# then reports what that produced
+from typing import Tuple
+
+legacy: Tuple[int, str]
+
+# a bare `tuple` is not subscripted
+bare: tuple
+
+# a string annotation is never lowered, so the quotes must keep the python form
+quoted: "tuple[int, str]"
+
+# value positions are plain python
+alias_value = tuple[int, str]
+print(tuple[int, str])
+
+
+def shadowed():
+    tuple = list
+    shadow: tuple[int, str]

@@ -301,10 +301,12 @@ class D[T = int]: ...
 reveal_type(D())  # revealed: D[int]
 ```
 
-If a typevar does not provide a default, we use `Unknown`:
+A typevar with no default and nothing to infer from is left unsolved. Under the fork's
+`precise-unsolved-typevars` that is `Never` — the instance holds nothing — rather than python's
+gradual `Unknown`:
 
 ```py
-reveal_type(C())  # revealed: C[Unknown]
+reveal_type(C())  # revealed: C[Never]
 ```
 
 ## Calls within the generic class
@@ -1093,19 +1095,21 @@ def protocol_case(x: GenericProtocol[[int], str]) -> None:
 
 ## Scoping of typevars
 
-### No back-references
+### No forward references
 
 <!-- snapshot-diagnostics -->
 
-Typevar bounds/constraints/defaults are lazy, but cannot refer to later typevars. Furthermore,
-bounds/constraints cannot refer to other type variables, i.e. they must be non-generic.
+Typevar bounds, constraints and defaults are lazy, so they may name a typevar that precedes them in
+the list. They may not name a later one, which is not yet in scope. Constraints may not name a
+typevar at all: a constrained typevar takes its solution _from_ its constraint set, and a variable
+does not name a type to take.
 
 ```py
 # error: [invalid-type-variable-bound]
 class C[S: T, T]:
     pass
 
-# error: [invalid-type-variable-bound]
+# `S` precedes `T`, so `T`'s bound can name it
 class D[S, T: S]:
     pass
 

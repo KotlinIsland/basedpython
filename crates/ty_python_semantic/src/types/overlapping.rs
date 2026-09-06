@@ -49,13 +49,12 @@ impl<'db> OverlappingType<'db> {
     /// method body*: the upper bound of the wrapped type argument. A covariant
     /// `Key` is thereby erased to its bound (`object` when unbounded), so it can
     /// never be written back into `Key`-typed storage.
+    ///
+    /// A bound may itself be a type parameter, which is a name rather than the ceiling this
+    /// erasure needs, so `declared_ceiling` follows it to one.
     pub(crate) fn value_type(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         match self.type_argument(db) {
-            Type::TypeVar(typevar) => typevar
-                .typevar(db)
-                .bound_or_constraints(db, env)
-                .map(|bound_or_constraints| bound_or_constraints.as_type(db, env))
-                .unwrap_or_else(Type::object),
+            Type::TypeVar(typevar) => typevar.typevar(db).declared_ceiling(db, env),
             other => other,
         }
     }
