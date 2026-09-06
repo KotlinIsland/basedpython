@@ -2459,6 +2459,20 @@ impl<'a> SemanticModel<'a> {
         self.flags.intersects(SemanticModelFlags::TYPE_ALIAS)
     }
 
+    /// Return `true` if the model is visiting a [PEP 695] type parameter
+    /// definition: a type parameter's bound or default, or a type alias value.
+    ///
+    /// For example:
+    /// ```python
+    /// class C[T: int]: ...  # We're visiting the bound
+    /// ```
+    ///
+    /// [PEP 695]: https://peps.python.org/pep-0695/
+    pub const fn in_type_param_definition(&self) -> bool {
+        self.flags
+            .intersects(SemanticModelFlags::TYPE_PARAM_DEFINITION)
+    }
+
     /// Return `true` if the model is in an exception handler.
     pub const fn in_exception_handler(&self) -> bool {
         self.flags.intersects(SemanticModelFlags::EXCEPTION_HANDLER)

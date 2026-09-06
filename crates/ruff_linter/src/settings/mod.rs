@@ -1007,6 +1007,7 @@ mod tests {
         	manual-cast-call (BY020),
         	manual-property (BY021),
         	manual-modifier (BY022),
+        	manual-tuple-annotation (BY023),
         	redundant-none-coalesce (BY101),
         	fast-api-redundant-response-model (FAST001),
         	fast-api-non-annotated-dependency (FAST002),
