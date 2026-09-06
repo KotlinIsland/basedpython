@@ -1,3 +1,5 @@
+use std::cell::{Cell, RefCell};
+
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::{Expr, PythonVersion, Stmt};
 use ruff_text_size::Ranged;
@@ -5,8 +7,9 @@ use ruff_text_size::Ranged;
 use crate::Config;
 use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::callable::CallableSyntax;
+use crate::transforms::optional_type;
 use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
-use crate::transforms::{literal_types, optional_type};
 use crate::type_info::TypeInfo;
 
 /// The element type an unpacked tuple element wraps, whichever way the target
@@ -41,9 +44,13 @@ pub(crate) struct TupleLiteralType<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
     min_version: PythonVersion,
-    float_literals: FloatLiteralLowering,
     /// set when a lowering spelled an `Unpack`, so the pass can ask for the import
-    needs_unpack_import: std::cell::Cell<bool>,
+    needs_unpack_import: Cell<bool>,
+    /// the shared type-expression lowerer, used for every element this
+    /// transform re-emits. our replacement covers the whole tuple, so the
+    /// dedicated passes' edits inside it are dropped — without this an element
+    /// would reach the output as surface syntax
+    leaves: RefCell<CallableSyntax<'src>>,
     edits: Vec<Fix>,
 }
 
@@ -58,8 +65,8 @@ impl<'src> TupleLiteralType<'src> {
             source,
             types,
             min_version,
-            float_literals,
-            needs_unpack_import: std::cell::Cell::new(false),
+            needs_unpack_import: Cell::new(false),
+            leaves: RefCell::new(CallableSyntax::new(source, float_literals).with_types(types)),
             edits: Vec::new(),
         }
     }
@@ -81,10 +88,17 @@ impl<'src> TupleLiteralType<'src> {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
-    /// Source text for `expr`, with literal-type rewrites applied if needed.
+    /// Python source for an element `transform_annotation` does not itself
+    /// rewrite, lowered through the shared type-expression lowerer.
+    ///
+    /// Taking the source verbatim here would leak basedpython surface syntax:
+    /// `float` has to become `JustFloat`, `dynamic` has to become `Any`, and an
+    /// intersection or a callable arrow has to be spelled the python way. The
+    /// dedicated passes cannot reach inside a tuple type, because the shared
+    /// walker does not descend into a parenthesized tuple, and our replacement
+    /// covers the whole expression anyway.
     fn fallback_src(&self, expr: &Expr) -> String {
-        literal_types::rewrite_type_expr(self.source, self.types, expr, self.float_literals)
-            .unwrap_or_else(|| self.src(expr.range()).to_owned())
+        self.leaves.borrow_mut().lower_type_expr(expr)
     }
 
     /// Returns a rewritten annotation string if any transformation is needed,
@@ -175,7 +189,7 @@ impl<'src> TupleLiteralType<'src> {
                         .join(", ");
                     let returns_str = self
                         .transform_annotation(returns_expr)
-                        .unwrap_or_else(|| self.src(returns_expr.range()).to_owned());
+                        .unwrap_or_else(|| self.fallback_src(returns_expr));
                     let value_str = self.src(s.value.range());
                     return Some(format!("{value_str}[[{params_str}], {returns_str}]"));
                 }
@@ -237,12 +251,12 @@ impl<'src> TupleLiteralType<'src> {
                     return String::new();
                 }
                 self.transform_annotation(&named.value)
-                    .unwrap_or_else(|| self.src(named.value.range()).to_owned())
+                    .unwrap_or_else(|| self.fallback_src(&named.value))
             }
             Expr::Starred(_) => String::new(),
             _ => self
                 .transform_annotation(elt)
-                .unwrap_or_else(|| self.src(elt.range()).to_owned()),
+                .unwrap_or_else(|| self.fallback_src(elt)),
         }
     }
 
@@ -272,16 +286,16 @@ impl<'src> TupleLiteralType<'src> {
                     if let Expr::Starred(unpacked) = named.value.as_ref() {
                         let inner_src = self
                             .transform_annotation(&unpacked.value)
-                            .unwrap_or_else(|| self.src(unpacked.value.range()).to_owned());
+                            .unwrap_or_else(|| self.fallback_src(&unpacked.value));
                         return self.unpack(&inner_src);
                     }
                     let value_src = self
                         .transform_annotation(&named.value)
-                        .unwrap_or_else(|| self.src(named.value.range()).to_owned());
+                        .unwrap_or_else(|| self.fallback_src(&named.value));
                     return self.unpack(&format!("tuple[{value_src}, ...]"));
                 }
                 self.transform_annotation(&named.value)
-                    .unwrap_or_else(|| self.src(named.value.range()).to_owned())
+                    .unwrap_or_else(|| self.fallback_src(&named.value))
             }
             // `*: T` (anonymous variadic) → `*tuple[T, ...]`
             // `**: T` (kwargs catch-all)  → dropped
@@ -291,7 +305,7 @@ impl<'src> TupleLiteralType<'src> {
                 }
                 let value_src = self
                     .transform_annotation(&s.value)
-                    .unwrap_or_else(|| self.src(s.value.range()).to_owned());
+                    .unwrap_or_else(|| self.fallback_src(&s.value));
                 if parameter_shape {
                     self.unpack(&format!("tuple[{value_src}, ...]"))
                 } else {
@@ -304,7 +318,7 @@ impl<'src> TupleLiteralType<'src> {
             _ => self
                 .transform_annotation(elt)
                 .or_else(|| optional_type::rewrite_type_expr(self.source, elt, self.min_version))
-                .unwrap_or_else(|| self.src(elt.range()).to_owned()),
+                .unwrap_or_else(|| self.fallback_src(elt)),
         }
     }
 }
@@ -353,14 +367,10 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
             self.config.float_literals,
         );
         walk_type_positions(stmts, Some(types), &mut inner);
-        let mut wraps_literal = false;
         for fix in inner.edits {
             for edit in fix.edits() {
                 let range = edit.range();
                 let repl = edit.content().unwrap_or_default().to_owned();
-                if repl.contains("Literal[") {
-                    wraps_literal = true;
-                }
                 ctx.text_edits.push((range, repl));
             }
         }
@@ -368,13 +378,17 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
             ctx.required_imports
                 .push("from typing import Unpack".to_owned());
         }
-        // when our embedded literal-type lowering produced `Literal[...]` text,
-        // request the import. the standalone literal_types pass doesn't see
-        // the bare literal anymore because we've replaced its parent annotation
-        if wraps_literal && !literal_types::literal_already_imported(types) {
+        // whatever the element lowerer spelled needs its own imports, and a
+        // callable arrow among the elements needs its hoisted `Protocol` class.
+        // our replacement covers the whole tuple, so the `callable` pass's own
+        // visit never reaches these and cannot ask for them
+        let mut leaves = inner.leaves.borrow_mut();
+        let defs = leaves.class_defs().to_owned();
+        if !defs.is_empty() {
             ctx.required_imports
-                .push("from typing import Literal".to_owned());
+                .push(format!("{}\n", defs.trim_end_matches('\n')));
         }
+        ctx.required_imports.extend(leaves.take_import_lines());
     }
 }
 
@@ -451,8 +465,34 @@ mod tests {
     #[test]
     fn nested_tuple() {
         check(
-            "a: (int, (str, float))\n",
-            "a: tuple[int, tuple[str, float]]\n",
+            "a: (int, (str, bytes))\n",
+            "a: tuple[int, tuple[str, bytes]]\n",
+        );
+    }
+
+    /// an element gets the same lowering any other type expression would.
+    /// the rewrite replaces the whole tuple, so the dedicated passes' edits
+    /// inside it are dropped and the element has to be lowered here instead —
+    /// otherwise `float` would keep python's `int | float` reading, `dynamic`
+    /// and an intersection would reach the output as basedpython syntax, and a
+    /// callable arrow would not be python at all
+    #[test]
+    fn an_element_is_lowered_like_any_other_type() {
+        check(
+            "a: (str, float)\n",
+            "from ty_extensions import JustFloat\na: tuple[str, JustFloat]\n",
+        );
+        check(
+            "a: (dynamic, int)\n",
+            "from typing import Any\na: tuple[Any, int]\n",
+        );
+        check(
+            "a: (A & B, int)\n",
+            "from ty_extensions import Intersection\na: tuple[Intersection[A, B], int]\n",
+        );
+        check(
+            "a: (str, (int) -> bytes)\n",
+            "from typing import Callable\na: tuple[str, Callable[[int], bytes]]\n",
         );
     }
 
@@ -476,11 +516,11 @@ mod tests {
 
     #[test]
     fn subscript_non_parenthesized_tuple_propagated() {
-        // dict[str, (int, float)] — the `str, (int, float)` is an unparenthesized
+        // dict[str, (int, bytes)] — the `str, (int, bytes)` is an unparenthesized
         // tuple in the slice; only the parenthesized inner tuple should be rewritten
         check(
-            "a: dict[str, (int, float)]\n",
-            "a: dict[str, tuple[int, float]]\n",
+            "a: dict[str, (int, bytes)]\n",
+            "a: dict[str, tuple[int, bytes]]\n",
         );
     }
 
@@ -488,11 +528,11 @@ mod tests {
     fn function_parameter_annotation() {
         check(
             indoc! {"
-                def f(x: (int, str)) -> (bool, float):
+                def f(x: (int, str)) -> (bool, bytes):
                     pass
             "},
             indoc! {"
-                def f(x: tuple[int, str]) -> tuple[bool, float]:
+                def f(x: tuple[int, str]) -> tuple[bool, bytes]:
                     pass
             "},
         );
