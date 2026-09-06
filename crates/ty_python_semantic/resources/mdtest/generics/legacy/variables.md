@@ -393,7 +393,7 @@ V = TypeVar("V", default=Union[T, U])
 
 class Valid(Generic[T, U, V]): ...
 
-reveal_type(Valid())  # revealed: Valid[Unknown, Unknown, Unknown]
+reveal_type(Valid())  # revealed: Valid[Never, Never, Never]
 reveal_type(Valid[int]())  # revealed: Valid[int, int, int]
 reveal_type(Valid[int, str]())  # revealed: Valid[int, str, int | str]
 reveal_type(Valid[int, str, None]())  # revealed: Valid[int, str, None]
@@ -1108,7 +1108,7 @@ V = TypeVar("V", default="V")
 class D(Generic[V]):
     x: V
 
-reveal_type(D().x)  # revealed: Unknown
+reveal_type(D().x)  # revealed: Never
 ```
 
 ## Regression
