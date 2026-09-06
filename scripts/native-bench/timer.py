@@ -16,6 +16,11 @@ whose file is not under this run's own root, is older than this run's build, or 
 for a build that is supposed to be compiled — does not end in a real extension
 suffix. a stale artefact and a build that silently did not happen are the two
 ways this suite has lied before, and both are refusals rather than warnings.
+
+a benchmark with inputs to build hands them to `setup`, which runs once per
+process here and never inside a clock. a benchmark that built them inside
+`bench()` instead was timing two things and reporting one — see `bare_answer`
+for what stops that coming back.
 """
 
 from __future__ import annotations
@@ -80,6 +85,26 @@ def load(leg: dict[str, Any], root: str, built_after: float) -> tuple[Bench, str
     return cast(Bench, module), str(path)
 
 
+def bare_answer(module: Bench) -> str:
+    """what `bench()` answers before `setup` has run
+
+    this is the evidence behind the one guard the timed region cannot check for
+    itself. a benchmark that declares a `setup` is saying that its inputs are
+    built outside the clock, and the way to prove it is to withhold the setup:
+    with the inputs unbuilt, `bench()` has to answer differently — or raise,
+    which is the same evidence — because it has nothing to work on. a `bench()`
+    that quietly went back to building its own inputs would answer the same
+    either way, and `bench.py` refuses a program whose two answers agree.
+
+    a raise is reported rather than propagated: an empty container reached the
+    wrong way is exactly what a properly emptied benchmark does
+    """
+    try:
+        return repr(module.bench())
+    except Exception as error:
+        return f"raised {type(error).__name__}"
+
+
 def sample(module, target: float, ceiling: int) -> tuple[float, int]:
     """one timed sample: however many calls it takes to fill `target` seconds
 
@@ -140,6 +165,8 @@ def main() -> int:
     refused: dict[str, str] = {}
     answers: dict[str, str] = {}
     origins: dict[str, str] = {}
+    bare: dict[str, str] = {}
+    has_setup: list[str] = []
     for leg in spec["legs"]:
         try:
             module, origin = load(leg, root, built_after)
@@ -151,12 +178,37 @@ def main() -> int:
 
     if spec["mode"] == "probe":
         for name, module in loaded:
+            prepare = getattr(module, "setup", None)
+            if prepare is not None:
+                has_setup.append(name)
+                bare[name] = bare_answer(module)
+                try:
+                    prepare()
+                except Exception as error:
+                    refused[name] = f"setup() raised {type(error).__name__}: {error}"
+                    continue
             try:
                 answers[name] = repr(module.bench())
             except Exception as error:
                 refused[name] = f"bench() raised {type(error).__name__}: {error}"
-        print(json.dumps({"answers": answers, "refused": refused, "origins": origins}))
+        print(
+            json.dumps(
+                {
+                    "answers": answers,
+                    "refused": refused,
+                    "origins": origins,
+                    "bare": bare,
+                    "has_setup": has_setup,
+                }
+            )
+        )
         return 0
+
+    # every build's inputs are built here, before any clock starts, and once for
+    # the whole process — so nothing below times a benchmark's preparation
+    for _, module in loaded:
+        if hasattr(module, "setup"):
+            module.setup()
 
     target, ceiling = spec["sample_target"], spec["max_calls"]
     rounds, warmup = spec["rounds"], spec["warmup"]

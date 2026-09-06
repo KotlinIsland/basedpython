@@ -1,0 +1,35 @@
+"""`props`, written the way basedpython offers to write it
+
+the pair is the point. `props` declares a `@property` and a `@v.setter` by hand
+over a `_v` the class initialises itself; this declares `var v: int = 0` with a
+`get`/`set` block under it, and the transpiler emits that same pair over a
+backing `__v`. the work `run` does is `props`'s exactly, character for
+character, so whatever the two rows differ by is the surface syntax and nothing
+else
+
+that is worth measuring rather than assuming, because a lowering is free only if
+it lands on the shape the backend already knew. `props_ext` is the standing
+warning here: it is `props` with one class added and it reads a fraction of it
+
+no `setup` — the cell is one object and building it is not the measurement,
+which is `fields`'s job
+"""
+
+
+class Cell:
+    var v: int = 0
+        get() = field
+        set(given):
+            field = given
+
+
+def run(cell: Cell, n: int) -> int:
+    i = 0
+    while i < n:
+        cell.v = cell.v + 1
+        i = i + 1
+    return cell.v
+
+
+def bench() -> int:
+    return run(Cell(), 300000)

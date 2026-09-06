@@ -13,6 +13,23 @@
 # `mypyc = false` means mypyc genuinely cannot build the program — the harness
 # reports a *failed* mypyc build loudly, so this is for the cases that are not
 # failures, and nothing may be listed here without the log to justify it.
+#
+# a program written as `.by` rather than `.py` is a basedpython one, and there
+# is no key for it here: the extension already decides how a benchmark is built,
+# so it is also what the harness reads to find out. such a row is a three-way
+# comparison rather than a two-way one — `by compile` takes the basedpython
+# source as written, while the interpreted and mypyc builds run the python
+# `by transpile` lowers it to, produced once per program outside every clock and
+# kept in the staging tree so a surprising number can be read rather than
+# guessed at. a lowering that fails is a refusal, not a skipped leg. one name
+# may not be on disk both ways, since nothing could then say which is meant.
+#
+# `setup = true` says the program builds its inputs in a `setup()` that the
+# harness calls once per process, outside every clock, so that the timed region
+# holds only the operation the row is named for. it is checked by withholding
+# the setup: with its inputs unbuilt a benchmark has to answer differently, or
+# raise, so a `bench()` that has gone back to building its own inputs fails the
+# run rather than posting a number about two things at once.
 
 [programs.mandel]
 group = "float"
@@ -53,6 +70,7 @@ declines = 0
 group = "dispatch"
 measures = "an override reached through a base-typed local"
 declines = 0
+setup = true
 
 [programs.alloc]
 group = "memory"
@@ -93,11 +111,13 @@ declines = 0
 group = "list"
 measures = "indexed reads over two lists that never escape"
 declines = 0
+setup = true
 
 [programs.prefix]
 group = "list"
 measures = "appends into a list the function owns, iterated with `for`"
 declines = 0
+setup = true
 
 [programs.sieve]
 group = "list"
@@ -118,16 +138,19 @@ declines = 0
 group = "set"
 measures = "a set built once and tested for membership many times"
 declines = 0
+setup = true
 
 [programs.dictget]
 group = "dict"
 measures = "dict lookup and in-place update, keys handed in already built"
 declines = 0
+setup = true
 
 [programs.dicthist]
 group = "dict"
 measures = "the histogram shape: membership test then read-modify-write"
 declines = 0
+setup = true
 
 [programs.words]
 group = "str"
@@ -138,11 +161,13 @@ declines = 0
 group = "str"
 measures = "an indexed scan over text, a character at a time"
 declines = 0
+setup = true
 
 [programs.strops]
 group = "str"
 measures = "the `str` methods real code calls: split, join, startswith, upper"
 declines = 0
+setup = true
 
 [programs.keybuild]
 group = "str"
@@ -178,3 +203,75 @@ declines = 0
 group = "frames"
 measures = "the same awaits over a coroutine that returns nothing — the commoner shape"
 declines = 0
+
+[programs.with_]
+group = "control"
+measures = "a `with` block over a class of the module's own, entered and left every pass"
+declines = 0
+
+[programs.match_]
+group = "control"
+measures = "a `match` ladder: a literal, a class pattern with captures, a guard, a wildcard"
+declines = 0
+setup = true
+
+[programs.comp]
+group = "list"
+measures = "the list `prefix` grows with `for` and `append` — the pair isolates the comprehension"
+declines = 0
+setup = true
+
+[programs.dunder]
+group = "dispatch"
+measures = "`+`, `<` and `==` reached through a class's own operator methods"
+declines = 0
+
+[programs.globals_]
+group = "memory"
+measures = "module-level names read from a loop rather than handed in"
+declines = 0
+setup = true
+
+[programs.dataclass]
+group = "memory"
+measures = "`alloc`'s loop with the constructor synthesised by `@dataclass` rather than written"
+declines = 1
+
+[programs.kwargs]
+group = "dispatch"
+measures = "`calls`'s body reached through `*args`, `**kwargs`, a default and a keyword-only — the pair isolates the argument shape"
+declines = 0
+
+[programs.slices]
+group = "list"
+measures = "slices of a list and a string, which every other container row indexes one element at a time"
+declines = 0
+setup = true
+
+[programs.closure]
+group = "dispatch"
+measures = "a nested function reading and writing a captured cell — `calls` is the same call with nothing captured"
+declines = 0
+
+[programs.sortkey]
+group = "dispatch"
+measures = "a key function reached from inside a builtin's own loop, which is the only call here python does not make"
+declines = 0
+setup = true
+
+[programs.payloads]
+group = "enum"
+measures = "a `match` over an enum whose variants carry data, and the payload read out"
+declines = 1
+setup = true
+
+[programs.destructure]
+group = "bind"
+measures = "a `match` pattern binding in a `for` target and in a `let`"
+declines = 2
+setup = true
+
+[programs.accessors]
+group = "dispatch"
+measures = "the `props` pair written as a `get`/`set` block — the pair isolates the syntax"
+declines = 3
