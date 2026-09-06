@@ -567,6 +567,44 @@ holding one — is not moved and cannot be. those stay as the body left them, an
 that limit is the reason the rule is a substitution of *the twin itself* rather
 than a deep rewrite.
 
+### checking that what was installed is what was reported
+
+init ends by asking the finished namespace what is in it. for every class the
+module publishes:
+
+- the name holds the emitted type, and not the interpreted definition still
+    sitting behind it. a class the module decorated is exempt: a decorator is
+    arbitrary python handed the class and may publish anything
+- `__bases__` holds, by identity, the type this module emitted for each base it
+    emitted itself
+- `_abc_impl` is the twin's own object, where the twin had one
+- every name in the class's method table answers as a descriptor rather than as
+    a `function`. a `function` there is the interpreted definition
+
+a failure raises `ImportError` naming the class. it is not a warning, because
+each of those is a wrong answer the program has simply not reached yet — a class
+standing on an orphaned copy of its base answers `isinstance` False where python
+answers True, and a type with an empty registry answers `issubclass(dict, Mapping)` False.
+
+a class the module **stood down** is none of those. the layout guard above
+leaves a class interpreted
+where installing it would be wrong, and a construction that could not be rebuilt
+hands the interpreted definition back to stand as the class — in both cases the
+name holding that definition is the answer, not a defect, and the check records
+it rather than raising.
+
+recording is the other half, and it is what the check is for. `--annotate` says
+which classes a module *meant* to compile; it cannot say which ones an import
+stood a type under, and for most of this project's life the report was read as
+though it could. so every published class writes a row — `installed`,
+`interpreted`, or `twin` — to the file named by the `BY_INSTALL_CENSUS`
+environment variable, and a build that compares those rows against the report is
+holding the report to what ran. `scripts/native-sweeps/installcensus.sh` does
+exactly that over the corpus.
+
+the check runs once per module at import, never per call, and
+`by compile --no-verify-install` leaves it out.
+
 ## interoperating with interpreted code
 
 the boundary is symmetric and both directions are guarded

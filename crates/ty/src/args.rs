@@ -229,11 +229,35 @@ pub(crate) enum Command {
         /// entirely.
         #[arg(long)]
         require_native: bool,
+        /// Leave out the import-time check that every class reported as compiled is
+        /// the class standing under its own name.
+        ///
+        /// The check runs once per module at import and raises `ImportError` naming
+        /// the class when what was installed is not what was emitted for it. It is on
+        /// by default: a class that quietly leaves its interpreted definition standing
+        /// answers exactly as that definition does, so nothing else detects one.
+        #[arg(long)]
+        no_verify_install: bool,
         /// Write a `<module>.annotated` report next to the generated C: each
         /// function's BIR, whether it is infallible, and for every function left
         /// interpreted, the reason why.
         #[arg(long)]
         annotate: bool,
+        /// Have every call that skipped a lookup re-ask it at runtime, and abort
+        /// naming the class and the member when the answer is not the body it
+        /// was about to run.
+        ///
+        /// The compiler licenses a call to go straight to a compiled body when
+        /// nothing can have put something else under the name — a class python
+        /// can neither subclass nor rebind a method on, a receiver whose type
+        /// still matches. A licence that is wrong is a silent wrong answer: an
+        /// override that stops being seen, a rebinding nothing notices. This
+        /// turns every one of those into a crash instead.
+        ///
+        /// It costs the lookup each licence exists to avoid, so it is for tests
+        /// and for chasing a wrong answer, not for a build that has to be fast.
+        #[arg(long)]
+        licence_recheck: bool,
         /// The lowering options a declined function's interpreted definition is
         /// transpiled with.
         ///

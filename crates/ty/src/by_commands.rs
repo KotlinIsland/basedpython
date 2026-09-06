@@ -286,7 +286,7 @@ pub(crate) fn cmd_run(
             if name.dotted() == module {
                 continue;
             }
-            let mut lowered = by_irbuild::module_from_source(source, name, options.language);
+            let mut lowered = by_irbuild::module_from_source(source, name, options.lowering());
             lowered.lines = Some(by_ir::function::LineTable::new(
                 entry.by_path.display().to_string(),
                 source,
@@ -1215,7 +1215,7 @@ pub(crate) fn cmd_compile(
                 &model,
                 parsed.suite(),
                 name,
-                options.language,
+                options.lowering(),
             );
             // the real path, so a `#line` in the generated C resolves for a debugger
             let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());

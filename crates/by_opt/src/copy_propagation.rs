@@ -351,6 +351,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::RaiseObject { .. }
         | Op::PopHandled { .. }
         | Op::Reraise { .. }
+        | Op::LicenceHolds { .. }
         | Op::SetField { .. } => {}
     }
 }
@@ -376,6 +377,7 @@ mod tests {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         }
     }
 

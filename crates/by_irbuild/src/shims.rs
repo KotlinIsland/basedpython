@@ -28,27 +28,36 @@
 //! forwarder needs a code object and this is the only place in the build that can
 //! make one.
 //!
-//! # the forwarder takes `*args, **kwargs`, and that is deliberate
+//! # what the forwarder may and may not decide
 //!
-//! writing out each parameter by name would have made `inspect.signature` read
-//! straight off the forwarder, but it also means the forwarder *binds* the call —
-//! and a forwarder that fills in a default is filling in the wrong one. the
-//! transpiler rewrites `def f(b=[])` into a `_MISSING` sentinel plus a test in the
-//! body, so the twin's default is a sentinel the native has never heard of, and
-//! passing it on made `f()` answer with the sentinel object.
+//! a forwarder that *binds* the call can fill in a default, and a default it fills
+//! in is the wrong one: the transpiler rewrites `def f(b=[])` into a `_MISSING`
+//! sentinel plus a test in the body, so the twin's default is a sentinel the native
+//! has never heard of, and passing it on made `f()` answer with the sentinel
+//! object. the same goes for every other decision about arity — which calls are
+//! short, which are long, and which are handed back to the interpreted definition
+//! — all of which live in the native boundary and are phrased in python's own
+//! words there.
 //!
-//! so the forwarder passes on exactly what it was given and nothing else. every
-//! decision about arity, defaults, keyword-only parameters and which calls are
-//! handed back to the interpreted definition stays where it already was, in the
-//! native boundary — the forwarder cannot get any of them wrong because it does
-//! not make any of them.
+//! so a forwarder over a function with anything to decide takes `*args, **kwargs`
+//! and passes on exactly what it was given. it cannot get any of those decisions
+//! wrong because it does not make any of them.
 //!
-//! what that costs is the signature, and it is paid back the way python itself
-//! pays it: `__wrapped__` points at the interpreted definition, so
-//! `inspect.signature`, `inspect.getsource` and `inspect.getfile` all answer for
-//! the definition as written. everything else a function is asked about — its
-//! name, docstring, module, defaults, annotations, `__dict__` — is copied off that
-//! same definition.
+//! a function with **no defaults, no `*args`, no `**kwargs`, and no positional-only
+//! or keyword-only parameters** has nothing to decide: every call that binds names
+//! at all binds each parameter exactly once, from a positional or a keyword, and a
+//! call that does not is a `TypeError` either way. such a forwarder is written with
+//! the parameters spelled out, which is worth roughly half the cost of reaching a
+//! compiled function from python — the packing of a tuple and a dict per call, and
+//! the `CALL_FUNCTION_EX` that unpacks them again — and it is what makes
+//! `sorted(values, key=compiled)` faster than the interpreted key rather than
+//! slower. `spelled_parameters` is that test.
+//!
+//! either shape costs the signature, and it is paid back the way python itself pays
+//! it: `__wrapped__` points at the interpreted definition, so `inspect.signature`,
+//! `inspect.getsource` and `inspect.getfile` all answer for the definition as
+//! written. everything else a function is asked about — its name, docstring,
+//! module, defaults, annotations, `__dict__` — is copied off that same definition.
 
 use std::fmt::Write;
 
@@ -84,6 +93,37 @@ fn published(module: &ModuleIr) -> Vec<&Function> {
         .functions
         .iter()
         .filter(|function| function.exported)
+        .collect()
+}
+
+/// the parameter names a forwarder for `function` may spell out, or `None` where it
+/// has to take `*args, **kwargs`
+///
+/// spelling them out makes the forwarder bind the call, so it is only allowed where
+/// binding decides nothing the native boundary would have decided differently: no
+/// default to fill in, no `*args` or `**kwargs` to collect into, and no
+/// positional-only or keyword-only run to phrase an arity error in terms of. what
+/// is left is a function whose every call either fills each parameter exactly once
+/// or is a `TypeError`, and python raises that `TypeError` off the forwarder in the
+/// same words the boundary would have used, under the same name — the installer
+/// rewrites `co_name` and `co_qualname` before the forwarder is reachable
+///
+/// a parameter with no source name is a receiver or a temporary, and a module-level
+/// function has neither; one that turns up anyway is not something to guess at
+fn spelled_parameters(function: &Function) -> Option<Vec<&str>> {
+    if function.vararg
+        || function.kwarg
+        || function.posonly != 0
+        || function.kwonly != 0
+        || function.defaults.iter().any(Option::is_some)
+        || !function.computed_defaults.is_empty()
+    {
+        return None;
+    }
+    function
+        .params()
+        .iter()
+        .map(|param| param.name.as_deref())
         .collect()
 }
 
@@ -153,14 +193,26 @@ pub fn shims(module: &ModuleIr, twin: &str) -> Option<Shims> {
     // the natives arrive in the order the module's own function list walks, which is
     // the order the artefact's table is written in
     for (slot, function) in published.iter().enumerate() {
+        // the forwarder reads one name from the enclosing scope, `{prefix}n{slot}`,
+        // so a parameter spelled the same would shadow it and the forwarder would
+        // call its own argument. `free_name` has already ruled that out: it extended
+        // `prefix` until it occurs nowhere in the twin, and every parameter name is
+        // written in the twin's own `def`
+        let (params, arguments) = match spelled_parameters(function) {
+            Some(names) => (names.join(", "), names.join(", ")),
+            None => (
+                format!("*{prefix}a, **{prefix}k"),
+                format!("*{prefix}a, **{prefix}k"),
+            ),
+        };
         // a cell of its own per forwarder. one shared name would be a single cell
         // every one of them closed over, so they would all end up calling whichever
         // native was assigned last
         let _ = write!(
             source,
             "    {prefix}n{slot} = {prefix}natives[{slot}]\n\
-             \x20   def {prefix}f{slot}(*{prefix}a, **{prefix}k):\n\
-             \x20       return {prefix}n{slot}(*{prefix}a, **{prefix}k)\n\
+             \x20   def {prefix}f{slot}({params}):\n\
+             \x20       return {prefix}n{slot}({arguments})\n\
              \x20   {prefix}adopt({prefix}f{slot}, {:?})\n",
             function.name
         );
@@ -255,5 +307,64 @@ def getattr(a: int) -> int:
     fn a_module_with_nothing_to_export_gets_no_installer() {
         let module = module_from_source("x = 1\n", "m", Language::Python);
         assert!(shims(&module, "x = 1\n").is_none());
+    }
+
+    /// a call reaching a function with nothing to decide should not be repacked
+    ///
+    /// `*args, **kwargs` costs a tuple and a dict per call and the `CALL_FUNCTION_EX`
+    /// that takes them apart again, which is most of what it costs to reach a
+    /// compiled function from python at all
+    #[test]
+    fn a_forwarder_over_a_plain_signature_spells_its_parameters_out() {
+        let source = "def add(a: int, b: int) -> int:\n    return a + b\n";
+        let rendered = built(source).source;
+        assert!(
+            rendered.contains("def _by_install_natives_f0(a, b):"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("return _by_install_natives_n0(a, b)"),
+            "{rendered}"
+        );
+    }
+
+    /// every shape where binding decides something keeps passing the call straight on
+    ///
+    /// a default is the one that matters most: the transpiler rewrites a mutable one
+    /// into a sentinel the native has never heard of, so a forwarder that filled it in
+    /// would answer with the sentinel object
+    #[test]
+    fn a_forwarder_over_anything_with_a_decision_to_make_passes_the_call_on() {
+        for source in [
+            "def f(a: int = 1) -> int:\n    return a\n",
+            "def f(a: list[int] = []) -> int:\n    return len(a)\n",
+            "def f(*a: int) -> int:\n    return len(a)\n",
+            "def f(**k: int) -> int:\n    return len(k)\n",
+            "def f(a: int, /) -> int:\n    return a\n",
+            "def f(*, a: int) -> int:\n    return a\n",
+        ] {
+            let rendered = built(source).source;
+            assert!(
+                rendered.contains(
+                    "def _by_install_natives_f0(*_by_install_natives_a, **_by_install_natives_k):"
+                ),
+                "{source} produced {rendered}"
+            );
+        }
+    }
+
+    /// a function taking nothing is a plain signature too, and spells out no parameter
+    #[test]
+    fn a_forwarder_over_a_function_taking_nothing_takes_nothing() {
+        let source = "def f() -> int:\n    return 1\n";
+        let rendered = built(source).source;
+        assert!(
+            rendered.contains("def _by_install_natives_f0():"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("return _by_install_natives_n0()"),
+            "{rendered}"
+        );
     }
 }

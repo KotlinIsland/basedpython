@@ -116,6 +116,16 @@ design, and it has one uncomfortable consequence: every surface construct now
 has two lowerings that must agree. [plan](plan.md#differential-testing)
 describes how that is held down
 
+being siblings also means `by_irbuild` walks the **basedpython** ast, markers
+and all: nothing between the parse and the lowering rewrites `a?.b` into a
+guarded read, and the transpiler's passes produce the *other* sibling's output.
+so a lowering that reads such a node by its plain-python meaning compiles a
+different program and says nothing about it — `a?.b` becomes `a.b` and raises
+`AttributeError` where the source asked for `None`. `by_irbuild::surface` is
+where every basedpython-only marker is decided: a form the lowering understands
+is named and allowed, and every other one declines, which puts the function back
+on the twin the transpiler *did* lower
+
 ## goals
 
 - **speed**, in that order of priority: hot numeric and string code first,

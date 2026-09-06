@@ -185,6 +185,23 @@ pub enum UnaryOp {
     Invert,
 }
 
+/// which lookup a [`Op::LicenceHolds`] re-asks
+///
+/// the two go through different halves of python's attribute machinery, so they are
+/// different questions even though the licence behind them is the same shape
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LicenceKind {
+    /// `receiver.member(...)` reached without the object protocol. the lookup consults
+    /// the instance as well as the type, because a method is a non-data descriptor and
+    /// a value stored on the instance wins
+    Method,
+    /// a `@property` half reached without the descriptor protocol. a `property` is a
+    /// data descriptor, so the lookup is on the type alone — and it stops at the
+    /// descriptor rather than calling a half, since calling one would run a body the
+    /// program is already running
+    Accessor,
+}
+
 /// which error class a [`Op::RaiseStandard`] raises
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StandardError {
@@ -396,6 +413,32 @@ pub enum Op {
         src: Value,
         class: String,
         name: String,
+    },
+    /// re-ask, against the receiver in hand, the lookup one licensed direct call
+    /// skipped — and abort naming `class` and `member` when the answer is not the body
+    /// that call is about to run
+    ///
+    /// a *licence* is a compile-time decision that a call may go straight to a compiled
+    /// body. some rest on nothing at runtime at all: a class the emitter laid out as a
+    /// static type refuses both subclassing and `setattr`, so the compiler concludes no
+    /// override and no rebinding can exist and emits the call bare. the others stand
+    /// behind [`Op::MethodStands`] or [`Op::AccessorStands`], which are a type-pointer
+    /// comparison and a cached version tag — cheap stand-ins for the lookup, not the
+    /// lookup.
+    ///
+    /// either way the licence is a claim nothing checks, and a licence that is wrong is
+    /// a wrong answer with nothing to report it: an override that stops being seen, a
+    /// rebinding nothing notices. this op is the claim asked out loud. it is emitted
+    /// only under the re-check mode, since a lookup per call is the whole cost the
+    /// licence exists to avoid
+    LicenceHolds {
+        /// the receiver the licensed call is about to run a body on
+        src: Value,
+        /// the emitted class the licence named, which `src` has to be *exactly*
+        class: String,
+        /// the method or property the call reaches
+        member: String,
+        kind: LicenceKind,
     },
     /// whether `src`'s own dict holds `method`, so that the body this module emitted
     /// for `class` is *not* what an attribute lookup would answer with
@@ -1096,6 +1139,8 @@ impl Op {
             // a method reached directly rather than through the type, which only a
             // class the emitter laid out has
             Self::CallNative { owner, .. } => owner.as_deref().into_iter().collect(),
+            // the class the licence named, which is one this module emitted
+            Self::LicenceHolds { class, .. } => vec![class.as_str()],
             Self::Unbox { to, .. } => to.instance_classes(),
             Self::Assign { .. }
             | Self::IntBinary { .. }
@@ -1322,6 +1367,7 @@ impl Op {
             | Self::RaiseObject { .. }
             | Self::PopHandled { .. }
             | Self::Reraise { .. }
+            | Self::LicenceHolds { .. }
             | Self::SetField { .. } => None,
         }
     }
@@ -1428,6 +1474,7 @@ impl Op {
             | Self::RaiseObject { .. }
             | Self::PopHandled { .. }
             | Self::Reraise { .. }
+            | Self::LicenceHolds { .. }
             | Self::SetField { .. } => None,
         }
     }
@@ -1444,6 +1491,7 @@ impl Op {
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
             | Self::AccessorStands { src, .. }
+            | Self::LicenceHolds { src, .. }
             | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
@@ -1645,6 +1693,7 @@ impl Op {
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
             | Self::AccessorStands { src, .. }
+            | Self::LicenceHolds { src, .. }
             | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }

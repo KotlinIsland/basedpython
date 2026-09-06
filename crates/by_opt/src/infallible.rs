@@ -252,6 +252,9 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::MatchAttr { .. } => true,
         // a pointer comparison against a singleton
         Op::IsMissing { .. } | Op::MethodStands { .. } | Op::AccessorStands { .. } => false,
+        // it either agrees and returns, or aborts the process. it never sets an
+        // exception, so there is no error edge for a caller to take
+        Op::LicenceHolds { .. } => false,
         // reading the instance's own dict. the lookup can raise on an unhashable key,
         // and `By_DictShadows` answers that with the refusal rather than the error
         Op::DictShadows { .. } => false,
@@ -305,6 +308,7 @@ mod tests {
             fallback_source: None,
             fallback_code: None,
             shims: None,
+            verify_install: true,
         }
     }
 

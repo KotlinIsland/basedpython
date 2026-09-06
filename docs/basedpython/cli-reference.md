@@ -136,6 +136,8 @@ by compile --verbose            # report every function left interpreted, and wh
 by compile --emit-c-only        # write the generated C without compiling it
 by compile --no-any             # refuse to leave a gradual-typed function interpreted
 by compile --require-native     # refuse to leave *any* function interpreted
+by compile --licence-recheck    # re-ask, at runtime, every lookup a call skipped
+by compile --no-verify-install  # leave out the import-time install check
 ```
 
 the output directory mirrors the *module* tree, the way `by build`'s does: the
@@ -217,6 +219,27 @@ Caused by:
       describe: `list[int]` has no native representation yet
 ```
 
+`--licence-recheck` is for chasing a wrong answer rather than for shipping. the
+compiler *licenses* a call to go straight to a compiled body wherever nothing can
+have put something else under the name — a class python can neither subclass nor
+rebind a method on, a receiver whose type still matches the one the licence was
+taken against. that decision is a claim nothing checks, and one that is wrong is
+a wrong answer with nothing to report it: an override that stops being seen, a
+rebinding nothing notices. under this flag each of those calls does the lookup it
+was licensed to skip, compares where it lands with the body it is about to run,
+and stops the process when the two disagree:
+
+```console
+$ by compile app.py --licence-recheck -o out && python -c 'import app; app.go()'
+by: licence re-check failed on Shape.area: the receiver is not this class (app.Square)
+by: the compiled call was licensed to skip this lookup, and the lookup no longer agrees
+```
+
+it costs the lookup each licence exists to avoid, so it is slower than an
+ordinary build and slower than no compilation at all in the places licences do
+the most work. a program that passes under it answers exactly what it answers
+without it — a re-check that agrees changes nothing
+
 a function the compiler cannot lower natively is **not** an error: the module's
 transpiled python is embedded in the extension and executed at import, so
 declined functions still exist and module-level code still runs. the natively
@@ -230,6 +253,22 @@ hot.by -> build/hot.cpython-313-darwin.so
 compiled 1 module(s)
 1 function(s) left to the interpreted definition
 ```
+
+a **class** left interpreted is harder to see, because it answers exactly as the
+compiled one would. so the emitted module checks its own classes once at import
+and raises `ImportError` naming any that did not install as the compiler meant
+them to, and `BY_INSTALL_CENSUS` names a file it writes the whole verdict into:
+
+```console
+$ BY_INSTALL_CENSUS=census.tsv python -c 'import hot'
+$ cat census.tsv
+hot Held interpreted
+hot Plain installed
+```
+
+comparing that against `--annotate`'s class headings is what says whether a
+report of *n* compiled classes is *n* classes that ran.
+`--no-verify-install` leaves the check out.
 
 the C toolchain and the cpython headers come from the same interpreter `by run`
 uses, chosen the same way, and it must have development headers available. it

@@ -623,6 +623,38 @@ def f(d: dict[str, int]) -> object:
 }
 
 #[test]
+fn a_keyword_bound_into_kwargs_names_itself_with_a_literal() {
+    // the name of a keyword argument is fixed where the call is written, so the
+    // dict the callee's `**rest` receives can be built from the literal. filling a
+    // register with the module's interned string first is work a call in a loop
+    // repeats on every trip for a name that never changes
+    with_source(
+        "\
+def takes(a: int, **rest: int) -> int:
+    return a
+
+def f(n: int) -> int:
+    return takes(n, bonus=3)
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let f = module
+                .all_functions()
+                .find(|function| function.name == "f")
+                .expect("f is compiled");
+            assert!(
+                has_op(f, |op| matches!(op, Op::BuildDict { pairs, .. }
+                    if pairs.first().is_some_and(|key| matches!(key, Value::Str(name) if name == "bonus")))),
+                "{}",
+                print_function(f)
+            );
+        },
+    );
+}
+
+#[test]
 fn a_splatted_call_binds_at_runtime() {
     // the arguments become a tuple and a dict, because the binding cannot happen
     // here — which is exactly what python does with `CALL_FUNCTION_EX`
@@ -10589,6 +10621,152 @@ def total(a: Metres, b: Feet) -> int:
     assert!(!rendered.contains("call Metres.__add__("), "{rendered}");
 }
 
+/// the source every licensed shape below is read out of
+///
+/// `Money` is extended, so a call on one takes the guarded form; `Coin` is not, so a
+/// call on one is licensed outright. between them they cover the four shapes a licence
+/// takes — the guarded property half, the guarded method, the bare direct call, and the
+/// operator
+const LICENSED_SHAPES: &str = "\
+class Money:
+    def __init__(self, amount: int) -> None:
+        self._amount = amount
+
+    @property
+    def amount(self) -> int:
+        return self._amount
+
+    def doubled(self) -> int:
+        return self._amount * 2
+
+
+class Loud(Money):
+    @property
+    def amount(self) -> int:
+        return self._amount * 100
+
+
+class Coin:
+    def __init__(self, amount: int) -> None:
+        self.amount = amount
+
+    def face(self) -> int:
+        return self.amount
+
+    def __add__(self, other: Coin) -> Coin:
+        return Coin(self.amount + other.amount)
+
+
+def read(money: Money) -> int:
+    return money.amount
+
+
+def call(money: Money) -> int:
+    return money.doubled()
+
+
+def flip(coin: Coin) -> int:
+    return coin.face()
+
+
+def total(a: Coin, b: Coin) -> Coin:
+    return a + b
+";
+
+/// lower `source` with the licence re-check mode on or off
+fn lowered_with_recheck(source: &str, recheck_licences: bool) -> by_ir::function::ModuleIr {
+    with_source(source, |db, env, model, suite| {
+        crate::build_module(
+            db,
+            env,
+            model,
+            suite,
+            "app",
+            crate::LowerOptions {
+                language: crate::Language::BasedPython,
+                recheck_licences,
+            },
+        )
+    })
+}
+
+/// every `(class, member)` some re-check in `module` asks about
+fn rechecked(module: &by_ir::function::ModuleIr) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = module
+        .all_functions()
+        .flat_map(|function| function.blocks.iter())
+        .flat_map(|block| block.ops.iter())
+        .filter_map(|op| match op {
+            Op::LicenceHolds { class, member, .. } => Some((class.clone(), member.clone())),
+            _ => None,
+        })
+        .collect();
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// nothing is re-asked unless the mode is on, which is what keeps a shipping build
+/// paying nothing for it
+#[test]
+fn a_licence_is_not_re_asked_unless_the_mode_is_on() {
+    let module = lowered_with_recheck(LICENSED_SHAPES, false);
+    assert_eq!(rechecked(&module), Vec::new());
+}
+
+/// all four licensed shapes re-ask their lookup under the mode
+#[test]
+fn every_licensed_shape_re_asks_its_lookup_under_the_mode() {
+    let module = lowered_with_recheck(LICENSED_SHAPES, true);
+    let asked = rechecked(&module);
+    let named =
+        |class: &str, member: &str| asked.contains(&(class.to_string(), member.to_string()));
+    let rendered = print_module(&module);
+    assert!(named("Money", "amount"), "{rendered}");
+    assert!(named("Money", "doubled"), "{rendered}");
+    assert!(named("Coin", "face"), "{rendered}");
+    assert!(named("Coin", "__add__"), "{rendered}");
+}
+
+/// the re-check sits on the arm the licence sent the call down, not in front of the
+/// test: the arm a receiver the licence does not cover takes has nothing to re-ask, and
+/// putting it there would abort on the very receivers the slow arm exists for
+#[test]
+fn a_re_check_sits_on_the_arm_the_licence_took() {
+    let module = lowered_with_recheck(LICENSED_SHAPES, true);
+    let read = module
+        .functions
+        .iter()
+        .find(|function| function.name == "read")
+        .expect("read is emitted");
+    let text = print_function(read);
+    let holding = read
+        .blocks
+        .iter()
+        .find(|block| {
+            block
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::LicenceHolds { .. }))
+        })
+        .expect("a block re-asks the lookup");
+    // the direct call to the compiled half, and no `getattr`: that is the other arm
+    assert!(
+        holding
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::CallNative { callee, .. } if callee.contains("$get"))),
+        "{text}"
+    );
+    assert!(
+        !holding
+            .ops
+            .iter()
+            .any(|op| matches!(op, Op::GetAttr { .. })),
+        "{text}"
+    );
+}
+
 #[test]
 fn a_comparison_the_class_leaves_out_goes_through_the_protocol() {
     // `a > b` on a class writing only `__lt__` is python swapping the operands and using
@@ -10688,4 +10866,265 @@ def look(o: object) -> int:
 ");
     assert!(rendered.contains("<positional>"), "{rendered}");
     assert!(!rendered.contains("<Maybe.v>"), "{rendered}");
+}
+
+// basedpython surface forms with no native lowering
+//
+// the lowering walks the basedpython ast, so every marker below is still on the tree
+// when a body is lowered. each of these was read by its plain-python meaning and
+// answered a different program — see `crate::surface`
+
+/// the reason one named definition declined
+///
+/// the pattern tests below stand a class beside the function under test, and a class
+/// declines for reasons of its own — so the function has to be named rather than taken
+/// as the only entry
+#[track_caller]
+fn decline_for(source: &str, name: &str) -> String {
+    let reasons = declines(source);
+    reasons
+        .iter()
+        .find(|(declined, _)| declined == name)
+        .map(|(_, reason)| reason.clone())
+        .unwrap_or_else(|| panic!("`{name}` was not declined: {reasons:?}"))
+}
+
+/// a class a pattern can match, written without `dataclass` so the class itself does
+/// not decline for a decorator moved to module init
+const A_MATCHABLE_CLASS: &str = "\
+class Rect:
+    w: int
+    h: int
+
+    def __init__(self, w: int, h: int) -> None:
+        self.w = w
+        self.h = h
+
+";
+
+#[test]
+fn an_optional_chain_is_declined() {
+    // `item?.value` answers `None` for a `None` receiver. read as `item.value` it
+    // raises `AttributeError` there instead, which is the opposite of what the form is
+    let reason = decline(
+        "\
+class Item:
+    value: int
+
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+def read(item: Item?) -> int?:
+    return item?.value
+",
+    );
+    assert!(reason.contains("`?.`"), "{reason}");
+}
+
+#[test]
+fn a_reified_type_parameter_is_declined() {
+    // `T` is filled by the `kind[int]` specialization step, which rebuilds the function
+    // with a closure holding the type argument. an emitted function is not
+    // subscriptable and has no closure, and the body read `T` as a module global
+    let reason = decline(
+        "\
+def kind[T](value: object) -> str:
+    return T.__name__
+",
+    );
+    assert!(reason.contains("reified type parameter"), "{reason}");
+}
+
+#[test]
+fn a_declared_reified_type_parameter_is_declined_without_a_read() {
+    // writing the keyword reifies the parameter whether or not the body reads it, so
+    // the specialization step is required and an emitted function still cannot take it
+    let reason = decline(
+        "\
+def label[reified T](value: object) -> str:
+    return str(value)
+",
+    );
+    assert!(reason.contains("reified"), "{reason}");
+}
+
+#[test]
+fn a_reified_class_type_parameter_is_declined() {
+    let reasons = declines(
+        "\
+class Box[reified T]:
+    def kind(self) -> str:
+        return T.__name__
+",
+    );
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    assert!(
+        reasons[0].1.contains("reified type parameter"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_destructuring_parameter_is_declined() {
+    // the pattern binds `a` and `b`; the parameter itself is a synthetic name the body
+    // never mentions, so dropping the pattern leaves two unbound reads
+    let reason = decline_for(
+        &format!(
+            "{A_MATCHABLE_CLASS}\
+def area(Rect(w=a, h=b): Rect) -> int:
+    return a * b
+"
+        ),
+        "area",
+    );
+    assert!(reason.contains("destructuring parameter"), "{reason}");
+}
+
+#[test]
+fn an_if_let_pattern_is_declined() {
+    let reason = decline_for(
+        &format!(
+            "{A_MATCHABLE_CLASS}\
+def area(r: object) -> int:
+    if let Rect(w=a, h=b) := r:
+        return a * b
+    return 0
+"
+        ),
+        "area",
+    );
+    assert!(reason.contains("`if let`"), "{reason}");
+}
+
+#[test]
+fn a_for_destructuring_pattern_is_declined() {
+    let reason = decline_for(
+        &format!(
+            "{A_MATCHABLE_CLASS}\
+def total(rects: list[Rect]) -> int:
+    var out = 0
+    for Rect(w=a, h=b) in rects:
+        out = out + a * b
+    return out
+"
+        ),
+        "total",
+    );
+    assert!(reason.contains("`for` destructuring"), "{reason}");
+}
+
+#[test]
+fn a_destructuring_with_item_is_declined() {
+    let reason = decline_for(
+        &format!(
+            "{A_MATCHABLE_CLASS}\
+from contextlib import contextmanager
+from collections.abc import Iterator
+
+
+@contextmanager
+def held() -> Iterator[Rect]:
+    yield Rect(3, 4)
+
+
+def area() -> int:
+    with held() as Rect(w=a, h=b):
+        return a * b
+    return 0
+"
+        ),
+        "area",
+    );
+    assert!(reason.contains("`with` item"), "{reason}");
+}
+
+#[test]
+fn an_anonymous_named_tuple_value_is_declined() {
+    // the fields are read by name, and the plain tuple the lowering would build has
+    // none of them
+    let reason = decline(
+        "\
+def make() -> (name: str, age: int):
+    return (name=\"ada\", age=36)
+",
+    );
+    assert!(reason.contains("named tuple"), "{reason}");
+}
+
+#[test]
+fn a_checked_cast_is_declined() {
+    // `v cast! int` tests the value and raises when it does not hold; read as a call it
+    // calls `v` with the type object
+    let reason = decline(
+        "\
+def down(v: object) -> int:
+    return v cast! int
+",
+    );
+    assert!(reason.contains("checked cast"), "{reason}");
+}
+
+#[test]
+fn a_positional_tuple_index_is_declined() {
+    // `p.1` is spelled as an attribute whose name is a number, so the dynamic read it
+    // would lower to can never find it
+    let reason = decline(
+        "\
+def pick(p: (int, str)) -> str:
+    return p.1
+",
+    );
+    assert!(reason.contains("tuple index"), "{reason}");
+}
+
+#[test]
+fn an_extension_member_is_declined() {
+    // an extension member is a module-level backing function in the interpreted twin.
+    // nothing rewrites the call here, so the attribute read stands and finds nothing
+    let reasons = declines(
+        "\
+extension list:
+    def second[T](self: list[T]) -> T:
+        return self[1]
+
+def pick(values: list[int]) -> int:
+    return values.second()
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(name, reason)| name == "pick" && reason.contains("`extension`")),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_prelude_grapheme_member_is_declined() {
+    // the grapheme string surface is an extension the prelude declares, and it has no
+    // backing function at all — its lowering is the transpiler's own
+    let reason = decline(
+        "\
+def size(s: str) -> int:
+    return s.character_count
+",
+    );
+    assert!(reason.contains("`extension`"), "{reason}");
+}
+
+#[test]
+fn an_ordinary_attribute_is_not_mistaken_for_an_extension() {
+    // the gate has to leave a real member alone, or every attribute read declines
+    let rendered = ir("\
+class Holder:
+    value: int
+
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+
+def read(h: Holder) -> int:
+    return h.value
+");
+    assert!(rendered.contains("Holder.value"), "{rendered}");
 }

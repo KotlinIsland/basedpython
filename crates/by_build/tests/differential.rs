@@ -948,6 +948,21 @@ fn agree_inner(tag: &str, source: &str, calls: &[&str], allow_declines: bool) {
     );
 }
 
+/// whether this run has every licensed call re-ask the lookup it skipped
+///
+/// on unless `BY_LICENCE_RECHECK=0` says otherwise. every case in this file is a
+/// program whose two legs have to agree, so it is also a program every licence the
+/// compiler hands out can be re-asked on — which is coverage no other suite has, and
+/// the reason the default is the mode rather than the shipping configuration.
+///
+/// the escape hatch is what the shipping configuration is tested through: with the mode
+/// on, a licensed call site has one more use of its receiver, and the borrow and
+/// refcount passes decide by use. a run with `BY_LICENCE_RECHECK=0` is the same suite
+/// over the C a real build writes
+fn recheck_licences() -> bool {
+    !std::env::var("BY_LICENCE_RECHECK").is_ok_and(|value| value == "0")
+}
+
 fn agree_in(
     tag: &str,
     source: &str,
@@ -992,6 +1007,7 @@ fn agree_in(
     // the compiled leg
     let options = Options {
         language,
+        recheck_licences: recheck_licences(),
         ..Options::default()
     };
     let built = match build_source(source, module.as_str(), &toolchain, &compiled_dir, &options) {
@@ -8858,6 +8874,54 @@ def accumulate(values: list[int]) -> int:
     );
 }
 
+/// a cell is read again on every call, however often the call is repeated
+///
+/// a closure called in a loop is the shape a compiled build has the most to gain from
+/// and the most to get wrong: the cell is one location two frames share, and anything
+/// that remembers what it last held answers the value before the rebinding rather than
+/// the one after it. that is a silent wrong answer, so the interleavings here rebind
+/// the cell from outside the closure that reads it, between calls to that closure, and
+/// from a third frame that closes over the same cell
+#[test]
+fn a_capture_rebound_between_calls_is_read_again() {
+    agree(
+        "cellrebind",
+        "\
+def pair(start: int) -> list[object]:
+    total = start
+    def step(by: int) -> int:
+        nonlocal total
+        total = total + by
+        return total
+    def put(v: int) -> int:
+        nonlocal total
+        total = v
+        return total
+    return [step, put]
+
+def repeated(n: int) -> int:
+    total = 0
+    def step(by: int) -> int:
+        nonlocal total
+        total = total + by
+        return total
+    last = 0
+    i = 0
+    while i < n:
+        last = step(i)
+        i = i + 1
+    return last
+",
+        &[
+            // the same call twice running, then the cell put back from elsewhere, then
+            // the same call twice again — a remembered read shows on the fourth
+            "[(p := m.pair(0), p[0](1), p[0](1), p[1](100), p[0](1), p[0](1))[1:]]",
+            "[(p := m.pair(7), p[1](-7), p[0](0), p[1](10 ** 20), p[0](1))[1:]]",
+            "[m.repeated(n) for n in (0, 1, 2, 50)]",
+        ],
+    );
+}
+
 #[test]
 fn reading_a_cell_before_it_is_written_raises_the_way_python_does() {
     // a cell starts unset, and NULL has to read back as an error rather than a zero
@@ -11134,6 +11198,49 @@ def calls_none() -> int:
             "m.calls_options(5)",
             "m.calls_both(1)",
             "m.calls_none()",
+        ],
+    );
+}
+
+/// a `*args` is read as the tuple the calling convention built it as, which is a
+/// guess about the container and not a licence to skip anything the general read
+/// does. python's own answer to a position off either end of it, to a position
+/// counted from the end, and to an index that is not a position at all has to be
+/// the answer either way — wording included
+#[test]
+fn indexing_a_variadic_agrees() {
+    agree(
+        "varindex",
+        "\
+def at(*rest: int) -> int:
+    return rest[0]
+
+def from_the_end(*rest: int) -> int:
+    return rest[-1]
+
+def at_position(index: int, *rest: int) -> int:
+    return rest[index]
+
+def rebound(*rest: int) -> int:
+    rest = (7, 8)
+    return rest[1]
+
+def calls_at(a: int, b: int) -> int:
+    return at(a, b)
+",
+        &[
+            "m.at(1, 2)",
+            "m.from_the_end(1, 2)",
+            "m.at_position(1, 10, 20)",
+            "m.at_position(-2, 10, 20)",
+            "m.rebound()",
+            "m.calls_at(3, 4)",
+            // every way the position can be no position at all
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.from_the_end)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at_position, 2, 10)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at_position, -3, 10)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.at_position, 1 << 70, 10)]]",
         ],
     );
 }
@@ -14576,8 +14683,13 @@ fn a_base_this_module_emits_beside_one_it_does_not_agrees() {
     // outside — the base of ours in the list lays nothing out, so it asks for no room —
     // and python works out the mro and which of the bases owns the instance.
     //
-    // the outside base may own a real one: `dict`, `int` and `Exception` each decide the
-    // instance, and getting that wrong writes this class's idea of a layout over theirs
+    // the outside base may own a real one: `Exception` decides the instance, and getting
+    // that wrong writes this class's idea of a layout over its.
+    //
+    // `dict` and `int` are the same idea and are *not* here: an outside base whose layout
+    // the emitted class of ours cannot be mixed with leaves the mixture standing on the
+    // interpreted definition of that class, which is a wrong answer rather than a slow
+    // one — see `a_mixture_left_on_a_base_the_module_replaced_refuses_the_import`
     agree_python(
         "mixed_bases",
         "\
@@ -14604,16 +14716,6 @@ class OutsideFirst(codecs.StreamWriter, Ours):
     # shadowed — a direct call on a receiver typed as `Ours` would answer with ours
     def label(self) -> str:
         return \"outside\"
-
-
-class AsDict(dict, Ours):
-    def label(self) -> str:
-        return \"dict\"
-
-
-class AsInt(int, Ours):
-    def label(self) -> str:
-        return \"int\"
 
 
 class OurError(Exception):
@@ -14652,16 +14754,13 @@ def exactly(which: int) -> str:
             "[c.__name__ for c in m.OursFirst.__mro__]",
             "[c.__name__ for c in m.OutsideFirst.__mro__]",
             "[c.__name__ for c in m.Diamond.__mro__]",
-            "(m.OursFirst.__base__.__name__, m.AsDict.__base__.__name__, m.AsInt.__base__.__name__)",
+            "m.OursFirst.__base__.__name__",
             "(m.OursFirst().side(), m.OursFirst().label())",
             "(m.OutsideFirst(None).side(), m.OutsideFirst(None).label())",
             "[m.through_the_base(o) for o in (m.Ours(), m.OursFirst(), m.OutsideFirst(None), m.Under())]",
             "[m.exactly(n) for n in (0, 1)]",
             "[m.resetting(o) for o in (m.Ours(), m.OursFirst(), m.OutsideFirst(None))]",
             "([c.__name__ for c in m.Under.__mro__], m.Under().label(), m.Under().side())",
-            // the outside base still owns the instance it always owned
-            "(sorted(m.AsDict(a=1, b=2).items()), m.AsDict().label())",
-            "(int(m.AsInt(7)) + 1, m.AsInt(7).label(), m.AsInt(7).side())",
             "(m.Diamond('boom').args, str(m.Diamond('boom')), m.Diamond('x').which(), m.Diamond('x').label())",
             "(isinstance(m.Diamond('x'), ValueError), isinstance(m.Diamond('x'), m.OurError))",
             // an instance of the mixture carries whatever `__dict__` the outside base
@@ -17362,6 +17461,82 @@ r.peer = a
     assert_eq!(run(&python, &interpreted, classes), "True True\nfunction");
 }
 
+/// a builtin holding the loop reaches a compiled function once per element
+///
+/// every other call in this suite is made by python code. `sorted(values, key=fn)` is
+/// made by C, so the forwarder the module publishes under `fn` is what the sort calls,
+/// and it is on the hot path rather than at the edge of one. the shapes that matter are
+/// the ones the forwarder now binds for itself — a keyword, too few arguments, too many
+/// — and, above all, a key that raises: cpython's sort has to see that exception on its
+/// way out, with the same type and the same message, or a `sorted` that should have
+/// failed answers a list
+#[test]
+fn a_builtin_reaching_a_compiled_key_agrees_about_what_it_raises() {
+    agree_python(
+        "sortkeycallback",
+        "\
+_values: list[int] = [5, 3, 9, 1, 7, 3, 0]
+
+
+def weight(value: int) -> int:
+    return value % 4
+
+
+def picky(value: int) -> int:
+    if value == 9:
+        raise ValueError(\"no nines\")
+    return value
+
+
+def scaled(value: int, by: int = 2) -> int:
+    return value * by
+
+
+def label(this: object) -> str:
+    return \"bound\"
+
+
+def by_weight() -> list[int]:
+    return sorted(_values, key=weight)
+
+
+def by_picky() -> list[int]:
+    return sorted(_values, key=picky)
+
+
+def by_scaled() -> list[int]:
+    return sorted(_values, key=scaled)
+
+
+def smallest() -> int:
+    return min(_values, key=weight)
+",
+        &[
+            "m.by_weight()",
+            "m.smallest()",
+            "list(map(m.weight, m._values))",
+            // the sort is holding the loop when this one raises
+            "repr(_capture(m.by_picky))",
+            // a defaulted parameter keeps the binding that fills it, and the sort
+            // still reaches it through the same name
+            "m.by_scaled()",
+            "[m.scaled(3), m.scaled(3, 5), m.scaled(3, by=5), m.scaled(value=3, by=5)]",
+            // what the forwarder decides for itself, now that it names its parameters
+            "[m.weight(7), m.weight(value=7)]",
+            "repr(_capture(m.weight))",
+            "repr(_capture(m.weight, 1, 2))",
+            "repr(_capture(lambda: m.weight(1, value=2)))",
+            "repr(_capture(lambda: m.weight(other=2)))",
+            // and it is still a real function, so it binds as a method and answers
+            // for the definition it stands in for
+            "type(m.weight).__name__",
+            "str(__import__('inspect').signature(m.weight))",
+            "str(__import__('inspect').signature(m.scaled))",
+            "type('T', (), {'label': m.label})().label()",
+        ],
+    );
+}
+
 /// a module-level *function* has an interpreted twin too, and it is moved onto the
 /// forwarder that replaced it — so what a class body captured still binds
 ///
@@ -18379,12 +18554,7 @@ class Root:
         return \"root\"
 
 
-class Extra:
-    def extra(self) -> str:
-        return \"extra\"
-
-
-class Mixin(Root, Extra):
+class Mixin(Root):
     TAG = 1
 
     def tag(self) -> int:
@@ -18427,8 +18597,8 @@ _pair()
             return;
         }
     };
-    // `Mixin` used to decline and take `Root` and `Extra` down with it, because an
-    // emitted class cannot have an interpreted subclass. none of the five is here now
+    // `Mixin` used to decline and take `Root` down with it, because an emitted class
+    // cannot have an interpreted subclass. none of the four is here now
     assert_eq!(
         built
             .declined
@@ -18443,16 +18613,16 @@ _pair()
         "import by_diff_gatedpair as m\n\
          print(m.Text._encoded_counterpart is m.Bytes, m.Bytes._decoded_counterpart is m.Text)\n\
          print(isinstance(m.Text._encoded_counterpart(), m.Bytes), m.Text._encoded_counterpart().label())\n\
-         print(m.Text().label(), m.Text().tag(), m.Text().kind(), m.Text().extra(), m.Text.TAG)\n\
-         print([b.__name__ for b in m.Text.__mro__])\n\
+         print(m.Text().label(), m.Text().tag(), m.Text().kind(), m.Text.TAG)\n\
+         print([b.__name__ for b in m.Text.__mro__], isinstance(m.Text(), m.Root))\n\
          print(type(m.Text.label).__name__, type(m.Bytes.label).__name__)\n",
     );
     assert_eq!(
         out,
         "True True\n\
          True bytes\n\
-         text 1 root extra 1\n\
-         ['Text', 'Mixin', 'Root', 'Extra', 'object']\n\
+         text 1 root 1\n\
+         ['Text', 'Mixin', 'Root', 'object'] True\n\
          method_descriptor method_descriptor"
     );
 }
@@ -25958,6 +26128,12 @@ def calls_kwonly(n: int) -> int:
 
 def calls_posonly(n: int) -> int:
     return posonly(n, b=2)
+
+def calls_posonly_kwargs(n: int) -> str:
+    return posonly_kwargs(n, a=2, z=3)
+
+def calls_kwonly_varargs(n: int) -> str:
+    return kwonly_varargs(n, 5, 6, b=7)
 ",
         &[
             "m.kwonly(1, b=2)",
@@ -25971,6 +26147,12 @@ def calls_posonly(n: int) -> int:
             "m.kwonly_varargs(1, b=4)",
             "m.calls_kwonly(1)",
             "m.calls_posonly(1)",
+            // a compiled caller binds the keywords against the callee's signature
+            // itself. `a` names a *positional-only* parameter, so it is not a second
+            // value for `a` — it is an entry in `**rest`, the same as `z`
+            "m.calls_posonly_kwargs(1)",
+            // and the shape a `*args` pack and a keyword-only argument make together
+            "m.calls_kwonly_varargs(1)",
             // every arity error, in python's own wording
             "[(type(e).__name__, str(e)) for e in [_capture(m.kwonly, 1, 2)]]",
             "[(type(e).__name__, str(e)) for e in [_capture(m.kwonly, 1)]]",
@@ -30894,5 +31076,645 @@ fn a_recycled_block_carries_nothing_of_the_instance_before_it() {
             "m.slotted_churn(5)",
             "m.cycles_then_reuse(20)",
         ],
+    );
+}
+
+// the basedpython surface forms the backend declines
+//
+// the compiler lowers the basedpython ast, so a marker for basedpython-only syntax is
+// still on the tree when a body is lowered — and reading such a node by its
+// plain-python meaning answered a different program with nothing said about it. each
+// test below asks for the *answer*, not just that the call ran: a compiled leg that
+// raised where the interpreted one returned a value is the whole shape of the bug
+// these guard against
+
+/// a class a pattern can match, written out rather than taken from `dataclasses` so
+/// the pattern is the only basedpython form in play
+const A_MATCHABLE_RECT: &str = "\
+class Rect:
+    w: int
+    h: int
+
+    def __init__(self, w: int, h: int) -> None:
+        self.w = w
+        self.h = h
+
+";
+
+#[test]
+fn an_optional_chain_agrees_on_a_none_receiver() {
+    // the `None` receiver is the whole of the form: `item?.value` is written *because*
+    // `item` may be absent, and a leg that raises `AttributeError` there has dropped
+    // the guard. a present receiver alone would pass with the guard gone
+    agree_with_declines(
+        "optchain",
+        "\
+class Item:
+    value: int
+
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def shout(self) -> str:
+        return \"v\" + str(self.value)
+
+
+def read(item: Item?) -> int?:
+    return item?.value
+
+
+def call(item: Item?) -> str?:
+    return item?.shout()
+",
+        &[
+            "m.read(m.Item(3))",
+            "m.read(None)",
+            "m.call(m.Item(3))",
+            "m.call(None)",
+        ],
+    );
+}
+
+#[test]
+fn a_reified_type_parameter_agrees() {
+    // `T` is a runtime value the `[int]` specialization supplies. the emitted function
+    // is not subscriptable and has no closure to rebuild, and its body read `T` as a
+    // module global
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
+    agree_with_declines(
+        "reifiedfn",
+        "\
+def kind[T](value: object) -> str:
+    return T.__name__
+
+
+def guard[T](value: object) -> bool:
+    return isinstance(value, T)
+",
+        &["m.kind[int](1)", "m.guard[int](1)", "m.guard[str](1)"],
+    );
+}
+
+#[test]
+fn a_reified_class_type_parameter_agrees() {
+    // a class reads its parameter off the instance, so `Box[int]` builds a memoized
+    // subclass carrying the argument — and an emitted class refuses to be a base
+    if environment().is_some_and(|(_, toolchain)| !supports(&toolchain, (3, 12))) {
+        return;
+    }
+    agree_with_declines(
+        "reifiedcls",
+        "\
+class Box[reified T]:
+    def kind(self) -> str:
+        return T.__name__
+",
+        &["m.Box[int]().kind()", "m.Box[str]().kind()"],
+    );
+}
+
+#[test]
+fn a_destructuring_parameter_agrees() {
+    // the pattern binds the names the body reads; the parameter itself is synthetic
+    agree_with_declines(
+        "destructparam",
+        &format!(
+            "{A_MATCHABLE_RECT}\
+def area(Rect(w=a, h=b): Rect) -> int:
+    return a * b
+"
+        ),
+        &["m.area(m.Rect(3, 4))"],
+    );
+}
+
+#[test]
+fn an_if_let_pattern_agrees() {
+    agree_with_declines(
+        "ifletpat",
+        &format!(
+            "{A_MATCHABLE_RECT}\
+def area(r: object) -> int:
+    if let Rect(w=a, h=b) := r:
+        return a * b
+    return 0
+"
+        ),
+        &["m.area(m.Rect(3, 4))", "m.area(5)"],
+    );
+}
+
+#[test]
+fn a_for_destructuring_pattern_agrees() {
+    agree_with_declines(
+        "fordestruct",
+        &format!(
+            "{A_MATCHABLE_RECT}\
+def total(rects: list[Rect]) -> int:
+    var out = 0
+    for Rect(w=a, h=b) in rects:
+        out = out + a * b
+    return out
+"
+        ),
+        &["m.total([m.Rect(1, 2), m.Rect(3, 4)])", "m.total([])"],
+    );
+}
+
+#[test]
+fn an_anonymous_named_tuple_value_agrees() {
+    // the fields are read by name, and the plain tuple the lowering built has none
+    agree_with_declines(
+        "anontuple",
+        "\
+def make() -> (name: str, age: int):
+    return (name=\"ada\", age=36)
+
+
+def show() -> str:
+    let p = make()
+    return p.name + str(p.age)
+",
+        &["m.show()", "m.make().name", "m.make().age"],
+    );
+}
+
+#[test]
+fn a_checked_cast_agrees_on_the_value_it_refuses() {
+    // the refusal is the point of the form, so the raise is part of the answer
+    agree_with_declines(
+        "checkedcast",
+        "\
+def down(v: object) -> int:
+    return v cast! int
+",
+        &["m.down(3)", "repr(_capture(m.down, 'x'))"],
+    );
+}
+
+#[test]
+fn an_extension_member_agrees() {
+    // an extension member is a module-level backing function in the interpreted twin,
+    // and nothing on the receiver at runtime
+    agree_with_declines(
+        "extmember",
+        "\
+extension list:
+    def second[T](self: list[T]) -> T:
+        return self[1]
+
+
+def pick(values: list[int]) -> int:
+    return values.second()
+",
+        &["m.pick([1, 2, 3])"],
+    );
+}
+
+#[test]
+fn a_positional_tuple_index_agrees() {
+    // `p.1` is spelled as an attribute whose name is a number
+    agree_with_declines(
+        "tupleidx",
+        "\
+def pick(p: (int, str)) -> str:
+    return p.1
+",
+        &["m.pick((1, 'a'))"],
+    );
+}
+
+/// a program covering the four shapes a licence takes
+///
+/// `Money` is extended, so a call on one is licensed behind a runtime test; `Coin` is
+/// not, so a call on one is licensed outright and the operator between two of them is
+/// too. `Loud` is what makes the guarded arms reachable
+const LICENSED_SHAPES: &str = "\
+class Money:
+    def __init__(self, amount: int) -> None:
+        self._amount = amount
+
+    @property
+    def amount(self) -> int:
+        return self._amount
+
+    def doubled(self) -> int:
+        return self._amount * 2
+
+
+class Loud(Money):
+    @property
+    def amount(self) -> int:
+        return self._amount * 100
+
+
+class Coin:
+    def __init__(self, amount: int) -> None:
+        self.amount = amount
+
+    def face(self) -> int:
+        return self.amount
+
+    def __add__(self, other: 'Coin') -> 'Coin':
+        return Coin(self.amount + other.amount)
+
+
+def report() -> str:
+    money = Money(2)
+    loud = Loud(3)
+    coin = Coin(4)
+    return f'{money.amount} {loud.amount} {money.doubled()} {coin.face()} {(coin + coin).amount}'
+";
+
+/// the mode reaches the generated C, and the program it generates still answers the
+/// same thing
+///
+/// the answers alone cannot say the mode is on — a re-check that agrees changes nothing
+/// about what a program prints, which is exactly why it is safe to leave on. so the
+/// generated C is read instead: the module says which mode it was written in, and each
+/// licensed call carries the call that re-asks its lookup
+#[test]
+fn a_licensed_call_re_asks_its_lookup_under_the_mode() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let mut written = Vec::new();
+    for recheck in [false, true] {
+        let tag = format!("by_diff_licencerecheck_{}", u8::from(recheck));
+        let dir = diff_root().join(&tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        let built = match build_source(
+            LICENSED_SHAPES,
+            tag.as_str(),
+            &toolchain,
+            &dir,
+            &Options {
+                language: by_irbuild::Language::Python,
+                recheck_licences: recheck,
+                ..Options::default()
+            },
+        ) {
+            Ok(built) => built,
+            Err(error) => {
+                assert!(missing_toolchain(&error), "failed to build: {error:#}");
+                eprintln!("skipping: no working C toolchain ({error})");
+                return;
+            }
+        };
+        assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+        let c = std::fs::read_to_string(&built.artifact.source).expect("the generated C is read");
+        let out = run(
+            &python,
+            &dir,
+            &format!("import {tag} as m\nprint(m.report())\n"),
+        );
+        written.push((c, out));
+    }
+    let mut written = written.into_iter();
+    let (plain, plain_out) = written.next().expect("the plain build was written");
+    let (checked, checked_out) = written.next().expect("the checked build was written");
+
+    // off: nothing at all, so a shipping build carries none of it
+    assert!(!plain.contains("BY_LICENCE_RECHECK"), "{plain}");
+    assert!(!plain.contains("By_Recheck"), "{plain}");
+
+    // on: the module declares the mode, and every licensed shape re-asks. the property
+    // half goes through the descriptor question, the other three through the method one
+    assert!(
+        checked.contains("#define BY_LICENCE_RECHECK 1"),
+        "{checked}"
+    );
+    assert!(checked.contains("By_RecheckAccessor("), "{checked}");
+    assert!(
+        checked.contains("By_RecheckMethod((PyObject *)"),
+        "{checked}"
+    );
+    for member in ["\"doubled\"", "\"face\"", "\"__add__\""] {
+        assert!(
+            checked.contains(member),
+            "{member} is not re-asked:\n{checked}"
+        );
+    }
+    // and a method re-check compares the lookup against the compiled body, not against
+    // the receiver's class alone — which is all a slot-backed name leaves it
+    assert!(checked.contains("\"face\", (PyCFunction)"), "{checked}");
+
+    assert_eq!(plain_out, "2 300 4 4 8");
+    assert_eq!(checked_out, plain_out);
+}
+
+// ── what a module installed, against what it reported compiling ──────────────────────
+//
+// every test above compares the compiled leg against the interpreted twin, and a class
+// that quietly left its interpreted definition standing answers *identically* to that
+// twin — so it agrees with all of them at once while `--annotate` goes on counting it
+// compiled. that is how the compiled-class figures here became upper bounds rather than
+// counts. module init now ends by asking the finished namespace what is in it, and
+// `BY_INSTALL_CENSUS` names a file it writes one row per class into.
+//
+// the three tests below are the three shapes that were shipped: a class the report
+// counts whose type never installed, a class standing on an in-module base, and an
+// emitted type carrying the abstract-base registry its module body built
+
+/// build `source` as python with an annotation report, and hand back the interpreter,
+/// the directory it built into and the report's text
+///
+/// the tests below are not comparisons between two legs — there is only one leg's state
+/// to ask about — so they build directly rather than through [`agree_python`]
+fn built_python(tag: &str, source: &str) -> Option<(String, PathBuf, String)> {
+    let (python, toolchain) = environment()?;
+    let dir = diff_root().join(format!("by_diff_{tag}_v"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        annotate: true,
+        ..Options::default()
+    };
+    let module = format!("by_diff_{tag}");
+    let built = match build_source(source, module.as_str(), &toolchain, &dir, &options) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(
+                missing_toolchain(&error),
+                "{tag} failed to build: {error:#}"
+            );
+            eprintln!("skipping {tag}: no working C toolchain ({error})");
+            return None;
+        }
+    };
+    let path = built
+        .artifact
+        .annotation
+        .as_ref()
+        .expect("the annotation was asked for");
+    let report = std::fs::read_to_string(path).expect("the annotation is readable");
+    Some((python, dir, report))
+}
+
+/// what `also` printed, followed by the census that import wrote
+///
+/// the variable is set from inside the snippet rather than around the interpreter,
+/// because it has to be in the environment before the extension's init runs and after
+/// nothing else — the module under test is the next statement
+fn install_census(python: &str, dir: &Path, module: &str, also: &str) -> String {
+    let census = dir.join("census.tsv").display().to_string();
+    let _ = std::fs::remove_file(&census);
+    run(
+        python,
+        dir,
+        &format!(
+            "import os\n\
+             os.environ['BY_INSTALL_CENSUS'] = {census:?}\n\
+             import {module} as m\n\
+             {also}\
+             print(open({census:?}).read().strip())\n"
+        ),
+    )
+}
+
+#[test]
+fn a_class_the_report_counts_says_whether_it_installed() {
+    // `Rebound` puts a class-level value over a field whose presence the base's layout
+    // left no room to record, and there is no second construction to try — so the pair
+    // stands down together and both keep their interpreted definitions. `Held`'s own
+    // construction *worked*: the family is what stood it down, which is why "was a type
+    // built" is not the same question as "did this class install".
+    //
+    // nothing is wrong with the module. leaving such a class interpreted is what the
+    // install gate is for, and both still answer every call the way python does. what
+    // was wrong is that the report counts all three and nothing said which of them a
+    // type actually stands under — so a report reading `3 compiled` was read as three
+    // that ran
+    let source = "\
+class Held(Exception):
+    tag = 'base'
+
+    def __init__(self, own):
+        if own:
+            self.tag = 'own'
+
+
+class Rebound(Held):
+    tag = 'rebound'
+
+
+class Plain:
+    def kind(self) -> str:
+        return \"plain\"
+";
+    let Some((python, dir, report)) = built_python("installcensus", source) else {
+        return;
+    };
+    for class in ["Held", "Rebound", "Plain"] {
+        assert!(report.contains(&format!("## class {class}")), "{report}");
+    }
+
+    let out = install_census(
+        &python,
+        &dir,
+        "by_diff_installcensus",
+        "print(type(m.Held.__dict__['__init__']).__name__,\n\
+         \x20     type(m.Plain.__dict__['kind']).__name__)\n\
+         print(m.Held(True).tag, m.Rebound(False).tag, m.Plain().kind())\n",
+    );
+    // `twin` is the class whose type was built and then was not what took the name;
+    // `interpreted` is the one no type was ever built for
+    assert_eq!(
+        out,
+        "function method_descriptor\n\
+         own rebound plain\n\
+         by_diff_installcensus\tHeld\ttwin\n\
+         by_diff_installcensus\tRebound\tinterpreted\n\
+         by_diff_installcensus\tPlain\tinstalled"
+    );
+}
+
+#[test]
+fn a_class_on_an_in_module_base_installs_onto_the_emitted_one() {
+    // both classes install, so both stand on types this module built — and the check
+    // holds `Derived` to standing on the very object the module publishes as `Base`. a
+    // `Derived` left on an orphaned copy answers `isinstance` False against that name
+    // where python answers True, and no comparison of what the two legs' methods
+    // *return* would ever reach it
+    let source = "\
+class Base:
+    def kind(self) -> str:
+        return \"base\"
+
+
+class Derived(Base):
+    def kind(self) -> str:
+        return \"derived\"
+";
+    let Some((python, dir, report)) = built_python("installbase", source) else {
+        return;
+    };
+    assert!(report.contains("## class Derived"), "{report}");
+
+    let out = install_census(
+        &python,
+        &dir,
+        "by_diff_installbase",
+        "print(m.Derived.__bases__[0] is m.Base, isinstance(m.Derived(), m.Base))\n",
+    );
+    assert_eq!(
+        out,
+        "True True\n\
+         by_diff_installbase\tBase\tinstalled\n\
+         by_diff_installbase\tDerived\tinstalled"
+    );
+}
+
+/// build `source` as python, import it, and hand back the message the import refused with
+fn refused_import(tag: &str, source: &str) -> Option<String> {
+    let (python, toolchain) = environment()?;
+    let dir = diff_root().join(format!("by_diff_{tag}_r"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let module = format!("by_diff_{tag}");
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if let Err(error) = build_source(source, module.as_str(), &toolchain, &dir, &options) {
+        assert!(
+            missing_toolchain(&error),
+            "{tag} failed to build: {error:#}"
+        );
+        eprintln!("skipping {tag}: no working C toolchain ({error})");
+        return None;
+    }
+    let out = Command::new(&python)
+        .env("PYTHONIOENCODING", "utf-8")
+        .args([
+            "-c",
+            &format!(
+                "import sys\n\
+                 sys.path.insert(0, {:?})\n\
+                 try:\n\
+                 \x20   import {module}\n\
+                 except ImportError as error:\n\
+                 \x20   print(error)\n\
+                 else:\n\
+                 \x20   print('the import was not refused')\n",
+                dir.display().to_string()
+            ),
+        ])
+        .output()
+        .expect("the interpreter runs");
+    assert!(
+        out.status.success(),
+        "the snippet failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+#[test]
+fn a_mixture_left_on_a_base_the_module_replaced_refuses_the_import() {
+    // `dict` owns its instances and the emitted `Ours` owns its own, so the two cannot
+    // be mixed and the construction hands back the interpreted definition to stand as
+    // `AsDict` — which the module body built on the interpreted `Ours`, while the name
+    // `Ours` now means the emitted type. `isinstance(m.AsDict(), m.Ours)` is then False
+    // where python answers True.
+    //
+    // that is a wrong answer, not a slow one, and it is invisible to every comparison of
+    // the two legs: both classes still answer every call the same way, and both spell
+    // their `__mro__` with the same names. so the import refuses, and the module is
+    // unusable rather than quietly wrong until the compiler stands the whole family down
+    // instead. `logging/config.py` is the shape in the standard library, where
+    // `ConvertingDict(dict, ConvertingMixin)` is the same three lines
+    let Some(message) = refused_import(
+        "orphanmix",
+        "\
+class Ours:
+    def side(self) -> str:
+        return \"ours\"
+
+
+class AsDict(dict, Ours):
+    def label(self) -> str:
+        return \"dict\"
+",
+    ) else {
+        return;
+    };
+    assert_eq!(
+        message,
+        "by_diff_orphanmix.AsDict stands on an orphaned base: by_diff_orphanmix.Ours is \
+         what this module's own base of that name means and is not among its __bases__, \
+         so isinstance answers False where python answers True"
+    );
+}
+
+#[test]
+fn a_class_on_two_bases_of_this_modules_own_refuses_the_import() {
+    // the same failure without an outside base in sight: two emitted classes each own
+    // their instances, so `type(\"Mixin\", (Root, Extra), ...)` cannot lay one out either,
+    // and `Mixin` is left as the definition the body built on the two interpreted ones
+    let Some(message) = refused_import(
+        "orphanpair",
+        "\
+class Root:
+    def kind(self) -> str:
+        return \"root\"
+
+
+class Extra:
+    def extra(self) -> str:
+        return \"extra\"
+
+
+class Mixin(Root, Extra):
+    def tag(self) -> int:
+        return 1
+",
+    ) else {
+        return;
+    };
+    assert_eq!(
+        message,
+        "by_diff_orphanpair.Mixin stands on an orphaned base: by_diff_orphanpair.Root is \
+         what this module's own base of that name means and is not among its __bases__, \
+         so isinstance answers False where python answers True"
+    );
+}
+
+#[test]
+fn an_installed_class_keeps_the_abstract_base_registry_its_body_built() {
+    // `register` records its argument inside the class's *own* `_abc_impl`, and the
+    // module body runs against the interpreted definition — so a type left holding the
+    // fresh empty one `ABCMeta.__new__` gave it answers `issubclass(dict, Registry)`
+    // False where the interpreted module answers True. the registry is handed over
+    // rather than rebuilt, and the check holds an installed type to holding the twin's
+    // own object
+    let source = "\
+from abc import ABCMeta
+
+
+class Registry(metaclass=ABCMeta):
+    def kind(self) -> str:
+        return \"registry\"
+
+
+Registry.register(dict)
+";
+    let Some((python, dir, report)) = built_python("installabc", source) else {
+        return;
+    };
+    assert!(report.contains("## class Registry"), "{report}");
+
+    let out = install_census(
+        &python,
+        &dir,
+        "by_diff_installabc",
+        "print(issubclass(dict, m.Registry), type(m.Registry).__name__,\n\
+         \x20     type(m.Registry.__dict__['kind']).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True ABCMeta method_descriptor\n\
+         by_diff_installabc\tRegistry\tinstalled"
     );
 }

@@ -66,9 +66,10 @@ fn make_db(source: &str, language: Language) -> (TestDb, File) {
 pub fn module_from_source(
     source: &str,
     module_name: impl Into<by_ir::ModuleName>,
-    language: Language,
+    options: impl Into<crate::LowerOptions>,
 ) -> by_ir::function::ModuleIr {
-    with_source_in(source, language, |db, env, model, suite| {
-        crate::build_module(db, env, model, suite, module_name, language)
+    let options = options.into();
+    with_source_in(source, options.language, |db, env, model, suite| {
+        crate::build_module(db, env, model, suite, module_name, options)
     })
 }
