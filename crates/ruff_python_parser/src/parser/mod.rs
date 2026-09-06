@@ -124,6 +124,14 @@ pub(crate) struct Parser<'src> {
     /// just parsed as part of a simple statement swallowed that statement's
     /// terminating newline along with its suite. The simple-statement parsers
     /// take this flag instead of demanding a newline of their own.
+    ///
+    /// It is *live* only between the suite being consumed and the enclosing
+    /// statement ending: the expression parser reads it to stop at the token the
+    /// suite left it on rather than splicing the next line onto the value, and
+    /// every simple-statement parser then clears it with [`std::mem::take`]. So
+    /// it is set by exactly two places, read by the expression parser through
+    /// [`Parser::expression_ended_with_suite`], and cleared by whichever
+    /// statement parser terminates the statement the suite ended.
     expr_consumed_suite: bool,
 
     /// basedpython: how many destructuring binders have been named so far.
