@@ -94,6 +94,43 @@ reveal_type(a)  # revealed: A[object]
 reveal_type(a.x())  # revealed: object
 ```
 
+## constructor calls in basedpython files
+
+in a basedpython file a constructor call is inferred `final A`: the value it builds has *exactly*
+the class named, never a subclass. that says nothing about the class's type arguments, so the
+binding is as fluid as it is in a python file, and every widened view of it is just as exact
+
+```by
+class A[in out T]:
+    def add(self, t: T): ...
+
+a = A()
+reveal_type(a)  # revealed: final A[Never]
+
+a.add(1)
+reveal_type(a)  # revealed: final A[int]
+
+# the declared type of a later assignment is adopted, exactly as it is for a collection literal
+b: A[int | str] = a
+reveal_type(a)  # revealed: final A[int | str]
+```
+
+a container built by calling its class widens the same way a display of it does
+
+```by
+s = set()
+s2: set[int | str] = s
+reveal_type(s)  # revealed: final set[int | str]
+
+d = dict()
+d2: dict[str, int] = d
+reveal_type(d)  # revealed: final dict[str, int]
+
+e = []
+e2: list[int | str] = e
+reveal_type(e)  # revealed: list[int | str]
+```
+
 ## contravariant method use widens
 
 ```py

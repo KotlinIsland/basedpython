@@ -301,10 +301,12 @@ class D[T = int]: ...
 reveal_type(D())  # revealed: D[int]
 ```
 
-If a typevar does not provide a default, we use `Unknown`:
+A typevar with no default and nothing to infer from is left unsolved. Under the fork's
+`precise-unsolved-typevars` that is `Never` — the instance holds nothing — rather than python's
+gradual `Unknown`:
 
 ```py
-reveal_type(C())  # revealed: C[Unknown]
+reveal_type(C())  # revealed: C[Never]
 ```
 
 ## Calls within the generic class

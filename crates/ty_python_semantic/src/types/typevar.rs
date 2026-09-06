@@ -1773,6 +1773,19 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.variance(db)
     }
 
+    /// basedpython: whether this type parameter belongs to a class rather than to a
+    /// function.
+    ///
+    /// A class type parameter left unsolved by a call is the specialization of the
+    /// instance that call builds, and nothing else: the class type parameters of a
+    /// method are already fixed by the receiver before the method is bound.
+    pub(crate) fn binds_class_specialization(self, db: &'db dyn Db) -> bool {
+        let BindingContext::Definition(definition) = self.binding_context(db) else {
+            return false;
+        };
+        binding_type(db, definition).is_class_literal()
+    }
+
     /// basedpython: whether this parameter is declared `in out` on a class whose
     /// body never writes through it.
     ///

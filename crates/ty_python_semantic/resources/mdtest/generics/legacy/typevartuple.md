@@ -475,7 +475,7 @@ reveal_type(Prefix[int, bool, str]().attr)  # revealed: tuple[int, bool, str]
 reveal_type(Prefix[int, *tuple[bool, str]]().attr)  # revealed: tuple[int, bool, str]
 
 # TODO: Should this raise an error?
-reveal_type(Prefix().attr)  # revealed: tuple[Unknown, *tuple[Unknown, ...]]
+reveal_type(Prefix().attr)  # revealed: tuple[Never, *tuple[Unknown, ...]]
 ```
 
 ```py
@@ -488,7 +488,7 @@ reveal_type(Suffix[int, str, bool]().attr)  # revealed: tuple[int, str, bool]
 reveal_type(Suffix[*tuple[int, str], bool]().attr)  # revealed: tuple[int, str, bool]
 
 # TODO: Should this raise an error?
-reveal_type(Suffix().attr)  # revealed: tuple[*tuple[Unknown, ...], Unknown]
+reveal_type(Suffix().attr)  # revealed: tuple[*tuple[Unknown, ...], Never]
 ```
 
 ```py
@@ -500,7 +500,10 @@ reveal_type(Between[int, bool, str]().attr)  # revealed: tuple[int, bool, str]
 reveal_type(Between[int, bool, bytes, str]().attr)  # revealed: tuple[int, bool, bytes, str]
 reveal_type(Between[int, *tuple[bool], str]().attr)  # revealed: tuple[int, bool, str]
 
-reveal_type(Between().attr)  # revealed: tuple[Unknown, *tuple[Unknown, ...], Unknown]
+# the fixed elements are left unsolved, and the fork solves those to `Never`. the variadic
+# middle is a `TypeVarTuple`, whose specialization is tuple-shaped rather than a plain type,
+# so `Never` is not a value it can take and it stays gradual
+reveal_type(Between().attr)  # revealed: tuple[Never, *tuple[Unknown, ...], Never]
 # error: [invalid-type-arguments] "No type argument provided for required type variable `U` of class `Between`"
 reveal_type(Between[int]().attr)  # revealed: tuple[Unknown, *tuple[Unknown, ...], Unknown]
 ```
