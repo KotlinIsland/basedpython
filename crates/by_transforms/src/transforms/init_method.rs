@@ -676,6 +676,43 @@ mod tests {
     }
 
     #[test]
+    fn a_modifier_chain_lowers_alongside_the_shorthand() {
+        // the modifier's decorator line and the `def __init__` rewrite are
+        // disjoint edits on the same statement
+        check(
+            indoc! {"
+                class A:
+                    final init(let a: int)
+            "},
+            indoc! {"
+                from typing import final
+                class A:
+                    @final
+                    def __init__(self, a: int):
+                        self.a: int = a
+            "},
+        );
+    }
+
+    #[test]
+    fn a_private_constructor_keeps_its_name() {
+        // `private` on a class member name-mangles it, but python calls
+        // `__init__` by its exact name — mangling would leave the class with no
+        // constructor at all. privacy is checked by ty instead
+        check(
+            indoc! {"
+                class A:
+                    private init(let a: int)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, a: int):
+                        self.a: int = a
+            "},
+        );
+    }
+
+    #[test]
     fn init_call_inside_method_is_left_alone() {
         // `init(...)` is the method shorthand only *directly* in a class body.
         // a call to a function named `init` inside a method body (as in

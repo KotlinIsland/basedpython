@@ -30,6 +30,7 @@ use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::is_immutable_scalar_default;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, StmtTypeAlias};
+use ruff_python_stdlib::basedpython::private_mangles;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
@@ -372,8 +373,15 @@ impl<'src> Modifiers<'src> {
                     if self.class_depth == 0 {
                         self.private_renames.push(func.name.as_str().to_owned());
                         self.rename_with_underscore(func.name.range());
-                    } else {
-                        // `private` method gets name-mangled `__name`
+                    } else if private_mangles(func.name.as_str()) {
+                        // a `private` method is name-mangled to `__name`. a
+                        // dunder is left alone: python calls it by its exact
+                        // name, so renaming would change what the method *is*
+                        // rather than who can reach it — and python's own
+                        // mangling rule skips a name with two trailing
+                        // underscores anyway. the one dunder where `private`
+                        // says something, `__init__`, is checked by ty at the
+                        // construction site instead
                         self.rename_with_dunder(func.name.range());
                     }
                 }
@@ -394,6 +402,8 @@ impl<'src> Modifiers<'src> {
     /// Replace the identifier at `range` with a double-underscore-prefixed
     /// copy. Used for `private` class members so Python's name-mangling
     /// applies and the symbol is hidden from subclass scope
+    ///
+    /// Only call this for a name [`private_mangles`] accepts.
     fn rename_with_dunder(&mut self, range: TextRange) {
         let original = self.src(range).to_owned();
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -1583,6 +1593,22 @@ mod tests {
     #[test]
     fn private_def() {
         check("private def helper(): ...\n", "def _helper(): ...\n");
+    }
+
+    #[test]
+    fn a_private_method_of_only_underscores_keeps_its_name() {
+        // `__` + `_` is `___`, and python mangles only a name with at most one
+        // trailing underscore, so the rename would hide nothing
+        check(
+            indoc! {"
+                class A:
+                    private def _(self): ...
+            "},
+            indoc! {"
+                class A:
+                    def _(self): ...
+            "},
+        );
     }
 
     #[test]

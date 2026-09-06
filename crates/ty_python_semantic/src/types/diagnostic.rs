@@ -153,6 +153,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SHADOWED_TYPE_VARIABLE);
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
+    registry.register_lint(&PRIVATE_CONSTRUCTOR);
+    registry.register_lint(&INEFFECTIVE_PRIVATE);
     registry.register_lint(&PRIVATE_IMPORT);
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
@@ -1109,6 +1111,71 @@ declare_lint! {
     pub(crate) static SUBCLASS_OF_SEALED_CLASS = {
         summary: "detects subclasses of sealed classes from outside their workspace",
         status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for constructing a class whose `init` is declared `private`, from
+    /// outside that class's own body.
+    ///
+    /// ## Why is this bad?
+    /// A `private` constructor says the class decides how its instances are
+    /// made: callers go through a factory the class provides, which can pick a
+    /// subclass, return a cached instance, or reject the arguments. Calling the
+    /// constructor directly bypasses that.
+    ///
+    /// A subclass is outside the class's body too, so it cannot construct the
+    /// base either.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class Id:
+    ///     private init(let raw: str)
+    ///
+    ///     @classmethod
+    ///     def parse(cls, text: str) -> Id:
+    ///         return Id(text.strip())  # ok: inside the class
+    ///
+    /// Id("x")  # error: `Id`'s constructor is private
+    /// ```
+    pub(crate) static PRIVATE_CONSTRUCTOR = {
+        summary: "detects construction of a class with a `private` constructor",
+        status: LintStatus::stable("0.0.79"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for the `private` modifier on a class member whose name it cannot
+    /// hide.
+    ///
+    /// ## Why is this bad?
+    /// `private` hides a class member by renaming it so python's name-mangling
+    /// applies, and python mangles only a name with at most one trailing
+    /// underscore. A dunder is therefore left with the name it was written
+    /// with, and the modifier does nothing — which is worse than an error,
+    /// because the declaration reads as though the member were hidden.
+    ///
+    /// `init` is the exception. It is the one dunder `private` says something
+    /// about, and it is enforced at the construction site rather than by hiding
+    /// a name: see [`private-constructor`](private-constructor.md).
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class Point:
+    ///     private def __repr__(self) -> str:  # error: `private` does nothing here
+    ///         return "Point()"
+    /// ```
+    pub(crate) static INEFFECTIVE_PRIVATE = {
+        summary: "detects a `private` modifier on a name it cannot hide",
+        status: LintStatus::stable("0.0.79"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }
@@ -6052,6 +6119,48 @@ fn add_non_runtime_checkable_protocol_context<'db>(
             .message(format_args!("`{class_name}` declared here")),
     );
     diagnostic.sub(class_def_diagnostic);
+}
+
+/// basedpython: `A(...)` where `A`'s constructor is declared `private` and the
+/// call is not inside `A`'s own body.
+pub(crate) fn report_private_constructor<'db>(
+    context: &InferContext<'db, '_>,
+    call: &ast::ExprCall,
+    class: ClassType<'db>,
+    constructor: crate::types::visibility::PrivateConstructor<'db>,
+) {
+    let Some(builder) = context.report_lint(&PRIVATE_CONSTRUCTOR, call) else {
+        return;
+    };
+    let db = context.db();
+    let class_name = class.name(db);
+    let owner_name = constructor.owner.name(db);
+    // naming the owner is only informative for a subclass, which is being
+    // refused over a constructor it did not declare. the classes are compared
+    // by identity, not by name: a subclass is free to reuse its base's name,
+    // and then the two messages would read the same while meaning different
+    // things
+    let inherited = class.class_literal(db).as_static() != Some(constructor.owner);
+    let mut diagnostic = if inherited {
+        builder.into_diagnostic(format_args!(
+            "Cannot construct `{class_name}`: it inherits `{owner_name}`'s private constructor"
+        ))
+    } else {
+        builder.into_diagnostic(format_args!(
+            "Cannot construct `{class_name}`: its constructor is private"
+        ))
+    };
+
+    let mut declaration = SubDiagnostic::new(
+        SubDiagnosticSeverity::Info,
+        format_args!("Only code inside `{owner_name}` may construct it"),
+    );
+    declaration.annotate(
+        Annotation::secondary(constructor.function.spans(db).name).message(format_args!(
+            "`{owner_name}`'s constructor declared private here"
+        )),
+    );
+    diagnostic.sub(declaration);
 }
 
 pub(crate) fn report_attempted_protocol_instantiation(

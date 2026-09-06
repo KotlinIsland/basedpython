@@ -8,11 +8,11 @@ use crate::{
         constraints::ConstraintSetBuilder,
         dedicated::pytest,
         diagnostic::{
-            ABSTRACT_AND_FINAL_METHOD, FINAL_ON_NON_METHOD, INVALID_FIXTURE_TYPE,
-            INVALID_PARAMETER_DEFAULT, INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM,
-            REDUNDANT_RETURN_ANNOTATION, REIFIED_CLASSMETHOD, TRAILING_LAMBDA_PARAMETERS,
-            TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE, UNSOUND_RETURN_STATEMENT,
-            USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
+            ABSTRACT_AND_FINAL_METHOD, FINAL_ON_NON_METHOD, INEFFECTIVE_PRIVATE,
+            INVALID_FIXTURE_TYPE, INVALID_PARAMETER_DEFAULT, INVALID_PARAMETRIZE,
+            INVALID_PARAMSPEC, INVALID_TYPE_FORM, REDUNDANT_RETURN_ANNOTATION, REIFIED_CLASSMETHOD,
+            TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE,
+            UNSOUND_RETURN_STATEMENT, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
             is_invalid_typed_dict_literal, report_bool_as_int, report_implicit_return_type,
             report_invalid_generator_function_return_type, report_invalid_return_type,
             report_shadowed_type_variable, report_unsound_return_statement,
@@ -856,6 +856,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let mut function_decorators = FunctionDecorators::empty();
         let mut dataclass_transformer_params = None;
         let mut final_decorator = None;
+        let mut private_modifier = None;
 
         for decorator in decorator_list {
             // basedpython: a trailing lambda block's synthetic decorator holds the
@@ -888,6 +889,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             {
                 if n.id.as_str() == "private" {
                     function_decorators |= FunctionDecorators::PRIVATE;
+                    private_modifier = Some(decorator);
                 }
                 continue;
             }
@@ -974,6 +976,32 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 "`@final` cannot be applied to non-method function `{name}`",
             ));
             diagnostic.info("`@final` is only meaningful on methods and classes");
+        }
+
+        // basedpython: a `private` the lowering cannot act on hides nothing. it is
+        // reported here rather than left to the lowering, which can only silently
+        // do nothing with it
+        if let Some(private_modifier) = private_modifier
+            && !ruff_python_stdlib::basedpython::private_mangles(&name.id)
+            && name.id != "__init__"
+            && self
+                .index
+                .scope(self.scope().file_scope_id(db))
+                .kind()
+                .is_class()
+            && let Some(builder) = self
+                .context
+                .report_lint(&INEFFECTIVE_PRIVATE, private_modifier)
+        {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`private` has no effect on `{name}`",
+                name = name.id
+            ));
+            diagnostic.info(
+                "`private` renames a member to `__<name>` so python's name-mangling hides it, \
+                 and python mangles only a name with at most one trailing underscore",
+            );
+            diagnostic.info("`init` is the one dunder `private` says something about");
         }
 
         // basedpython: a classmethod cannot have reified type parameters — the

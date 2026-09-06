@@ -3038,6 +3038,32 @@ fn basedpython_destructuring_let_rejects_plain_equals() {
     }
 }
 
+/// a modifier chain in front of `init(...)` reaches the constructor rather than
+/// being read as a statement of its own
+#[test]
+fn basedpython_init_method_takes_a_modifier_chain() {
+    let parsed =
+        parse_basedpython_module_with_errors("class C:\n    private final init(let a: int)\n");
+    assert_eq!(parsed.errors(), &[], "expected a clean parse");
+
+    let Some(Stmt::ClassDef(class)) = parsed.suite().first() else {
+        panic!("expected a class, got {:?}", parsed.suite());
+    };
+    let Some(Stmt::FunctionDef(function)) = class.body.first() else {
+        panic!("expected a function, got {:?}", class.body);
+    };
+    assert_eq!(function.name.as_str(), "__init__");
+    let markers: Vec<&str> = function
+        .decorator_list
+        .iter()
+        .filter_map(|decorator| match &decorator.expression {
+            Expr::Name(name) => Some(name.id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(markers, ["private", "final", "__init_method__"]);
+}
+
 /// every parameter of an `init(...)` becomes a field of the same name, which a
 /// pattern has none of
 #[test]
