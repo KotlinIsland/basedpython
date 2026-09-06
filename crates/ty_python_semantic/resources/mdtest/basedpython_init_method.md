@@ -154,6 +154,27 @@ x = A(1)
 x.a  # error: [unresolved-attribute]
 ```
 
+## a modifier chain may precede `init`
+
+`init(...)` is a `def __init__`, so a modifier written in front of it applies exactly as it would to
+a `def`:
+
+```by
+class A:
+    final init(let n: int)
+
+reveal_type(A(1).n)  # revealed: int
+```
+
+`static` and the `class def` classmethod modifier say which kind of function a `def` is, and a
+constructor is neither of those, so they are rejected:
+
+```by
+class B:
+    # error: [invalid-syntax] "`static` is not a modifier on an `init(...)` constructor"
+    static init()
+```
+
 ## call diagnostics name the class
 
 `init` has no `__init__` in the source to point at, so a bad constructor call names the class the

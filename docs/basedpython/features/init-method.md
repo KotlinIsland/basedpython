@@ -124,6 +124,62 @@ a visibility modifier without `let` / `var` has no attribute to name, and any
 other modifier keyword (`final`, `abstract`, …) is meaningless in this
 position — both are reported as errors
 
+## modifiers
+
+a modifier chain in front of `init` applies to the constructor exactly as it
+would to the `def __init__` it stands for:
+
+```by
+class A:
+    final init(let a: int)
+```
+
+```python
+from typing import final
+
+class A:
+    @final
+    def __init__(self, a: int):
+        self.a: int = a
+```
+
+`static` and the `class def` classmethod modifier say which kind of function a
+`def` is, and a constructor is neither, so they are rejected
+
+## private constructors
+
+`private init` means the class decides how its instances are made: its own body
+may construct it, and nothing else may. that is what a factory method rests on
+
+```by
+class Id:
+    private init(let raw: str)
+
+    @classmethod
+    def parse(cls, text: str) -> Id:
+        return Id(text.strip())
+
+Id("x")  # rejected
+```
+
+a subclass is outside the base's body like any other caller, so it may neither
+construct the base nor — while it inherits the private constructor — be
+constructed itself. declaring an `init` of its own makes it constructible again
+
+the guarantee is over the class's own name. a `type[Id]` may hold a subclass,
+and a subclass is free to declare a constructor of its own, so calling one is not
+refused
+
+```by
+def build(cls: type[Id]) -> Id:
+    return cls()  # allowed
+```
+
+unlike an ordinary `private` method, the emitted `__init__` is not renamed:
+python calls a constructor by its exact name, so there is no spelling that would
+hide it and leave the class constructible. a private constructor is a static
+guarantee rather than a runtime one
+
 ## implicit `self`
 
 `self` may be omitted from the parameter list. it is implied, so it is

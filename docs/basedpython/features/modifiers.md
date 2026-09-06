@@ -211,6 +211,13 @@ def _helper(): ...
     bare `self.__helper` would name a different attribute in a subclass's body
     and none at all outside a class; the full spelling reaches the method from
     all of them
+- `private` on a name python looks up verbatim — a dunder, or `_` — is reported
+    as having no effect. mangling applies only to a name with at most one
+    trailing underscore, so renaming would change what the member *is* rather
+    than who can reach it, and leaving it alone would make the modifier do
+    nothing. the one dunder where `private` says something is
+    [`init`](init-method.md#private-constructors), which is checked at the
+    construction site instead
 
 ## inlay hints
 
