@@ -35,7 +35,7 @@ use crate::types::instance::Protocol;
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::protocol_class::ReifiedMember;
 use crate::types::tuple::Tuple;
-use crate::types::typevar::{TypeVarBoundOrConstraints, TypeVarKind};
+use crate::types::typevar::TypeVarKind;
 use crate::types::variance::TypeVarVariance;
 use crate::types::{KnownClass, MemberLookupPolicy, Type};
 
@@ -1569,14 +1569,7 @@ fn type_param_interface<'db>(
                 .variables(db)
                 .map(|bound_typevar| {
                     let typevar = bound_typevar.typevar(db);
-                    let admissible = match typevar.bound_or_constraints(db, env) {
-                        Some(TypeVarBoundOrConstraints::UpperBound(bound)) => bound,
-                        Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
-                            constraints.as_type(db, env)
-                        }
-                        None => Type::object(),
-                    };
-                    (typevar.name(db), admissible)
+                    (typevar.name(db), typevar.declared_ceiling(db, env))
                 })
                 .collect()
         })

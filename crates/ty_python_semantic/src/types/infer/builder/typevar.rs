@@ -16,8 +16,9 @@ use crate::{
             original_class_type,
         },
         typevar::{
-            TypeVarBoundOrConstraintsEvaluation, TypeVarConstraints, TypeVarDefaultEvaluation,
-            TypeVarIdentity, TypeVarInstance, TypeVarLowerBoundEvaluation,
+            BoundScopeViolation, DeclaredEnd, TypeVarBoundOrConstraintsEvaluation,
+            TypeVarConstraints, TypeVarDefaultEvaluation, TypeVarIdentity, TypeVarInstance,
+            TypeVarLowerBoundEvaluation, bound_scope_violation_for,
         },
         visitor::find_over_type,
     },
@@ -58,6 +59,18 @@ fn constraint_set_nodes(
         _ if is_basedpython => Some(std::slice::from_ref(bound)),
         _ => None,
     }
+}
+
+/// basedpython: why a bound range `Lower..Upper` admits nothing worth writing.
+///
+/// Either end may name a type parameter, so the range is judged against what those parameters
+/// could be rather than against the names themselves.
+enum RangeVerdict<'db> {
+    /// No specialization puts anything in the range, the ends read at their widest.
+    Uninhabited { lower: Type<'db>, upper: Type<'db> },
+    /// Something is in the range, but only when the named parameter is `Never` — every call
+    /// would then be rejected from one side or the other.
+    OnlyNever { lower: Type<'db>, upper: Type<'db> },
 }
 
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
@@ -186,7 +199,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         );
     }
 
-    pub(super) fn infer_typevar_deferred(&mut self, node: &'ast ast::TypeParamTypeVar) {
+    pub(super) fn infer_typevar_deferred(
+        &mut self,
+        definition: Definition<'db>,
+        node: &'ast ast::TypeParamTypeVar,
+    ) {
         let env = self.program_environment();
         let ast::TypeParamTypeVar {
             range: _,
@@ -283,7 +300,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     Some(TypeVarBoundOrConstraints::UpperBound(bound_ty))
                 }
                 Some(expr) => {
-                    let bound_ty = self.infer_type_variable_bound(expr);
+                    let bound_ty = self.infer_type_variable_bound(expr, Some(definition));
                     Some(TypeVarBoundOrConstraints::UpperBound(bound_ty))
                 }
                 None => None,
@@ -292,21 +309,74 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // basedpython: the lower end of a bound range is always inferred, even when the range was
         // rejected above, so that every expression in the definition region has a type
         let lower_bound_ty = lower_bound.as_deref().map(|lower_expr| {
-            let lower_ty = self.infer_type_variable_bound_end(lower_expr, "lower");
-            if let Some(TypeVarBoundOrConstraints::UpperBound(upper_ty)) = bound_or_constraints
-                && !lower_ty.is_assignable_to(db, env, upper_ty)
+            let lower_ty =
+                self.infer_type_variable_bound_end(lower_expr, "lower", Some(definition));
+            // Either end may name another type parameter, and at the declaration nothing says
+            // what that parameter is. Two readings answer two different questions.
+            //
+            // Widest — the lower end at its floor, the upper end at its ceiling — asks whether
+            // *any* specialization makes the range inhabited. `def f[T, R: T..int]` passes: `T`
+            // could be `bool`.
+            //
+            // Narrowest for the lower end — at its ceiling — asks whether any specialization
+            // leaves room for something other than `Never`. `def f[T: str, R: T..int]` fails
+            // that: `str` and `int` share no value, so only `T = Never` inhabits the range and
+            // every call of `f` is rejected from one side or the other. A declaration nothing can
+            // use is reported where it is written.
+            let range_verdict = match bound_or_constraints {
+                Some(TypeVarBoundOrConstraints::UpperBound(upper_ty)) => {
+                    let upper_widest =
+                        upper_ty.with_typevars_at_declared_end(db, env, DeclaredEnd::Ceiling);
+                    let lower_widest =
+                        lower_ty.with_typevars_at_declared_end(db, env, DeclaredEnd::Floor);
+                    if !lower_widest.is_assignable_to(db, env, upper_widest) {
+                        Some(RangeVerdict::Uninhabited {
+                            lower: lower_widest,
+                            upper: upper_widest,
+                        })
+                    } else if lower_ty
+                        .with_typevars_at_declared_end(db, env, DeclaredEnd::Ceiling)
+                        .is_disjoint_from(db, env, upper_widest)
+                    {
+                        Some(RangeVerdict::OnlyNever {
+                            lower: lower_ty,
+                            upper: upper_ty,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(verdict) = range_verdict
                 && let Some(builder) = self
                     .context
                     .report_lint(&INVALID_TYPE_VARIABLE_BOUND, lower_expr)
             {
-                let mut diagnostic = builder.into_diagnostic(format_args!(
-                    "TypeVar lower bound `{lower}` is not assignable to its upper bound `{upper}`",
-                    lower = lower_ty.display(db, env),
-                    upper = upper_ty.display(db, env),
-                ));
-                diagnostic.info(
-                    "no type satisfies this bound range, so the type variable cannot be specialized",
-                );
+                match verdict {
+                    RangeVerdict::OnlyNever { lower, upper } => {
+                        let mut diagnostic = builder.into_diagnostic(format_args!(
+                            "TypeVar bound range `{lower}..{upper}` is inhabited only by `Never`",
+                            lower = lower.display(db, env),
+                            upper = upper.display(db, env),
+                        ));
+                        diagnostic.info(format_args!(
+                            "no specialization of `{lower}` leaves room below `{upper}`",
+                            lower = lower.display(db, env),
+                            upper = upper.display(db, env),
+                        ));
+                    }
+                    RangeVerdict::Uninhabited { lower, upper } => {
+                        let mut diagnostic = builder.into_diagnostic(format_args!(
+                            "TypeVar lower bound `{lower}` is not assignable to its upper bound `{upper}`",
+                            lower = lower.display(db, env),
+                            upper = upper.display(db, env),
+                        ));
+                        diagnostic.info(
+                            "no type satisfies this bound range, so the type variable cannot be specialized",
+                        );
+                    }
+                }
             }
             (lower_expr, lower_ty)
         });
@@ -315,7 +385,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // the default is a specialization like any other, so it has to sit above the lower
             // end too — `validate_typevar_default` only knows about the upper end
             if let Some((lower_expr, lower_ty)) = lower_bound_ty
-                && !lower_ty.is_assignable_to(db, env, default_ty)
+                && !lower_ty
+                    .with_typevars_at_declared_end(db, env, DeclaredEnd::Floor)
+                    .is_assignable_to(db, env, default_ty)
                 && let Some(builder) = self
                     .context
                     .report_lint(&INVALID_TYPE_VARIABLE_DEFAULT, default_expr)
@@ -346,17 +418,32 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         self.deferred_state = previous_deferred_state;
     }
 
-    /// Infer a type variable's upper bound, reporting a diagnostic if it is generic.
+    /// Infer a type variable's upper bound, reporting a diagnostic if it names a type variable
+    /// it may not name.
     ///
-    /// `Self` is exempt from that check: it is bound by the enclosing class, not by the generic
-    /// context being defined, so `def method[T: Self](self) -> T` leaves nothing unsolved
-    pub(super) fn infer_type_variable_bound(&mut self, bound: &ast::Expr) -> Type<'db> {
-        self.infer_type_variable_bound_end(bound, "upper")
+    /// `definition` is the type parameter the bound belongs to, and is `None` for a legacy
+    /// `TypeVar(bound=...)`, which has no type-parameter list to be positioned in.
+    pub(super) fn infer_type_variable_bound(
+        &mut self,
+        bound: &ast::Expr,
+        definition: Option<Definition<'db>>,
+    ) -> Type<'db> {
+        self.infer_type_variable_bound_end(bound, "upper", definition)
     }
 
     /// Infer one end of a type variable's bound, named by `end` in any diagnostic. basedpython
     /// bound ranges `T: Lower..Upper` have two ends; every other form has only an upper bound.
-    fn infer_type_variable_bound_end(&mut self, bound: &ast::Expr, end: &str) -> Type<'db> {
+    ///
+    /// A bound may name a type parameter that is already in scope where it is written — an
+    /// earlier entry in the same list, or one belonging to an enclosing list — so what is
+    /// reported here is the scope rule, not the mere presence of a type variable. The same rule
+    /// decides whether the bound is kept at all; see `bound_scope_violation_for`.
+    fn infer_type_variable_bound_end(
+        &mut self,
+        bound: &ast::Expr,
+        end: &str,
+        definition: Option<Definition<'db>>,
+    ) -> Type<'db> {
         let env = self.program_environment();
         let previously_in_type_variable_bound = self
             .context
@@ -368,12 +455,37 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             previously_in_type_variable_bound,
         );
 
-        if bound_ty.has_non_self_typevar_or_typevar_instance(self.db(), env)
+        // a bound with no declaring type parameter is a legacy `TypeVar(bound=...)`: it has no
+        // list for a name to be earlier in, so every type variable it mentions is out of scope
+        let kind = match definition {
+            Some(definition) => bound_scope_violation_for(self.db(), env, definition, bound_ty),
+            None => bound_ty
+                .has_non_self_typevar_or_typevar_instance(self.db(), env)
+                .then_some(BoundScopeViolation::out_of_scope()),
+        };
+
+        if let Some(violation) = kind
             && let Some(builder) = self
                 .context
                 .report_lint(&INVALID_TYPE_VARIABLE_BOUND, bound)
         {
-            builder.into_diagnostic(format_args!("TypeVar {end} bound cannot be generic"));
+            let db = self.db();
+            match violation {
+                BoundScopeViolation::OutOfScope => {
+                    builder.into_diagnostic(format_args!("TypeVar {end} bound cannot be generic"));
+                }
+                BoundScopeViolation::SelfReference => {
+                    builder.into_diagnostic(format_args!(
+                        "TypeVar {end} bound cannot reference the type parameter it bounds"
+                    ));
+                }
+                BoundScopeViolation::LaterInList(referenced) => {
+                    builder.into_diagnostic(format_args!(
+                        "TypeVar {end} bound cannot reference later type parameter `{name}`",
+                        name = referenced.name(db),
+                    ));
+                }
+            }
         }
 
         bound_ty
@@ -394,6 +506,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         let db = self.db();
+
+        // a bound naming another type parameter is not a type yet, so it is read at its loosest:
+        // every parameter it names at that parameter's own ceiling. a default outside even that
+        // is outside the bound under every specialization, and one inside it is left to the
+        // specialization to judge
+        let bound_or_constraints = match bound_or_constraints {
+            TypeVarBoundOrConstraints::UpperBound(bound) => TypeVarBoundOrConstraints::UpperBound(
+                bound.with_typevars_at_declared_end(db, env, DeclaredEnd::Ceiling),
+            ),
+            constraints @ TypeVarBoundOrConstraints::Constraints(_) => constraints,
+        };
 
         // Normalize both typevar representations into a `TypeVarInstance` so they
         // follow the same compatibility rules:
@@ -842,12 +965,26 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// [`InferenceFlags::IN_PACK_BOUND`] is what lets the double-starred whole-pack form
     /// resolve here: outside a pack's bound and outside a `**kwargs` annotation, a `**` type
     /// expression has no meaning.
+    ///
+    /// Unlike an ordinary bound, a pack's is not an interval on the pack's own value, so it never
+    /// reaches the constraint set. That is why it may not name another type parameter, even one
+    /// that is in scope: the check that enforces it walks members one at a time and has nowhere
+    /// to record a relation, so accepting the bound would leave every member unchecked.
     fn infer_pack_bound(&mut self, bound: &ast::Expr) -> Type<'db> {
         let previous = self.context.inference_flags;
         self.context.inference_flags |=
             InferenceFlags::IN_PACK_BOUND | InferenceFlags::IN_TYPE_VARIABLE_BOUND;
         let bound_ty = self.infer_type_expression(bound);
         self.context.inference_flags = previous;
+
+        if bound_ty.has_non_self_typevar_or_typevar_instance(self.db(), self.program_environment())
+            && let Some(builder) = self
+                .context
+                .report_lint(&INVALID_TYPE_VARIABLE_BOUND, bound)
+        {
+            builder.into_diagnostic("A variadic pack's bound cannot be generic");
+        }
+
         bound_ty
     }
 

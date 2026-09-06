@@ -4,7 +4,7 @@ expression: snapshot
 ---
 
 ---
-mdtest name: classes.md - Generic classes: PEP 695 syntax - Scoping of typevars - No back-references
+mdtest name: classes.md - Generic classes: PEP 695 syntax - Scoping of typevars - No forward references
 mdtest path: crates/ty_python_semantic/resources/mdtest/generics/pep695/classes.md
 ---
 
@@ -17,7 +17,7 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/generics/pep695/classes.
  2 | class C[S: T, T]:
  3 |     pass
  4 | 
- 5 | # error: [invalid-type-variable-bound]
+ 5 | # `S` precedes `T`, so `T`'s bound can name it
  6 | class D[S, T: S]:
  7 |     pass
  8 | 
@@ -42,20 +42,11 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/generics/pep695/classes.
 # Diagnostics
 
 ```
-error[invalid-type-variable-bound]: TypeVar upper bound cannot be generic
+error[invalid-type-variable-bound]: TypeVar upper bound cannot reference later type parameter `T`
  --> src/mdtest_snippet.py:2:12
   |
 2 | class C[S: T, T]:
   |            ^
-
-```
-
-```
-error[invalid-type-variable-bound]: TypeVar upper bound cannot be generic
- --> src/mdtest_snippet.py:6:15
-  |
-6 | class D[S, T: S]:
-  |               ^
 
 ```
 
