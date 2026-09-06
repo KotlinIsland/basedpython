@@ -1384,7 +1384,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let previous_typevar_binding_context =
             self.typevar_binding_context.replace(binding_context);
         self.infer_function_signature_annotations(function, binding_context);
-        self.infer_raises_clause(function);
         self.typevar_binding_context = previous_typevar_binding_context;
     }
 
