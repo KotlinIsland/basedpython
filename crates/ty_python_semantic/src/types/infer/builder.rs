@@ -83,7 +83,7 @@ use crate::types::diagnostic::{
     INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
     NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
     NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING,
+    POSSIBLY_MISSING_SUBMODULE, PRIVATE_CONSTRUCTOR, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING,
     TRAILING_LAMBDA_PARAMETERS, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
     UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
     UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_ASSIGNMENT, UNSOUND_CAST, UNSOUND_YIELD,
@@ -103,7 +103,7 @@ use crate::types::diagnostic::{
     report_match_pattern_against_non_runtime_checkable_protocol,
     report_match_pattern_against_typed_dict, report_mismatched_type_name,
     report_possibly_missing_attribute, report_possibly_unresolved_reference,
-    report_too_many_positional_patterns_for_class_pattern,
+    report_private_constructor, report_too_many_positional_patterns_for_class_pattern,
     report_unplaceable_starred_class_pattern, report_unsound_assignment, report_unsound_yield,
     report_unsupported_augmented_assignment, report_unsupported_comparison,
 };
@@ -157,6 +157,7 @@ use crate::types::unpacker::{
     UnpackResult, fixed_sequence_elements, sequence_from_literal_elements,
     tuple_literal_needs_promotion,
 };
+use crate::types::visibility::{private_constructor, scope_is_within_class};
 use crate::types::{
     BindingContext, BoundTypeVarInstance, CallDunderError, CallableBinding, CallableType,
     CallableTypes, ClassType, DeferredOperation, DeferredType, DynamicType, GeneratorTypeMode,
@@ -12427,6 +12428,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 && let Some(protocol) = class.into_protocol_class(self.db())
             {
                 report_attempted_protocol_instantiation(&self.context, call_expression, protocol);
+            }
+
+            // basedpython: a `private` constructor may only be called from
+            // inside the body of the class that declares it. `type[A]` is left
+            // alone for the same reason a protocol is: the class it stands for
+            // may be a subclass that declares a constructor of its own.
+            // the lint is asked first because answering the question at all
+            // costs a `__init__` lookup on every construction in the program
+            if !callable_type.is_subclass_of()
+                && self.context.is_lint_enabled(&PRIVATE_CONSTRUCTOR)
+                && let Some(constructor) = private_constructor(db, class)
+                && !scope_is_within_class(db, self.index, self.scope(), constructor.owner)
+            {
+                report_private_constructor(&self.context, call_expression, class, constructor);
             }
 
             // Inference of correctly-placed `TypeVar`, `ParamSpec`, `NewType`, and

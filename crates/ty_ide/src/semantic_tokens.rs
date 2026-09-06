@@ -6520,6 +6520,26 @@ class A:
     }
 
     #[test]
+    fn semantic_tokens_init_shorthand_with_a_modifier() {
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    private init(a: int)
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "private" @ 14..21: Keyword
+        "init" @ 22..26: Keyword
+        "a" @ 27..28: Parameter [definition]
+        "int" @ 30..33: Class
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_init_let_parameter() {
         // a `let` parameter is promoted to a `self.a` assignment synthesised
         // into the body; the synthetic nodes carry the parameter's ranges and
