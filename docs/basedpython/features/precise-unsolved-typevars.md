@@ -57,6 +57,38 @@ variance is read positionally for a type variable bound to a function: python on
 variance meaning for a generic class, and a legacy `TypeVar("T")` is invariant under its own rules,
 so `def f[T]() -> T` and its legacy spelling say the same thing here
 
+the variance rule is about type variables bound to a *function*. a class's own type parameter that
+no argument could have reached is the specialization of an instance the call just built with nothing
+in it, so it is `Never` whatever the class declared
+
+```by
+class Cell[in out T]:
+    def __init__(self, *values: T): ...
+    def add(self, value: T): ...
+
+reveal_type(Cell())   # final Cell[Never]
+```
+
+that is the answer `[]` gets, and it is not a dead end for the same reason:
+[fluid specializations](fluid-specializations.md) widen the binding at its first use
+
+*reached* is the point. a type parameter an argument did reach, and the solver still could not
+resolve, stays gradual: an empty solve there means inference gave up, not that the value is empty,
+and `Never` would move the error away from the call that could not infer it
+
+```python
+reveal_type(map(operator.add, ints, dynamic))   # map[Unknown] — the callback did reach `T`
+```
+
+a gradual parameter reaches everything, because it says nothing about where the
+argument went. that is what keeps `dict` and its subclasses usable: the
+`__new__(cls, /, *args: Any, **kwargs: Any)` they inherit takes the
+constructor's arguments before `__init__` does
+
+```python
+reveal_type(defaultdict(list))   # defaultdict[Never, Unknown]
+```
+
 ## the call still returns
 
 a return type of `Never` normally says the callee does not return, and a statement-level call to

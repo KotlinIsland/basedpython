@@ -643,10 +643,10 @@ from collections import defaultdict
 def tree():
     return defaultdict(tree)
 
-reveal_type(tree())  # revealed: defaultdict[Unknown, Divergent]
+reveal_type(tree())  # revealed: defaultdict[Never, Divergent]
 
 nested = defaultdict(tree)
-reveal_type(nested)  # revealed: defaultdict[Unknown, defaultdict[Unknown, Divergent]]
+reveal_type(nested)  # revealed: defaultdict[Never, defaultdict[Never, Divergent]]
 ```
 
 ## a recursive return value carried in a tuple element

@@ -69,6 +69,119 @@ class Defaulted[T = str]:
 reveal_type(Defaulted())  # revealed: Defaulted[str]
 ```
 
+## a declared variance does not change the constructor answer
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+declaring `in out` pins the subtyping relation between a class's specializations. it says nothing
+about what an instance built with no arguments holds, which is nothing, so the type parameter is
+still left unsolved as `Never` — the same answer `[]` gets, for the same reason
+
+```by
+class Cell[in out T]:
+    def __init__(self, *values: T):
+        self.values = values
+
+    def add(self, value: T):
+        self.values += (value,)
+
+reveal_type(Cell())  # revealed: final Cell[Never]
+reveal_type(Cell(1))  # revealed: final Cell[int]
+```
+
+a built-in container built by calling its class answers the same way
+
+```by
+reveal_type(set())  # revealed: final set[Never]
+reveal_type(list())  # revealed: final list[Never]
+```
+
+## a type variable an argument reached stays gradual
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+`Never` says the call built something with nothing in it, which is only true of a type parameter no
+argument could have constrained. Where an argument did reach one and the solve still came back
+empty, inference gave up rather than the value being empty, and `Never` would move the resulting
+error away from the call that could not infer it.
+
+it is the parameter an argument was matched to that decides this, not what the solve produced. `V`
+is reached and `K` is not, so a call that fills `value` still leaves `K` uninhabited:
+
+```py
+class Keyed[K, V]:
+    def __init__(self, value: V): ...
+
+reveal_type(Keyed(1))  # revealed: Keyed[Never, Literal[1]]
+```
+
+`map`'s constructor reaches its element type through the callback. the solve over an overloaded
+callback and a gradual iterable does not converge, and the fallback stays gradual:
+
+```py
+import operator
+from typing import Any
+
+ints: list[int] = []
+dynamic: Any = []
+
+reveal_type(map(operator.add, ints, dynamic))  # revealed: map[Unknown]
+```
+
+## a gradual parameter reaches everything
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+a parameter annotated `Any` swallows its argument and says nothing about where the argument went, so
+a call that filled one has not established that anything is empty.
+
+this is what `dict` and every subclass of it inherit: `__new__(cls, /, *args: Any, **kwargs: Any)`
+takes the constructor's arguments before `__init__` does. reading that as "no argument reached the
+value type" would make every `defaultdict(list)` hold `Never`, and its values unusable.
+
+```py
+from collections import defaultdict
+
+# the key type really is unreached, and `Never` is the right answer for it. the value type is not:
+# `default_factory` names it, and the solve simply did not resolve it
+reveal_type(defaultdict(list))  # revealed: defaultdict[Never, Unknown]
+
+d = defaultdict(list)
+reveal_type(d["key"])  # revealed: Unknown
+```
+
+a class of our own with the same catch-all `__new__` answers the same way, and one without it is
+unaffected either way:
+
+```py
+from typing import Any, Callable
+
+class Caught[K, V]:
+    values: list[V]
+
+    def __new__(cls, /, *args: Any, **kwargs: Any) -> "Caught[K, V]":
+        raise NotImplementedError
+
+    def __init__(self, make: Callable[[], V] | None, /) -> None: ...
+
+class Plain[K, V]:
+    values: list[V]
+
+    def __init__(self, make: Callable[[], V] | None, /) -> None: ...
+
+reveal_type(Caught(list))  # revealed: Caught[Never, Unknown]
+reveal_type(Plain(list))  # revealed: Plain[Never, Unknown]
+```
+
 ## only where the type variable is an output
 
 ```toml

@@ -12591,8 +12591,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let value_type = self.expression_type(value);
 
             if let Some(collection_def) = self.index.fluid_candidate_binding(value)
-                && let Some((collection_literal, _)) =
-                    value_type.class_specialization(self.db(), env)
+                && let Some((collection_literal, _)) = self.fluid_class_specialization(value_type)
             {
                 let identity_instance = Type::instance(
                     self.db(),
