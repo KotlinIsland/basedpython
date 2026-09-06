@@ -6,6 +6,7 @@ use itertools::{Either, Itertools};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, PySourceType};
+use ruff_text_size::Ranged;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
@@ -26,7 +27,7 @@ use crate::{
         tuple::Tuple,
         variance::VarianceInferable,
         visitor::{
-            self, TypeCollector, TypeVisitor, any_over_type_with_opaque_self,
+            self, TypeCollector, TypeVisitor, any_over_type_with_opaque_self, find_over_type,
             walk_type_with_recursion_guard,
         },
     },
@@ -34,8 +35,19 @@ use crate::{
 use ty_python_core::{
     Program,
     definition::{Definition, DefinitionKind},
+    scope::{NodeWithScopeKind, ScopeKind},
     semantic_index,
 };
+
+/// Which end of a type variable's own declaration stands in for it when a bound that names it has
+/// to be read without a specialization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeclaredEnd {
+    /// The narrowest the variable can be — its declared lower bound, or `Never`.
+    Floor,
+    /// The widest the variable can be — its declared upper bound, or `object`.
+    Ceiling,
+}
 
 impl<'db> Type<'db> {
     pub(crate) const fn is_type_var(self) -> bool {
@@ -57,6 +69,57 @@ impl<'db> Type<'db> {
             Type::TypeVar(bound_typevar)
                 if bound_typevar.typevar(db).kind(db) == TypeVarKind::InferredParameter
         )
+    }
+
+    /// This type with every type variable it names replaced by one end of that variable's own
+    /// declaration.
+    ///
+    /// A bound may name another type parameter, and at the declaration nothing says what that
+    /// parameter is. Reading each one at the end that makes the surrounding bound *widest* gives
+    /// the most permissive type it can ever denote, so a check against it reports only what no
+    /// specialization could rescue: an upper bound is widest at its ceiling, a lower bound at its
+    /// floor. `def f[T, R: T..int]` is fine — `T` could be `bool` — while
+    /// `class C[S = int, T: Sequence[S] = int]` has a default no `S` makes a `Sequence` of.
+    ///
+    /// `Self` is left alone: it is bound by the receiver, not by the list being declared.
+    pub(crate) fn with_typevars_at_declared_end(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        end: DeclaredEnd,
+    ) -> Type<'db> {
+        /// A ceiling can name a type variable of its own, so the substitution repeats. Each round
+        /// replaces a variable declared strictly earlier than the last, which the scope rule
+        /// keeps acyclic — the cap is only there so a bound this rule never sanctioned cannot
+        /// spin.
+        const MAX_ROUNDS: usize = 8;
+
+        let mut ty = self;
+        for _ in 0..MAX_ROUNDS {
+            let Some(bound_typevar) = find_over_type(db, env, ty, false, |ty| match ty {
+                Type::TypeVar(bound_typevar) if !bound_typevar.typevar(db).is_self(db) => {
+                    Some(bound_typevar)
+                }
+                _ => None,
+            }) else {
+                break;
+            };
+            let typevar = bound_typevar.typevar(db);
+            let replacement = match end {
+                DeclaredEnd::Ceiling => typevar.declared_ceiling(db, env),
+                DeclaredEnd::Floor => typevar.lower_bound(db).unwrap_or(Type::Never),
+            };
+            ty = ty.apply_type_mapping(
+                db,
+                env,
+                &TypeMapping::ApplySpecialization(ApplySpecialization::Single(
+                    bound_typevar,
+                    replacement,
+                )),
+                TypeContext::default(),
+            );
+        }
+        ty
     }
 
     pub(crate) fn has_typevar(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
@@ -421,6 +484,12 @@ impl<'db> TypeVarInstance<'db> {
         if !self.is_pack(db) {
             return None;
         }
+        // a pack's bound never reaches the constraint set, so a bound naming another type
+        // parameter has nowhere to record the relation it describes. it is reported where it is
+        // written and dropped here, rather than silently checking nothing
+        if self.bound_mentions_typevars(db) {
+            return None;
+        }
         match self._bound_or_constraints(db)? {
             TypeVarBoundOrConstraintsEvaluation::Eager(TypeVarBoundOrConstraints::UpperBound(
                 bound,
@@ -441,6 +510,38 @@ impl<'db> TypeVarInstance<'db> {
     /// (`**Kwargs`) rather than for a single type.
     fn is_pack(self, db: &'db dyn Db) -> bool {
         self.is_typevartuple(db) || self.is_keyword_variadic(db)
+    }
+
+    /// Whether either end of this type variable's bound names another type variable.
+    ///
+    /// Such a bound is a relation between two variables, and the constraint set is what expresses
+    /// one — so the paths that treat a declared bound as a concrete type have to leave it alone
+    /// and let [`SpecializationBuilder`](crate::types::generics::SpecializationBuilder) conjoin
+    /// it instead. `Self` does not count: it is bound by the receiver, not by the generic context
+    /// being solved.
+    #[salsa::tracked(returns(copy), cycle_result=|_, _, _| false, heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn bound_mentions_typevars(self, db: &'db dyn Db) -> bool {
+        // an eagerly-unbounded type variable is the common case and must not force anything
+        if self._bound_or_constraints(db).is_none() && self._lower_bound(db).is_none() {
+            return false;
+        }
+        let Some(definition) = self.definition(db) else {
+            return false;
+        };
+        let env = ProgramEnvironment::from_definition(definition);
+        let mentions = |ty: Type<'db>| ty.has_non_self_typevar_or_typevar_instance(db, &env);
+        // read the bound directly rather than through `bound_or_constraints`, which hides a
+        // variadic pack's — a pack bound is one of the callers that needs this answer
+        let upper = match self._bound_or_constraints(db) {
+            Some(TypeVarBoundOrConstraintsEvaluation::Eager(
+                TypeVarBoundOrConstraints::UpperBound(bound),
+            )) => Some(bound),
+            Some(TypeVarBoundOrConstraintsEvaluation::LazyUpperBound) => self.lazy_bound(db, &env),
+            // constraints naming a type variable are rejected outright, so there is never one
+            // here to hide from the paths below
+            _ => None,
+        };
+        upper.is_some_and(mentions) || self.lower_bound(db).is_some_and(mentions)
     }
 
     pub(crate) fn upper_bound(
@@ -479,6 +580,33 @@ impl<'db> TypeVarInstance<'db> {
             Some(tuple.elements(db))
         } else {
             None
+        }
+    }
+
+    /// The declared ceiling on this type variable, as a type rather than as a name.
+    ///
+    /// A bound may be another type parameter (`def f[T, R: T]`), and a name is no ceiling at all
+    /// to a caller that wants to measure a value against one — so the chain is followed until it
+    /// reaches something that is not a type variable. An unbounded parameter is capped by
+    /// `object`, and a constrained one by the union of its constraints.
+    ///
+    /// The scope rule makes the chain acyclic: a bound may only name a parameter declared before
+    /// it, and one that breaks that rule is dropped rather than installed.
+    pub(crate) fn declared_ceiling(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Type<'db> {
+        let mut typevar = self;
+        loop {
+            let ceiling = match typevar.bound_or_constraints(db, env) {
+                Some(bound_or_constraints) => bound_or_constraints.as_type(db, env),
+                None => return Type::object(),
+            };
+            match ceiling {
+                Type::TypeVar(named) => typevar = named.typevar(db),
+                ceiling => return ceiling,
+            }
         }
     }
 
@@ -522,7 +650,6 @@ impl<'db> TypeVarInstance<'db> {
         heap_size=ruff_memory_usage::heap_size
     )]
     fn lazy_lower_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
-        let env = &ProgramEnvironment::from_definition(self.definition(db)?);
         let definition = self.definition(db)?;
         let module = parsed_module(db, definition.program_file(db).python_file(db)).load(db);
         let DefinitionKind::TypeVar(typevar) = definition.kind(db) else {
@@ -531,8 +658,9 @@ impl<'db> TypeVarInstance<'db> {
         let lower =
             definition_expression_type(db, definition, typevar.node(&module).lower_bound.as_ref()?);
 
-        // a generic lower bound is reported as an error and dropped, mirroring the upper bound
-        if lower.has_non_self_typevar_or_typevar_instance(db, env) {
+        // the lower end follows the same scope rule as the upper one, and is dropped for the
+        // same reason when it breaks it
+        if bound_scope_violation(db, self, lower).is_some() {
             return None;
         }
 
@@ -890,12 +1018,13 @@ impl<'db> TypeVarInstance<'db> {
         }
     }
 
-    fn lazy_bound(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Option<Type<'db>> {
+    fn lazy_bound(self, db: &'db dyn Db, _env: &ProgramEnvironment<'db>) -> Option<Type<'db>> {
         let bound = self.lazy_bound_unchecked(db)?;
 
-        // a generic bound is reported as an error and dropped, but `Self` is a legitimate bound:
-        // it is bound by the enclosing class, and is substituted when the method binds its receiver
-        if bound.has_non_self_typevar_or_typevar_instance(db, env) {
+        // a bound naming a type parameter that is already in scope is kept — `def f[T, R: T]`.
+        // one naming a parameter that is not is reported *and dropped*, because the consumers
+        // that reduce a type variable to its bound recurse into it
+        if bound_scope_violation(db, self, bound).is_some() {
             return None;
         }
 
@@ -1104,6 +1233,132 @@ impl<'db> TypeVarInstance<'db> {
             .next()?;
         GenericContext::of_node(db, child.node(), index)?.binds_typevar(db, self)
     }
+}
+
+/// How a type variable's bound names a type variable it may not name.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) enum BoundScopeViolation<'db> {
+    /// `def f[T: list[T]]` — the parameter is not in scope inside its own bound.
+    SelfReference,
+    /// `def f[S: T, T]` — PEP 695 allows a bound to name an earlier parameter, not a later one.
+    LaterInList(TypeVarInstance<'db>),
+    /// A legacy `TypeVar(bound=U)`, or a name no enclosing type-parameter list declares.
+    OutOfScope,
+}
+
+impl BoundScopeViolation<'_> {
+    pub(crate) const fn out_of_scope() -> Self {
+        Self::OutOfScope
+    }
+}
+
+/// Classifies every type variable `bound` names against the list `own_definition` belongs to.
+///
+/// A type parameter may name one that is already in scope where it is written: an earlier entry
+/// in the same list, or one belonging to an enclosing type-parameter list. Because the entries of
+/// a list appear in source order, "earlier" is decided by comparing offsets rather than by
+/// walking the list.
+///
+/// `Self` is exempt. It is bound by the enclosing class rather than by the list being declared,
+/// and `def method[T: Self]` is checked when the method binds its receiver.
+///
+/// The rule is decided in one place because two callers need the same answer for different
+/// reasons: the diagnostic reports it, and [`lazy_bound`](TypeVarInstance::lazy_bound) has to
+/// *drop* a bound that breaks it. Dropping matters more than the message — several consumers
+/// reduce a type variable to its bound by plain recursion, so installing the mutually recursive
+/// bounds of `def f[T: R, R: T]` would be a stack overflow rather than an error.
+pub(crate) fn bound_scope_violation_for<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    own_definition: Definition<'db>,
+    bound: Type<'db>,
+) -> Option<BoundScopeViolation<'db>> {
+    let program_file = own_definition.program_file(db);
+    let file = own_definition.file(db);
+    let own_scope = own_definition.file_scope(db);
+    let index = semantic_index(db, program_file);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let own_start = Ranged::start(&own_definition.full_range(db, &module));
+
+    // only a type parameter has a list to be early or late in. a legacy `TypeVar(bound=U)` is
+    // declared by an assignment, so there is no position for `U` to precede — and one `TypeVar`
+    // object can be reused by two unrelated generics, which is why the rule cannot be relaxed
+    // for it by looking at the surrounding scope instead
+    let in_type_param_list = index.scope(own_scope).kind() == ScopeKind::TypeParams;
+
+    // The one enclosing list a bound may name, if there is one: the class's, when this list
+    // belongs to one of that class's own methods. That is the only enclosing case anything
+    // substitutes — projecting a member from `Owner[int]` applies `Owner`'s specialization to the
+    // method's signature, and the bound is rewritten with it. Nothing does that for a list on a
+    // nested class or a nested function, so naming an enclosing parameter there would leave a
+    // variable in the bound that no specialization ever reaches, and every use of the generic
+    // would fail a bound it cannot satisfy.
+    //
+    // The chain for a method is exactly [its own list, the class body, the class's list]; anything
+    // longer has crossed something that does not carry the parameter along.
+    let method_owner_type_params = index
+        .ancestor_scopes(own_scope)
+        .skip(1)
+        .take(2)
+        .collect_tuple()
+        .filter(|((_, body), (_, type_params))| {
+            matches!(
+                index.scope(own_scope).node(),
+                NodeWithScopeKind::FunctionTypeParameters(_)
+            ) && body.kind().is_class()
+                && matches!(
+                    type_params.node(),
+                    NodeWithScopeKind::ClassTypeParameters(_)
+                )
+        })
+        .map(|(_, (type_params_scope, _))| type_params_scope);
+
+    // the bound's own lazy attributes are not searched: a name this bound writes is a type
+    // variable of its own, and what *that* variable is bounded by is its own declaration's problem
+    find_over_type(db, env, bound, false, |ty| {
+        let referenced = match ty {
+            Type::TypeVar(bound_typevar) => bound_typevar.typevar(db),
+            Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) => typevar,
+            _ => return None,
+        };
+        if referenced.is_self(db) {
+            return None;
+        }
+        Some(match referenced.definition(db) {
+            Some(definition) if definition == own_definition => BoundScopeViolation::SelfReference,
+            Some(definition)
+                if in_type_param_list
+                    && definition.file(db) == file
+                    && definition.file_scope(db) == own_scope =>
+            {
+                if Ranged::start(&definition.full_range(db, &module)) < own_start {
+                    return None;
+                }
+                BoundScopeViolation::LaterInList(referenced)
+            }
+            Some(definition)
+                if in_type_param_list
+                    && definition.file(db) == file
+                    && method_owner_type_params == Some(definition.file_scope(db)) =>
+            {
+                return None;
+            }
+            _ => BoundScopeViolation::OutOfScope,
+        })
+    })
+}
+
+/// The cached form of [`bound_scope_violation_for`], for the callers that have to consult it
+/// whenever a bound is read rather than once per definition.
+#[salsa::tracked(returns(copy), cycle_result=|_, _, _, _| None, heap_size=ruff_memory_usage::heap_size)]
+fn bound_scope_violation<'db>(
+    db: &'db dyn Db,
+    typevar: TypeVarInstance<'db>,
+    bound: Type<'db>,
+) -> Option<BoundScopeViolation<'db>> {
+    let own_definition = typevar.definition(db)?;
+    let env = ProgramEnvironment::from_definition(own_definition);
+    bound_scope_violation_for(db, &env, own_definition, bound)
 }
 
 /// A nonce that gives a bound typevar occurrence a fresh identity.
@@ -1867,14 +2122,26 @@ impl<'db> BoundTypeVarInstance<'db> {
                 && specialization.specialize_self_domain()
                 && let Some(specialization) = specialization.as_specialization(db)
             {
-                Type::TypeVar(self.apply_specialization_to_bound_or_constraints(
+                return Type::TypeVar(self.apply_specialization_to_bound_or_constraints(
                     db,
                     specialization,
                     visitor.env,
-                ))
-            } else {
-                Type::TypeVar(self)
+                ));
             }
+            // a type variable the specialization does not name can still be bounded by one it
+            // does — `class Owner[T]: def narrow[U: T]`, projected from an `Owner[int]`. the
+            // bound is read off the variable wherever it turns up, so the variable itself has to
+            // carry the substituted bound
+            if self.typevar(db).bound_mentions_typevars(db) {
+                return Type::TypeVar(self.with_mapped_bound_and_default(
+                    db,
+                    env,
+                    self.freshness(db),
+                    type_mapping,
+                    visitor,
+                ));
+            }
+            Type::TypeVar(self)
         };
 
         match type_mapping {
@@ -2044,6 +2311,13 @@ impl<'db> BoundTypeVarInstance<'db> {
         ) -> Option<Type<'db>> {
             let env =
                 ProgramEnvironment::from_program(bound_typevar.binding_context(db).program(db));
+
+            // every caller intersects the result into a *specialization*, so a bound naming
+            // another type variable has nothing to offer here: substituting it would leave that
+            // variable in the specialization
+            if bound_typevar.typevar(db).bound_mentions_typevars(db) {
+                return None;
+            }
 
             bound_typevar
                 .typevar(db)

@@ -108,6 +108,53 @@ class A[Fn: (*: *, **: *) -> object]:
     def f(self, *args: *Fn.parameters, **kwargs: **Fn.parameters) -> Fn.returns
 ```
 
+## a bound can name another type parameter
+
+a bound may name a type parameter that is already in scope where it is written — one that precedes
+it in the same list, or one belonging to an enclosing list:
+
+```by
+def pick[T, R: T](t: T, r: R) -> T:
+    return r
+
+class Owner[T]:
+    def narrow[U: T](self, u: U) -> T:
+        return u
+```
+
+the bound takes part in solving a call rather than being checked against one argument at a time, so
+`R`'s solution is a floor under `T`:
+
+```by
+class Animal
+class Dog(Animal)
+
+def pick[T, R: T](t: T, r: R) -> T:
+    return t
+
+pick(Dog(), Animal())   # T is Animal
+```
+
+nothing else has to mention `T` for it to be found:
+
+```by
+def only_bound[T, R: T](r: R) -> T:
+    return r
+
+only_bound(1)   # T is Literal[1]
+```
+
+a name that is not yet in scope is rejected: a later entry in the list, the parameter's own name,
+and a legacy `TypeVar`, which holds no position in a list at all:
+
+```by
+def f[S: T, T](s: S, t: T)      # error: `T` comes later
+def g[T: list[T]](x: T) -> T    # error: `T` is not in scope inside its own bound
+```
+
+a [variadic pack](pack-bounds.md)'s bound describes its members rather than its own value, so it is
+checked member by member and cannot name a type parameter.
+
 ## see also
 
 - [bounds on a variadic pack](pack-bounds.md) — what a bound means on a `*Args` or `**Kwargs`

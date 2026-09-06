@@ -480,6 +480,32 @@ impl<'db, 'c> ConstraintSet<'db, 'c> {
         Self::from_node(builder, node, source_order)
     }
 
+    /// Returns a constraint set that holds a typevar inside the bounds its own declaration gives
+    /// it.
+    ///
+    /// These are *validity* bounds, not inference evidence: nothing was observed at a call site,
+    /// the declaration simply rules out every solution outside the range. Recording them as
+    /// evidence would make a typevar look inferred-from on paths that never mention it, and
+    /// whether a typevar has lower evidence is what selects the branch in
+    /// [`PathBounds::preliminary_solve`] and gates [`PathBound::restrict_gradual_solution`].
+    pub(crate) fn constrain_typevar_declared_bounds(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        builder: &'c ConstraintSetBuilder<'db>,
+        typevar: BoundTypeVarInstance<'db>,
+        lower: Option<Type<'db>>,
+        upper: Option<Type<'db>>,
+    ) -> Self {
+        Self::constrain_typevar_with_bounds(
+            db,
+            env,
+            builder,
+            typevar,
+            lower.map(ConstraintBound::Validity),
+            upper.map(ConstraintBound::Validity),
+        )
+    }
+
     /// Returns a constraint set that constrains a typevar to be a supertype of `lower`.
     pub(crate) fn constrain_typevar_lower_bound(
         db: &'db dyn Db,
@@ -4470,11 +4496,21 @@ impl<'db> PathBounds<'db> {
             .require_bound_or_constraints(db, env)
         {
             TypeVarBoundOrConstraints::UpperBound(bound) => {
-                let declared_upper = bound.top_materialization(db, env);
+                // a bound naming another type variable is already conjoined into this constraint
+                // set, so there is nothing left for it to cap here — and top-materializing it
+                // would put a type variable where a concrete ceiling is expected
+                let declared_upper = if bound_typevar.typevar(db).bound_mentions_typevars(db) {
+                    Type::object()
+                } else {
+                    bound.top_materialization(db, env)
+                };
 
                 // basedpython: a declared lower bound raises the floor of every solution. The
                 // narrowest type above both it and any inferred lower bound is their union
-                let declared_lower = bound_typevar.typevar(db).lower_bound(db);
+                let declared_lower = bound_typevar
+                    .typevar(db)
+                    .lower_bound(db)
+                    .filter(|_| !bound_typevar.typevar(db).bound_mentions_typevars(db));
                 let lower = match declared_lower {
                     Some(declared) if path_bound.evidence_lower.is_some() => {
                         UnionType::from_two_elements(db, env, lower, declared)

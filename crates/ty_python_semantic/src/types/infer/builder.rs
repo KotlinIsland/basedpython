@@ -1797,7 +1797,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 self.infer_class_deferred(definition, class.node(self.module()));
             }
             DefinitionKind::TypeVar(typevar) => {
-                self.infer_typevar_deferred(typevar.node(self.module()));
+                self.infer_typevar_deferred(definition, typevar.node(self.module()));
             }
             DefinitionKind::ParamSpec(paramspec) => {
                 self.infer_paramspec_deferred(paramspec.node(self.module()));
@@ -4813,7 +4813,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             None
         };
         if let Some(bound) = arguments.find_keyword("bound") {
-            let bound_type = self.infer_type_variable_bound(&bound.value);
+            let bound_type = self.infer_type_variable_bound(&bound.value, None);
             bound_or_constraints = Some(TypeVarBoundOrConstraints::UpperBound(bound_type));
         }
         if let Some(default) = arguments.find_keyword("default") {
