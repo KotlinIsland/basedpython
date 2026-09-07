@@ -43,6 +43,16 @@ impl Index {
         })
     }
 
+    /// The same documents as [`Self::file_documents`], each with the key it is stored under.
+    pub(super) fn keyed_file_documents(&self) -> impl Iterator<Item = (&DocumentKey, &Document)> {
+        self.documents
+            .iter()
+            .filter(|(_, document)| match document {
+                Document::Text(text_document) => text_document.notebook().is_none(),
+                Document::Notebook(_) => true,
+            })
+    }
+
     pub(crate) fn document_handle(
         &self,
         uri: &lsp_types::Uri,

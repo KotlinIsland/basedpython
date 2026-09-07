@@ -42,6 +42,7 @@ mod initialize;
 mod injections;
 mod inlay_hints;
 mod notebook;
+mod project_server;
 mod publish_diagnostics;
 mod pull_diagnostics;
 mod rename;
@@ -226,6 +227,7 @@ impl TestServer {
         capabilities: ClientCapabilities,
         initialization_options: Option<Value>,
         env_vars: Vec<(String, Option<String>)>,
+        project_server_directory: Option<SystemPathBuf>,
     ) -> Self {
         setup_tracing();
 
@@ -252,7 +254,13 @@ impl TestServer {
             // TODO: This should probably be configurable to test concurrency issues
             let worker_threads = NonZeroUsize::new(1).unwrap();
 
-            match Server::new(worker_threads, server_connection, test_system, true) {
+            match Server::new(
+                worker_threads,
+                server_connection,
+                test_system,
+                true,
+                project_server_directory,
+            ) {
                 Ok(server) => {
                     if let Err(err) = server.run() {
                         panic!("Server stopped with error: {err:?}");
@@ -1279,9 +1287,18 @@ pub(crate) struct TestServerBuilder {
     initialization_options: Option<Value>,
     client_capabilities: ClientCapabilities,
     env_vars: Vec<(String, Option<String>)>,
+    project_server_directory: Option<SystemPathBuf>,
 }
 
 impl TestServerBuilder {
+    /// The environment variables a test server is started without.
+    ///
+    /// Removed so that a test's answer does not depend on the machine it runs on — most of
+    /// all on which interpreter happens to be on the `PATH`. A test that builds a database of
+    /// its own alongside the server has to remove them too, or the two resolve different
+    /// environments and the server rightly refuses to answer for it.
+    pub(crate) const CLEARED_ENV_VARS: &'static [&'static str] = &["HOME", "PATH", "VIRTUAL_ENV"];
+
     /// Create a new builder
     pub(crate) fn new() -> Result<Self> {
         // Default client capabilities for the test server:
@@ -1311,11 +1328,11 @@ impl TestServerBuilder {
             test_context: TestContext::new()?,
             initialization_options: None,
             client_capabilities,
-            env_vars: vec![
-                ("HOME".into(), None),
-                ("PATH".into(), None),
-                ("VIRTUAL_ENV".into(), None),
-            ],
+            env_vars: Self::CLEARED_ENV_VARS
+                .iter()
+                .map(|name| ((*name).to_string(), None))
+                .collect(),
+            project_server_directory: None,
         })
     }
 
@@ -1611,6 +1628,16 @@ impl TestServerBuilder {
         Ok(self)
     }
 
+    /// Let `by` command lines reach this server, announcing it in `directory`.
+    ///
+    /// Off by default, and never the user's own directory: a test server that published
+    /// itself there would be found and asked for answers by whatever `by check` the person
+    /// running the tests has going in another terminal.
+    pub(crate) fn with_project_server(mut self, directory: &SystemPath) -> Self {
+        self.project_server_directory = Some(directory.to_path_buf());
+        self
+    }
+
     /// Build the test server
     pub(crate) fn build(self) -> TestServer {
         TestServer::new(
@@ -1619,6 +1646,7 @@ impl TestServerBuilder {
             self.client_capabilities,
             self.initialization_options,
             self.env_vars,
+            self.project_server_directory,
         )
     }
 }

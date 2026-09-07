@@ -91,10 +91,12 @@ fn generate() -> String {
 
     output.push_str("# Environment variables\n\n");
 
-    // Partition and sort environment variables into TY_ and external variables.
+    // Partition and sort environment variables into the ones ty defines and the ones it only
+    // reads. `BY_` as well as `TY_`, because basedpython's own variables are as much ty's as
+    // the rest — listing them beside `VIRTUAL_ENV` would say ty merely observes them.
     let (ty_vars, external_vars): (BTreeSet<_>, BTreeSet<_>) = EnvVars::metadata()
         .iter()
-        .partition(|(var, _)| var.starts_with("TY_"));
+        .partition(|(var, _)| var.starts_with("TY_") || var.starts_with("BY_"));
 
     output.push_str("ty defines and respects the following environment variables:\n\n");
 

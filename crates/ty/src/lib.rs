@@ -2,6 +2,7 @@ mod args;
 mod by_commands;
 mod by_init;
 mod by_lowering;
+mod by_project_server;
 mod by_source_encoding;
 mod by_stamps;
 mod by_wheels;
@@ -362,6 +363,8 @@ fn run_check(args: CheckCommand) -> anyhow::Result<ExitStatus> {
         .map(|path| SystemPath::absolute(path, &cwd))
         .collect();
 
+    let check_paths_given = !check_paths.is_empty();
+
     let mode = if args.fix {
         MainLoopMode::Fix(FixMode::ApplyFixes)
     } else if args.add_ignore {
@@ -394,8 +397,12 @@ fn run_check(args: CheckCommand) -> anyhow::Result<ExitStatus> {
 
     project_metadata.apply_configuration_files(&system)?;
 
+    let no_server = args.no_server;
     project_metadata.apply_override_options(args.into_options());
 
+    // the answer this command exists to produce may already exist, in a server that has been
+    // holding this project open. what comes back is only ever the answer this process would
+    // have computed — see `by_project_server` for what that costs and what it refuses
     let mut db = ProjectDatabase::fallible(project_metadata, system)?;
 
     // the project's django, which the type checker does not read: its templates are
@@ -411,6 +418,31 @@ fn run_check(args: CheckCommand) -> anyhow::Result<ExitStatus> {
 
     if !check_paths.is_empty() {
         project.set_included_paths(&mut db, check_paths);
+    }
+
+    // the answer this command exists to produce may already exist, in a server that has been
+    // holding this project open. asked here rather than earlier because what decides whether
+    // the server may answer is what *this* database resolved — see `by_project_server`
+    let ineligible = if no_server {
+        Some(by_project_server::Ineligible::Disabled)
+    } else if watch {
+        Some(by_project_server::Ineligible::Watch)
+    } else if !matches!(mode, MainLoopMode::Check) {
+        Some(by_project_server::Ineligible::Fixing)
+    } else if check_paths_given {
+        Some(by_project_server::Ineligible::Paths)
+    } else if memory_report.is_some() {
+        Some(by_project_server::Ineligible::MemoryReport)
+    } else {
+        None
+    };
+
+    if let Some(exit_status) = by_project_server::check(&db, &cwd, printer, ineligible) {
+        return Ok(if exit_zero {
+            ExitStatus::Success
+        } else {
+            exit_status
+        });
     }
 
     // Disabling LRU only assumes that the database is short-lived; unlike freezing below, it does
@@ -851,60 +883,89 @@ impl MainLoop {
         let terminal_settings = db.project().settings(db).terminal();
         let is_human_readable = terminal_settings.output_format.is_human_readable();
 
-        match diagnostics {
-            [] if is_human_readable && fixed_diagnostics.is_none_or(|fixed| fixed == 0) => {
-                writeln!(
-                    self.printer.stream_for_success_summary(),
+        {
+            let stdout = self.printer.stream_for_details().lock();
+
+            // Only render diagnostics if they're going to be displayed, since doing
+            // so is expensive.
+            if stdout.is_enabled() {
+                let mut stdout = BufWriter::new(stdout);
+                let display_config = DisplayDiagnosticConfig::new("ty")
+                    .format(terminal_settings.output_format.into())
+                    .color(colored::control::SHOULD_COLORIZE.should_colorize())
+                    .with_cancellation_token(Some(self.cancellation_token.clone()))
+                    .context(0);
+
+                write!(
+                    stdout,
                     "{}",
-                    "All checks passed!".green().bold()
+                    DisplayDiagnostics::new(db, &display_config, diagnostics)
                 )?;
-            }
-            diagnostics => {
-                let diagnostics_count = diagnostics.len();
-
-                let stdout = self.printer.stream_for_details().lock();
-
-                // Only render diagnostics if they're going to be displayed, since doing
-                // so is expensive.
-                if stdout.is_enabled() {
-                    let mut stdout = BufWriter::new(stdout);
-                    let display_config = DisplayDiagnosticConfig::new("ty")
-                        .format(terminal_settings.output_format.into())
-                        .color(colored::control::SHOULD_COLORIZE.should_colorize())
-                        .with_cancellation_token(Some(self.cancellation_token.clone()))
-                        .context(0);
-
-                    write!(
-                        stdout,
-                        "{}",
-                        DisplayDiagnostics::new(db, &display_config, diagnostics)
-                    )?;
-                    stdout.flush()?;
-                }
-
-                if !self.cancellation_token.is_cancelled() && is_human_readable {
-                    if let Some(fixed) = fixed_diagnostics {
-                        let total = fixed + diagnostics_count;
-                        writeln!(
-                            self.printer.stream_for_failure_summary(),
-                            "Found {total} diagnostic{} \
-                            ({fixed} fixed, {diagnostics_count} remaining).",
-                            if total == 1 { "" } else { "s" }
-                        )?;
-                    } else {
-                        writeln!(
-                            self.printer.stream_for_failure_summary(),
-                            "Found {} diagnostic{}",
-                            diagnostics_count,
-                            if diagnostics_count > 1 { "s" } else { "" }
-                        )?;
-                    }
-                }
+                stdout.flush()?;
             }
         }
 
-        Ok(())
+        write_summary(
+            self.printer,
+            diagnostics.len(),
+            is_human_readable,
+            fixed_diagnostics,
+            self.cancellation_token.is_cancelled(),
+        )
     }
+}
+
+/// Writes the line that says how a check came out, after its diagnostics.
+///
+/// Shared with the [project server](crate::by_project_server) path, which renders its
+/// diagnostics elsewhere but has to summarize them the same way — the wording of "how did
+/// that go" belongs to the command, not to whoever computed the answer.
+///
+/// `cancelled` suppresses the count but not the sentence for a project with nothing wrong
+/// with it: a run interrupted before it finished counting cannot say how many there were, but
+/// a fix run that removed everything and was then interrupted still removed everything.
+pub(crate) fn write_summary(
+    printer: Printer,
+    diagnostics: usize,
+    is_human_readable: bool,
+    fixed_diagnostics: Option<usize>,
+    cancelled: bool,
+) -> anyhow::Result<()> {
+    // nothing left and nothing fixed, which is the only outcome with its own sentence
+    if diagnostics == 0 && fixed_diagnostics.is_none_or(|fixed| fixed == 0) {
+        if is_human_readable {
+            writeln!(
+                printer.stream_for_success_summary(),
+                "{}",
+                "All checks passed!".green().bold()
+            )?;
+        }
+        return Ok(());
+    }
+
+    // a check that was interrupted did not finish counting, so it has no total to report
+    if cancelled || !is_human_readable {
+        return Ok(());
+    }
+
+    if let Some(fixed) = fixed_diagnostics {
+        let total = fixed + diagnostics;
+        writeln!(
+            printer.stream_for_failure_summary(),
+            "Found {total} diagnostic{} \
+            ({fixed} fixed, {diagnostics} remaining).",
+            if total == 1 { "" } else { "s" }
+        )?;
+    } else {
+        writeln!(
+            printer.stream_for_failure_summary(),
+            "Found {} diagnostic{}",
+            diagnostics,
+            if diagnostics > 1 { "s" } else { "" }
+        )?;
+    }
+
+    Ok(())
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -949,17 +1010,31 @@ fn exit_status_from_diagnostics(
     diagnostics: &[Diagnostic],
     terminal_settings: &TerminalSettings,
 ) -> ExitStatus {
-    if diagnostics.is_empty() {
-        return ExitStatus::Success;
-    }
-
-    let mut max_severity = Severity::Info;
+    let mut max_severity = None;
     let mut io_error = false;
 
     for diagnostic in diagnostics {
-        max_severity = max_severity.max(diagnostic.severity());
+        max_severity = max_severity.max(Some(diagnostic.severity()));
         io_error = io_error || matches!(diagnostic.id(), DiagnosticId::Io);
     }
+
+    exit_status_from_summary(max_severity, io_error, terminal_settings.error_on_warning)
+}
+
+/// The status a check exits with, from what it found.
+///
+/// Separate from the diagnostics themselves so that the [project
+/// server](crate::by_project_server) path decides it here too: that path never holds the
+/// diagnostics — they are rendered where they were computed — but the rules for turning them
+/// into an exit code belong to the command either way.
+pub(crate) fn exit_status_from_summary(
+    max_severity: Option<Severity>,
+    io_error: bool,
+    error_on_warning: bool,
+) -> ExitStatus {
+    let Some(max_severity) = max_severity else {
+        return ExitStatus::Success;
+    };
 
     if !max_severity.is_fatal() && io_error {
         return ExitStatus::Error;
@@ -968,7 +1043,7 @@ fn exit_status_from_diagnostics(
     match max_severity {
         Severity::Info => ExitStatus::Success,
         Severity::Warning => {
-            if terminal_settings.error_on_warning {
+            if error_on_warning {
                 ExitStatus::Failure
             } else {
                 ExitStatus::Success

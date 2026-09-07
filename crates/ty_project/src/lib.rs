@@ -675,7 +675,7 @@ impl Project {
         }
     }
 
-    fn verbose(self, db: &dyn Db) -> bool {
+    pub fn verbose(self, db: &dyn Db) -> bool {
         self.verbose_flag(db)
     }
 
@@ -685,7 +685,7 @@ impl Project {
         }
     }
 
-    fn force_exclude(self, db: &dyn Db) -> bool {
+    pub fn force_exclude(self, db: &dyn Db) -> bool {
         self.force_exclude_flag(db)
     }
 

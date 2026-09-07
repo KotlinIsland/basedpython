@@ -2,6 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use ty_static::EnvVars;
 
 /// a temp directory of this process's own
 ///
@@ -488,6 +489,7 @@ fn compile_emits_only_the_files_it_was_given_and_still_resolves_the_others() {
 
     let out = dir.join("build");
     let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["compile", "wanted.py", "-o"])
         .arg(&out)
         .arg("--emit-c-only")
@@ -554,6 +556,7 @@ fn compile_writes_each_package_member_at_its_own_place_in_the_output_tree() {
 
     let out = dir.join("o");
     let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["compile", "-o"])
         .arg(&out)
         .arg("--emit-c-only")
@@ -613,6 +616,7 @@ fn compile_refuses_two_sources_that_would_write_the_same_artifact() {
 
     let out = dir.join("o");
     let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["compile", "-o"])
         .arg(&out)
         .arg("--emit-c-only")
@@ -654,6 +658,7 @@ fn compile_declines_a_package_body_whose_package_has_no_importable_name() {
 
     let out = dir.join("o");
     let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["compile", "-o"])
         .arg(&out)
         .arg("--emit-c-only")
@@ -694,6 +699,7 @@ async def total(s: str, n: int) -> int:
     let emitted = |spec: &str| -> Option<String> {
         let out = dir.join(spec);
         let status = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
             .args(["compile"])
             .arg(&file)
             .arg("-o")
@@ -732,6 +738,7 @@ fn run_executes_module() {
     fs::write(dir.path().join("main.by"), "print('hello from by run')\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -767,6 +774,7 @@ fn run_names_the_by_source_for_file_and_argv() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -817,6 +825,7 @@ def main():
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -845,6 +854,7 @@ fn run_enters_a_package_through_its_main_module() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "app"])
         .current_dir(dir.path())
         .output()
@@ -874,6 +884,7 @@ fn run_still_rewrites_traceback_frames_to_by_lines() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -919,6 +930,7 @@ main()
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -964,6 +976,7 @@ fn run_checks_a_deeply_nested_expression() {
     fs::write(dir.path().join("main.by"), format!("print({terms})\n")).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -985,6 +998,7 @@ fn run_force_unwrap_yields_inner_value() {
     fs::write(dir.path().join("main.by"), "x = Some(5)\nprint(x! + 1)\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1010,6 +1024,7 @@ fn run_invokes_top_level_main() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1034,6 +1049,7 @@ fn run_invokes_async_main_via_asyncio() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1058,6 +1074,7 @@ fn run_uses_the_configured_entry_point() {
     fs::write(dir.path().join("app.by"), "print('ran the entry point')\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("run")
         .current_dir(dir.path())
         .output()
@@ -1087,6 +1104,7 @@ fn run_reads_the_entry_point_from_pyproject() {
     fs::write(dir.path().join("pkg/cli.by"), "print('ran pkg.cli')\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("run")
         .current_dir(dir.path())
         .output()
@@ -1114,6 +1132,7 @@ fn run_reads_the_entry_point_from_basedpython_toml() {
     fs::write(dir.path().join("app.by"), "print('ran the entry point')\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("run")
         .current_dir(dir.path())
         .output()
@@ -1143,6 +1162,7 @@ fn run_reads_the_entry_point_from_the_basedpython_section() {
     fs::write(dir.path().join("pkg/cli.by"), "print('ran pkg.cli')\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("run")
         .current_dir(dir.path())
         .output()
@@ -1167,6 +1187,7 @@ fn run_prefers_an_explicit_module_over_the_configured_entry_point() {
     fs::write(dir.path().join("other.by"), "print('explicit')\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "other"])
         .current_dir(dir.path())
         .output()
@@ -1193,6 +1214,7 @@ fn run_forwards_arguments_to_the_named_entry_point() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "app", "--name", "asdf"])
         .current_dir(dir.path())
         .output()
@@ -1212,6 +1234,7 @@ fn run_without_a_module_or_entry_point_reports_both_ways_out() {
     fs::write(dir.path().join("main.by"), "print('unreached')\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("run")
         .current_dir(dir.path())
         .output()
@@ -1233,6 +1256,7 @@ fn run_main_with_args(source: &str, args: &[&str]) -> (String, String, i32) {
     fs::write(dir.path().join("main.by"), source).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .args(args)
         .current_dir(dir.path())
@@ -1258,6 +1282,7 @@ fn run_main_stamped(source: &str, stamps: &[&str]) -> (String, String, i32) {
     fs::write(dir.path().join("basedpython.toml"), OPT_IN_TO_STAMPS).unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_by"));
+    command.env(EnvVars::BY_NO_PROJECT_SERVER, "1");
     command.arg("run");
     for stamp in stamps {
         command.args(["--stamp", stamp]);
@@ -1419,6 +1444,7 @@ def main():
     fs::write(dir.path().join("basedpython.toml"), OPT_IN_TO_STAMPS).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "--compiled", "--python"])
         .arg(&python)
         .args([
@@ -1595,6 +1621,7 @@ Grid()[(1, 2)]
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1624,6 +1651,7 @@ print(A.__sealed_members__ == (B, C))
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1657,6 +1685,7 @@ print(shout(\"moon\", greeting=\"good night\"))
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1698,6 +1727,7 @@ print(\"quiet\".shouty)
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1759,6 +1789,7 @@ print(b not in w)
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1805,6 +1836,7 @@ print(Widget().kind)
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1841,6 +1873,7 @@ extension str:
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1875,6 +1908,7 @@ print(Holder.value)
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1912,6 +1946,7 @@ print(xs.second())
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -1995,6 +2030,7 @@ print(Color.Green.name)
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -2033,6 +2069,7 @@ main()
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -2107,6 +2144,7 @@ print('verified', checked)
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -2151,6 +2189,7 @@ boom()
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -2192,6 +2231,7 @@ fn build_skips_a_source_it_cannot_read() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--min-version", "3.12"])
         .current_dir(dir.path())
         .output()
@@ -2297,6 +2337,7 @@ fn transpile_renders_parse_error_with_location() {
     fs::write(&by_path, "a b\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("transpile")
         .arg(&by_path)
         .output()
@@ -2353,6 +2394,7 @@ fn transpile_malformed_inputs_never_panic() {
     ];
     for src in inputs {
         let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
             .arg("transpile")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -2387,6 +2429,7 @@ fn run_renders_parse_error_and_aborts() {
     fs::write(dir.path().join("main.by"), "a b\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -2414,6 +2457,7 @@ fn build_renders_parse_error_and_aborts() {
     fs::write(dir.path().join("bad.by"), "a b\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2445,6 +2489,7 @@ fn run_refuses_to_execute_on_check_errors() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -2485,6 +2530,7 @@ fn run_min_version_newer_than_interpreter_errors() {
     fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "--min-version", "3.99", "main"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -2520,6 +2566,7 @@ fn run_honors_explicit_min_version() {
     fs::write(dir.path().join("main.by"), "print('versioned')\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "--min-version", "3.9", "main"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -2545,6 +2592,7 @@ fn build_skips_hidden_directories() {
     fs::write(hidden.join("junk.by"), "a b\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2584,6 +2632,7 @@ fn build_writes_what_the_project_exports_into_its_marker() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2607,6 +2656,7 @@ fn build_writes_a_marker_for_a_project_that_exports_nothing() {
     fs::write(package.join("__init__.by"), "").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2638,6 +2688,7 @@ fn build_mirrors_the_module_tree_not_the_directory_tree() {
     fs::write(package.join("main.by"), "print(\"src layout\")\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2665,6 +2716,7 @@ fn build_writes_a_sourcemap_beside_the_generated_python() {
     fs::write(dir.path().join("main.by"), "print(\"built\")\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2720,6 +2772,7 @@ fn sourcemap_table_for(source: &str) -> (Vec<Option<u32>>, String) {
     fs::write(dir.path().join("main.by"), source).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2827,6 +2880,7 @@ fn run_resolves_a_src_layout_entry_point() {
     fs::write(package.join("main.by"), "print(\"src layout\")\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("run")
         .current_dir(dir.path())
         .output()
@@ -2855,6 +2909,7 @@ fn build_targets_the_configured_python_version() {
     fs::write(dir.path().join("main.by"), "type X = int\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2880,6 +2935,7 @@ fn build_emits_every_file_it_can_past_a_broken_one() {
     fs::write(dir.path().join("broken.by"), "x = (\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2914,6 +2970,7 @@ fn build_honours_src_exclude() {
     fs::write(negative.join("bad.by"), "def f(:\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -2938,6 +2995,7 @@ fn transpile_proceeds_past_non_syntax_errors() {
     fs::write(&by_path, "x: int = \"string\"\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("transpile")
         .arg(&by_path)
         .output()
@@ -2977,6 +3035,7 @@ fn transpile_directory_reverses_in_place() {
     fs::write(root.join(".venv/dep.py"), "x = 1\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("transpile")
         .arg("--reverse")
         .arg(root)
@@ -3014,6 +3073,7 @@ fn transpile_directory_round_trips_through_build() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(root)
         .output()
@@ -3138,6 +3198,7 @@ a.f()
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .env("PYTHON", &python)
         .current_dir(dir.path())
@@ -3209,6 +3270,7 @@ fn declared_reified_generic_runs() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -3250,6 +3312,7 @@ fn reified_generic_infers_specialization_from_arguments() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -3312,6 +3375,7 @@ Box().kind[float]()
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -3399,6 +3463,7 @@ print(sorted(s))
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -3477,6 +3542,7 @@ x(A(True))
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -3550,6 +3616,7 @@ print(h(A(\"x\")))
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -3617,6 +3684,7 @@ con(Con[object]())
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -3695,6 +3763,7 @@ print(object() is Sequence[int])
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -3741,6 +3810,7 @@ def main():
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main", "--runtime-raises-checks"])
         .current_dir(dir.path())
         .output()
@@ -3790,6 +3860,7 @@ def main():
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main", "--runtime-raises-checks"])
         .current_dir(dir.path())
         .output()
@@ -3835,6 +3906,7 @@ def main():
 
     let check = || {
         Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
             .arg("check")
             .current_dir(dir.path())
             .output()
@@ -3908,6 +3980,7 @@ fn a_lazy_from_import_resolves_a_submodule_and_refuses_a_missing_name_as_python_
     .unwrap();
 
     let transpiled = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["transpile", "main.by"])
         .env("PYTHON", python)
         .current_dir(dir.path())
@@ -3974,6 +4047,7 @@ fn build_carries_a_python_module_into_the_output() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4001,6 +4075,7 @@ fn build_carries_data_files_into_the_output() {
     fs::write(package.join("template.html"), "<p>hi</p>\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4027,6 +4102,7 @@ fn build_writes_a_stub_as_a_stub() {
     fs::write(dir.path().join("shapes.byi"), "def area() -> int: ...\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4054,6 +4130,7 @@ fn build_refuses_two_sources_that_are_one_module() {
     fs::write(dir.path().join("thing.py"), "x = 2\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4081,6 +4158,7 @@ fn build_deletes_output_the_project_no_longer_has() {
 
     let build = || {
         let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
             .arg("build")
             .current_dir(dir.path())
             .output()
@@ -4115,6 +4193,7 @@ fn build_leaves_output_it_never_wrote_alone() {
     fs::write(dir.path().join("build/theirs.txt"), "hands off\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4134,6 +4213,7 @@ fn build_writes_where_out_says() {
     fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--out", "elsewhere"])
         .current_dir(dir.path())
         .output()
@@ -4153,6 +4233,7 @@ fn build_does_not_read_its_own_output() {
 
     for _ in 0..2 {
         let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
             .args(["build", "--out", "elsewhere"])
             .current_dir(dir.path())
             .output()
@@ -4182,6 +4263,7 @@ fn build_reports_what_it_read_and_what_it_produced() {
     fs::write(package.join("helper.py"), "x = 1\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--print-manifest"])
         .current_dir(dir.path())
         .output()
@@ -4238,6 +4320,7 @@ fn build_does_not_ship_what_lives_outside_the_source_root() {
     fs::write(tests.join("test_it.py"), "def test_x(): pass\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--print-manifest"])
         .current_dir(dir.path())
         .output()
@@ -4275,6 +4358,7 @@ fn build_marks_a_package_as_carrying_its_sources() {
     fs::write(package.join("deep.by"), "x = 1\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4308,6 +4392,7 @@ fn build_ships_python_only_when_the_project_says_so() {
     fs::write(package.join("__init__.by"), "").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4345,6 +4430,7 @@ fn build_honours_the_configured_exclusions() {
     fs::write(dir.path().join("public.json"), "{}\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4378,6 +4464,7 @@ fn build_carries_a_directory_a_negated_exclude_takes_back() {
     fs::write(generated.join("kept.json"), "{}\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -4413,6 +4500,7 @@ fn build_ships_a_source_directory_that_is_itself_a_package() {
     fs::write(package.join("__init__.by"), "").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--print-manifest"])
         .current_dir(dir.path())
         .output()
@@ -4454,6 +4542,7 @@ fn build_reports_what_lowering_needs_at_run_time() {
 
     let manifest = |extra: &[&str]| -> String {
         let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
             .args(["build", "--print-manifest"])
             .args(extra)
             .current_dir(dir.path())
@@ -4498,6 +4587,7 @@ fn building_wheels_without_a_frontend_says_what_is_missing() {
     fs::write(package.join("__init__.by"), "").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--wheels"])
         .current_dir(dir.path())
         // an empty `PATH` is the only way to be sure this machine's `uv` is not
@@ -4552,6 +4642,7 @@ fn build_emitting(source: &str, settled: Option<&str>) -> String {
     fs::write(dir.path().join("main.by"), source).unwrap();
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_by"));
+    command.env(EnvVars::BY_NO_PROJECT_SERVER, "1");
     command
         .args(["build", "--out", "build"])
         .current_dir(dir.path());
@@ -4644,6 +4735,7 @@ fn only_a_build_takes_its_lowering_from_the_environment() {
     fs::write(dir.path().join("main.by"), LOWERED_THREE_WAYS).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["transpile", "main.by"])
         .current_dir(dir.path())
         .env(
@@ -4671,6 +4763,7 @@ fn building_wheels_refuses_a_soundness_spec_it_cannot_parse() {
     fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--wheels", "--soundness", "nonsense"])
         .current_dir(dir.path())
         // refused before the frontend is even looked for, so this holds on a
@@ -4722,6 +4815,7 @@ fn a_release_hands_each_build_the_stamps_and_the_lowering() {
     fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--wheels", "--soundness", "none"])
         .current_dir(dir.path())
         // the stub is the only `uv` reachable, so this cannot accidentally
@@ -4758,6 +4852,7 @@ fn building_wheels_refuses_a_single_target_version() {
     fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["build", "--wheels", "--min-version", "3.12"])
         .current_dir(dir.path())
         .output()
@@ -4791,6 +4886,7 @@ fn run_imports_a_python_module_beside_the_transpiled_ones() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -4816,6 +4912,7 @@ fn run_reads_a_data_file_beside_the_program() {
     fs::write(dir.path().join("greeting.txt"), "read from disk\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -4858,6 +4955,7 @@ fn run_refuses_an_interpreter_older_than_the_project_targets() {
     fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .env_remove("PYTHON")
@@ -5006,6 +5104,7 @@ fn run_uses_the_environment_the_project_configures() {
     fs::write(dir.path().join("main.by"), REPORTS_ITS_INTERPRETER).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .env_remove("PYTHON")
@@ -5045,6 +5144,7 @@ fn run_from_a_subdirectory_is_still_the_project() {
     fs::create_dir_all(&elsewhere).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("run")
         .current_dir(&elsewhere)
         .env_remove("PYTHON")
@@ -5075,6 +5175,7 @@ fn build_from_a_subdirectory_builds_the_project() {
     fs::create_dir_all(&elsewhere).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(&elsewhere)
         .output()
@@ -5114,6 +5215,7 @@ fn run_prefers_the_project_environment_to_the_python_variable() {
     fs::write(dir.path().join("main.by"), REPORTS_ITS_INTERPRETER).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .env("PYTHON", named.interpreter())
@@ -5151,6 +5253,7 @@ fn run_falls_back_to_the_python_variable() {
     fs::write(project.join("main.by"), REPORTS_ITS_INTERPRETER).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(&project)
         .env("PYTHON", elsewhere.interpreter())
@@ -5182,6 +5285,7 @@ fn run_refuses_a_configured_environment_that_is_not_one() {
     fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -5205,6 +5309,7 @@ fn run_refuses_a_project_file_that_collides_with_its_shim() {
     fs::write(dir.path().join("_by_runner.py"), "x = 1\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args(["run", "main"])
         .current_dir(dir.path())
         .output()
@@ -5228,6 +5333,7 @@ fn build_does_not_carry_a_compilers_output_directory() {
     fs::write(artifacts.join("blob"), "an enormous binary").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("build")
         .current_dir(dir.path())
         .output()
@@ -5252,6 +5358,7 @@ fn init_writes_a_project_that_builds_and_runs() {
     let (major, minor) = running_python_version();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .args([
             "init",
             "demo",
@@ -5270,6 +5377,7 @@ fn init_writes_a_project_that_builds_and_runs() {
     assert!(project.join("src/demo/__init__.by").exists());
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("run")
         .current_dir(&project)
         .output()
@@ -5295,6 +5403,7 @@ fn init_refuses_to_write_over_a_project() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
         .arg("init")
         .current_dir(dir.path())
         .output()
