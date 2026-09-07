@@ -135,10 +135,12 @@ impl<'a> Visitor<'a> for Scanner {
             Stmt::If(node) if node.pattern.is_some() => {
                 self.refuse("an `if let` pattern binds the names its body reads");
             }
-            // `for P in xs:` — the same, once per iteration
-            Stmt::For(node) if node.pattern.is_some() => {
-                self.refuse("a `for` destructuring pattern binds the names its body reads");
-            }
+            // `for P in xs:` and `let P := v` are lowered — both bind the pattern from
+            // the value the way a single-case `match` does, which is the shape the
+            // transpiler writes them as. an `if let` is not: it is a *condition* as
+            // well as a binding, and the pattern's captures have to reach the clause
+            // bodies rather than the statement after
+            //
             // `break <value>` yields out of a loop being used as an expression, which
             // is the statement-expression form and is declined with it
             Stmt::Break(node) if node.value.is_some() => {

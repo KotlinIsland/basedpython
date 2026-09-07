@@ -262,19 +262,34 @@ setup = true
 [programs.payloads]
 group = "enum"
 measures = "a `match` over an enum whose variants carry data, and the payload read out"
+# the enum class itself declines: an emitted type cannot carry the variant types the
+# lowering hangs on it, and lifting the gate was measured to answer `Shape.Circle` with
+# an `AttributeError` on a payload enum and to lose `.name`/`.value` *silently* on a
+# unit one, which is the worst rung of the ladder. the four functions all compile
 declines = 1
+# mypyc cannot build this row at all, and the reason is a mypyc bug rather than anything
+# about the program: `case Shape.Circle(r)` — a class pattern reaching its class through
+# an attribute — raises `AssertionError: RefExpr not resolved` from inside mypyc, which
+# it reports as an internal error. a payload enum *is* that pattern, so there is no
+# version of this row mypyc can compile and the column would be permanently dashed
+mypyc = false
 setup = true
 
 [programs.destructure]
 group = "bind"
 measures = "a `match` pattern binding in a `for` target and in a `let`"
-declines = 2
+# both bindings lower now, so the row measures a fully compiled build. it declined 2 until
+# `for` and `let` patterns were given a lowering: the `for` pattern declined through the
+# surface gate before the body lowering was ever reached, which is why fixing the `let`
+# alone would not have moved this row
+declines = 0
 setup = true
 
 [programs.accessors]
 group = "dispatch"
 measures = "the `props` pair written as a `get`/`set` block — the pair isolates the syntax"
-# the one remaining decline is the class, on `var v: int = 0`: the transpiler moves that
-# initialiser into `__init__`, so the twin's class body no longer binds the name, and an
-# emitted class has no constructor to write it instead. the accessor pair itself lowers
-declines = 1
+# nothing declines: the storage value rides on the field as the constructor's default, so
+# the emitted constructor writes it into each instance the way the twin's injected
+# `self.__v = 0` does. it declined until then because a declined *class* has no layout, and
+# `run`/`bench` could only reach it through generic getattr against an interpreted property
+declines = 0

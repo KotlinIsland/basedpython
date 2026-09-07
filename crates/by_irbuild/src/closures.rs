@@ -385,7 +385,7 @@ pub(crate) fn written_names(body: &[Stmt]) -> Vec<&str> {
 /// the recursion is [`visitor::walk_pattern`]'s rather than a hand-written match over the
 /// variants, so a pattern kind added later is descended into without being remembered
 /// here
-pub(crate) fn pattern_names(pattern: &ast::Pattern) -> Vec<&str> {
+fn pattern_names(pattern: &ast::Pattern) -> Vec<&str> {
     struct Collect<'a>(Vec<&'a str>);
     impl<'a> Visitor<'a> for Collect<'a> {
         fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
@@ -564,7 +564,7 @@ pub(crate) fn visit_expressions<'a>(expr: &'a Expr, f: &mut impl FnMut(&'a Expr)
 /// over-reporting only ever costs a decline
 pub(crate) fn loop_targets(body: &[Stmt]) -> HashSet<String> {
     let mut out = HashSet::new();
-    let mut record = |target: &Expr| {
+    let names = |target: &Expr, out: &mut HashSet<String>| {
         visit_expressions(target, &mut |child| {
             if let Expr::Name(name) = child {
                 out.insert(name.id.to_string());
@@ -573,7 +573,15 @@ pub(crate) fn loop_targets(body: &[Stmt]) -> HashSet<String> {
     };
     for stmt in crate::walk(body) {
         if let Stmt::For(node) = stmt {
-            record(&node.target);
+            // `for Rect(w, h) in rects:` binds `w` and `h` per trip, and the target
+            // beside them is the synthetic binder the pattern is matched against —
+            // which no closure can name. the transpiler draws the same line, so a
+            // capture left out here is a *shared* cell where the twin froze a copy,
+            // and every closure the loop made then answers with the last trip's value
+            match node.pattern.as_deref() {
+                Some(pattern) => out.extend(pattern_names(pattern).into_iter().map(str::to_string)),
+                None => names(&node.target, &mut out),
+            }
         }
         for expr in statement_expressions(stmt) {
             visit_expressions(expr, &mut |child| {
@@ -585,7 +593,7 @@ pub(crate) fn loop_targets(body: &[Stmt]) -> HashSet<String> {
                     _ => return,
                 };
                 for generator in generators {
-                    record(&generator.target);
+                    names(&generator.target, &mut out);
                 }
             });
         }

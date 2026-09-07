@@ -3025,6 +3025,30 @@ pub const INVALID_MODIFIER_MARKER: &str = "invalid_modifier";
 /// than matching the string itself.
 const ENUM_DEF_MARKER: &str = "enum_def";
 
+/// The keyword a synthetic class marker was written as, or `None` for a name
+/// that is not one of these markers at all.
+///
+/// The parser desugars several keyword-written basedpython constructs to a
+/// `ClassDef` carrying a marker decorator, and that marker then sits exactly
+/// where a modifier keyword (`sealed`, `final`, `data class`) sits — both are
+/// `Invalid`-ctx `Name` decorators, so the name is all that tells the two apart.
+/// A consumer that has to say *which* construct it is looking at wants the
+/// keyword rather than the marker's internal spelling.
+///
+/// `StmtClassDef::synthetic_marker_range` reaches the same keyword
+/// through the source, but a `case A, B` line gives every variant after the
+/// first an empty range, so the source there names nothing.
+pub fn synthetic_class_marker_keyword(marker: &str) -> Option<&'static str> {
+    Some(match marker {
+        ENUM_DEF_MARKER => "enum class",
+        "variant_unit" | "variant_tuple" => "case",
+        "extension_def" => "extension",
+        "build_def" => "build",
+        "protocol_class" => "protocol",
+        _ => return None,
+    })
+}
+
 /// Whether `class` came from basedpython's `enum class`, whose `case` members
 /// are its variants.
 pub fn is_based_enum(class: &crate::StmtClassDef) -> bool {

@@ -111,11 +111,12 @@ use by_ir::rtype::{Primitive, RType};
 use mapper::{Decline, Layouts, Lowered, map_fixed_tuple, map_type, map_type_with};
 use ruff_python_ast::{
     self as ast, CmpOp as AstCmpOp, Expr, ExprContext, Operator, Stmt, UnaryOp as AstUnaryOp,
+    helpers,
 };
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_text_size::{Ranged, TextSize};
 use ty_python_semantic::ProgramEnvironment;
-use ty_python_semantic::types::{KnownClass, TypeDefinition};
+use ty_python_semantic::types::{KnownClass, SpecialFormType, Type, TypeDefinition, TypeQualifier};
 use ty_python_semantic::{HasType, SemanticModel};
 
 /// lower every module-level function ty can represent natively
@@ -1324,6 +1325,8 @@ fn lower_generator(
             methods: vec![resume],
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             immutable: false,
             keywords: Vec::new(),
         }],
@@ -2526,6 +2529,15 @@ fn lower_class<'a>(
         }
         published.push(published_group);
     }
+    // an accessor block's storage is written down in the class body, but the twin binds
+    // nothing under that name — its initialiser went into `__init__`. so it is not a
+    // class-level constant to copy across, and the layout has taken it as a field with a
+    // constructor default instead
+    let storage = accessor_storage_defaults(db, model, class);
+    let is_storage = |target: &Expr| {
+        matches!(target, Expr::Name(name)
+            if storage.iter().any(|(declared, _)| std::ptr::eq(*declared, name)))
+    };
     for statement in &class.body {
         match statement {
             // an annotation is not a binding, but an annotated *assignment* is the
@@ -2533,7 +2545,9 @@ fn lower_class<'a>(
             // to `__annotations__`, and the value lands in the class dict either way.
             // in a `data class` the annotations are the fields instead, and the
             // layout has taken them already
-            Stmt::AnnAssign(node) if !is_data && node.value.is_some() => {
+            Stmt::AnnAssign(node)
+                if !is_data && node.value.is_some() && !is_storage(node.target.as_ref()) =>
+            {
                 match (node.target.as_ref(), node.value.as_deref()) {
                     (Expr::Name(name), Some(value)) => {
                         slot_aliases.extend(assigned_slot(name.id.as_str(), value)?);
@@ -2599,6 +2613,9 @@ fn lower_class<'a>(
             // evaluated it already and module init copies it across
             Stmt::Assign(assign) => {
                 for target in &assign.targets {
+                    if is_storage(target) {
+                        continue;
+                    }
                     match target {
                         // a dunder that fills a type slot needs one emitted alongside the
                         // copy. the copy writes into `tp_dict`, and a name there does not
@@ -2757,12 +2774,16 @@ fn lower_class<'a>(
             name: class.name.to_string(),
             immutable,
             base,
-            // neither written nor generated: a `data class` always gets one, and a
-            // written `__init__` is a method of its own
+            // neither written nor generated: a `data class` always gets one, a written
+            // `__init__` is a method of its own, and an accessor block's storage is
+            // written by a constructor the twin has too — the transpiler injected it
             inherited_init: !is_data
+                && storage.is_empty()
                 && !class.body.iter().any(|statement| {
                     matches!(statement, Stmt::FunctionDef(method) if method.name.as_str() == "__init__")
                 }),
+            fields_are_parameters: is_data,
+            dataclass: is_data,
             fields,
             decorators: class_decorators,
             generic: class.type_params.is_some(),
@@ -4201,32 +4222,28 @@ fn is_accessor_marker(
         && !is_written_decorator(db, model, decorator)
 }
 
-/// the storage an accessor block declared with an initialiser, where the class body has one
+/// the storage declarations an accessor block gave an initialiser, target and value each
 ///
 /// the three members `var v: int = 0` with a suite under it is parsed into include the
 /// backing storage, as a class-body declaration under a name no source spelled — which is
-/// why its target has no width. the transpiler does not leave it there: it moves the
-/// initialiser into `__init__`, so each instance gets storage of its own and a mutable
+/// why its target has no width. the transpiler does not leave the initialiser there: it
+/// moves it into `__init__`, so each instance gets storage of its own and a mutable
 /// initialiser is not one object every instance shares.
 ///
-/// that leaves the twin's class body with no such name and the emitted class with nowhere
-/// to take the value from. a class-level value is read back off the twin's body, and a
-/// class that wrote no `__init__` has no constructor of its own to write the field in
-/// instead — so a read before the first write would raise where the twin answers with the
-/// initialiser.
-///
-/// there are class shapes the transpiler cannot inject an `__init__` into and leaves the
-/// declaration where it stands, and those would be lowerable. nothing here tells them
-/// apart from the rest without deciding the placement a second time, and a decline is the
-/// safe way to be wrong about which shape this is.
+/// the emitted class has to write it at construction for the same reason, and a
+/// class-level value is the one thing it must not be. that answer is one object every
+/// instance reads through to, and it is published on the type — so `Cell._Cell__v` would
+/// read back a value the twin's class does not have at all. the storage becomes a field
+/// carrying the value as its *constructor* default instead, which the generated
+/// constructor writes into every instance it makes.
 ///
 /// a declaration with no initialiser is not this at all. the transpiler leaves that one in
 /// the class body exactly as the parser wrote it, and the two bodies say the same thing
-fn accessor_storage_with_an_initialiser<'a>(
+fn accessor_storage_defaults<'a>(
     db: &dyn ty_python_semantic::Db,
     model: &SemanticModel<'_>,
     class: &'a ast::StmtClassDef,
-) -> Option<&'a str> {
+) -> Vec<(&'a ast::ExprName, &'a Expr)> {
     let holds_a_block = class.body.iter().any(|statement| {
         matches!(statement, Stmt::FunctionDef(function)
             if function
@@ -4235,26 +4252,29 @@ fn accessor_storage_with_an_initialiser<'a>(
                 .any(|decorator| is_accessor_marker(db, model, decorator)))
     });
     if !holds_a_block {
-        return None;
+        return Vec::new();
     }
-    class.body.iter().find_map(|statement| {
-        let (target, value) = match statement {
-            Stmt::AnnAssign(node) => (node.target.as_ref(), node.value.is_some()),
-            Stmt::Assign(node) => match node.targets.as_slice() {
-                [target] => (target, true),
+    class
+        .body
+        .iter()
+        .filter_map(|statement| {
+            let (target, value) = match statement {
+                Stmt::AnnAssign(node) => (node.target.as_ref(), node.value.as_deref()?),
+                Stmt::Assign(node) => match node.targets.as_slice() {
+                    [target] => (target, node.value.as_ref()),
+                    _ => return None,
+                },
                 _ => return None,
-            },
-            _ => return None,
-        };
-        let Expr::Name(name) = target else {
-            return None;
-        };
-        // the storage is named after the property, two underscores deeper, so the name
-        // the message carries is the one the source actually wrote
-        (value && name.range.is_empty())
-            .then(|| name.id.as_str().trim_start_matches('_'))
-            .filter(|written| !written.is_empty())
-    })
+            };
+            let Expr::Name(name) = target else {
+                return None;
+            };
+            // a name with no width is one the accessor lowering wrote. a class-level value
+            // the source spelled out beside an accessor block is an ordinary one and keeps
+            // the ordinary lowering
+            name.range.is_empty().then_some((name, value))
+        })
+        .collect()
 }
 
 /// which half `@value.setter` and its siblings name, wherever the decorator stands
@@ -4653,21 +4673,40 @@ fn nested_binding_stands_alone(body: &[Stmt], name: &str, bound_by: &str) -> Low
 }
 
 /// what to call a statement in a decline, in the word python spells it with
+///
+/// exhaustive, and deliberately so: this was two tables that had drifted apart, and
+/// the one the body lowering read had no entry for `let` — so a `let` the backend
+/// could not lower declined as "`this statement`", which is a decline nothing can
+/// count. with no `_` arm a statement kind added to the ast cannot reach a decline
+/// without being named here first
+///
+/// the backticks belong to the entry rather than to the caller, because only half of
+/// these are a word python spells: "`for`" is the keyword, "an import" is not
 fn statement_word(statement: &Stmt) -> &'static str {
     match statement {
-        Stmt::Try(_) => "`try`",
+        Stmt::FunctionDef(_) => "a nested function",
+        Stmt::ClassDef(_) => "a nested class",
+        Stmt::Return(_) => "`return`",
+        Stmt::Delete(_) => "`del`",
+        Stmt::TypeAlias(_) => "a type alias",
+        Stmt::Assign(_) | Stmt::AugAssign(_) | Stmt::AnnAssign(_) => "an assignment",
+        Stmt::For(_) => "`for`",
+        Stmt::While(_) => "`while`",
+        Stmt::If(_) => "`if`",
+        Stmt::Let(_) => "`let`",
         Stmt::With(_) => "`with`",
         Stmt::Match(_) => "`match`",
-        Stmt::Delete(_) => "`del`",
+        Stmt::Raise(_) => "`raise`",
+        Stmt::Try(_) => "`try`",
+        Stmt::Assert(_) => "`assert`",
         Stmt::Import(_) | Stmt::ImportFrom(_) => "an import",
         Stmt::Global(_) => "`global`",
         Stmt::Nonlocal(_) => "`nonlocal`",
-        Stmt::Raise(_) => "`raise`",
-        Stmt::Assert(_) => "`assert`",
-        Stmt::Return(_) => "`return`",
-        Stmt::TypeAlias(_) => "a type alias",
-        Stmt::Let(_) => "`let`",
-        _ => "a statement",
+        Stmt::Expr(_) => "an expression statement",
+        Stmt::Pass(_) => "`pass`",
+        Stmt::Break(_) => "`break`",
+        Stmt::Continue(_) => "`continue`",
+        Stmt::IpyEscapeCommand(_) => "an ipython escape",
     }
 }
 
@@ -4737,9 +4776,23 @@ fn class_modifier(
         // `final` becomes `@final` from `typing`, which returns its argument — the
         // one class decorator whose result is provably the class it was handed
         "final" => Ok(Modifier::Apply(Decorator::name("final"))),
-        // `private` renames the class and `protocol` rewrites its bases: neither is a
-        // decorator at all, and the emitted type would answer to the wrong name or
-        // stand outside the protocol it was declared to be
+        // not a modifier at all: the parser leaves a construct marker in the same place,
+        // and the class statement carrying it is only what that construct desugars to.
+        // the rest of the construct is built around the class — an enum's variant types
+        // and the names on the enum that reach them, an extension's members on a type
+        // that is not this one — and an emitted type stands in for the class alone. it
+        // replaces the twin's namespace entry, so everything the twin built around the
+        // twin's class is left pointing at a class nothing reaches any more. measured on
+        // `enum class`: the payload form raises `AttributeError` at the first variant
+        // construction, and the all-unit form answers with bare objects carrying neither
+        // `name` nor `value` and no error anywhere
+        marker if let Some(keyword) = helpers::synthetic_class_marker_keyword(marker) => {
+            Err(Decline::new(format!(
+                "`{keyword}` is a construct this class statement only stands for, and an emitted type standing in for the class alone would not carry the rest of it"
+            )))
+        }
+        // `private` renames the class: that is a rename rather than a decorator, and the
+        // emitted type would answer to the wrong name
         _ => Err(Decline::new(
             "this class modifier changes what the class is, which an emitted type cannot follow",
         )),
@@ -5349,12 +5402,29 @@ fn class_fields(
             "a `setattr` on the receiver names its attribute at runtime",
         ));
     }
-    if let Some(written) = accessor_storage_with_an_initialiser(db, model, class) {
-        return Err(Decline::new(format!(
-            "the accessor block for `{written}` gives its storage an initialiser, which the twin writes in a constructor this class does not have"
-        )));
-    }
     let (is_data, _, wrote_a_decorator) = class_modifiers(db, model, class)?;
+    // an accessor block's storage is the one class-body declaration whose initialiser the
+    // twin writes in `__init__` rather than binding to the class, so it is lowered as a
+    // field default further down. two shapes have no way to reach that: a `data class`
+    // takes a constructor parameter per annotation, and storage is a name no source
+    // spelled; and a class with a written `__init__` is initialised by running that one,
+    // which is not where the twin's injected write went
+    let storage = accessor_storage_defaults(db, model, class);
+    if let Some((target, _)) = storage.first() {
+        let written = target.id.as_str().trim_start_matches('_');
+        if is_data {
+            return Err(Decline::new(format!(
+                "the accessor block for `{written}` gives its storage an initialiser, which a data class would take as a constructor parameter"
+            )));
+        }
+        if class.body.iter().any(|statement| {
+            matches!(statement, Stmt::FunctionDef(method) if method.name.as_str() == "__init__")
+        }) {
+            return Err(Decline::new(format!(
+                "the accessor block for `{written}` gives its storage an initialiser, which the twin writes at the top of an `__init__` this class runs as it stands"
+            )));
+        }
+    }
     // this class's own decorators are applied at init and taken out of the twin's source,
     // so the module body must not reach the class in the window between the twin's
     // `class` statement and init — everything it bound in that window keeps the
@@ -5385,8 +5455,33 @@ fn class_fields(
     // the inherited ones come first and nothing after that removes or reorders one, so
     // what this class adds of its own is whatever the field passes left past them
     let taken = inherited.len();
-    let defaults = class_level_defaults(class, is_data);
+    let mut defaults = class_level_defaults(class, is_data);
+    // storage is not one of those: the twin binds nothing under this name, so a field
+    // standing behind a class-level value would answer a read the twin's class refuses
+    for (target, _) in &storage {
+        defaults.remove(&mangled(Some(&class.name), target.id.as_str()));
+    }
     let mut fields = if is_data {
+        // `@dataclass` takes a base's fields from the base's *own* `__dataclass_fields__`,
+        // so a base that is not itself one contributes none — while the layout inherited
+        // above carries everything the base's `__init__` assigns. the two disagree by
+        // exactly those attributes, and the generated constructor would then take a
+        // parameter python's does not:
+        //
+        //     class Plain:
+        //         def __init__(self): self.p = 1
+        //     data class OnPlain(Plain):     # `OnPlain(1)` interpreted, `OnPlain(p, b)` here
+        //         b: int
+        if !inherited.is_empty()
+            && !base
+                .as_ref()
+                .and_then(ClassBase::in_module)
+                .is_some_and(|name| is_a_data_class(suite, name))
+        {
+            return Err(Decline::new(
+                "a data class takes its base's fields from a base that is one too, and this base is not",
+            ));
+        }
         data_fields(db, env, model, class, layouts, inherited)?
     } else {
         // a plain class *is* its `__init__`: the fields are the attributes it gives
@@ -5420,6 +5515,48 @@ fn class_fields(
         }
         field.optional = true;
         field.defaulted_by = Some(class.name.to_string());
+    }
+    // an accessor block's storage carries its initialiser as the field's constructor
+    // default, which is what the twin's injected `self.__v = 0` amounts to. only an
+    // immediate: a `[]` written there is a fresh list per instance in the twin, and one
+    // value written into every instance would be the one list they all share
+    for (target, value) in &storage {
+        let name = mangled(Some(&class.name), target.id.as_str());
+        let default = literal_value(value).ok_or_else(|| {
+            Decline::new(format!(
+                "the accessor block for `{}` gives its storage an initialiser that is not an immediate, and the twin evaluates that one per instance",
+                target.id.as_str().trim_start_matches('_')
+            ))
+        })?;
+        match fields.iter().position(|field| field.name == name) {
+            // a base laid the field out and its own constructor fills it. writing this
+            // class's value over the top would need a constructor that runs after the
+            // base's, which a class with no `__init__` of its own does not have
+            Some(at) if at < taken => {
+                return Err(Decline::new(format!(
+                    "`{name}` is an accessor block's storage over a field its base laid out"
+                )));
+            }
+            Some(at) => {
+                let field = &mut fields[at];
+                field.default = Some(default);
+                field.optional = false;
+            }
+            // a `let` whose getter only reads the storage has no write to it anywhere, so
+            // nothing has declared the field yet
+            None => {
+                let ty = target.inferred_type(model).ok_or_else(|| {
+                    Decline::new("an accessor block's storage has no inferred type")
+                })?;
+                fields.push(by_ir::function::FieldDecl {
+                    name,
+                    ty: map_type_with(db, env, ty, layouts)?,
+                    default: Some(default),
+                    optional: false,
+                    defaulted_by: None,
+                });
+            }
+        }
     }
     // a class that adds no field of its own keeps what its base keeps, at the offsets
     // the base laid them out, reached through the descriptors the base published — so
@@ -5545,6 +5682,74 @@ fn metaclass_carries_the_body(
     Ok(())
 }
 
+/// whether the class written under `name` in this module carries the `data class` marker
+fn is_a_data_class(suite: &[Stmt], name: &str) -> bool {
+    suite.iter().any(|statement| {
+        matches!(statement, Stmt::ClassDef(candidate)
+        if candidate.name.as_str() == name
+            && candidate.decorator_list.iter().any(|decorator| {
+                matches!(&decorator.expression, Expr::Name(marker)
+                    if matches!(marker.id.as_str(), "data_class" | "frozen_data_class"))
+            }))
+    })
+}
+
+/// an annotation in a `data class` body that declares something other than a field
+///
+/// `@dataclass` reads three annotations as instructions rather than as storage, and each
+/// leaves the class with a different set of fields than the annotations alone say:
+///
+/// ```python
+/// @dataclass
+/// class C:
+///     kind: ClassVar[str] = "k"   # a class attribute; not a parameter, not stored
+///     seed: InitVar[int]          # handed to `__post_init__`; not stored
+///     _: KW_ONLY                  # a marker; every field below it becomes keyword-only
+/// ```
+///
+/// laying any of them out as a field is a wrong answer rather than a slow one — the
+/// constructor takes an argument python does not, and `c.seed` answers where the
+/// interpreted instance raises. so each is declined
+fn pseudo_field_declines(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    node: &ast::StmtAnnAssign,
+) -> Lowered<()> {
+    // a qualifier is the head of the annotation: `ClassVar[str]` subscripts it, and a
+    // bare `ClassVar` is the whole of it
+    let head = match node.annotation.as_ref() {
+        Expr::Subscript(subscript) => subscript.value.as_ref(),
+        other => other,
+    };
+    if let Some(Type::SpecialForm(SpecialFormType::TypeQualifier(qualifier))) =
+        head.inferred_type(model)
+    {
+        match qualifier {
+            TypeQualifier::ClassVar => {
+                return Err(Decline::new(
+                    "a `ClassVar` is a class attribute rather than a field, which a fixed layout has nowhere to put",
+                ));
+            }
+            TypeQualifier::InitVar => {
+                return Err(Decline::new(
+                    "an `InitVar` is handed to `__post_init__` rather than stored, and a fixed layout would keep it",
+                ));
+            }
+            TypeQualifier::Final
+            | TypeQualifier::ReadOnly
+            | TypeQualifier::Required
+            | TypeQualifier::NotRequired => {}
+        }
+    }
+    if node.target.inferred_type(model) == Some(KnownClass::KwOnly.to_instance(db, env)) {
+        return Err(Decline::new(
+            "a `KW_ONLY` marker makes every field below it keyword-only, which a generated constructor does not model",
+        ));
+    }
+    Ok(())
+}
+
 /// the fields of a `data class`: the annotations its body writes, after its base's
 fn data_fields(
     db: &dyn ty_python_semantic::Db,
@@ -5560,6 +5765,7 @@ fn data_fields(
                 let Expr::Name(name) = node.target.as_ref() else {
                     return Err(Decline::new("only a plain attribute name is lowered yet"));
                 };
+                pseudo_field_declines(db, env, model, node)?;
                 // the annotation key a class body writes is mangled like any other
                 // private name, and a `data class` takes its fields from those keys
                 let name = mangled(Some(&class.name), name.id.as_str());
@@ -7187,6 +7393,8 @@ fn lower_function_with_receiver(
                     methods: Vec::new(),
                     base: None,
                     inherited_init: false,
+                    fields_are_parameters: true,
+                    dataclass: false,
                     immutable: false,
                 })
                 .collect();
@@ -7205,6 +7413,8 @@ fn lower_function_with_receiver(
                 methods: lowered_methods,
                 base: None,
                 inherited_init: false,
+                fields_are_parameters: true,
+                dataclass: false,
                 immutable: false,
             });
             all.extend(inner_environments);
@@ -8651,6 +8861,39 @@ fn local_representations(
                 for (name, rtype) in target_names(&node.target) {
                     record(&name, rtype, &mut found);
                 }
+                // `for Rect(w, h) in rects:` binds through a pattern instead, from the
+                // element the synthetic target holds
+                if let Some(pattern) = node.pattern.as_deref() {
+                    let mut bound = Vec::new();
+                    pattern_bindings(
+                        db,
+                        model,
+                        layouts,
+                        sealed,
+                        pattern,
+                        &RType::OBJECT,
+                        &mut bound,
+                    );
+                    for (name, rtype) in bound {
+                        record(name, rtype, &mut found);
+                    }
+                }
+            }
+            // `let (a, b) := pair` binds through a pattern, the same as a `case` does
+            Stmt::Let(node) => {
+                let mut bound = Vec::new();
+                pattern_bindings(
+                    db,
+                    model,
+                    layouts,
+                    sealed,
+                    &node.pattern,
+                    &RType::OBJECT,
+                    &mut bound,
+                );
+                for (name, rtype) in bound {
+                    record(name, rtype, &mut found);
+                }
             }
             // `except E as e` binds the caught exception, which the lowering fetches
             // as a plain object — so this is the one write whose representation is
@@ -8874,6 +9117,9 @@ fn walk(body: &[Stmt]) -> Vec<&Stmt> {
                 out.extend(walk(&node.finalbody));
             }
             Stmt::With(node) => out.extend(walk(&node.body)),
+            // a `let`'s `else` block is a suite like any other: it binds names, and it
+            // can hold a `def`
+            Stmt::Let(node) => out.extend(walk(&node.orelse)),
             Stmt::Match(node) => {
                 for case in &node.cases {
                     out.extend(walk(&case.body));
@@ -9381,6 +9627,7 @@ impl Lowering<'_, '_> {
                 }
             }
             Stmt::If(node) => self.if_statement(node),
+            Stmt::Let(node) => self.let_statement(node),
             Stmt::Match(node) => self.match_statement(node),
             Stmt::While(node) => self.while_statement(node),
             Stmt::For(node) => self.for_statement(node),
@@ -9410,8 +9657,8 @@ impl Lowering<'_, '_> {
                 self.expression(&node.value).map(|_| ())
             }
             other => Err(Decline::new(format!(
-                "`{}` is not lowered yet",
-                statement_kind(other)
+                "{} is not lowered yet",
+                statement_word(other)
             ))),
         }
     }
@@ -9502,6 +9749,73 @@ impl Lowering<'_, '_> {
                 expression_kind(other)
             ))),
         }
+    }
+
+    /// basedpython `let <pattern> := <subject>`, with its optional `else` block
+    ///
+    /// the transpiler writes this as `match <subject>: case <pattern>: pass`, so
+    /// a pattern that does not match binds nothing and the statement is over —
+    /// `let (a, b) := triple` leaves both names unbound and whatever reads them
+    /// next is what raises. an `else` block runs on that edge and then falls
+    /// through to the statement after, which is not rust's `let else`
+    fn let_statement(&mut self, node: &ast::StmtLet) -> Lowered<()> {
+        let (subject, subject_ty) = self.expression(&node.value)?;
+        self.destructure(&node.pattern, subject, &subject_ty, &node.orelse)
+    }
+
+    /// bind a pattern's captures from a value, which is what every basedpython
+    /// destructuring binder comes down to
+    ///
+    /// the captures land in the enclosing scope, as a `case` body's do, so they
+    /// outlive the statement exactly as the source says. `orelse` is the block
+    /// that runs when the pattern did not match; every binder but `let` has none,
+    /// and then the unmatched edge simply carries on
+    fn destructure(
+        &mut self,
+        pattern: &ast::Pattern,
+        subject: Value,
+        subject_ty: &RType,
+        orelse: &[Stmt],
+    ) -> Lowered<()> {
+        // boxed and held, which is what `match` does with its own subject. the two
+        // have to agree: [`local_representations`] reads a pattern's captures against
+        // an object subject to decide their representations, and a binding lowered
+        // against a narrower one would be a different type for the same local
+        let subject = self.widen_to_object(subject, subject_ty);
+        let held = self.builder.temp(RType::OBJECT);
+        self.builder.assign(held, subject);
+        let subject = Value::Register(held);
+
+        let matched = self.builder.new_block();
+        let unmatched = self.builder.new_block();
+        let after = self.builder.new_block();
+        self.pattern_branch(pattern, &subject, &RType::OBJECT, matched, unmatched)?;
+
+        self.builder.switch_to(unmatched);
+        self.block(orelse)?;
+        self.builder.terminate(Terminator::Goto(after));
+
+        // the matched edge always reaches the statement after, so `after` is live
+        // whatever the `else` block did
+        self.builder.switch_to(matched);
+        self.builder.terminate(Terminator::Goto(after));
+
+        self.builder.switch_to(after);
+        Ok(())
+    }
+
+    /// bind a `for` target's pattern from the element the loop just bound
+    ///
+    /// `for Rect(w, h) in rects:` reaches the ast as a loop over a synthetic name
+    /// with the pattern beside it, so every loop shape binds the element the way it
+    /// always did and this runs once at the top of the body, per trip. the synthetic
+    /// name is not one the source can spell, so nothing after this reads it
+    fn for_pattern(&mut self, node: &ast::StmtFor) -> Lowered<()> {
+        let Some(pattern) = node.pattern.as_deref() else {
+            return Ok(());
+        };
+        let (element, element_ty) = self.expression(&node.target)?;
+        self.destructure(pattern, element, &element_ty, &[])
     }
 
     /// `match` — the subject once, then each case in order
@@ -11014,6 +11328,7 @@ impl Lowering<'_, '_> {
         });
 
         self.builder.switch_to(body);
+        self.for_pattern(node)?;
         // `continue` jumps to the step, not the header, or the index never moves
         self.loops.push((step_block, after, self.cleanups.len()));
         let result = self.block(&node.body);
@@ -11098,6 +11413,7 @@ impl Lowering<'_, '_> {
             index: Value::Register(counter),
         });
         self.write_place(&item_place, Value::Register(item), &element)?;
+        self.for_pattern(node)?;
         self.loops.push((step, after, self.cleanups.len()));
         let result = self.block(&node.body);
         self.loops.pop();
@@ -11189,6 +11505,7 @@ impl Lowering<'_, '_> {
         self.builder.terminate(Terminator::Goto(body));
 
         self.builder.switch_to(body);
+        self.for_pattern(node)?;
         self.loops.push((header, after, self.cleanups.len()));
         let result = self.block(&node.body);
         self.loops.pop();
@@ -11342,6 +11659,7 @@ impl Lowering<'_, '_> {
             }
             None => self.assign_to(target, Value::Register(raw), &RType::OBJECT)?,
         }
+        self.for_pattern(node)?;
         self.loops.push((header, after, self.cleanups.len()));
         let result = self.block(&node.body);
         self.loops.pop();
@@ -16364,22 +16682,6 @@ fn binds_a_name(pattern: &ast::Pattern) -> bool {
         ast::Pattern::MatchValue(_) | ast::Pattern::MatchSingleton(_) => false,
         // anything else binds by construction, or is declined before this is asked
         _ => true,
-    }
-}
-
-fn statement_kind(stmt: &Stmt) -> &'static str {
-    match stmt {
-        Stmt::For(_) => "for",
-        Stmt::With(_) => "with",
-        Stmt::Match(_) => "match",
-        Stmt::ClassDef(_) => "class",
-        Stmt::FunctionDef(_) => "a nested function",
-        Stmt::Import(_) | Stmt::ImportFrom(_) => "import",
-        Stmt::Global(_) | Stmt::Nonlocal(_) => "global/nonlocal",
-        Stmt::Delete(_) => "del",
-        Stmt::Break(_) => "break",
-        Stmt::Continue(_) => "continue",
-        _ => "this statement",
     }
 }
 

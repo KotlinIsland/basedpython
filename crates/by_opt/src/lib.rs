@@ -326,6 +326,8 @@ mod tests {
             declares_slots: false,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             immutable: false,
         });
 

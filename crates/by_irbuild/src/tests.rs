@@ -8130,6 +8130,53 @@ class Pair:
     );
 }
 
+/// the enum decline is the only thing standing between a based enum and a module that
+/// misbehaves, so it is asserted for both lowerings the construct has
+///
+/// an `enum class` is a hierarchy the module body builds: the payload form leaves the
+/// variant types on the enum as `Shape.Circle`, and the all-unit form leaves real `Enum`
+/// members there. an emitted type replaces the twin's namespace entry and carries
+/// neither. lifting this one match arm was measured: the payload form then raises
+/// `AttributeError` at the first `Shape.Circle(...)`, and the all-unit form answers
+/// `Color.Red` with a bare object that has no `name` and no `value`, silently
+#[test]
+fn an_enum_with_payload_variants_declines() {
+    let reasons = declines(
+        "\
+enum class Shape:
+    case Circle(radius: int)
+    case Rect(width: int, height: int)
+",
+    );
+    assert!(
+        reasons.iter().any(
+            |(name, reason)| name == "Shape" && reason == ENUM_IS_MORE_THAN_ITS_CLASS_STATEMENT
+        ),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn an_enum_with_only_unit_variants_declines() {
+    let reasons = declines(
+        "\
+enum class Color:
+    case Red
+    case Green
+",
+    );
+    assert!(
+        reasons.iter().any(
+            |(name, reason)| name == "Color" && reason == ENUM_IS_MORE_THAN_ITS_CLASS_STATEMENT
+        ),
+        "{reasons:?}"
+    );
+}
+
+/// what both enum lowerings decline with, spelled once so the two tests above cannot
+/// drift apart from each other
+const ENUM_IS_MORE_THAN_ITS_CLASS_STATEMENT: &str = "`enum class` is a construct this class statement only stands for, and an emitted type standing in for the class alone would not carry the rest of it";
+
 /// the reason each declined entry in `source` gives, by name
 fn declines(source: &str) -> Vec<(String, String)> {
     with_source(source, |db, env, model, suite| {
@@ -9400,20 +9447,86 @@ class Box:
     });
 }
 
-/// an accessor block whose storage carries an initialiser declines saying so
+/// an accessor block's storage carries its initialiser as the constructor's default
 ///
-/// the transpiler does not leave that initialiser in the class body: it moves it into
-/// `__init__`, so every instance gets storage of its own rather than sharing one object.
-/// the emitted class has neither half of that — a class-level value is read back off the
-/// twin's body, which no longer holds one, and a class that wrote no `__init__` has no
-/// constructor to write the field in instead. so the decline is the answer, and what it
-/// must not be is the message about a name written twice that stood here before
+/// the transpiler does not leave that initialiser in the class body: it moves it into an
+/// `__init__` it injects, so every instance gets storage of its own rather than sharing
+/// one object. the field default is the same thing said in the layout — the generated
+/// constructor writes it into each instance — and what it must not be is a class-level
+/// value, which is one object every instance reads through to and is published on the
+/// type where the twin publishes nothing
 #[test]
-fn an_accessor_blocks_initialised_storage_is_declined() {
+fn an_accessor_blocks_initialised_storage_becomes_a_field_default() {
+    let source = "\
+class Cell:
+    var v: int = 4
+        get() = field
+        set(given):
+            field = given
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Cell")
+            .expect("Cell is emitted");
+        assert!(class.constants.is_empty(), "{:?}", class.constants);
+        // the twin's class writes nothing at class level, so neither may this: the
+        // constructor it does have is what fills the field
+        assert!(!class.inherited_init);
+        assert!(!class.fields_are_parameters);
+        let [field] = class.fields.as_slice() else {
+            panic!("one field: {:?}", class.fields);
+        };
+        assert_eq!(field.name, "_Cell__v");
+        assert_eq!(field.default, Some(by_ir::ops::Value::Int(4)));
+        assert!(!field.optional);
+        assert_eq!(field.defaulted_by, None);
+    });
+}
+
+/// a read-only accessor block declares the storage nothing writes
+///
+/// with no setter there is no assignment to the receiver anywhere in the class, so the
+/// declaration in the class body is the only thing that says the field is there at all
+#[test]
+fn a_read_only_accessor_blocks_storage_is_still_a_field() {
+    let source = "\
+class Cell:
+    let v: int = 7
+        get() = field
+";
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        let class = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Cell")
+            .expect("Cell is emitted");
+        let [field] = class.fields.as_slice() else {
+            panic!("one field: {:?}", class.fields);
+        };
+        assert_eq!(field.name, "_Cell__v");
+        assert_eq!(field.default, Some(by_ir::ops::Value::Int(7)));
+    });
+}
+
+/// an initialiser python evaluates once per instance is declined
+///
+/// the twin's injected `__init__` builds a fresh list for each `Cell()`. a field default
+/// is an immediate written into every instance, so a `[]` there would be the one list
+/// they all share — the very thing moving the initialiser into a constructor prevents
+#[test]
+fn an_accessor_blocks_computed_initialiser_is_declined() {
     let declined = declines(
         "\
 class Cell:
-    var v: int = 0
+    var v: list[int] = []
         get() = field
         set(given):
             field = given
@@ -9422,7 +9535,7 @@ class Cell:
     assert!(
         declined
             .iter()
-            .any(|(_, reason)| reason.contains("gives its storage an initialiser")),
+            .any(|(_, reason)| reason.contains("is not an immediate")),
         "{declined:?}"
     );
     assert!(
@@ -9430,6 +9543,204 @@ class Cell:
             .iter()
             .any(|(_, reason)| reason.contains("defined more than once")),
         "{declined:?}"
+    );
+}
+
+/// and so is one beside an `__init__` the class wrote for itself
+///
+/// the transpiler injects the write at the top of that constructor, and an emitted class
+/// with a written `__init__` is initialised by running it exactly as it stands — there is
+/// nowhere for the injected write to go
+#[test]
+fn an_accessor_blocks_initialiser_beside_a_written_init_is_declined() {
+    let declined = declines(
+        "\
+class Cell:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    var v: int = 4
+        get() = field
+        set(given):
+            field = given
+",
+    );
+    assert!(
+        declined
+            .iter()
+            .any(|(_, reason)| reason.contains("an `__init__` this class runs as it stands")),
+        "{declined:?}"
+    );
+}
+
+/// and so is one in a `data class`, whose fields are its constructor's parameters
+///
+/// storage is a name no source spelled, so taking it as a parameter would publish a
+/// signature the twin's generated `__init__` does not have
+#[test]
+fn an_accessor_blocks_initialiser_in_a_data_class_is_declined() {
+    let declined = declines(
+        "\
+data class Point:
+    x: int
+
+    var v: int = 4
+        get() = field
+        set(given):
+            field = given
+",
+    );
+    assert!(
+        declined.iter().any(
+            |(_, reason)| reason.contains("a data class would take as a constructor parameter")
+        ),
+        "{declined:?}"
+    );
+}
+
+/// `@dataclass` reads three annotations as instructions rather than as storage, and a
+/// layout that took any of them for a field would take a constructor parameter python's
+/// own generated `__init__` does not
+#[test]
+fn a_class_var_in_a_data_class_is_declined() {
+    let declined = declines(
+        "\
+from typing import ClassVar
+
+
+data class Point:
+    kind: ClassVar[str] = \"point\"
+    x: int
+",
+    );
+    assert!(
+        declined
+            .iter()
+            .any(|(_, reason)| reason.contains("a `ClassVar` is a class attribute")),
+        "{declined:?}"
+    );
+}
+
+/// the name it is imported under makes no difference: the decline reads the annotation's
+/// *type*, so an alias is the same `ClassVar`
+#[test]
+fn a_renamed_class_var_in_a_data_class_is_declined() {
+    let declined = declines(
+        "\
+from typing import ClassVar as CV
+
+
+data class Point:
+    kind: CV[str] = \"point\"
+    x: int
+",
+    );
+    assert!(
+        declined
+            .iter()
+            .any(|(_, reason)| reason.contains("a `ClassVar` is a class attribute")),
+        "{declined:?}"
+    );
+}
+
+#[test]
+fn an_init_var_in_a_data_class_is_declined() {
+    let declined = declines(
+        "\
+from dataclasses import InitVar
+
+
+data class Point:
+    x: int
+    seed: InitVar[int]
+",
+    );
+    assert!(
+        declined
+            .iter()
+            .any(|(_, reason)| reason.contains("an `InitVar` is handed to `__post_init__`")),
+        "{declined:?}"
+    );
+}
+
+#[test]
+fn a_kw_only_marker_in_a_data_class_is_declined() {
+    let declined = declines(
+        "\
+from dataclasses import KW_ONLY
+
+
+data class Point:
+    x: int
+    _: KW_ONLY
+    y: int
+",
+    );
+    assert!(
+        declined
+            .iter()
+            .any(|(_, reason)| reason.contains("`KW_ONLY` marker")),
+        "{declined:?}"
+    );
+}
+
+/// a base that is not a data class contributes no fields to the *dataclass*, however
+/// many attributes its own `__init__` gives the instance
+#[test]
+fn a_data_class_on_a_plain_base_is_declined() {
+    let declined = declines(
+        "\
+class Plain:
+    def __init__(self):
+        self.p = 1
+
+
+data class OnPlain(Plain):
+    b: int
+",
+    );
+    assert!(
+        declined
+            .iter()
+            .any(|(_, reason)| reason.contains("takes its base's fields from a base that is one")),
+        "{declined:?}"
+    );
+}
+
+/// …while a base that *is* one contributes them all, and stays compiled
+#[test]
+fn a_data_class_on_a_data_base_stays_compiled() {
+    assert_eq!(
+        declines(
+            "\
+data class Base:
+    a: int
+
+
+data class Sub(Base):
+    b: int
+"
+        ),
+        vec![]
+    );
+}
+
+/// a plain base with no storage of its own leaves the two field lists agreeing, so
+/// there is nothing to decline for
+#[test]
+fn a_data_class_on_an_empty_plain_base_stays_compiled() {
+    assert_eq!(
+        declines(
+            "\
+class Marker:
+    pass
+
+
+data class OnMarker(Marker):
+    b: int
+"
+        ),
+        vec![]
     );
 }
 
@@ -10997,20 +11308,75 @@ def area(r: object) -> int:
 }
 
 #[test]
-fn a_for_destructuring_pattern_is_declined() {
-    let reason = decline_for(
-        &format!(
-            "{A_MATCHABLE_CLASS}\
+fn a_destructuring_let_tests_the_pattern_and_binds_its_captures() {
+    // the shape a single-case `match` has: a test that branches, the captures written
+    // on the way through, and both edges joining at the statement after — so a pattern
+    // that does not match binds nothing and falls straight past
+    let ir = ir("\
+def first(pair: tuple[int, int]) -> object:
+    let (a, b) := pair
+    return a
+");
+    assert!(ir.contains("is-sequence"), "{ir}");
+    assert!(ir.contains("[0]") && ir.contains("[1]"), "{ir}");
+    assert!(ir.contains("a = r") && ir.contains("b = r"), "{ir}");
+}
+
+#[test]
+fn a_for_destructuring_pattern_binds_at_the_top_of_the_body() {
+    // the loop binds the element to the synthetic name the parser put beside the
+    // pattern, and the pattern is matched against that name once per trip
+    let ir = ir(&format!(
+        "{A_MATCHABLE_CLASS}\
 def total(rects: list[Rect]) -> int:
     var out = 0
     for Rect(w=a, h=b) in rects:
         out = out + a * b
     return out
 "
-        ),
-        "total",
+    ));
+    assert!(ir.contains("isinstance"), "{ir}");
+    assert!(ir.contains("a = "), "{ir}");
+    assert!(ir.contains("b = "), "{ir}");
+}
+
+#[test]
+fn a_let_in_a_class_body_declines_by_name() {
+    // a class body is settled from its text rather than run, so a name bound under a
+    // conditional there is only known once one has. the decline has to say which
+    // statement it was, and both naming tables read from one entry now
+    let reasons = declines(
+        "\
+available: bool = True
+
+
+class Holder:
+    n: int = 0
+    if available:
+        let (a, b) := (1, 2)
+",
     );
-    assert!(reason.contains("`for` destructuring"), "{reason}");
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Holder"
+            && reason == "`let` nested in a class body is not lowered yet"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
+fn a_class_written_in_a_function_body_declines_by_name() {
+    // the same table names what the *body* lowering turned down, and a statement with
+    // no entry there is a decline nothing can group or count
+    let reason = decline(
+        "\
+def make() -> object:
+    class Inner:
+        n: int = 0
+
+    return Inner
+",
+    );
+    assert_eq!(reason, "a nested class is not lowered yet");
 }
 
 #[test]

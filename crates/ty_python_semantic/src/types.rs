@@ -119,7 +119,7 @@ use crate::types::signatures::{
     ConcatenateTail, walk_signature, walk_signature_without_return_type,
 };
 pub(crate) use crate::types::signatures::{Parameter, Parameters};
-use crate::types::special_form::TypeQualifier;
+pub use crate::types::special_form::TypeQualifier;
 use crate::types::tuple::TupleSpec;
 pub use crate::types::type_alias::TypeAliasType;
 pub use crate::types::type_form::TypeFormType;

@@ -4480,6 +4480,245 @@ static inline int By_AdoptTwinAttributes(const By_Twins *twins) {
     return 0;
 }
 
+/* ── the members `@dataclass` generates ───────────────────────────────────────
+ *
+ * a `data class` is `@dataclass(slots=True)` on the twin, so python's own decorator gives
+ * the twin's class a `__repr__`, an `__eq__`, a `__hash__`, `__match_args__` and the
+ * bookkeeping `dataclasses` reads back — and a frozen one a `__setattr__` and
+ * `__delattr__` besides. none of that crosses in `By_AdoptTwinAttributes`, so the emitted
+ * type has to have it of its own.
+ *
+ * the four below are what the emitted type's slots point at. each is handed the class's
+ * fields as a table of `(name, getter)` pairs, the getter being the one the getset
+ * publishes — so a field is read through exactly the descriptor python reads it through */
+
+/* one field of an emitted data class, in the order `@dataclass` lists it */
+typedef struct {
+    const char *name;
+    getter get;
+} By_DataField;
+
+/* `f'{qualname}({name}={value!r}, …)'`, which is what `@dataclass` writes
+ *
+ * `Py_ReprEnter` stands for the `reprlib.recursive_repr` the generated `__repr__` is
+ * wrapped in: a dataclass holding itself prints `C(kid=...)` rather than recurring until
+ * the stack runs out */
+static inline PyObject *By_DataclassRepr(PyObject *self, const By_DataField *fields) {
+    PyObject *parts, *sep, *joined, *result;
+    const By_DataField *field;
+    int entered = Py_ReprEnter(self);
+    if (entered != 0) {
+        return entered > 0 ? PyUnicode_FromString("...") : NULL;
+    }
+    parts = PyList_New(0);
+    if (parts == NULL) {
+        Py_ReprLeave(self);
+        return NULL;
+    }
+    for (field = fields; field->name != NULL; field++) {
+        PyObject *value = field->get(self, NULL);
+        PyObject *piece;
+        if (value == NULL) {
+            Py_DECREF(parts);
+            Py_ReprLeave(self);
+            return NULL;
+        }
+        piece = PyUnicode_FromFormat("%s=%R", field->name, value);
+        Py_DECREF(value);
+        if (piece == NULL || PyList_Append(parts, piece) < 0) {
+            Py_XDECREF(piece);
+            Py_DECREF(parts);
+            Py_ReprLeave(self);
+            return NULL;
+        }
+        Py_DECREF(piece);
+    }
+    sep = PyUnicode_FromString(", ");
+    joined = sep == NULL ? NULL : PyUnicode_Join(sep, parts);
+    Py_XDECREF(sep);
+    Py_DECREF(parts);
+    if (joined == NULL) {
+        Py_ReprLeave(self);
+        return NULL;
+    }
+    /* the *instance's* type rather than the one that declared the slot, because that is
+     * what `self.__class__.__qualname__` in the generated `__repr__` reads */
+    result = PyUnicode_FromFormat("%s(%U)", By_TypeName(self), joined);
+    Py_DECREF(joined);
+    Py_ReprLeave(self);
+    return result;
+}
+
+/* the `__eq__` a `@dataclass` generates, which is
+ *
+ *     if self is other: return True
+ *     if other.__class__ is self.__class__:
+ *         return self.a==other.a and self.b==other.b
+ *     return NotImplemented
+ *
+ * three things in that are easy to get subtly wrong, and each has been:
+ *
+ * - the identity test is a *rule*, not a shortcut. without it `p == p` would be False for
+ *   a dataclass holding a NaN, and it is True
+ * - the class test is identity too, so a subclass instance is never equal to a base one
+ * - the terms are `==`, so no identity shortcut applies to a field. `PyObject_RichCompareBool`
+ *   has one, which would make two instances sharing one NaN object compare equal where
+ *   python says they do not
+ *
+ * `and` hands back the *term* rather than a bool, so a field whose `__eq__` answers with
+ * something other than True or False is what the whole comparison answers with — and the
+ * chain stops at the first falsy one. `__ne__` is not generated: python's own derives it
+ * from this by negating, so the four ordering opcodes are refused here and `Py_NE` is the
+ * negation `object.__ne__` would have produced */
+static inline PyObject *By_DataclassEq(PyObject *self, PyObject *other, int op,
+                                       const By_DataField *fields) {
+    const By_DataField *field;
+    PyObject *result;
+    int truthy = 1;
+    if (op != Py_EQ && op != Py_NE) Py_RETURN_NOTIMPLEMENTED;
+    if (self == other) return PyBool_FromLong(op == Py_EQ);
+    if (Py_TYPE(self) != Py_TYPE(other)) Py_RETURN_NOTIMPLEMENTED;
+    /* what a class with no fields at all answers, where python writes a bare `True` */
+    result = Py_NewRef(Py_True);
+    for (field = fields; field->name != NULL; field++) {
+        PyObject *mine = field->get(self, NULL);
+        PyObject *theirs;
+        if (mine == NULL) {
+            Py_DECREF(result);
+            return NULL;
+        }
+        theirs = field->get(other, NULL);
+        if (theirs == NULL) {
+            Py_DECREF(mine);
+            Py_DECREF(result);
+            return NULL;
+        }
+        Py_DECREF(result);
+        result = PyObject_RichCompare(mine, theirs, Py_EQ);
+        Py_DECREF(mine);
+        Py_DECREF(theirs);
+        if (result == NULL) return NULL;
+        truthy = PyObject_IsTrue(result);
+        if (truthy < 0) {
+            Py_DECREF(result);
+            return NULL;
+        }
+        if (!truthy) break;
+    }
+    if (op == Py_EQ) return result;
+    Py_DECREF(result);
+    return PyBool_FromLong(!truthy);
+}
+
+/* `hash((self.a, self.b))`, which is what a frozen `@dataclass` hashes
+ *
+ * the tuple is built rather than folded by hand: two instances that compare equal have to
+ * hash equal, and the only way to promise that against python's own tuple hash is to use
+ * it */
+static inline Py_hash_t By_DataclassHash(PyObject *self, const By_DataField *fields) {
+    Py_ssize_t count = 0;
+    Py_ssize_t at;
+    PyObject *values;
+    Py_hash_t hash;
+    while (fields[count].name != NULL) count++;
+    values = PyTuple_New(count);
+    if (values == NULL) return -1;
+    for (at = 0; at < count; at++) {
+        PyObject *value = fields[at].get(self, NULL);
+        if (value == NULL) {
+            Py_DECREF(values);
+            return -1;
+        }
+        PyTuple_SET_ITEM(values, at, value);
+    }
+    hash = PyObject_Hash(values);
+    Py_DECREF(values);
+    return hash;
+}
+
+/* `dataclasses.FrozenInstanceError`, held for the life of the module
+ *
+ * the twin's own source imports `dataclasses` to be decorated at all, so by the time an
+ * emitted type can be handed an instance the module is in `sys.modules` and this costs a
+ * dict lookup */
+static inline PyObject *By_FrozenInstanceError(void) {
+    static PyObject *held = NULL;
+    if (held == NULL) {
+        PyObject *module = PyImport_ImportModule("dataclasses");
+        if (module == NULL) return NULL;
+        held = PyObject_GetAttrString(module, "FrozenInstanceError");
+        Py_DECREF(module);
+    }
+    return held;
+}
+
+/* the `__setattr__` and `__delattr__` a frozen `@dataclass` generates, which share one
+ * slot here the way they share one body there
+ *
+ * python's pair refuses every name on an instance of the class that declared them, and
+ * only a *subclass* instance writing a name that is not a field gets through to the
+ * ordinary attribute machinery — which is why `owner` is asked about rather than assumed */
+static inline int By_FrozenSetAttr(PyObject *self, PyObject *name, PyObject *value,
+                            PyTypeObject *owner, const By_DataField *fields) {
+    const By_DataField *field;
+    int mine = Py_TYPE(self) == owner;
+    for (field = fields; field->name != NULL && !mine; field++) {
+        mine = PyUnicode_CompareWithASCIIString(name, field->name) == 0;
+    }
+    if (mine) {
+        PyObject *error = By_FrozenInstanceError();
+        if (error == NULL) return -1;
+        PyErr_Format(error,
+                     value == NULL ? "cannot delete field %R" : "cannot assign to field %R",
+                     name);
+        return -1;
+    }
+    return PyObject_GenericSetAttr(self, name, value);
+}
+
+/* the dataclass bookkeeping that has no slot to fill, carried off the twin's class
+ *
+ * `__dataclass_fields__` is a dict of `dataclasses.Field` objects and `__dataclass_params__`
+ * an object of that module's own — neither is code this compiler could emit, and both are
+ * exactly right for the emitted type as they stand, because every one of them describes
+ * the *fields* rather than the class. `dataclasses.fields`, `asdict`, `astuple` and
+ * `replace` all read the first of them and then go through the ordinary attribute and
+ * construction machinery, which the emitted type answers.
+ *
+ * `By_AdoptTwinAttributes` refuses every dunder, and rightly: a name written into
+ * `tp_dict` does not fill a type slot, so an adopted `__eq__` would answer `a.__eq__(b)`
+ * while `a == b` still went to the slot. none of the names here has a slot, so that
+ * hazard does not reach them — and they are listed one by one rather than admitted as a
+ * class, because the ones with slots are exactly what this compiler emits instead */
+static inline int By_CarryDataclassMembers(PyObject *twin, PyObject *type) {
+    static const char *const carried[] = {
+        "__dataclass_fields__", "__dataclass_params__", "__match_args__",
+        /* `copy.replace` reaches for this, and the function it names calls
+         * `dataclasses.replace`, which is carried above */
+        "__replace__",
+        /* `@dataclass` writes the class's signature here where the body wrote no
+         * docstring, and leaves the docstring alone where it did */
+        "__doc__",
+        NULL};
+    const char *const *name;
+    PyObject *source, *target;
+    if (twin == NULL || type == NULL) return 0;
+    if (!PyType_Check(twin) || !PyType_Check(type)) return 0;
+    source = ((PyTypeObject *)twin)->tp_dict;
+    target = ((PyTypeObject *)type)->tp_dict;
+    if (source == NULL || target == NULL) return 0;
+    for (name = carried; *name != NULL; name++) {
+        PyObject *value = PyDict_GetItemString(source, *name);
+        if (value == NULL) {
+            if (PyErr_Occurred()) return -1;
+            continue;
+        }
+        if (PyDict_SetItemString(target, *name, value) < 0) return -1;
+    }
+    PyType_Modified((PyTypeObject *)type);
+    return 0;
+}
+
 /* the compiled methods an emitted type answers with, standing where its body's own
  * functions do
  *
@@ -6551,6 +6790,34 @@ static inline int By_UnpublishSlotNames(PyObject *type, const char *const *names
         Py_DECREF(key);
     }
     /* the attribute cache would otherwise go on serving the wrappers just removed */
+    PyType_Modified((PyTypeObject *)type);
+    return 0;
+}
+
+/* say `__hash__ = None` under the name as well as in the slot
+ *
+ * a class python makes unhashable carries two things: `tp_hash` is
+ * `PyObject_HashNotImplemented`, and `__hash__` in the dict is `None`. an emitted type
+ * fills the slot and used to leave the name to `PyType_Ready`, which writes the `None`
+ * itself — but it decides to by comparing the slot's value against its own
+ * `PyObject_HashNotImplemented`, and a module that reaches that function through an
+ * import stub does not hand it the address it is comparing against. the comparison then
+ * fails, a wrapper descriptor over the stub is published instead of the `None`, and
+ * `C.__hash__ is None` answers False where the interpreted class answers True. that is
+ * what a compiled `data class` did on windows.
+ *
+ * `hash(x)` raises either way, so what this settles is only what the *name* answers —
+ * which is what `@dataclass`, `copy`, and anything asking a class whether it is hashable
+ * actually read. writing it here says it outright rather than hoping it is inferred */
+static inline int By_PublishNoHash(PyObject *type) {
+    PyObject *dict = ((PyTypeObject *)type)->tp_dict;
+    if (dict == NULL) {
+        PyErr_Format(PyExc_SystemError, "type '%s' has no dict to write `__hash__` into",
+                     ((PyTypeObject *)type)->tp_name);
+        return -1;
+    }
+    if (PyDict_SetItemString(dict, "__hash__", Py_None) < 0) return -1;
+    /* the attribute cache would otherwise go on serving whatever the name held */
     PyType_Modified((PyTypeObject *)type);
     return 0;
 }
