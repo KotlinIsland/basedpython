@@ -186,6 +186,7 @@ Module(
                                             },
                                         ),
                                     ],
+                                    identity_ops: None,
                                 },
                             ),
                             body: BinOp(
@@ -325,6 +326,7 @@ Module(
                                             },
                                         ),
                                     ],
+                                    identity_ops: None,
                                 },
                             ),
                             orelse: Name(

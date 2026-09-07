@@ -1689,13 +1689,14 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
                 comparators,
                 range: _,
                 node_index: _,
+                identity_ops: _,
             },
         ) => {
             if checker.any_rule_enabled(&[Rule::NoneComparison, Rule::TrueFalseComparison]) {
                 pycodestyle::rules::literal_comparisons(checker, compare);
             }
             if checker.is_rule_enabled(Rule::IsLiteral) {
-                pyflakes::rules::invalid_literal_comparison(checker, left, ops, comparators, expr);
+                pyflakes::rules::invalid_literal_comparison(checker, compare);
             }
             if checker.is_rule_enabled(Rule::TypeComparison) {
                 pycodestyle::rules::type_comparison(checker, compare);

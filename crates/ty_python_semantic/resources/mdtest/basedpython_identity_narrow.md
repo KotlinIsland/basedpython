@@ -1,23 +1,23 @@
-# basedpython: `is` / `is not` keyword narrowing
+# basedpython: `is` / `is not` narrowing
 
-In basedpython, the `is` and `is not` keyword pair perform instance checks (they transpile to
-`isinstance(...)` / `not isinstance(...)`). The `===` and `!==` operators retain Python's identity
-comparison semantics. Narrowing in `.by` files mirrors this swap.
+In basedpython the `is` and `is not` keyword pair is a *type test*: its right-hand side is a type
+expression, and the test asks whether the value has that type. The `===` and `!==` operators keep
+Python's identity comparison. Narrowing mirrors that split.
 
-## `is not` narrows to negation of the instance type
-
-```by
-def f(a: object):
-    if a is not int:
-        reveal_type(a)  # revealed: not int
-```
-
-## `is` narrows to the instance type
+## `is` narrows to the type named
 
 ```by
 def f(a: object):
     if a is int:
         reveal_type(a)  # revealed: int
+```
+
+## `is not` narrows to the negation of it
+
+```by
+def f(a: object):
+    if a is not int:
+        reveal_type(a)  # revealed: not int
 ```
 
 ## `!==` keeps Python identity semantics
@@ -36,11 +36,11 @@ def f(a: int | None):
         reveal_type(a)  # revealed: None
 ```
 
-## `is` with literal RHS keeps Python identity semantics
+## A literal names the type holding exactly that value
 
-`isinstance(x, None)` is invalid at runtime, so `is`/`is not` against literal singletons (`None`,
-`True`/`False`, numbers, strings, bytes, `...`) must transpile as Python `is`/`is not` rather than
-`isinstance`.
+`None`, `True`/`False` and a number are all type expressions, so a test against one narrows to the
+literal type it names. The runtime check that comes out is the equality — or, for `None`, the
+identity — that decides membership of that type.
 
 ```by
 def f(a: int | None):
@@ -59,16 +59,17 @@ def f(a: bool | int):
 ```
 
 ```by
-def f(a: int | None):
-    if a is ...:
-        reveal_type(a)  # revealed: Never
+def f(a: int | str):
+    if a is 1:
+        reveal_type(a)  # revealed: 1
+    if a is "x":
+        reveal_type(a)  # revealed: "x"
 ```
 
-## `is` with an enum member RHS keeps Python identity semantics
+## An enum member names the type holding exactly that member
 
-An enum member is a singleton *instance*, not a class — `isinstance(x, Color.RED)` would be a
-runtime `TypeError` — so `is`/`is not` against a member keeps Python identity semantics and narrows
-by identity, the same as literal singletons.
+An enum member is a singleton, so `Literal[Color.RED]` holds one object and the test for it is
+identity — which is also what the runtime compares.
 
 ```by
 import enum
@@ -97,11 +98,11 @@ def g(x: Genre):
         reveal_type(x)  # revealed: Literal[Genre.B]
 ```
 
-## An instance check yields `bool`, never an identity fold
+## An undecidable test is `bool`
 
-The keyword form is an instance check, so Python's identity folds (an instance is never identical to
-a class object, so plain Python would type `x is int` as `Literal[False]`) must not apply —
-otherwise everything after `assert x is int` would be unreachable.
+The identity folds Python applies to the same operator have no place here: the right-hand side names
+a type rather than the class object the same source spells as a value, so `x is int` is not "an
+instance compared to a class" and must not collapse to `Literal[False]`.
 
 ```by
 def f(x: object):
@@ -111,10 +112,21 @@ def f(x: object):
     reveal_type(x)  # revealed: int
 ```
 
+## A test the types settle is its answer
+
+Where the value's type decides the question, the test *is* that answer — which is what lets a reader
+see that the branch it guards is already decided.
+
+```by
+def f(x: int):
+    reveal_type(x is int)  # revealed: True
+    reveal_type(x is not int)  # revealed: False
+```
+
 ## A test against a disjoint type is reported
 
-An instance check whose value can never have the tested type is a constant: `is` never holds and
-`is not` always does. Either the guarded branch is dead or the wrong type was named.
+A test whose value can never have the type named is a constant: `is` never holds and `is not` always
+does. Either the guarded branch is dead or the wrong type was named.
 
 ```by
 def f(x: None):
@@ -189,11 +201,30 @@ def g(x: int):
 
 ## Identity comparisons are left alone
 
-The `===` operators and the literal/enum-member forms keep Python identity semantics, where an
-always-`False` comparison is already typed `Literal[False]`.
+`===` and `!==` keep Python identity semantics, where an always-`False` comparison is already typed
+`Literal[False]`.
 
 ```by
 def f(x: None):
     b = x === 1
     reveal_type(b)  # revealed: False
+```
+
+## A chained type test is rejected
+
+Python chains `a is int is str` into `a is int and int is str`, whose second half asks whether the
+*class* `int` has the type `str`. That is never what the writer meant, so the chain is refused
+rather than given a meaning.
+
+```by
+def f(a: object):
+    # error: [invalid-syntax] "`is` type test cannot be chained with another comparison; split it into separate tests joined with `and`"
+    b = a is int is str
+```
+
+A chain of identity comparisons is ordinary Python and stays legal.
+
+```by
+def f(a: object, b: object):
+    c = a === b !== None
 ```

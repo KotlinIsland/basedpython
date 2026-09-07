@@ -272,6 +272,7 @@ Module(
                                     },
                                 ),
                             ],
+                            identity_ops: None,
                         },
                     ),
                     body: [

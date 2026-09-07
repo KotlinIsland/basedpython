@@ -96,6 +96,7 @@ impl ast::ExprCompare {
             left,
             ops,
             comparators,
+            identity_ops: _,
             range: _,
             node_index: _,
         } = self;

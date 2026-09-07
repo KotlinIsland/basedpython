@@ -732,6 +732,7 @@ Module(
                                     },
                                 ),
                             ],
+                            identity_ops: None,
                         },
                     ),
                     op: Add,

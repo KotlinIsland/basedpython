@@ -664,13 +664,8 @@ impl<'db> StaticClassLiteral<'db> {
             return Box::default();
         }
         let module = parsed_module(db, self.python_file(db)).load(db);
-        let source = ruff_db::source::source_text(db, file);
-        crate::reified::reified_class_type_param_names(
-            source.as_str(),
-            source_type,
-            self.node(db, &module),
-        )
-        .into_boxed_slice()
+        crate::reified::reified_class_type_param_names(source_type, self.node(db, &module))
+            .into_boxed_slice()
     }
 
     /// basedpython: whether this class or anything it inherits from reifies a

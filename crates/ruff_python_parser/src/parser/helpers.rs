@@ -44,14 +44,13 @@ pub(super) const fn token_kind_to_cmp_op(
         (TokenKind::In, _) => CmpOp::In,
         (TokenKind::EqEqual, _) => CmpOp::Eq,
         // basedpython: `===` is the identity comparison (Python's `is`).
-        // we map it to CmpOp::Is so the AST matches Python semantics; the
-        // forward transpile distinguishes it from the basedpython `is`
-        // keyword by looking at the source text
+        // we map it to CmpOp::Is so the AST matches Python semantics, and the
+        // parser records the spelling in `ExprCompare::identity_ops` so nothing
+        // downstream has to read it back out of the source
         (TokenKind::EqEqEqual, _) => CmpOp::Is,
         // basedpython: `!==` is the negated identity comparison (Python's
-        // `is not`). mapped to CmpOp::IsNot; the forward transpile
-        // distinguishes it from the basedpython `is not` keyword pair by
-        // looking at the source text
+        // `is not`). mapped to CmpOp::IsNot, with the spelling recorded the
+        // same way
         (TokenKind::BangEqEqual, _) => CmpOp::IsNot,
         (TokenKind::NotEqual, _) => CmpOp::NotEq,
         (TokenKind::Less, _) => CmpOp::Lt,

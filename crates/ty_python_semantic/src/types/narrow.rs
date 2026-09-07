@@ -21,8 +21,8 @@ use crate::types::{
     CallableType, ClassBase, ClassLiteral, ClassPatternPositionalSource, ClassType,
     IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType, LiteralValueTypeKind,
     Parameter, Parameters, Signature, SpecialFormType, SubclassOfInner, SubclassOfType, Truthiness,
-    Type, TypeContext, TypeVarBoundOrConstraints, UnionBuilder, basedpython_is_keeps_identity,
-    binding_type, callable_pattern_type, class_pattern_positional_sources,
+    Type, TypeContext, TypeVarBoundOrConstraints, UnionBuilder, binding_type,
+    callable_pattern_type, class_pattern_positional_sources,
     definite_match_pattern_type_for_subject, exact_sequence_pattern_type, infer_expression_types,
     mapping_pattern_type, pattern_binding_fallthrough_type, sequence_pattern_type_builder,
     singleton_pattern_type, starred_sequence_pattern_type, typed_dict_matches_class_pattern,
@@ -4230,6 +4230,7 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
         let ast::ExprCompare {
             range: _,
             node_index: _,
+            identity_ops: _,
             left,
             ops,
             comparators,
@@ -4543,19 +4544,18 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
         };
         let mut last_rhs_ty: Option<Type> = None;
 
-        // basedpython: in `.by` files, the `is`/`is not` keyword form
-        // performs isinstance-style narrowing on the lhs (the `===`/`!==`
-        // operators retain Python's identity-narrowing semantics). The
-        // parser flattens both spellings to the same `CmpOp`, so we look
-        // at the original source text between the two operands to tell
-        // them apart
-        let file = expression.file(self.db);
-        let basedpython_keyword_form = file
-            .source_type(self.db)
-            .is_basedpython()
-            .then(|| ruff_db::source::source_text(self.db, file));
+        // basedpython: in `.by` files, the `is`/`is not` keyword form is a type
+        // test and narrows the way `isinstance` does; `===` / `!==` keep
+        // python's identity narrowing. the parser folds both spellings onto one
+        // `CmpOp` and records which it saw
+        let source_type = expression.file(self.db).source_type(self.db);
+        // a chain carrying a type test is a parse error, and the inference
+        // builder falls back to reading the whole chain as ordinary
+        // comparisons. narrowing has to read it the same way, or the body of a
+        // branch it guards disappears on top of the syntax error
+        let chained_type_test = ops.len() > 1 && expr_compare.has_type_test(source_type);
 
-        for (op, (left, right)) in std::iter::zip(&**ops, comparator_tuples) {
+        for (index, (op, (left, right))) in std::iter::zip(&**ops, comparator_tuples).enumerate() {
             let lhs_ty = last_rhs_ty.unwrap_or_else(|| expression_type(left, &self.env));
             let rhs_ty = expression_type(right, &self.env);
             let lhs_narrowing_rhs_ty = if matches!(op, ast::CmpOp::In | ast::CmpOp::NotIn) {
@@ -4565,23 +4565,8 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                 rhs_ty
             };
 
-            // literal rhs (None, True/False, numbers, strings, bytes, `...`) keeps
-            // Python identity semantics — `isinstance(x, None)` would be invalid.
-            // the same holds for any rhs that resolves to a plain value (an enum
-            // member like `Color.RED`, a based unit variant, an instance of a
-            // non-type class): it is not a class, so the transpiler keeps `is`
-            // and narrowing must mirror that
-            let basedpython_is_keyword = basedpython_keyword_form.as_ref().is_some_and(|src| {
-                use ruff_text_size::Ranged;
-                matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) && !right.is_literal_expr() && {
-                    let between =
-                        &src[usize::from(left.range().end())..usize::from(right.range().start())];
-                    let trimmed = between.trim();
-                    !trimmed.starts_with("===") && !trimmed.starts_with("!==")
-                }
-            }) && !basedpython_is_keeps_identity(
-                self.db, &env, rhs_ty,
-            );
+            let basedpython_is_keyword =
+                !chained_type_test && expr_compare.is_type_test(index, source_type);
 
             // Narrowing for:
             // - `if type(x) is Y`
@@ -4644,15 +4629,25 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                 && let Some(narrowable) = PlaceExpr::try_from_expr(left)
             {
                 let positive = is_positive == matches!(op, ast::CmpOp::Is);
-                // a parametric test (`x is list[int]`) verifies the exact
-                // specialization, so the positive branch narrows to it. no
-                // negative narrowing: an unreified or witness-less (empty)
-                // value answers `False` even when it *is* one statically
-                let constraint = if let Type::GenericAlias(alias) = rhs_ty {
-                    positive.then(|| Type::instance(self.db, &env, ClassType::Generic(alias)))
+                // the right-hand side of a type test is a type expression, so
+                // its inferred type *is* the type being tested for — there is
+                // no class object to unwrap. the negative branch narrows only
+                // where the runtime check is exact: a parametric probe reads the
+                // arguments a value happens to record, and answers `False` for
+                // one that records none even though it is a match
+                let constraint = if positive {
+                    Some(rhs_ty)
                 } else {
-                    ClassInfoConstraintFunction::IsInstance
-                        .generate_constraint(self.db, &env, rhs_ty, positive, false)
+                    crate::types::reified_infer::type_test_plan(
+                        self.db,
+                        &env,
+                        expression.file(self.db),
+                        lhs_ty,
+                        rhs_ty,
+                        Some(right),
+                    )
+                    .narrows_negatively()
+                    .then_some(rhs_ty)
                 };
                 if let Some(constraint_ty) = constraint {
                     let place = self.expect_place(&narrowable);

@@ -556,6 +556,7 @@ pub fn walk_expr<V: Transformer + ?Sized>(visitor: &V, expr: &mut Expr) {
             left,
             ops,
             comparators,
+            identity_ops: _,
             range: _,
             node_index: _,
         }) => {

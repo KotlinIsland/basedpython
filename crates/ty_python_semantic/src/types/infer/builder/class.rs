@@ -15,7 +15,6 @@ use crate::types::{
     },
     special_form::TypeQualifier,
 };
-use ruff_db::source::source_text;
 use ruff_python_ast::{self as ast, helpers::any_over_expr};
 use ty_module_resolver::{ImportingFile, KnownModule, file_to_module};
 use ty_python_core::{definition::Definition, scope::NodeWithScopeRef};
@@ -35,8 +34,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         if !source_type.is_basedpython() {
             return;
         }
-        let source = source_text(self.db(), self.file());
-        let reads = reified_class_reads(source.as_str(), source_type, class);
+        let reads = reified_class_reads(source_type, class);
 
         // reification fixes the variance, so a declaration saying anything else
         // is a contradiction rather than a refinement — and the variance it

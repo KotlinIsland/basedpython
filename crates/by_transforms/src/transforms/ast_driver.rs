@@ -111,6 +111,17 @@ pub(crate) struct PassContext {
     /// statement materialized inside an expression is a syntax error, not a
     /// composition
     pub(crate) statement_inserts: Vec<(TextSize, Vec<Fragment>)>,
+    /// Sub-statement edits standing in for a construct the same pass re-emits
+    /// somewhere else: the `_MISSING` a mutable default leaves in the
+    /// signature, whose written value the body guard evaluates instead.
+    ///
+    /// Identical to a [`template_edits`](Self::template_edits) entry except
+    /// that it leads every other edit at its span. The others are rewrites of
+    /// the construct, and the construct is no longer here — they materialize
+    /// where the pass re-emits it. Without this they would be ordered against
+    /// the substitution by shape alone, which cannot tell two substitutions of
+    /// one span apart
+    pub(crate) relocating_edits: Vec<(TextRange, Vec<Fragment>)>,
     /// Hard transpile errors a pass surfaced — abort the pipeline rather
     /// than emit partial / invalid output. Each entry is a human-readable
     /// message suitable for showing the user
@@ -211,6 +222,11 @@ enum SubPatch {
     /// [`PassContext::statement_inserts`]. Materializes exactly like
     /// [`SubPatch::Template`]; the difference is only in what may claim it
     Statement(Vec<Fragment>),
+    /// a template standing in for a construct the same pass re-emits somewhere
+    /// else — see [`PassContext::relocating_edits`]. Materializes exactly like
+    /// [`SubPatch::Template`]; the difference is only that it leads every other
+    /// edit at its span
+    Relocating(Vec<Fragment>),
 }
 
 /// The sub-edits a template materializes, in position order: those nested in
@@ -325,7 +341,9 @@ fn apply_within(
         out.push_source(source, cursor, s);
         match &all[idx].2 {
             SubPatch::Text(t) => out.push_generated(t, s),
-            SubPatch::Template(frags) | SubPatch::Statement(frags) => {
+            SubPatch::Template(frags)
+            | SubPatch::Statement(frags)
+            | SubPatch::Relocating(frags) => {
                 let inner: Vec<usize> = contained[k + 1..]
                     .iter()
                     .copied()
@@ -637,9 +655,9 @@ pub(crate) fn run_against_source<'a>(
         // keep their source bytes and the lowerings inside them compose
         &destructure_pass,
         // text-edit-emitting passes first (read source ranges).
-        // type_is must run before identity_swap so type-position `a is T`
-        // wins the first-wins overlap dedup over identity_swap's
-        // value-context `isinstance(a, T)` rewrite
+        // type_is rewrites a `-> a is T` return guard into `TypeIs[T]`, which
+        // claims the whole guard; `parametric_is` would otherwise lower the
+        // same `is` pair inside it
         &type_is_pass,
         // `from x export y` → `from x import y as y`: two source edits inside
         // an import statement, independent of every other pass
@@ -1078,6 +1096,13 @@ pub(crate) fn run_against_source<'a>(
             let at = usize::from(at);
             (at, at, SubPatch::Statement(frags))
         }))
+        .chain(ctx.relocating_edits.into_iter().map(|(r, frags)| {
+            (
+                usize::from(r.start()),
+                usize::from(r.end()),
+                SubPatch::Relocating(frags),
+            )
+        }))
         .collect();
     // start asc. tie-break by edit shape:
     //   1. zero-width insertions first — they don't consume bytes, so any
@@ -1087,30 +1112,34 @@ pub(crate) fn run_against_source<'a>(
     //   2. then wider replacements before narrower ones — so a wider edit
     //      wins over (or, for templates, absorbs) a narrow one nested inside
     //      it
-    //   3. at one identical span, a *substitution* — plain text, or a template
-    //      with no `Src` passthrough — ahead of a *rewrite*, a template that
-    //      re-emits part of the span. a substitution says the construct does not
-    //      appear here at all, which a rewrite of it cannot outrank: the pass
-    //      that substitutes may be relocating the construct (default
-    //      re-evaluation moves a parameter default into the body), and the
-    //      rewrite still materializes wherever the passthrough re-emits it
+    //   3. at one identical span, a *relocating* edit leads: it says the
+    //      construct has moved, and the pass that moved it re-emits the span
+    //      itself, so every other edit there materializes at the new home
+    //   4. then a *substitution* — plain text, or a template with no `Src`
+    //      passthrough — ahead of a *rewrite*, a template that re-emits part of
+    //      the span. a substitution says the construct does not appear here at
+    //      all, which a rewrite of it cannot outrank
     sub_edits.sort_by(|a, b| {
         let priority = |e: &(usize, usize, SubPatch)| {
             let rewrites = i64::from(match &e.2 {
                 SubPatch::Text(_) => false,
-                SubPatch::Template(frags) | SubPatch::Statement(frags) => {
+                SubPatch::Template(frags)
+                | SubPatch::Statement(frags)
+                | SubPatch::Relocating(frags) => {
                     frags.iter().any(|frag| matches!(frag, Fragment::Src(_)))
                 }
             });
             let statement = i64::from(!matches!(e.2, SubPatch::Statement(_)));
+            let relocating = i64::from(!matches!(e.2, SubPatch::Relocating(_)));
             // (start, is_replacement_not_insertion, statement-insert-first,
-            //  neg_end-for-wider-first, substitution-before-rewrite)
+            //  neg_end-for-wider-first, relocating-first,
+            //  substitution-before-rewrite)
             if e.1 == e.0 {
-                (e.0, 0i64, statement, 0i64, rewrites) // insertion
+                (e.0, 0i64, statement, 0i64, relocating, rewrites) // insertion
             } else {
                 #[allow(clippy::cast_possible_wrap)]
                 let neg_end = -(e.1 as i64);
-                (e.0, 1i64, statement, neg_end, rewrites)
+                (e.0, 1i64, statement, neg_end, relocating, rewrites)
             }
         };
         priority(a).cmp(&priority(b))
@@ -1134,7 +1163,7 @@ pub(crate) fn run_against_source<'a>(
         }
         let is_template = matches!(
             sub_edits[i].2,
-            SubPatch::Template(_) | SubPatch::Statement(_)
+            SubPatch::Template(_) | SubPatch::Statement(_) | SubPatch::Relocating(_)
         );
         for (m, edit) in sub_edits.iter().enumerate() {
             if m == i || claimed[m] {
@@ -1182,7 +1211,9 @@ pub(crate) fn run_against_source<'a>(
                 if !claimed[j] {
                     match &sub_edits[j].2 {
                         SubPatch::Text(t) => combined.push_generated(t, start),
-                        SubPatch::Template(frags) | SubPatch::Statement(frags) => {
+                        SubPatch::Template(frags)
+                        | SubPatch::Statement(frags)
+                        | SubPatch::Relocating(frags) => {
                             let contained = template_claimees(frags, &sub_edits, &claimed, j, None);
                             materialize_fragments(
                                 &mut combined,
@@ -1204,7 +1235,9 @@ pub(crate) fn run_against_source<'a>(
         let repl = match &sub_edits[i].2 {
             // a plain-text replacement wins over anything inside it
             SubPatch::Text(t) => Replacement::generated(t, start),
-            SubPatch::Template(frags) | SubPatch::Statement(frags) => {
+            SubPatch::Template(frags)
+            | SubPatch::Statement(frags)
+            | SubPatch::Relocating(frags) => {
                 // the claimees nested in this span materialize inside the
                 // template's `Src` passthrough fragments
                 let contained =

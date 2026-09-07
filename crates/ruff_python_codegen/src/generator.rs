@@ -1478,17 +1478,26 @@ impl<'a> Generator<'a> {
                     self.unparse_expr(value, precedence::MAX);
                 });
             }
-            Expr::Compare(ast::ExprCompare {
-                left,
-                ops,
-                comparators,
-                range: _,
-                node_index: _,
-            }) => {
+            Expr::Compare(compare) => {
+                let ast::ExprCompare {
+                    left,
+                    ops,
+                    comparators,
+                    identity_ops: _,
+                    range: _,
+                    node_index: _,
+                } = compare;
                 group_if!(precedence::CMP, {
                     let new_lvl = precedence::CMP + 1;
                     self.unparse_expr(left, new_lvl);
-                    for (op, cmp) in ops.iter().zip(comparators) {
+                    for (index, (op, cmp)) in ops.iter().zip(comparators).enumerate() {
+                        // basedpython gives the `is` keyword to the type test and
+                        // spells python's identity comparison `===` / `!==`. both
+                        // parse to the same operator, so printing `is` for one
+                        // the source wrote `===` would quietly turn an identity
+                        // check into a type test. only basedpython records the
+                        // spelling, so this needs no mode of its own
+                        let identity = compare.is_identity_operator(index);
                         let op = match op {
                             CmpOp::Eq => " == ",
                             CmpOp::NotEq => " != ",
@@ -1496,6 +1505,8 @@ impl<'a> Generator<'a> {
                             CmpOp::LtE => " <= ",
                             CmpOp::Gt => " > ",
                             CmpOp::GtE => " >= ",
+                            CmpOp::Is if identity => " === ",
+                            CmpOp::IsNot if identity => " !== ",
                             CmpOp::Is => " is ",
                             CmpOp::IsNot => " is not ",
                             CmpOp::In => " in ",

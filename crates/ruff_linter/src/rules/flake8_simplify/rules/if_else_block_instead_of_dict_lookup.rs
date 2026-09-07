@@ -65,6 +65,7 @@ pub(crate) fn if_else_block_instead_of_dict_lookup(checker: &Checker, stmt_if: &
         comparators,
         range: _,
         node_index: _,
+        identity_ops: _,
     }) = test.as_ref()
     else {
         return;
@@ -152,6 +153,7 @@ pub(crate) fn if_else_block_instead_of_dict_lookup(checker: &Checker, stmt_if: &
                 comparators,
                 range: _,
                 node_index: _,
+                identity_ops: _,
             })) => {
                 let Expr::Name(ast::ExprName { id, .. }) = left.as_ref() else {
                     return;

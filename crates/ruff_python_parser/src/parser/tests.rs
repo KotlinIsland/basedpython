@@ -39,6 +39,73 @@ fn parse_basedpython_module_with_errors(source: &str) -> Parsed<ModModule> {
     .unwrap()
 }
 
+/// the identity spelling recorded for each operator of the single comparison in
+/// `source`, parsed as basedpython
+fn identity_spellings(source: &str) -> Vec<bool> {
+    let parsed = parse_basedpython_module(source);
+    let [Stmt::Expr(statement)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single expression statement: {source}");
+    };
+    let Expr::Compare(compare) = statement.value.as_ref() else {
+        panic!("expected a comparison: {source}");
+    };
+    (0..compare.ops.len())
+        .map(|index| compare.is_identity_operator(index))
+        .collect()
+}
+
+#[test]
+fn identity_operators_are_recorded_per_operator() {
+    // the two spellings share a `CmpOp`, so the parser records which it saw —
+    // and records nothing at all when the answer is "none of them"
+    assert_eq!(identity_spellings("a === b"), vec![true]);
+    assert_eq!(identity_spellings("a !== b"), vec![true]);
+    assert_eq!(identity_spellings("a is b"), vec![false]);
+    assert_eq!(identity_spellings("a == b"), vec![false]);
+    // a spelling recorded for one operator does not shift the others
+    assert_eq!(identity_spellings("a == b === c"), vec![false, true]);
+    assert_eq!(identity_spellings("a === b == c"), vec![true, false]);
+    assert_eq!(
+        identity_spellings("a === b !== c === d"),
+        vec![true, true, true]
+    );
+}
+
+#[test]
+fn a_type_test_may_not_be_chained() {
+    // python chains `a is int is str` into `a is int and int is str`, whose
+    // second half asks whether the class `int` has the type `str`
+    let parsed = parse_basedpython_module_with_errors("a is int is str\n");
+    let errors = parsed.errors();
+    assert!(
+        errors
+            .iter()
+            .any(|error| matches!(error.error, ParseErrorType::ChainedTypeTest)),
+        "expected a chained-type-test error, got {errors:?}"
+    );
+    // the reported range covers the whole comparison, which is what has to change
+    let error = errors
+        .iter()
+        .find(|error| matches!(error.error, ParseErrorType::ChainedTypeTest))
+        .unwrap();
+    assert_eq!(&"a is int is str\n"[error.location], "a is int is str");
+}
+
+#[test]
+fn a_trailing_type_test_still_chains() {
+    // nothing follows it, so no type expression becomes the next comparison's
+    // left operand — the conflict the rejection exists for
+    let parsed = parse_basedpython_module_with_errors("a < b is None\n");
+    assert!(
+        !parsed
+            .errors()
+            .iter()
+            .any(|error| matches!(error.error, ParseErrorType::ChainedTypeTest)),
+        "a trailing type test is not a chained one: {:?}",
+        parsed.errors()
+    );
+}
+
 /// The keyword-argument names of the single call statement in `source`, each
 /// with the way it was spelled.
 fn keyword_names(source: &str) -> Vec<(String, ruff_python_ast::KeywordKey)> {

@@ -414,6 +414,26 @@ fn emit_sealed_hierarchy(
         .unwrap_or_default();
 
     out.push_gen(&format!("{vis}class {name}{params}:\n"));
+    // each variant is *declared* in the body and *assigned* below it. the
+    // assignment is what the runtime needs; the declaration is what lets a
+    // reader — and the checker — see that `Shape.Point` is a value and
+    // `Shape.Circle` a class, which an assignment from outside the body does
+    // not say. the annotations are strings (the lowering emits `from __future__
+    // import annotations`), so naming a class defined further down costs
+    // nothing at run time
+    if !variants.is_empty() {
+        imports.add("typing", "ClassVar");
+    }
+    for variant in variants {
+        let variant_class = format!("_{name}_{}", variant.name);
+        let declared = match variant.kind {
+            // a payload variant is the class its call constructs
+            VariantKind::Tuple => format!("type[{variant_class}]"),
+            // a unit variant is the one instance of its class
+            VariantKind::Unit => variant_class,
+        };
+        out.push_gen(&format!("    {}: ClassVar[{declared}]\n", variant.name));
+    }
     // ordinary members (methods, classmethods, constants) — copied verbatim,
     // already indented under the enum in the source. they may refer to variants
     // (`A.Foo`) freely: the references resolve lazily at call time, by which
@@ -421,7 +441,7 @@ fn emit_sealed_hierarchy(
     for member in members {
         emit_member(out, source, member);
     }
-    if members.is_empty() {
+    if members.is_empty() && variants.is_empty() {
         out.push_gen("    pass\n");
     }
     // variant subclasses, emitted at module level and attached to the enum
@@ -722,9 +742,9 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class _Shape:
-                    pass
+                    Circle: ClassVar[type[_Shape_Circle]]
 
                 @final
                 @dataclass(frozen=True, slots=True)
@@ -751,7 +771,9 @@ mod tests {
             "},
             indoc! {"
                 from __future__ import annotations
+                from typing import ClassVar
                 class E:
+                    A: ClassVar[_E_A]
                     MAX: int = 10
 
                 class _E_A(E):
@@ -776,9 +798,10 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Shape:
-                    pass
+                    Circle: ClassVar[type[_Shape_Circle]]
+                    Point: ClassVar[_Shape_Point]
 
                 @final
                 @dataclass(frozen=True, slots=True)
@@ -812,9 +835,10 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Shape:
-                    pass
+                    Rectangle: ClassVar[type[_Shape_Rectangle]]
+                    Polygon: ClassVar[type[_Shape_Polygon]]
 
                 @final
                 @dataclass(frozen=True, slots=True)
@@ -848,9 +872,10 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Value:
-                    pass
+                    Pair: ClassVar[type[_Value_Pair]]
+                    Nothing: ClassVar[_Value_Nothing]
 
                 @final
                 @dataclass(frozen=True, slots=True)
@@ -888,8 +913,9 @@ mod tests {
                 from __future__ import annotations
                 from ty_extensions import JustFloat
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Shape:
+                    Circle: ClassVar[type[_Shape_Circle]]
                     def area(self) -> JustFloat:
                         return 0.0
 
@@ -940,9 +966,9 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Shape:
-                    pass
+                    Circle: ClassVar[type[_Shape_Circle]]
 
                 @final
                 @dataclass(frozen=True)
@@ -969,9 +995,10 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class E:
-                    pass
+                    A: ClassVar[type[_E_A]]
+                    B: ClassVar[_E_B]
 
                 @final
                 @dataclass(frozen=True, slots=True)
@@ -1008,11 +1035,12 @@ mod tests {
                 from __future__ import annotations
                 from typing import TypeVar, Generic
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 _T = TypeVar(\"_T\")
                 _E = TypeVar(\"_E\")
                 class Result(Generic[_T, _E]):
-                    pass
+                    Ok: ClassVar[type[_Result_Ok]]
+                    Err: ClassVar[type[_Result_Err]]
 
                 @final
                 @dataclass(frozen=True, slots=True)
@@ -1045,9 +1073,10 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Result[T, E]:
-                    pass
+                    Ok: ClassVar[type[_Result_Ok]]
+                    Err: ClassVar[type[_Result_Err]]
 
                 @final
                 @dataclass(frozen=True, slots=True)
@@ -1083,9 +1112,10 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Tree[T]:
-                    pass
+                    Leaf: ClassVar[_Tree_Leaf]
+                    Node: ClassVar[type[_Tree_Node]]
 
                 class _Tree_Leaf(Tree):
                     __slots__ = ()

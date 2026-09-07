@@ -56,6 +56,7 @@ impl TypeAwarePass for InitMethod<'_> {
             float_literals: self.float_literals,
             edits: RefCell::new(Vec::new()),
             templates: RefCell::new(Vec::new()),
+            relocating: RefCell::new(Vec::new()),
             errors: RefCell::new(Vec::new()),
             needs_missing: RefCell::new(false),
         };
@@ -67,6 +68,7 @@ impl TypeAwarePass for InitMethod<'_> {
         }
         ctx.text_edits.extend(state.edits.into_inner());
         ctx.template_edits.extend(state.templates.into_inner());
+        ctx.relocating_edits.extend(state.relocating.into_inner());
         ctx.errors.extend(state.errors.into_inner());
     }
 }
@@ -101,6 +103,8 @@ struct State<'src> {
     float_literals: FloatLiteralLowering,
     edits: RefCell<Vec<(TextRange, String)>>,
     templates: RefCell<Vec<(TextRange, Vec<Fragment>)>>,
+    /// the `_MISSING` substitutions, whose defaults the guards re-evaluate
+    relocating: RefCell<Vec<(TextRange, Vec<Fragment>)>>,
     errors: RefCell<Vec<String>>,
     /// whether the `_MISSING` sentinel reached the output
     needs_missing: RefCell<bool>,
@@ -302,7 +306,11 @@ impl State<'_> {
             // the whole body is written here, so the guards a defaulted or
             // relaxed-order parameter needs are written here too — `mutable_
             // defaults` has no source statement to anchor them before
-            let (sentinels, guards) = parameter_guards(func, self.types);
+            let super::mutable_defaults::ParameterGuards {
+                sentinels,
+                written,
+                guards,
+            } = parameter_guards(func, self.types);
             let header_indent = self.line_indent(func.range.start()).to_owned();
             let body_indent = format!("{header_indent}    ");
             let mut frags = vec![Fragment::Lit(":".to_owned())];
@@ -319,7 +327,8 @@ impl State<'_> {
             }
             // an inherited default is a signature edit that needs no guard, so the sentinels
             // are written whether or not the body gains anything
-            self.templates.borrow_mut().extend(sentinels);
+            self.relocating.borrow_mut().extend(sentinels);
+            self.templates.borrow_mut().extend(written);
             let pos = func.range.end();
             if guards.is_empty() {
                 // no passthrough to carry, so emit plain text: a template

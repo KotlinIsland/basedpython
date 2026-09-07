@@ -158,6 +158,7 @@ pub(crate) fn negation_with_equal_op(checker: &Checker, expr: &Expr, op: UnaryOp
         comparators,
         range: _,
         node_index: _,
+        identity_ops: _,
     }) = operand
     else {
         return;
@@ -189,6 +190,7 @@ pub(crate) fn negation_with_equal_op(checker: &Checker, expr: &Expr, op: UnaryOp
         left: left.clone(),
         ops: Box::from([CmpOp::NotEq]),
         comparators: comparators.clone(),
+        identity_ops: None,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     };
@@ -214,6 +216,7 @@ pub(crate) fn negation_with_not_equal_op(
         comparators,
         range: _,
         node_index: _,
+        identity_ops: _,
     }) = operand
     else {
         return;
@@ -245,6 +248,7 @@ pub(crate) fn negation_with_not_equal_op(
         left: left.clone(),
         ops: Box::from([CmpOp::Eq]),
         comparators: comparators.clone(),
+        identity_ops: None,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     };

@@ -42,22 +42,20 @@
 //!
 //! [`build_predicate`] is the core of this pass *and* of
 //! [`checked_cast`](super::checked_cast): both ask one question — does this
-//! value satisfy this specialization at runtime — over the same
-//! [`ParametricIsPlan`]. they differ only in two parameters:
-//!
-//! - [`TargetPosition`], because a cast's target is a type expression while an
-//!   `is`-rhs is a value expression, so ty infers the two differently
-//! - [`ProbeStrictness`], because an `is`-test must *earn* a `True` (it narrows)
-//!   while a cast is an assertion that only holds the value to arguments the
-//!   runtime can actually see
+//! value satisfy this type at runtime — over the same [`ParametricIsPlan`],
+//! built from the same type expression. they differ in one parameter,
+//! [`ProbeStrictness`]: an `is`-test must *earn* a `True` (it narrows) while a
+//! cast is an assertion that only holds the value to arguments the runtime can
+//! actually see
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, CmpOp, Expr, Stmt};
+use ruff_python_ast::{self as ast, CmpOp, Expr, PySourceType, Stmt};
+use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange};
-use ty_python_semantic::reified::is_keyword_comparison;
-use ty_python_semantic::{ArgVariance, ParametricIsPlan, ProtocolMemberCheck};
+use ty_python_semantic::{ArgVariance, ParametricIsPlan, ProtocolMemberCheck, TargetSpelling};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
@@ -257,7 +255,7 @@ def _parametric_is_lenient(value, alias, variances):
 /// covariant → subtype, 2 contravariant → supertype, 3 bivariant → any).
 /// annotations are read with `typing.get_type_hints` (resolving string
 /// annotations and inherited members), falling back to a raw `__mro__` walk
-pub(crate) const PROTOCOL_IS_RUNTIME: &str = "\
+const PROTOCOL_IS_RUNTIME: &str = "\
 _by_proto_missing = object()
 
 def _by_member_annotation(klass, name):
@@ -392,6 +390,20 @@ def _by_protocol_is(value, members):
     return True
 ";
 
+/// matches a value against a template literal type — a pattern such as
+/// `f"a{int}b"`, whose type is the set of strings it can produce.
+///
+/// the regular expression comes from the checker, which builds it from the same
+/// reading of the pattern's holes that decides the static answer, so the test
+/// accepts exactly the strings the type contains. a non-`str` value is not one
+/// of them
+const PATTERN_IS_RUNTIME: &str = "\
+import re as _by_re
+
+def _by_pattern_is(value, pattern):
+    return isinstance(value, str) and _by_re.fullmatch(pattern, value) is not None
+";
+
 /// the runtime variance code `_by_variance_ok` expects
 fn variance_code(variance: ArgVariance) -> u8 {
     match variance {
@@ -437,17 +449,6 @@ fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
     format!("[{entries}]")
 }
 
-/// which inference position a target expression lives in. this is the *only*
-/// difference between an `is`-test and a checked cast at the front end: an
-/// `is`-rhs is a value expression (its type is the class object), a `cast`
-/// target is a type expression (its type is the instance). both then classify
-/// through the same engine
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TargetPosition {
-    Value,
-    Type,
-}
-
 /// how a runtime probe treats a value that carries no reification
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProbeStrictness {
@@ -474,6 +475,8 @@ pub(crate) struct PredicateNeeds {
     pub(crate) protocol_runtime: bool,
     /// the predicate calls `_by_conforms`
     pub(crate) conformance_runtime: bool,
+    /// the predicate calls `_by_pattern_is`
+    pub(crate) pattern_runtime: bool,
     /// no arm carried a parametric claim — a plain `isinstance` covers the whole
     /// target, so a caller may use its compact shallow form instead
     pub(crate) all_plain: bool,
@@ -497,72 +500,21 @@ impl PredicateNeeds {
     }
 }
 
-/// the plan for one `(value, target)` pair, resolved through the position's
-/// inference rules
-fn plan_for(
-    types: &dyn TypeInfo,
-    value_expr: &Expr,
-    target: &Expr,
-    position: TargetPosition,
-) -> Option<ParametricIsPlan> {
-    match position {
-        TargetPosition::Value => types.parametric_is_plan(value_expr, target),
-        TargetPosition::Type => types.parametric_cast_plan(value_expr, target),
-    }
-}
-
 /// the bare (non-negated) runtime predicate for one target arm, referencing the
 /// value through `value_ref` so the caller controls how it is bound.
 ///
 /// this is the shared core of `x is T` and `x cast T`: both ask the same
-/// question — does this value satisfy this specialization at runtime — and
-/// differ only in `position` (how the target is inferred) and `probe` (what an
-/// unreified value means).
+/// question — does this value satisfy this type at runtime — and differ only in
+/// `probe`, which decides what an unreified value means.
 fn arm_predicate(
     types: &dyn TypeInfo,
     value_ref: &dyn Fn() -> Fragment,
     value_expr: &Expr,
     arm: &Expr,
-    position: TargetPosition,
     probe: ProbeStrictness,
     needs: &mut PredicateNeeds,
 ) -> Vec<Fragment> {
-    // a `None` arm (an `X | None` optional) is an identity check, not
-    // `isinstance(_, None)` — `None` is a value, not a class
-    if matches!(arm, Expr::NoneLiteral(_)) {
-        needs.all_true = false;
-        needs.references_value = true;
-        return vec![value_ref(), Fragment::Lit(" is None".to_owned())];
-    }
-    // an interface something visibly conforms to cannot be answered by
-    // `isinstance`: a conforming type is not a subclass, and a protocol is not
-    // even a legal `isinstance` target. the registry answers first, and a value
-    // nothing registered falls back to carrying the requirements
-    if let Some(test) = types.conformance_test(arm) {
-        needs.all_plain = false;
-        needs.all_true = false;
-        needs.references_value = true;
-        needs.conformance_runtime = true;
-        let members = match &test.members {
-            Some(names) => {
-                let mut spelled = String::from(", (");
-                for name in names {
-                    let _ = write!(spelled, "\"{name}\", ");
-                }
-                spelled.push(')');
-                spelled
-            }
-            None => String::new(),
-        };
-        return vec![
-            Fragment::Lit("_by_conforms(".to_owned()),
-            value_ref(),
-            Fragment::Lit(", ".to_owned()),
-            Fragment::Src(arm.range()),
-            Fragment::Lit(format!("{members})")),
-        ];
-    }
-    let Some(plan) = plan_for(types, value_expr, arm, position) else {
+    let Some(plan) = types.parametric_is_plan(value_expr, arm) else {
         needs.all_true = false;
         needs.references_value = true;
         return vec![
@@ -573,9 +525,33 @@ fn arm_predicate(
             Fragment::Lit(")".to_owned()),
         ];
     };
-    needs.all_plain = false;
-    if !matches!(plan, ParametricIsPlan::Fold(true)) {
-        needs.all_true = false;
+    fragments_for_plan(types, plan, value_ref, arm, probe, needs)
+}
+
+/// the fragments one already-classified plan lowers to. split out from
+/// [`arm_predicate`] so a union plan can build its arms, which the source need
+/// not spell separately — a PEP 695 alias names a whole union with one word
+fn fragments_for_plan(
+    types: &dyn TypeInfo,
+    plan: ParametricIsPlan,
+    value_ref: &dyn Fn() -> Fragment,
+    arm: &Expr,
+    probe: ProbeStrictness,
+    needs: &mut PredicateNeeds,
+) -> Vec<Fragment> {
+    // a union reports through its arms instead: a disjunction of plain
+    // `isinstance` calls is still a plain check, and it holds as soon as one arm
+    // does
+    if !matches!(plan, ParametricIsPlan::Union(_)) {
+        if !matches!(
+            plan,
+            ParametricIsPlan::Isinstance(_) | ParametricIsPlan::Unresolved
+        ) {
+            needs.all_plain = false;
+        }
+        if !matches!(plan, ParametricIsPlan::Fold(true)) {
+            needs.all_true = false;
+        }
     }
     match plan {
         // an erased arm can't be checked at runtime; ty reports the error (a
@@ -597,7 +573,7 @@ fn arm_predicate(
             frags.push(Fragment::Lit(")".to_owned()));
             frags
         }
-        ParametricIsPlan::Probe(variances) => {
+        ParametricIsPlan::Probe { target, variances } => {
             needs.parametric_runtime = true;
             needs.references_value = true;
             let codes: Vec<u8> = variances.iter().copied().map(variance_code).collect();
@@ -605,13 +581,14 @@ fn arm_predicate(
                 ProbeStrictness::Strict => "_parametric_is(",
                 ProbeStrictness::Lenient => "_parametric_is_lenient(",
             };
-            vec![
+            let mut frags = vec![
                 Fragment::Lit(call.to_owned()),
                 value_ref(),
                 Fragment::Lit(", ".to_owned()),
-                Fragment::Src(arm.range()),
-                Fragment::Lit(format!(", {})", variance_tuple(&codes))),
-            ]
+                target_fragment(&target, arm),
+            ];
+            frags.push(Fragment::Lit(format!(", {})", variance_tuple(&codes))));
+            frags
         }
         ParametricIsPlan::ProtocolStructural(checks) => {
             needs.protocol_runtime = true;
@@ -623,35 +600,192 @@ fn arm_predicate(
                 Fragment::Lit(format!(", {members})")),
             ]
         }
+        // nothing is known about the target, so the source's own spelling is
+        // the only thing to test against — and the error that left it unknown
+        // is already reported
+        // an interface something visibly conforms to cannot be answered by
+        // `isinstance`: a conforming type is not a subclass. the registry
+        // answers first, and a value nothing registered falls back to carrying
+        // the requirements
+        ParametricIsPlan::Conformance { target, members } => {
+            needs.references_value = true;
+            needs.conformance_runtime = true;
+            let mut spelled = String::from(", (");
+            for name in &members {
+                let _ = write!(spelled, "\"{name}\", ");
+            }
+            spelled.push(')');
+            vec![
+                Fragment::Lit("_by_conforms(".to_owned()),
+                value_ref(),
+                Fragment::Lit(", ".to_owned()),
+                target_fragment(&target, arm),
+                Fragment::Lit(format!("{spelled})")),
+            ]
+        }
+        // the checker could not read the target as a type. that is how a unit
+        // enum variant arrives: the enum lowering has already rewritten it into
+        // a singleton instance, so what the source named as a type names a
+        // value here — and identity is the test for a value. anything else
+        // keeps the plain instance check, and whatever left the target unknown
+        // is already reported where it is written
+        ParametricIsPlan::Unresolved => {
+            needs.references_value = true;
+            if types.is_plain_value(arm) {
+                return vec![
+                    value_ref(),
+                    Fragment::Lit(" is ".to_owned()),
+                    Fragment::Src(arm.range()),
+                ];
+            }
+            vec![
+                Fragment::Lit("isinstance(".to_owned()),
+                value_ref(),
+                Fragment::Lit(", ".to_owned()),
+                Fragment::Src(arm.range()),
+                Fragment::Lit(")".to_owned()),
+            ]
+        }
+        ParametricIsPlan::Isinstance(target) => {
+            needs.references_value = true;
+            let mut frags = vec![
+                Fragment::Lit("isinstance(".to_owned()),
+                value_ref(),
+                Fragment::Lit(", ".to_owned()),
+            ];
+            frags.push(target_fragment(&target, arm));
+            frags.push(Fragment::Lit(")".to_owned()));
+            frags
+        }
+        // `None` is a value, not a class, so `isinstance` cannot take it — and
+        // there is only one `None`, which makes identity the whole test
+        // a bare `Callable` asks exactly what `callable()` answers
+        ParametricIsPlan::IsCallable => {
+            needs.references_value = true;
+            vec![
+                Fragment::Lit("callable(".to_owned()),
+                value_ref(),
+                Fragment::Lit(")".to_owned()),
+            ]
+        }
+        ParametricIsPlan::IsNone => {
+            needs.references_value = true;
+            vec![value_ref(), Fragment::Lit(" is None".to_owned())]
+        }
+        // the class guard is not redundant: python's `1 == True` would let a
+        // `bool` satisfy `Literal[1]` without it
+        ParametricIsPlan::Equality { class, value } => {
+            needs.references_value = true;
+            vec![
+                Fragment::Lit("(type(".to_owned()),
+                value_ref(),
+                Fragment::Lit(format!(") is {class} and ")),
+                value_ref(),
+                Fragment::Lit(" == ".to_owned()),
+                target_fragment(&value, arm),
+                Fragment::Lit(")".to_owned()),
+            ]
+        }
+        ParametricIsPlan::Identity(target) => {
+            needs.references_value = true;
+            vec![
+                value_ref(),
+                Fragment::Lit(" is ".to_owned()),
+                target_fragment(&target, arm),
+            ]
+        }
+        ParametricIsPlan::Subclass(target) => {
+            needs.references_value = true;
+            let mut frags = vec![Fragment::Lit("(isinstance(".to_owned()), value_ref()];
+            frags.push(Fragment::Lit(", type) and issubclass(".to_owned()));
+            frags.push(value_ref());
+            frags.push(Fragment::Lit(", ".to_owned()));
+            frags.push(target_fragment(&target, arm));
+            frags.push(Fragment::Lit("))".to_owned()));
+            frags
+        }
+        // a template literal type is a set of strings; the regular expression
+        // ty built spells exactly the strings it produces
+        ParametricIsPlan::Pattern(pattern) => {
+            needs.pattern_runtime = true;
+            needs.references_value = true;
+            vec![
+                Fragment::Lit("_by_pattern_is(".to_owned()),
+                value_ref(),
+                Fragment::Lit(format!(", {})", python_string_literal(&pattern))),
+            ]
+        }
+        // a value satisfies a union as soon as one arm holds
+        ParametricIsPlan::Union(arms) => {
+            let mut frags = vec![Fragment::Lit("(".to_owned())];
+            let mut any_true = false;
+            for (index, arm_plan) in arms.iter().enumerate() {
+                if index > 0 {
+                    frags.push(Fragment::Lit(" or ".to_owned()));
+                }
+                any_true |= matches!(arm_plan, ParametricIsPlan::Fold(true));
+                frags.extend(fragments_for_plan(
+                    types,
+                    arm_plan.clone(),
+                    value_ref,
+                    arm,
+                    probe,
+                    needs,
+                ));
+            }
+            frags.push(Fragment::Lit(")".to_owned()));
+            if any_true {
+                needs.all_true = true;
+            }
+            frags
+        }
     }
 }
 
-/// the full runtime predicate for a target expression, splitting a union into
-/// the disjunction of its arms. shared by `is` and `cast`.
+/// how a plan's target is written: its own spelling, or the source the target
+/// was written as when the plan carries none
+fn target_fragment(target: &TargetSpelling, arm: &Expr) -> Fragment {
+    match target {
+        TargetSpelling::Written => Fragment::Src(arm.range()),
+        TargetSpelling::Rebuilt(text) => Fragment::Lit(text.clone()),
+    }
+}
+
+/// a python string literal for `text`, escaped so the emitted source reads it
+/// back byte for byte. only the characters that end or reinterpret a
+/// single-quoted literal need escaping
+fn python_string_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// the full runtime predicate for a target expression. shared by `is` and
+/// `cast`.
+///
+/// A union target needs no splitting here: the target is a type expression, so
+/// its type is the union and the plan carries one arm per member — including
+/// the arms of a union the source never spelled as one.
 pub(crate) fn build_predicate(
     types: &dyn TypeInfo,
     value_ref: &dyn Fn() -> Fragment,
     value_expr: &Expr,
     target: &Expr,
-    position: TargetPosition,
     probe: ProbeStrictness,
 ) -> (Vec<Fragment>, PredicateNeeds) {
     let mut needs = PredicateNeeds::new();
-    let Some(arms) = union_arms(target) else {
-        let frags = arm_predicate(
-            types, value_ref, value_expr, target, position, probe, &mut needs,
-        );
-        return (frags, needs);
-    };
-    let mut frags = Vec::new();
-    for (index, arm) in arms.iter().enumerate() {
-        if index > 0 {
-            frags.push(Fragment::Lit(" or ".to_owned()));
-        }
-        frags.extend(arm_predicate(
-            types, value_ref, value_expr, arm, position, probe, &mut needs,
-        ));
-    }
+    let frags = arm_predicate(types, value_ref, value_expr, target, probe, &mut needs);
     (frags, needs)
 }
 
@@ -664,9 +798,8 @@ struct ParametricIs<'src, 'ti> {
     source: &'src str,
     types: &'ti dyn TypeInfo,
     edits: Vec<(TextRange, Vec<Fragment>)>,
-    needs_probe: bool,
-    needs_protocol: bool,
-    needs_conformance: bool,
+    /// the runtime helpers the predicates emitted so far call
+    runtimes: BTreeSet<PredicateRuntime>,
 }
 
 impl ParametricIs<'_, '_> {
@@ -687,18 +820,26 @@ impl ParametricIs<'_, '_> {
     /// predicate builder and then wrapped for this form: negation, and keeping
     /// an effectful lhs alive when the predicate doesn't mention it
     fn lower_pair(&mut self, lhs: &Expr, rhs: &Expr, negate: bool) -> Vec<Fragment> {
-        let value = || Fragment::Src(lhs.range());
-        let (frags, needs) = build_predicate(
-            self.types,
-            &value,
-            lhs,
-            rhs,
-            TargetPosition::Value,
-            ProbeStrictness::Strict,
-        );
-        self.needs_probe |= needs.parametric_runtime;
-        self.needs_protocol |= needs.protocol_runtime;
-        self.needs_conformance |= needs.conformance_runtime;
+        // a predicate may mention the value more than once — a union tests each
+        // arm, an equality also checks the class — so an effectful left operand
+        // is bound to a lambda parameter and evaluated once. counting the
+        // references is what tells the two cases apart: a single mention needs
+        // no binding, and the lambda would only obscure the output
+        let mentions = std::cell::Cell::new(0usize);
+        let counting = || {
+            mentions.set(mentions.get() + 1);
+            Fragment::Src(lhs.range())
+        };
+        let (frags, needs) =
+            build_predicate(self.types, &counting, lhs, rhs, ProbeStrictness::Strict);
+        let via_lambda = mentions.get() > 1 && !effect_free(lhs);
+        let (frags, needs) = if via_lambda {
+            let param = || Fragment::Lit(UNION_VALUE_PARAM.to_owned());
+            build_predicate(self.types, &param, lhs, rhs, ProbeStrictness::Strict)
+        } else {
+            (frags, needs)
+        };
+        self.runtimes.extend(PredicateRuntime::used(&needs));
 
         // a predicate that folded to a constant inverts in place rather than
         // growing a `not`
@@ -713,9 +854,33 @@ impl ParametricIs<'_, '_> {
             return Self::with_lhs_effects(lhs, vec![Fragment::Lit(value.to_owned())]);
         }
 
+        // `x is not None` rather than `not x is None`: the same test, and the
+        // one a reader (and every linter) expects. an identity predicate is the
+        // only shape python can negate in place, and it is spelled with the
+        // operator in a literal fragment of its own
+        if negate
+            && let [value, Fragment::Lit(operator), rest @ ..] = frags.as_slice()
+            && operator.starts_with(" is ")
+        {
+            let mut negated = vec![
+                value.clone(),
+                Fragment::Lit(operator.replacen(" is ", " is not ", 1)),
+            ];
+            negated.extend_from_slice(rest);
+            return negated;
+        }
+
         let mut result = Vec::new();
         if negate {
             result.push(Fragment::Lit("not ".to_owned()));
+        }
+        if via_lambda {
+            result.push(Fragment::Lit(format!("(lambda {UNION_VALUE_PARAM}: ")));
+            result.extend(frags);
+            result.push(Fragment::Lit(")(".to_owned()));
+            result.push(Fragment::Src(lhs.range()));
+            result.push(Fragment::Lit(")".to_owned()));
+            return result;
         }
         result.extend(frags);
         if needs.references_value {
@@ -725,120 +890,92 @@ impl ParametricIs<'_, '_> {
         }
     }
 
-    /// one arm of a union `is`-target, delegated to the shared predicate
-    /// builder so `is` and `cast` stay in lockstep
-    fn lower_arm(&mut self, value: &dyn Fn() -> Fragment, lhs: &Expr, arm: &Expr) -> Vec<Fragment> {
-        let mut needs = PredicateNeeds::new();
-        let frags = arm_predicate(
-            self.types,
-            value,
-            lhs,
-            arm,
-            TargetPosition::Value,
-            ProbeStrictness::Strict,
-            &mut needs,
-        );
-        self.needs_probe |= needs.parametric_runtime;
-        self.needs_protocol |= needs.protocol_runtime;
-        self.needs_conformance |= needs.conformance_runtime;
-        frags
-    }
-
-    /// `lhs is (T1 | T2 | …)` — a test against a union type — is the disjunction
-    /// of the per-arm tests (`type(lhs) <: Ti` for any arm). the lhs is bound
-    /// once: referenced directly when it has no effects, else through a lambda
-    /// parameter so the arms share a single evaluation
-    fn lower_union(&mut self, lhs: &Expr, arms: &[&Expr], negate: bool) -> Vec<Fragment> {
-        let via_lambda = !effect_free(lhs);
-        let value = || {
-            if via_lambda {
-                Fragment::Lit(UNION_VALUE_PARAM.to_owned())
-            } else {
-                Fragment::Src(lhs.range())
-            }
-        };
-        let mut inner: Vec<Fragment> = Vec::new();
-        for (index, arm) in arms.iter().enumerate() {
-            if index > 0 {
-                inner.push(Fragment::Lit(" or ".to_owned()));
-            }
-            inner.extend(self.lower_arm(&value, lhs, arm));
-        }
-        let mut frags = Vec::new();
-        if via_lambda {
-            frags.push(Fragment::Lit(format!(
-                "{}(lambda {UNION_VALUE_PARAM}: ",
-                if negate { "not " } else { "" }
-            )));
-            frags.extend(inner);
-            frags.push(Fragment::Lit(")(".to_owned()));
-            frags.push(Fragment::Src(lhs.range()));
-            frags.push(Fragment::Lit(")".to_owned()));
-        } else {
-            frags.push(Fragment::Lit(if negate { "not (" } else { "(" }.to_owned()));
-            frags.extend(inner);
-            frags.push(Fragment::Lit(")".to_owned()));
-        }
-        frags
-    }
-
     fn process_compare(&mut self, compare: &ast::ExprCompare) {
         let mut lhs: &Expr = &compare.left;
-        for (op, rhs) in compare.ops.iter().zip(&compare.comparators) {
-            // identity_swap defers every non-literal name/attribute/subscript
-            // and union `is`-rhs to this pass, which owns the
-            // isinstance-vs-parametric decision (a bare class → isinstance, a
-            // specialization or an alias to one → a parametric test, a union →
-            // the disjunction of the arms)
-            if matches!(op, CmpOp::Is | CmpOp::IsNot)
-                && is_keyword_comparison(self.source, *op, lhs, rhs)
-                // a subscript that resolves to a plain value (`candidates[0]`
-                // holding an enum member) keeps python identity semantics,
-                // same as identity_swap's rule for unsubscripted rhs
-                && !self.types.is_keeps_identity(rhs)
-            {
-                let negate = matches!(op, CmpOp::IsNot);
-                let replacement =
-                    if matches!(rhs, Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_)) {
-                        Some(self.lower_pair(lhs, rhs, negate))
-                    } else {
-                        union_arms(rhs).map(|arms| self.lower_union(lhs, &arms, negate))
-                    };
-                if let Some(replacement) = replacement {
-                    let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
-                    self.edits.push((pair_range, replacement));
-                }
+        for (index, rhs) in compare.comparators.iter().enumerate() {
+            // every type test is lowered here, whatever shape its target was
+            // written in. the plan comes from the target's *type*, so a target
+            // the source spells as one word (`x is Alias`) and the union that
+            // word stands for reach the same lowering
+            if compare.is_type_test(index, PySourceType::BasedPython) {
+                let negate = compare.ops.get(index) == Some(&CmpOp::IsNot);
+                let (opening, closing) = paren_padding(self.source, lhs, rhs);
+                let mut replacement = Vec::new();
+                replacement.push(Fragment::Lit("(".repeat(opening)));
+                replacement.extend(self.lower_pair(lhs, rhs, negate));
+                replacement.push(Fragment::Lit(")".repeat(closing)));
+                let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
+                self.edits.push((pair_range, replacement));
             }
             lhs = rhs;
         }
     }
 }
 
-/// the lambda parameter that binds an effectful union-test lhs for its arms.
-/// unlikely to collide: an `is`-target arm is a type expression, and this name
-/// would have to appear free inside one
-const UNION_VALUE_PARAM: &str = "_by_is_value";
-
-/// the flat arms of a union type expression (`A | B | C` → `[A, B, C]`), or
-/// `None` when `expr` is not a `|` union
-fn union_arms(expr: &Expr) -> Option<Vec<&Expr>> {
-    if !matches!(expr, Expr::BinOp(binop) if binop.op == ast::Operator::BitOr) {
-        return None;
-    }
-    let mut arms = Vec::new();
-    collect_union_arms(expr, &mut arms);
-    Some(arms)
+/// a runtime helper one of the emitted predicates calls. the preamble emits one
+/// definition per helper a pass actually used, in this order — `_parametric_is`
+/// and `_by_protocol_is` must precede the predicates that call them
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum PredicateRuntime {
+    Parametric,
+    Protocol,
+    Conformance,
+    Pattern,
 }
 
-fn collect_union_arms<'a>(expr: &'a Expr, arms: &mut Vec<&'a Expr>) {
-    if let Expr::BinOp(binop) = expr
-        && binop.op == ast::Operator::BitOr
-    {
-        collect_union_arms(&binop.left, arms);
-        collect_union_arms(&binop.right, arms);
-    } else {
-        arms.push(expr);
+impl PredicateRuntime {
+    /// the definitions this helper needs in the emitted module
+    pub(crate) fn source(self) -> &'static str {
+        match self {
+            Self::Parametric => PARAMETRIC_IS_RUNTIME,
+            Self::Protocol => PROTOCOL_IS_RUNTIME,
+            Self::Conformance => super::conformance::WITNESS_RUNTIME,
+            Self::Pattern => PATTERN_IS_RUNTIME,
+        }
     }
+
+    /// the helpers `needs` recorded, in preamble order
+    pub(crate) fn used(needs: &PredicateNeeds) -> impl Iterator<Item = Self> {
+        [
+            needs.parametric_runtime.then_some(Self::Parametric),
+            needs.protocol_runtime.then_some(Self::Protocol),
+            needs.conformance_runtime.then_some(Self::Conformance),
+            needs.pattern_runtime.then_some(Self::Pattern),
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
+/// the lambda parameter that binds an effectful test value for a predicate that
+/// mentions it more than once. unlikely to collide: an `is`-target is a type
+/// expression, and this name would have to appear free inside one
+const UNION_VALUE_PARAM: &str = "_by_is_value";
+
+/// how many parentheses a replacement for one comparison pair must supply
+/// itself, because the source wrote them around an operand rather than around
+/// the pair.
+///
+/// An operand's range stops inside its own parentheses, so the pair
+/// `lhs.start() .. rhs.end()` of `(a) is str` swallows the `)` while leaving the
+/// `(` outside it. Rather than guess which outer `(` that was — the `(` of an
+/// enclosing call looks exactly the same — the replacement closes what it
+/// swallowed and opens what the source will close after it.
+fn paren_padding(source: &str, lhs: &Expr, rhs: &Expr) -> (usize, usize) {
+    let gap = TextRange::new(lhs.range().end(), rhs.range().start());
+    let tokens: Vec<_> = SimpleTokenizer::new(source, gap).skip_trivia().collect();
+    // parens closing around the left operand come first in the gap, parens
+    // opening around the right operand last; the operator sits between them
+    let closing = tokens
+        .iter()
+        .take_while(|token| token.kind() == SimpleTokenKind::RParen)
+        .count();
+    let opening = tokens
+        .iter()
+        .rev()
+        .take_while(|token| token.kind() == SimpleTokenKind::LParen)
+        .count();
+    (opening, closing)
 }
 
 impl<'ast> Visitor<'ast> for ParametricIs<'_, '_> {
@@ -870,9 +1007,7 @@ impl TypeAwarePass for ParametricIsPass<'_> {
             source: self.source,
             types,
             edits: Vec::new(),
-            needs_probe: false,
-            needs_protocol: false,
-            needs_conformance: false,
+            runtimes: BTreeSet::new(),
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
@@ -882,15 +1017,8 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         // (`T == list[int]`), which is already restricted to 3.12+ by the
         // reified-generic requirement; a user-generic probe (`A[int]`) works
         // on any target
-        if inner.needs_probe {
-            ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
-        }
-        if inner.needs_protocol {
-            ctx.required_imports.push(PROTOCOL_IS_RUNTIME.to_owned());
-        }
-        if inner.needs_conformance {
-            ctx.required_imports
-                .push(super::conformance::WITNESS_RUNTIME.to_owned());
+        for runtime in inner.runtimes {
+            ctx.required_imports.push(runtime.source().to_owned());
         }
         ctx.template_edits.extend(inner.edits);
     }
@@ -1344,7 +1472,8 @@ mod tests {
     #[test]
     fn implicit_alias_target_probes_like_the_specialization() {
         // `X = A[int]` binds `X` to the specialization itself, so `y is X`
-        // resolves exactly as `y is A[int]` would — a probe here
+        // resolves exactly as `y is A[int]` would — and is written back out
+        // that way, which is what the runtime probe needs to unwind
         let out = out(indoc! {"
             class A[T]:
                 def __init__(self, v: T):
@@ -1354,30 +1483,30 @@ mod tests {
                 return y is X
         "});
         assert!(
-            out.contains("return _parametric_is(y, X, (0,))"),
-            "alias name probes through `X`: {out}"
+            out.contains("return _parametric_is(y, A[int], (0,))"),
+            "alias name probes against the specialization it binds: {out}"
         );
     }
 
     #[test]
     fn implicit_alias_builtin_target_probes() {
         // an alias to a builtin specialization probes just like the direct form
-        // — the alias name `X` is passed through so the runtime unwinds it
         let out = out(indoc! {"
             X = list[int]
             def f(y: object) -> bool:
                 return y is X
         "});
         assert!(
-            out.contains("return _parametric_is(y, X, (0,))"),
-            "alias to a builtin probes through `X`: {out}"
+            out.contains("return _parametric_is(y, list[int], (0,))"),
+            "alias to a builtin probes against the specialization: {out}"
         );
     }
 
     #[test]
     fn pep695_type_alias_target_probes_through_value() {
-        // `type W = A[int]` is a `TypeAliasType`; the probe unwraps `.__value__`
-        // at runtime, so `y is W` still resolves against `A[int]`
+        // `type W = A[int]` evaluates to a `TypeAliasType`, which `isinstance`
+        // would refuse — so the specialization it stands for is written out
+        // instead of the name
         let out = out(indoc! {"
             class A[T]:
                 def __init__(self, v: T):
@@ -1387,8 +1516,8 @@ mod tests {
                 return y is W
         "});
         assert!(
-            out.contains("return _parametric_is(y, W, (0,))"),
-            "type alias probes through `W`: {out}"
+            out.contains("return _parametric_is(y, A[int], (0,))"),
+            "type alias probes against its value: {out}"
         );
     }
 
@@ -1428,10 +1557,10 @@ mod tests {
                 def __init__(self, v: T):
                     self.v: list[T] = [v]
             def f(a: object) -> bool:
-                return a is A[int] | object
+                return a is A[int] | str
         "});
         assert!(
-            out.contains("return (_parametric_is(a, A[int], (0,)) or isinstance(a, object))"),
+            out.contains("return (_parametric_is(a, A[int], (0,)) or isinstance(a, str))"),
             "each arm lowered by its own kind: {out}"
         );
     }
@@ -1488,8 +1617,8 @@ mod tests {
         "});
         assert!(
             out.contains(
-                "return (lambda _by_is_value: isinstance(_by_is_value, int) or \
-                 isinstance(_by_is_value, str))(g())"
+                "return (lambda _by_is_value: (isinstance(_by_is_value, int) or \
+                 isinstance(_by_is_value, str)))(g())"
             ),
             "effectful lhs bound once: {out}"
         );
@@ -1620,25 +1749,24 @@ mod tests {
     }
 
     #[test]
-    fn a_target_outside_the_union_compares_the_cell() {
-        // no arm matches `list[bytes]`, so this can never be true. it used to
-        // fold to `False` statically; now the parameter carries a reified type
-        // parameter constrained to `(int, str)`, so it lowers to a cell
-        // comparison that is always false at runtime instead. same answer, one
-        // comparison rather than a constant — the fold is not recoverable from
-        // the token path, which carries source ranges rather than types
+    fn a_target_outside_the_union_can_never_hold() {
+        // no arm matches `list[bytes]`, so this can never be true — and the
+        // constraint `(int, str)` on the reified parameter says so statically,
+        // before any runtime residue is reached
         let out = out(indoc! {"
             def f(x: list[int] | list[str]) -> bool:
                 return x is list[bytes]
         "});
         assert!(
-            out.contains("return (__by_erased_0 == bytes)"),
-            "target outside the union compares the cell: {out}"
+            out.contains("return False"),
+            "a target outside the union can never hold: {out}"
         );
     }
 
     #[test]
-    fn value_subscript_rhs_falls_back_to_isinstance() {
+    fn a_subscript_of_a_value_keeps_the_plain_instance_check() {
+        // `pair[0]` is not something a type expression can say, so the checker
+        // reports it and the lowering keeps the `isinstance` the source wrote
         let out = out(indoc! {"
             class A: ...
             pair = (A, A)
@@ -1680,9 +1808,9 @@ mod tests {
 
     #[test]
     fn stdlib_enum_member_rhs_keeps_identity() {
-        // an enum member is a singleton instance, not a class, so
-        // `isinstance(x, Color.RED)` would be a runtime TypeError; the pair
-        // must keep `is` / `is not`
+        // `Color.RED` names the type `Literal[Color.RED]`, which holds exactly
+        // one object — so the test is identity, and `isinstance(x, Color.RED)`
+        // (a runtime `TypeError`) is never emitted
         let out = out(indoc! {"
             from enum import Enum
 
@@ -1690,17 +1818,106 @@ mod tests {
                 RED = 1
                 GREEN = 2
 
-            print(Color.RED is Color.RED)
-            print(Color.RED is not Color.GREEN)
+            def f(c: Color) -> None:
+                print(c is Color.RED)
+                print(c is not Color.GREEN)
         "});
         assert!(
-            out.contains("print(Color.RED is Color.RED)"),
-            "enum member rhs keeps identity: {out}"
+            out.contains("print(c is Color.RED)"),
+            "enum member rhs is an identity check: {out}"
         );
         assert!(
-            out.contains("print(Color.RED is not Color.GREEN)"),
-            "enum member rhs keeps identity under is not: {out}"
+            out.contains("print(c is not Color.GREEN)"),
+            "enum member rhs is an identity check under `is not`: {out}"
         );
+    }
+
+    #[test]
+    fn an_alias_to_the_enum_still_reaches_the_variant() {
+        // the target is decided from the *type* it names, so a binding standing
+        // in for the enum reaches the same variant. a match on the written name
+        // would miss this one and emit `isinstance` against a singleton
+        let out = out(indoc! {"
+            enum class Shape:
+                case Circle(radius: float)
+                case Point
+
+            S = Shape
+
+            def f(s: Shape) -> bool:
+                return s is S.Point
+        "});
+        assert!(
+            out.contains("return s is S.Point"),
+            "an aliased enum's unit variant is still an identity check: {out}"
+        );
+    }
+
+    #[test]
+    fn a_binding_shadowing_the_enum_names_what_it_holds() {
+        // the same rule the other way: `Shape` here is the local class, whose
+        // `Point` is an ordinary class and therefore an instance check
+        let out = out(indoc! {"
+            enum class Shape:
+                case Circle(radius: float)
+                case Point
+
+            class Other:
+                class Point: pass
+
+            def f(x: object) -> bool:
+                Shape = Other
+                return x is Shape.Point
+        "});
+        assert!(
+            out.contains("return isinstance(x, Shape.Point)"),
+            "a shadowed name names what the binding holds: {out}"
+        );
+    }
+
+    #[test]
+    fn a_literal_target_keeps_the_source_spelling() {
+        // the source already wrote a literal that is valid where it sits —
+        // rebuilding one would pick its own quote character, which a python
+        // before 3.12 forbids reusing inside an f-string
+        let out = out(indoc! {"
+            def f(x: object) -> str:
+                return f\"{x is 'q'}\"
+        "});
+        assert!(
+            out.contains("x == 'q'"),
+            "the literal is re-emitted as written: {out}"
+        );
+    }
+
+    #[test]
+    fn an_effectful_value_is_evaluated_once_for_a_literal_target() {
+        // the equality check mentions the value twice — once for the class
+        // guard — so an effectful operand is bound rather than repeated
+        let out = out(indoc! {"
+            def g() -> object:
+                return 1
+
+            def f() -> bool:
+                return g() is 1
+        "});
+        assert_eq!(out.matches("g()").count(), 2, "single evaluation:\n{out}");
+    }
+
+    #[test]
+    fn a_pattern_target_escapes_what_the_source_cannot_carry() {
+        // a control character has no raw spelling in python source — CPython
+        // refuses a file containing a NUL outright — so the regex carries its
+        // escape instead
+        let out = out(indoc! {"
+            def f(s: str) -> bool:
+                return s is f\"a\\x00b{int}\"
+        "});
+        assert!(
+            out.contains("\\\\x00") || out.contains("a\\\\x00b"),
+            "the pattern escapes the control character: {out}"
+        );
+        assert!(!out.contains('\0'), "no raw NUL reaches the output: {out}");
     }
 
     #[test]
@@ -1710,11 +1927,12 @@ mod tests {
             enum class Genre:
                 case A, B
 
-            print(Genre.A is not Genre.B)
+            def f(g: Genre) -> None:
+                print(g is not Genre.B)
         "});
         assert!(
-            out.contains("print(Genre.A is not Genre.B)"),
-            "caseless variant rhs keeps identity: {out}"
+            out.contains("print(g is not Genre.B)"),
+            "caseless variant rhs is an identity check: {out}"
         );
     }
 
@@ -1727,12 +1945,12 @@ mod tests {
                 case Circle(radius: float)
                 case Point
 
-            c = Shape.Circle(1.0)
-            print(c is Shape.Circle)
-            print(c is not Shape.Point)
+            def f(c: Shape) -> None:
+                print(c is Shape.Circle)
+                print(c is not Shape.Point)
         "});
         assert!(
-            out.contains("print(isinstance(c, Shape.Circle))"),
+            out.contains("print(isinstance(c, _Shape_Circle))"),
             "payload variant rhs is a class and lowers to isinstance: {out}"
         );
         assert!(

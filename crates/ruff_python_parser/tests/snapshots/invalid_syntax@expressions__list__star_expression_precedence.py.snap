@@ -86,6 +86,7 @@ Module(
                                                         },
                                                     ),
                                                 ],
+                                                identity_ops: None,
                                             },
                                         ),
                                         ctx: Load,

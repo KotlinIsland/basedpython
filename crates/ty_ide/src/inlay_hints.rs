@@ -1337,18 +1337,16 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// basedpython: hint `reified` on each type parameter of `function` that a
     /// value-position use in the body reifies without saying so.
     fn add_inferred_reification(&mut self, function: &ast::StmtFunctionDef) {
-        let inferred = |hints: &mut Self| {
-            inferred_reified_type_param_names(hints.source, hints.source_type, function)
-        };
+        let inferred =
+            |hints: &mut Self| inferred_reified_type_param_names(hints.source_type, function);
         self.add_inferred_reification_of(function.type_params.as_deref(), inferred);
     }
 
     /// basedpython: the same hint on a class, which reifies a type parameter its
     /// methods read through their receiver.
     fn add_inferred_class_reification(&mut self, class: &ast::StmtClassDef) {
-        let inferred = |hints: &mut Self| {
-            inferred_reified_class_type_param_names(hints.source, hints.source_type, class)
-        };
+        let inferred =
+            |hints: &mut Self| inferred_reified_class_type_param_names(hints.source_type, class);
         self.add_inferred_reification_of(class.type_params.as_deref(), inferred);
     }
 

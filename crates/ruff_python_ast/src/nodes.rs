@@ -2799,6 +2799,83 @@ impl ExprNamed {
     }
 }
 
+/// basedpython: which operators of an [`ExprCompare`](crate::ExprCompare) were
+/// written `===` / `!==`, python's identity comparison.
+///
+/// basedpython gives the `is` keyword to the type test and spells identity
+/// `===` / `!==`. Both parse to the same [`CmpOp`](crate::CmpOp), so the AST
+/// keeps this alongside to say which was written.
+///
+/// Boxed behind an `Option` on the node: a comparison written any other way
+/// carries none of this, and paying two words for it on every comparison would
+/// widen `Expr` itself.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub struct IdentityOperators {
+    /// one entry per operator, in the same order as
+    /// [`ExprCompare::ops`](crate::ExprCompare::ops)
+    pub ops: Box<[bool]>,
+}
+
+impl IdentityOperators {
+    /// the side table to store on a node, or `None` when no operator was
+    /// written `===` / `!==`.
+    ///
+    /// `operators` is the comparison's own operator count: an entry past it
+    /// would never be read, and one short of it would answer `false` for an
+    /// operator that was written `===`.
+    pub fn into_stored(ops: Vec<bool>, operators: usize) -> Option<Box<Self>> {
+        debug_assert!(
+            ops.len() <= operators,
+            "identity spellings outnumber the operators they belong to"
+        );
+        ops.iter().any(|identity| *identity).then(|| {
+            Box::new(Self {
+                ops: ops.into_boxed_slice(),
+            })
+        })
+    }
+}
+
+impl crate::ExprCompare {
+    /// basedpython: whether the operator at `index` was written `===` / `!==`,
+    /// which is Python's identity comparison.
+    ///
+    /// `false` for every operator that is not an identity comparison and for an
+    /// index past the end, so a caller never has to check the encoding or the
+    /// length first. A renderer can print `===` from this answer alone, without
+    /// knowing which language it is emitting: the lexer produces the token for
+    /// any source that spells it, and a `.py` file that does was never valid
+    /// Python.
+    pub fn is_identity_operator(&self, index: usize) -> bool {
+        self.identity_ops
+            .as_ref()
+            .and_then(|identity| identity.ops.get(index))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// basedpython: whether the operator at `index` is a *type test* — `is` or
+    /// `is not` spelled with the keyword, which asks whether the left operand
+    /// has the type its right-hand side names.
+    ///
+    /// The source type is required because the same operator means Python's
+    /// identity comparison in a `.py` file, where there is no type test at all.
+    pub fn is_type_test(&self, index: usize, source_type: crate::PySourceType) -> bool {
+        source_type.is_basedpython()
+            && matches!(
+                self.ops.get(index),
+                Some(crate::CmpOp::Is | crate::CmpOp::IsNot)
+            )
+            && !self.is_identity_operator(index)
+    }
+
+    /// basedpython: whether any operator of this comparison is a type test.
+    pub fn has_type_test(&self, source_type: crate::PySourceType) -> bool {
+        (0..self.ops.len()).any(|index| self.is_type_test(index, source_type))
+    }
+}
+
 impl ExprList {
     pub fn iter(&self) -> std::slice::Iter<'_, Expr> {
         self.elts.iter()
@@ -4552,7 +4629,10 @@ mod tests {
         assert_eq!(std::mem::size_of::<ExprBooleanLiteral>(), 16);
         assert_eq!(std::mem::size_of::<ExprBytesLiteral>(), 48);
         assert_eq!(std::mem::size_of::<ExprCall>(), 64);
-        assert_eq!(std::mem::size_of::<ExprCompare>(), 56);
+        // basedpython: a comparison carries which of its operators were written
+        // `===` / `!==`, boxed so this stays inside `ExprCall`'s width and
+        // `Expr` does not grow
+        assert_eq!(std::mem::size_of::<ExprCompare>(), 64);
         assert_eq!(std::mem::size_of::<ExprDict>(), 40);
         assert_eq!(std::mem::size_of::<ExprDictComp>(), 56);
         assert_eq!(std::mem::size_of::<ExprEllipsisLiteral>(), 12);

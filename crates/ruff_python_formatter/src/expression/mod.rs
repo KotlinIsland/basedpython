@@ -743,6 +743,7 @@ impl<'input> CanOmitOptionalParenthesesVisitor<'input> {
                 left: _,
                 ops,
                 comparators: _,
+                identity_ops: _,
             }) => {
                 self.update_max_precedence_with_count(
                     OperatorPrecedence::Comparator,

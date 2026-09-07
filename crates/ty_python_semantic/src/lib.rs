@@ -46,9 +46,7 @@ pub use ty_site_packages::{
     SitePackagesDiscoveryError, SitePackagesPaths, SysPrefixPathOrigin,
 };
 pub use types::conformance::declares_conformances;
-pub use types::conformance::{
-    ConformanceRegistration, ConformanceTest, WitnessDispatch, WitnessKind,
-};
+pub use types::conformance::{ConformanceRegistration, WitnessDispatch, WitnessKind};
 pub use types::conversions::{
     ConversionImport, ConversionInfo, ConversionRuntime, DISCARD_ADAPTER,
 };
@@ -64,6 +62,7 @@ pub use types::ide_support::{
 pub use types::implicit_names::implicit_names;
 pub use types::reified_infer::{
     ArgVariance, ErasedTargetReason, ErasedUnion, ParametricIsPlan, ProtocolMemberCheck,
+    TargetSpelling,
 };
 pub use types::static_resource::{ResourceError, render_as, resolve_static_resource};
 pub use types::template::finite_string_set;

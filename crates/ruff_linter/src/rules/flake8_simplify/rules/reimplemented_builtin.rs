@@ -155,6 +155,7 @@ pub(crate) fn convert_for_loop_to_any_all(checker: &Checker, stmt: &Stmt) {
                     comparators,
                     range: _,
                     node_index: _,
+                    identity_ops,
                 }) = &loop_.test
                 {
                     if let ([op], [comparator]) = (&**ops, &**comparators) {
@@ -174,6 +175,9 @@ pub(crate) fn convert_for_loop_to_any_all(checker: &Checker, stmt: &Stmt) {
                             left: left.clone(),
                             ops: Box::from([op]),
                             comparators: Box::from([comparator.clone()]),
+                            // the negation keeps the spelling: `is` becomes
+                            // `is not`, never the `!==` identity operator
+                            identity_ops: identity_ops.clone(),
                             range: TextRange::default(),
                             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                         };

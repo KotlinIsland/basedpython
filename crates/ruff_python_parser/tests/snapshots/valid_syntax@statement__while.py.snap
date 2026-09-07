@@ -75,6 +75,7 @@ Module(
                                                 },
                                             ),
                                         ],
+                                        identity_ops: None,
                                     },
                                 ),
                                 Name(

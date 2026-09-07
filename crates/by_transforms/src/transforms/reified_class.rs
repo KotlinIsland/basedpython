@@ -227,7 +227,7 @@ impl<'src> ReifiedClass<'src> {
     }
 
     fn specialize(&mut self, class: &StmtClassDef) {
-        let reads = reified_class_reads(self.source, PySourceType::BasedPython, class);
+        let reads = reified_class_reads(PySourceType::BasedPython, class);
         if reads.names.is_empty() {
             return;
         }

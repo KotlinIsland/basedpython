@@ -94,7 +94,7 @@ use crate::types::diagnostic::{
     report_bad_dunder_get_call, report_bad_import_call,
 };
 pub use crate::types::display::{DisplaySettings, SourceSpelling, TypeDetail, TypeDisplayDetails};
-pub use crate::types::enums::basedpython_is_keeps_identity;
+pub(crate) use crate::types::enums::basedpython_is_plain_value;
 pub(crate) use crate::types::enums::{EnumClassLiteral, EnumComplementType, enum_metadata};
 pub(crate) use crate::types::equality::{ComparisonSoundnessPolicy, equality_truthiness};
 use crate::types::function::{
@@ -700,7 +700,7 @@ pub enum TypingModule {
 impl TypingModule {
     /// Return the module for a `TypedDict` special form, including a union of the special forms
     /// exported by `typing` and `typing_extensions`.
-    pub(crate) fn from_typed_dict_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Self> {
+    fn from_typed_dict_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Self> {
         match ty {
             Type::SpecialForm(SpecialFormType::TypedDict(module)) => Some(module),
             Type::Union(union) => {
@@ -727,7 +727,7 @@ impl TypingModule {
         }
     }
 
-    pub(crate) const fn from_type_alias_class(class: KnownClass) -> Option<Self> {
+    const fn from_type_alias_class(class: KnownClass) -> Option<Self> {
         match class {
             KnownClass::TypeAliasType => Some(Self::Typing),
             KnownClass::ExtensionsTypeAliasType => Some(Self::TypingExtensions),

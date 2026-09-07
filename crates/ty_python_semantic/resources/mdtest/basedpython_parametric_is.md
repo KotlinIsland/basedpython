@@ -384,7 +384,7 @@ class C:
     a: bool
 
 def f(c: C) -> bool:
-    reveal_type(c is HasA[bool])  # revealed: bool
+    reveal_type(c is HasA[bool])  # revealed: True
     return c is HasA[bool]
 ```
 
@@ -839,4 +839,206 @@ def outer(data: list[int] | list[str]) -> str:
 
 print(outer(list[int]()))  # ints
 print(outer(list[str]()))  # strs
+```
+
+## the target is a type expression
+
+The right-hand side of a type test is a type expression, so it names its target the way an
+annotation does — and an unusable target is reported the same way too.
+
+```by
+import os
+
+def fn() -> None: ...
+
+def f(v: object) -> None:
+    # error: [invalid-type-form] "Module `os` is not valid in a type expression"
+    print(v is os)
+    # error: [invalid-type-form] "Function `fn` is not valid in a type expression"
+    print(v is fn)
+```
+
+A bare generic class is complete without arguments: the test asks whether the value is one, and the
+arguments are what the runtime cannot see either way.
+
+```by
+def f(v: object) -> None:
+    print(v is list)
+    print(v is dict)
+```
+
+A tuple names the tuple *type*, not the "any of these" that `isinstance` spells with one. Write a
+union for that.
+
+```by
+def f(v: int) -> None:
+    # error: [non-overlapping-type-test] "`int` and `(int, str)` are non-overlapping types, so this test is always `False`"
+    print(v is (int, str))
+    print(v is int | str)
+```
+
+## a target with no runtime form is rejected
+
+A test must *earn* its `True` — it narrows — so a target the runtime can only partly check is
+rejected rather than approximated. `Any` admits every value, and a test that can only answer `True`
+narrows nothing.
+
+```by
+from typing import Any
+
+def f(v: object) -> None:
+    # error: [erased-type-check] "`is Any` cannot be checked at runtime: `Any` admits every value, so there is nothing for the test to look for"
+    print(v is Any)
+```
+
+A callable type's parameter and return types are not recorded on the value, so a runtime check would
+assume the signature rather than test it. A bare `Callable` asks only what the runtime does record,
+and is the test `callable()` performs.
+
+```by
+from typing import Callable
+
+def f(v: object) -> None:
+    # error: [erased-type-check] "`is Callable[[], int]` cannot be checked at runtime: a callable's parameter and return types are not recorded on the value"
+    print(v is Callable[[], int])
+    print(v is Callable)
+```
+
+A `float` or `complex` literal names a type equality cannot decide — `0.0 == -0.0` and `nan != nan`
+— and `LiteralString` is a property of how a value was written rather than of the value.
+
+```by
+from typing import LiteralString
+
+def f(v: object) -> None:
+    # error: [erased-type-check] "`is 1.5` cannot be checked at runtime: equality does not decide membership of `1.5`"
+    print(v is 1.5)
+    # error: [erased-type-check] "`is LiteralString` cannot be checked at runtime: equality does not decide membership of `LiteralString`"
+    print(v is LiteralString)
+```
+
+An intersection has no single runtime form, and `issubclass` cannot be asked what a `type[Any]` is
+parameterized by.
+
+```by
+from typing import Any
+
+class A: ...
+
+class B: ...
+
+def f(v: object) -> None:
+    # error: [erased-type-check] "`is A & B` cannot be checked at runtime: an intersection has no single runtime form"
+    print(v is A & B)
+    # error: [erased-type-check] "`is type[Any]` cannot be checked at runtime: `issubclass` cannot take what `type[Any]` is parameterized by"
+    print(v is type[Any])
+```
+
+A `TypedDict`'s instances are plain dicts, so the test could only ask whether the value is a `dict`
+and assume every key.
+
+```by
+from typing import TypedDict
+
+class Movie(TypedDict):
+    title: str
+
+def f(v: dict[str, str]) -> None:
+    # error: [erased-type-check] "`is Movie` cannot be checked at runtime: a `TypedDict`'s instances are plain dicts"
+    print(v is Movie)
+```
+
+A protocol whose members all have a runtime spelling is checked against the value's own reified
+annotations, member by member — `isinstance` could not, since a conforming class need not be a
+subclass. One with a member the emitted python cannot name leaves nothing to check against.
+
+```by
+from typing import Callable, Protocol
+
+class Handler(Protocol):
+    on_event: Callable[[], int]
+
+def f(v: object) -> None:
+    # error: [erased-type-check] "`is Handler` cannot be checked at runtime: `Handler` has a member with no runtime spelling"
+    print(v is Handler)
+```
+
+## a `@runtime_checkable` protocol target is an ordinary instance test
+
+Decorating the protocol is the author's own statement that `isinstance` may take it, so the test is
+the check python itself performs — that the members are present.
+
+```by
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class HasName(Protocol):
+    name: str
+
+def f(v: object) -> None:
+    print(v is HasName)
+```
+
+## a literal target tests the value, not its class
+
+A literal names the type holding exactly the values equal to it, so the runtime check is that
+equality — with the class pinned, because python's `1 == True` would otherwise let a `bool` satisfy
+`Literal[1]`.
+
+```by
+from typing import Literal
+
+def f(v: object) -> None:
+    print(v is Literal[1])
+    print(v is Literal["a", "b"])
+```
+
+An alias to a union of literals is the same test, arm by arm — the source spells the union with one
+word, and `isinstance` could take neither that word nor the literals it stands for.
+
+```by
+from typing import Literal
+
+type Small = Literal[1, 2]
+
+def f(v: object) -> None:
+    print(v is Small)
+```
+
+## a `type[C]` target tests the class
+
+`type[C]` is one of the few parameterized types the runtime can check in full: the value must be a
+class, and a subclass of `C`.
+
+```by
+class A: ...
+
+def f(v: object) -> None:
+    print(v is type[A])
+```
+
+## a template literal type tests the string
+
+A template literal type is the set of strings its pattern produces, and a value is one of them or it
+is not — so a test against it is decided by the pattern.
+
+```by
+def f(s: str) -> None:
+    print(s is f"item-{int}")
+
+reveal_type("item-12" is f"item-{int}")  # revealed: True
+# error: [non-overlapping-type-test] "`"item-ab"` and `f"item-{int}"` are non-overlapping types, so this test is always `False`"
+reveal_type("item-ab" is f"item-{int}")  # revealed: False
+```
+
+## a union target the source spells with one word
+
+A PEP 695 alias names a whole union with a single identifier, which `isinstance` cannot take — the
+test is the disjunction of the arms all the same.
+
+```by
+type Key = int | str
+
+def f(v: object) -> None:
+    print(v is Key)
 ```

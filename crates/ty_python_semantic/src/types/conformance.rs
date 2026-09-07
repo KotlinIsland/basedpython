@@ -398,16 +398,6 @@ pub enum WitnessKind {
     Property,
 }
 
-/// how `x is <interface>` is answered at runtime once conformances are in play
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConformanceTest {
-    /// the requirement names, for a protocol target: with no registered
-    /// conformance for the value's class, answering the test means checking that
-    /// the value carries them. `None` for an abstract class, where `isinstance`
-    /// is already the whole answer
-    pub members: Option<Vec<String>>,
-}
-
 /// declaration-site validation for a conformance extension, run from the
 /// post-inference static-class checks alongside the ordinary extension checks
 pub(crate) fn validate_conformance_declaration<'db>(

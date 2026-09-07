@@ -20,12 +20,10 @@
 //! still compose and it is evaluated exactly once.
 //!
 //! How a *checked* form validates is decided by the **same engine that decides
-//! `x is T`** — [`build_predicate`], via [`TypeInfo::parametric_cast_plan`]. The
-//! two forms ask one question (does this value satisfy this specialization at
-//! runtime) and differ only in two parameters:
+//! `x is T`** — [`build_predicate`], via [`TypeInfo::parametric_is_plan`]. The
+//! two forms ask one question (does this value satisfy this type at runtime)
+//! over the same kind of expression, and differ in one parameter:
 //!
-//! - [`TargetPosition::Type`], because a cast's target is a *type* expression
-//!   while an `is`-rhs is a value expression, so ty infers it differently;
 //! - [`ProbeStrictness::Lenient`], because a cast is an assertion: arguments the
 //!   runtime cannot see are not held against the value, keeping
 //!   `[1, 2] cast! list[int]` legal. An `is`-test is strict — a `True` narrows,
@@ -52,9 +50,7 @@ use ruff_python_ast::{CastKind, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::parametric_is::{
-    PARAMETRIC_IS_RUNTIME, PROTOCOL_IS_RUNTIME, ProbeStrictness, TargetPosition, build_predicate,
-};
+use super::parametric_is::{PredicateRuntime, ProbeStrictness, build_predicate};
 use crate::type_info::{CastCheck, SoundnessCheck, TypeInfo};
 
 /// the lambda parameter a predicate-form cast binds its value to, so the value
@@ -151,9 +147,8 @@ struct CastLower<'a> {
     types: &'a dyn TypeInfo,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     used: BTreeSet<Helper>,
-    needs_parametric: bool,
-    needs_protocol: bool,
-    needs_conformance: bool,
+    /// the runtime helpers the emitted predicates call
+    runtimes: BTreeSet<PredicateRuntime>,
 }
 
 impl<'a> CastLower<'a> {
@@ -162,9 +157,7 @@ impl<'a> CastLower<'a> {
             types,
             edits: Vec::new(),
             used: BTreeSet::new(),
-            needs_parametric: false,
-            needs_protocol: false,
-            needs_conformance: false,
+            runtimes: BTreeSet::new(),
         }
     }
 
@@ -189,13 +182,10 @@ impl<'a> CastLower<'a> {
             &value_ref,
             value_arg,
             type_arg,
-            TargetPosition::Type,
             ProbeStrictness::Lenient,
         );
         if !needs.all_plain && !needs.erased {
-            self.needs_parametric |= needs.parametric_runtime;
-            self.needs_protocol |= needs.protocol_runtime;
-            self.needs_conformance |= needs.conformance_runtime;
+            self.runtimes.extend(PredicateRuntime::used(&needs));
             let mut fragments = vec![Fragment::Lit(format!("lambda {CAST_VALUE_PARAM}: "))];
             fragments.extend(predicate);
             return (helper.as_predicate(), fragments);
@@ -292,15 +282,8 @@ impl TypeAwarePass for CheckedCastPass {
         }
         // `_parametric_is` / `_by_protocol_is` must precede the predicates that
         // call them
-        if inner.needs_parametric {
-            ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
-        }
-        if inner.needs_protocol {
-            ctx.required_imports.push(PROTOCOL_IS_RUNTIME.to_owned());
-        }
-        if inner.needs_conformance {
-            ctx.required_imports
-                .push(super::conformance::WITNESS_RUNTIME.to_owned());
+        for runtime in inner.runtimes {
+            ctx.required_imports.push(runtime.source().to_owned());
         }
         for helper in &inner.used {
             ctx.required_imports.push(helper.runtime().to_owned());
@@ -371,9 +354,13 @@ mod tests {
         let out = check(
             "from typing import Literal\n\ndef f(a: object):\n    b = a cast! Literal[\"x\", \"y\"]\n",
         );
+        // each arm pins the class as well as the value: python's `1 == True`
+        // would otherwise let a `bool` satisfy `Literal[1]`
         assert!(
             out.contains(
-                "b = _checked_cast_pred(a, lambda _by_cast_value: _by_cast_value in (\"x\", \"y\"))"
+                "b = _checked_cast_pred(a, lambda _by_cast_value: \
+                 ((type(_by_cast_value) is str and _by_cast_value == \"x\") or \
+                 (type(_by_cast_value) is str and _by_cast_value == \"y\")))"
             ),
             "got:\n{out}"
         );
@@ -387,7 +374,9 @@ mod tests {
         );
         assert!(
             out.contains(
-                "b = _try_cast_pred(a, lambda _by_cast_value: _by_cast_value in (\"x\", \"y\"))"
+                "b = _try_cast_pred(a, lambda _by_cast_value: \
+                 ((type(_by_cast_value) is str and _by_cast_value == \"x\") or \
+                 (type(_by_cast_value) is str and _by_cast_value == \"y\")))"
             ),
             "got:\n{out}"
         );
@@ -400,7 +389,9 @@ mod tests {
         let out =
             check("from typing import Literal\n\ndef f(a: object):\n    b = a cast? Literal[7]\n");
         assert!(
-            out.contains("lambda _by_cast_value: _by_cast_value in (7,)"),
+            out.contains(
+                "lambda _by_cast_value: (type(_by_cast_value) is int and _by_cast_value == 7)"
+            ),
             "got:\n{out}"
         );
     }
@@ -411,7 +402,10 @@ mod tests {
             "from typing import Literal\n\ndef f(a: object):\n    b = a cast? Literal[True] | None\n",
         );
         assert!(
-            out.contains("lambda _by_cast_value: _by_cast_value in (True, None)"),
+            out.contains(
+                "lambda _by_cast_value: ((type(_by_cast_value) is bool and \
+                 _by_cast_value == True) or _by_cast_value is None)"
+            ),
             "got:\n{out}"
         );
     }
@@ -488,7 +482,7 @@ mod tests {
     fn union_arms_are_decomposed() {
         let out = check("def f(a: object):\n    b = a cast? list[int] | None\n");
         assert!(
-            out.contains("b = _try_cast_pred(a, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, list[int], (0,)) or _by_cast_value is None)"),
+            out.contains("b = _try_cast_pred(a, lambda _by_cast_value: (_parametric_is_lenient(_by_cast_value, list[int], (0,)) or _by_cast_value is None))"),
             "got:\n{out}"
         );
     }
@@ -684,8 +678,8 @@ mod tests {
         assert!(
             out.contains(
                 "b = _checked_cast_pred(a, lambda _by_cast_value: \
-                 _parametric_is_lenient(_by_cast_value, A[int], (0,)) \
-                 or isinstance(_by_cast_value, str))"
+                 (_parametric_is_lenient(_by_cast_value, A[int], (0,)) \
+                 or isinstance(_by_cast_value, str)))"
             ),
             "each arm lowered by its own kind: {out}"
         );

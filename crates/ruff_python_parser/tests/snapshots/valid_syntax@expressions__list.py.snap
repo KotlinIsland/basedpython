@@ -964,6 +964,7 @@ Module(
                                                 },
                                             ),
                                         ],
+                                        identity_ops: None,
                                     },
                                 ),
                             ],

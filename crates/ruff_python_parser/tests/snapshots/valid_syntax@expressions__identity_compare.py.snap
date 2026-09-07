@@ -8,20 +8,20 @@ input_file: crates/ruff_python_parser/resources/valid/expressions/identity_compa
 Module(
     ModModule {
         node_index: NodeIndex(None),
-        range: 0..119,
+        range: 0..410,
         body: [
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 44..51,
+                    range: 234..241,
                     value: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
-                            range: 44..51,
+                            range: 234..241,
                             left: Name(
                                 ExprName {
                                     node_index: NodeIndex(None),
-                                    range: 44..45,
+                                    range: 234..235,
                                     id: Name("x"),
                                     ctx: Load,
                                 },
@@ -33,12 +33,19 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 50..51,
+                                        range: 240..241,
                                         id: Name("y"),
                                         ctx: Load,
                                     },
                                 ),
                             ],
+                            identity_ops: Some(
+                                IdentityOperators {
+                                    ops: [
+                                        true,
+                                    ],
+                                },
+                            ),
                         },
                     ),
                 },
@@ -46,15 +53,15 @@ Module(
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 52..59,
+                    range: 242..249,
                     value: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
-                            range: 52..59,
+                            range: 242..249,
                             left: Name(
                                 ExprName {
                                     node_index: NodeIndex(None),
-                                    range: 52..53,
+                                    range: 242..243,
                                     id: Name("x"),
                                     ctx: Load,
                                 },
@@ -66,12 +73,19 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 58..59,
+                                        range: 248..249,
                                         id: Name("y"),
                                         ctx: Load,
                                     },
                                 ),
                             ],
+                            identity_ops: Some(
+                                IdentityOperators {
+                                    ops: [
+                                        true,
+                                    ],
+                                },
+                            ),
                         },
                     ),
                 },
@@ -79,15 +93,15 @@ Module(
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 94..110,
+                    range: 388..401,
                     value: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
-                            range: 94..110,
+                            range: 388..401,
                             left: Name(
                                 ExprName {
                                     node_index: NodeIndex(None),
-                                    range: 94..95,
+                                    range: 388..389,
                                     id: Name("a"),
                                     ctx: Load,
                                 },
@@ -100,7 +114,7 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 100..101,
+                                        range: 394..395,
                                         id: Name("b"),
                                         ctx: Load,
                                     },
@@ -108,12 +122,20 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 109..110,
+                                        range: 400..401,
                                         id: Name("c"),
                                         ctx: Load,
                                     },
                                 ),
                             ],
+                            identity_ops: Some(
+                                IdentityOperators {
+                                    ops: [
+                                        true,
+                                        true,
+                                    ],
+                                },
+                            ),
                         },
                     ),
                 },
@@ -121,15 +143,15 @@ Module(
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 111..118,
+                    range: 402..409,
                     value: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
-                            range: 111..118,
+                            range: 402..409,
                             left: Name(
                                 ExprName {
                                     node_index: NodeIndex(None),
-                                    range: 111..112,
+                                    range: 402..403,
                                     id: Name("a"),
                                     ctx: Load,
                                 },
@@ -141,12 +163,19 @@ Module(
                                 Name(
                                     ExprName {
                                         node_index: NodeIndex(None),
-                                        range: 117..118,
+                                        range: 408..409,
                                         id: Name("b"),
                                         ctx: Load,
                                     },
                                 ),
                             ],
+                            identity_ops: Some(
+                                IdentityOperators {
+                                    ops: [
+                                        true,
+                                    ],
+                                },
+                            ),
                         },
                     ),
                 },

@@ -92,6 +92,7 @@ pub(crate) fn not_tests(checker: &Checker, unary_op: &ast::ExprUnaryOp) {
         comparators,
         range: _,
         node_index: _,
+        identity_ops,
     }) = unary_op.operand.as_ref()
     else {
         return;
@@ -106,6 +107,7 @@ pub(crate) fn not_tests(checker: &Checker, unary_op: &ast::ExprUnaryOp) {
                         left,
                         &[CmpOp::NotIn],
                         comparators,
+                        identity_ops.as_deref(),
                         unary_op.into(),
                         checker.tokens(),
                         checker.source(),
@@ -124,6 +126,7 @@ pub(crate) fn not_tests(checker: &Checker, unary_op: &ast::ExprUnaryOp) {
                         left,
                         &[CmpOp::IsNot],
                         comparators,
+                        identity_ops.as_deref(),
                         unary_op.into(),
                         checker.tokens(),
                         checker.source(),

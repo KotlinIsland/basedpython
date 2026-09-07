@@ -250,6 +250,7 @@ pub(crate) fn needless_bool(checker: &Checker, stmt: &Stmt) {
                     ops,
                     left,
                     comparators,
+                    identity_ops,
                     ..
                 }) if matches!(
                     ops.as_ref(),
@@ -269,6 +270,10 @@ pub(crate) fn needless_bool(checker: &Checker, stmt: &Stmt) {
                         ops: Box::new([op.negate()]),
                         left: left.clone(),
                         comparators: Box::new([right.clone()]),
+                        // negating `is` gives `is not`, which is still the
+                        // basedpython type test the source spelled; dropping the
+                        // flag would rewrite it to the `!==` identity operator
+                        identity_ops: identity_ops.clone(),
                         range: TextRange::default(),
                         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     }))

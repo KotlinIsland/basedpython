@@ -212,6 +212,7 @@ pub(crate) fn repeated_equality_comparison(checker: &Checker, bool_op: &ast::Exp
                                 BoolOp::And => Box::from([CmpOp::NotIn]),
                             },
                             comparators: Box::from([comparator]),
+                            identity_ops: None,
                             range: bool_op.range(),
                             node_index: AtomicNodeIndex::NONE,
                         })))

@@ -49,6 +49,7 @@ expression: suite
                                                                 },
                                                             ),
                                                         ],
+                                                        identity_ops: None,
                                                     },
                                                 ),
                                                 debug_text: None,

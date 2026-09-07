@@ -2766,6 +2766,7 @@ pub fn generate_comparison(
     left: &Expr,
     ops: &[CmpOp],
     comparators: &[Expr],
+    identity_ops: Option<&crate::IdentityOperators>,
     parent: AnyNodeRef,
     tokens: &Tokens,
     source: &str,
@@ -2779,7 +2780,14 @@ pub fn generate_comparison(
         &source[parenthesized_range(left.into(), parent, tokens).unwrap_or(left.range())],
     );
 
-    for (op, comparator) in ops.iter().zip(comparators) {
+    for (index, (op, comparator)) in ops.iter().zip(comparators).enumerate() {
+        // basedpython writes python's identity comparison `===` / `!==` and
+        // gives the `is` keyword to a type test. printing `is` for an operator
+        // the source wrote `===` would rewrite one into the other
+        let identity = identity_ops
+            .and_then(|identity| identity.ops.get(index))
+            .copied()
+            .unwrap_or(false);
         // Add the operator.
         contents.push_str(match op {
             CmpOp::Eq => " == ",
@@ -2790,6 +2798,8 @@ pub fn generate_comparison(
             CmpOp::GtE => " >= ",
             CmpOp::In => " in ",
             CmpOp::NotIn => " not in ",
+            CmpOp::Is if identity => " === ",
+            CmpOp::IsNot if identity => " !== ",
             CmpOp::Is => " is ",
             CmpOp::IsNot => " is not ",
         });

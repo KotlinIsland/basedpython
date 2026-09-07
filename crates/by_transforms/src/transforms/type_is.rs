@@ -8,11 +8,10 @@
 //! identical to PEP 742 `TypeIs[T]`; the parameter name is lost in
 //! lowering since `TypeIs` doesn't carry it.
 //!
-//! traversal is delegated to [`type_expr_walker`] (with `types = None` —
-//! value-position `a is T` is *not* a type expression here; it's the
-//! basedpython surface form for `isinstance(a, T)`, owned by
-//! `identity_swap`). running before `identity_swap` in the `AstPass` list so
-//! type-position rewrites win the first-wins overlap dedup
+//! traversal is delegated to [`type_expr_walker`] (with `types = None`): the
+//! `a is T` written in a *return guard* is what this rewrites, and the same
+//! pair written in a body is a type test that [`parametric_is`] lowers. this
+//! pass claims the guard first, so the two never rewrite the same span
 
 use ruff_python_ast::helpers::{ReturnGuardForm, return_guards};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};

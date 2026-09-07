@@ -17,7 +17,7 @@
 
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, CmpOp, Expr, PySourceType, Stmt};
+use ruff_python_ast::{self as ast, Expr, PySourceType, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -30,7 +30,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// `ParamSpec`, a parameter list with no runtime object to bind — so
 /// `source_type` decides whether it is a candidate
 pub fn reified_type_param_names(
-    source: &str,
     source_type: PySourceType,
     function: &ast::StmtFunctionDef,
 ) -> Vec<Name> {
@@ -68,7 +67,7 @@ pub fn reified_type_param_names(
     shadow_bound_names(&function.body, &mut active);
     let param_typevars = param_annotation_typevars(&function.parameters, &active);
     let mut finder = ValueUseFinder {
-        source,
+        source_type,
         active,
         param_typevars,
         found: Vec::new(),
@@ -147,11 +146,10 @@ pub enum UnansweredReason {
 /// a `**Kwargs` keyword pack is never a candidate. a class writes its
 /// specialization as a subscript, and a subscript takes no keyword arguments,
 /// so there is no way to supply one
-pub fn reified_class_reads<'ast>(
-    source: &str,
+pub fn reified_class_reads(
     source_type: PySourceType,
-    class: &'ast ast::StmtClassDef,
-) -> ReifiedClassReads<'ast> {
+    class: &ast::StmtClassDef,
+) -> ReifiedClassReads<'_> {
     let Some(type_params) = class.type_params.as_deref() else {
         return ReifiedClassReads::default();
     };
@@ -199,7 +197,7 @@ pub fn reified_class_reads<'ast>(
     // wherever the body writes the `def` — guarded by a version check, say —
     // while a read in the class body itself, in a method's header, or inside a
     // class nested in the class body has no method around it
-    let mut finder = ValueUseFinder::new(source, active);
+    let mut finder = ValueUseFinder::new(source_type, active);
     for stmt in &class.body {
         finder.visit_stmt(stmt);
     }
@@ -347,18 +345,16 @@ fn body_span(function: &ast::StmtFunctionDef) -> Option<TextRange> {
 
 /// names of the class's type parameters that are reified, in declaration order
 pub(crate) fn reified_class_type_param_names(
-    source: &str,
     source_type: PySourceType,
     class: &ast::StmtClassDef,
 ) -> Vec<Name> {
-    reified_class_reads(source, source_type, class).names
+    reified_class_reads(source_type, class).names
 }
 
 /// names of the class's type parameters that are reified *only* because the
 /// class reads them in a value position, in declaration order. this is what an
 /// editor hints, where the keyword would be written
 pub fn inferred_reified_class_type_param_names(
-    source: &str,
     source_type: PySourceType,
     class: &ast::StmtClassDef,
 ) -> Vec<Name> {
@@ -370,7 +366,7 @@ pub fn inferred_reified_class_type_param_names(
         .filter(|param| param.is_reified())
         .map(|param| param.name().id.as_str())
         .collect();
-    let mut names = reified_class_type_param_names(source, source_type, class);
+    let mut names = reified_class_type_param_names(source_type, class);
     names.retain(|name| !declared.contains(name.as_str()));
     names
 }
@@ -419,7 +415,6 @@ fn own_bindings(function: &ast::StmtFunctionDef) -> Vec<&str> {
 /// [`reified_type_param_names`] finds that does not already say so itself.
 /// this is what an editor hints, where the keyword would be written
 pub fn inferred_reified_type_param_names(
-    source: &str,
     source_type: PySourceType,
     function: &ast::StmtFunctionDef,
 ) -> Vec<Name> {
@@ -431,22 +426,9 @@ pub fn inferred_reified_type_param_names(
         .filter(|param| param.is_reified())
         .map(|param| param.name().id.as_str())
         .collect();
-    let mut names = reified_type_param_names(source, source_type, function);
+    let mut names = reified_type_param_names(source_type, function);
     names.retain(|name| !declared.contains(name.as_str()));
     names
-}
-
-/// whether the `is` / `is not` between two compare operands is the keyword
-/// form (isinstance semantics) rather than the `===` / `!==` identity
-/// operators, which the parser flattens to the same ast
-pub fn is_keyword_comparison(source: &str, op: CmpOp, lhs: &Expr, rhs: &Expr) -> bool {
-    let between = &source[usize::from(lhs.range().end())..usize::from(rhs.range().start())];
-    let trimmed = between.trim();
-    match op {
-        CmpOp::Is => trimmed == "is",
-        CmpOp::IsNot => !trimmed.starts_with("!=="),
-        _ => false,
-    }
 }
 
 /// parameter name → the still-active type-param names its annotation
@@ -557,7 +539,7 @@ impl<'a> Visitor<'a> for StoredNames<'a> {
 }
 
 struct ValueUseFinder<'a> {
-    source: &'a str,
+    source_type: PySourceType,
     active: FxHashSet<&'a str>,
     /// parameters of the innermost enclosing def whose annotations mention
     /// active type params — parametric `is` tests on them reify those params
@@ -570,9 +552,9 @@ struct ValueUseFinder<'a> {
 impl<'a> ValueUseFinder<'a> {
     /// a finder for a region that binds no parameters of its own, so no
     /// annotation can carry a parametric type test into it
-    fn new(source: &'a str, active: FxHashSet<&'a str>) -> Self {
+    fn new(source_type: PySourceType, active: FxHashSet<&'a str>) -> Self {
         Self {
-            source,
+            source_type,
             active,
             param_typevars: FxHashMap::default(),
             found: Vec::new(),
@@ -602,11 +584,8 @@ impl<'a> ValueUseFinder<'a> {
     /// reified cell against the target's type arguments
     fn check_parametric_tests(&mut self, compare: &'a ast::ExprCompare) {
         let mut lhs: &Expr = &compare.left;
-        for (op, rhs) in compare.ops.iter().zip(&compare.comparators) {
-            if matches!(op, CmpOp::Is | CmpOp::IsNot)
-                && matches!(rhs, Expr::Subscript(_))
-                && is_keyword_comparison(self.source, *op, lhs, rhs)
-            {
+        for (index, rhs) in compare.comparators.iter().enumerate() {
+            if matches!(rhs, Expr::Subscript(_)) && compare.is_type_test(index, self.source_type) {
                 self.reify_tested_param(lhs);
             }
             lhs = rhs;

@@ -95,6 +95,8 @@ pub(crate) fn single_item_membership_test(
                 left,
                 &[membership_test.replacement_op()],
                 std::slice::from_ref(item),
+                // only `in` / `not in`, which have one spelling
+                None,
                 expr.into(),
                 checker.tokens(),
                 checker.source(),

@@ -72,6 +72,10 @@ pub(super) fn replace_with_identity_check(
         left: left.clone().into(),
         ops: [op].into(),
         comparators: [ast::ExprNoneLiteral::default().into()].into(),
+        // basedpython writes this test as `is None`, whose target is the type
+        // `None`: the same runtime check, and the spelling a reader expects.
+        // recording no `===` is what prints it that way in both languages
+        identity_ops: None,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     });

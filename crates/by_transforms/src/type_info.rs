@@ -167,22 +167,16 @@ pub(crate) trait TypeInfo {
         rhs: &Expr,
     ) -> Option<ty_python_semantic::ParametricIsPlan>;
 
-    /// [`Self::parametric_is_plan`] for a checked cast's `(value, target)` pair.
-    /// the same classification engine backs both; only the target's inference
-    /// position differs (a cast target is a type expression)
-    fn parametric_cast_plan(
-        &self,
-        value: &Expr,
-        target: &Expr,
-    ) -> Option<ty_python_semantic::ParametricIsPlan>;
-
-    /// whether an `is`/`is not` comparison whose rhs is `expr` keeps python
-    /// identity semantics instead of lowering to `isinstance`: true when
-    /// `expr` resolves to a plain *value* — an enum member (`Color.RED`, a
-    /// based-enum unit variant like `Shape.Point`), another literal, or an
-    /// instance of a concrete non-type class — which `isinstance` would
-    /// reject as its classinfo argument at runtime
-    fn is_keeps_identity(&self, expr: &Expr) -> bool;
+    /// whether the *value* `expr` evaluates to is a plain value rather than a
+    /// class — an enum member, a literal, an instance of a concrete non-type
+    /// class. `isinstance` would reject such a value as its classinfo argument,
+    /// so the runtime test for it is identity.
+    ///
+    /// Only consulted for a target the checker could not read as a type at all.
+    /// The enum lowering rewrites a unit variant into a singleton instance
+    /// before this pass runs, so `s is Shape.Point` reaches here naming
+    /// something that is a type in the source and a value in what is emitted
+    fn is_plain_value(&self, expr: &Expr) -> bool;
 
     /// whether `expr` is a PEP 604 union standing where the runtime will
     /// evaluate it — `isinstance(x, int | str)`, a `cast` target, an alias
@@ -234,11 +228,6 @@ pub(crate) trait TypeInfo {
         &self,
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::WitnessDispatch>;
-
-    /// how `x is <target>` is answered when `target` is an interface something
-    /// visibly conforms to. `None` when the ordinary `isinstance` lowering is
-    /// still right
-    fn conformance_test(&self, target: &Expr) -> Option<ty_python_semantic::ConformanceTest>;
 
     /// the conversions a statement's value needs: an annotated assignment, an
     /// attribute assignment, or a `return`. one wrap for a value that converts
@@ -704,22 +693,8 @@ impl TypeInfo for SemanticModel<'_> {
         SemanticModel::parametric_is_plan(self, lhs, rhs)
     }
 
-    fn parametric_cast_plan(
-        &self,
-        value: &Expr,
-        target: &Expr,
-    ) -> Option<ty_python_semantic::ParametricIsPlan> {
-        SemanticModel::parametric_cast_plan(self, value, target)
-    }
-
-    fn is_keeps_identity(&self, expr: &Expr) -> bool {
-        expr.inferred_type(self).is_some_and(|ty| {
-            ty_python_semantic::types::basedpython_is_keeps_identity(
-                self.db(),
-                &self.program_environment(),
-                ty,
-            )
-        })
+    fn is_plain_value(&self, expr: &Expr) -> bool {
+        SemanticModel::denotes_plain_value(self, expr)
     }
 
     fn is_runtime_union(&self, expr: &Expr) -> bool {
@@ -771,10 +746,6 @@ impl TypeInfo for SemanticModel<'_> {
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::WitnessDispatch> {
         SemanticModel::witness_dispatch(self, attribute)
-    }
-
-    fn conformance_test(&self, target: &Expr) -> Option<ty_python_semantic::ConformanceTest> {
-        SemanticModel::conformance_test(self, target)
     }
 
     fn statement_conversions(

@@ -209,9 +209,10 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Shape:
-                    pass
+                    Circle: ClassVar[type[_Shape_Circle]]
+                    Empty: ClassVar[_Shape_Empty]
 
                 @final
                 @dataclass(frozen=True, slots=True)
@@ -308,9 +309,10 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 from dataclasses import dataclass
-                from typing import final
+                from typing import final, ClassVar
                 class Shape:
-                    pass
+                    Circle: ClassVar[type[_Shape_Circle]]
+                    Empty: ClassVar[_Shape_Empty]
 
                 @final
                 @dataclass(frozen=True, slots=True)

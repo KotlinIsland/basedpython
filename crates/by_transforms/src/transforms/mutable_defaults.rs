@@ -88,6 +88,8 @@ struct MutableDefaults<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
     edits: Vec<(TextRange, Vec<Fragment>)>,
+    /// the `_MISSING` substitutions, whose defaults the guards re-evaluate
+    relocating: Vec<(TextRange, Vec<Fragment>)>,
     /// the guard suites, anchored at the body statement they precede
     guards: Vec<(TextSize, Vec<Fragment>)>,
     used: bool,
@@ -122,11 +124,21 @@ fn written_default(pw: &ParameterWithDefault, value: &str) -> (TextRange, Vec<Fr
 /// The signature edits and body guards `f`'s parameter list calls for: the default an override
 /// inherits from the method it overrides, a `_MISSING` sentinel wherever a default would
 /// otherwise be shared between calls, and one wherever python's own parameter order is relaxed.
-pub(crate) fn parameter_guards(
-    f: &StmtFunctionDef,
-    types: &dyn TypeInfo,
-) -> (Vec<(TextRange, Vec<Fragment>)>, Vec<Guard>) {
+pub(crate) struct ParameterGuards {
+    /// the `_MISSING` left where a written default stood. *relocating*: the
+    /// guard evaluates the default's own source instead, so at this span this
+    /// edit leads every lowering written inside the default
+    pub(crate) sentinels: Vec<(TextRange, Vec<Fragment>)>,
+    /// a default written into the signature that the source did not write — an
+    /// inherited one, or the `_MISSING` a relaxed-order parameter needs. these
+    /// relocate nothing; they add text at the end of a parameter
+    pub(crate) written: Vec<(TextRange, Vec<Fragment>)>,
+    pub(crate) guards: Vec<Guard>,
+}
+
+pub(crate) fn parameter_guards(f: &StmtFunctionDef, types: &dyn TypeInfo) -> ParameterGuards {
     let mut sentinels = Vec::new();
+    let mut written = Vec::new();
     let mut guards = Vec::new();
     let params = f.parameters.as_ref();
     // positional parameters: swap non-scalar defaults for the sentinel, and give
@@ -150,10 +162,10 @@ pub(crate) fn parameter_guards(
             // the parameters after it "after a default", exactly as a written one would
             None if let Some(value) = types.inherited_parameter_default(pw) => {
                 seen_default = true;
-                sentinels.push(written_default(pw, &value));
+                written.push(written_default(pw, &value));
             }
             None if seen_default => {
-                sentinels.push(written_default(pw, "_MISSING"));
+                written.push(written_default(pw, "_MISSING"));
                 guards.push(Guard::Required {
                     name: pw.parameter.name.id.to_string(),
                     function: f.name.id.to_string(),
@@ -174,12 +186,16 @@ pub(crate) fn parameter_guards(
             Some(_) => {}
             None => {
                 if let Some(value) = types.inherited_parameter_default(pw) {
-                    sentinels.push(written_default(pw, &value));
+                    written.push(written_default(pw, &value));
                 }
             }
         }
     }
-    (sentinels, guards)
+    ParameterGuards {
+        sentinels,
+        written,
+        guards,
+    }
 }
 
 /// Whether the *callee's* body could evaluate `default` at all.
@@ -237,8 +253,13 @@ impl MutableDefaults<'_> {
         if is_bodyless_init_shorthand(f) {
             return;
         }
-        let (sentinels, guards) = parameter_guards(f, self.types);
-        self.edits.extend(sentinels);
+        let ParameterGuards {
+            sentinels,
+            written,
+            guards,
+        } = parameter_guards(f, self.types);
+        self.relocating.extend(sentinels);
+        self.edits.extend(written);
         if guards.is_empty() {
             return;
         }
@@ -281,6 +302,7 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
             source: self.source,
             types,
             edits: Vec::new(),
+            relocating: Vec::new(),
             guards: Vec::new(),
             used: false,
             unanchored: Vec::new(),
@@ -303,6 +325,7 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
             ctx.required_imports.push("_MISSING = object()".to_owned());
         }
         ctx.template_edits.extend(inner.edits);
+        ctx.relocating_edits.extend(inner.relocating);
         ctx.statement_inserts.extend(inner.guards);
     }
 }
@@ -880,7 +903,8 @@ mod tests {
     fn default_lowerings_survive() {
         // the default is re-emitted in the body through a `Src` passthrough, so
         // the lowerings written inside it land in the guard rather than being
-        // dropped with the signature they came from
+        // dropped with the signature they came from. `1 is int` is a type test
+        // the checker settles, so what lands is the constant it settled on
         check(
             indoc! {"
                 def f(x = [1 is int]):
@@ -890,7 +914,7 @@ mod tests {
                 _MISSING = object()
                 def f(x = _MISSING):
                     if x is _MISSING:
-                        x = [isinstance(1, int)]
+                        x = [True]
                     return x
             "},
         );
@@ -899,8 +923,9 @@ mod tests {
     #[test]
     fn default_lowering_spanning_the_whole_default_survives() {
         // the sentinel and the `is` lowering claim the *same* span. the sentinel
-        // substitutes it and the lowering rewrites it, so the substitution
-        // decides the signature and the rewrite materializes in the guard
+        // relocates the default, so it decides the signature and the lowering
+        // materializes in the guard — which holds even here, where the lowering
+        // settles to a constant and so replaces the span just as flatly
         check(
             indoc! {"
                 def f(x = 1 is int):
@@ -910,7 +935,7 @@ mod tests {
                 _MISSING = object()
                 def f(x = _MISSING):
                     if x is _MISSING:
-                        x = isinstance(1, int)
+                        x = True
                     return x
             "},
         );

@@ -92,7 +92,7 @@ pub(crate) enum HoleShape {
 }
 
 impl HoleShape {
-    fn of<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, hole: Type<'db>) -> Self {
+    pub(crate) fn of<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, hole: Type<'db>) -> Self {
         let Some(class) = hole.nominal_class(db, env) else {
             return Self::Anything;
         };
@@ -122,6 +122,22 @@ impl HoleShape {
     /// whether the empty string is one of this shape's strings
     fn admits_empty(self) -> bool {
         self == Self::Anything
+    }
+
+    /// the regular expression matching exactly this shape's strings, or `None`
+    /// when it has no spelling python's `re` can evaluate.
+    ///
+    /// A grapheme is a cluster of code points rather than one, and `re` has no
+    /// way to say that, so a pattern with a grapheme hole has no runtime test —
+    /// which is why the type test rejects one rather than approximating it
+    pub(crate) fn regex(self) -> Option<&'static str> {
+        match self {
+            Self::Anything => Some("(?s:.*)"),
+            // exactly the renderings `is_int_rendering` accepts — `str(-0)` is
+            // `"0"`, so the sign belongs to the non-zero alternative alone
+            Self::Int => Some("(?:0|-?[1-9][0-9]*)"),
+            Self::Grapheme => None,
+        }
     }
 }
 
