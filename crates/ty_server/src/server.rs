@@ -10,7 +10,7 @@ use lsp_types::{
     ClientCapabilities, InitializeParams, MessageType, Uri, WorkspaceFolders,
     WorkspaceFoldersInitializeParams,
 };
-use ruff_db::system::System;
+use ruff_db::system::{System, SystemPathBuf};
 use std::num::NonZeroUsize;
 use std::panic::{PanicHookInfo, RefUnwindSafe};
 use std::sync::Arc;
@@ -21,6 +21,7 @@ mod main_loop;
 mod schedule;
 mod script_progress;
 
+use crate::project_server::Listener as ProjectServerListener;
 use crate::session::client::Client;
 pub(crate) use api::Error;
 pub(crate) use api::{
@@ -39,6 +40,12 @@ pub struct Server {
     main_loop_receiver: MainLoopReceiver,
     main_loop_sender: MainLoopSender,
     session: Session,
+
+    /// The side channel `by` command lines reach this session on.
+    ///
+    /// `None` when it is switched off or failed to start. Held rather than used: dropping
+    /// it takes the server's discovery record off disk.
+    _project_server_listener: Option<ProjectServerListener>,
 }
 
 impl Server {
@@ -47,6 +54,7 @@ impl Server {
         connection: Connection,
         native_system: Arc<dyn System + 'static + Send + Sync + RefUnwindSafe>,
         in_test: bool,
+        project_server_directory: Option<SystemPathBuf>,
     ) -> crate::Result<Self> {
         let (id, init_value) = connection.initialize_start()?;
 
@@ -157,11 +165,28 @@ impl Server {
                 )
             })?;
 
+        let project_server_listener = project_server_directory.and_then(|directory| {
+            ProjectServerListener::spawn(
+                main_loop_sender.clone(),
+                &directory,
+                workspace_roots(&workspace_urls),
+                version,
+            )
+            // not being reachable from a command line is not a reason to fail to start: it
+            // costs `by check` the warm answer, which it was never entitled to
+            .inspect_err(|error| {
+                tracing::warn!("Failed to listen for command-line requests: {error}");
+            })
+            .ok()
+            .flatten()
+        });
+
         Ok(Self {
             connection,
             worker_threads,
             main_loop_receiver,
             main_loop_sender,
+            _project_server_listener: project_server_listener,
             session: Session::new(
                 resolved_client_capabilities,
                 position_encoding,
@@ -198,6 +223,17 @@ impl Server {
             })
             .unwrap_or_default()
     }
+}
+
+/// The workspace URIs as paths, dropping any that does not name one.
+///
+/// Only for the discovery record, which is a filter on which servers a command line bothers
+/// to ask. A URI that is not a file path names nothing a command line could be running in.
+fn workspace_roots(workspace_urls: &[Uri]) -> Vec<SystemPathBuf> {
+    workspace_urls
+        .iter()
+        .filter_map(|uri| SystemPathBuf::from_path_buf(uri.to_file_path().ok()?).ok())
+        .collect()
 }
 
 type PanicHook = Box<dyn Fn(&PanicHookInfo<'_>) + 'static + Sync + Send>;

@@ -15,6 +15,7 @@ mod capabilities;
 mod db;
 mod document;
 mod logging;
+pub mod project_server;
 mod server;
 mod session;
 mod system;
@@ -51,9 +52,24 @@ pub fn run_server() -> anyhow::Result<()> {
     // This is to complement the `LSPSystem` if the document is not available in the index.
     let fallback_system = Arc::new(OsSystem::new(cwd));
 
-    let server_result = Server::new(worker_threads, connection, fallback_system, false)
-        .context("Failed to start server")?
-        .run();
+    // a server publishes itself for `by` command lines to find, unless the user has said
+    // not to. see `project_server`
+    let project_server_directory = if project_server::disabled(&*fallback_system) {
+        tracing::debug!("Not publishing this server: disabled by the environment");
+        None
+    } else {
+        project_server::discovery::default_directory(&*fallback_system)
+    };
+
+    let server_result = Server::new(
+        worker_threads,
+        connection,
+        fallback_system,
+        false,
+        project_server_directory,
+    )
+    .context("Failed to start server")?
+    .run();
 
     let io_result = io_threads.join();
 

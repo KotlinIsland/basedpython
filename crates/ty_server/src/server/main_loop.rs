@@ -1,4 +1,6 @@
-use crate::server::schedule::Scheduler;
+use crate::Session;
+use crate::project_server;
+use crate::server::schedule::{BackgroundSchedule, Scheduler, Task};
 use crate::server::{Server, api};
 use crate::session::client::{Client, ClientResponseHandler};
 use crate::session::{ClientOptions, SuspendedWorkspaceDiagnosticRequest};
@@ -7,6 +9,16 @@ use lsp_server::Message;
 use lsp_types::Notification;
 use lsp_types::Uri;
 use ruff_db::system::SystemPathBuf;
+use std::panic::AssertUnwindSafe;
+use ty_project::watch::ChangeEvent;
+
+/// How many fresh snapshots a command-line request gets before it is told to check for
+/// itself.
+///
+/// Every retry is a check that ran and was cancelled, so this is bounded by patience rather
+/// than by correctness: a session being typed into cancels checks faster than they finish,
+/// and the caller has a cold path that always works.
+const RETRY_LIMIT: u8 = 3;
 
 pub(crate) type ConnectionSender = crossbeam::channel::Sender<Message>;
 pub(crate) type MainLoopSender = crossbeam::channel::Sender<Event>;
@@ -165,6 +177,9 @@ impl Server {
                         // self.try_register_file_watcher(&client);
                     }
                 },
+                Event::ProjectServer(incoming) => {
+                    self.answer_project_server_request(incoming, &mut scheduler, client);
+                }
                 Event::PollUvEnvironments { project_root } => {
                     self.session.poll_uv_sync(&client, &project_root);
                 }
@@ -200,9 +215,84 @@ impl Server {
         uv_sync.select(&self.connection.receiver, &self.main_loop_receiver)
     }
 
+    /// Schedules a `by` command line's request against a snapshot of this session.
+    ///
+    /// Twice, in the ordinary case. The first pass decides only whether this session may
+    /// answer at all, and the second produces the answer — with a re-read of the file system
+    /// in between, on this thread, because that is what makes the answer the caller's own:
+    /// this session's picture of the file system is whatever the editor's watcher reported,
+    /// and the caller is a process that can see the disk directly, so anything the watcher
+    /// missed — a `git checkout` most of all — would otherwise be answered out of a tree that
+    /// is no longer there.
+    ///
+    /// The order is the point. Re-reading walks every project in the session and makes the
+    /// editor re-pull its diagnostics, which is far too much to spend on a request that was
+    /// going to be refused for a configuration the two never shared.
+    fn answer_project_server_request(
+        &mut self,
+        mut incoming: Box<project_server::Incoming>,
+        scheduler: &mut Scheduler,
+        client: Client,
+    ) {
+        if incoming.rescanned {
+            api::changes::apply(&mut self.session, &client, &[ChangeEvent::Rescan]);
+        }
+
+        let sender = self.main_loop_sender.clone();
+        let task = Task::background(BackgroundSchedule::Worker, move |session: &Session| {
+            // the snapshot is not read after an unwind: `project_server::run` catches the
+            // panic and builds its answer without it
+            let snapshot = AssertUnwindSafe(session.snapshot_session());
+
+            Box::new(move |_client: &Client| {
+                let _span = tracing::debug_span!("project server request").entered();
+                let snapshot = snapshot.0;
+                let outcome = project_server::run(&snapshot, &incoming.payload, incoming.rescanned);
+
+                let response = match outcome {
+                    // back to the main loop to be re-read and then answered. the flag is set
+                    // here rather than there so that the pass which set it is the pass that
+                    // agreed the request was worth it
+                    project_server::Outcome::NeedsRescan => {
+                        incoming.rescanned = true;
+                        requeue(&sender, incoming);
+                        return;
+                    }
+                    project_server::Outcome::Answered(response) => response,
+                };
+
+                if project_server::is_retryable(&response) && incoming.attempts < RETRY_LIMIT {
+                    incoming.attempts += 1;
+                    requeue(&sender, incoming);
+                    return;
+                }
+
+                let token = incoming.token.clone();
+                if let Err(error) =
+                    project_server::respond(&mut incoming.connection, &token, &response)
+                {
+                    tracing::debug!("Failed to answer a command-line request: {error}");
+                }
+            })
+        });
+
+        scheduler.dispatch(task, &mut self.session, client);
+    }
+
     fn initialize(&mut self, client: &Client) {
         self.session
             .request_uninitialized_workspace_folder_configurations(client);
+    }
+}
+
+/// Sends a request back to the main loop for another pass.
+///
+/// A failure means the main loop is gone and the process is on its way out; the caller sees
+/// the connection close and checks for itself, which is the same thing every other failure
+/// here leads to.
+fn requeue(sender: &MainLoopSender, incoming: Box<project_server::Incoming>) {
+    if sender.send(Event::ProjectServer(incoming)).is_err() {
+        tracing::debug!("Dropping a command-line request: the main loop is gone");
     }
 }
 
@@ -234,6 +324,9 @@ pub(crate) enum Event {
     Message(lsp_server::Message),
 
     Action(Action),
+
+    /// A request from a `by` command line, over the server's side channel.
+    ProjectServer(Box<project_server::Incoming>),
 
     PollUvEnvironments {
         project_root: SystemPathBuf,

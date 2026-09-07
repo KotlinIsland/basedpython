@@ -32,6 +32,7 @@ ty_ide = { workspace = true }
 ty_module_resolver = { workspace = true }
 ty_project = { workspace = true }
 ty_python_semantic = { workspace = true }
+ty_static = { workspace = true }
 
 anyhow = { workspace = true }
 bitflags = { workspace = true }
@@ -39,6 +40,7 @@ crossbeam = { workspace = true }
 jod-thread = { workspace = true }
 lsp-server = { workspace = true }
 lsp-types = { workspace = true }
+rand = { workspace = true, features = ["sys_rng"] }
 rustc-hash = { workspace = true }
 salsa = { workspace = true }
 serde = { workspace = true }

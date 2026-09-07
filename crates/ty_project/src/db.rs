@@ -267,6 +267,11 @@ impl ProjectDatabase {
         self.checker = Some(checker);
     }
 
+    /// The set of files this database checks.
+    pub fn check_mode(&self) -> CheckMode {
+        self.project().check_mode(self)
+    }
+
     /// Set the check mode for the project.
     pub fn set_check_mode(&mut self, mode: CheckMode) {
         if self.project().check_mode(self) != mode {

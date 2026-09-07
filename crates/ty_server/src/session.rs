@@ -1349,6 +1349,7 @@ impl Session {
             resolved_client_capabilities: self.resolved_client_capabilities,
             revision: self.revision,
             client_name: self.client_name,
+            native_system: self.native_system.clone(),
         }
     }
 
@@ -1675,6 +1676,12 @@ pub(crate) struct SessionSnapshot {
     revision: u64,
     client_name: ClientName,
 
+    /// The file system underneath the editor's buffers.
+    ///
+    /// Held so that a snapshot can ask what a file says on disk, which is a different
+    /// question from what [`Self::open_documents`] answers.
+    native_system: Arc<dyn System + 'static + Send + Sync + RefUnwindSafe>,
+
     /// IMPORTANT: It's important that the databases come last, or at least,
     /// after any `Arc` that we try to extract or mutate in-place using `Arc::into_inner`
     /// and that relies on Salsa's cancellation to guarantee that there's now only a
@@ -1694,6 +1701,32 @@ impl SessionSnapshot {
 
     pub(crate) fn index(&self) -> &Index {
         &self.index
+    }
+
+    /// Every file-backed document the editor has open, with the path it stands for.
+    ///
+    /// Notebooks are included, because the whole point of asking is whether the editor is
+    /// holding something the file system is not. Notebook *cells* are not: a cell's
+    /// file-level representation is the notebook that contains it, which is already here.
+    ///
+    /// A document behind a non-`file` URI has no path on disk at all, and is left out — there
+    /// is nothing to compare it to, and a check that reads it is reading something a caller on
+    /// the command line could never have seen either.
+    pub(crate) fn open_documents(&self) -> impl Iterator<Item = (&SystemPath, OpenDocument<'_>)> {
+        self.index
+            .keyed_file_documents()
+            .filter_map(|(key, document)| {
+                let document = match document {
+                    Document::Text(text) => OpenDocument::Text(text.contents()),
+                    Document::Notebook(_) => OpenDocument::Notebook,
+                };
+                Some((key.file_path()?.as_path(), document))
+            })
+    }
+
+    /// What `path` says on disk, past whatever the editor is holding for it.
+    pub(crate) fn read_from_disk(&self, path: &SystemPath) -> Option<String> {
+        self.native_system.read_to_string(path).ok()
     }
 
     pub(crate) fn global_settings(&self) -> &GlobalSettings {
@@ -1719,6 +1752,18 @@ impl SessionSnapshot {
     pub(crate) fn client_name(&self) -> ClientName {
         self.client_name
     }
+}
+
+/// What the editor is holding for one file.
+///
+/// A notebook carries no text to compare: the editor holds it as cells, and what is on disk
+/// is a serialization of them whose formatting is the writer's choice. So the two are only
+/// ever known to be the same when neither has been touched, and this says which case it is
+/// rather than pretending to answer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum OpenDocument<'a> {
+    Text(&'a str),
+    Notebook,
 }
 
 /// Represents the client (editor) that's connected to the language server.

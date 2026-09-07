@@ -2,6 +2,17 @@
 
 ty defines and respects the following environment variables:
 
+### `BY_NO_PROJECT_SERVER`
+
+Disable the project server: the language server answering `by` command lines.
+
+A server started for a project holds it parsed and inferred, and a `by check` in that
+project asks the server rather than doing the work again. Set this to `1` to switch
+that off — on a command line, so it checks for itself, and on a server, so it does
+not open the socket that makes it reachable.
+
+Equivalent to the `--no-server` command-line argument.
+
 ### `TY_CONFIG_FILE`
 
 Path to a `ty.toml` configuration file to use.

@@ -5151,6 +5151,7 @@ dependencies = [
  "jod-thread",
  "libc",
  "lsp-server",
+ "rand 0.10.2",
  "regex",
  "ruff_db",
  "ruff_diagnostics",
@@ -5179,6 +5180,7 @@ dependencies = [
  "ty_project",
  "ty_python_core",
  "ty_python_semantic",
+ "ty_static",
 ]
 
 [[package]]

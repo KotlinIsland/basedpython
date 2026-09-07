@@ -442,6 +442,17 @@ pub(crate) struct CheckCommand {
     #[arg(long, short = 'W')]
     pub(crate) watch: bool,
 
+    /// Check the project from scratch instead of asking a running language server.
+    ///
+    /// A server holding this project has already parsed and inferred it, and answers a
+    /// check out of that in a fraction of the time. It only answers when the two agree
+    /// about the configuration and there is nothing unsaved, so this is a way to rule the
+    /// server out rather than a way to get a different answer.
+    ///
+    /// `BY_NO_PROJECT_SERVER` does the same, and also stops a server from listening.
+    #[arg(long, help_heading = "Global options")]
+    pub(crate) no_server: bool,
+
     /// Respect file exclusions via `.gitignore` and other standard ignore files.
     /// Use `--no-respect-ignore-files` to disable.
     #[arg(

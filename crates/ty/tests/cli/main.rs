@@ -5,6 +5,7 @@ mod django;
 mod exit_code;
 mod file_selection;
 mod fixes;
+mod project_server;
 mod python_environment;
 mod rule;
 mod rule_selection;
@@ -23,6 +24,7 @@ use std::{
     process::Command,
 };
 use tempfile::TempDir;
+use ty_static::EnvVars;
 
 #[test]
 fn test_quiet_output() -> anyhow::Result<()> {
@@ -1097,6 +1099,9 @@ impl CliTest {
             user_config_directory_env_var(),
             self.user_config_directory(),
         );
+        // These tests assert on exact output, and a language server running on this machine
+        // for a directory above the test's own would otherwise be entitled to answer them.
+        command.env(EnvVars::BY_NO_PROJECT_SERVER, "1");
 
         command
     }
@@ -1111,6 +1116,7 @@ impl CliTest {
             user_config_directory_env_var(),
             self.user_config_directory(),
         );
+        command.env(EnvVars::BY_NO_PROJECT_SERVER, "1");
 
         command
     }

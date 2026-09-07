@@ -93,6 +93,7 @@ features = [
     { "editor support" = "features/editor.md" },
     { "language injection" = "features/language-injection.md" },
     { "linting" = "features/linter.md" },
+    { "the project server" = "features/project-server.md" },
   ] },
   { "standard library" = [
     { "typeshed improvements" = "features/typeshed.md" },

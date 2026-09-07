@@ -76,6 +76,9 @@ over all configuration files.</p>
 </dd><dt id="by-check--ignore"><a href="#by-check--ignore"><code>--ignore</code></a> <i>rule</i></dt><dd><p>Disables the rule. Can be specified multiple times. Use 'all' to apply to all rules.</p>
 </dd><dt id="by-check--no-progress"><a href="#by-check--no-progress"><code>--no-progress</code></a></dt><dd><p>Hide all progress outputs.</p>
 <p>For example, spinners or progress bars.</p>
+</dd><dt id="by-check--no-server"><a href="#by-check--no-server"><code>--no-server</code></a></dt><dd><p>Check the project from scratch instead of asking a running language server.</p>
+<p>A server holding this project has already parsed and inferred it, and answers a check out of that in a fraction of the time. It only answers when the two agree about the configuration and there is nothing unsaved, so this is a way to rule the server out rather than a way to get a different answer.</p>
+<p><code>BY_NO_PROJECT_SERVER</code> does the same, and also stops a server from listening.</p>
 </dd><dt id="by-check--output-format"><a href="#by-check--output-format"><code>--output-format</code></a> <i>output-format</i></dt><dd><p>The format to use for printing diagnostic messages</p>
 <p>May also be set with the <code>TY_OUTPUT_FORMAT</code> environment variable.</p><p>Possible values:</p>
 <ul>

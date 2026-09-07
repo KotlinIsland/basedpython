@@ -102,6 +102,11 @@ impl Printer {
         self.stdout_general()
     }
 
+    /// Whether messages that are neither diagnostics nor a summary should be shown.
+    pub(crate) fn shows_general_messages(self) -> bool {
+        self.stdout_general().is_enabled()
+    }
+
     pub(crate) fn clear_screen() -> Result<()> {
         clearscreen::clear()?;
         Ok(())

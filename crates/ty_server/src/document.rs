@@ -86,6 +86,14 @@ impl DocumentKey {
         }
     }
 
+    /// The path this document has on disk, or `None` for one that has none.
+    pub(crate) const fn file_path(&self) -> Option<&SystemPathBuf> {
+        match self {
+            Self::File(path) => Some(path),
+            Self::Opaque(_) => None,
+        }
+    }
+
     /// Returns the corresponding [`AnySystemPath`] for this document key.
     ///
     /// Note, calling this method on a `DocumentKey::Opaque` representing a cell document

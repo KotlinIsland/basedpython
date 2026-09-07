@@ -45,6 +45,8 @@ features that apply to a project rather than to a file
     language is written inside it
 - [linting](linter.md) — the `BY` rules, and how ruff's own rules read `.by`
     source
+- [the project server](project-server.md) — `by check` answered out of the
+    language server's warm state
 
 </div>
 
