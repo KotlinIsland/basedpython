@@ -958,6 +958,8 @@ mod tests {
             exported: true,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             fields: vec![by_ir::function::FieldDecl {
                 name: "x".to_string(),
                 ty: RType::FLOAT,
@@ -1023,6 +1025,8 @@ mod tests {
             exported: true,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             fields: vec![by_ir::function::FieldDecl {
                 name: "x".to_string(),
                 ty: RType::FLOAT,
@@ -1079,6 +1083,8 @@ mod tests {
             exported: true,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             fields: vec![by_ir::function::FieldDecl {
                 name: "x".to_string(),
                 ty: RType::FLOAT,
@@ -1137,6 +1143,8 @@ mod tests {
             exported: true,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             fields: vec![by_ir::function::FieldDecl {
                 name: "x".to_string(),
                 ty: RType::FLOAT,

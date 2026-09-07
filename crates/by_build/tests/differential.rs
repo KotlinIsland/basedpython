@@ -7449,7 +7449,9 @@ frozen data class Fixed:
         \x20   except (TypeError, AttributeError) as e:\n        print(type(e).__name__)\n\
         \x20   else:\n        print('accepted')\n",
     );
-    assert_eq!(out, "5\nTypeError\nAttributeError\nAttributeError");
+    // the frozen write is *not* part of that delta: `FrozenInstanceError` is what the
+    // interpreted twin raises, and the emitted type's `__setattr__` raises the same
+    assert_eq!(out, "5\nTypeError\nAttributeError\nFrozenInstanceError");
 }
 
 #[test]
@@ -12340,14 +12342,20 @@ class Cell:
     assert_eq!(out, "property method_descriptor method_descriptor");
 }
 
-/// an accessor block whose storage carries an initialiser is left interpreted
+/// an accessor block whose storage carries an initialiser
 ///
-/// the transpiler moves that initialiser into `__init__`, and the emitted class has no
-/// constructor of its own to write it in — so the class is declined and its interpreted
-/// definition is what runs, which still answers exactly as the source says
+/// the transpiler moves that initialiser into an `__init__` it injects, so every instance
+/// gets storage of its own rather than sharing one object the class holds. the emitted
+/// class writes it at construction for the same reason — the value rides on the field as
+/// the constructor's default rather than being bound to the class — and the two arrive at
+/// the same answers, including the message a constructor that takes no arguments gives
+/// when handed one — which is the injected `__init__`'s and not `object.__init__`'s.
+///
+/// the two constructions are what say the storage is per-instance: a class-level value
+/// would leave the second one reading what the first one wrote
 #[test]
 fn an_accessor_block_with_an_initialiser_agrees() {
-    agree_with_declines(
+    agree(
         "accessorinit",
         "\
 class Cell:
@@ -12360,14 +12368,183 @@ class Cell:
 def store(cell: Cell, given: int) -> int:
     cell.v = given
     return cell.v
+
+
+def raised(fn: object) -> str:
+    try:
+        fn()
+    except TypeError as error:
+        return str(error)
+    except AttributeError as error:
+        return str(error)
+    return 'nothing raised'
 ",
         &[
             "m.Cell().v",
             "m.store(m.Cell(), 5)",
             "type(vars(m.Cell)['v']).__name__",
             "vars(m.Cell)['v'].fget(m.Cell())",
-            "hasattr(m.Cell, '_Cell__v')",
+            // the storage each instance gets is its own: writing one leaves the next
+            // construction still answering with the initialiser
+            "(lambda c: (m.store(c, 5), m.Cell().v))(m.Cell())",
+            "m.Cell()._Cell__v",
+            "m.raised(lambda: m.Cell(1))",
+            "m.raised(lambda: m.Cell(v=1))",
+            "m.raised(lambda: delattr(m.Cell(), 'v'))",
+            "isinstance(vars(m.Cell)['v'], property)",
         ],
+    );
+}
+
+/// three accessor blocks over one class, each with an initialiser of its own
+///
+/// the constructor writes one value per field rather than one field, and a `str` is the
+/// one of these whose value is refcounted — a construction that took it without a
+/// reference of its own would hand back a string the next collection frees
+#[test]
+fn several_accessor_block_initialisers_agree() {
+    agree(
+        "accessorinits",
+        "\
+class Many:
+    var name: str = 'ada'
+        get() = field
+        set(given):
+            field = given
+
+    var ratio: float = 1.5
+        get() = field
+        set(given):
+            field = given
+
+    var on: bool = True
+        get() = field
+        set(given):
+            field = given
+
+
+def touch(m: Many) -> str:
+    m.name = m.name + '!'
+    return m.name
+
+
+def many() -> str:
+    last = ''
+    i = 0
+    while i < 5000:
+        last = Many().name
+        i = i + 1
+    return last
+",
+        &[
+            "(m.Many().name, m.Many().ratio, m.Many().on)",
+            "m.touch(m.Many())",
+            "(lambda a: (m.touch(a), m.Many().name))(m.Many())",
+            "m.many()",
+        ],
+    );
+}
+
+/// a read-only accessor block, and one a class in the same module extends
+///
+/// the read-only form is the shape with no assignment to the receiver anywhere, so the
+/// class-body declaration is the only thing saying the storage exists at all. the subclass
+/// is the other construction: a class another one extends is emitted as a mutable heap
+/// type, and the subclass inherits both the layout and the value written into it
+#[test]
+fn an_accessor_blocks_initialiser_reaches_a_subclass() {
+    agree(
+        "accessorinitsub",
+        "\
+class Read:
+    let v: int = 7
+        get() = field
+
+
+class Cell:
+    var v: int = 4
+        get() = field
+        set(given):
+            field = given
+
+
+class Sized(Cell):
+    def width(self) -> int:
+        return 1
+
+
+def grow(cell: Cell) -> int:
+    cell.v = cell.v + 1
+    return cell.v
+
+
+def raised(fn: object) -> str:
+    try:
+        fn()
+    except TypeError as error:
+        return str(error)
+    return 'nothing raised'
+",
+        &[
+            "m.Read().v",
+            "m.Cell().v",
+            "m.Sized().v",
+            "m.grow(m.Cell())",
+            "m.grow(m.Sized())",
+            "m.Sized().width()",
+            // the value the subclass inherits is written into each of its instances too
+            "(lambda s: (m.grow(s), m.Sized().v))(m.Sized())",
+            "m.raised(lambda: m.Sized(1))",
+            "m.raised(lambda: m.Read(1))",
+        ],
+    );
+}
+
+/// and the halves of that pair are this module's own bodies, over a written field
+///
+/// [`an_accessor_block_with_an_initialiser_agrees`] cannot say so: a declined class
+/// answers every one of those questions through its interpreted definition. this is what
+/// separates a class that reached the layout from one that only agrees with it
+#[test]
+fn an_initialised_accessor_blocks_halves_are_the_compiled_bodies() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_accessorinithalves");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+class Cell:
+    var v: int = 4
+        get() = field
+        set(given):
+            field = given
+";
+    let built = match build_source(
+        source,
+        "by_diff_accessorinithalves",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_accessorinithalves as m\n\
+         p = m.Cell.__dict__['v']\n\
+         print(type(p).__name__, type(p.fget).__name__, type(p.fset).__name__)\n\
+         print(type(m.Cell.__dict__['_Cell__v']).__name__, m.Cell().v)\n",
+    );
+    assert_eq!(
+        out,
+        "property method_descriptor method_descriptor\ngetset_descriptor 4"
     );
 }
 
@@ -24803,6 +24980,330 @@ data class Loose:
     );
 }
 
+/// the members `@dataclass` puts on the twin's class
+///
+/// `data class C` is `@dataclass(slots=True)` and `frozen data class C` is
+/// `@dataclass(frozen=True, slots=True)`, so the twin's class grows a `__repr__`, an
+/// `__eq__`, a `__hash__`, `__match_args__` and the bookkeeping `dataclasses` reads
+/// back. an emitted type has to answer all of it the same way — two equal frozen
+/// instances hashing differently would quietly corrupt any set or dict holding them
+const A_PAIR_AND_A_POINT: &str = "\
+frozen data class Pair:
+    x: int
+    y: int
+
+data class Point:
+    x: int
+    y: int
+
+frozen data class Sub(Pair):
+    z: int
+";
+
+#[test]
+fn the_members_a_data_class_generates_agree() {
+    agree(
+        "dcmembers",
+        A_PAIR_AND_A_POINT,
+        &[
+            "repr(m.Pair(1, 2))",
+            "repr(m.Point(1, 2))",
+            "repr(m.Sub(1, 2, 3))",
+            "m.Pair(1, 2) == m.Pair(1, 2)",
+            "m.Pair(1, 2) == m.Pair(1, 3)",
+            "m.Pair(1, 2) != m.Pair(1, 2)",
+            // a subclass instance is never equal to a base one: the generated `__eq__`
+            // compares `other.__class__ is self.__class__` rather than asking `isinstance`
+            "m.Pair(1, 2) == m.Sub(1, 2, 3)",
+            "m.Sub(1, 2, 3) == m.Pair(1, 2)",
+            "m.Pair(1, 2) == (1, 2)",
+            "m.Pair(1, 2).__eq__(object())",
+            "hash(m.Pair(1, 2)) == hash(m.Pair(1, 2))",
+            "hash(m.Pair(1, 2)) == hash((1, 2))",
+            "len({m.Pair(1, 2), m.Pair(1, 2), m.Pair(1, 3)})",
+            "{m.Pair(1, 2): 'here'}[m.Pair(1, 2)]",
+            // a mutable dataclass with an `__eq__` is unhashable, because two objects
+            // that compare equal have to hash equal and a mutable one cannot promise it
+            "type(_capture(hash, m.Point(1, 2))).__name__",
+            "m.Pair.__match_args__",
+            "m.Point.__match_args__",
+            "m.Sub.__match_args__",
+            "m.Pair.__hash__ is None",
+            "m.Point.__hash__ is None",
+            "m.Pair.__doc__",
+            "m.Point.__doc__",
+            // no ordering: `@dataclass` is called without `order=True`, so all four
+            // comparisons stay `object`'s and raise
+            "m.Pair.__lt__ is object.__lt__",
+            "m.Pair.__ne__ is object.__ne__",
+            "type(_capture(lambda: m.Pair(1, 2) < m.Pair(1, 3))).__name__",
+        ],
+    );
+}
+
+/// the generated `__eq__` is `self.a==other.a and self.b==other.b`, term by term
+///
+/// not a comparison of two tuples, which is what it looks like and what it used to be.
+/// the difference shows in three places at once: `and` hands back the *term* rather than
+/// a bool, the chain stops at the first falsy one, and a plain `==` has none of the
+/// identity shortcut a tuple comparison applies to each pair — so two instances sharing
+/// one NaN are not equal, while an instance is equal to itself because the generated body
+/// tests that outright before it looks at a field
+#[test]
+fn the_generated_equality_answers_term_by_term() {
+    agree(
+        "dceqterms",
+        "\
+frozen data class Holder:
+    a: object
+    b: object
+
+frozen data class Blank:
+    pass
+
+frozen data class Floats:
+    x: float
+
+class Odd:
+    \"\"\"an `__eq__` answering with something that is neither True nor False\"\"\"
+
+    def __init__(self, tag: str):
+        self.tag = tag
+
+    def __eq__(self, other: object) -> object:
+        return \"<\" + self.tag + \">\"
+
+class Falsy:
+    def __eq__(self, other: object) -> object:
+        return []
+",
+        &[
+            // the first term is truthy, so the chain runs on and the *last* term answers
+            "m.Holder(m.Odd('a'), 1) == m.Holder(m.Odd('b'), 1)",
+            "m.Holder(1, m.Odd('b')) == m.Holder(1, m.Odd('c'))",
+            // …and a falsy term stops it, so that term is the answer
+            "m.Holder(m.Falsy(), 1) == m.Holder(m.Falsy(), 2)",
+            "m.Holder(m.Falsy(), 1) != m.Holder(m.Falsy(), 2)",
+            "m.Holder(m.Odd('a'), 1) != m.Holder(m.Odd('b'), 1)",
+            // a class with no fields at all compares on nothing and is always equal
+            "m.Blank() == m.Blank()",
+            "m.Blank() != m.Blank()",
+            "hash(m.Blank()) == hash(())",
+            // an instance is equal to itself whatever it holds
+            "[(p := m.Floats(float('nan'))), p == p][-1]",
+            "[(p := m.Floats(float('nan'))), p != p][-1]",
+            "[(p := m.Holder(float('nan'), 1)), p == p][-1]",
+            // …and two instances sharing the one NaN object are not
+            "[(n := float('nan')), m.Floats(n) == m.Floats(n)][-1]",
+            "[(n := float('nan')), m.Holder(n, 1) == m.Holder(n, 1)][-1]",
+        ],
+    );
+}
+
+#[test]
+fn the_dataclass_bookkeeping_of_a_data_class_agrees() {
+    agree(
+        "dcbookkeeping",
+        A_PAIR_AND_A_POINT,
+        &[
+            "__import__('dataclasses').is_dataclass(m.Pair)",
+            "__import__('dataclasses').is_dataclass(m.Pair(1, 2))",
+            "[f.name for f in __import__('dataclasses').fields(m.Pair)]",
+            "[f.name for f in __import__('dataclasses').fields(m.Sub)]",
+            "__import__('dataclasses').astuple(m.Pair(1, 2))",
+            "__import__('dataclasses').asdict(m.Pair(1, 2))",
+            "repr(__import__('dataclasses').replace(m.Pair(1, 2), x=9))",
+            "repr(__import__('copy').replace(m.Pair(1, 2), y=9))",
+        ],
+    );
+}
+
+/// a `case Pair(a, b)` written *outside* the module, which is the one that needs
+/// `__match_args__`
+///
+/// a `case` inside the module is lowered against the class's own field list and never
+/// reads the attribute, so the test below it passes whether or not the attribute is
+/// there. python reaching in from elsewhere has only the attribute to go on
+#[test]
+fn a_compiled_data_class_matches_positionally_from_python() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_dcmatchout");
+    let _ = std::fs::remove_dir_all(&dir);
+    if build_source(
+        A_PAIR_AND_A_POINT,
+        "by_diff_dcmatchout",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_dcmatchout as m\n\
+         match m.Pair(1, 2):\n\
+         \x20   case m.Pair(a, b):\n\
+         \x20       print('matched', a, b)\n\
+         \x20   case _:\n\
+         \x20       print('no match')\n",
+    );
+    assert_eq!(out, "matched 1 2");
+}
+
+#[test]
+fn a_data_class_matches_positionally() {
+    agree(
+        "dcmatch",
+        "\
+frozen data class Pair:
+    x: int
+    y: int
+
+def described(p: object) -> str:
+    match p:
+        case Pair(a, b):
+            return f\"pair {a} {b}\"
+        case _:
+            return \"other\"
+",
+        &[
+            "m.described(m.Pair(1, 2))",
+            "m.described((1, 2))",
+            "m.described(3)",
+        ],
+    );
+}
+
+#[test]
+fn a_frozen_data_class_refuses_every_write() {
+    agree(
+        "dcfrozen",
+        "\
+frozen data class Pair:
+    x: int
+    y: int
+",
+        &[
+            "repr(_capture(setattr, m.Pair(1, 2), 'x', 5))",
+            "repr(_capture(delattr, m.Pair(1, 2), 'x'))",
+            // not only the fields: python's generated `__setattr__` refuses every name
+            // on an instance of the class that declared it
+            "repr(_capture(setattr, m.Pair(1, 2), 'extra', 5))",
+            "isinstance(_capture(setattr, m.Pair(1, 2), 'x', 5), AttributeError)",
+        ],
+    );
+}
+
+/// the members have to come off the emitted *type*, not off an interpreted definition
+/// the class fell back to — which answers identically and would pass every case above
+#[test]
+fn the_generated_dataclass_members_are_slots_of_the_emitted_type() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_dcslots");
+    let _ = std::fs::remove_dir_all(&dir);
+    if build_source(
+        A_PAIR_AND_A_POINT,
+        "by_diff_dcslots",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_dcslots as m\n\
+         for name in ('__repr__', '__eq__', '__hash__', '__setattr__'):\n\
+         \x20   print(name, type(getattr(m.Pair, name)).__name__)\n\
+         print('__hash__ of a mutable one', m.Point.__hash__)\n",
+    );
+    // a `wrapper_descriptor` is what `PyType_Ready` builds over a filled slot: the
+    // interpreted twin's would be a plain `function`
+    assert_eq!(
+        out,
+        "__repr__ wrapper_descriptor\n\
+         __eq__ wrapper_descriptor\n\
+         __hash__ wrapper_descriptor\n\
+         __setattr__ wrapper_descriptor\n\
+         __hash__ of a mutable one None"
+    );
+}
+
+/// `@dataclass` reads three annotations as instructions rather than as storage, and each
+/// leaves the class with a different field list than the annotations alone say. taking
+/// any of them for a field gives the emitted constructor a parameter python's has not,
+/// so each declines and the class runs from its interpreted definition
+#[test]
+fn a_data_class_with_a_pseudo_field_declines_and_still_agrees() {
+    agree_with_declines(
+        "dcpseudo",
+        "\
+from dataclasses import KW_ONLY, InitVar
+from typing import ClassVar
+
+data class WithClassVar:
+    kind: ClassVar[str] = \"k\"
+    x: int
+
+data class WithInitVar:
+    x: int
+    seed: InitVar[int]
+
+data class WithKwOnly:
+    x: int
+    _: KW_ONLY
+    y: int
+",
+        &[
+            "repr(m.WithClassVar(1))",
+            "m.WithClassVar.kind",
+            "m.WithClassVar(1).kind",
+            "[f.name for f in __import__('dataclasses').fields(m.WithClassVar)]",
+            "repr(m.WithInitVar(1, 2))",
+            "hasattr(m.WithInitVar(1, 2), 'seed')",
+            "[f.name for f in __import__('dataclasses').fields(m.WithInitVar)]",
+            "type(_capture(m.WithKwOnly, 1, 2)).__name__",
+        ],
+    );
+}
+
+/// a base that is not itself a data class contributes no fields to the dataclass,
+/// however many attributes its own `__init__` gives the instance
+#[test]
+fn a_data_class_on_a_plain_base_declines_and_still_agrees() {
+    agree_with_declines(
+        "dcplainbase",
+        "\
+class Plain:
+    def __init__(self):
+        self.p = 1
+
+data class OnPlain(Plain):
+    b: int
+",
+        &[
+            "repr(m.OnPlain(1))",
+            "m.OnPlain(1).b",
+            // `@dataclass(slots=True)` rebuilds the class with an `__init__` of its own,
+            // which never runs the base's — so the attribute the base assigns is not there
+            "hasattr(m.OnPlain(1), 'p')",
+            "[f.name for f in __import__('dataclasses').fields(m.OnPlain)]",
+        ],
+    );
+}
+
 #[test]
 fn a_frozen_field_is_read_once_across_a_call() {
     // the optimization is invisible from outside, which is the point — this pins
@@ -31208,7 +31709,7 @@ def area(r: object) -> int:
 
 #[test]
 fn a_for_destructuring_pattern_agrees() {
-    agree_with_declines(
+    agree(
         "fordestruct",
         &format!(
             "{A_MATCHABLE_RECT}\
@@ -31220,6 +31721,142 @@ def total(rects: list[Rect]) -> int:
 "
         ),
         &["m.total([m.Rect(1, 2), m.Rect(3, 4)])", "m.total([])"],
+    );
+}
+
+#[test]
+fn a_destructuring_let_agrees() {
+    // every pattern kind in the binding position a `let` is, against a value that
+    // matches and one that does not — a pattern that fails binds nothing at all, so
+    // the read after it is what raises
+    agree(
+        "letdestruct",
+        &format!(
+            "{A_MATCHABLE_RECT}\
+def area(r: object) -> object:
+    let Rect(w=a, h=b) := r
+    return a * b
+
+
+def first(xs: object) -> object:
+    let [head, *tail] := xs
+    return (head, tail)
+
+
+def keyed(d: object) -> object:
+    let {{\"k\": v}} := d
+    return v
+
+
+def deep(p: object) -> object:
+    let ((a, b), c) := p
+    return a + b + c
+
+
+def whole(x: object) -> object:
+    let y := x
+    return y
+"
+        ),
+        &[
+            "m.area(m.Rect(3, 4))",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.area, 5)]]",
+            "m.first((1, 2, 3))",
+            "m.first((1,))",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.first, ())]]",
+            "m.keyed({'k': 7})",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.keyed, {'j': 7})]]",
+            "m.deep(((1, 2), 3))",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.deep, (1, 2))]]",
+            "m.whole(9)",
+        ],
+    );
+}
+
+#[test]
+fn a_destructuring_let_else_agrees() {
+    // the `else` block runs when the pattern did not match and then carries on to
+    // the statement after it, which is not rust's `let else`
+    agree(
+        "letelse",
+        "\
+def area(p: object) -> object:
+    let (w, h) := p else:
+        return \"no\"
+    return w * h
+
+
+def falls(p: object) -> object:
+    out = []
+    let (w, h) := p else:
+        out.append(\"miss\")
+    out.append(1)
+    return out
+",
+        &[
+            "m.area((3, 4))",
+            "m.area(5)",
+            "m.falls((3, 4))",
+            "m.falls(5)",
+        ],
+    );
+}
+
+#[test]
+fn a_destructuring_pattern_capture_reaches_a_closure() {
+    // a name bound only by a pattern is a *local* of the frame, so a nested function
+    // captures it. left out of the frame's own names it was read from the module
+    // namespace instead, and the call raised `NameError` where the twin answered
+    agree(
+        "letcapture",
+        &format!(
+            "{A_MATCHABLE_RECT}\
+def area(p: object) -> object:
+    let (w, h) := p
+
+    def inner() -> object:
+        return w * h
+
+    return inner()
+
+
+def total(rects: list[Rect]) -> object:
+    out = []
+    for Rect(w=a, h=b) in rects:
+
+        def inner() -> object:
+            return a * b
+
+        out.append(inner())
+    return out
+"
+        ),
+        &["m.area((3, 4))", "m.total([m.Rect(1, 2), m.Rect(3, 4)])"],
+    );
+}
+
+#[test]
+fn a_for_destructuring_pattern_binds_once_per_iteration() {
+    // basedpython freezes a loop binding per trip, so closures made in different
+    // iterations answer differently. a pattern's captures are the loop's binding here
+    // — the target beside them is the synthetic binder — and treating them as one
+    // shared cell instead had every closure answer with the last trip's value
+    agree(
+        "fordestructcell",
+        &format!(
+            "{A_MATCHABLE_RECT}\
+def made(rects: list[Rect]) -> object:
+    fns = []
+    for Rect(w=a, h=b) in rects:
+
+        def inner() -> object:
+            return a * b
+
+        fns.append(inner)
+    return [f() for f in fns]
+"
+        ),
+        &["m.made([m.Rect(2, 3), m.Rect(4, 5)])", "m.made([])"],
     );
 }
 
@@ -31716,5 +32353,96 @@ Registry.register(dict)
         out,
         "True ABCMeta method_descriptor\n\
          by_diff_installabc\tRegistry\tinstalled"
+    );
+}
+
+#[test]
+fn an_enum_with_payload_variants_stays_the_hierarchy_its_module_body_built() {
+    // an `enum class` is not one class. the module body builds a variant type per `case`,
+    // hangs it on the enum under the variant's own name, and renames it so it answers to
+    // `Shape.Circle` rather than to the mangled name it was defined under. the enum's own
+    // class statement is the smallest part of that.
+    //
+    // so the enum declines, and this holds the whole construct to what the interpreter
+    // does with it. it is also the check that the decline is worth keeping: with the
+    // marker arm in `class_modifier` lifted, an emitted `Shape` takes the twin's
+    // namespace entry while the variants stay hung on the twin's, so `Shape.Circle` is
+    // simply absent and the first construction dies on an `AttributeError`
+    agree_with_declines(
+        "enumpayload",
+        "\
+enum class Shape:
+    case Circle(radius: int)
+    case Rect(width: int, height: int)
+
+
+def area(shape: Shape) -> int:
+    match shape:
+        case Shape.Circle(r):
+            return r * r * 3
+        case Shape.Rect(w, h):
+            return w * h
+    return 0
+
+
+def areas() -> list[int]:
+    return [area(s) for s in [Shape.Circle(4), Shape.Rect(2, 5), Shape.Circle(0)]]
+",
+        &[
+            "m.areas()",
+            "repr(m.Shape.Circle(4))",
+            "m.Shape.Circle(4).radius",
+            "(m.Shape.Rect(2, 5).width, m.Shape.Rect(2, 5).height)",
+            // a variant is a subclass of its enum, and it answers to the enum's names
+            // rather than to the mangled one it was defined under
+            "isinstance(m.Shape.Circle(4), m.Shape)",
+            "issubclass(m.Shape.Rect, m.Shape)",
+            "(m.Shape.Circle.__name__, m.Shape.Circle.__qualname__)",
+            // frozen, so a write to a field is refused rather than taken
+            "[type(e).__name__ for e in [_capture(setattr, m.Shape.Circle(4), 'radius', 9)]]",
+            "m.Shape.Circle(4) == m.Shape.Circle(4)",
+            "m.Shape.Circle(4) == m.Shape.Rect(2, 5)",
+        ],
+    );
+}
+
+#[test]
+fn an_enum_with_only_unit_variants_keeps_the_enum_members_its_module_body_built() {
+    // the all-unit lowering is a real `Enum`, so every member carries a `name` and a
+    // `value`, and the class itself iterates and looks up. none of that is on the class
+    // statement either.
+    //
+    // this is the pair to the payload case and the more important half. lifting the
+    // marker arm breaks the payload form loudly, with an `AttributeError` nobody could
+    // miss; it breaks this one *silently* — `Color.Red` comes back as a bare object of
+    // the emitted type, with no `name`, no `value` and a `Color` that will not iterate,
+    // while a `match` over it still answers correctly. a test that only matched would
+    // pass on it
+    agree_with_declines(
+        "enumunit",
+        "\
+enum class Color:
+    case Red
+    case Green
+
+
+def name_of(c: Color) -> str:
+    match c:
+        case Color.Red:
+            return \"red\"
+        case Color.Green:
+            return \"green\"
+    return \"?\"
+",
+        &[
+            "[m.name_of(c) for c in (m.Color.Red, m.Color.Green)]",
+            "repr(m.Color.Red)",
+            "(m.Color.Red.name, m.Color.Red.value)",
+            "[(c.name, c.value) for c in m.Color]",
+            "m.Color['Red'] is m.Color.Red",
+            "isinstance(m.Color.Red, m.Color)",
+            "type(m.Color.Red) is m.Color",
+            "m.Color.Red == m.Color.Green",
+        ],
     );
 }

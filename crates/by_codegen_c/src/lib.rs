@@ -822,6 +822,15 @@ fn emit_instance_recycling(module: &ModuleIr, class: &ClassIr) -> String {
     )
 }
 
+/// where a generated constructor takes the value it writes into one field
+enum Filling<'a> {
+    /// the argument bound at this position, falling back to the field's default where the
+    /// call bound none
+    Bound(usize, Option<&'a by_ir::ops::Value>),
+    /// a value the class body declared, which no argument may supply
+    Declared(&'a by_ir::ops::Value),
+}
+
 /// `tp_new` allocates and zeroes, `tp_init` fills every field, `tp_dealloc`
 /// releases them. every field is written by `__init__`, which is what makes them
 /// *always defined* — no bitfield and no per-read check
@@ -914,18 +923,19 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
     // in a chain of appended storage each rung keeps its own in a region of its own — so
     // it binds one pointer per rung rather than the single `self` everything else needs
     let _ = writeln!(out, "    {}", bind_storage_chain(module, class));
-    // the fields this constructor *takes*, which for a generated one are the class's own
-    // — a `data class` is its annotations, and each becomes a parameter.
+    // the fields this constructor *takes* — a `data class` is its annotations, and each
+    // becomes a parameter.
     //
-    // a class that wrote no `__init__` at all takes none of them. its fields are storage
-    // the source never gave a constructor: a `__slots__` declares attributes an instance
-    // has room for and nothing fills, and an inherited layout is filled by the base's
-    // `__init__`. a parameter per field would be a signature the source never wrote, so
-    // this one binds nothing and rejects an argument exactly as `object.__init__` does
-    let taken: &[by_ir::function::FieldDecl] = if class.inherited_init {
-        &[]
-    } else {
+    // every other generated constructor takes none of them. their fields are storage the
+    // source never gave a constructor a parameter for: a `__slots__` declares attributes
+    // an instance has room for and nothing fills, an inherited layout is filled by the
+    // base's `__init__`, and an accessor block's storage is filled from the value the
+    // class body declared. a parameter per field would be a signature the source never
+    // wrote, so this one binds nothing
+    let taken: &[by_ir::function::FieldDecl] = if class.fields_are_parameters {
         &class.fields
+    } else {
+        &[]
     };
     let names = taken
         .iter()
@@ -958,10 +968,31 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
         }),
         i32::from(class.inherited_init)
     );
-    for (index, field) in taken.iter().enumerate() {
+    // a field the constructor takes no parameter for but the class body gave a value still
+    // has to be written, and an accessor block's storage is that: the twin writes it at
+    // the top of an `__init__` the transpiler injected for exactly this
+    let declared = if class.fields_are_parameters {
+        Vec::new()
+    } else {
+        class
+            .fields
+            .iter()
+            .filter_map(|field| field.default.as_ref().map(|value| (field, value)))
+            .collect()
+    };
+    let filled = taken
+        .iter()
+        .enumerate()
+        .map(|(index, field)| (Filling::Bound(index, field.default.as_ref()), field))
+        .chain(
+            declared
+                .iter()
+                .map(|(field, value)| (Filling::Declared(value), *field)),
+        );
+    for (filling, field) in filled {
         let _ = writeln!(out, "    {{ {} by_v;", ctype(module, &field.ty));
-        match &field.default {
-            Some(default) => {
+        match filling {
+            Filling::Bound(index, Some(default)) => {
                 let _ = writeln!(out, "      if (by_bound[{index}] != NULL) {{");
                 let _ = writeln!(
                     out,
@@ -976,12 +1007,15 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
                 );
                 let _ = writeln!(out, "      }}");
             }
-            None => {
+            Filling::Bound(index, None) => {
                 let _ = writeln!(
                     out,
                     "      by_v = {};",
                     unbox_checked(module, &field.ty, &format!("by_bound[{index}]"))
                 );
+            }
+            Filling::Declared(default) => {
+                let _ = writeln!(out, "      by_v = {};", default_expr(&field.ty, default));
             }
         }
         let _ = writeln!(
@@ -1365,6 +1399,83 @@ fn property_halves<'a>(
 }
 
 /// the getters, setters, slot table and type spec python sees
+/// the slots a `data class` fills that its body never wrote a method for
+///
+/// `data class C` is `@dataclass(slots=True)` on the twin and `frozen data class C` is
+/// `@dataclass(frozen=True, slots=True)`, so python's decorator gives the twin's class a
+/// `__repr__`, an `__eq__` and a `__hash__` — and the frozen one a `__setattr__` and
+/// `__delattr__` besides. every one of those fills a type slot, and a name in `tp_dict`
+/// does not fill one, so none of them can be carried off the twin: they are emitted here
+/// instead. what has no slot is carried, in [`By_CarryDataclassMembers`].
+///
+/// the field list is the class's own, which is also the constructor's parameter list —
+/// `data_fields` declines every annotation `@dataclass` reads as something other than a
+/// field, so the two agree by construction
+fn dataclass_slots(class: &ClassIr, type_name: &str) -> Vec<(&'static str, String)> {
+    if !class.dataclass {
+        return Vec::new();
+    }
+    let mut slots = vec![
+        ("tp_repr", format!("{type_name}_repr")),
+        ("tp_richcompare", format!("{type_name}_richcompare")),
+    ];
+    if class.immutable {
+        slots.push(("tp_hash", format!("{type_name}_hash")));
+        slots.push(("tp_setattro", format!("{type_name}_setattro")));
+    } else {
+        // `@dataclass` writes `__hash__ = None` on a class it gave an `__eq__` and did
+        // not freeze: two objects that compare equal have to hash equal, and a mutable
+        // one cannot promise that. python spells it in the slot this way
+        slots.push(("tp_hash", "PyObject_HashNotImplemented".to_string()));
+    }
+    slots
+}
+
+/// the slot id a designated initializer names as a field
+fn slot_id(field: &str) -> String {
+    format!("Py_{field}")
+}
+
+/// the bodies those slots point at, and the field table each of them walks
+fn emit_dataclass_members(class: &ClassIr, type_name: &str) -> String {
+    if !class.dataclass {
+        return String::new();
+    }
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "static const By_DataField {type_name}_datafields[] = {{"
+    );
+    for field in &class.fields {
+        let _ = writeln!(
+            out,
+            "    {{{}, {type_name}_get_{}}},",
+            c_string(&field.name),
+            field.name
+        );
+    }
+    out.push_str("    {NULL, NULL}\n};\n");
+    let _ = write!(
+        out,
+        "static PyObject *{type_name}_repr(PyObject *selfobj) {{\n\
+         \x20   return By_DataclassRepr(selfobj, {type_name}_datafields);\n}}\n\
+         static PyObject *{type_name}_richcompare(PyObject *selfobj, PyObject *other, int op) {{\n\
+         \x20   return By_DataclassEq(selfobj, other, op, {type_name}_datafields);\n}}\n"
+    );
+    if class.immutable {
+        let _ = write!(
+            out,
+            "static Py_hash_t {type_name}_hash(PyObject *selfobj) {{\n\
+             \x20   return By_DataclassHash(selfobj, {type_name}_datafields);\n}}\n\
+             static int {type_name}_setattro(PyObject *selfobj, PyObject *name, PyObject *value) {{\n\
+             \x20   return By_FrozenSetAttr(selfobj, name, value,\n\
+             \x20                           (PyTypeObject *){type_name}_OBJ, {type_name}_datafields);\n}}\n"
+        );
+    }
+    out.push('\n');
+    out
+}
+
 fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     let struct_name = class.struct_name(module.name.dotted());
     let type_name = class.type_name(module.name.dotted());
@@ -1569,6 +1680,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         }
     }
     out.push_str("    {NULL, NULL, NULL, NULL, NULL}\n};\n\n");
+
+    out.push_str(&emit_dataclass_members(class, &type_name));
 
     // `__dictoffset__` is not an attribute the table binds: `PyType_FromSpec` lifts it
     // out and writes it into `tp_dictoffset`, which is the only way a type built from a
@@ -3732,6 +3845,19 @@ fn fills_slot(class: &ClassIr, name: &str) -> bool {
 /// body would have said
 fn published_beyond_the_body(class: &ClassIr) -> Vec<&'static str> {
     let mut names = Vec::new();
+    // a `data class` fills `tp_richcompare` for the `__eq__` `@dataclass` generates, and
+    // that one slot backs all six. the twin's class has only the one, so the other five
+    // come off — `Point.__lt__` is `object`'s slot wrapper there, and would be `Point`'s
+    // own here. `__ne__` is among them: `@dataclass` generates no `__ne__` either, and
+    // python's default derives it from `__eq__`
+    if class.dataclass {
+        names.extend(
+            COMPARISONS
+                .iter()
+                .map(|(name, _)| *name)
+                .filter(|name| *name != "__eq__"),
+        );
+    }
     if COMPARISONS
         .iter()
         .any(|(name, _)| answers_slot(class, name))
@@ -4112,6 +4238,16 @@ fn hash_slot_override(class: &ClassIr) -> Option<&'static str> {
         .then_some("PyObject_HashNotImplemented")
 }
 
+/// whether the emitted type's `tp_hash` says this class has no hash at all
+///
+/// two ways it comes to say so: [`hash_slot_override`] for a class that wrote
+/// `__hash__ = None` or defined equality without a hash, and [`dataclass_slots`] for a
+/// `data class` that is not frozen. either way the *name* has to be written too — see
+/// `By_PublishNoHash`, which says why leaving it to `PyType_Ready` is not enough
+fn says_unhashable(class: &ClassIr) -> bool {
+    hash_slot_override(class).is_some() || (class.dataclass && !class.immutable)
+}
+
 /// the slot table entries for a heap type
 fn dunder_slots(class: &ClassIr, type_name: &str) -> Vec<(String, String)> {
     let mut slots: Vec<(String, String)> = DUNDER_SLOTS
@@ -4135,6 +4271,9 @@ fn dunder_slots(class: &ClassIr, type_name: &str) -> Vec<(String, String)> {
     }
     if let Some(hash) = hash_slot_override(class) {
         slots.push(("Py_tp_hash".to_string(), hash.to_string()));
+    }
+    for (field, value) in dataclass_slots(class, type_name) {
+        slots.push((slot_id(field), value));
     }
     for (name, reflected, slot, field) in ARITHMETIC.iter().copied().chain([POWER]) {
         if answers_slot(class, name) || answers_slot(class, reflected) {
@@ -4171,6 +4310,9 @@ fn dunder_initializers(class: &ClassIr, type_name: &str) -> String {
     }
     if let Some(hash) = hash_slot_override(class) {
         let _ = writeln!(out, "             .tp_hash = {hash},");
+    }
+    for (field, value) in dataclass_slots(class, type_name) {
+        let _ = writeln!(out, "             .{field} = {value},");
     }
     // `__bool__` names the number table already; an arithmetic method without one
     // still needs it pointed at
@@ -7815,7 +7957,10 @@ fn emit_install_verification(module: &ModuleIr) -> String {
 /// from — see the layout guard in [`emit_module_init`] — so a module with none of those
 /// installs its classes or fails the import, and never quietly stands down entire
 fn stands_the_module_down(module: &ModuleIr) -> bool {
-    module.classes.iter().any(|class| built_ahead(module, class))
+    module
+        .classes
+        .iter()
+        .any(|class| built_ahead(module, class))
 }
 
 fn emit_module_init(module: &ModuleIr) -> String {
@@ -8164,6 +8309,20 @@ fn emit_module_init(module: &ModuleIr) -> String {
             adopt_init,
             "    if (By_AdoptTwinAttributes(&by_twins) < 0) return -1;"
         );
+        // the dataclass bookkeeping the adoption above leaves behind because it is spelled
+        // as a dunder. it has no slot, so nothing about it can disagree with one — and it
+        // is a `dataclasses.Field` dict rather than code, which is why it is carried
+        // rather than emitted
+        for (slot, class) in twins.iter().enumerate() {
+            if !class.dataclass {
+                continue;
+            }
+            let _ = writeln!(
+                adopt_init,
+                "    if (By_CarryDataclassMembers(by_twin[{slot}], {}_OBJ) < 0) return -1;",
+                class.type_name(module.name.dotted())
+            );
+        }
         // and now that every type holds everything its body gave it, the methods those
         // values captured. this waits for the adoption because a table a factory installed
         // after the `class` statement is one of the values it has to reach
@@ -8366,6 +8525,13 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 installed,
                 "    {{ static const char *const by_unpublished[] = {{{listed}, NULL}};\n\
                  \x20     if (By_UnpublishSlotNames({type_name}_OBJ, by_unpublished) < 0) return -1; }}"
+            );
+        }
+        // the slot alone leaves `C.__hash__` to whatever `PyType_Ready` inferred from it
+        if says_unhashable(class) {
+            let _ = writeln!(
+                installed,
+                "    if (By_PublishNoHash({type_name}_OBJ) < 0) return -1;"
             );
         }
         // before anything else asks the type to build an instance: the assignment is what
@@ -9072,6 +9238,8 @@ mod tests {
             exported: true,
             base: Some(ClassBase::External(vec!["Exception".to_string()])),
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
@@ -9943,6 +10111,8 @@ mod tests {
             exported: true,
             base: Some(ClassBase::External(vec!["Exception".to_string()])),
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
@@ -10437,6 +10607,8 @@ mod tests {
             exported: true,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
@@ -11151,6 +11323,8 @@ mod tests {
             exported: true,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
@@ -11239,6 +11413,8 @@ mod tests {
             exported: false,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
@@ -11310,6 +11486,8 @@ mod tests {
             exported: true,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             generic: false,
             declares_slots: false,
             constants: Vec::new(),
@@ -11603,6 +11781,46 @@ mod tests {
         );
     }
 
+    /// a class python makes unhashable says so twice: `tp_hash` is
+    /// `PyObject_HashNotImplemented`, and `__hash__` in the dict is `None`. leaving the
+    /// name to `PyType_Ready` — which writes it only where it recognises the slot's value
+    /// as its own `PyObject_HashNotImplemented` — is what made a compiled mutable
+    /// `data class` answer `C.__hash__ is None` False on windows, where this module
+    /// reaches that function through an import stub and the two addresses differ
+    #[test]
+    fn a_class_with_no_hash_writes_the_name_as_well_as_the_slot() {
+        let mut module = module_with(add());
+        let mut class = sealed_class();
+        class.dataclass = true;
+        module.classes = vec![class];
+        let c = emit_module(&module);
+
+        assert!(
+            c.contains("PyObject_HashNotImplemented"),
+            "the slot says unhashable: {c}"
+        );
+        assert!(
+            c.contains("By_PublishNoHash("),
+            "and the name is written rather than inferred: {c}"
+        );
+    }
+
+    /// a frozen one hashes, so neither half of that applies to it
+    #[test]
+    fn a_frozen_data_class_keeps_the_hash_it_generates() {
+        let mut module = module_with(add());
+        let mut class = sealed_class();
+        class.dataclass = true;
+        class.immutable = true;
+        module.classes = vec![class];
+        let c = emit_module(&module);
+
+        assert!(
+            !c.contains("PyObject_HashNotImplemented") && !c.contains("By_PublishNoHash("),
+            "the class answers a hash of its own: {c}"
+        );
+    }
+
     /// a plain class: its own layout, nothing derived from it, and an instance dict
     fn sealed_class() -> ClassIr {
         ClassIr {
@@ -11611,6 +11829,8 @@ mod tests {
             exported: true,
             base: None,
             inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
             generic: false,
             declares_slots: false,
             constants: Vec::new(),

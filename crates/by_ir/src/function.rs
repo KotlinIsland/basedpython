@@ -712,6 +712,24 @@ pub struct ClassIr {
     /// then `object.__init__` is what rejects a call with arguments, and python names
     /// the *class* in that message rather than a method the class does not have
     pub inherited_init: bool,
+    /// whether a generated constructor takes a parameter per field
+    ///
+    /// a `data class` is its annotations and each of them becomes one. every other
+    /// generated constructor takes nothing and fills the fields from values the class
+    /// body declared — a parameter for one of those would be a signature no source wrote
+    pub fields_are_parameters: bool,
+    /// whether this is a `data class`, whose members `@dataclass` generates.
+    ///
+    /// a generator's state object and a closure's environment also take a parameter per
+    /// field, so [`fields_are_parameters`](Self::fields_are_parameters) does not answer
+    /// this — and nothing python calls a dataclass member belongs on either of those.
+    ///
+    /// the twin is decorated with `@dataclass(slots=True)`, or with
+    /// `@dataclass(frozen=True, slots=True)` where [`immutable`](Self::immutable) is set,
+    /// and those two are the whole option matrix: a written `@dataclass(...)` declines
+    /// because a decorator call cannot be moved to module init. so what the twin's class
+    /// grows is settled, and the emitted type has to grow the same
+    pub dataclass: bool,
     /// whether the class body declares `__slots__`.
     ///
     /// python reads that as "this instance's attributes are exactly these names", and
