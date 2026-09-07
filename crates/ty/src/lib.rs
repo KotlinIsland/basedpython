@@ -162,7 +162,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 by_commands::cmd_build(
                     min_version.as_deref(),
                     &lowering,
-                    out.as_deref().unwrap_or(Path::new("out")),
+                    out.as_deref().unwrap_or(Path::new("build")),
                     print_manifest,
                 )
             }

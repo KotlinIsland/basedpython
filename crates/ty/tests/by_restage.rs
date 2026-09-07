@@ -24,7 +24,7 @@ fn write_project(dir: &Path) {
 
 fn build(dir: &Path) {
     let status = Command::new(env!("CARGO_BIN_EXE_by"))
-        .args(["build", "--out", "out"])
+        .args(["build", "--out", "build"])
         .current_dir(dir)
         .status()
         .expect("`by build` should run");
@@ -33,7 +33,7 @@ fn build(dir: &Path) {
 
 fn restage(dir: &Path, file: &str) -> (bool, serde_json::Value) {
     let out = Command::new(env!("CARGO_BIN_EXE_by"))
-        .args(["restage", "out", file])
+        .args(["restage", "build", file])
         .current_dir(dir)
         .output()
         .expect("`by restage` should run");
@@ -78,13 +78,13 @@ build-stamps = true
     .unwrap();
 
     let status = Command::new(env!("CARGO_BIN_EXE_by"))
-        .args(["build", "--out", "out", "--stamp", "GIT_SHA=abc123"])
+        .args(["build", "--out", "build", "--stamp", "GIT_SHA=abc123"])
         .current_dir(dir.path())
         .status()
         .expect("`by build` should run");
     assert!(status.success(), "`by build` failed");
 
-    let on_disk = std::fs::read_to_string(dir.path().join("out/main.py")).unwrap();
+    let on_disk = std::fs::read_to_string(dir.path().join("build/main.py")).unwrap();
     assert!(
         on_disk.contains(r#"GIT_SHA: str = "abc123""#),
         "the build should have stamped the value:\n{on_disk}"
@@ -111,7 +111,7 @@ fn restaging_a_file_nobody_edited_reproduces_the_build_exactly() {
     write_project(dir.path());
     build(dir.path());
 
-    let on_disk = std::fs::read_to_string(dir.path().join("out/main.py")).unwrap();
+    let on_disk = std::fs::read_to_string(dir.path().join("build/main.py")).unwrap();
     let (ok, answer) = restage(dir.path(), "main.by");
 
     assert!(ok, "an unedited file should re-stage: {answer}");
@@ -137,7 +137,7 @@ fn the_generated_path_is_absolute_even_for_a_relative_build_directory() {
         generated.display()
     );
     assert!(
-        generated.ends_with("out/main.py"),
+        generated.ends_with("build/main.py"),
         "{}",
         generated.display()
     );
@@ -284,7 +284,7 @@ fn a_directory_that_is_not_a_build_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     write_project(dir.path());
     build(dir.path());
-    std::fs::remove_file(dir.path().join("out/_by_build.json")).unwrap();
+    std::fs::remove_file(dir.path().join("build/_by_build.json")).unwrap();
 
     let (ok, answer) = restage(dir.path(), "main.by");
 
@@ -306,7 +306,7 @@ fn a_tree_built_by_another_by_is_refused() {
     write_project(dir.path());
     build(dir.path());
 
-    let record = dir.path().join("out/_by_build.json");
+    let record = dir.path().join("build/_by_build.json");
     let mut parsed: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&record).unwrap()).unwrap();
     parsed["byVersion"] = serde_json::Value::String("0.0.0+somethingelse".to_owned());

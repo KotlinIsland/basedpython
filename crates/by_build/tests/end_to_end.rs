@@ -81,7 +81,10 @@ fn built(module: &ModuleIr, toolchain: &Toolchain, tag: &str) -> Option<PathBuf>
     let _ = std::fs::remove_dir_all(&dir);
     match build_module(module, toolchain, &dir) {
         Ok(artifact) => {
-            assert!(artifact.extension.exists(), "the extension was written");
+            assert!(
+                extension_of(&artifact).exists(),
+                "the extension was written"
+            );
             Some(dir)
         }
         Err(error) => {
@@ -216,6 +219,18 @@ fn fib_module() -> ModuleIr {
         fallback_code: None,
         shims: None,
     }
+}
+
+/// The extension a build wrote.
+///
+/// `Artifact::extension` is `None` only for an `--emit-c-only` emit, which
+/// nothing in this file does — every case here goes through `build_module` or
+/// `build_lowered`, both of which invoke the C compiler.
+fn extension_of(artifact: &by_build::Artifact) -> &std::path::Path {
+    artifact
+        .extension
+        .as_deref()
+        .expect("this build compiled an extension, so it has to name one")
 }
 
 #[test]
@@ -931,7 +946,7 @@ fn an_unchanged_module_is_not_recompiled() {
             .and_then(|meta| meta.modified())
             .expect("the artifact exists")
     };
-    let before = stamp(&first.artifact.extension);
+    let before = stamp(extension_of(&first.artifact));
 
     let second = build_source(
         source,
@@ -941,7 +956,11 @@ fn an_unchanged_module_is_not_recompiled() {
         &Options::default(),
     )
     .expect("the toolchain already worked");
-    assert_eq!(stamp(&second.artifact.extension), before, "it recompiled");
+    assert_eq!(
+        stamp(extension_of(&second.artifact)),
+        before,
+        "it recompiled"
+    );
 
     // and a real change does rebuild
     let changed = "def double(a: int) -> int:\n    return a * 3\n";
@@ -954,7 +973,7 @@ fn an_unchanged_module_is_not_recompiled() {
     )
     .expect("the toolchain already worked");
     assert_ne!(
-        stamp(&third.artifact.extension),
+        stamp(extension_of(&third.artifact)),
         before,
         "it skipped a change"
     );
@@ -980,7 +999,7 @@ fn a_stale_extension_is_rebuilt_even_when_the_c_is_unchanged() {
         eprintln!("skipping: no working C toolchain");
         return;
     };
-    std::fs::remove_file(&built.artifact.extension).expect("the artifact exists");
+    std::fs::remove_file(extension_of(&built.artifact)).expect("the artifact exists");
     let again = build_source(
         source,
         "by_e2e_rebuild_stale",
@@ -989,7 +1008,7 @@ fn a_stale_extension_is_rebuilt_even_when_the_c_is_unchanged() {
         &Options::default(),
     )
     .expect("the toolchain already worked");
-    assert!(again.artifact.extension.exists());
+    assert!(extension_of(&again.artifact).exists());
 }
 
 /// a class on a base from outside the module, holding storage of its own
@@ -1251,10 +1270,10 @@ fn a_package_is_built_as_a_tree_and_imports_under_its_dotted_names() {
             return;
         };
         assert!(
-            built.artifact.extension.exists(),
+            extension_of(&built.artifact).exists(),
             "{} was written to {}",
             name.dotted(),
-            built.artifact.extension.display()
+            extension_of(&built.artifact).display()
         );
     }
 

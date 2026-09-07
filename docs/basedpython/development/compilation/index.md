@@ -9,10 +9,21 @@
 transpiled python it replaces:
 
 ```sh
-by compile                 # compile the whole project to ./out/
+by compile                 # compile the whole project to ./build/
 by compile app.hot         # compile one module, leave the rest interpreted
 python -c "import app"     # the extension is picked up ahead of the .py
 ```
+
+`by compile` writes everything `by build` writes and the extensions as well, so
+`build/` holds the whole project as importable python — every `.by` transpiled,
+every hand-written `.py`, the markers, the data files, the sourcemap — with a
+native extension beside each module that was compiled. two things depend on that.
+a compiled module reads its fixtures relative to itself the way its interpreted
+twin does, so the twin property below is a claim about two modules in the *same*
+project, not about one of them running somewhere the other's data never reached.
+and the tree's manifest only means anything while one command authors the whole
+tree: deleting what the last run wrote and this one did not is right for a mirror
+and wrong for a heap.
 
 the observable behaviour of a compiled module and its interpreted twin must be
 identical. that is not an aspiration, it is the property the entire test
@@ -88,7 +99,7 @@ AST and ty's inferred types
               │                          │
               │                   cc + ld (platform)
               ▼                          ▼
-          out/*.py                out/*.cpython-*.so
+         build/*.py            build/*.cpython-*.so
 ```
 
 ordinary python enters the same front end. `by_irbuild` lowers the `.py` AST

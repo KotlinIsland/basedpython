@@ -131,7 +131,7 @@ custom collection configs in `pytest.ini` or `pyproject.toml` aren't read yet, s
 
 ```sh
 by build
-pytest out/
+pytest build/
 ```
 
 ## see also

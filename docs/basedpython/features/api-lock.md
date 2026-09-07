@@ -71,7 +71,7 @@ record. fields are colon-separated, and the records are sorted lexicographically
 - any symbol whose simple name starts with `_` (unless it's one of the
     conventional public dunders above)
 - stdlib, site-packages, and other non-first-party modules
-- output from `by build` — the `out/` directory is not considered first-party
+- output from `by build` — the `build/` directory is not considered first-party
     source for lockfile purposes
 
 ## determinism and stability

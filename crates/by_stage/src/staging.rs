@@ -20,13 +20,16 @@ use anyhow::Context;
 /// until one shadows a module that moved. The manifest is what makes the output a
 /// mirror rather than a pile: what the previous build wrote and this one did not
 /// is deleted.
-const MANIFEST_FILENAME: &str = ".by-manifest";
+pub(crate) const MANIFEST_FILENAME: &str = ".by-manifest";
 
 /// An output tree being written.
 pub struct Staging {
     out: PathBuf,
     /// relative destination -> the source it came from, for collision reporting
     written: BTreeMap<PathBuf, Option<PathBuf>>,
+    /// destinations another writer produced, held apart from `written` so a
+    /// source that would land on one is reported rather than overwriting it
+    recorded: BTreeSet<PathBuf>,
 }
 
 impl Staging {
@@ -34,6 +37,7 @@ impl Staging {
         Self {
             out: out.to_path_buf(),
             written: BTreeMap::new(),
+            recorded: BTreeSet::new(),
         }
     }
 
@@ -78,6 +82,32 @@ impl Staging {
             .with_context(|| format!("could not write {}", destination.display()))
     }
 
+    /// Record a file another writer put into the tree at `relative`.
+    ///
+    /// `by compile` writes its extensions through `by_build`, which lays them out
+    /// itself rather than through a staging. They still belong in the manifest:
+    /// an extension left behind by a module that has since been deleted keeps
+    /// importing, and — because python's finder prefers an extension to source —
+    /// it goes on shadowing the `.py` a later `by build` writes in its place.
+    ///
+    /// A recorded path is also claimed, so a file the project keeps where an
+    /// artifact lands is reported rather than copied over it. The check runs in
+    /// both directions for whichever order the caller happens to use; today
+    /// `compile` records every artifact before it stages anything, so in practice
+    /// it is the staging side that reports.
+    pub fn record(&mut self, relative: &Path) -> anyhow::Result<()> {
+        if let Some((previous, source)) = self.written.get_key_value(relative) {
+            anyhow::bail!(
+                "the compiler wrote an artifact to `{}`, where {} is already staged \
+                 — one of them has to be renamed",
+                previous.display(),
+                claimant(source.as_deref()),
+            );
+        }
+        self.recorded.insert(relative.to_path_buf());
+        Ok(())
+    }
+
     /// Copy `source` to `relative` verbatim.
     pub(crate) fn copy(&mut self, relative: &Path, source: &Path) -> anyhow::Result<()> {
         self.claim(relative, Some(source))?;
@@ -94,17 +124,27 @@ impl Staging {
     }
 
     fn claim(&mut self, relative: &Path, source: Option<&Path>) -> anyhow::Result<()> {
+        // a project that keeps a file of its own where an artifact lands — a
+        // hand-written `main.c` beside `main.by`, say. copying over it would
+        // leave a tree whose generated half is somebody else's file, and say
+        // nothing about it
+        if self.recorded.contains(relative) {
+            anyhow::bail!(
+                "{} would be carried over to `{}`, where the compiler \
+                 already wrote an artifact of that name — rename one of them, or \
+                 keep the file out of the build with `build.exclude`",
+                claimant(source),
+                relative.display(),
+            );
+        }
         if let Some((previous, Some(previous_source))) = self.written.get_key_value(relative)
             && Some(previous_source.as_path()) != source
         {
-            let claimant = source.map_or_else(
-                || "the build".to_owned(),
-                |source| format!("`{}`", source.display()),
-            );
             anyhow::bail!(
-                "`{}` and {claimant} both build to `{}` — \
+                "`{}` and {} both build to `{}` — \
                  they are the same module, so one of them has to be renamed",
                 previous_source.display(),
+                claimant(source),
                 previous.display(),
             );
         }
@@ -118,7 +158,12 @@ impl Staging {
     pub fn finish(self) -> anyhow::Result<()> {
         let manifest = self.out.join(MANIFEST_FILENAME);
         let previous = read_manifest(&manifest);
-        let current: BTreeSet<&Path> = self.written.keys().map(PathBuf::as_path).collect();
+        let current: BTreeSet<&Path> = self
+            .written
+            .keys()
+            .chain(self.recorded.iter())
+            .map(PathBuf::as_path)
+            .collect();
 
         let mut emptied: BTreeSet<PathBuf> = BTreeSet::new();
         for stale in &previous {
@@ -154,6 +199,14 @@ impl Staging {
         fs::write(&manifest, rendered)
             .with_context(|| format!("could not write {}", manifest.display()))
     }
+}
+
+/// How a collision names the thing that wanted the destination.
+fn claimant(source: Option<&Path>) -> String {
+    source.map_or_else(
+        || "the build".to_owned(),
+        |source| format!("`{}`", source.display()),
+    )
 }
 
 fn create_parent(path: &Path) -> anyhow::Result<()> {

@@ -55,8 +55,10 @@ TARGET_VERSION_SETTING = "python-version"
 
 # where `build_editable` stages the project. it is `by build`'s own default
 # output directory on purpose: an editable install points python at this tree, so
-# a plain `by build` is what refreshes an editable install
-EDITABLE_STAGING_DIRECTORY = "out"
+# a plain `by build` is what refreshes an editable install. the two have to be
+# renamed together — an install left pointing at a directory `by build` no longer
+# writes goes stale with nothing said about it
+EDITABLE_STAGING_DIRECTORY = "build"
 
 
 class BuildError(Exception):

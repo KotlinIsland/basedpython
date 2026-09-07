@@ -16,11 +16,12 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use ruff_db::Db as _;
 use ruff_db::system::SystemPath;
 use ty_project::{Db, ProjectDatabase};
 use walkdir::WalkDir;
 
-use crate::project::may_hold_build_content;
+use crate::project::{holds_manifest, may_hold_build_content};
 use crate::staging::{Staging, relative_destination};
 
 /// One file carried into the output unchanged.
@@ -54,6 +55,19 @@ fn verbatim_files(
         .filter_entry(|entry| {
             // the output tree is not an input to itself, wherever `--out` put it
             if entry.path() == out {
+                return false;
+            }
+            // nor is any *other* build's output. a project can have several —
+            // `by build --out one` beside `by build --out two` — and each holds a
+            // copy of every file this walk carries, so one that was not turned
+            // away would be copied into the next wholesale, a tree deep in a
+            // tree. it is recognised by the manifest it carries rather than by
+            // its name, because `--out` can say anything. the root is exempt:
+            // a manifest there would otherwise carry nothing over at all
+            if entry.file_type().is_dir()
+                && entry.path() != root
+                && holds_manifest(db.system(), entry.path())
+            {
                 return false;
             }
             if !may_hold_build_content(entry) {

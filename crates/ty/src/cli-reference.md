@@ -24,8 +24,8 @@ by run main --min-version 3.12
 
 ## `by build`
 
-transpile every `.by` file in the project to `out/`, mirroring the module
-layout — a src-layout project's source root is stripped, so `out/` is
+transpile every `.by` file in the project to `build/`, mirroring the module
+layout — a src-layout project's source root is stripped, so `build/` is
 importable as it stands:
 
 ```sh
@@ -33,9 +33,9 @@ by build
 ```
 
 ```text
-main.by                     -> out/main.py
-utils.by                    -> out/utils.py
-src/package_name/main.by    -> out/package_name/main.py
+main.by                     -> build/main.py
+utils.by                    -> build/utils.py
+src/package_name/main.by    -> build/package_name/main.py
 ```
 
 generated `.py` files are ordinary Python — run them with any Python tool

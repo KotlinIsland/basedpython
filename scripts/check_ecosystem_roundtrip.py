@@ -14,7 +14,7 @@ For each target project, round-trip the whole tree with the directory-level
 `by` commands::
 
     by transpile --reverse <project>   # python -> basedpython (in place)
-    by build                           # basedpython -> python (-> out/)
+    by build                           # basedpython -> python (-> build/)
 
 `by build` uses one shared project db, so cross-module types resolve — the same
 path real `.by` projects take. This is far cheaper than spawning `by` per file:
@@ -219,7 +219,7 @@ class ProjectOutcome(NamedTuple):
     """The result of round-trip-building a project with a single binary."""
 
     error: str | None
-    # relpath under out/ -> built python; empty when error is set
+    # relpath under build/ -> built python; empty when error is set
     outputs: dict[str, bytes]
 
 
@@ -333,7 +333,7 @@ async def roundtrip_project(
     build_mem_limit_bytes: int | None,
     build_timeout: float | None,
 ) -> ProjectOutcome:
-    """Reverse the whole project (py->by) then build it (by->py via out/)."""
+    """Reverse the whole project (py->by) then build it (by->py via build/)."""
     rc, _, err = await _run(
         by,
         ["transpile", "--reverse", "--min-version", ROUNDTRIP_MIN_VERSION, str(root)],
@@ -356,10 +356,10 @@ async def roundtrip_project(
         mem_limit_bytes=build_mem_limit_bytes,
         timeout=build_timeout,
     )
-    outputs = collect_outputs(root / "out")
+    outputs = collect_outputs(root / "build")
     # a non-zero exit from ty diagnostics (e.g. unresolved third-party imports —
     # the corpus is cloned source-only, so those are expected and unavoidable)
-    # is not a round-trip failure: the transpile still emitted `out/`. only a
+    # is not a round-trip failure: the transpile still emitted `build/`. only a
     # build the watchdog killed (137), or one that produced nothing at all, is a
     # genuine failure
     if rc == 137 or (rc != 0 and not outputs):
@@ -944,7 +944,7 @@ async def main_async(args: argparse.Namespace) -> int:
                     logger.warning("project %s failed setup: %s", name, e)
                     return skipped_result(name, f"setup failed: {e}")
                 finally:
-                    # free the clone (source + generated `.by` + `out/`) so disk
+                    # free the clone (source + generated `.by` + `build/`) so disk
                     # doesn't accumulate across the shard's projects. --checkout
                     # is for reuse, so only clean the temp-dir mode
                     if args.checkout is None:

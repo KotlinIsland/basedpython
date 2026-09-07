@@ -33,7 +33,7 @@ a correct sourcemap is the single primitive all of these share
     span back to its `.by` line for a source-annotated diagnostic
 - `_by_sourcemap.py` carries two tables keyed by the generated `.py` path:
     `SOURCEMAP`, the `.by` path and its line table, and `DIGESTS`, the sha-256 of
-    both files that entry describes. `by build` writes it into `out/` beside the
+    both files that entry describes. `by build` writes it into `build/` beside the
     python it describes, and `by run` into the temporary tree it executes — where
     it lives only as long as that run. see [staleness](#staleness) below
 
@@ -90,7 +90,7 @@ never read is invisible to them
 the traceback shim is the first consumer, and it shows what refusing looks like:
 when either digest disagrees it leaves the frame in the generated python and
 writes a note saying which file no longer matches. a frame pointing at
-`out/main.py` is a worse answer, but a frame quoting a `.by` that has been
+`build/main.py` is a worse answer, but a frame quoting a `.by` that has been
 rewritten since is a false one
 
 both tables are keyed by the generated path exactly as the map spells it. the
