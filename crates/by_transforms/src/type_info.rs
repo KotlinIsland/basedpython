@@ -10,6 +10,7 @@ use ruff_python_stdlib::basedpython::IMPLICIT_TYPING_NAMES;
 use ruff_text_size::TextRange;
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
+use ty_python_semantic::types::call_type_forms::CallTypeForm;
 use ty_python_semantic::types::{
     DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
@@ -90,6 +91,18 @@ pub(crate) trait TypeInfo {
     /// transforms that may fire on value-position subscripts (where an
     /// unresolved name should be treated as a runtime subscript, not a type)
     fn subscript_is_known_type_context(&self, value: &Expr) -> bool;
+
+    /// the arguments of `call` that are type expressions, because the call is one of the
+    /// typing constructs that spells a type through a call — `NewType("D", int)`,
+    /// `TypeVar("T", bound=int)`, the functional `NamedTuple` and `TypedDict`
+    ///
+    /// the type checker decides this, from the same
+    /// [`CallTypeForm`](ty_python_semantic::types::call_type_forms::CallTypeForm) it uses
+    /// to check those arguments as types. a form ty checks as a type and the transpiler
+    /// leaves alone is a silent miscompilation: the surface syntax survives into the
+    /// output as ordinary python, where `A & B` is a runtime `__and__` call and
+    /// `A and B or C` evaluates to `C`
+    fn call_type_expression_arguments<'ast>(&self, call: &'ast ExprCall) -> Vec<&'ast Expr>;
 
     fn is_function(&self, name: &ExprName) -> bool;
 
@@ -624,6 +637,14 @@ impl TypeInfo for SemanticModel<'_> {
             Some(ty) => ty.is_subscript_type_context() && !ty.is_dynamic(),
             None => false,
         }
+    }
+
+    fn call_type_expression_arguments<'ast>(&self, call: &'ast ExprCall) -> Vec<&'ast Expr> {
+        call.func
+            .inferred_type(self)
+            .and_then(|callee| CallTypeForm::of(self.db(), callee))
+            .map(|form| form.type_expressions(&call.arguments))
+            .unwrap_or_default()
     }
 
     fn is_function(&self, name: &ExprName) -> bool {

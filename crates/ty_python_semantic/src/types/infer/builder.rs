@@ -61,6 +61,7 @@ use crate::types::call::bind::{
     requires_overload_evaluation,
 };
 use crate::types::call::{Argument, Binding, Bindings, CallArguments, CallError, CallErrorKind};
+use crate::types::call_type_forms::CallTypeForm;
 use crate::types::callable::CallableTypeKind;
 use crate::types::class::{
     ClassLiteral, CodeGeneratorKind, DynamicClassScopeOffset, DynamicNamedTupleAnchor,
@@ -4782,35 +4783,40 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let func_ty = self
             .try_expression_type(func)
             .unwrap_or_else(|| self.infer_expression(func, TypeContext::default()));
-        if func_ty == Type::SpecialForm(SpecialFormType::NamedTuple) {
-            // Only the `fields` argument is deferred for `NamedTuple`;
-            // other arguments are inferred eagerly.
-            self.infer_typing_namedtuple_fields(&arguments.args[1]);
-            return;
-        }
         let known_class = func_ty
             .as_class_literal()
             .and_then(|cls| cls.known(self.db()));
-        match (known_class, self.region) {
-            (Some(KnownClass::NewType), _) => {
+        // which construct this is, and so which of its arguments are type expressions, is
+        // decided in one place — the basedpython transpiler asks the same question of the
+        // same call, because a form whose arguments are checked as types is one whose
+        // arguments have to be lowered as types too
+        match (CallTypeForm::of(self.db(), func_ty), self.region) {
+            (Some(CallTypeForm::NamedTuple), _) => {
+                // Only the `fields` argument is deferred for `NamedTuple`;
+                // other arguments are inferred eagerly.
+                self.infer_typing_namedtuple_fields(&arguments.args[1]);
+                return;
+            }
+            (Some(CallTypeForm::NewType), _) => {
                 self.infer_newtype_assignment_deferred(arguments);
                 return;
             }
-            (
-                Some(KnownClass::TypeAliasType | KnownClass::ExtensionsTypeAliasType),
-                InferenceRegion::Deferred(definition),
-            ) => {
+            (Some(CallTypeForm::TypeAliasType), InferenceRegion::Deferred(definition)) => {
                 self.infer_typealiastype_assignment_deferred(definition, target, arguments);
                 return;
             }
-            (Some(KnownClass::Type), InferenceRegion::Deferred(definition)) => {
-                self.infer_builtins_type_deferred(definition, value);
+            (Some(CallTypeForm::TypedDict), _) => {
+                self.infer_functional_typeddict_deferred(arguments);
                 return;
             }
             _ => {}
         }
-        if TypingModule::from_typed_dict_type(self.db(), func_ty).is_some() {
-            self.infer_functional_typeddict_deferred(arguments);
+        // `type("C", bases, ns)` and `new_class` build a class rather than name a type, so
+        // neither is a form whose arguments are type expressions
+        if let (Some(KnownClass::Type), InferenceRegion::Deferred(definition)) =
+            (known_class, self.region)
+        {
+            self.infer_builtins_type_deferred(definition, value);
             return;
         }
         if let InferenceRegion::Deferred(definition) = self.region

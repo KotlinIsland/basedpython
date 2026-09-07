@@ -173,6 +173,7 @@ mod bool;
 mod bound_super;
 mod build_stamps;
 mod call;
+pub mod call_type_forms;
 mod callable;
 pub mod character;
 mod class;
@@ -699,7 +700,7 @@ pub enum TypingModule {
 impl TypingModule {
     /// Return the module for a `TypedDict` special form, including a union of the special forms
     /// exported by `typing` and `typing_extensions`.
-    fn from_typed_dict_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Self> {
+    pub(crate) fn from_typed_dict_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Self> {
         match ty {
             Type::SpecialForm(SpecialFormType::TypedDict(module)) => Some(module),
             Type::Union(union) => {
@@ -726,7 +727,7 @@ impl TypingModule {
         }
     }
 
-    const fn from_type_alias_class(class: KnownClass) -> Option<Self> {
+    pub(crate) const fn from_type_alias_class(class: KnownClass) -> Option<Self> {
         match class {
             KnownClass::TypeAliasType => Some(Self::Typing),
             KnownClass::ExtensionsTypeAliasType => Some(Self::TypingExtensions),

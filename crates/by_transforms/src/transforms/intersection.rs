@@ -558,4 +558,99 @@ mod tests {
             "},
         );
     }
+
+    // a handful of typing constructs spell a type through a call rather than through an
+    // annotation. those arguments are type expressions, so the surface syntax written in
+    // one lowers exactly as it does after a `:` — an unlowered `A & B` reaching the output
+    // is a runtime `A.__and__(B)`
+
+    #[test]
+    fn typevar_bound_lowers() {
+        check(
+            "import typing\nT = typing.TypeVar(\"T\", bound=A & B)\n",
+            indoc! {r#"
+                from ty_extensions import Intersection
+                import typing
+                T = typing.TypeVar("T", bound=Intersection[A, B])
+            "#},
+        );
+    }
+
+    #[test]
+    fn typevar_constraints_lower() {
+        check(
+            "import typing\nT = typing.TypeVar(\"T\", A & B, C or D)\n",
+            indoc! {r#"
+                from ty_extensions import Intersection
+                import typing
+                T = typing.TypeVar("T", Intersection[A, B], C | D)
+            "#},
+        );
+    }
+
+    #[test]
+    fn paramspec_default_elements_lower() {
+        check(
+            "import typing\nP = typing.ParamSpec(\"P\", default=[A & B, C])\n",
+            indoc! {r#"
+                from ty_extensions import Intersection
+                import typing
+                P = typing.ParamSpec("P", default=[Intersection[A, B], C])
+            "#},
+        );
+    }
+
+    #[test]
+    fn newtype_base_lowers() {
+        check(
+            "import typing\nD = typing.NewType(\"D\", A or B)\n",
+            indoc! {r#"
+                import typing
+                D = typing.NewType("D", A | B)
+            "#},
+        );
+    }
+
+    #[test]
+    fn functional_named_tuple_field_lowers() {
+        check(
+            "import typing\nNT = typing.NamedTuple(\"NT\", [(\"f\", A & B)])\n",
+            indoc! {r#"
+                from ty_extensions import Intersection
+                import typing
+                NT = typing.NamedTuple("NT", [("f", Intersection[A, B])])
+            "#},
+        );
+    }
+
+    #[test]
+    fn functional_typed_dict_field_lowers() {
+        check(
+            "import typing\nTD = typing.TypedDict(\"TD\", {\"f\": A & B})\n",
+            indoc! {r#"
+                from ty_extensions import Intersection
+                import typing
+                TD = typing.TypedDict("TD", {"f": Intersection[A, B]})
+            "#},
+        );
+    }
+
+    #[test]
+    fn type_alias_type_value_lowers() {
+        check_py312(
+            "import typing\nAL = typing.TypeAliasType(\"AL\", A & B)\n",
+            indoc! {r#"
+                from ty_extensions import Intersection
+                import typing
+                AL = typing.TypeAliasType("AL", Intersection[A, B])
+            "#},
+        );
+    }
+
+    // the keyword is only a type operator where the call really is one of those
+    // constructs; an ordinary call's arguments stay boolean expressions
+    #[test]
+    fn ordinary_call_argument_untouched() {
+        unchanged("f(A and B)\n");
+    }
 }

@@ -32,6 +32,11 @@
 //! 9. `Annotated[T, meta…]` only the first arg
 //! 10. `Callable[[P1, P2], R]` parameter list elements + return type
 //! 12. class base list
+//! 13. the type-expression arguments of a typing construct that spells a type through a
+//!     call — `NewType("D", int)`, `TypeVar("T", bound=int)`, the functional
+//!     `NamedTuple` and `TypedDict`. which arguments those are is the type checker's
+//!     answer rather than a list kept here, so a form ty learns to check as a type is
+//!     one this lowers without further change
 
 use ruff_python_ast::helpers::declaration_annotation_type;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
@@ -373,6 +378,36 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
                     self.visit_expr(&kw.value);
                 }
                 return;
+            }
+
+            // a typing construct that spells a type through a call
+            if let Some(types) = self.types {
+                let type_arguments = types.call_type_expression_arguments(c);
+                if !type_arguments.is_empty() {
+                    // a form can hold its types inside a literal — a `NamedTuple`'s
+                    // field list, a `TypedDict`'s field dict — so an argument counts as
+                    // handled once it *contains* one, and is not walked again as a value
+                    let holds_type_argument = |expr: &Expr| {
+                        type_arguments
+                            .iter()
+                            .any(|argument| expr.range().contains_range(argument.range()))
+                    };
+                    for argument in &type_arguments {
+                        self.visit_type_expr(argument, TypePos::Root);
+                    }
+                    // everything else the call holds is an ordinary value
+                    for arg in &c.arguments.args {
+                        if !holds_type_argument(arg) {
+                            self.visit_expr(arg);
+                        }
+                    }
+                    for kw in &c.arguments.keywords {
+                        if !holds_type_argument(&kw.value) {
+                            self.visit_expr(&kw.value);
+                        }
+                    }
+                    return;
+                }
             }
         }
         // lambda parameter annotations (basedpython supports typed lambdas)
