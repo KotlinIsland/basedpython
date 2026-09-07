@@ -1735,17 +1735,19 @@ pub(crate) fn is_enum_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
     }
 }
 
-/// shared checker/transpiler contract for the basedpython `is`/`is not`
-/// keyword pair: whether a comparison whose rhs has type `ty` keeps python
-/// identity semantics instead of lowering to `isinstance`. true when the rhs
-/// is statically a plain *value* — an enum member (`Color.RED`, a based-enum
-/// unit variant like `Shape.Point`), another literal, or an instance of a
-/// concrete non-type class — which `isinstance` would reject as its classinfo
-/// argument at runtime. a class-like rhs (a class literal, `type[...]`, an
-/// instance of a metaclass), a tuple (a valid multi-target classinfo
-/// spelling), a bare `object` (which admits classes), and anything dynamic or
-/// unresolved lower to `isinstance` as usual
-pub fn basedpython_is_keeps_identity<'db>(
+/// basedpython: whether a value of type `ty` is a plain *value* rather than a
+/// class — an enum member (`Color.RED`, a based-enum unit variant), another
+/// literal, or an instance of a concrete non-type class. `isinstance` rejects
+/// such a value as its classinfo argument at runtime, so the test for one is
+/// identity.
+///
+/// This answers a lowering question, not a checking one. A type test's target
+/// is a type expression, and the checker reads it as one — but the enum
+/// lowering rewrites a unit variant into a singleton instance before the
+/// transpiler's own pass runs, so a target that names a type in the source can
+/// name a value in what is emitted. That is the case this decides, from the
+/// type rather than from the shape the target was written in.
+pub(crate) fn basedpython_is_plain_value<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     ty: Type<'db>,
@@ -1754,13 +1756,13 @@ pub fn basedpython_is_keeps_identity<'db>(
         Type::Union(union) => union
             .elements(db)
             .iter()
-            .all(|element| basedpython_is_keeps_identity(db, env, *element)),
+            .all(|element| basedpython_is_plain_value(db, env, *element)),
         // literal values (enum members included) are never classes
         Type::LiteralValue(_) | Type::EnumComplement(_) => true,
         // a use-site modifier says nothing about whether the value is a class:
         // a unit enum variant is a `final _Shape_Point`, still an instance
         Type::Restricted(restricted) => {
-            basedpython_is_keeps_identity(db, env, restricted.value_type(db))
+            basedpython_is_plain_value(db, env, restricted.value_type(db))
         }
         Type::NominalInstance(instance) => {
             !instance.has_known_class(db, KnownClass::Object)

@@ -2540,6 +2540,15 @@ bitflags::bitflags! {
         /// means something: it bounds the pack as a whole rather than field by field.
         const IN_PACK_BOUND = 1 << 18;
 
+        /// basedpython: set while inferring the right-hand side of a type test — the
+        /// type expression `x is T` tests against.
+        ///
+        /// A bare generic class is complete there: the test asks whether the value is
+        /// one, and the type arguments are exactly what the runtime cannot see. So
+        /// `missing-type-argument`, which asks an annotation to say more, has nothing
+        /// to ask for here.
+        const IN_TYPE_TEST_TARGET = 1 << 19;
+
         /// Whether the current method's explicit receiver annotation is incompatible with `Self`.
         const HAS_INCOMPATIBLE_SELF_RECEIVER = 1 << 15;
     }

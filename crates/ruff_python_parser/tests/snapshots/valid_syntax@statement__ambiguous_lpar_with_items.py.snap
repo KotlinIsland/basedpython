@@ -625,6 +625,7 @@ Module(
                                             },
                                         ),
                                     ],
+                                    identity_ops: None,
                                 },
                             ),
                             optional_vars: None,

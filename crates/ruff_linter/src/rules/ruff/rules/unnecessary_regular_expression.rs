@@ -334,6 +334,8 @@ impl<'a> ReFunc<'a> {
             left: Box::new(left.clone()),
             ops: Box::new([op]),
             comparators: Box::new([right.clone()]),
+            // only ever `==` / `!=` here, which have one spelling
+            identity_ops: None,
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         })

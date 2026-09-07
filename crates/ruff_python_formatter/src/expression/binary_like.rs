@@ -8,7 +8,7 @@ use ruff_python_ast::{
     Expr, ExprAttribute, ExprBinOp, ExprBoolOp, ExprCompare, ExprUnaryOp, StringLike, UnaryOp,
 };
 use ruff_python_trivia::{SimpleToken, SimpleTokenKind, SimpleTokenizer, TriviaRanges};
-use ruff_text_size::{Ranged, TextLen, TextRange};
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::comments::{Comments, SourceComment, leading_comments, trailing_comments};
 use crate::expression::OperatorPrecedence;
@@ -65,20 +65,16 @@ impl<'a> BinaryLike<'a> {
             if let Some((last_expression, middle_expressions)) = compare.comparators.split_last() {
                 let (last_operator, middle_operators) = compare.ops.split_last().unwrap();
 
-                // the source gap preceding each operator, so a basedpython
-                // `===` / `!==` can be told apart from the `is` / `is not` it
-                // shares a `CmpOp` with
-                let mut gap_start = compare.left.end();
-
-                for (operator, expression) in middle_operators.iter().zip(middle_expressions) {
+                for (index, (operator, expression)) in
+                    middle_operators.iter().zip(middle_expressions).enumerate()
+                {
                     parts.push(OperandOrOperator::Operator(Operator {
                         symbol: OperatorSymbol::Comparator(
                             *operator,
-                            TextRange::new(gap_start, expression.start()),
+                            compare.is_identity_operator(index),
                         ),
                         trailing_comments: &[],
                     }));
-                    gap_start = expression.end();
 
                     rec(Operand::Middle { expression }, comments, trivia, parts);
                 }
@@ -86,7 +82,7 @@ impl<'a> BinaryLike<'a> {
                 parts.push(OperandOrOperator::Operator(Operator {
                     symbol: OperatorSymbol::Comparator(
                         *last_operator,
-                        TextRange::new(gap_start, last_expression.start()),
+                        compare.is_identity_operator(middle_operators.len()),
                     ),
                     trailing_comments: &[],
                 }));
@@ -1022,12 +1018,11 @@ impl Format<PyFormatContext<'_>> for Operator<'_> {
 #[derive(Copy, Clone, Debug)]
 enum OperatorSymbol {
     Binary(ruff_python_ast::Operator),
-    /// The comparison operator together with the source gap that precedes it —
-    /// the span between the end of the left operand and the start of the right
-    /// one. basedpython spells identity as `===` / `!==` but parses both to the
-    /// `CmpOp` of `is` / `is not` (whose surface form is instead a parametric
-    /// type test), so the spelling can only be recovered from that source.
-    Comparator(ruff_python_ast::CmpOp, TextRange),
+    /// The comparison operator, and whether it was written `===` / `!==`.
+    /// basedpython spells python's identity comparison that way and parses it
+    /// to the same `CmpOp` as the `is` keyword, so the operator alone does not
+    /// say which one to print back.
+    Comparator(ruff_python_ast::CmpOp, bool),
     Bool(ruff_python_ast::BoolOp),
 }
 
@@ -1045,40 +1040,33 @@ impl OperatorSymbol {
     }
 }
 
-/// The source range of a basedpython `===` / `!==` identity operator written in
-/// `gap` — the span between the two operands it joins — or `None` when the
-/// operator is spelled `is` / `is not`, or is not an identity comparison at all.
-fn identity_operator_range(
-    context: &PyFormatContext,
+/// The basedpython spelling of an identity comparison — `===` / `!==` — or
+/// `None` when the operator is written `is` / `is not`, or is not an identity
+/// comparison at all.
+///
+/// Only basedpython records the spelling, so a `.py` file always takes the
+/// `None` arm and prints python's `is`.
+fn identity_operator_symbol(
     operator: ruff_python_ast::CmpOp,
-    gap: TextRange,
-) -> Option<TextRange> {
-    let symbol = match operator {
-        ruff_python_ast::CmpOp::Is => "===",
-        ruff_python_ast::CmpOp::IsNot => "!==",
-        _ => return None,
-    };
-
-    let source = context.source();
-    // the operator is the first token in the gap that is neither trivia nor a
-    // closing parenthesis of the left operand (`(a) === b`)
-    let start = SimpleTokenizer::new(source, gap)
-        .skip_trivia()
-        .find(|token| token.kind() != SimpleTokenKind::RParen)?
-        .start();
-
-    source[usize::from(start)..]
-        .starts_with(symbol)
-        .then(|| TextRange::at(start, symbol.text_len()))
+    identity: bool,
+) -> Option<&'static str> {
+    if !identity {
+        return None;
+    }
+    match operator {
+        ruff_python_ast::CmpOp::Is => Some("==="),
+        ruff_python_ast::CmpOp::IsNot => Some("!=="),
+        _ => None,
+    }
 }
 
 impl Format<PyFormatContext<'_>> for OperatorSymbol {
     fn fmt(&self, f: &mut Formatter<PyFormatContext<'_>>) -> FormatResult<()> {
         match self {
             OperatorSymbol::Binary(operator) => operator.format().fmt(f),
-            OperatorSymbol::Comparator(operator, gap) => {
-                match identity_operator_range(f.context(), *operator, *gap) {
-                    Some(range) => source_text_slice(range).fmt(f),
+            OperatorSymbol::Comparator(operator, identity) => {
+                match identity_operator_symbol(*operator, *identity) {
+                    Some(symbol) => token(symbol).fmt(f),
                     None => operator.format().fmt(f),
                 }
             }

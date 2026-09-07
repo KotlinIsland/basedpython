@@ -596,34 +596,33 @@ c: Color.RED = Color.RED
 reveal_type(c)  # revealed: Color.RED
 ```
 
-## `is` / `is not` between members keeps identity at runtime
+## `is` / `is not` against a member is identity at runtime
 
-a payload-less variant is a singleton *instance*, not a class, so the `is`/`is not` keyword pair
-keeps python identity semantics for it — the `isinstance` lowering only fires when the rhs resolves
-to a variant *class*. this block is checker-clean, so the divergence harness executes it and pins
-the runtime contract
+a payload-less variant names the type holding exactly one object, so the test for it is identity —
+and a payload-less variant is a singleton *instance*, so identity is also all the runtime has to
+compare. a payload variant names a *class* instead, and its test is the `isinstance` that asks. this
+block is checker-clean, so the divergence harness executes it and pins the runtime contract
+
+the values come from a call rather than being written inline, so the tests are not settled
+statically — a settled one would fold to a constant and stop exercising the lowering
 
 ```by
 enum class Genre:
     case A, B
 
-assert Genre.A is Genre.A
-assert Genre.A is not Genre.B
+def pick() -> Genre:
+    return Genre.A
 
-g: Genre = Genre.A
-assert g is Genre.A
-assert g is not Genre.B
+assert pick() is Genre.A
+assert pick() is not Genre.B
 
 enum class Shape:
     case Circle(radius: float)
     case Point
 
-assert Shape.Point is Shape.Point
-p = Shape.Point
-assert p is Shape.Point
+def shape() -> Shape:
+    return Shape.Circle(1.0)
 
-# a payload variant is a class, so the rhs of `is` lowers to `isinstance`
-c = Shape.Circle(1.0)
-assert c is Shape.Circle
-assert c is not Shape.Point
+assert shape() is Shape.Circle
+assert shape() is not Shape.Point
 ```

@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow, bail};
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{
-    self as ast, Arguments, CmpOp, Expr, ExprContext, Identifier, Keyword, Stmt, UnaryOp,
+    self as ast, Arguments, CmpOp, Expr, ExprContext, Identifier, Keyword, PySourceType, Stmt,
+    UnaryOp,
 };
 use ruff_text_size::TextRange;
 use rustc_hash::{FxBuildHasher, FxHashMap};
@@ -170,11 +171,26 @@ fn assert(expr: &Expr, msg: Option<&Expr>) -> Stmt {
     })
 }
 
-fn compare(left: &Expr, cmp_op: CmpOp, right: &Expr) -> Expr {
+fn compare(left: &Expr, cmp_op: CmpOp, right: &Expr, source_type: PySourceType) -> Expr {
     Expr::Compare(ast::ExprCompare {
         left: Box::new(left.clone()),
         ops: Box::from([cmp_op]),
         comparators: Box::from([right.clone()]),
+        // `assertIs` asserts python *identity*, which basedpython writes `===`
+        // — its `is` keyword is a type test, a different assertion entirely.
+        // recording no spelling prints `is`, so this has to say so.
+        //
+        // `assertIsNone` is the exception: `is None` is a test for the type
+        // `None`, which holds one object, so it is the same test either way —
+        // and it is the spelling a reader expects
+        identity_ops: (source_type.is_basedpython()
+            && matches!(cmp_op, CmpOp::Is | CmpOp::IsNot)
+            && !right.is_none_literal_expr())
+        .then(|| {
+            Box::new(ast::IdentityOperators {
+                ops: Box::from([true]),
+            })
+        }),
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     })
@@ -278,7 +294,12 @@ impl UnittestAssert {
         Ok(args_map)
     }
 
-    pub(crate) fn generate_assert(self, args: &[Expr], keywords: &[Keyword]) -> Result<Stmt> {
+    pub(crate) fn generate_assert(
+        self,
+        args: &[Expr],
+        keywords: &[Keyword],
+        source_type: PySourceType,
+    ) -> Result<Stmt> {
         let args = self.args_map(args, keywords)?;
         match self {
             UnittestAssert::True
@@ -339,7 +360,7 @@ impl UnittestAssert {
                     UnittestAssert::IsNot => CmpOp::IsNot,
                     _ => unreachable!(),
                 };
-                let expr = compare(first, cmp_op, second);
+                let expr = compare(first, cmp_op, second, source_type);
                 Ok(assert(&expr, msg))
             }
             UnittestAssert::In | UnittestAssert::NotIn => {
@@ -355,7 +376,7 @@ impl UnittestAssert {
                 } else {
                     CmpOp::NotIn
                 };
-                let expr = compare(member, cmp_op, container);
+                let expr = compare(member, cmp_op, container, source_type);
                 Ok(assert(&expr, msg))
             }
             UnittestAssert::IsNone | UnittestAssert::IsNotNone => {
@@ -372,7 +393,7 @@ impl UnittestAssert {
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                 });
-                let expr = compare(expr, cmp_op, &node);
+                let expr = compare(expr, cmp_op, &node, source_type);
                 Ok(assert(&expr, msg))
             }
             UnittestAssert::IsInstance | UnittestAssert::NotIsInstance => {

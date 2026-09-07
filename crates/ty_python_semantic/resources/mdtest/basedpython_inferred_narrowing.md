@@ -384,8 +384,8 @@ def f(x: str):
 ## a parameter the body puts something else in is not a guard
 
 A guard names the argument a call passed, so it says nothing once the body puts something else where
-that argument was. `rebound` hands back `True` whatever it is given, and reading that as a claim
-about the argument would narrow it to `Never`.
+that argument was. `rebound` hands back `True` whatever it is given — the test is settled by the `1`
+the body assigned — and reading that as a claim about the argument would narrow it to `Never`.
 
 ```by
 def rebound(a: object):
@@ -393,7 +393,7 @@ def rebound(a: object):
     return a is int
 
 def f(x: str):
-    reveal_type(rebound)  # revealed: def rebound(a: object) -> bool
+    reveal_type(rebound)  # revealed: def rebound(a: object) -> True
     if rebound(x):
         reveal_type(x)  # revealed: str
 ```

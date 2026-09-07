@@ -466,6 +466,7 @@ fn match_eq_target(expr: &Expr) -> Option<(&Name, &Expr)> {
         comparators,
         range: _,
         node_index: _,
+        identity_ops: _,
     }) = expr
     else {
         return None;
@@ -554,6 +555,7 @@ pub(crate) fn compare_with_tuple(checker: &Checker, expr: &Expr) {
             left: Box::new(node1.into()),
             ops: Box::from([CmpOp::In]),
             comparators: Box::from([node.into()]),
+            identity_ops: None,
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         };

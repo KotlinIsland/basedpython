@@ -339,6 +339,111 @@ print("ok")
 /// Returns `None` (test skips) when none is found — PEP 695 class syntax is a
 /// hard requirement here.
 /// pep 695 type parameters — what [`PROGRAM`] needs (3.12+)
+/// basedpython whose module-level `assert`s exercise the runtime check each
+/// *non-parametric* target lowers to. The checker's own tests pin the type it
+/// reads and the transpiler's pin the text it emits; only running the result
+/// says whether the check accepts the values the type contains and no others.
+const TARGETS_PROGRAM: &str = r#"
+from typing import Callable, Literal, Protocol, runtime_checkable
+
+class A: ...
+class B(A): ...
+
+# a class is the `isinstance` it looks like
+assert (B() is A) is True, "a subclass instance is an A"
+assert (A() is B) is False, "a base instance is not a B"
+
+# `type[C]` asks two things, and the runtime can answer both
+assert (B is type[A]) is True, "a subclass is a type[A]"
+assert (B() is type[A]) is False, "an instance is not a type[A]"
+assert (int is type[A]) is False, "an unrelated class is not a type[A]"
+
+# a literal names the values equal to it, with the class pinned: `1 == True` in
+# python, and `Literal[1]` does not contain `True`
+def literal_one(v: object) -> bool:
+    return v is Literal[1]
+
+assert literal_one(1) is True, "1 is a Literal[1]"
+assert literal_one(True) is False, "True is not a Literal[1]"
+assert literal_one(2) is False, "2 is not a Literal[1]"
+
+def literal_true(v: object) -> bool:
+    return v is Literal[True]
+
+assert literal_true(True) is True, "True is a Literal[True]"
+assert literal_true(1) is False, "1 is not a Literal[True]"
+
+# a union holds when any arm does, including one the source spells with a
+# single word
+type Key = int | str
+
+def key(v: object) -> bool:
+    return v is Key
+
+assert key(1) is True, "an int is a Key"
+assert key("a") is True, "a str is a Key"
+assert key(1.5) is False, "a float is not a Key"
+
+# a template literal type is the set of strings its pattern produces
+def item(s: str) -> bool:
+    return s is f"item-{int}"
+
+assert item("item-12") is True, "item-12 matches"
+assert item("item--3") is True, "a negative renders with its sign"
+assert item("item-0") is True, "zero renders as one digit"
+assert item("item--0") is False, "str(-0) is 0, so -0 renders no such string"
+assert item("item-01") is False, "a leading zero is not an int rendering"
+assert item("item-ab") is False, "a non-numeric tail does not match"
+assert item("item-") is False, "an empty hole does not match"
+assert (1 is f"item-{int}") is False, "a non-str is never one of the strings"
+
+# a pattern's literal text matches itself, metacharacters and all
+def dotted(s: str) -> bool:
+    return s is f"a.b{int}"
+
+assert dotted("a.b1") is True, "the dot is literal text"
+assert dotted("axb1") is False, "and does not stand for any character"
+
+# `None` is a value, so its test is the identity python already performs
+def optional(v: object) -> bool:
+    return v is None
+
+assert optional(None) is True, "None is None"
+assert optional(0) is False, "0 is not None"
+
+# a bare `Callable` asks exactly what `callable()` answers
+def call(v: object) -> bool:
+    return v is Callable
+
+assert call(len) is True, "a builtin is callable"
+assert call(A) is True, "a class is callable"
+assert call(1) is False, "an int is not"
+
+# a `@runtime_checkable` protocol is the check python itself performs
+@runtime_checkable
+class HasName(Protocol):
+    name: str
+
+class Named:
+    def __init__(self) -> None:
+        self.name = "x"
+
+assert (Named() is HasName) is True, "a value with the member satisfies it"
+assert (1 is HasName) is False, "one without does not"
+
+# `is not` is the negation, evaluated once
+calls = []
+
+def once() -> object:
+    calls.append(1)
+    return 1
+
+assert (once() is not Literal[2]) is True, "the negation holds"
+assert len(calls) == 1, "an effectful value is evaluated once"
+
+print("ok")
+"#;
+
 const PEP695_PROBE: &str = "type X[T] = T";
 
 /// pep 696 defaults in native syntax plus the `has_default()` accessor the probe
@@ -404,6 +509,19 @@ fn parametric_protocol_checks_run_correctly() {
         return;
     };
     run_program(&python, PROGRAM);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn every_target_kind_checks_correctly_at_runtime() {
+    let Some(python) = python_supporting(PEP695_PROBE) else {
+        eprintln!("skipping type-test target runtime test: no PEP 695-capable interpreter found");
+        return;
+    };
+    run_program(&python, TARGETS_PROGRAM);
 }
 
 #[test]

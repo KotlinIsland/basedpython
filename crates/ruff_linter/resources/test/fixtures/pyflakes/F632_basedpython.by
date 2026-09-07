@@ -17,3 +17,20 @@ def type_tests[T](x: T, xs: list[int]) -> None:
     # this one lowers to `isinstance([], [])`, which raises at runtime — but the
     # mistake in it is the target, not the operator, so it is ty's to report
     print([] is [])
+
+
+# which spelling was written is recorded on the comparison, not recovered from the
+# source between the operands, so it survives everything that can sit there
+def spelling_survives_what_sits_between(x: object) -> None:
+    a = (1) === (1)  # F632
+    b = 1 \
+        === 1  # F632
+    c = (1 ===  # a comment between the operands
+         1)  # F632
+    d = 1===1  # F632
+
+
+# each operator of a chain answers for its own spelling
+def chained(x: object) -> None:
+    e = x < 1 === 1  # F632
+    f = 1 === 1 !== 2  # F632

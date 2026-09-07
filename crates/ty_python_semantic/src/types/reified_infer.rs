@@ -16,6 +16,8 @@
 //! classes, exotic type forms — has no spelling and the bare call stays an
 //! error
 
+use std::fmt::Write as _;
+
 use itertools::Itertools;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
@@ -696,7 +698,16 @@ pub enum ParametricIsPlan {
     /// generic whose instances carry `__orig_class__` — probe it at runtime,
     /// matching each argument by the target's effective variance (one entry
     /// per type parameter). a legitimate, unwarned runtime test
-    Probe(Box<[ArgVariance]>),
+    Probe {
+        /// the target's runtime spelling (`A[int]`), or `None` when the source
+        /// already spells it and should be passed through — which is the more
+        /// robust of the two, since a name the source wrote is in scope by
+        /// construction while a rebuilt spelling needs the origin class to be
+        /// nameable where the test is written. `Some` where nothing in the
+        /// source spells this target on its own: one arm of a union
+        target: TargetSpelling,
+        variances: Box<[ArgVariance]>,
+    },
     /// basedpython: not decidable from static types, and the target is a
     /// protocol — but every data member's specialized type has a runtime
     /// spelling, so the value's reified annotations can be checked structurally
@@ -706,6 +717,114 @@ pub enum ParametricIsPlan {
     /// a usable `__orig_class__`, so no sound runtime probe exists — the test
     /// is an error. the reason picks the diagnostic wording
     ErasedTarget(ErasedTargetReason),
+    /// `isinstance(value, <spelling>)` — the target is a plain class, which is
+    /// exactly what `isinstance` was built to answer. `None` where the source
+    /// spells the target itself and should be passed through, which names even
+    /// a class no module global does (an enum's `Shape.Circle`)
+    Isinstance(TargetSpelling),
+    /// `callable(value)` — a `Callable` with no signature, which asks only what
+    /// the runtime records
+    IsCallable,
+    /// `value is None`. `None` is a value, not a class, so `isinstance` cannot
+    /// take it, and identity is the whole test — there is only one `None`
+    IsNone,
+    /// `type(value) is <class> and value == <value>` — a literal target such as
+    /// `Literal[3]`, whose type holds exactly one value. the class guard is not
+    /// redundant: python's `1 == True` would otherwise let a `bool` satisfy
+    /// `Literal[1]`
+    Equality {
+        class: String,
+        /// the value to compare against. the source's own literal where it
+        /// wrote one — which is already spelled correctly for wherever it sits,
+        /// including inside an f-string on a python that forbids reusing the
+        /// outer quote
+        value: TargetSpelling,
+    },
+    /// `value is <spelling>` — an enum member, which is a singleton, so
+    /// identity is both exact and what the runtime compares anyway. `None`
+    /// passes the source through, as for [`Self::Isinstance`]
+    Identity(TargetSpelling),
+    /// `isinstance(value, type) and issubclass(value, <spelling>)` — a
+    /// `type[C]` target, which the runtime can check in full. `None` passes the
+    /// source through, as for [`Self::Isinstance`]
+    Subclass(TargetSpelling),
+    /// a template literal type: the value must be a `str` matching this
+    /// regular expression, which spells the same language `matches_str` decides
+    Pattern(String),
+    /// the target is an interface something in scope visibly *conforms* to, so
+    /// the conformance registry answers the test. a conforming type is not a
+    /// subclass, so `isinstance` could never see the relationship
+    Conformance {
+        /// how the interface is written into the emitted python
+        target: TargetSpelling,
+        /// the interface's required member names, for the runtime check to look
+        /// for on a value nothing registered
+        members: Vec<String>,
+    },
+    /// nothing is known about the target — an error elsewhere left `Unknown`
+    /// behind. the test is lowered as the plain `isinstance` the source spells
+    /// and reported by whatever produced the `Unknown`, which is the sharper
+    /// report and the only one
+    Unresolved,
+    /// the disjunction of these plans — the target is a union, and a value
+    /// satisfies it as soon as one arm holds. the arms are carried as plans of
+    /// their own because a union's arms need not be spelled in the source: a
+    /// PEP 695 alias names one with a single identifier
+    Union(Box<[ParametricIsPlan]>),
+}
+
+impl ParametricIsPlan {
+    /// whether a `False` from this test proves the value does *not* have the
+    /// type, so the negative branch may narrow.
+    ///
+    /// An exact check answers the question the type asks. The parametric ones
+    /// do not: a runtime probe reads the arguments a value happens to record,
+    /// and a value that records none answers `False` even where the static
+    /// types say it is a match — narrowing on that would remove a type the
+    /// value really has.
+    pub(crate) fn narrows_negatively(&self) -> bool {
+        match self {
+            Self::Fold(_)
+            | Self::Isinstance(_)
+            | Self::IsCallable
+            | Self::IsNone
+            | Self::Equality { .. }
+            | Self::Identity(_)
+            | Self::Subclass(_)
+            | Self::Pattern(_) => true,
+            Self::Union(arms) => arms.iter().all(Self::narrows_negatively),
+            Self::TokenEq(_)
+            | Self::Probe { .. }
+            | Self::ProtocolStructural(_)
+            | Self::Conformance { .. }
+            | Self::Unresolved
+            | Self::ErasedTarget(_) => false,
+        }
+    }
+
+    /// whether this plan proves the test can never hold, so the guarded branch
+    /// is dead. only a static fold proves that; every runtime residue leaves
+    /// the answer to the value
+    pub(crate) fn never_holds(&self) -> bool {
+        match self {
+            Self::Fold(holds) => !holds,
+            Self::Union(arms) => arms.iter().all(Self::never_holds),
+            _ => false,
+        }
+    }
+}
+
+/// basedpython: how a type test's target is written into the emitted python
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetSpelling {
+    /// the source spells the target itself, so its own text is passed through.
+    /// this is the more robust of the two: a name the source wrote is in scope
+    /// by construction, while a rebuilt spelling needs the class to be nameable
+    /// where the test is written
+    Written,
+    /// nothing in the source spells this target on its own — one arm of a union
+    /// the source named with a single word — so it is rebuilt
+    Rebuilt(String),
 }
 
 /// basedpython: one protocol member a parametric `is`-test checks structurally
@@ -736,9 +855,36 @@ pub enum ProtocolMemberCheck {
     },
 }
 
-/// why a parametric test's target cannot be probed at runtime
+/// why a type test's target cannot be checked at runtime
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErasedTargetReason {
+    /// the target says nothing a runtime check could look for — `Any` and
+    /// `Unknown` admit every value, so the test has no content
+    Dynamic,
+    /// a callable type: the runtime sees that a value is callable and nothing
+    /// more, so its parameter and return types would be assumed rather than
+    /// checked
+    Callable,
+    /// a `TypedDict`: its instances are plain dicts, so a runtime check can
+    /// only ask whether the value is a `dict` and would assume every key
+    TypedDict,
+    /// an intersection of types has no single runtime form to test against
+    Intersection,
+    /// a protocol that is not `@runtime_checkable` and has a member with no
+    /// runtime spelling, so neither python's presence check nor a structural
+    /// one against the value's reified annotations can answer it
+    NonRuntimeCheckableProtocol,
+    /// a `type[…]` whose argument `issubclass` cannot take — `Any`, or a
+    /// protocol with a data member
+    Subclass,
+    /// a literal whose value the runtime cannot be asked to compare: a `float`
+    /// or `complex`, whose equality does not decide the type (`0.0 == -0.0`),
+    /// or `LiteralString`, which is a property of how a value was written and
+    /// not of the value
+    UncomparableLiteral,
+    /// the target has no runtime spelling at all — a type the checker can name
+    /// but the emitted python cannot evaluate
+    Unspellable,
     /// a builtin collection (`list` / `dict` / `set` / `frozenset` / `tuple`)
     /// erases its type arguments — its C-level instances reject
     /// `__orig_class__` entirely
@@ -906,7 +1052,7 @@ fn erased_target_reason<'db>(
 /// (`X = list[int]`); a PEP 695 `type` alias is unwrapped to the same. `None`
 /// when the rhs is not a specialization — a bare class or value — so the caller
 /// keeps the ordinary `isinstance` lowering.
-pub(crate) fn parametric_is_target<'db>(
+fn parametric_is_target<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     rhs_ty: Type<'db>,
@@ -969,11 +1115,11 @@ pub(crate) fn classify_parametric_is<'db>(
     file: File,
     lhs_ty: Type<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
-    rhs_node: &ast::Expr,
+    rhs_node: Option<&ast::Expr>,
 ) -> ParametricIsPlan {
     let target_origin = ClassLiteral::Static(rhs_alias.origin(db));
     let target_args_ast: Vec<&ast::Expr> = match rhs_node {
-        ast::Expr::Subscript(subscript) => match subscript.slice.as_ref() {
+        Some(ast::Expr::Subscript(subscript)) => match subscript.slice.as_ref() {
             ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
             single => vec![single],
         },
@@ -982,8 +1128,8 @@ pub(crate) fn classify_parametric_is<'db>(
     let plan = classify_value(
         db,
         env,
+        file,
         lhs_ty.promote(db, env),
-        target_origin,
         rhs_alias,
         &target_args_ast,
         rhs_node,
@@ -997,7 +1143,7 @@ pub(crate) fn classify_parametric_is<'db>(
     // spellable data members can still be checked structurally against those
     // annotations. only a protocol that also has a method member (unrecoverable
     // from an annotation) stays an error
-    if let ParametricIsPlan::Probe(_) = plan
+    if let ParametricIsPlan::Probe { .. } = plan
         && let Some(ErasedTargetReason::Protocol) = erased_target_reason(db, target_origin)
     {
         return protocol_structural_members(db, env, file, ClassType::Generic(rhs_alias))
@@ -1015,12 +1161,523 @@ pub(crate) fn classify_parametric_is<'db>(
     // `x is Sequence[int]` — which runs perfectly well — into an error
     if matches!(
         plan,
-        ParametricIsPlan::Probe(_) | ParametricIsPlan::TokenEq(_)
+        ParametricIsPlan::Probe { .. } | ParametricIsPlan::TokenEq(_)
     ) && runtime_subscript(db, env, target_origin) == RuntimeSubscript::Unsupported
     {
         return ParametricIsPlan::ErasedTarget(ErasedTargetReason::NotSubscriptable);
     }
     plan
+}
+
+/// basedpython: how a type test — `value is Target` — resolves, for *any*
+/// target type.
+///
+/// The right-hand side of a type test is a type expression, so an unusable
+/// target has already been reported as `invalid-type-form` by the time this
+/// runs. What is left is a narrower question: does the type it named have a
+/// runtime form? A test must *earn* its `True` — it narrows — so a target the
+/// runtime can only partly check is rejected rather than approximated. That
+/// rules out a `TypedDict` (its instances are plain dicts), a callable type
+/// (the runtime sees only that a value is callable), and `Any`.
+///
+/// `target_node` is the source the target was written as, which the
+/// specialization plans use to spell type arguments back out.
+///
+/// `value_ty` is taken exactly as the value has it — a construction's `final A`
+/// is disjoint from an unrelated class in a way a plain `A` is not, and that is
+/// the whole point of tracking it. Only the specialization path widens, where a
+/// literal argument would otherwise decide a test the runtime cannot.
+pub(crate) fn type_test_plan<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    value_ty: Type<'db>,
+    target: Type<'db>,
+    target_node: Option<&ast::Expr>,
+) -> ParametricIsPlan {
+    type_test_plan_seen(
+        db,
+        env,
+        file,
+        value_ty,
+        target,
+        target_node,
+        &mut Vec::new(),
+    )
+}
+
+/// [`type_test_plan`] carrying the aliases already opened on the way here.
+///
+/// A `type` alias may name itself — `type A = int | B` with `type B = str | A`
+/// — and the plan for one is the plan for its value, so following that without
+/// a record would not terminate.
+fn type_test_plan_seen<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    value_ty: Type<'db>,
+    target: Type<'db>,
+    target_node: Option<&ast::Expr>,
+    open: &mut Vec<Type<'db>>,
+) -> ParametricIsPlan {
+    // an `Unknown` target is not evidence of anything: every value is a subtype
+    // of it, and folding on that would answer `True` for a test the source got
+    // wrong somewhere else
+    if target.is_dynamic() {
+        return runtime_test_plan(db, env, file, value_ty, target, target_node, open);
+    }
+    // a target that resolves statically needs no runtime residue at all, and
+    // answering it here keeps every unspellable-but-decidable target working:
+    // `x is Never` is `False` without the runtime ever seeing `Never`
+    if value_ty.is_subtype_of(db, env, target) {
+        return ParametricIsPlan::Fold(true);
+    }
+    if value_ty.is_disjoint_from(db, env, target) {
+        return ParametricIsPlan::Fold(false);
+    }
+    runtime_test_plan(db, env, file, value_ty, target, target_node, open)
+}
+
+/// The runtime residue of a type test whose answer the static types do not
+/// already give. Split from [`type_test_plan`] so a union arm can be planned
+/// without re-asking the static question the whole test already answered.
+fn runtime_test_plan<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    value_ty: Type<'db>,
+    target: Type<'db>,
+    target_node: Option<&ast::Expr>,
+    open: &mut Vec<Type<'db>>,
+) -> ParametricIsPlan {
+    if target.is_none(db) {
+        return ParametricIsPlan::IsNone;
+    }
+    match target {
+        // an alias stands for its value, and a use-site modifier (`final T`)
+        // constrains how the value may be used rather than what it is at
+        // runtime — neither adds anything a runtime check could look for
+        Type::TypeAlias(alias) => {
+            // an alias that names itself has no value to resolve to, and the
+            // definition is reported where it is written
+            if open.contains(&target) {
+                return ParametricIsPlan::Unresolved;
+            }
+            open.push(target);
+            let plan = runtime_test_plan(db, env, file, value_ty, alias.value_type(db), None, open);
+            open.pop();
+            plan
+        }
+        // a use-site modifier is not python, so the source no longer spells
+        // what is left once it is dropped
+        Type::Restricted(restricted) => runtime_test_plan(
+            db,
+            env,
+            file,
+            value_ty,
+            restricted.value_type(db),
+            None,
+            open,
+        ),
+
+        // a value satisfies a union as soon as it satisfies one arm. the arms
+        // are planned separately because a union need not be spelled as one:
+        // `type AU = int | str` names it with a single identifier, and
+        // `isinstance` cannot take the alias object that identifier evaluates to
+        Type::Union(union) => {
+            let mut arms = Vec::with_capacity(union.elements(db).len());
+            for element in union.elements(db) {
+                // the source spells the union, not this arm, so the arm's own
+                // plan may not read type arguments back out of it
+                let arm = type_test_plan_seen(db, env, file, value_ty, *element, None, open);
+                // one unusable arm makes the whole disjunction unusable: it may
+                // not quietly fold to `False`, since that would answer `False`
+                // for a value the arm would have accepted
+                if let ParametricIsPlan::ErasedTarget(reason) = arm {
+                    return ParametricIsPlan::ErasedTarget(reason);
+                }
+                // an arm the checker could not read has no spelling of its own,
+                // and the source spells the union rather than the arm — so the
+                // whole test falls back to what the source wrote
+                if matches!(arm, ParametricIsPlan::Unresolved) {
+                    return ParametricIsPlan::Unresolved;
+                }
+                arms.push(arm);
+            }
+            ParametricIsPlan::Union(arms.into_boxed_slice())
+        }
+
+        // a literal type holds exactly the values equal to it, which is what
+        // the runtime compares. an enum member is a literal too, and its
+        // equality is identity
+        Type::LiteralValue(literal) => literal_target_plan(db, env, file, literal, target_node),
+
+        // `type[C]`: the runtime can check this one in full — the value must be
+        // a class, and a subclass of `C`
+        Type::SubclassOf(subclass) => match subclass.subclass_of().into_class(db, env) {
+            // `type[C]` is written as a subscript, so the source spells the
+            // subscript rather than `C` — the spelling has to be rebuilt
+            Some(class) => match spell_class(db, env, file, class) {
+                Some(spelling) => ParametricIsPlan::Subclass(TargetSpelling::Rebuilt(spelling)),
+                None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
+            },
+            // `type[Any]`, or `type[<protocol>]` — the value must be a class,
+            // and `issubclass` has nothing it can ask beyond that
+            None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Subclass),
+        },
+
+        Type::NominalInstance(_) | Type::ProtocolInstance(_) => {
+            class_target_plan(db, env, file, value_ty, target, target_node)
+        }
+
+        // the value's type is carried by a reified type parameter on the
+        // *target* side — `x is T` where `T` is reified spells `T` itself
+        Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => {
+            ParametricIsPlan::Isinstance(TargetSpelling::Rebuilt(
+                bound_typevar.name(db).to_string(),
+            ))
+        }
+
+        // `Any` really does admit every value and is worth rejecting. `Unknown`
+        // is what an already-reported error leaves behind, and a second report
+        // on the same target would only repeat it
+        Type::Dynamic(crate::types::DynamicType::Any) => {
+            ParametricIsPlan::ErasedTarget(ErasedTargetReason::Dynamic)
+        }
+        Type::Dynamic(_) => ParametricIsPlan::Unresolved,
+        // a bare `Callable` is exactly what `callable()` answers; only a
+        // *signature* asks for something the value does not record
+        Type::Callable(callable)
+            if callable.signatures(db).iter().all(is_unannotated_signature) =>
+        {
+            ParametricIsPlan::IsCallable
+        }
+        Type::Callable(_) => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Callable),
+        Type::Intersection(_) => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Intersection),
+        // a `TypedDict`'s inhabitants are plain dicts: nothing at runtime
+        // records which one a dict was built as
+        Type::TypedDict(_) => ParametricIsPlan::ErasedTarget(ErasedTargetReason::TypedDict),
+        _ => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
+    }
+}
+
+/// The runtime test for a literal target. A `TypedDict`-like erasure is not
+/// good enough here: the type holds exactly the values equal to the literal, so
+/// the check is that equality.
+fn literal_target_plan<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    literal: crate::types::LiteralValueType<'db>,
+    target_node: Option<&ast::Expr>,
+) -> ParametricIsPlan {
+    let unspellable = ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable);
+    // the guard names a builtin, whose spelling is fixed and always in scope
+    let written = target_node
+        .is_some_and(|node| node.is_literal_expr() || matches!(node, ast::Expr::UnaryOp(_)));
+    let equality = |class: &str, value: String| ParametricIsPlan::Equality {
+        class: class.to_owned(),
+        value: if written {
+            TargetSpelling::Written
+        } else {
+            TargetSpelling::Rebuilt(value)
+        },
+    };
+    match literal.kind() {
+        // a pattern is a set of strings, and the regular expression that spells
+        // it decides exactly the language `matches_str` decides
+        LiteralValueTypeKind::Template(template) => match template_pattern(db, env, template) {
+            Some(pattern) => ParametricIsPlan::Pattern(pattern),
+            None => unspellable,
+        },
+        LiteralValueTypeKind::Bool(value) => {
+            equality("bool", (if value { "True" } else { "False" }).to_owned())
+        }
+        LiteralValueTypeKind::Int(value) => equality("int", value.as_i64().to_string()),
+        LiteralValueTypeKind::String(value) => equality("str", python_str_literal(value.value(db))),
+        LiteralValueTypeKind::Bytes(value) => {
+            equality("bytes", python_bytes_literal(value.value(db)))
+        }
+        // an enum member is a singleton, so identity is exact — and it is the
+        // comparison `Enum.__eq__` performs anyway
+        LiteralValueTypeKind::Enum(member) => {
+            match written_or_spelled(target_node, false, || {
+                spell_class_literal(db, env, file, member.enum_class(db))
+                    .map(|class| format!("{class}.{}", member.name(db)))
+            }) {
+                Some(spelling) => ParametricIsPlan::Identity(spelling),
+                None => unspellable,
+            }
+        }
+        // `LiteralString` is the *property* of having been written as a literal,
+        // which nothing about a value at runtime records; `float` and `complex`
+        // literals are values the checker tracks but does not promise are
+        // distinguishable from equal ones
+        LiteralValueTypeKind::LiteralString
+        | LiteralValueTypeKind::Float(_)
+        | LiteralValueTypeKind::Complex(_) => {
+            ParametricIsPlan::ErasedTarget(ErasedTargetReason::UncomparableLiteral)
+        }
+    }
+}
+
+/// how a target is written into the emitted python: the spelling rebuilt from
+/// the type, or the source's own text where that is what the runtime evaluates.
+///
+/// The rebuilt spelling is preferred, because the source names a *type* and the
+/// emitted check needs a *value*, and the two part company far more often than
+/// they look like they do: a PEP 695 alias evaluates to a `TypeAliasType`,
+/// `Literal[…]` and `Annotated[…]` to special forms, `list[Any]` to a
+/// subscripted generic — none of which `isinstance` will take. Falling back to
+/// the source is for the one case rebuilding cannot express: a class the
+/// emitting module cannot name as a global, such as an enum's attached variant
+/// or a class imported under another name. Only a plain dotted name qualifies,
+/// and only a [`Probe`](ParametricIsPlan::Probe) also accepts a subscript,
+/// whose value is the specialization it unwinds.
+fn written_or_spelled(
+    target_node: Option<&ast::Expr>,
+    subscript_evaluates: bool,
+    spell: impl FnOnce() -> Option<String>,
+) -> Option<TargetSpelling> {
+    if let Some(spelling) = spell() {
+        return Some(TargetSpelling::Rebuilt(spelling));
+    }
+    target_node
+        .filter(|node| evaluates_to_its_target(node, subscript_evaluates))
+        .map(|_| TargetSpelling::Written)
+}
+
+/// whether the runtime value of `node` is the thing the type it names denotes
+fn evaluates_to_its_target(node: &ast::Expr, subscript_evaluates: bool) -> bool {
+    match node {
+        ast::Expr::Name(_) => true,
+        ast::Expr::Attribute(attribute) => evaluates_to_its_target(&attribute.value, false),
+        ast::Expr::Subscript(subscript) if subscript_evaluates => {
+            evaluates_to_its_target(&subscript.value, false)
+        }
+        _ => false,
+    }
+}
+
+/// a python string literal for `value`, escaped so the emitted source reads it
+/// back character for character.
+fn python_str_literal(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            ch if ch.is_control() || ch == '"' => push_escaped_char(ch, &mut out),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// a python bytes literal for `value`, written one `\xNN` escape per byte so
+/// every byte round-trips whatever it is
+fn python_bytes_literal(value: &[u8]) -> String {
+    let mut out = String::with_capacity(value.len() * 4 + 3);
+    out.push_str("b\"");
+    for byte in value {
+        let _ = write!(out, "\\x{byte:02x}");
+    }
+    out.push('"');
+    out
+}
+
+/// The runtime test for an instance target — the common case, and the one the
+/// parametric engine already answered for a specialization.
+fn class_target_plan<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    value_ty: Type<'db>,
+    target: Type<'db>,
+    target_node: Option<&ast::Expr>,
+) -> ParametricIsPlan {
+    let Some(class) = target_class(db, env, target) else {
+        return ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable);
+    };
+    let literal = class.class_literal(db);
+    // a `TypedDict`'s instances are plain dicts, so the only runtime question
+    // is whether the value is a `dict` — every key and value type would be
+    // assumed. a test that must earn its `True` cannot assume them
+    if literal.is_typed_dict(db) {
+        return ParametricIsPlan::ErasedTarget(ErasedTargetReason::TypedDict);
+    }
+    match class {
+        // a bare generic class in a type expression means every specialization
+        // of it, which is the class itself — and `isinstance` answers exactly
+        // that. only *written* arguments give the parametric engine something
+        // to check
+        ClassType::Generic(alias)
+            if alias
+                .specialization(db)
+                .types(db)
+                .iter()
+                .all(Type::is_dynamic) =>
+        {
+            match written_or_spelled(target_node, false, || {
+                spell_class_literal(db, env, file, ClassLiteral::Static(alias.origin(db)))
+            }) {
+                Some(spelling) => ParametricIsPlan::Isinstance(spelling),
+                None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
+            }
+        }
+        // a specialization keeps the engine it always had: reified cells,
+        // an `__orig_class__` probe, or a structural protocol check
+        ClassType::Generic(alias) => {
+            classify_parametric_is(db, env, file, value_ty, alias, target_node)
+        }
+        ClassType::NonGeneric(_) => {
+            // an interface something visibly conforms to is answered by the
+            // registry rather than by the class hierarchy, so it is checkable
+            // even though a conforming type is not a subclass
+            if let Some(members) = conformance_members(db, file, class) {
+                return match written_or_spelled(target_node, false, || {
+                    spell_class(db, env, file, class)
+                }) {
+                    Some(target) => ParametricIsPlan::Conformance { target, members },
+                    None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
+                };
+            }
+            if let Some(protocol) = class.into_protocol_class(db) {
+                // `@runtime_checkable` is the author's own statement that
+                // `isinstance` may take the class, and it is what python then
+                // checks — that the members are present
+                if !protocol.is_runtime_checkable(db) {
+                    // basedpython reifies class annotations, so a protocol whose
+                    // members all have a runtime spelling can be checked against
+                    // them member by member — a stricter answer than presence,
+                    // and the only one available without the decorator
+                    return match protocol_structural_members(db, env, file, class) {
+                        Some(checks) => {
+                            ParametricIsPlan::ProtocolStructural(checks.into_boxed_slice())
+                        }
+                        None => ParametricIsPlan::ErasedTarget(
+                            ErasedTargetReason::NonRuntimeCheckableProtocol,
+                        ),
+                    };
+                }
+            }
+            match written_or_spelled(target_node, false, || spell_class(db, env, file, class)) {
+                Some(spelling) => ParametricIsPlan::Isinstance(spelling),
+                None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
+            }
+        }
+    }
+}
+
+/// The required member names of `class` when something in `file`'s scope
+/// visibly conforms to it, or `None` when it is not a conformance interface.
+fn conformance_members<'db>(
+    db: &'db dyn Db,
+    file: File,
+    class: ClassType<'db>,
+) -> Option<Vec<String>> {
+    let conformed = crate::types::conformance::visible_conformances(db, file)
+        .iter()
+        .any(|(_, declared)| declared.class_literal(db) == class.class_literal(db));
+    conformed.then(|| {
+        crate::types::conformance::interface_requirements(db, class)
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    })
+}
+
+/// whether a callable signature says nothing beyond "this is callable" — the
+/// gradual form `Callable[..., Any]` the bare `Callable` denotes
+fn is_unannotated_signature(signature: &crate::types::signatures::Signature<'_>) -> bool {
+    signature.parameters().is_gradual() && signature.return_ty.is_dynamic()
+}
+
+/// The class an instance target names, for both the nominal and the protocol
+/// spelling of one.
+fn target_class<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    target: Type<'db>,
+) -> Option<ClassType<'db>> {
+    match target {
+        Type::NominalInstance(instance) => Some(instance.class(db, env)),
+        Type::ProtocolInstance(instance) => match instance.inner {
+            crate::types::instance::Protocol::FromClass(class) => Some(*class),
+            crate::types::instance::Protocol::Materialized(_)
+            | crate::types::instance::Protocol::Synthesized(_) => None,
+        },
+        _ => None,
+    }
+}
+
+/// The regular expression that matches exactly the strings a template literal
+/// type produces, for `re.fullmatch`, or `None` when one of its holes has no
+/// regular-expression spelling.
+///
+/// The holes are read through the same [`HoleShape`](crate::types::template::HoleShape)
+/// classification
+/// `matches_str` uses, so the runtime test and the static one decide the same
+/// language rather than two that happen to agree on the cases anyone tried.
+fn template_pattern<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    template: crate::types::template::TemplateLiteralType<'db>,
+) -> Option<String> {
+    let mut pattern = String::new();
+    for part in template.parts(db) {
+        match part {
+            crate::types::template::TemplatePart::Text(text) => {
+                escape_regex(text.as_str(), &mut pattern);
+            }
+            crate::types::template::TemplatePart::Hole(hole) => {
+                pattern.push_str(crate::types::template::HoleShape::of(db, env, *hole).regex()?);
+            }
+        }
+    }
+    Some(pattern)
+}
+
+/// Append `text` to `pattern` with every character python's `re` gives a
+/// meaning escaped, so the text matches itself.
+///
+/// A character the emitted source cannot carry — anything the `str` escaping
+/// below would have to spell — is written as its own `\\xNN` / `\\uNNNN`
+/// escape, which `re` reads as that character. Passing one through raw would
+/// put a literal control byte in the python, and CPython refuses to compile a
+/// source containing a NUL at all.
+fn escape_regex(text: &str, pattern: &mut String) {
+    for ch in text.chars() {
+        if "\\.^$*+?()[]{}|-#&~".contains(ch) {
+            pattern.push('\\');
+            pattern.push(ch);
+        } else if ch.is_control() || ch == '"' {
+            push_escaped_char(ch, pattern);
+        } else {
+            pattern.push(ch);
+        }
+    }
+}
+
+/// Write `ch` as the escape a python string literal reads back as that
+/// character. Used for anything the emitted source cannot carry raw.
+fn push_escaped_char(ch: char, out: &mut String) {
+    match ch {
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '"' => out.push_str("\\\""),
+        ch if (ch as u32) < 0x100 => {
+            let _ = write!(out, "\\x{:02x}", ch as u32);
+        }
+        ch if (ch as u32) < 0x1_0000 => {
+            let _ = write!(out, "\\u{:04x}", ch as u32);
+        }
+        ch => {
+            let _ = write!(out, "\\U{:08x}", ch as u32);
+        }
+    }
 }
 
 /// basedpython: the structural runtime check for a protocol target whose data
@@ -1163,12 +1820,13 @@ fn is_object_instance<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: T
 fn classify_value<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
+    file: File,
     value_ty: Type<'db>,
-    target_origin: ClassLiteral<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
     target_args_ast: &[&ast::Expr],
-    rhs_node: &ast::Expr,
+    rhs_node: Option<&ast::Expr>,
 ) -> ParametricIsPlan {
+    let target_origin = ClassLiteral::Static(rhs_alias.origin(db));
     // when the value's type is carried by a reified type parameter, the answer
     // lives in a runtime cell rather than the static type — extract the cell
     // comparisons before falling back to static subtyping
@@ -1196,7 +1854,17 @@ fn classify_value<'db>(
     } else {
         // undecidable statically; `classify_parametric_is` turns this into a
         // runtime probe (user generic) or an erased-target error (builtin)
-        ParametricIsPlan::Probe(target_variances(db, rhs_alias))
+        // the source's own spelling is preferred: a name it wrote is in scope,
+        // and the runtime probe unwraps a `TypeAliasType` for itself
+        let Some(target) = written_or_spelled(rhs_node, true, || {
+            spell_class(db, env, file, ClassType::Generic(rhs_alias))
+        }) else {
+            return ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable);
+        };
+        ParametricIsPlan::Probe {
+            target,
+            variances: target_variances(db, rhs_alias),
+        }
     }
 }
 
@@ -1211,7 +1879,7 @@ fn try_token_eq<'db>(
     target_origin: ClassLiteral<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
     target_args_ast: &[&ast::Expr],
-    rhs_node: &ast::Expr,
+    rhs_node: Option<&ast::Expr>,
 ) -> Option<ParametricIsPlan> {
     match value_ty {
         // `x: T is <target>` compares the reified `T` cell against the target
@@ -1221,11 +1889,11 @@ fn try_token_eq<'db>(
         // `TypeAliasType` wrapper), so it falls through to the static resolution
         Type::TypeVar(bound_typevar)
             if is_reified_function_typevar(db, bound_typevar)
-                && matches!(rhs_node, ast::Expr::Subscript(_)) =>
+                && matches!(rhs_node, Some(ast::Expr::Subscript(_))) =>
         {
             Some(ParametricIsPlan::TokenEq(vec![(
                 bound_typevar.name(db).clone(),
-                rhs_node.range(),
+                rhs_node.expect("guarded above").range(),
             )]))
         }
         Type::NominalInstance(instance) => {
@@ -1453,8 +2121,7 @@ fn is_reified_function_typevar<'db>(
         return false;
     };
     let node = function.node(&module);
-    let source = ruff_db::source::source_text(db, def_file);
-    crate::reified::reified_type_param_names(source.as_str(), def_file.source_type(db), node)
+    crate::reified::reified_type_param_names(def_file.source_type(db), node)
         .iter()
         .any(|name| name == bound_typevar.name(db))
 }

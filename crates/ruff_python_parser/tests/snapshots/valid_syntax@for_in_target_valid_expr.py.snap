@@ -52,6 +52,7 @@ Module(
                                             },
                                         ),
                                     ],
+                                    identity_ops: None,
                                 },
                             ),
                             ctx: Store,
@@ -119,6 +120,7 @@ Module(
                                             },
                                         ),
                                     ],
+                                    identity_ops: None,
                                 },
                             ),
                             slice: NumberLiteral(
@@ -195,6 +197,7 @@ Module(
                                             },
                                         ),
                                     ],
+                                    identity_ops: None,
                                 },
                             ),
                             attr: Identifier {

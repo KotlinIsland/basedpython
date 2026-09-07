@@ -2259,6 +2259,17 @@ impl<'src> Parser<'src> {
         op: CmpOp,
         context: ExpressionContext,
     ) -> ast::ExprCompare {
+        // built only once an operator is actually written `===` / `!==`, so an
+        // ordinary comparison — every one in a `.py` file — allocates nothing
+        let mut identity_ops: Vec<bool> = Vec::new();
+        let record_identity = |identity_ops: &mut Vec<bool>, index: usize, identity: bool| {
+            if identity_ops.is_empty() && !identity {
+                return;
+            }
+            identity_ops.resize(index, false);
+            identity_ops.push(identity);
+        };
+        record_identity(&mut identity_ops, 0, self.at_identity_operator(op));
         self.bump_cmp_op(op);
 
         let comparators_snapshot = self.expr_scratch.snapshot();
@@ -2288,17 +2299,56 @@ impl<'src> Parser<'src> {
                 break;
             };
 
+            record_identity(
+                &mut identity_ops,
+                operators.len(),
+                self.at_identity_operator(next_op),
+            );
             self.bump_cmp_op(next_op);
             operators.push(next_op);
         }
 
+        let range = self.node_range(start);
+        // a type test's right-hand side is a type expression, and python's
+        // chaining rule makes each operand the *next* comparison's left operand
+        // — so `a is int is str` becomes `a is int and int is str`, where the
+        // class `int` is asked whether it has the type `str`. only a type test
+        // that something follows creates that conflict; a trailing one
+        // (`a < b is None`) hands nothing on, and chains as it always did
+        if self.options.is_basedpython
+            && operators
+                .iter()
+                .enumerate()
+                .take(operators.len().saturating_sub(1))
+                .any(|(index, op)| {
+                    matches!(op, CmpOp::Is | CmpOp::IsNot)
+                        && !identity_ops.get(index).copied().unwrap_or(false)
+                })
+        {
+            self.add_error(ParseErrorType::ChainedTypeTest, range);
+        }
+        let operator_count = operators.len();
         ast::ExprCompare {
             left: Box::new(lhs),
             ops: operators.into_boxed_slice(),
             comparators: self.expr_scratch.take(comparators_snapshot),
-            range: self.node_range(start),
+            // the common case — a `.py` file, or basedpython written with the
+            // `is` keyword — stores nothing at all
+            identity_ops: ast::IdentityOperators::into_stored(identity_ops, operator_count),
+            range,
             node_index: AtomicNodeIndex::NONE,
         }
+    }
+
+    /// basedpython: whether the comparison operator the parser is positioned at
+    /// was written `===` / `!==` — python's identity comparison, which the lexer
+    /// emits as its own token and which shares a [`CmpOp`] with the `is` keyword.
+    fn at_identity_operator(&self, op: CmpOp) -> bool {
+        matches!(op, CmpOp::Is | CmpOp::IsNot)
+            && self.at_ts(TokenSet::new([
+                TokenKind::EqEqEqual,
+                TokenKind::BangEqEqual,
+            ]))
     }
 
     /// Parses all kinds of strings and implicitly concatenated strings.

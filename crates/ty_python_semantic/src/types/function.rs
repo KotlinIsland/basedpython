@@ -573,9 +573,7 @@ impl<'db> OverloadLiteral<'db> {
         // below belongs to whichever one the body scope was built for
         let module = parsed_module(db, self.python_file(db)).load(db);
         let node = self.body_scope(db).node(db).expect_function().node(&module);
-        let source = source_text(db, file);
-        crate::reified::reified_type_param_names(source.as_str(), source_type, node)
-            .into_boxed_slice()
+        crate::reified::reified_type_param_names(source_type, node).into_boxed_slice()
     }
 
     /// basedpython: reified type parameters that a call must supply a value

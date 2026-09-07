@@ -1013,12 +1013,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 || is_implicit_classmethod(&name.id))
             && let Some(type_params) = function.type_params.as_deref()
         {
-            let source = ruff_db::source::source_text(db, self.file());
-            let reified = crate::reified::reified_type_param_names(
-                source.as_str(),
-                self.file().source_type(db),
-                function,
-            );
+            let reified =
+                crate::reified::reified_type_param_names(self.file().source_type(db), function);
             if let Some(first) = reified.first()
                 && let Some(builder) = self.context.report_lint(&REIFIED_CLASSMETHOD, type_params)
             {

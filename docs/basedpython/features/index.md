@@ -172,7 +172,7 @@ syntax inside a function body
 <div class="by-index" markdown>
 
 - [context-sensitive resolution](context-sensitive-resolution.md) — `a: Color = Red`
-- [identity and isinstance (`===` / `!==` / `is`)](identity-swap.md)
+- [type tests and identity (`is` / `===` / `!==`)](identity-swap.md)
 - [optional chaining (`?.`)](optional-chaining.md)
 - [none-coalesce operator (`??`)](none-coalesce.md)
 - [postfix await (`.await`)](await-attribute.md)

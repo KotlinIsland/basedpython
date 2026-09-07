@@ -384,6 +384,9 @@ fn compare_is_not_none(left: Expr) -> Expr {
         range: TextRange::default(),
         left: Box::new(left),
         ops: Box::new([CmpOp::IsNot]),
+        // python identity against `None`, written `is not` — the lowering emits
+        // python, so it never wants basedpython's `!==` spelling
+        identity_ops: None,
         comparators: Box::new([Expr::NoneLiteral(ExprNoneLiteral {
             node_index: AtomicNodeIndex::NONE,
             range: TextRange::default(),

@@ -3,7 +3,7 @@ use anyhow::{Error, bail};
 use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::helpers;
 use ruff_python_ast::token::{TokenKind, Tokens};
-use ruff_python_ast::{CmpOp, Expr};
+use ruff_python_ast::{self as ast, CmpOp};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::checkers::ast::Checker;
@@ -81,26 +81,15 @@ impl AlwaysFixableViolation for IsLiteral {
 }
 
 /// F632
-pub(crate) fn invalid_literal_comparison(
-    checker: &Checker,
-    left: &Expr,
-    ops: &[CmpOp],
-    comparators: &[Expr],
-    expr: &Expr,
-) {
+pub(crate) fn invalid_literal_comparison(checker: &Checker, compare: &ast::ExprCompare) {
     // basedpython keeps `is` as python identity only where its right-hand side is a
     // literal; anywhere else `is` is a type test, and `===` is the spelling that always
-    // compares identity. telling `===` from `is` takes the tokens, which are worth
-    // locating up front once the file can contain either
-    let mut lazy_located = (checker.source_type.is_basedpython()
-        && ops.iter().any(|op| matches!(op, CmpOp::Is | CmpOp::IsNot)))
-    .then(|| locate_cmp_ops(expr, checker.tokens()));
-    let mut left = left;
-    for (index, (op, right)) in ops.iter().zip(comparators).enumerate() {
-        let spells_identity = lazy_located
-            .as_ref()
-            .and_then(|located| located.get(index))
-            .is_some_and(|located_op| located_op.op == *op && located_op.spells_identity);
+    // compares identity. the parser records which of the two was written, so the tokens
+    // are needed only to place a fix
+    let mut lazy_located = None;
+    let mut left = &*compare.left;
+    for (index, (op, right)) in compare.ops.iter().zip(&compare.comparators).enumerate() {
+        let spells_identity = compare.is_identity_operator(index);
 
         if matches!(op, CmpOp::Is | CmpOp::IsNot)
             && (helpers::is_constant_non_singleton(left)
@@ -114,20 +103,19 @@ pub(crate) fn invalid_literal_comparison(
                     cmp_op: op.into(),
                     spells_identity,
                 },
-                expr.range(),
+                compare.range(),
             );
             if lazy_located.is_none() {
-                lazy_located = Some(locate_cmp_ops(expr, checker.tokens()));
+                lazy_located = Some(locate_cmp_ops(compare.range(), checker.tokens()));
             }
             diagnostic.try_set_optional_fix(|| {
                 let located_op = lazy_located.as_ref().and_then(|located| located.get(index));
-                // the tokens and the operators come from one parse, so they line up. a
-                // basedpython file is the one place the two can legitimately disagree,
-                // because a spelling the token scan does not know reads as a different
-                // operator there — hence a dropped fix rather than a panic
+                // the tokens and the operators come from one parse, so they line up in
+                // either language: basedpython's `===` and `!==` scan to the same
+                // `CmpOp` the parser recorded for them. a dropped fix rather than a
+                // panic if that ever stops holding
                 debug_assert!(
-                    checker.source_type.is_basedpython()
-                        || located_op.is_none_or(|located_op| located_op.op == *op),
+                    located_op.is_none_or(|located_op| located_op.op == *op),
                     "located `{:?}` where the comparison has `{op:?}`",
                     located_op.map(|located_op| located_op.op)
                 );
@@ -175,9 +163,9 @@ impl From<&CmpOp> for IsCmpOp {
 ///
 /// This method iterates over the token stream and re-identifies [`CmpOp`] nodes, annotating them
 /// with valid ranges.
-fn locate_cmp_ops(expr: &Expr, tokens: &Tokens) -> Vec<LocatedCmpOp> {
+fn locate_cmp_ops(range: TextRange, tokens: &Tokens) -> Vec<LocatedCmpOp> {
     let mut tok_iter = tokens
-        .in_range(expr.range())
+        .in_range(range)
         .iter()
         .filter(|token| !token.kind().is_trivia())
         .peekable();
@@ -227,11 +215,14 @@ fn locate_cmp_ops(expr: &Expr, tokens: &Tokens) -> Vec<LocatedCmpOp> {
                 };
                 ops.push(op);
             }
+            // basedpython's identity operators, which parse to the same `CmpOp` as
+            // the `is` keyword — scanned so the operators keep lining up with the
+            // comparison's own, whichever spelling the source used
             TokenKind::EqEqEqual => {
-                ops.push(LocatedCmpOp::identity(token.range(), CmpOp::Is));
+                ops.push(LocatedCmpOp::new(token.range(), CmpOp::Is));
             }
             TokenKind::BangEqEqual => {
-                ops.push(LocatedCmpOp::identity(token.range(), CmpOp::IsNot));
+                ops.push(LocatedCmpOp::new(token.range(), CmpOp::IsNot));
             }
             TokenKind::NotEqual => {
                 ops.push(LocatedCmpOp::new(token.range(), CmpOp::NotEq));
@@ -261,11 +252,6 @@ fn locate_cmp_ops(expr: &Expr, tokens: &Tokens) -> Vec<LocatedCmpOp> {
 struct LocatedCmpOp {
     range: TextRange,
     op: CmpOp,
-    /// Whether the operator was written with basedpython's `===` / `!==`, the
-    /// spellings that compare identity there. A plain `is` in a basedpython file
-    /// is a [parametric type test](https://docs.basedpython.org/features/parametric-type-tests)
-    /// and parses to the same [`CmpOp`], so the two can only be told apart here.
-    spells_identity: bool,
 }
 
 impl LocatedCmpOp {
@@ -273,14 +259,6 @@ impl LocatedCmpOp {
         Self {
             range: range.into(),
             op,
-            spells_identity: false,
-        }
-    }
-
-    fn identity<T: Into<TextRange>>(range: T, op: CmpOp) -> Self {
-        Self {
-            spells_identity: true,
-            ..Self::new(range, op)
         }
     }
 }
@@ -291,13 +269,13 @@ mod tests {
 
     use ruff_python_ast::CmpOp;
     use ruff_python_parser::parse_expression;
-    use ruff_text_size::TextSize;
+    use ruff_text_size::{Ranged, TextSize};
 
     use super::{LocatedCmpOp, locate_cmp_ops};
 
     fn extract_cmp_op_locations(source: &str) -> Result<Vec<LocatedCmpOp>> {
         let parsed = parse_expression(source)?;
-        Ok(locate_cmp_ops(parsed.expr(), parsed.tokens()))
+        Ok(locate_cmp_ops(parsed.expr().range(), parsed.tokens()))
     }
 
     #[test]

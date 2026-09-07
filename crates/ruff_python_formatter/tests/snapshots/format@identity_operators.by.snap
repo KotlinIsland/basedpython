@@ -17,8 +17,10 @@ b = xs !== xs
 c = xs is list[int]
 d = xs is not list[int]
 
-# chained comparisons mix the spellings freely
-e = xs === xs !== None is list[int] is not list[str]
+# a chain of identity comparisons is ordinary python, and each operator keeps
+# the spelling it was written with. a type test may not join a chain at all —
+# python's chaining rule would ask whether the *class* has the next type
+e = xs === xs !== None
 
 # mixed with value comparisons
 f = 1 === 1 == 1
@@ -26,6 +28,16 @@ f = 1 === 1 == 1
 # parenthesised operands
 g = (xs) === (xs)
 h = (xs) !== (xs)
+
+# a comment between the operands, and a line continuation — the two the old
+# source-gap scan read wrong
+i = (
+    xs
+    # which one is this
+    === xs
+)
+j = xs \
+    === xs
 
 # inside a condition
 if xs === xs:
@@ -53,8 +65,10 @@ b = xs !== xs
 c = xs is list[int]
 d = xs is not list[int]
 
-# chained comparisons mix the spellings freely
-e = xs === xs !== None is list[int] is not list[str]
+# a chain of identity comparisons is ordinary python, and each operator keeps
+# the spelling it was written with. a type test may not join a chain at all —
+# python's chaining rule would ask whether the *class* has the next type
+e = xs === xs !== None
 
 # mixed with value comparisons
 f = 1 === 1 == 1
@@ -62,6 +76,15 @@ f = 1 === 1 == 1
 # parenthesised operands
 g = (xs) === (xs)
 h = (xs) !== (xs)
+
+# a comment between the operands, and a line continuation — the two the old
+# source-gap scan read wrong
+i = (
+    xs
+    # which one is this
+    === xs
+)
+j = xs === xs
 
 # inside a condition
 if xs === xs:

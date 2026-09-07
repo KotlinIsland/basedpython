@@ -94,9 +94,10 @@ variants lower to **subclasses** of the enum attached as class attributes, so
 they are reached qualified through the enum name — `Shape.Circle(2.0)`,
 `Shape.Point` — everywhere: inside the enum body, in pattern contexts
 (`case Shape.Circle(r):`), and at module scope. variant constructors are real
-classes at runtime, so `x is Shape.Circle` works (recall `is` is basedpython's
-[`isinstance`](identity-swap.md); use `type(x) === Shape.Circle` for an
-exact-class check). because variants are qualified, the same variant name may
+classes at runtime, so `x is Shape.Circle` [tests](identity-swap.md) whether `x`
+is one; use `type(x) === Shape.Circle` for an exact-class check. a payload-less
+variant names the type holding exactly that one object, so `x is Shape.Point` is
+the identity it comes down to. because variants are qualified, the same variant name may
 appear in two different enums (`A.Same` vs `B.Same`) without collision
 
 where the expected type is the enum, a variant may also be written

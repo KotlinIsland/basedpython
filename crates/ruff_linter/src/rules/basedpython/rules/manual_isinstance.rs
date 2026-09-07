@@ -1,6 +1,6 @@
 use ruff_diagnostics::Applicability;
 use ruff_macros::{ViolationMetadata, derive_message_formats};
-use ruff_python_ast::{self as ast, Expr, UnaryOp};
+use ruff_python_ast::{self as ast, Expr, Operator, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::checkers::ast::Checker;
@@ -43,7 +43,7 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 /// than as several classes.
 ///
 /// ## References
-/// - [basedpython documentation: identity and isinstance](https://docs.basedpython.org/features/identity-swap)
+/// - [basedpython documentation: type tests and identity](https://docs.basedpython.org/features/identity-swap)
 #[derive(ViolationMetadata)]
 #[violation_metadata(stable_since = "0.0.1-a10", category = Category::Style)]
 pub(crate) struct ManualIsinstance;
@@ -56,6 +56,24 @@ impl AlwaysFixableViolation for ManualIsinstance {
 
     fn fix_title(&self) -> String {
         "Replace with `is`".to_string()
+    }
+}
+
+/// whether `classinfo` is something a type expression can name — a name, a
+/// dotted name, a subscript of one, or a `|` union of those.
+///
+/// `isinstance` takes a runtime value, and most of what can stand there is not
+/// a type expression: a tuple means the tuple *type* rather than a choice of
+/// classes, and `type(y)` or `registry["a"]` mean nothing there at all.
+fn names_a_type(classinfo: &Expr) -> bool {
+    match classinfo {
+        Expr::Name(_) => true,
+        Expr::Attribute(attribute) => names_a_type(&attribute.value),
+        Expr::Subscript(subscript) => names_a_type(&subscript.value),
+        Expr::BinOp(binop) if binop.op == Operator::BitOr => {
+            names_a_type(&binop.left) && names_a_type(&binop.right)
+        }
+        _ => false,
     }
 }
 
@@ -76,9 +94,11 @@ pub(crate) fn manual_isinstance(checker: &Checker, call: &ast::ExprCall) {
     if !call.arguments.keywords.is_empty() {
         return;
     }
-    // a tuple in the class position reads as a tuple type, not as a choice of
-    // classes
-    if class.is_tuple_expr() {
+    // `is` takes a *type expression*, so the rewrite is only available when the
+    // classinfo argument is something one can say. a tuple reads as the tuple
+    // type rather than as a choice of classes; a call or a subscript of a value
+    // is not a type expression at all
+    if !names_a_type(class) {
         return;
     }
 

@@ -174,7 +174,7 @@ features = [
   ] },
   { "expressions and statements" = [
     { "context-sensitive resolution" = "features/context-sensitive-resolution.md" },
-    { "identity and isinstance" = "features/identity-swap.md" },
+    { "type tests and identity" = "features/identity-swap.md" },
     { "optional chaining (?.)" = "features/optional-chaining.md" },
     { "none-coalesce operator (??)" = "features/none-coalesce.md" },
     { "postfix await (.await)" = "features/await-attribute.md" },

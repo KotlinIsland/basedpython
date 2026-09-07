@@ -136,6 +136,7 @@ pub(crate) fn if_else_block_instead_of_dict_get(checker: &Checker, stmt_if: &ast
         comparators: test_dict,
         range: _,
         node_index: _,
+        identity_ops: _,
     }) = &**test
     else {
         return;
@@ -268,6 +269,7 @@ pub(crate) fn if_exp_instead_of_dict_get(
         comparators: test_dict,
         range: _,
         node_index: _,
+        identity_ops: _,
     }) = test
     else {
         return;

@@ -32,7 +32,7 @@ the same source, running, does something else
 the compiler doesn't always do `isinstance`, for example `x is None` will become `x is None` in
 python, this is because "type of x is None" and "value of x is None" have identical meanings
 
-see [identity and isinstance](identity-swap.md)
+see [type tests and identity](identity-swap.md)
 
 ### a mutable default is re-evaluated per call
 

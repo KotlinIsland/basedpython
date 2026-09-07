@@ -7,12 +7,23 @@
 //! basedpython's `is` is the instance check, so a python identity comparison
 //! round-trips to `===` / `!==` and an `isinstance` call round-trips to `is`
 //!
-//! a literal right-hand side is left alone, mirroring the forward transform's
-//! own literal guard: `x is None` is identity in both languages, so rewriting
-//! it to `x === None` would churn idiomatic source for no change in meaning.
-//! this is why the operator must be rewritten rather than skipped — leaving a
-//! python `is not` in place re-reads it as `not isinstance(...)` on the way
-//! back out
+//! `x is None` is left alone: basedpython reads it as a type test against the
+//! type `None`, which is the same runtime check, so rewriting it to
+//! `x === None` would churn idiomatic source for no change in meaning. Every
+//! *other* literal must still be rewritten — `x is 3` is identity in python but
+//! a test for the type `Literal[3]` in basedpython, and those differ for an int
+//! outside the interned range.
+//!
+//! This is also why the operator has to be rewritten rather than skipped:
+//! leaving a python `is not` in place re-reads it as a type test on the way
+//! back out.
+//!
+//! An `isinstance` call is only rewritten when its second argument is
+//! something a type expression can say. A tuple of classes is `isinstance`'s
+//! own spelling for a union and reads as a *tuple type* in a type expression,
+//! so it is written back out as `A | B`; anything else — `type(y)`, a variable
+//! holding classinfo — keeps the call it was, which basedpython runs just as
+//! python does
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
@@ -45,9 +56,9 @@ impl<'src> IdentitySwapReverse<'src> {
         for (op, rhs) in c.ops.iter().zip(c.comparators.iter()) {
             let rhs_start = rhs.range().start();
             let between = &self.source[usize::from(lhs_end)..usize::from(rhs_start)];
-            // a literal rhs means identity in basedpython too, so the forward
-            // transform leaves it as `is` — mirror that and don't churn it
-            if !rhs.is_literal_expr() {
+            // `is None` reads the same in both languages; every other literal
+            // rhs changes meaning, so it takes the identity spelling
+            if !rhs.is_none_literal_expr() {
                 let words: &[&str] = match op {
                     CmpOp::Is => &["is"],
                     CmpOp::IsNot => &["is", "not"],
@@ -123,13 +134,13 @@ impl<'src> IdentitySwapReverse<'src> {
         let Some((x, y)) = isinstance_operands(call) else {
             return;
         };
-        let (x_src, y_src) = (
-            self.src(x.range()).to_owned(),
-            self.src(y.range()).to_owned(),
-        );
+        let Some(target) = self.type_expression_target(y) else {
+            return;
+        };
+        let x_src = self.src(x.range()).to_owned();
         self.folded_into_not.push(call.range());
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            format!("{x_src} is not {y_src}"),
+            format!("{x_src} is not {target}"),
             unary.range(),
         )));
     }
@@ -141,14 +152,44 @@ impl<'src> IdentitySwapReverse<'src> {
         let Some((x, y)) = isinstance_operands(call) else {
             return;
         };
-        let (x_src, y_src) = (
-            self.src(x.range()).to_owned(),
-            self.src(y.range()).to_owned(),
-        );
+        let Some(target) = self.type_expression_target(y) else {
+            return;
+        };
+        let x_src = self.src(x.range()).to_owned();
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            format!("{x_src} is {y_src}"),
+            format!("{x_src} is {target}"),
             call.range(),
         )));
+    }
+
+    /// how an `isinstance` classinfo argument is written as the type expression
+    /// a type test takes, or `None` when its shape is not one a type expression
+    /// has and the call has to stay a call.
+    ///
+    /// A tuple is `isinstance`'s spelling for "any of these", which a type
+    /// expression spells `A | B` — writing the tuple back out would name the
+    /// *tuple type* instead, a different test entirely.
+    fn type_expression_target(&self, classinfo: &Expr) -> Option<String> {
+        match classinfo {
+            Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_) => {
+                Some(self.src(classinfo.range()).to_owned())
+            }
+            Expr::BinOp(binop) if binop.op == ruff_python_ast::Operator::BitOr => {
+                Some(self.src(classinfo.range()).to_owned())
+            }
+            Expr::Tuple(tuple) => {
+                let arms: Option<Vec<String>> = tuple
+                    .elts
+                    .iter()
+                    .map(|element| self.type_expression_target(element))
+                    .collect();
+                let arms = arms?;
+                // an empty `isinstance(x, ())` is always `False`; there is no
+                // union to write for it
+                (!arms.is_empty()).then(|| arms.join(" | "))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -328,14 +369,43 @@ mod tests {
         );
     }
 
-    /// a literal rhs is identity in both languages, so the forward transform
-    /// leaves it as `is` and the reverse must not churn it
     #[test]
-    fn literal_comparisons_left_alone() {
+    fn none_comparisons_left_alone() {
+        // basedpython reads `is None` as a test for the type `None`, which is
+        // the same runtime check python's identity performs
         check("y = a is None\n", "y = a is None\n");
         check("y = a is not None\n", "y = a is not None\n");
-        check("y = a is True\n", "y = a is True\n");
-        check("y = a is not 1\n", "y = a is not 1\n");
+    }
+
+    #[test]
+    fn a_classinfo_tuple_becomes_a_union() {
+        // `isinstance`'s tuple means "any of these"; a type expression spells
+        // that `A | B`, and a tuple there is the tuple *type*
+        check("y = isinstance(a, (int, str))\n", "y = a is int | str\n");
+        check(
+            "y = not isinstance(a, (int, (str, bytes)))\n",
+            "y = a is not int | str | bytes\n",
+        );
+    }
+
+    #[test]
+    fn a_classinfo_no_type_expression_can_say_keeps_the_call() {
+        // a call is not a type expression, and neither is the empty tuple —
+        // whose test is always `False` and has no union to write
+        check(
+            "y = isinstance(a, type(a))\n",
+            "y = isinstance(a, type(a))\n",
+        );
+        check("y = isinstance(a, ())\n", "y = isinstance(a, ())\n");
+    }
+
+    #[test]
+    fn other_literal_comparisons_take_the_identity_operator() {
+        // `a is 1` is identity in python but a test for the type `Literal[1]`
+        // in basedpython, and those part company for an int outside the
+        // interned range — so the operator has to be written back out
+        check("y = a is True\n", "y = a === True\n");
+        check("y = a is not 1\n", "y = a !== 1\n");
     }
 
     /// the comment case cannot round-trip byte for byte — the operator's layout

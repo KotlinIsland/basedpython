@@ -1,7 +1,7 @@
-# identity and isinstance
+# type tests and identity
 
-basedpython swaps the surface syntax for identity comparison and `isinstance`
-checks: `===` is identity and `is` is an instance check
+basedpython swaps the surface syntax for identity comparison and type tests:
+`===` is identity, and `is` asks whether a value has a type
 
 ```by
 if x === y:
@@ -31,8 +31,12 @@ if not isinstance(x, str):
 | ------------ | ---------------------- |
 | `x === y`    | `x is y`               |
 | `x !== y`    | `x is not y`           |
-| `x is y`     | `isinstance(x, y)`     |
-| `x is not y` | `not isinstance(x, y)` |
+| `x is T`     | `isinstance(x, T)`     |
+| `x is not T` | `not isinstance(x, T)` |
+
+`T` is a *type*, and the check that comes out is whatever decides membership of
+it — `isinstance` for a class, but an equality for a literal and an identity for
+`None`. the sections below say which
 
 ## why
 
@@ -40,26 +44,62 @@ if not isinstance(x, str):
 rare outside of `is None`. basedpython promotes the common case to a keyword
 and demotes identity to a triple-equals operator borrowed from JavaScript
 
-## checking against `None`
+## the right-hand side is a type
 
-`a is None` and `a is not None` stay as python identity checks. `a === None`
-spells the same thing
+`is` takes a *type expression*, the same thing an annotation takes. anything an
+annotation can name, a test can test against:
 
-## checking against values
+```by
+from typing import Literal
 
-`isinstance` requires a class as its second argument, so a rhs that resolves
-to a plain *value* keeps python identity semantics. this covers literal
-singletons (`None`, `True`/`False`, numbers, strings, `...`), enum members,
-and any other rhs whose static type is an instance rather than a class:
-
-```py
-enum class Genre:
-    case A, B
-
-Genre.A is not Genre.B  # stays `is not` — members are singleton instances
+def f(v: object):
+    if v is int | str: ...        # a union
+    if v is list: ...             # a class, arguments and all
+    if v is Literal[1, 2]: ...    # a set of values
+    if v is type[int]: ...        # a class object
+    if v is f"item-{int}": ...    # a string pattern
 ```
 
-a payload-bearing variant (`Shape.Circle`) *is* a class, so `x is Shape.Circle` lowers to `isinstance(x, Shape.Circle)` as usual
+and anything an annotation rejects, a test rejects with the same message —
+`v is os` names a module, which is not a type in either place
+
+this is why `is` does not mean `isinstance`'s tuple: `isinstance(v, (int, str))`
+spells "any of these", while `(int, str)` in a type expression is the *tuple
+type*. write `v is int | str` for the first
+
+## checking against `None` and other values
+
+`None`, `True`, a number, a string and an enum member are all type expressions —
+each names the type holding exactly that one value. so the check that comes out
+is the identity or equality that decides membership of that type:
+
+```by
+if a is None: ...           # → a is None
+if flag is True: ...        # → type(flag) is bool and flag == True
+if g is Genre.A: ...        # → g is Genre.A
+```
+
+the class guard on a literal is not redundant: python's `1 == True` would
+otherwise let a `bool` satisfy `Literal[1]`
+
+## a target with no runtime form
+
+a test narrows, so it has to *earn* its `True`. a target the runtime could only
+partly check is rejected rather than approximated, by `erased-type-check` — and
+the emitted python answers `False`, since a test that cannot be made is one
+nothing satisfies:
+
+```by
+if v is Any: ...                  # error: admits every value
+if v is Callable[[], int]: ...    # error: the signature is not recorded on the value
+if v is Movie: ...                # error: a TypedDict's instances are plain dicts
+```
+
+a protocol is checkable when basedpython can see enough to check it: a
+`@runtime_checkable` one gets the presence check python itself performs, and any
+other is checked member by member against the value's
+[reified annotations](reified-generics.md). one with a member the emitted python
+cannot name is rejected
 
 ## a test that can never hold
 
@@ -86,8 +126,30 @@ subclass of `A` either.
 
 a [parametric target](parametric-type-tests.md) is judged by the same fold that
 decides the test, so a use-site variance projection (`a is A[out int]`) that
-makes the test possible keeps it quiet. a union target is never reported: any arm
-matching makes the whole test hold
+makes the test possible keeps it quiet. a union target is reported only when no
+arm can hold: any arm matching makes the whole test hold
+
+## a settled test is its answer
+
+where the value's type decides the question, the test *is* that answer, and the
+branch it guards is decided with it:
+
+```by
+def f(x: int):
+    reveal_type(x is int)  # revealed: True
+```
+
+an undecidable test is `bool`. the identity folds python applies to the same
+operator have no place here: the right-hand side names a type rather than the
+class object the same source spells as a value
+
+## chaining
+
+a type test may not join a chained comparison. python chains `a is int is str`
+into `a is int and int is str`, whose second half asks whether the *class* `int`
+has the type `str` — never what the writer meant, so it is a syntax error. split
+it into separate tests joined with `and`. a chain of `===` / `!==` is ordinary
+python and stays legal
 
 ## interaction with `==`
 
@@ -96,7 +158,6 @@ and `===` are remapped
 
 ## scope
 
-the swap applies to every comparison in source, with the value-rhs exemption
-above decided from static types. there is no opt-out at the statement level —
-write `===` / `!==` whenever you mean identity. ty understands both forms
-when type-checking `.by` files
+the swap applies to every comparison in source. there is no opt-out at the
+statement level — write `===` / `!==` whenever you mean identity. ty understands
+both forms when type-checking `.by` files

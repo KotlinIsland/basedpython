@@ -162,16 +162,15 @@ use crate::types::visibility::{private_constructor, scope_is_within_class};
 use crate::types::{
     BindingContext, BoundTypeVarInstance, CallDunderError, CallableBinding, CallableType,
     CallableTypes, ClassType, DeferredOperation, DeferredType, DynamicType, GeneratorTypeMode,
-    InferenceFlags, InstanceProjection, InternedConstraintSet, InternedType, IntersectionBuilder,
-    IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType, KnownUnion,
-    LiteralValueType, LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter,
-    Parameters, ProgramEnvironment, PropertyDeprecations, RestrictedType, SentinelInstance,
-    Signature, SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers,
-    TypeContext, TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
-    TypedDictType, TypingModule, UnionAccumulator, UnionBuilder, UnionType, any_over_type,
-    binding_type, extract_fixed_length_iterable_element_types, infer_complete_scope_types,
-    infer_scope_types, is_discarded_dict_key_assignment, report_iteration_over_character,
-    todo_type,
+    InferenceFlags, InternedConstraintSet, InternedType, IntersectionBuilder, IntersectionType,
+    KnownBoundMethodType, KnownClass, KnownInstanceType, KnownUnion, LiteralValueType,
+    LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter, Parameters,
+    ProgramEnvironment, PropertyDeprecations, RestrictedType, SentinelInstance, Signature,
+    SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers, TypeContext,
+    TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, TypedDictType,
+    TypingModule, UnionAccumulator, UnionBuilder, UnionType, any_over_type, binding_type,
+    extract_fixed_length_iterable_element_types, infer_complete_scope_types, infer_scope_types,
+    is_discarded_dict_key_assignment, report_iteration_over_character, todo_type,
 };
 use crate::{AnalysisSettings, Db, DisplaySettings, FxIndexSet, FxOrderSet, SemanticModel};
 use fluid::FluidTimeline;
@@ -11023,7 +11022,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     self.file(),
                     value_ty,
                     alias,
-                    type_arg,
+                    Some(type_arg),
                 ),
                 crate::types::reified_infer::ParametricIsPlan::TokenEq(_)
                     | crate::types::reified_infer::ParametricIsPlan::Fold(_)
@@ -15828,6 +15827,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let ast::ExprCompare {
             range: _,
             node_index: _,
+            identity_ops: _,
             left,
             ops,
             comparators,
@@ -15847,6 +15847,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // A chain like `a == True == b` is two comparisons over one literal: reporting each pair
         // would double up on that `True`, and "test the operand" is not the fix for the chain.
         let single_comparison = ops.len() == 1;
+        // a chained type test is a parse error; nothing here re-reports it
+        let chained_type_test = !single_comparison && compare.has_type_test(self.source_type());
         let ChainedBooleanResult {
             value_type: ty,
             preceding_truthiness,
@@ -15856,30 +15858,43 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             std::iter::once(&**left)
                 .chain(comparators)
                 .tuple_windows::<(_, _)>()
-                .zip(ops),
+                .zip(ops.iter().enumerate()),
             |_| false,
-            |builder, ((left, right), op), _peer_ty| {
+            |builder, ((left, right), (index, op)), _peer_ty| {
                 let left_ty = builder.expression_type(left);
-                let right_ty = builder.infer_expression(right, TypeContext::default());
-
                 let range = TextRange::new(left.start(), right.end());
+
+                // basedpython: the right-hand side of a type test is a *type*
+                // expression — `x is list[int]` names the type `list[int]`, not
+                // the class object the same source spells as a value. inferring
+                // it that way is what makes an annotation and a type test agree
+                // about which targets exist, and about which ones are rejected.
+                //
+                // a chain carrying one is rejected outright by the parser, and
+                // checking its pairs anyway would pile a second report on the
+                // same mistake
+                if !chained_type_test && compare.is_type_test(index, builder.source_type()) {
+                    let previously_in_target = builder
+                        .context
+                        .inference_flags
+                        .replace(InferenceFlags::IN_TYPE_TEST_TARGET, true);
+                    let target = builder.infer_type_expression(right);
+                    builder
+                        .context
+                        .inference_flags
+                        .set(InferenceFlags::IN_TYPE_TEST_TARGET, previously_in_target);
+                    return (
+                        builder.check_type_test(left, right, left_ty, target, *op),
+                        range,
+                    );
+                }
+
+                let right_ty = builder.infer_expression(right, TypeContext::default());
 
                 if single_comparison {
                     builder.check_redundant_boolean_comparison(
                         left, right, left_ty, right_ty, *op, range,
                     );
-                }
-
-                // a basedpython keyword-form `is`/`is not` whose rhs is a
-                // class (or a parametric test like `x is list[int]`) is an
-                // instance check, not python identity: it always yields a
-                // `bool`, and its reachability is decided by narrowing (not
-                // by the instance-vs-class-object disjointness that would
-                // otherwise type it `Literal[False]` and kill a live branch)
-                if let Some(ty) =
-                    builder.check_basedpython_is_test(left, right, left_ty, right_ty, *op)
-                {
-                    return (ty, range);
                 }
 
                 let ty = comparisons::infer_binary_type_comparison(
@@ -15951,71 +15966,85 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         ty
     }
 
-    /// basedpython: type a keyword-form `is`/`is not` pair that performs an
-    /// *instance check* rather than python identity, and check it. Returns
-    /// `Some(bool)` — the runtime result type — for any such pair, so the
-    /// identity folds (disjointness → `Literal[False]`) never apply to it;
-    /// reachability is decided by narrowing instead
-    fn check_basedpython_is_test(
+    /// basedpython: check a type test — `x is T` / `x is not T` — and give it
+    /// the `bool` its runtime check produces.
+    ///
+    /// `target` is the *type* the right-hand side names, already inferred as a
+    /// type expression, so an invalid target has been reported as
+    /// `invalid-type-form` before this runs. What is left to decide is whether
+    /// that type can be tested at runtime at all, and whether the test could
+    /// ever hold. Reachability is decided by narrowing rather than by the
+    /// identity folds, so this never returns anything but `bool`.
+    fn check_type_test(
         &mut self,
         left: &ast::Expr,
         right: &ast::Expr,
         left_ty: Type<'db>,
-        right_ty: Type<'db>,
+        target: Type<'db>,
         op: ast::CmpOp,
-    ) -> Option<Type<'db>> {
-        let (bool_ty, decision) =
-            self.classify_basedpython_is_test(left, right, left_ty, right_ty, op)?;
-        self.report_non_overlapping_type_test(left, right, left_ty, right_ty, op, decision);
-        Some(bool_ty)
-    }
-
-    /// The type a keyword-form `is`/`is not` asks its left operand to have: the
-    /// instance type of the class on the right, or the union of the arms' instance
-    /// types for a union target. `None` for a target with no instance form.
-    fn is_test_target_instance(&self, right: &ast::Expr, right_ty: Type<'db>) -> Option<Type<'db>> {
-        let env = self.program_environment();
-        // an over-approximating projection is the safe direction here: a wider
-        // target can only overlap more, so it never invents a disjointness
+    ) -> Type<'db> {
         let db = self.db();
-        let Some(arms) = union_target_arms(right) else {
-            return right_ty
-                .to_instance(db, env)
-                .map(InstanceProjection::into_inner);
-        };
-        let mut instances = Vec::with_capacity(arms.len());
-        for arm in arms {
-            instances.push(self.expression_type(arm).to_instance(db, env)?.into_inner());
+        let env = self.program_environment();
+        let plan = crate::types::reified_infer::type_test_plan(
+            db,
+            env,
+            self.file(),
+            left_ty,
+            target,
+            Some(right),
+        );
+        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = plan {
+            let source = ruff_db::source::source_text(db, self.file());
+            self.report_erased_type_check(
+                TextRange::new(left.start(), right.end()),
+                &source[right.range()],
+                reason,
+            );
+        } else {
+            // a target with no runtime test has already been rejected, and
+            // saying it can also never hold would pile a second report on one
+            // mistake
+            self.report_non_overlapping_type_test(
+                left,
+                right,
+                left_ty,
+                target,
+                op,
+                plan.never_holds(),
+            );
         }
-        Some(UnionType::from_elements(db, env, instances))
+        // a test the static types settle *is* its answer, and saying so is what
+        // lets a reader — and the editor's data-flow view — see that the branch
+        // it guards is decided. an undecidable test stays `bool`: the identity
+        // folds python would apply to the same operator have no place here,
+        // since the right-hand side names a type rather than the class object
+        // the same source spells as a value
+        match plan {
+            crate::types::reified_infer::ParametricIsPlan::Fold(holds) => {
+                Type::bool_literal(holds == (op == ast::CmpOp::Is))
+            }
+            _ => KnownClass::Bool.to_instance(db, env),
+        }
     }
 
-    /// Warn when a keyword-form `is`/`is not` tests a value against a type it can
-    /// never have. The test is then a constant — `is` never holds and `is not`
-    /// always does — so either the guarded branch is dead or the wrong type was
-    /// named. `Any`/`Unknown` overlap everything, so those never fire.
+    /// Warn when a type test asks whether a value has a type it can never have.
+    /// The test is then a constant — `is` never holds and `is not` always does —
+    /// so either the guarded branch is dead or the wrong type was named.
+    /// `Any`/`Unknown` overlap everything, so those never fire.
     fn report_non_overlapping_type_test(
         &self,
         left: &ast::Expr,
         right: &ast::Expr,
         left_ty: Type<'db>,
-        right_ty: Type<'db>,
+        target: Type<'db>,
         op: ast::CmpOp,
-        decision: IsTestDecision,
+        never_holds: bool,
     ) {
-        let env = self.program_environment();
-        let db = self.db();
-        let Some(target) = self.is_test_target_instance(right, right_ty) else {
-            return;
-        };
-        let never_holds = match decision {
-            IsTestDecision::Instance => left_ty.is_disjoint_from(db, env, target),
-            IsTestDecision::ParametricNeverHolds => true,
-            IsTestDecision::Undecided => false,
-        };
         if !never_holds {
             return;
         }
+        let db = self.db();
+        let env = self.program_environment();
         let range = TextRange::new(left.start(), right.end());
         let Some(builder) = self.context.report_lint(&NON_OVERLAPPING_TYPE_TEST, range) else {
             return;
@@ -16032,118 +16061,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         ));
     }
 
-    /// Decide whether this pair is an instance check, erroring when the pair is a
-    /// parametric test (`x is list[int]`) against a builtin collection whose
-    /// runtime instances erase their type arguments, so no runtime probe of the
-    /// value can ever confirm the specialization. `None` when the pair keeps
-    /// python identity semantics (`===` spelling, a literal or other plain-value
-    /// rhs such as an enum member — mirroring the transpiler's lowering), so the
-    /// caller keeps its usual comparison typing
-    fn classify_basedpython_is_test(
-        &mut self,
-        left: &ast::Expr,
-        right: &ast::Expr,
-        left_ty: Type<'db>,
-        right_ty: Type<'db>,
-        op: ast::CmpOp,
-    ) -> Option<(Type<'db>, IsTestDecision)> {
-        let env = self.program_environment();
-        if !matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) || !self.is_basedpython_file() {
-            return None;
-        }
-        // a literal rhs (`x is None`, `x is 0`) keeps python identity
-        // semantics; the transpiler leaves the operator untouched
-        if right.is_literal_expr() {
-            return None;
-        }
-        let source = ruff_db::source::source_text(self.db(), self.file());
-        if !crate::reified::is_keyword_comparison(source.as_str(), op, left, right) {
-            return None;
-        }
-        let bool_ty = KnownClass::Bool.to_instance(self.db(), env);
-
-        // a union target `a is T1 | T2` tests each arm (`type(a) <: Ti` for any
-        // arm). an erased arm can't be checked at runtime and, unlike a
-        // standalone erased target, may not fold to a constant inside the
-        // disjunction — that would be unsound — so it is rejected per arm
-        if let Some(arms) = union_target_arms(right) {
-            let mut decision = IsTestDecision::Instance;
-            for arm in arms {
-                let Some(alias) = crate::types::reified_infer::parametric_is_target(
-                    self.db(),
-                    env,
-                    self.expression_type(arm),
-                ) else {
-                    continue;
-                };
-                // a parametric arm is decided by the engine rather than by
-                // disjointness, and the test holds as soon as *any* arm does, so
-                // one such arm puts the whole disjunction out of the lint's reach
-                decision = IsTestDecision::Undecided;
-                if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) =
-                    crate::types::reified_infer::classify_parametric_is(
-                        self.db(),
-                        env,
-                        self.file(),
-                        left_ty,
-                        alias,
-                        arm,
-                    )
-                {
-                    self.report_erased_type_check(arm.range(), &source[arm.range()], reason);
-                }
-            }
-            return Some((bool_ty, decision));
-        }
-
-        // a plain-value rhs (an enum member, an instance of a non-type class)
-        // keeps python identity semantics — the transpiler leaves `is`/`is not`
-        // untouched, so ty types it as an ordinary identity comparison too
-        if crate::types::basedpython_is_keeps_identity(self.db(), env, right_ty) {
-            return None;
-        }
-
-        let Some(alias) =
-            crate::types::reified_infer::parametric_is_target(self.db(), env, right_ty)
-        else {
-            // a bare class / dynamic rhs (`x is int`, `x is SomeClass`) is an
-            // instance check that lowers to `isinstance`, so it always yields a
-            // `bool` — the identity folds (disjointness → `Literal[False]`)
-            // must not apply
-            return Some((bool_ty, IsTestDecision::Instance));
-        };
-        let plan = crate::types::reified_infer::classify_parametric_is(
-            self.db(),
-            env,
-            self.file(),
-            left_ty,
-            alias,
-            right,
-        );
-        // only a probe against a runtime-erased target is an error; every
-        // other plan (fold, reified-cell equality, witness, or a probe of a
-        // user generic that carries `__orig_class__`) is a valid test
-        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = plan {
-            self.report_erased_type_check(
-                TextRange::new(left.start(), right.end()),
-                &source[right.range()],
-                reason,
-            );
-        }
-        let decision = if plan == crate::types::reified_infer::ParametricIsPlan::Fold(false) {
-            IsTestDecision::ParametricNeverHolds
-        } else {
-            IsTestDecision::Undecided
-        };
-        Some((bool_ty, decision))
-    }
-
-    /// report an `erased-type-check` for a parametric `is`-target (or one arm
-    /// of a union target) that has no runtime residue — either because the
-    /// target records no specialization to probe, or because the target cannot
-    /// be spelled at runtime at all. every other concrete class records its
-    /// specialization on the instance or across its mro, so the runtime probe
-    /// unwinds it instead
     fn report_erased_type_check(
         &self,
         primary: TextRange,
@@ -16190,6 +16107,95 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 diagnostic.info(format_args!(
                     "test against a subclass that fixes the arguments (`class B(list[int])`), \
                      whose `__orig_bases__` the probe can unwind"
+                ));
+            }
+            ErasedTargetReason::Dynamic => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: `{target}` admits every value, \
+                     so there is nothing for the test to look for"
+                ));
+                diagnostic.info(format_args!(
+                    "a test that can only answer `True` narrows nothing; drop it, or name the \
+                     type the value is expected to have"
+                ));
+            }
+            ErasedTargetReason::Callable => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: a callable's parameter and \
+                     return types are not recorded on the value"
+                ));
+                diagnostic.info(format_args!(
+                    "the runtime can see that a value is callable and nothing more, so the \
+                     signature would be assumed rather than checked"
+                ));
+                diagnostic.info(format_args!(
+                    "test against a bare `Callable`, which asks only what the runtime records, \
+                     or take the value's type from the call site"
+                ));
+            }
+            ErasedTargetReason::TypedDict => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: a `TypedDict`'s instances are \
+                     plain dicts"
+                ));
+                diagnostic.info(format_args!(
+                    "the test could only ask whether the value is a `dict`, assuming every key \
+                     and value type `{target}` declares"
+                ));
+                diagnostic.info(format_args!(
+                    "`isinstance` refuses a `TypedDict` for the same reason"
+                ));
+            }
+            ErasedTargetReason::NonRuntimeCheckableProtocol => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: `{target}` has a member with no \
+                     runtime spelling"
+                ));
+                diagnostic.info(format_args!(
+                    "a member whose type the emitted python cannot name leaves nothing to check \
+                     the value's own annotation against"
+                ));
+                diagnostic.info(format_args!(
+                    "decorate `{target}` with `@typing.runtime_checkable` for the check python \
+                     itself performs, which asks only that the members are present"
+                ));
+            }
+            ErasedTargetReason::Intersection => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: an intersection has no single \
+                     runtime form"
+                ));
+                diagnostic.info(format_args!(
+                    "test each part separately and join the tests with `and`"
+                ));
+            }
+            ErasedTargetReason::Subclass => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: `issubclass` cannot take what \
+                     `{target}` is parameterized by"
+                ));
+                diagnostic.info(format_args!(
+                    "the test can see that the value is a class and nothing more; name the class \
+                     it must be a subclass of"
+                ));
+            }
+            ErasedTargetReason::UncomparableLiteral => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: equality does not decide \
+                     membership of `{target}`"
+                ));
+                diagnostic.info(format_args!(
+                    "`0.0 == -0.0` and `nan != nan`, so a `float` or `complex` literal names a \
+                     type the runtime cannot be asked about; `LiteralString` is a property of how \
+                     a value was written rather than of the value"
+                ));
+            }
+            ErasedTargetReason::Unspellable => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: `{target}` has no runtime form"
+                ));
+                diagnostic.info(format_args!(
+                    "the emitted python has no expression to evaluate for this target"
                 ));
             }
         }
@@ -17309,44 +17315,6 @@ fn is_collection_literal(expression: &ast::Expr) -> bool {
         expression,
         ast::Expr::List(_) | ast::Expr::Set(_) | ast::Expr::Dict(_)
     )
-}
-
-/// the flat arms of a `|` union type expression (`A | B | C` → `[A, B, C]`), or
-/// `None` when `expr` is not a union — used to test each arm of a parametric
-/// `is`-target union independently
-/// basedpython: how a keyword-form `is`/`is not` instance check is decided, which
-/// is what the `non-overlapping-type-test` lint reads to know whether the test can
-/// ever hold.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IsTestDecision {
-    /// a bare class target (`x is int`): ordinary disjointness decides it
-    Instance,
-    /// a parametric target (`x is list[int]`) the parametric engine folded to
-    /// `False`. That engine is asked rather than disjointness directly because it
-    /// also honours a use-site variance projection (`a is A[out int]`)
-    ParametricNeverHolds,
-    /// a parametric target left to a runtime probe, or a union with such an arm —
-    /// nothing the lint can call constant
-    Undecided,
-}
-
-fn union_target_arms(expr: &ast::Expr) -> Option<Vec<&ast::Expr>> {
-    fn collect<'a>(expr: &'a ast::Expr, arms: &mut Vec<&'a ast::Expr>) {
-        if let ast::Expr::BinOp(binop) = expr
-            && binop.op == ast::Operator::BitOr
-        {
-            collect(&binop.left, arms);
-            collect(&binop.right, arms);
-        } else {
-            arms.push(expr);
-        }
-    }
-    if !matches!(expr, ast::Expr::BinOp(binop) if binop.op == ast::Operator::BitOr) {
-        return None;
-    }
-    let mut arms = Vec::new();
-    collect(expr, &mut arms);
-    Some(arms)
 }
 
 /// Returns `true` if `expression` is a link of a basedpython optional chain: a `?.` access, or a

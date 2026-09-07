@@ -116,6 +116,7 @@ Module(
                                                         },
                                                     ),
                                                 ],
+                                                identity_ops: None,
                                             },
                                         ),
                                         BoolOp(
@@ -269,6 +270,7 @@ Module(
                                                         },
                                                     ),
                                                 ],
+                                                identity_ops: None,
                                             },
                                         ),
                                     ],
@@ -389,6 +391,7 @@ Module(
                                                         },
                                                     ),
                                                 ],
+                                                identity_ops: None,
                                             },
                                         ),
                                     ],

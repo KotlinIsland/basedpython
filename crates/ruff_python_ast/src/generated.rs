@@ -10440,6 +10440,21 @@ pub struct ExprCompare {
     pub left: Box<Expr>,
     pub ops: Box<[crate::CmpOp]>,
     pub comparators: Box<[Expr]>,
+    /// basedpython: which operators were written `===` / `!==`.
+    ///
+    /// basedpython gives the `is` keyword to the type test and spells Python's identity
+    /// comparison `===` / `!==`. Both parse to [`CmpOp::Is`](crate::CmpOp::Is) / [`CmpOp::IsNot`](crate::CmpOp::IsNot) so the
+    /// AST keeps Python's shape, and the spelling is recorded here instead. `None` when
+    /// nothing was written `===` / `!==`, which is every `.py` file — and boxed, because
+    /// paying two more words on every comparison would widen `Expr` itself.
+    ///
+    /// The lexer emits `===` / `!==` for any source that spells them, so a renderer can
+    /// print them back from this field alone without knowing which language it is
+    /// emitting — a `.py` file that contains them was never valid Python anyway. Read it
+    /// through [`ExprCompare::is_identity_operator`], and ask
+    /// [`ExprCompare::is_type_test`] for the other half of the question, which is the
+    /// one that needs the source type.
+    pub identity_ops: Option<Box<crate::IdentityOperators>>,
 }
 
 /// A call expression whose end offset is derived from its arguments.

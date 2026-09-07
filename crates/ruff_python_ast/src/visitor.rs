@@ -569,6 +569,7 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
             left,
             ops,
             comparators,
+            identity_ops: _,
             range: _,
             node_index: _,
         }) => {

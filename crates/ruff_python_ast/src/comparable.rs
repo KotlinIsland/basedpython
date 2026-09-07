@@ -971,6 +971,10 @@ pub struct ExprCompare<'a> {
     left: Box<ComparableExpr<'a>>,
     ops: Vec<ComparableCmpOp>,
     comparators: Vec<ComparableExpr<'a>>,
+    /// basedpython: `a is int` and `a === int` share an operator but not a
+    /// meaning, so two comparisons are only equal when they were spelled the
+    /// same way
+    identity_ops: Vec<bool>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1282,12 +1286,17 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 left,
                 ops,
                 comparators,
+                identity_ops,
                 range: _,
                 node_index: _,
             }) => Self::Compare(ExprCompare {
                 left: left.into(),
                 ops: ops.iter().copied().map(Into::into).collect(),
                 comparators: comparators.iter().map(Into::into).collect(),
+                identity_ops: identity_ops
+                    .as_ref()
+                    .map(|identity| identity.ops.to_vec())
+                    .unwrap_or_default(),
             }),
             ast::Expr::Call(ast::ExprCall {
                 func,

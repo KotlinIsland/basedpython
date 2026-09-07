@@ -348,35 +348,6 @@ impl<'db> SemanticModel<'db> {
         })
     }
 
-    /// basedpython: how `x is <interface>` is answered once conformances are in
-    /// play. `None` when the target is not an interface anything conforms to
-    /// here, where the ordinary `isinstance` lowering is still right
-    pub fn conformance_test(
-        &self,
-        target: &ast::Expr,
-    ) -> Option<crate::types::conformance::ConformanceTest> {
-        use crate::types::conformance;
-
-        let db = self.db;
-        if !self.file.file(db).source_type(db).is_basedpython() {
-            return None;
-        }
-        let interface = target.inferred_type(self)?.to_class_type(db)?;
-        if !conformance::visible_conformances(db, self.file.file(db))
-            .iter()
-            .any(|(_, declared)| declared.class_literal(db) == interface.class_literal(db))
-        {
-            return None;
-        }
-        let members = Some(
-            conformance::interface_requirements(db, interface)
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-        );
-        Some(conformance::ConformanceTest { members })
-    }
-
     /// basedpython: when an attribute access resolves to an `extension`
     /// member (this module's, or one from a module imported with a plain
     /// `import mod`), the backing-function rewrite the transpiler applies.
@@ -1003,57 +974,72 @@ impl<'db> SemanticModel<'db> {
             .is_some_and(|ty| crate::types::trailing_lambda::callee_callback_is_once(self.db, ty))
     }
 
-    /// basedpython: how the parametric type test `lhs is rhs` (keyword form)
-    /// resolves, from the operands' inferred types. `rhs` may name the target
-    /// specialization directly (`list[int]`) or through an alias — an implicit
-    /// alias whose value is a specialization (`X = list[int]`) or a PEP 695
-    /// `type` alias. `None` when `rhs` does not resolve to a specialization —
-    /// the test is then an ordinary isinstance lowering
+    /// basedpython: whether `target`, read as a *value*, denotes a plain value
+    /// rather than a class — an enum member, a literal, an instance of a
+    /// concrete non-type class.
+    ///
+    /// A type test's target is a type expression, so its inferred type is the
+    /// type it names and the value it evaluates to is not recorded. That is
+    /// almost always the same thing, and where it is not, the type reading is
+    /// the one that matters. The exception is a target the type reading cannot
+    /// make sense of at all: the enum lowering rewrites a unit variant into a
+    /// singleton instance before the transpiler's passes run, so `s is
+    /// Shape.Point` reaches them naming a type in the source and a value in
+    /// what is emitted — and the test for a value is identity.
+    ///
+    /// Resolved here rather than read from the inference store, which holds the
+    /// type reading. Only a name or a dotted name is resolved; anything else
+    /// answers `false`, which leaves the ordinary instance check in place.
+    pub fn denotes_plain_value(&self, target: &ast::Expr) -> bool {
+        let env = self.program_environment();
+        self.value_of(target, &env)
+            .is_some_and(|ty| crate::types::basedpython_is_plain_value(self.db, &env, ty))
+    }
+
+    /// the type of the value `expr` evaluates to, for a name or a dotted name
+    fn value_of(
+        &self,
+        expr: &ast::Expr,
+        env: &crate::types::context::ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
+        match expr {
+            ast::Expr::Name(name) => crate::place::global_symbol(
+                self.db,
+                self.db.program_file(self.file()),
+                name.id.as_str(),
+            )
+            .place
+            .ignore_possibly_undefined(),
+            ast::Expr::Attribute(attribute) => {
+                let base = self.value_of(&attribute.value, env)?;
+                base.member(self.db, env, attribute.attr.id.as_str())
+                    .place
+                    .ignore_possibly_undefined()
+            }
+            _ => None,
+        }
+    }
+
+    /// basedpython: how the type test `lhs is rhs` resolves, from the value's
+    /// inferred type and the type its right-hand side names.
+    ///
+    /// The right-hand side is a type expression, so `rhs` may name its target
+    /// however a type expression can: directly (`list[int]`), through an
+    /// implicit alias (`X = list[int]`), or through a PEP 695 `type` alias.
+    /// `None` only when inference has no type for one of the operands.
     pub fn parametric_is_plan(
         &self,
         lhs: &ast::Expr,
         rhs: &ast::Expr,
     ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
         let env = &self.program_environment();
-        let alias = crate::types::reified_infer::parametric_is_target(
+        Some(crate::types::reified_infer::type_test_plan(
             self.db,
             env,
+            self.file(),
+            lhs.inferred_type(self)?,
             rhs.inferred_type(self)?,
-        )?;
-        let lhs_ty = lhs.inferred_type(self)?;
-        Some(crate::types::reified_infer::classify_parametric_is(
-            self.db,
-            env,
-            self.file(),
-            lhs_ty,
-            alias,
-            rhs,
-        ))
-    }
-
-    /// basedpython: [`Self::parametric_is_plan`] for a checked cast
-    /// (`value cast T`). The same classification engine decides both — only the
-    /// target's inference position differs, since a cast's target is a *type*
-    /// expression while an `is`-rhs is a value expression.
-    pub fn parametric_cast_plan(
-        &self,
-        value: &ast::Expr,
-        target: &ast::Expr,
-    ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
-        let env = &self.program_environment();
-        let alias = crate::types::reified_infer::parametric_cast_target(
-            self.db,
-            env,
-            target.inferred_type(self)?,
-        )?;
-        let value_ty = value.inferred_type(self)?;
-        Some(crate::types::reified_infer::classify_parametric_is(
-            self.db,
-            env,
-            self.file(),
-            value_ty,
-            alias,
-            target,
+            Some(rhs),
         ))
     }
 

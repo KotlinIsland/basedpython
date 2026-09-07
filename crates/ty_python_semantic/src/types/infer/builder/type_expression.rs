@@ -208,7 +208,20 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         if self.is_basedpython_file() && ty.as_enum_literal().is_some() {
             return ty;
         }
-        report_missing_type_arguments(&self.context, ty, annotation);
+        // a type test's target is complete without type arguments: it asks
+        // whether the value is one of these, and the arguments are what the
+        // runtime cannot see either way. that holds for the target itself, not
+        // for a bare generic *inside* it — `x is A[list]` really does leave an
+        // argument the probe compares
+        let bare_target_is_complete = self
+            .inference_flags()
+            .contains(InferenceFlags::IN_TYPE_TEST_TARGET)
+            && !self
+                .inference_flags()
+                .contains(InferenceFlags::IN_NESTED_TYPE_EXPRESSION);
+        if !bare_target_is_complete {
+            report_missing_type_arguments(&self.context, ty, annotation);
+        }
         let result_ty = ty
             .default_specialize(db, env)
             .in_type_expression(

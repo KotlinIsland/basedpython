@@ -262,7 +262,7 @@ def f(fn: (local Resource) -> None):
 
 f:
     tmp = it
-    print(tmp is None)
+    print(tmp === None)
 ```
 
 ## a `once` block's fresh binding still escapes

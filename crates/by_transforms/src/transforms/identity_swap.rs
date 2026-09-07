@@ -1,24 +1,18 @@
-//! `===` / `!==` are real python identity; `is` / `is not` mean
-//! `isinstance` / `not isinstance`. parser flattens both spellings to
-//! `CmpOp::Is`/`IsNot`, so disambiguation reads the operator text from
-//! source.
+//! `===` / `!==` are real python identity, which python spells `is` / `is not`.
+//! basedpython gives the `is` keyword to the type test instead, and the parser
+//! folds both spellings onto the same [`CmpOp`], recording which one it saw.
+//!
+//! This pass lowers only the identity spelling, by replacing the operator text.
+//! Every type test belongs to [`parametric_is`](super::parametric_is), which
+//! decides its lowering from the target's *type* rather than from the shape the
+//! target was written in.
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{
-    Arguments, AtomicNodeIndex, CmpOp, Expr, ExprCall, ExprContext, ExprName, ExprUnaryOp,
-    ModModule, Operator, Stmt, UnaryOp, name::Name,
-};
+use ruff_python_ast::{CmpOp, Expr, ModModule, Stmt};
+use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use super::ast_driver::{AstPass, PassContext, render_expr};
-
-/// whether the type-aware `parametric_is` pass owns lowering this `is`-rhs, so
-/// `identity_swap` must leave it alone. it owns a name / attribute / subscript
-/// target (may name a specialization or alias) and a `|` union of them
-fn owned_by_parametric_is(rhs: &Expr) -> bool {
-    matches!(rhs, Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_))
-        || matches!(rhs, Expr::BinOp(binop) if binop.op == Operator::BitOr)
-}
+use super::ast_driver::{AstPass, PassContext};
 
 pub(crate) struct IdentitySwap<'src> {
     source: &'src str,
@@ -51,92 +45,63 @@ struct State<'src> {
 impl State<'_> {
     fn process_compare(&mut self, c: &ruff_python_ast::ExprCompare) {
         let mut lhs_end = c.left.range().end();
-        let mut lhs: &Expr = c.left.as_ref();
-        for (op, rhs) in c.ops.iter().zip(c.comparators.iter()) {
-            let rhs_start = rhs.range().start();
-            let between = &self.source[usize::from(lhs_end)..usize::from(rhs_start)];
-            let trimmed = between.trim();
-            match op {
-                CmpOp::Is => {
-                    if trimmed.starts_with("===") {
-                        if let Some(pos) = between.find("===") {
-                            let op_start = lhs_end + TextSize::try_from(pos).unwrap();
-                            let op_range =
-                                TextRange::new(op_start, op_start + TextSize::from(3u32));
-                            self.edits.push((op_range, "is".to_owned()));
-                        }
-                    } else if trimmed == "is"
-                        && !rhs.is_literal_expr()
-                        && !owned_by_parametric_is(rhs)
-                    {
-                        let call = isinstance_call(lhs.clone(), rhs.clone(), false);
-                        let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
-                        self.edits.push((pair_range, render_expr(&call)));
-                    }
+        for (index, rhs) in c.comparators.iter().enumerate() {
+            let gap = TextRange::new(lhs_end, rhs.range().start());
+            if c.is_identity_operator(index) {
+                let replacement = match c.ops.get(index) {
+                    Some(CmpOp::Is) => "is",
+                    Some(CmpOp::IsNot) => "is not",
+                    _ => unreachable!("only `is` / `is not` carry the identity spelling"),
+                };
+                if let Some(range) = identity_operator_range(self.source, gap) {
+                    // `===` needs no space around it and `is` does, so an
+                    // operator the source wrote tight against its operands
+                    // (`a===b`) has to bring its own
+                    let before = self.source[..usize::from(range.start())]
+                        .ends_with(|c: char| c.is_whitespace());
+                    let after = self.source[usize::from(range.end())..]
+                        .starts_with(|c: char| c.is_whitespace());
+                    let padded = format!(
+                        "{}{replacement}{}",
+                        if before { "" } else { " " },
+                        if after { "" } else { " " },
+                    );
+                    self.edits.push((range, padded));
                 }
-                CmpOp::IsNot => {
-                    if trimmed.starts_with("!==") {
-                        if let Some(pos) = between.find("!==") {
-                            let op_start = lhs_end + TextSize::try_from(pos).unwrap();
-                            let op_range =
-                                TextRange::new(op_start, op_start + TextSize::from(3u32));
-                            self.edits.push((op_range, "is not".to_owned()));
-                        }
-                    } else if !rhs.is_literal_expr() && !owned_by_parametric_is(rhs) {
-                        let call = isinstance_call(lhs.clone(), rhs.clone(), true);
-                        let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
-                        self.edits.push((pair_range, render_expr(&call)));
-                    }
-                }
-                _ => {}
             }
             lhs_end = rhs.range().end();
-            lhs = rhs;
         }
     }
 }
 
-fn isinstance_call(lhs: Expr, rhs: Expr, negate: bool) -> Expr {
-    let call = Expr::Call(ExprCall {
-        node_index: AtomicNodeIndex::NONE,
-        range_start: ruff_text_size::TextSize::default(),
-        func: Box::new(Expr::Name(ExprName {
-            node_index: AtomicNodeIndex::NONE,
-            range: TextRange::default(),
-            id: Name::from("isinstance"),
-            ctx: ExprContext::Load,
-        })),
-        arguments: Arguments {
-            node_index: AtomicNodeIndex::NONE,
-            range: TextRange::default(),
-            args: Box::new([lhs, rhs]),
-            keywords: thin_vec::ThinVec::new(),
-        },
-        cast_kind: None,
-        is_string_tag: false,
-    });
-    if negate {
-        Expr::UnaryOp(ExprUnaryOp {
-            node_index: AtomicNodeIndex::NONE,
-            range: TextRange::default(),
-            op: UnaryOp::Not,
-            operand: Box::new(call),
-        })
-    } else {
-        call
-    }
+/// the source range of the `===` / `!==` written in `gap` — the span between
+/// the two operands it joins.
+///
+/// The operand ranges stop inside any parentheses wrapping them, and a comment
+/// may sit in the gap of a bracketed expression, so the operator is found by
+/// tokenizing rather than by searching for its text.
+fn identity_operator_range(source: &str, gap: TextRange) -> Option<TextRange> {
+    let start = SimpleTokenizer::new(source, gap)
+        .skip_trivia()
+        .find(|token| token.kind() != SimpleTokenKind::RParen)?
+        .start();
+    let rest = &source[usize::from(start)..];
+    ["===", "!=="]
+        .into_iter()
+        .find(|symbol| rest.starts_with(symbol))
+        .map(|_| TextRange::at(start, TextSize::from(3u32)))
 }
 
 impl<'ast> Visitor<'ast> for State<'_> {
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Compare(c) = expr {
-            self.process_compare(c);
-        }
-        walk_expr(self, expr);
-    }
-
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::Compare(compare) = expr {
+            self.process_compare(compare);
+        }
+        walk_expr(self, expr);
     }
 }
 
@@ -168,6 +133,14 @@ mod tests {
     }
 
     #[test]
+    fn parenthesized_operands_still_lower() {
+        // an operand's own range stops inside its parentheses, so the rewrite
+        // has to close what it swallowed and open what the source closes after
+        check("(x) is int\n", "(isinstance(x, int))\n");
+        check("x is ( int )\n", "(isinstance(x, int) )\n");
+    }
+
+    #[test]
     fn is_not_to_not_isinstance() {
         check("x is not int\n", "not isinstance(x, int)\n");
     }
@@ -188,24 +161,21 @@ mod tests {
     }
 
     #[test]
-    fn is_bool_kept() {
-        check("a is True\n", "a is True\n");
-        check("a is False\n", "a is False\n");
-    }
-
-    #[test]
-    fn is_number_kept() {
-        check("a is 0\n", "a is 0\n");
-    }
-
-    #[test]
-    fn is_string_kept() {
-        check("a is \"x\"\n", "a is \"x\"\n");
-    }
-
-    #[test]
-    fn is_ellipsis_kept() {
-        check("a is ...\n", "a is ...\n");
+    fn is_literal_tests_the_literal_type() {
+        // a literal names a type holding exactly the values equal to it, and the
+        // class guard is what keeps python's `1 == True` from widening that
+        check(
+            "def f(a: object):\n    return a is True\n",
+            "def f(a: object):\n    return (type(a) is bool and a == True)\n",
+        );
+        check(
+            "def f(a: object):\n    return a is 0\n",
+            "def f(a: object):\n    return (type(a) is int and a == 0)\n",
+        );
+        check(
+            "def f(a: object):\n    return a is \"x\"\n",
+            "def f(a: object):\n    return (type(a) is str and a == \"x\")\n",
+        );
     }
 
     #[test]
@@ -216,6 +186,13 @@ mod tests {
     #[test]
     fn bang_eq_eq_none_still_swaps() {
         check("a !== None\n", "a is not None\n");
+    }
+
+    #[test]
+    fn an_unspaced_identity_operator_brings_its_own_spaces() {
+        // `===` needs no space around it; `is` does
+        check("c = a===b\n", "c = a is b\n");
+        check("d = a!==b\n", "d = a is not b\n");
     }
 
     #[test]

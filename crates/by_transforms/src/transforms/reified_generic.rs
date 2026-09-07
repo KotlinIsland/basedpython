@@ -230,7 +230,7 @@ impl<'src> ReifiedGeneric<'src> {
     }
 
     fn wrap(&mut self, function: &StmtFunctionDef) {
-        if reified_type_param_names(self.source, PySourceType::BasedPython, function).is_empty() {
+        if reified_type_param_names(PySourceType::BasedPython, function).is_empty() {
             return;
         }
         if !self.supports_native_generics {
