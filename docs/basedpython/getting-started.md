@@ -63,30 +63,30 @@ see [configuration](configuration.md) for everything that can go in there
 
 ## building
 
-`by build` writes the project to `out/` as python:
+`by build` writes the project to `build/` as python:
 
 ```sh
 by build
 ```
 
 ```text
-main.by -> out/main.py
-utils.by -> out/utils.py
+main.by -> build/main.py
+utils.by -> build/utils.py
 
 build complete (2 files)
 ```
 
 that is the whole project, not only its `.by` files — a hand-written `.py`
 module, a `py.typed`, a data file the program reads are all carried across to
-the same place, so `out/` runs the way the source does
+the same place, so `build/` runs the way the source does
 
 the generated `.py` files are ordinary python. run them with any python tool:
 
 ```sh
-python out/main.py
-pytest out/
-mypy out/
-ruff check out/
+python build/main.py
+pytest build/
+mypy build/
+ruff check build/
 ```
 
 to ship the project rather than run it, build a wheel — see
@@ -105,7 +105,7 @@ uv build
     by build
 
 - name: Test
-  run: pytest out/
+  run: pytest build/
 ```
 
 ## converting python to basedpython
@@ -194,7 +194,7 @@ echo 'a = b ?? 1' | by transpile
 
 output goes to stdout - redirect it to a file if you want to keep it
 (`by transpile hello.by > hello.py`). use `by build` to transpile a whole
-project into `out/`
+project into `build/`
 
 ## forward references
 

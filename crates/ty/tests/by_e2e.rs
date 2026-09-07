@@ -58,6 +58,398 @@ fn run_transpile(source: &str, extra_args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+/// A project whose program reads a data file sitting beside it.
+///
+/// Written by each `compile` staging test, which then differ only in what they do
+/// to the tree afterwards.
+fn resource_project(name: &str) -> PathBuf {
+    let dir = cli_root().join(name);
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("data")).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("data").join("config.json"),
+        "{\"greeting\": \"hi\"}\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("helper.py"),
+        "def helper() -> int:\n    return 1\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.by"),
+        "from pathlib import Path\n\n\ndef go() -> str:\n    \
+         return (Path(__file__).parent / \"data\" / \"config.json\").read_text()\n",
+    )
+    .unwrap();
+    dir
+}
+
+/// Whether `by` refused because this host's interpreter is below the native floor.
+///
+/// `by compile` probes an interpreter before it does anything, and
+/// `by_build::MINIMUM_PYTHON` refuses one older than 3.11 by name. On a host whose
+/// ambient `python3` is older that is not a failure of the code under test, and a
+/// test that asserted its way through it reported a wall of unrelated noise — so
+/// every `compile` test here skips on it, the way `by_build`'s own suite does.
+/// Pin `PYTHON` to a 3.11+ interpreter to actually run them.
+#[allow(
+    clippy::print_stderr,
+    reason = "skip notices belong on the harness's stderr"
+)]
+fn refused_for_python_version(result: &std::process::Output) -> bool {
+    let refused = String::from_utf8_lossy(&result.stderr)
+        .contains("a native build needs python 3.11 or later");
+    if refused {
+        eprintln!("skipping: this host's python is below the native compilation floor");
+    }
+    refused
+}
+
+/// Run `by compile` in `dir`, or `None` when this host cannot compile natively.
+fn compile_in(dir: &Path) -> Option<std::process::Output> {
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["compile", "--emit-c-only"])
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by");
+    if refused_for_python_version(&result) {
+        return None;
+    }
+    assert!(
+        result.status.success(),
+        "by exited with error:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    Some(result)
+}
+
+#[test]
+fn compile_carries_the_rest_of_the_project_into_the_output_tree() {
+    // a compiled module is only half of a project. `main.by` reads its data file
+    // relative to itself, and the extension's `__file__` is its own place in the
+    // output tree — so a tree holding artefacts and nothing else fails on the
+    // first `open`, with a `FileNotFoundError` naming a path in a directory the
+    // author never wrote anything to. `compile` writes everything `build` writes
+    // and the extensions as well, so a compiled module finds its data exactly
+    // where its interpreted twin would
+    let dir = resource_project("by_cli_compile_resources");
+    if compile_in(&dir).is_none() {
+        return;
+    }
+
+    let out = dir.join("build");
+    assert!(out.join("main.c").exists(), "the module is compiled");
+    assert!(
+        out.join("data").join("config.json").exists(),
+        "a data file lands at the same relative place it had in the source"
+    );
+    assert!(
+        out.join("helper.py").exists(),
+        "a hand-written python module beside the source is carried over too"
+    );
+    assert!(
+        out.join("main.py").exists(),
+        "the `.by` is transpiled too, so the module imports whether or not its \
+         extension was built"
+    );
+    assert!(
+        out.join("_by_sourcemap.py").exists() && out.join("_by_build.json").exists(),
+        "the tree describes itself, the way a `by build` tree does"
+    );
+}
+
+#[test]
+fn compiling_one_module_leaves_the_others_importable() {
+    // the docs offer `by compile app.hot` as "compile one module, leave the rest
+    // interpreted". while `compile` wrote artefacts alone that was not what
+    // happened: the modules nobody named reached the tree as `.by`, which python
+    // cannot import, and the second invocation's `finish` took the first's
+    // artefact back as well — so `compile a` then `compile b` left a tree that
+    // could import neither
+    let dir = resource_project("by_cli_compile_one_of_many");
+    fs::write(dir.join("other.by"), "def other() -> int:\n    return 2\n").unwrap();
+
+    let compile_one = |name: &str| -> bool {
+        let result = Command::new(env!("CARGO_BIN_EXE_by"))
+            .args(["compile", "--emit-c-only", name])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn by");
+        if refused_for_python_version(&result) {
+            return false;
+        }
+        assert!(
+            result.status.success(),
+            "by exited with error:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        true
+    };
+    let out = dir.join("build");
+
+    if !compile_one("main.by") {
+        return;
+    }
+    assert!(out.join("main.c").exists(), "the named module is compiled");
+    assert!(
+        out.join("other.py").exists(),
+        "a module nobody named still reaches the tree as importable python"
+    );
+
+    assert!(compile_one("other.by"), "the second compile ran");
+    assert!(
+        out.join("other.c").exists(),
+        "the newly named one is compiled"
+    );
+    assert!(
+        out.join("main.py").exists(),
+        "and the previously named one is still importable"
+    );
+}
+
+#[test]
+fn a_compile_leaves_a_build_tree_readable() {
+    // `compile` and `build` write to the same directory by design. while
+    // `compile` wrote artefacts alone it took the sourcemap and the build record
+    // with it, and `by restage` — the language server's single-file re-stage —
+    // then refused the tree for having no `_by_build.json`, so a compile silently
+    // disabled the editor plugin against it
+    let dir = resource_project("by_cli_compile_then_restage");
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(result.status.success());
+    if compile_in(&dir).is_none() {
+        return;
+    }
+
+    let restaged = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["restage", "build", "main.by"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    let answer = String::from_utf8_lossy(&restaged.stdout);
+    assert!(
+        answer.contains("\"generated\""),
+        "the tree is still one a re-stage can read:\n{answer}"
+    );
+}
+
+#[test]
+fn a_build_with_nothing_to_write_leaves_no_output_directory() {
+    // `by build` created the output directory before it knew whether it had
+    // anything to put in it, so a project with no `.by` files — one whose sources
+    // are all python, say — was left holding an empty `build/` it never asked for
+    let dir = cli_root().join("by_cli_build_no_litter");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(dir.join("only.py"), "x = 1\n").unwrap();
+
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(result.status.success(), "by build failed:\n{stderr}");
+    assert!(
+        stderr.contains("no .by files found"),
+        "the build found nothing to do:\n{stderr}"
+    );
+    assert!(
+        !dir.join("build").exists(),
+        "a build that wrote nothing left a directory behind:\n{stderr}"
+    );
+}
+
+#[test]
+fn a_second_output_directory_is_not_carried_into_the_first() {
+    // a project can have more than one output tree — `by build --out one` beside
+    // `by build --out two`. only the directory *this* run was given is known to
+    // be an output from its arguments; the other is recognised by the
+    // `.by-manifest` it carries, and without that it is carried over as though it
+    // were source, putting a whole copy of one tree inside the other
+    let dir = cli_root().join("by_cli_two_outputs");
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(dir.join("main.by"), "x = 1\n").unwrap();
+    fs::write(dir.join("data.json"), "{}\n").unwrap();
+
+    let build_into = |name: &str| {
+        let result = Command::new(env!("CARGO_BIN_EXE_by"))
+            .args(["build", "--out", name])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn by");
+        assert!(
+            result.status.success(),
+            "by build failed:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    };
+    build_into("one");
+    build_into("two");
+
+    assert!(dir.join("two").join("main.py").exists(), "the build ran");
+    assert!(
+        !dir.join("two").join("one").exists(),
+        "the first output tree was copied into the second"
+    );
+}
+
+#[test]
+fn compile_takes_back_what_the_previous_compile_wrote() {
+    // the output tree is a mirror rather than a pile: a resource deleted from the
+    // source is deleted from the tree. without the manifest it would keep being
+    // read, and a wheel built from the same tree would ship it
+    let dir = resource_project("by_cli_compile_stale");
+    if compile_in(&dir).is_none() {
+        return;
+    }
+    let out = dir.join("build");
+    assert!(out.join("data").join("config.json").exists());
+
+    fs::remove_file(dir.join("data").join("config.json")).unwrap();
+    assert!(compile_in(&dir).is_some(), "the second compile ran");
+    assert!(
+        !out.join("data").join("config.json").exists(),
+        "a resource the source no longer has is taken back out of the tree"
+    );
+}
+
+#[test]
+fn a_build_takes_back_the_artifacts_a_compile_left() {
+    // `compile` and `build` write to the same directory by default, and python's
+    // finder prefers an extension to source. an artefact left behind by an
+    // earlier `compile` would therefore go on shadowing the `.py` this `build`
+    // writes in its place — which is why `compile` records what it produced even
+    // though `by_build` is what laid it out
+    let dir = resource_project("by_cli_compile_then_build");
+    if compile_in(&dir).is_none() {
+        return;
+    }
+    let out = dir.join("build");
+    assert!(out.join("main.c").exists());
+
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        result.status.success(),
+        "by exited with error:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(out.join("main.py").exists(), "the build wrote the module");
+    assert!(
+        !out.join("main.c").exists(),
+        "what the compile produced is taken back"
+    );
+}
+
+#[test]
+fn compile_refuses_to_carry_a_file_over_an_artifact_it_wrote() {
+    // a project can keep a `main.c` of its own beside `main.by` — and the
+    // compiler writes its generated C under that same name. carrying the
+    // hand-written one over would leave a tree whose generated half is somebody
+    // else's file, with nothing said about it, so it is reported the way two
+    // sources claiming one module are
+    let dir = resource_project("by_cli_compile_artifact_collision");
+    fs::write(dir.join("main.c"), "/* hand-written */\n").unwrap();
+
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["compile", "--emit-c-only"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    if refused_for_python_version(&result) {
+        return;
+    }
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success(), "by should have failed:\n{stderr}");
+    assert!(
+        stderr.contains("already wrote an artifact of that name"),
+        "the collision is named:\n{stderr}"
+    );
+    assert!(
+        !fs::read_to_string(dir.join("build").join("main.c"))
+            .unwrap()
+            .contains("hand-written"),
+        "the generated C is left as the compiler wrote it"
+    );
+}
+
+#[test]
+fn compile_does_not_read_the_tree_it_writes() {
+    // the output holds a copy of every resource the build carried over, including
+    // the project's `.py` modules. a second `compile` that walked them would
+    // compile each module twice — once from the source and once from the copy —
+    // and the two would claim the same artifact
+    //
+    // the directory is deliberately *not* one of the names the project walk skips
+    // by default (`build`, `out`, `target`, …). those are turned away whoever
+    // asks, so a tree written to one of them would pass this test even if the
+    // build never told the database where its own output was going.
+    //
+    // two mechanisms keep `generated/` out — the output this run was given, and
+    // the `.by-manifest` any output carries — and either alone is enough here.
+    // the manifest is the only one that covers an output this run was *not*
+    // given, which `a_second_output_directory_is_not_carried_into_the_first`
+    // is for
+    let dir = resource_project("by_cli_compile_not_own_input");
+    let compile = || -> Option<usize> {
+        let result = Command::new(env!("CARGO_BIN_EXE_by"))
+            .args(["compile", "--emit-c-only", "-o", "generated"])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn by");
+        if refused_for_python_version(&result) {
+            return None;
+        }
+        assert!(
+            result.status.success(),
+            "by exited with error:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        // the count `compile` reports, not the per-artifact lines: `--emit-c-only`
+        // does not print those, so counting them compares nothing to nothing
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        let reported = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("compiled ")?.strip_suffix(" module(s)"))
+            .and_then(|count| count.parse::<usize>().ok());
+        Some(reported.unwrap_or_else(|| panic!("no module count in:\n{stderr}")))
+    };
+    let Some(first) = compile() else {
+        return;
+    };
+    assert!(first > 0, "the first compile compiled something");
+    assert_eq!(
+        Some(first),
+        compile(),
+        "the second compile sees the same sources as the first"
+    );
+}
+
 #[test]
 fn compile_emits_only_the_files_it_was_given_and_still_resolves_the_others() {
     // `by compile a.py` used to compile every source in the project and ignore the
@@ -94,7 +486,7 @@ fn compile_emits_only_the_files_it_was_given_and_still_resolves_the_others() {
     )
     .unwrap();
 
-    let out = dir.join("out");
+    let out = dir.join("build");
     let result = Command::new(env!("CARGO_BIN_EXE_by"))
         .args(["compile", "wanted.py", "-o"])
         .arg(&out)
@@ -102,6 +494,9 @@ fn compile_emits_only_the_files_it_was_given_and_still_resolves_the_others() {
         .current_dir(&dir)
         .output()
         .expect("failed to spawn by");
+    if refused_for_python_version(&result) {
+        return;
+    }
     assert!(
         result.status.success(),
         "by exited with error:\n{}",
@@ -165,6 +560,9 @@ fn compile_writes_each_package_member_at_its_own_place_in_the_output_tree() {
         .current_dir(&dir)
         .output()
         .expect("failed to spawn by");
+    if refused_for_python_version(&result) {
+        return;
+    }
     assert!(
         result.status.success(),
         "by exited with error:\n{}",
@@ -221,6 +619,9 @@ fn compile_refuses_two_sources_that_would_write_the_same_artifact() {
         .current_dir(&dir)
         .output()
         .expect("failed to spawn by");
+    if refused_for_python_version(&result) {
+        return;
+    }
     assert!(!result.status.success(), "the clash is refused");
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(
@@ -259,6 +660,9 @@ fn compile_declines_a_package_body_whose_package_has_no_importable_name() {
         .current_dir(&dir)
         .output()
         .expect("failed to spawn by");
+    if refused_for_python_version(&result) {
+        return;
+    }
     let stderr = String::from_utf8_lossy(&result.stderr);
     // declining one source is not a failed build — the rest of the project is
     // compiled, and what was left out is said rather than silently produced
@@ -287,7 +691,7 @@ async def total(s: str, n: int) -> int:
     let file = dir.join("sound.by");
     std::fs::write(&file, source).unwrap();
 
-    let emitted = |spec: &str| -> String {
+    let emitted = |spec: &str| -> Option<String> {
         let out = dir.join(spec);
         let status = Command::new(env!("CARGO_BIN_EXE_by"))
             .args(["compile"])
@@ -298,20 +702,26 @@ async def total(s: str, n: int) -> int:
             .current_dir(&dir)
             .output()
             .expect("failed to spawn by");
+        if refused_for_python_version(&status) {
+            return None;
+        }
         assert!(
             status.status.success(),
             "by exited with error:\n{}",
             String::from_utf8_lossy(&status.stderr)
         );
-        std::fs::read_to_string(out.join("sound.c")).expect("the C is readable")
+        Some(std::fs::read_to_string(out.join("sound.c")).expect("the C is readable"))
     };
 
+    let Some(all) = emitted("all") else {
+        return;
+    };
     assert!(
-        emitted("all").contains("_soundness_check"),
+        all.contains("_soundness_check"),
         "`all` puts the entry checks in the fallback"
     );
     assert!(
-        !emitted("none").contains("_soundness_check"),
+        !emitted("none").is_some_and(|none| none.contains("_soundness_check")),
         "`none` leaves them out, so the flag is what made the difference"
     );
 }
@@ -1797,11 +2207,11 @@ fn build_skips_a_source_it_cannot_read() {
         "the skipped file must be reported:\n{stderr}"
     );
     assert_eq!(
-        fs::read_to_string(dir.path().join("out/good.py")).unwrap(),
+        fs::read_to_string(dir.path().join("build/good.py")).unwrap(),
         "x = 1\n"
     );
     assert!(
-        !dir.path().join("out/bad.py").exists(),
+        !dir.path().join("build/bad.py").exists(),
         "an unreadable source must not be emitted as an empty module"
     );
 }
@@ -2016,7 +2426,7 @@ fn build_renders_parse_error_and_aborts() {
         "stderr should include invalid-syntax diagnostic:\n{stderr}"
     );
     assert!(
-        !dir.path().join("out").join("bad.py").exists(),
+        !dir.path().join("build").join("bad.py").exists(),
         "build should not emit output when parse error present"
     );
 }
@@ -2146,9 +2556,9 @@ fn build_skips_hidden_directories() {
         !stderr.contains("junk"),
         "hidden-directory file must not be checked:\n{stderr}"
     );
-    assert!(dir.path().join("out").join("main.py").exists());
+    assert!(dir.path().join("build").join("main.py").exists());
     assert!(
-        !dir.path().join("out").join(".claude").exists(),
+        !dir.path().join("build").join(".claude").exists(),
         "hidden-directory file must not be emitted"
     );
 }
@@ -2182,7 +2592,7 @@ fn build_writes_what_the_project_exports_into_its_marker() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
     assert_eq!(
-        fs::read_to_string(dir.path().join("out").join("my_lib").join("by.typed")).unwrap(),
+        fs::read_to_string(dir.path().join("build").join("my_lib").join("by.typed")).unwrap(),
         "exported-dependencies = [\"numpy\"]\n"
     );
 }
@@ -2204,14 +2614,14 @@ fn build_writes_a_marker_for_a_project_that_exports_nothing() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    let marker = dir.path().join("out").join("my_lib").join("by.typed");
-    assert!(marker.exists(), "expected out/my_lib/by.typed:\n{stderr}");
+    let marker = dir.path().join("build").join("my_lib").join("by.typed");
+    assert!(marker.exists(), "expected build/my_lib/by.typed:\n{stderr}");
     assert_eq!(fs::read_to_string(marker).unwrap(), "");
 }
 
 /// a src-layout project's `src/pkg/main.by` is the module `pkg.main`, so the
 /// emitted tree has to be rooted at `src` — mirroring the directory instead
-/// emits `out/src/pkg/main.py`, whose module is `src.pkg.main`, a name nothing
+/// emits `build/src/pkg/main.py`, whose module is `src.pkg.main`, a name nothing
 /// imports and `run.main` cannot sensibly be set to
 #[test]
 fn build_mirrors_the_module_tree_not_the_directory_tree() {
@@ -2235,10 +2645,10 @@ fn build_mirrors_the_module_tree_not_the_directory_tree() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    let out = dir.path().join("out");
+    let out = dir.path().join("build");
     assert!(
         out.join("package_name").join("main.py").exists(),
-        "expected out/package_name/main.py:\n{stderr}"
+        "expected build/package_name/main.py:\n{stderr}"
     );
     assert!(
         !out.join("src").exists(),
@@ -2246,7 +2656,7 @@ fn build_mirrors_the_module_tree_not_the_directory_tree() {
     );
 }
 
-/// `out/` outlives the build that wrote it — a test runner, a debugger or an
+/// `build/` outlives the build that wrote it — a test runner, a debugger or an
 /// editor reads it later — so it is the tree where a `.by` really can be saved
 /// after the transpile, and the one that needs the digests to say so
 #[test]
@@ -2262,7 +2672,7 @@ fn build_writes_a_sourcemap_beside_the_generated_python() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    let out = dir.path().join("out");
+    let out = dir.path().join("build");
     let map = fs::read_to_string(out.join("_by_sourcemap.py")).expect("sourcemap module");
 
     // read the keys out of the file rather than rebuilding them: the build
@@ -2320,7 +2730,7 @@ fn sourcemap_table_for(source: &str) -> (Vec<Option<u32>>, String) {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let out = dir.path().join("out");
+    let out = dir.path().join("build");
     let map = fs::read_to_string(out.join("_by_sourcemap.py")).expect("sourcemap module");
     let generated = fs::read_to_string(out.join("main.py")).expect("generated module");
 
@@ -2452,7 +2862,7 @@ fn build_targets_the_configured_python_version() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    let emitted = fs::read_to_string(dir.path().join("out/main.py")).unwrap();
+    let emitted = fs::read_to_string(dir.path().join("build/main.py")).unwrap();
     assert!(
         !emitted.contains("typing_extensions"),
         "a 3.13 target needs no shim:\n{emitted}"
@@ -2477,7 +2887,7 @@ fn build_emits_every_file_it_can_past_a_broken_one() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        dir.path().join("out/good.py").exists(),
+        dir.path().join("build/good.py").exists(),
         "the parseable file must still be emitted:\n{stderr}"
     );
     assert!(
@@ -2515,8 +2925,8 @@ fn build_honours_src_exclude() {
         !stderr.contains("bad.by"),
         "excluded file checked:\n{stderr}"
     );
-    assert!(dir.path().join("out/main.py").exists());
-    assert!(!dir.path().join("out/tests").exists());
+    assert!(dir.path().join("build/main.py").exists());
+    assert!(!dir.path().join("build/tests").exists());
 }
 
 #[test]
@@ -2614,7 +3024,7 @@ fn transpile_directory_round_trips_through_build() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let built = fs::read_to_string(root.join("out/pkg/models.py")).unwrap();
+    let built = fs::read_to_string(root.join("build/pkg/models.py")).unwrap();
     assert!(
         built.contains("x if x is not None else 0"),
         "coalesce lowered back to python:\n{built}"
@@ -3572,7 +3982,7 @@ fn build_carries_a_python_module_into_the_output() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
     assert_eq!(
-        fs::read_to_string(dir.path().join("out/helper.py")).unwrap(),
+        fs::read_to_string(dir.path().join("build/helper.py")).unwrap(),
         "def shout(text: str) -> str:\n    return text.upper()\n",
         "a hand-written python module belongs in the output verbatim"
     );
@@ -3598,7 +4008,7 @@ fn build_carries_data_files_into_the_output() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    let out = dir.path().join("out").join("app");
+    let out = dir.path().join("build").join("app");
     assert_eq!(
         fs::read_to_string(out.join("settings.json")).unwrap(),
         "{\"key\": 1}\n"
@@ -3625,11 +4035,11 @@ fn build_writes_a_stub_as_a_stub() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
     assert!(
-        dir.path().join("out/shapes.pyi").exists(),
+        dir.path().join("build/shapes.pyi").exists(),
         "a `.byi` builds to a `.pyi`:\n{stderr}"
     );
     assert!(
-        !dir.path().join("out/shapes.py").exists(),
+        !dir.path().join("build/shapes.py").exists(),
         "a stub emitted as a module shadows the implementation"
     );
 }
@@ -3683,14 +4093,14 @@ fn build_deletes_output_the_project_no_longer_has() {
     };
 
     build();
-    assert!(dir.path().join("out/removed.py").exists());
+    assert!(dir.path().join("build/removed.py").exists());
 
     fs::remove_file(dir.path().join("removed.by")).unwrap();
     build();
 
-    assert!(dir.path().join("out/kept.py").exists());
+    assert!(dir.path().join("build/kept.py").exists());
     assert!(
-        !dir.path().join("out/removed.py").exists(),
+        !dir.path().join("build/removed.py").exists(),
         "output for a source that is gone must not survive the next build"
     );
 }
@@ -3701,8 +4111,8 @@ fn build_deletes_output_the_project_no_longer_has() {
 fn build_leaves_output_it_never_wrote_alone() {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
-    fs::create_dir_all(dir.path().join("out")).unwrap();
-    fs::write(dir.path().join("out/theirs.txt"), "hands off\n").unwrap();
+    fs::create_dir_all(dir.path().join("build")).unwrap();
+    fs::write(dir.path().join("build/theirs.txt"), "hands off\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_by"))
         .arg("build")
@@ -3715,7 +4125,7 @@ fn build_leaves_output_it_never_wrote_alone() {
         "by build failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(dir.path().join("out/theirs.txt").exists());
+    assert!(dir.path().join("build/theirs.txt").exists());
 }
 
 #[test]
@@ -3732,7 +4142,7 @@ fn build_writes_where_out_says() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
     assert!(dir.path().join("elsewhere/main.py").exists());
-    assert!(!dir.path().join("out").exists());
+    assert!(!dir.path().join("build").exists());
 }
 
 /// the output directory is not an input to itself, wherever it is put
@@ -3847,9 +4257,9 @@ fn build_does_not_ship_what_lives_outside_the_source_root() {
     );
     // it is still built, because it is still the project — running the tests out
     // of the output tree is the point of building them
-    assert!(dir.path().join("out/tests/test_it.py").exists());
+    assert!(dir.path().join("build/tests/test_it.py").exists());
     assert!(
-        !dir.path().join("out/tests/by.typed").exists(),
+        !dir.path().join("build/tests/by.typed").exists(),
         "a marker only speaks for what the project ships"
     );
 }
@@ -3872,7 +4282,7 @@ fn build_marks_a_package_as_carrying_its_sources() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    let out = dir.path().join("out").join("app");
+    let out = dir.path().join("build").join("app");
     assert!(
         out.join("by.typed").exists(),
         "expected a marker:\n{stderr}"
@@ -3905,7 +4315,7 @@ fn build_ships_python_only_when_the_project_says_so() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    let out = dir.path().join("out").join("app");
+    let out = dir.path().join("build").join("app");
     assert!(out.join("__init__.py").exists());
     assert!(
         !out.join("__init__.by").exists(),
@@ -3942,9 +4352,9 @@ fn build_honours_the_configured_exclusions() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    assert!(dir.path().join("out/public.json").exists());
+    assert!(dir.path().join("build/public.json").exists());
     assert!(
-        !dir.path().join("out/secrets.json").exists(),
+        !dir.path().join("build/secrets.json").exists(),
         "an excluded file must not reach the output"
     );
 }
@@ -3976,11 +4386,11 @@ fn build_carries_a_directory_a_negated_exclude_takes_back() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
     assert!(
-        dir.path().join("out/dist/kept.py").exists(),
+        dir.path().join("build/dist/kept.py").exists(),
         "the re-included `.by` builds:\n{stderr}"
     );
     assert!(
-        dir.path().join("out/dist/kept.json").exists(),
+        dir.path().join("build/dist/kept.json").exists(),
         "and so does everything beside it:\n{stderr}"
     );
 }
@@ -4018,7 +4428,7 @@ fn build_ships_a_source_directory_that_is_itself_a_package() {
         stdout.lines().any(|line| line == "package src"),
         "`src.mymod` is the module, so `src` is the package:\n{stdout}"
     );
-    assert!(dir.path().join("out/src/mymod/__init__.py").exists());
+    assert!(dir.path().join("build/src/mymod/__init__.py").exists());
 }
 
 /// lowering for an older python can put a name in the output that only
@@ -4143,7 +4553,7 @@ fn build_emitting(source: &str, settled: Option<&str>) -> String {
 
     let mut command = Command::new(env!("CARGO_BIN_EXE_by"));
     command
-        .args(["build", "--out", "out"])
+        .args(["build", "--out", "build"])
         .current_dir(dir.path());
     match settled {
         Some(settled) => command.env("BY_BUILD_LOWERING", settled),
@@ -4154,7 +4564,7 @@ fn build_emitting(source: &str, settled: Option<&str>) -> String {
     let output = command.output().expect("failed to spawn by");
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    fs::read_to_string(dir.path().join("out").join("main.py")).expect("emitted python")
+    fs::read_to_string(dir.path().join("build").join("main.py")).expect("emitted python")
 }
 
 /// the builds inside a `--wheels` release are the ones that transpile, so every
@@ -4674,7 +5084,7 @@ fn build_from_a_subdirectory_builds_the_project() {
     assert!(output.status.success(), "by build failed:\n{stderr}");
     assert!(
         elsewhere
-            .join("out")
+            .join("build")
             .join("app")
             .join("__init__.py")
             .exists(),
@@ -4825,9 +5235,9 @@ fn build_does_not_carry_a_compilers_output_directory() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
-    assert!(dir.path().join("out").join("main.py").exists());
+    assert!(dir.path().join("build").join("main.py").exists());
     assert!(
-        !dir.path().join("out").join("target").exists(),
+        !dir.path().join("build").join("target").exists(),
         "a build directory must not be carried into the build:\n{stderr}"
     );
 }

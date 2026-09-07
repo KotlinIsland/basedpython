@@ -22,8 +22,18 @@ pub(crate) mod annotate;
 pub struct Artifact {
     /// the generated C, kept for `--annotate` and for debugging
     pub source: PathBuf,
-    /// the loadable extension
-    pub extension: PathBuf,
+    /// the header every generated `.c` includes, at the root of the tree
+    pub header: PathBuf,
+    /// the loadable extension, or `None` when only the C was emitted
+    ///
+    /// a caller that records what the build wrote — so that a later one can take
+    /// a stale file back — has to be told the difference. naming the extension an
+    /// `--emit-c-only` run *would* have built is not harmless: the name is
+    /// `<module>.so`, which is not where any real build puts it (that is
+    /// `Toolchain::extension_path`, tagged with the interpreter's abi), so a
+    /// caller checking the file system for it finds nothing, records nothing, and
+    /// prunes the extension a previous real build left
+    pub extension: Option<PathBuf>,
     /// the `--annotate` report, when one was asked for
     pub annotation: Option<PathBuf>,
 }
@@ -113,7 +123,8 @@ fn emit_verified(module: &ModuleIr, out_dir: &Path, options: &Options) -> Result
     }
     fs::create_dir_all(out_dir)
         .with_context(|| format!("could not create {}", out_dir.display()))?;
-    fs::write(out_dir.join(by_rt::BY_H_NAME), by_rt::BY_H)?;
+    let header = out_dir.join(by_rt::BY_H_NAME);
+    fs::write(&header, by_rt::BY_H)?;
 
     let source_path = out_dir.join(module.name.relative_path(".c"));
     create_parent(&source_path)?;
@@ -123,7 +134,8 @@ fn emit_verified(module: &ModuleIr, out_dir: &Path, options: &Options) -> Result
     Ok(Built {
         artifact: Artifact {
             source: source_path,
-            extension: out_dir.join(module.name.relative_path(".so")),
+            header,
+            extension: None,
             annotation: write_annotation(module, out_dir, options)?,
         },
         declined: module.declined.clone(),
@@ -364,7 +376,8 @@ pub fn build_module(module: &ModuleIr, toolchain: &Toolchain, out_dir: &Path) ->
 
     Ok(Artifact {
         source,
-        extension,
+        header,
+        extension: Some(extension),
         annotation: None,
     })
 }

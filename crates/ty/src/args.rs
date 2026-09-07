@@ -146,7 +146,7 @@ pub(crate) enum Command {
         /// `uv`, which does the packaging.
         #[arg(long, conflicts_with_all = ["min_version", "print_manifest"])]
         wheels: bool,
-        /// Where to write the output [default: `out`, or `dist` with `--wheels`]
+        /// Where to write the output [default: `build`, or `dist` with `--wheels`]
         #[arg(short = 'o', long, value_name = "DIR")]
         out: Option<PathBuf>,
         /// Report what the build read and produced, as `<kind> <value>` lines.
@@ -196,7 +196,16 @@ pub(crate) enum Command {
         #[arg(value_name = "FILE")]
         files: Vec<PathBuf>,
         /// Where to write the generated C and the extension modules.
-        #[arg(short = 'o', long, value_name = "DIR", default_value = "out")]
+        ///
+        /// The same directory `by build` writes, and the same flag names it —
+        /// `--output` is kept because it was the only spelling this command took.
+        #[arg(
+            short = 'o',
+            long = "out",
+            visible_alias = "output",
+            value_name = "DIR",
+            default_value = "build"
+        )]
         output: PathBuf,
         /// Report every function that was not lowered natively, with the reason.
         #[arg(long)]

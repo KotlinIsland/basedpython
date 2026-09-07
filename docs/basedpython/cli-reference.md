@@ -14,7 +14,7 @@ in addition to the cli provided by `ty`, `by` includes:
 | command             | what it does                                                       |
 | ------------------- | ------------------------------------------------------------------ |
 | `run`               | transpile and run a module with `python -m <module>`               |
-| `build`             | transpile every `.by`/`.byi` file and write to `out/`              |
+| `build`             | transpile every `.by`/`.byi` file and write to `build/`            |
 | `compile`           | compile `.by` files to native CPython extension modules            |
 | `generate-api-file` | write a public-api lockfile (see [api-lock](features/api-lock.md)) |
 | `transpile`         | transpile a single file to stdout (reads stdin if no file)         |
@@ -104,18 +104,20 @@ reach for when one file is mid-edit
 artifacts and exit status answer different questions. everything that could be
 emitted is emitted, sourcemap and package markers included; the exit status says
 whether anything was *reported*. so a build that prints an error exits 1 while
-still leaving a usable `out/`, and `by build && pytest out/tests` runs the tests
+still leaving a usable `build/`, and `by build && pytest build/tests` runs the tests
 only against a tree the checker had nothing to say about
 
-writes the transpiled python to `./out/` mirroring the *module* tree. a
+writes the transpiled python to `./build/` mirroring the *module* tree. a
 src-layout project's `src/package_name/main.by` is the module
-`package_name.main`, so it lands at `out/package_name/main.py` — `out/` is a
+`package_name.main`, so it lands at `build/package_name/main.py` — `build/` is a
 directory you can put on `sys.path` as it stands, and `run.main` names a module
-the same way an import does. the `out/` directory is **not** considered
-first-party source for `by check` or `by generate-api-file` — it is regenerated
-on every build
+the same way an import does. `by generate-api-file` does not read `build/` as
+first-party source — it is regenerated on every build. `by check` still walks it,
+though, so a project that keeps its output beside its sources will see
+diagnostics reported against generated python; exclude it with
+`src.exclude = ["build"]` if that is in the way
 
-alongside the python it writes `out/_by_sourcemap.py`, mapping each generated
+alongside the python it writes `build/_by_sourcemap.py`, mapping each generated
 line back to the `.by` line it came from, with a digest of both files so a tool
 reading it can tell whether it still describes what is on disk — see
 [sourcemaps](development/sourcemaps.md)
@@ -127,9 +129,9 @@ reading it can tell whether it still describes what is on disk — see
 > definition — see [native compilation](development/compilation/index.md)
 
 ```sh
-by compile                      # every .by file under the project root → out/
+by compile                      # every .by file under the project root → build/
 by compile hot.by               # one file
-by compile -o build hot.by      # a different output directory
+by compile -o native hot.by     # a different output directory
 by compile --verbose            # report every function left interpreted, and why
 by compile --emit-c-only        # write the generated C without compiling it
 by compile --no-any             # refuse to leave a gradual-typed function interpreted
@@ -137,10 +139,55 @@ by compile --require-native     # refuse to leave *any* function interpreted
 ```
 
 the output directory mirrors the *module* tree, the way `by build`'s does: the
-package member `pkg/sub/dup.py` lands at `out/pkg/sub/dup.cpython-313-darwin.so`,
+package member `pkg/sub/dup.py` lands at `build/pkg/sub/dup.cpython-313-darwin.so`,
 and the package `pkg/sub/__init__.py` at
-`out/pkg/sub/__init__.cpython-313-darwin.so` — so `out/` can go on `sys.path` as
+`build/pkg/sub/__init__.cpython-313-darwin.so` — so `build/` can go on `sys.path` as
 it stands and every module imports under the dotted name it was compiled as
+
+**`by compile` writes everything `by build` writes, and the extensions as well.**
+a compiled module is not a program on its own: it reads its templates and
+fixtures relative to itself, and imports the modules beside it. so the tree holds
+the whole project as importable python — every `.by` transpiled, every
+hand-written `.py`, `py.typed`, the data files, the sourcemap — with a native
+extension beside each module that was compiled. python's finder prefers an
+extension to source, so those modules load natively and the rest are interpreted,
+which is what makes naming files a speed decision rather than a correctness one:
+
+```sh
+by compile hot.by        # hot is native, every other module is interpreted
+```
+
+naming files decides what is *compiled*, not what is written: the whole project
+is checked and transpiled either way, so `by compile hot.by` costs what a
+`by build` costs plus the one module's native compile. that is the price of the
+tree being a program rather than a heap.
+
+`build/` is a mirror rather than a pile. what the previous run wrote and this one
+did not is taken back, which matters most for extensions: python prefers one to
+source, so an extension left behind by a deleted or renamed module would go on
+shadowing the `.py` written in its place. the artefacts therefore describe the
+*last* invocation — `by compile a.by` then `by compile b.by` leaves `b` native and
+`a` interpreted, and `--emit-c-only`, which stops before the C compiler, leaves a
+tree with no extensions at all. in every case each module still imports, so this
+costs speed rather than correctness; `by compile` with no arguments compiles the
+whole project.
+
+the directory is shared with `by build` on purpose — the same tree, built two
+ways — and the two take each other's output back accordingly. it is also a name
+setuptools and `python -m build` use, so a project using both writes them into one
+directory; nothing is destroyed, because the manifest only ever takes back what
+`by` itself wrote.
+
+a directory holding a `.by-manifest` is a build output, whoever wrote it, and is
+never read as source or carried into another tree — a project that builds into
+two directories would otherwise put a copy of each inside the other. that is by
+the marker rather than by the directory's name, because `--out` can say anything.
+a project that deliberately ships a directory containing one has to rename the
+marker or keep the directory outside its source roots.
+
+> upgrading from a version that wrote `out/`: nothing migrates it, and nothing
+> reads it any more. delete it — a stale `out/` holds importable python that no
+> build refreshes.
 
 `--no-any` buys no speed on its own — it is a **predictability contract**. a
 gradual type is the commonest reason a function silently stays interpreted, and a
@@ -177,7 +224,7 @@ compiled functions are installed over the top
 
 ```console
 $ by compile hot.by --verbose
-hot.by -> out/hot.cpython-313-darwin.so
+hot.by -> build/hot.cpython-313-darwin.so
   declined describe: `list[int]` has no native representation yet
 
 compiled 1 module(s)

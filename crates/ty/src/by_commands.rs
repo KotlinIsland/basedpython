@@ -846,14 +846,7 @@ pub(crate) fn cmd_build(
     let target = config.min_version.to_string();
     crate::by_stamps::fill_discovered(&mut config.stamps, &cwd, Some(&target));
 
-    // the output directory is settled before the project is read, because it is
-    // the one directory the project must not be read *from*: it holds a copy of
-    // every source this build is about to write. canonical, because that is what
-    // the paths it is compared against are — creating it first is what makes
-    // canonicalizing it possible
-    let out = cwd.join(out);
-    fs::create_dir_all(&out).with_context(|| format!("could not create {}", out.display()))?;
-    let out = fs::canonicalize(&out).unwrap_or(out);
+    let out = settled_output_dir(&cwd, out);
 
     let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES, Some(&out))?;
     if handles.is_empty() {
@@ -863,7 +856,7 @@ pub(crate) fn cmd_build(
     let file_count = handles.len();
     let roots = module_roots(&db, &root);
     let mut staging = Staging::new(&out);
-    // `out/` outlives the build that wrote it — it is what a test runner, a
+    // `build/` outlives the build that wrote it — it is what a test runner, a
     // debugger or an editor plugin sees — so the sourcemap goes with it. this is
     // the directory where a `.by` really can be saved after the transpile, which
     // is what the digests beside the map are for
@@ -889,12 +882,12 @@ pub(crate) fn cmd_build(
         },
     );
     // the sourcemap and the package markers describe the tree that was written,
-    // so they are staged whether or not something was reported — an `out/` a
+    // so they are staged whether or not something was reported — a `build/` a
     // debugger cannot read is worse than one built from a partial check
     stage_verbatim(&db, &root, &roots, &mut staging)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_sourcemap_module(&mut staging, &entries)?;
-    // `out/` outlives the build that wrote it and is what a debugger, a test
+    // `build/` outlives the build that wrote it and is what a debugger, a test
     // runner or an editor plugin later reads, so it carries the same record a
     // `run` tree does. no entry module: a build is not pointed at one
     stage_build_record(
@@ -946,6 +939,33 @@ fn print_build_manifest(
     Ok(())
 }
 
+/// Where a build's output goes, settled before the project is read.
+///
+/// It is the one directory the project must not be read *from*: it holds a copy
+/// of every source the build is about to write, so a second build that walked it
+/// would take its own output for more of the project. Canonical, because the
+/// paths it is compared against are.
+///
+/// Nothing is created here. An output directory conjured before the command has
+/// anything to put in it outlives every way the command can fail early, and a
+/// project that has just been told it has no sources should not be left holding
+/// an empty `build/` it did not ask for. A directory that does not exist yet
+/// cannot be canonicalized, so its parent is, which answers the same question:
+/// two paths naming this directory compare equal.
+fn settled_output_dir(cwd: &Path, out: &Path) -> PathBuf {
+    let out = cwd.join(out);
+    if let Ok(canonical) = fs::canonicalize(&out) {
+        return canonical;
+    }
+    match (out.parent(), out.file_name()) {
+        (Some(parent), Some(name)) => match fs::canonicalize(parent) {
+            Ok(canonical) => canonical.join(name),
+            Err(_) => out,
+        },
+        _ => out,
+    }
+}
+
 // ── compile ─────────────────────────────────────────────────────────────────
 
 /// How `by compile` was invoked.
@@ -990,6 +1010,20 @@ pub(crate) fn cmd_compile(
     // to say which, and gets told so rather than told the wrong one
     crate::by_stamps::fill_discovered(&mut fallback.stamps, &cwd, None);
     options.fallback = Some(fallback);
+    // the python this writes into the tree is `by build`'s python, derived the
+    // way `build` derives it: from the version the *project* declares.
+    //
+    // it must not come from the interpreter the extensions are built against.
+    // the two commands share an output directory, so the module `build` writes
+    // and the module `compile` writes are the same file — and a project that
+    // declares `>=3.9` would get a tree lowered for 3.9 or for 3.13 depending on
+    // which command ran last. `build/` is also where an editable install points,
+    // so the losing half of that is code the project says it supports and no
+    // longer runs on
+    let mut tree_config = version_config(None, &cwd)?;
+    lowering.apply_for_build(&mut tree_config, &cwd)?;
+    let target = tree_config.min_version.to_string();
+    crate::by_stamps::fill_discovered(&mut tree_config.stamps, &cwd, Some(&target));
     let sources: Vec<PathBuf> = if files.is_empty() {
         compilable_files(&cwd)
     } else {
@@ -1009,17 +1043,20 @@ pub(crate) fn cmd_compile(
     // context that used to sit here misreported a version refusal as a missing header
     let toolchain = by_build::Toolchain::probe(&python)?;
 
-    let out_dir = cwd.join(output);
+    let out_dir = settled_output_dir(&cwd, output);
     let mut compiled = 0usize;
     let mut declined_total = 0usize;
+    // the output tree. `by_build` lays the artefacts out itself, so they are
+    // recorded rather than written through this — but they belong in the same
+    // manifest as everything else, or nothing ever takes a stale one back
+    let mut staging = Staging::new(&out_dir);
 
     // one database for the whole project, so a type imported from a sibling module
     // resolves. lowering each file on its own is sound — an unresolved class
     // degrades to the object protocol — but it makes every imported type look
     // gradual, and `--no-any` would then fail on noise
-    // `compile` embeds fallback source produced by the untyped transpile, which
-    // takes no db, so the rebuilder the other commands thread through is unused here
-    let (db, project, _rebuilder, _root) = build_project_db(&cwd, COMPILABLE_SOURCES, None)?;
+    let (db, project, rebuilder, root) =
+        build_project_db(&cwd, COMPILABLE_SOURCES, Some(&out_dir))?;
 
     // the database holds the whole project so a type imported from a sibling
     // resolves, but only the files that were *asked for* are checked and emitted.
@@ -1076,6 +1113,47 @@ pub(crate) fn cmd_compile(
         render_diagnostics(&db, &diagnostics)?;
     }
 
+    // `compile` writes a superset of what `build` writes: the whole project as
+    // importable python, and native extensions for the modules that were asked
+    // for. two things follow from it, and neither is optional.
+    //
+    // the tree is a program rather than a heap of artefacts — a module nobody
+    // named still imports, from the python `by build` would have written, so
+    // `by compile one.by` no longer produces a tree that can import `one` and
+    // nothing else written in basedpython.
+    //
+    // and the manifest becomes sound. `finish` deletes what the last run wrote
+    // and this one did not, which is only a correct thing to do when this run
+    // authored the whole tree. while `compile` wrote artefacts alone, it deleted
+    // the sourcemap and build record a `by build` into the same directory had
+    // left — and `by restage` then refused that tree, which took the language
+    // server's single-file re-stage down with it
+    let roots = module_roots(&db, &root);
+    let transpilable: Vec<(PathBuf, ruff_db::files::File)> = project
+        .iter()
+        .filter(|(path, _)| {
+            path.extension()
+                .and_then(OsStr::to_str)
+                .is_some_and(|extension| BY_SOURCES.contains(&extension))
+        })
+        .cloned()
+        .collect();
+    let mut entries: Vec<TracebackEntry> = Vec::new();
+    let mut requirements = by_transforms::RuntimeRequirements::default();
+    let transpiled = render_check_and_transpile(
+        &db,
+        &transpilable,
+        &tree_config,
+        CheckGate::ParseErrorsOnly,
+        &rebuilder,
+        &mut requirements,
+        |emitted| {
+            let relative = transpiled_destination(&roots, &root, emitted.by_path);
+            entries.push(stage_module(&mut staging, &relative, emitted)?);
+            Ok(())
+        },
+    );
+
     // what each source will be compiled as, worked out before anything is written:
     // two sources that land on the same artefact used to leave only the second, and
     // nothing said so
@@ -1109,63 +1187,139 @@ pub(crate) fn cmd_compile(
         planned.push((handle, name));
     }
 
-    for ((path, file), name) in planned {
-        let source = fs::read_to_string(path)
-            .with_context(|| format!("could not read {}", path.display()))?;
+    // the tree is finished whatever happens in here, so a run that gives up
+    // half way still leaves a manifest describing what is actually on disk. a
+    // manifest left describing the run before it would have the *next* run prune
+    // against a tree that no longer exists
+    let compiling: anyhow::Result<()> = 'compiling: {
+        for ((path, file), name) in planned {
+            let source = match fs::read_to_string(path)
+                .with_context(|| format!("could not read {}", path.display()))
+            {
+                Ok(source) => source,
+                Err(error) => break 'compiling Err(error),
+            };
 
-        let program_file = ty_python_semantic::Db::program_file(&db, *file);
-        let parsed = ruff_db::parsed::parsed_module(&db, program_file.python_file(&db)).load(&db);
-        let model = ty_python_semantic::SemanticModel::new(&db, program_file);
-        // a `.py` source needs no transpiling to be its own interpreted fallback
-        let mut options = options.clone();
-        if path.extension().is_some_and(|x| x == "py") {
-            options.language = by_irbuild::Language::Python;
-        }
-        let mut lowered = by_irbuild::build_module(
-            &db,
-            &model.program_environment(),
-            &model,
-            parsed.suite(),
-            name,
-            options.language,
-        );
-        // the real path, so a `#line` in the generated C resolves for a debugger
-        let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-        lowered.lines = Some(by_ir::function::LineTable::new(
-            absolute.display().to_string(),
-            &source,
-        ));
+            let program_file = ty_python_semantic::Db::program_file(&db, *file);
+            let parsed =
+                ruff_db::parsed::parsed_module(&db, program_file.python_file(&db)).load(&db);
+            let model = ty_python_semantic::SemanticModel::new(&db, program_file);
+            // a `.py` source needs no transpiling to be its own interpreted fallback
+            let mut options = options.clone();
+            if path.extension().is_some_and(|x| x == "py") {
+                options.language = by_irbuild::Language::Python;
+            }
+            let mut lowered = by_irbuild::build_module(
+                &db,
+                &model.program_environment(),
+                &model,
+                parsed.suite(),
+                name,
+                options.language,
+            );
+            // the real path, so a `#line` in the generated C resolves for a debugger
+            let absolute = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            lowered.lines = Some(by_ir::function::LineTable::new(
+                absolute.display().to_string(),
+                &source,
+            ));
 
-        let built = if emit_c_only {
-            by_build::emit_lowered(lowered, &source, Some(&toolchain), &out_dir, &options)
-        } else {
-            by_build::build_lowered(lowered, &source, &toolchain, &out_dir, &options).inspect(
-                |built| {
-                    eprintln!(
-                        "{} -> {}",
-                        path.display(),
-                        built.artifact.extension.display()
-                    );
-                },
-            )
-        }
-        .with_context(|| format!("could not compile {}", path.display()))?;
+            let built = match if emit_c_only {
+                by_build::emit_lowered(lowered, &source, Some(&toolchain), &out_dir, &options)
+            } else {
+                by_build::build_lowered(lowered, &source, &toolchain, &out_dir, &options).inspect(
+                    |built| {
+                        if let Some(extension) = &built.artifact.extension {
+                            eprintln!("{} -> {}", path.display(), extension.display());
+                        }
+                    },
+                )
+            }
+            .with_context(|| format!("could not compile {}", path.display()))
+            {
+                Ok(built) => built,
+                Err(error) => break 'compiling Err(error),
+            };
 
-        if let Some(annotation) = &built.artifact.annotation {
-            eprintln!("  annotated {}", annotation.display());
+            // exactly what `by_build` says it wrote — no guessing at names, and no
+            // asking the file system, which cannot tell an artefact this run
+            // produced from one a previous run left
+            for produced in [&built.artifact.source, &built.artifact.header]
+                .into_iter()
+                .chain(built.artifact.extension.as_ref())
+                .chain(built.artifact.annotation.as_ref())
+            {
+                if let Ok(relative) = produced.strip_prefix(&out_dir)
+                    && let Err(error) = staging.record(relative)
+                {
+                    break 'compiling Err(error);
+                }
+            }
+            if let Some(annotation) = &built.artifact.annotation {
+                eprintln!("  annotated {}", annotation.display());
+            }
+            declined_total += built.declined.len();
+            if verbose {
+                // a decline is the compiler's report on the code it did *not* take,
+                // so it points at that code the way every other diagnostic does
+                let diagnostics: Vec<Diagnostic> = built
+                    .declined
+                    .iter()
+                    .map(|declined| declined_diagnostic(*file, declined))
+                    .collect();
+                if let Err(error) = render_diagnostics(&db, &diagnostics) {
+                    break 'compiling Err(error);
+                }
+            }
+            compiled += 1;
         }
-        declined_total += built.declined.len();
-        if verbose {
-            // a decline is the compiler's report on the code it did *not* take, so
-            // it points at that code the way every other diagnostic does
-            let diagnostics: Vec<Diagnostic> = built
-                .declined
-                .iter()
-                .map(|declined| declined_diagnostic(*file, declined))
-                .collect();
-            render_diagnostics(&db, &diagnostics)?;
+
+        // the rest of the project: the data a module reads relative to itself,
+        // the hand-written `.py` beside it, the markers and the record that let a
+        // tool read the tree back. the same calls `build` makes, in the same
+        // order, because this is the same tree.
+        //
+        // inside the block with the compile, because each of these can fail and
+        // the tree has to be finished either way — `stage_verbatim` in particular
+        // is where a file the project keeps on top of an artefact is reported,
+        // which is a failure this change deliberately introduced
+        if let Err(error) = stage_verbatim(&db, &root, &roots, &mut staging) {
+            break 'compiling Err(error);
         }
-        compiled += 1;
+        if let Err(error) = stage_by_typed_markers(&db, &mut staging, &roots, &root) {
+            break 'compiling Err(error);
+        }
+        if let Err(error) = write_sourcemap_module(&mut staging, &entries) {
+            break 'compiling Err(error);
+        }
+        // whether the tree actually *holds* extensions, which is the question a
+        // reader of the record is asking — `--emit-c-only` writes the generated C
+        // and stops, so its tree is as replaceable one file at a time as a
+        // `by build`'s. the generated `.c` beside it is then a description of the
+        // source at the time it was written, and a later re-stage does not
+        // regenerate it; nothing loads it, so the two are allowed to drift
+        let holds_extensions = !emit_c_only && compiled > 0;
+        if let Err(error) = stage_build_record(
+            &mut staging,
+            &BuildRecord::new(&root, &roots, None, holds_extensions, &tree_config),
+        ) {
+            break 'compiling Err(error);
+        }
+        Ok(())
+    };
+
+    // whatever happened above, the manifest is brought into line with what is
+    // actually on disk. a manifest left describing the run before would have the
+    // *next* run prune against a tree that no longer exists, leaving behind files
+    // no source produces — an importable module nobody wrote
+    staging.finish()?;
+
+    compiling?;
+    // the transpile's verdict is answered after the tree is finished, the way
+    // `build` answers it: a diagnostic must not cost the tree, because a `build/`
+    // a debugger cannot read is worse than one built from a partial check
+    if !transpiled? {
+        return Ok(ExitStatus::Failure);
     }
 
     eprintln!("\ncompiled {compiled} module(s)");
@@ -1415,7 +1569,7 @@ fn reverse_dir_converting(
 
 /// Forward-transpile every `.by` under `dir` into a `.py` next to it, using one
 /// shared project db so cross-module types resolve (the same path as `by
-/// build`, but written in place rather than to `out/`).
+/// build`, but written in place rather than to `build/`).
 #[allow(clippy::print_stderr)]
 fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
     let (db, handles, rebuilder, _root) = build_project_db(dir, BY_SOURCES, None)?;

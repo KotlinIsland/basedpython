@@ -39,21 +39,21 @@ leave off `--lib` and you also get a `main.by` and a configured entry point, so
 
 ## what a build produces
 
-`by build` writes the project to `out/` as python. that is the whole project,
+`by build` writes the project to `build/` as python. that is the whole project,
 not only its `.by` files:
 
 ```text
-src/app/main.by        ->  out/app/main.py
-src/app/helper.py      ->  out/app/helper.py
-src/app/settings.json  ->  out/app/settings.json
-src/app/py.typed       ->  out/app/py.typed
+src/app/main.by        ->  build/app/main.py
+src/app/helper.py      ->  build/app/helper.py
+src/app/settings.json  ->  build/app/settings.json
+src/app/py.typed       ->  build/app/py.typed
 ```
 
 a `.by` file is transpiled; everything else is carried across unchanged, to the
 same place. the one rearrangement is the source root — `src/app/main.by` is the
 module `app.main`, so it lands at `app/main.py` and not at `src/app/main.py`
 
-`out/` is a mirror, not a pile: what a previous build wrote and this one did not
+`build/` is a mirror, not a pile: what a previous build wrote and this one did not
 is deleted, so a module you renamed does not go on being importable
 
 a stub stays a stub. `a.byi` builds to `a.pyi`, never to `a.py`
@@ -230,8 +230,8 @@ checker guessing
 uv sync
 ```
 
-installs the project pointing at `out/`, so `by build` is what refreshes an
-editable install. run it after editing, the same way any compiled language
+installs the project pointing at `build/` — `by build`'s own output directory, so
+a plain `by build` is what refreshes an editable install. run it after editing, the same way any compiled language
 rebuilds before its changes are visible
 
 ## a single-module project

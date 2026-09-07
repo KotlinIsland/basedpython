@@ -299,7 +299,7 @@ instead, three entry points over one core:
 ### the CLI
 
 ```sh
-by compile                          # whole project → out/
+by compile                          # whole project → build/
 by compile app.hot app.parse        # a subset; the rest stays interpreted
 by compile --tier=1                 # open world (see index.md)
 by compile --annotate               # emit C next to the .by that produced it
