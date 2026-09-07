@@ -1,0 +1,21 @@
+---
+source: crates/ruff_linter/src/rules/flake8_simplify/mod.rs
+---
+SIM222 [*] Use `True` instead of `... or True`
+  --> SIM222_basedpython.by:17:8
+   |
+15 | # a boolean operator in a value expression is untouched
+16 | def values(a: int, b: int) -> None:
+17 |     if a or True:  # SIM222
+   |        ^^^^^^^^^
+18 |         pass
+19 |     if b and False:  # SIM223
+   |
+help: Replace with `True`
+   |
+16 | def values(a: int, b: int) -> None:
+   -     if a or True:  # SIM222
+17 +     if True:  # SIM222
+18 |         pass
+   |
+note: This is an unsafe fix and may change runtime behavior

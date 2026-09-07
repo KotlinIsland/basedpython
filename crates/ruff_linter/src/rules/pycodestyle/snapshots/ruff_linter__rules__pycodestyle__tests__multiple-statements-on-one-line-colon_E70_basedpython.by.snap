@@ -7,3 +7,57 @@ E701 Multiple statements on one line (colon)
 15 | # a class definition written on one line is still reported
 16 | class OneLiner: x = 1
    |               ^
+
+E701 Multiple statements on one line (colon)
+  --> E70_basedpython.by:39:19
+   |
+37 |     # a `match` statement after the alias is a compound statement again
+38 |     match T:
+39 |         case int(): pass
+   |                   ^
+40 |         case _: pass
+   |
+
+E701 Multiple statements on one line (colon)
+  --> E70_basedpython.by:40:15
+   |
+38 |     match T:
+39 |         case int(): pass
+40 |         case _: pass
+   |               ^
+
+E701 Multiple statements on one line (colon)
+  --> E70_basedpython.by:46:19
+   |
+44 | def statement_expression(v: object) -> int:
+45 |     result = match v:
+46 |         case int(): 1
+   |                   ^
+47 |         case _: 0
+48 |     return result
+   |
+
+E701 Multiple statements on one line (colon)
+  --> E70_basedpython.by:47:15
+   |
+45 |     result = match v:
+46 |         case int(): 1
+47 |         case _: 0
+   |               ^
+48 |     return result
+   |
+
+E701 Multiple statements on one line (colon)
+  --> E70_basedpython.by:58:23
+   |
+56 |     def method(self, v: object) -> None:
+57 |         match v:
+58 |             case int(): pass
+   |                       ^
+
+E701 Multiple statements on one line (colon)
+  --> E70_basedpython.by:68:18
+   |
+67 |     match flag:
+68 |         case True: pass
+   |                  ^

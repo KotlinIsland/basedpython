@@ -1966,6 +1966,12 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
             }
         }
         Expr::BoolOp(bool_op) => {
+            // basedpython spells union and intersection with `or` and `and` inside a
+            // type expression, so `A or B` there is the type `A | B` rather than a
+            // boolean expression. None of the rules below describe that operator
+            if checker.semantic().in_basedpython_type_expression() {
+                return;
+            }
             if checker.is_rule_enabled(Rule::BooleanChainedComparison) {
                 pylint::rules::boolean_chained_comparison(checker, bool_op);
             }

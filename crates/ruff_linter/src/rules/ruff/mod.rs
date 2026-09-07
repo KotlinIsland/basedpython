@@ -62,6 +62,7 @@ mod tests {
     #[test_case(Rule::UnnecessaryKeyCheck, Path::new("RUF019.py"))]
     #[test_case(Rule::NeverUnion, Path::new("RUF020.py"))]
     #[test_case(Rule::ParenthesizeChainedOperators, Path::new("RUF021.py"))]
+    #[test_case(Rule::ParenthesizeChainedOperators, Path::new("RUF021_basedpython.by"))]
     #[test_case(Rule::UnsortedDunderAll, Path::new("RUF022.py"))]
     #[test_case(Rule::UnsortedDunderSlots, Path::new("RUF023.py"))]
     #[test_case(Rule::MutableFromkeysValue, Path::new("RUF024.py"))]

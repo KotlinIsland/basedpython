@@ -1,0 +1,11 @@
+# `is` is basedpython's isinstance check and `===` its identity comparison, so
+# the two operators this rule names are not the ones python's message names
+def compare(a: object, b: object) -> None:
+    if type(a) == type(b):
+        pass
+    if type(a) == int:
+        pass
+
+
+def reified[reified T](x: T) -> None:
+    assert T == int

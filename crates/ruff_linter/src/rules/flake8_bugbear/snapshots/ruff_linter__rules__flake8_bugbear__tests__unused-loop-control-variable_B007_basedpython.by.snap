@@ -1,0 +1,73 @@
+---
+source: crates/ruff_linter/src/rules/flake8_bugbear/mod.rs
+---
+B007 [*] Loop control variable `y` not used within loop body
+  --> B007_basedpython.by:12:18
+   |
+11 | def unused_capture(points: list[Point]) -> None:
+12 |     for Point(x, y) in points:  # B007 on `y`
+   |                  ^
+13 |         print(x)
+   |
+help: Rename unused `y` to `_y`
+   |
+11 | def unused_capture(points: list[Point]) -> None:
+   -     for Point(x, y) in points:  # B007 on `y`
+12 +     for Point(x, _y) in points:  # B007 on `y`
+13 |         print(x)
+   |
+note: This is an unsafe fix and may change runtime behavior
+
+B007 [*] Loop control variable `b` not used within loop body
+  --> B007_basedpython.by:30:19
+   |
+28 | # nesting reaches the captures at every depth
+29 | def nested(pairs: list[tuple[Point, Point]]) -> None:
+30 |     for (Point(a, b), Point(c, d)) in pairs:  # B007 on `b`, `c` and `d`
+   |                   ^
+31 |         print(a)
+   |
+help: Rename unused `b` to `_b`
+   |
+29 | def nested(pairs: list[tuple[Point, Point]]) -> None:
+   -     for (Point(a, b), Point(c, d)) in pairs:  # B007 on `b`, `c` and `d`
+30 +     for (Point(a, _b), Point(c, d)) in pairs:  # B007 on `b`, `c` and `d`
+31 |         print(a)
+   |
+note: This is an unsafe fix and may change runtime behavior
+
+B007 [*] Loop control variable `c` not used within loop body
+  --> B007_basedpython.by:30:29
+   |
+28 | # nesting reaches the captures at every depth
+29 | def nested(pairs: list[tuple[Point, Point]]) -> None:
+30 |     for (Point(a, b), Point(c, d)) in pairs:  # B007 on `b`, `c` and `d`
+   |                             ^
+31 |         print(a)
+   |
+help: Rename unused `c` to `_c`
+   |
+29 | def nested(pairs: list[tuple[Point, Point]]) -> None:
+   -     for (Point(a, b), Point(c, d)) in pairs:  # B007 on `b`, `c` and `d`
+30 +     for (Point(a, b), Point(_c, d)) in pairs:  # B007 on `b`, `c` and `d`
+31 |         print(a)
+   |
+note: This is an unsafe fix and may change runtime behavior
+
+B007 [*] Loop control variable `d` not used within loop body
+  --> B007_basedpython.by:30:32
+   |
+28 | # nesting reaches the captures at every depth
+29 | def nested(pairs: list[tuple[Point, Point]]) -> None:
+30 |     for (Point(a, b), Point(c, d)) in pairs:  # B007 on `b`, `c` and `d`
+   |                                ^
+31 |         print(a)
+   |
+help: Rename unused `d` to `_d`
+   |
+29 | def nested(pairs: list[tuple[Point, Point]]) -> None:
+   -     for (Point(a, b), Point(c, d)) in pairs:  # B007 on `b`, `c` and `d`
+30 +     for (Point(a, b), Point(c, _d)) in pairs:  # B007 on `b`, `c` and `d`
+31 |         print(a)
+   |
+note: This is an unsafe fix and may change runtime behavior

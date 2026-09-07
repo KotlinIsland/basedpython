@@ -77,6 +77,7 @@ mod tests {
     #[test_case(Rule::UnintentionalTypeAnnotation, Path::new("B032.py"))]
     #[test_case(Rule::UnreliableCallableCheck, Path::new("B004.py"))]
     #[test_case(Rule::UnusedLoopControlVariable, Path::new("B007.py"))]
+    #[test_case(Rule::UnusedLoopControlVariable, Path::new("B007_basedpython.by"))]
     #[test_case(Rule::UselessComparison, Path::new("B015.ipynb"))]
     #[test_case(Rule::UselessComparison, Path::new("B015.py"))]
     #[test_case(Rule::UselessContextlibSuppress, Path::new("B022.py"))]

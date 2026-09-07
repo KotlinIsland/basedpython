@@ -1,0 +1,30 @@
+---
+source: crates/ruff_linter/src/rules/pycodestyle/mod.rs
+---
+E721 Use `===` and `!==` for type comparisons, or `is` for isinstance checks
+ --> E721_basedpython.by:4:8
+  |
+2 | # the two operators this rule names are not the ones python's message names
+3 | def compare(a: object, b: object) -> None:
+4 |     if type(a) == type(b):
+  |        ^^^^^^^^^^^^^^^^^^
+5 |         pass
+6 |     if type(a) == int:
+  |
+
+E721 Use `===` and `!==` for type comparisons, or `is` for isinstance checks
+ --> E721_basedpython.by:6:8
+  |
+4 |     if type(a) == type(b):
+5 |         pass
+6 |     if type(a) == int:
+  |        ^^^^^^^^^^^^^^
+7 |         pass
+  |
+
+E721 Use `===` and `!==` for type comparisons, or `is` for isinstance checks
+  --> E721_basedpython.by:11:12
+   |
+10 | def reified[reified T](x: T) -> None:
+11 |     assert T == int
+   |            ^^^^^^^^

@@ -67,6 +67,7 @@ mod tests {
     #[test_case(Rule::TrailingWhitespace, Path::new("W291.py"))]
     #[test_case(Rule::TrueFalseComparison, Path::new("E712.py"))]
     #[test_case(Rule::TypeComparison, Path::new("E721.py"))]
+    #[test_case(Rule::TypeComparison, Path::new("E721_basedpython.by"))]
     #[test_case(Rule::UselessSemicolon, Path::new("E70.py"))]
     #[test_case(Rule::UselessSemicolon, Path::new("E703.ipynb"))]
     #[test_case(Rule::WhitespaceAfterDecorator, Path::new("E204.py"))]

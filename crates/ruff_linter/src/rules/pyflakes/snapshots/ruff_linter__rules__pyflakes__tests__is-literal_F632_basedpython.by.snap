@@ -1,0 +1,65 @@
+---
+source: crates/ruff_linter/src/rules/pyflakes/mod.rs
+---
+F632 [*] Use `==` to compare constant literals
+ --> F632_basedpython.by:5:11
+  |
+3 | # spellings, and an `is` whose right-hand side is a literal, compare identity
+4 | def identity(x: object) -> None:
+5 |     print(1 === 1)  # F632
+  |           ^^^^^^^
+6 |     print(x !== "a")  # F632
+  |
+help: Replace `===` with `==`
+  |
+4 | def identity(x: object) -> None:
+  -     print(1 === 1)  # F632
+5 +     print(1 == 1)  # F632
+6 |     print(x !== "a")  # F632
+  |
+
+F632 [*] Use `!=` to compare constant literals
+ --> F632_basedpython.by:6:11
+  |
+4 | def identity(x: object) -> None:
+5 |     print(1 === 1)  # F632
+6 |     print(x !== "a")  # F632
+  |           ^^^^^^^^^
+help: Replace `!==` with `!=`
+  |
+5 |     print(1 === 1)  # F632
+  -     print(x !== "a")  # F632
+6 +     print(x != "a")  # F632
+7 |
+  |
+
+F632 [*] Use `==` to compare constant literals
+  --> F632_basedpython.by:10:11
+   |
+ 9 | def literal_right_hand_side(x: object) -> None:
+10 |     print(1 is 1)  # F632
+   |           ^^^^^^
+11 |     print(x is not "a")  # F632
+   |
+help: Replace `is` with `==`
+   |
+9  | def literal_right_hand_side(x: object) -> None:
+   -     print(1 is 1)  # F632
+10 +     print(1 == 1)  # F632
+11 |     print(x is not "a")  # F632
+   |
+
+F632 [*] Use `!=` to compare constant literals
+  --> F632_basedpython.by:11:11
+   |
+ 9 | def literal_right_hand_side(x: object) -> None:
+10 |     print(1 is 1)  # F632
+11 |     print(x is not "a")  # F632
+   |           ^^^^^^^^^^^^
+help: Replace `is not` with `!=`
+   |
+10 |     print(1 is 1)  # F632
+   -     print(x is not "a")  # F632
+11 +     print(x != "a")  # F632
+12 |
+   |

@@ -1,0 +1,16 @@
+# a `type def` computes a type from its type parameters, so its body compares
+# those parameters against types — none of which is a constant on the left
+type def Widen[X]:
+    if X <= int:
+        return int
+    return str
+
+
+def reified_cell[reified T](x: T) -> None:
+    assert T == int
+
+
+# a genuine yoda condition still fires
+def yoda(age: int) -> None:
+    if 42 == age:  # SIM300
+        pass

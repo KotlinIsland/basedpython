@@ -892,6 +892,18 @@ impl<'a> SemanticModel<'a> {
         self.in_basedpython_file() && self.in_trailing_lambda_block()
     }
 
+    /// True when the model is inside a type expression in a basedpython file,
+    /// where `or` and `and` are the
+    /// [keyword spellings](https://docs.basedpython.org/features/or-and-types)
+    /// of union and intersection.
+    ///
+    /// `A or B` there is the type `A | B`, not a boolean expression whose value
+    /// is `A` whenever `A` is truthy, so a rule that reasons about python's
+    /// boolean operators has nothing to say about it.
+    pub fn in_basedpython_type_expression(&self) -> bool {
+        self.in_basedpython_file() && self.in_type_definition()
+    }
+
     /// True when the innermost function scope is a
     /// [trailing-lambda](https://docs.basedpython.org/features/trailing-lambdas)
     /// block, whose receiver the parser binds outside the source's reach

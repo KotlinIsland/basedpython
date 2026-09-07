@@ -78,12 +78,34 @@ depending on a line that basedpython does not need
 
 a rule that suggests a replacement suggests the python one. `SIM108` above is
 the case where that composes; where it does not, the suggestion is still valid
-`.by`, just not the shortest way to write it
+`.by`, just not the shortest way to write it. `E721` is the exception, and names
+basedpython's operators instead, because python's advice there — reach for `is`
+— spells [a type test](parametric-type-tests.md) in `.by` rather than the
+identity comparison it means in python
 
-nothing in ruff's rule set is known to report a construct that is correct
-basedpython. `F821` used to: an unqualified builder inside a
+a rule that reads a construct as the python it resembles is a false positive,
+and each one is answered where the misreading is, not by silencing the rule:
+
+- `or` and `and` inside a type expression are
+    [union and intersection](or-and-types.md), so the boolean rules — `SIM222`,
+    `SIM223`, `RUF021` — say nothing there
+- a bare string in a type position is
+    [the literal type](literal-types.md), not a forward reference, so `UP037`
+    does not offer to take its quotes off
+- `is` is a type test unless its right-hand side is a literal, so `F632` reports
+    only what really compares identity: the `===` and `!==` spellings, and an
+    `is` against a literal
+- a [match type](match-types.md)'s `case` arms are types, so `E701` does not
+    read the `:` in one as opening a suite
+- a [destructuring](destructuring.md) binder always binds, so its captures are
+    reported the way the equivalent python unpacking's are — `B007` for a loop,
+    `F841` never
+- a type parameter is not a constant, however the one-letter convention spells
+    it, so `assert T == int` is not a `SIM300` yoda condition
+
+`F821` is the older instance of the same thing: an unqualified builder inside a
 [trailing-lambda](trailing-lambdas.md) block resolves against the block's
 [implicit receiver](implicit-receivers.md), and the linter cannot see receiver
-types, so it now defers every unresolved name inside a block to `by check`. the
+types, so it defers every unresolved name inside a block to `by check`. the
 same deferral covers `self` and an
 [enum variant](context-sensitive-resolution.md) written bare

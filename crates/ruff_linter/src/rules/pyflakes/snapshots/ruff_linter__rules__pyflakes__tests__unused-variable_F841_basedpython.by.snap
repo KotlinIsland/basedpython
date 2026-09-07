@@ -29,3 +29,27 @@ F841 Local variable `Unmatched` is assigned to but never used
 46 |         case _:
    |
 help: Remove assignment to unused variable `Unmatched`
+
+F841 Local variable `k` is assigned to but never used
+  --> F841_basedpython.by:78:21
+   |
+76 | # what python's own capture pattern does, so an unused capture still fires
+77 | def matching_binders(p: Point) -> int:
+78 |     if let Point(j, k) := p:  # F841 on `k`
+   |                     ^
+79 |         return j
+80 |     match p:
+   |
+help: Remove assignment to unused variable `k`
+
+F841 Local variable `m` is assigned to but never used
+  --> F841_basedpython.by:81:23
+   |
+79 |         return j
+80 |     match p:
+81 |         case Point(l, m):  # F841 on `m`
+   |                       ^
+82 |             return l
+83 |     return 0
+   |
+help: Remove assignment to unused variable `m`

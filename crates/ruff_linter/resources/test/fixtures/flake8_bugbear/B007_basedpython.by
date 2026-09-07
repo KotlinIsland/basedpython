@@ -1,0 +1,31 @@
+"""a destructuring loop binds its control variables in the header's pattern rather
+than in its target, which holds only the synthetic binder the pattern takes apart"""
+
+
+class Point:
+    __match_args__ = ("x", "y")
+    x: int
+    y: int
+
+
+def unused_capture(points: list[Point]) -> None:
+    for Point(x, y) in points:  # B007 on `y`
+        print(x)
+
+
+def both_used(points: list[Point]) -> None:
+    for Point(x, y) in points:
+        print(x, y)
+
+
+# an underscore-prefixed capture says the omission is deliberate, as it does for a
+# tuple target
+def deliberately_unused(points: list[Point]) -> None:
+    for Point(x, _y) in points:
+        print(x)
+
+
+# nesting reaches the captures at every depth
+def nested(pairs: list[tuple[Point, Point]]) -> None:
+    for (Point(a, b), Point(c, d)) in pairs:  # B007 on `b`, `c` and `d`
+        print(a)

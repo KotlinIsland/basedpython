@@ -130,6 +130,14 @@ pub(crate) fn compound_statements(
     // This is used to allow `class C: ...`-style definitions in stubs.
     let mut allow_ellipsis = false;
 
+    // basedpython: `type Swap[*Ts] = match *Ts:` is a type whose `case` arms are type
+    // expressions rather than statements, so the `:` in `case (A, B): (B, A)` separates
+    // a pattern from a type and opens no suite. `type_match` holds the indent of the
+    // header line for as long as the arms it opened last, and `type_keyword` records the
+    // `type` that tells such a header from `x = match ...`, which really is a statement
+    let mut type_match: Option<u32> = None;
+    let mut type_keyword = false;
+
     // Track indentation.
     let mut indent = 0u32;
 
@@ -147,6 +155,9 @@ pub(crate) fn compound_statements(
             }
             TokenKind::Dedent => {
                 indent = indent.saturating_sub(1);
+                if type_match.is_some_and(|header| indent <= header) {
+                    type_match = None;
+                }
             }
             _ => {}
         }
@@ -194,6 +205,7 @@ pub(crate) fn compound_statements(
                 try_ = None;
                 while_ = None;
                 with = None;
+                type_keyword = false;
             }
             TokenKind::Colon => {
                 if case.is_some()
@@ -273,7 +285,12 @@ pub(crate) fn compound_statements(
                 with = None;
             }
             TokenKind::Case => {
-                case = Some(token.range());
+                if type_match.is_none() {
+                    case = Some(token.range());
+                }
+            }
+            TokenKind::Type => {
+                type_keyword = true;
             }
             TokenKind::If => {
                 if_ = Some(token.range());
@@ -313,6 +330,9 @@ pub(crate) fn compound_statements(
             }
             TokenKind::Match => {
                 match_ = Some(token.range());
+                if source_type.is_basedpython() && type_keyword {
+                    type_match = Some(indent);
+                }
             }
             _ => {}
         }

@@ -1,0 +1,19 @@
+---
+source: crates/ruff_linter/src/rules/flake8_simplify/mod.rs
+---
+SIM300 [*] Yoda condition detected
+  --> SIM300_basedpython.by:15:8
+   |
+13 | # a genuine yoda condition still fires
+14 | def yoda(age: int) -> None:
+15 |     if 42 == age:  # SIM300
+   |        ^^^^^^^^^
+16 |         pass
+   |
+help: Rewrite as `age == 42`
+   |
+14 | def yoda(age: int) -> None:
+   -     if 42 == age:  # SIM300
+15 +     if age == 42:  # SIM300
+16 |         pass
+   |

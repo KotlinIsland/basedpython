@@ -1,0 +1,21 @@
+# `A and B or C` in a type expression is the intersection of `A` and `B` unioned
+# with `C`, which the keywords already spell unambiguously — there is no python
+# precedence to make clear with parentheses
+class A: ...
+
+
+class B: ...
+
+
+class C: ...
+
+
+def annotated(x: A and B or C) -> None: ...
+
+
+type Alias = A and B or C
+
+
+# a boolean expression in a value position still wants the parentheses
+def values(a: bool, b: bool, c: bool) -> bool:
+    return a and b or c

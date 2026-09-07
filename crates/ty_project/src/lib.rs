@@ -1281,6 +1281,43 @@ mod tests {
         Ok(())
     }
 
+    /// A diagnostic names its types in the syntax of the file it is reported in, and
+    /// that has to hold however the inference behind it was reached. Checking the `.py`
+    /// importer first forces the `.by` module's inference, and the message salsa caches
+    /// there is the one every later reader of that file sees.
+    #[test]
+    fn basedpython_diagnostic_keeps_its_spelling_when_a_python_importer_is_checked_first() {
+        let root = SystemPathBuf::from("/project");
+        let project = ProjectMetadata::new("test", root.clone());
+        let mut db = TestDb::new(project);
+
+        db.write_files([
+            (
+                root.join("lib.by"),
+                "def g():\n    c: \"c\" = \"b\"\n    return c\n",
+            ),
+            (root.join("main.py"), "from lib import g\n\ng()\n"),
+        ])
+        .unwrap();
+
+        let main = system_path_to_file(&db, root.join("main.py")).unwrap();
+        let lib = system_path_to_file(&db, root.join("lib.by")).unwrap();
+
+        // inferring `g`'s return type infers its body, diagnostics and all
+        check_file_impl(&db, db.program_file(main)).unwrap();
+
+        let messages: Vec<String> = check_file_impl(&db, db.program_file(lib))
+            .unwrap()
+            .iter()
+            .map(|diagnostic| diagnostic.concise_message().to_string())
+            .collect();
+
+        assert_eq!(
+            messages,
+            vec![r#"Object of type `"b"` is not assignable to `"c"`"#.to_string()]
+        );
+    }
+
     #[test]
     fn explicit_nested_included_file_is_a_literal_match() {
         let root = SystemPathBuf::from("/project");

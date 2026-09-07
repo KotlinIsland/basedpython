@@ -39,7 +39,7 @@ use ruff_python_ast::identifier::Identifier;
 use ruff_python_ast::name::QualifiedName;
 use ruff_python_ast::str::Quote;
 use ruff_python_ast::token::Tokens;
-use ruff_python_ast::visitor::{Visitor, walk_except_handler, walk_pattern};
+use ruff_python_ast::visitor::{Visitor, walk_except_handler, walk_pattern, walk_with_item};
 use ruff_python_ast::{
     self as ast, AnyParameterRef, ArgOrKeyword, Comprehension, ElifElseClause, ExceptHandler, Expr,
     ExprContext, ExprFString, ExprTString, InterpolatedStringElement, Keyword, MatchCase,
@@ -194,6 +194,26 @@ impl ExpectedDocstringKind {
     }
 }
 
+/// basedpython: how a pattern's captures are bound, which follows the binder the
+/// pattern sits in rather than the pattern itself
+///
+/// a `match` case or an `if let` binds only when the pattern matches, which is what
+/// python's own capture pattern does. the destructuring binders bind unconditionally,
+/// and each one has a python spelling whose bindings they should match: `for Point(x,
+/// y) in points` binds `x` and `y` the way `for x, y in points` does, and `let Point(x,
+/// y) := p` the way `x, y = p` does
+#[derive(Copy, Clone, Debug, Default)]
+enum PatternBinder {
+    /// `case <pattern>:`, `if let <pattern> := ...` — a conditional capture
+    #[default]
+    Match,
+    /// `for <pattern> in ...` — a loop variable
+    Loop,
+    /// `let <pattern> := ...`, `with ... as <pattern>`, `def f(<pattern>: T)` — the
+    /// captures come out of unpacking a value that is always there
+    Unpacking,
+}
+
 pub(crate) struct Checker<'a> {
     /// The [`Parsed`] output for the source code.
     parsed: &'a Parsed<ModModule>,
@@ -250,6 +270,8 @@ pub(crate) struct Checker<'a> {
     semantic_checker: SemanticSyntaxChecker,
     /// Errors collected by the `semantic_checker`.
     semantic_errors: RefCell<Vec<SemanticSyntaxError>>,
+    /// basedpython: the binder whose pattern is currently being visited
+    pattern_binder: PatternBinder,
     context: &'a LintContext<'a>,
 }
 
@@ -307,6 +329,7 @@ impl<'a> Checker<'a> {
             target_version,
             semantic_checker: SemanticSyntaxChecker::new(),
             semantic_errors: RefCell::default(),
+            pattern_binder: PatternBinder::default(),
             context,
         }
     }
@@ -1703,6 +1726,19 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 self.visit_body(orelse);
                 self.semantic.flags = flags_snapshot;
             }
+            // basedpython: `let <pattern> := <subject>` unpacks the subject, and falls
+            // through to the `else` block when the pattern does not match
+            Stmt::Let(ast::StmtLet {
+                pattern,
+                value,
+                orelse,
+                range: _,
+                node_index: _,
+            }) => {
+                self.visit_expr(value);
+                self.visit_pattern_binder(PatternBinder::Unpacking, pattern);
+                self.visit_body(orelse);
+            }
             Stmt::For(ast::StmtFor {
                 node_index: _,
                 range: _,
@@ -1717,7 +1753,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 self.visit_expr(target);
                 // basedpython: a destructuring loop binds the pattern's captures
                 if let Some(pattern) = pattern {
-                    self.visit_pattern(pattern);
+                    self.visit_pattern_binder(PatternBinder::Loop, pattern);
                 }
                 self.visit_body(body);
                 let flags_snapshot = self.semantic.flags;
@@ -1739,7 +1775,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 // its subject against the pattern rather than testing it
                 if let Some(pattern) = pattern {
                     self.visit_expr(test);
-                    self.visit_pattern(pattern);
+                    self.visit_pattern_binder(PatternBinder::Match, pattern);
                 } else {
                     self.visit_boolean_test(test);
                 }
@@ -1822,15 +1858,21 @@ impl<'a> Visitor<'a> for Checker<'a> {
             && (self.semantic.in_annotation() || self.source_type.is_stub())
         {
             if let Expr::StringLiteral(string_literal) = expr {
-                self.visit
-                    .string_type_definitions
-                    .push((string_literal, self.semantic.snapshot()));
+                // basedpython promotes bare string literals in type positions to
+                // `Literal["..."]` rather than treating them as forward references,
+                // so there is no annotation inside the quotes to defer
+                if !self.source_type.is_basedpython() {
+                    self.visit
+                        .string_type_definitions
+                        .push((string_literal, self.semantic.snapshot()));
+                    return;
+                }
             } else {
                 self.visit
                     .future_type_definitions
                     .push((expr, self.semantic.snapshot()));
+                return;
             }
-            return;
         }
 
         self.semantic.push_node(expr);
@@ -2515,11 +2557,19 @@ impl<'a> Visitor<'a> for Checker<'a> {
         // basedpython: a destructuring parameter binds its pattern's captures in
         // the same scope the parameter itself is bound in
         if let Some(pattern) = parameter.pattern.as_deref() {
-            self.visit_pattern(pattern);
+            self.visit_pattern_binder(PatternBinder::Unpacking, pattern);
         }
 
         // Step 4: Analysis
         analyze::parameter(parameter, self);
+    }
+
+    fn visit_with_item(&mut self, with_item: &'a ast::WithItem) {
+        // basedpython: `with ctx() as Point(x, y):` unpacks the bound value. a with item
+        // holds no statements, so the binder can stand for the whole walk
+        let snapshot = std::mem::replace(&mut self.pattern_binder, PatternBinder::Unpacking);
+        walk_with_item(self, with_item);
+        self.pattern_binder = snapshot;
     }
 
     fn visit_pattern(&mut self, pattern: &'a Pattern) {
@@ -2543,12 +2593,20 @@ impl<'a> Visitor<'a> for Checker<'a> {
             // `is_basedpython_transpile_resolved_name` makes applies: a name that
             // matches no variant at all stays an ordinary capture, and ty reports
             // one whose subject does not accept it
-            let flags = if self.semantic.is_based_enum_case_name(name.as_str()) {
+            let mut flags = if self.semantic.is_based_enum_case_name(name.as_str()) {
                 BindingFlags::BASED_ENUM_CASE_NAME
             } else {
                 BindingFlags::empty()
             };
-            self.add_binding(name, name.range(), BindingKind::Assignment, flags);
+            let kind = match self.pattern_binder {
+                PatternBinder::Match => BindingKind::Assignment,
+                PatternBinder::Loop => BindingKind::LoopVar,
+                PatternBinder::Unpacking => {
+                    flags |= BindingFlags::UNPACKED_ASSIGNMENT;
+                    BindingKind::Assignment
+                }
+            };
+            self.add_binding(name, name.range(), kind, flags);
         }
 
         // Step 2: Traversal
@@ -2569,7 +2627,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
     }
 
     fn visit_match_case(&mut self, match_case: &'a MatchCase) {
-        self.visit_pattern(&match_case.pattern);
+        self.visit_pattern_binder(PatternBinder::Match, &match_case.pattern);
         if let Some(expr) = &match_case.guard {
             self.visit_boolean_test(expr);
         }
@@ -2870,12 +2928,20 @@ impl<'a> Checker<'a> {
         self.semantic.flags = snapshot;
     }
 
+    /// basedpython: visit a [`Pattern`] as the given binder's, so that its captures are
+    /// bound the way that binder's python spelling binds them
+    fn visit_pattern_binder(&mut self, binder: PatternBinder, pattern: &'a Pattern) {
+        let snapshot = std::mem::replace(&mut self.pattern_binder, binder);
+        self.visit_pattern(pattern);
+        self.pattern_binder = snapshot;
+    }
+
     /// Visit an [`ElifElseClause`]
     fn visit_elif_else_clause(&mut self, clause: &'a ElifElseClause) {
         if let Some(test) = &clause.test {
             if let Some(pattern) = &clause.pattern {
                 self.visit_expr(test);
-                self.visit_pattern(pattern);
+                self.visit_pattern_binder(PatternBinder::Match, pattern);
             } else {
                 self.visit_boolean_test(test);
             }

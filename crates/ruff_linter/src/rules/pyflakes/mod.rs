@@ -91,6 +91,7 @@ mod tests {
     #[test_case(Rule::MultipleStarredExpressions, Path::new("F622.py"))]
     #[test_case(Rule::AssertTuple, Path::new("F631.py"))]
     #[test_case(Rule::IsLiteral, Path::new("F632.py"))]
+    #[test_case(Rule::IsLiteral, Path::new("F632_basedpython.by"))]
     #[test_case(Rule::InvalidPrintSyntax, Path::new("F633.py"))]
     #[test_case(Rule::IfTuple, Path::new("F634.py"))]
     // basedpython: a pattern clause's subject is a value, not a test
