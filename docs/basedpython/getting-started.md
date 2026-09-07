@@ -8,11 +8,9 @@ minutes
 basedpython ships as the `basedpython` package, which installs two executables:
 `by`, the type checker and transpiler, and `buff`, the linter and formatter
 
-=== "uv"
-
-    ```sh
-    uv add --dev basedpython
-    ```
+```sh
+uv add --dev basedpython
+```
 
 verify it works:
 
@@ -36,8 +34,7 @@ by run main
 ```
 
 `by run main` finds `main.by` in the current directory, transpiles it (and all
-other `.by` files in the project) to a temporary directory, then executes
-`python -m main` from there
+other `.by` files in the project), then executes it with your python interpreter
 
 !!! note "`by run` takes a module, not a path"
 
@@ -86,7 +83,6 @@ the generated `.py` files are ordinary python. run them with any python tool:
 python build/main.py
 pytest build/
 mypy build/
-ruff check build/
 ```
 
 to ship the project rather than run it, build a wheel — see
