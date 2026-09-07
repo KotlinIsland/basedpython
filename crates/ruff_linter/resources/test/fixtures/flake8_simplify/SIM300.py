@@ -44,3 +44,18 @@ SomeClass().settings.SOME_CONSTANT_VALUE > (60 * 60) # Error in 0.1.8
 # https://github.com/astral-sh/ruff/issues/14761
 {"": print(1)} == print(2)
 {0: 1, **print(2)} == print(4)
+
+
+# A type parameter is a name the caller chooses, not a constant, however the
+# one-letter convention spells it
+def compare_type_param[T](value: T) -> None:
+    if T == int:
+        pass
+    if T > value:
+        pass
+
+
+class Box[T]:
+    def check(self) -> None:
+        if T == int:
+            pass

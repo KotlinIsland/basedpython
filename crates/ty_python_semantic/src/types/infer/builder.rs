@@ -1278,6 +1278,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     /// Infers types in the given [`InferenceRegion`].
     fn infer_region(&mut self) {
+        // a diagnostic raised here is written for the file being inferred, so the types
+        // it names have to be spelled in that file's own syntax. the spelling is taken
+        // from the file rather than from whoever asked for the inference because this
+        // work is cached: were it taken from the caller, the first reader of a `.by`
+        // file would decide how every later reader sees the messages salsa kept
+        crate::with_display_for_file(self.db(), self.file(), || self.infer_region_inner());
+    }
+
+    fn infer_region_inner(&mut self) {
         match self.region {
             InferenceRegion::Statement(statement) => self.infer_region_statement(statement),
             InferenceRegion::Scope(scope, tcx) => self.infer_region_scope(scope, tcx),

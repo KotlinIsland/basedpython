@@ -920,15 +920,26 @@ fn basedpython_display_enabled() -> bool {
     BASEDPYTHON_DISPLAY.with(std::cell::Cell::get)
 }
 
-/// Run `f` with basedpython-style type display enabled. Used by
-/// diagnostic emission for `.by` files
-pub(crate) fn with_basedpython_display<R>(f: impl FnOnce() -> R) -> R {
-    BASEDPYTHON_DISPLAY.with(|cell| {
-        let prev = cell.replace(true);
-        let result = f();
-        cell.set(prev);
-        result
-    })
+/// Run `f` with basedpython-style type display set to `enabled`.
+///
+/// Both directions matter: inferring a `.by` file reaches definitions in `.py` files
+/// and vice versa, and each file's own diagnostics have to be spelled in that file's
+/// syntax rather than in whichever one the outermost caller happened to be reading.
+pub(crate) fn with_basedpython_display<R>(enabled: bool, f: impl FnOnce() -> R) -> R {
+    /// Restores the previous setting however `f` ends. Type inference is where this is
+    /// set, and salsa cancels an inference by unwinding through it — a `f()` that never
+    /// returns would otherwise leave the thread spelling every later type in the syntax
+    /// of the file whose inference was cancelled.
+    struct Restore(bool);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BASEDPYTHON_DISPLAY.with(|cell| cell.set(self.0));
+        }
+    }
+
+    let _restore = BASEDPYTHON_DISPLAY.with(|cell| Restore(cell.replace(enabled)));
+    f()
 }
 
 /// Format a file location suffix for disambiguation (e.g., " @ path:line:column")

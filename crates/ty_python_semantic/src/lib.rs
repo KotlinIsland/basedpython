@@ -481,11 +481,7 @@ pub fn check_file_with(
 /// hint — should go through this, or it will spell types in a syntax the file
 /// cannot be written in.
 pub fn with_display_for_file<R>(db: &dyn Db, file: File, body: impl FnOnce() -> R) -> R {
-    if file.source_type(db).is_basedpython() {
-        crate::types::display::with_basedpython_display(body)
-    } else {
-        body()
-    }
+    crate::types::display::with_basedpython_display(file.source_type(db).is_basedpython(), body)
 }
 
 fn check_file_inner(

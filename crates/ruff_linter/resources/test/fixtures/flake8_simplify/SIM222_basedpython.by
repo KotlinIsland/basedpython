@@ -1,0 +1,20 @@
+# `or` and `and` inside a type expression are basedpython's keyword spellings of
+# union and intersection, so what looks like boolean logic there is type syntax:
+# `A or B` is the type `A | B`, not an expression whose value is always `A`
+type Names = "foo" or "bar"
+
+type Both = int and str
+
+
+def annotated(a: str or bytes, b: "x" or "y") -> int or None: ...
+
+
+def nested(handlers: list[int or str]) -> None: ...
+
+
+# a boolean operator in a value expression is untouched
+def values(a: int, b: int) -> None:
+    if a or True:  # SIM222
+        pass
+    if b and False:  # SIM223
+        pass

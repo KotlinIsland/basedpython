@@ -1,0 +1,16 @@
+---
+source: crates/ruff_linter/src/rules/ruff/mod.rs
+---
+RUF021 [*] Parenthesize `a and b` expressions when chaining `and` and `or` together, to make the precedence clear
+  --> RUF021_basedpython.by:21:12
+   |
+19 | # a boolean expression in a value position still wants the parentheses
+20 | def values(a: bool, b: bool, c: bool) -> bool:
+21 |     return a and b or c
+   |            ^^^^^^^
+help: Parenthesize the `and` subexpression
+   |
+20 | def values(a: bool, b: bool, c: bool) -> bool:
+   -     return a and b or c
+21 +     return (a and b) or c
+   |

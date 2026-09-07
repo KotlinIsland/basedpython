@@ -55,6 +55,8 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 #[violation_metadata(stable_since = "v0.0.39", category = Category::Suspicious)]
 pub(crate) struct IsLiteral {
     cmp_op: IsCmpOp,
+    /// Whether the operator was written with basedpython's `===` / `!==`
+    spells_identity: bool,
 }
 
 impl AlwaysFixableViolation for IsLiteral {
@@ -67,9 +69,12 @@ impl AlwaysFixableViolation for IsLiteral {
     }
 
     fn fix_title(&self) -> String {
-        let title = match self.cmp_op {
-            IsCmpOp::Is => "Replace `is` with `==`",
-            IsCmpOp::IsNot => "Replace `is not` with `!=`",
+        // basedpython's `===` / `!==` are the identity operators this rule replaces there
+        let title = match (self.cmp_op, self.spells_identity) {
+            (IsCmpOp::Is, false) => "Replace `is` with `==`",
+            (IsCmpOp::Is, true) => "Replace `===` with `==`",
+            (IsCmpOp::IsNot, false) => "Replace `is not` with `!=`",
+            (IsCmpOp::IsNot, true) => "Replace `!==` with `!=`",
         };
         title.to_string()
     }
@@ -83,25 +88,50 @@ pub(crate) fn invalid_literal_comparison(
     comparators: &[Expr],
     expr: &Expr,
 ) {
-    let mut lazy_located = None;
+    // basedpython keeps `is` as python identity only where its right-hand side is a
+    // literal; anywhere else `is` is a type test, and `===` is the spelling that always
+    // compares identity. telling `===` from `is` takes the tokens, which are worth
+    // locating up front once the file can contain either
+    let mut lazy_located = (checker.source_type.is_basedpython()
+        && ops.iter().any(|op| matches!(op, CmpOp::Is | CmpOp::IsNot)))
+    .then(|| locate_cmp_ops(expr, checker.tokens()));
     let mut left = left;
     for (index, (op, right)) in ops.iter().zip(comparators).enumerate() {
+        let spells_identity = lazy_located
+            .as_ref()
+            .and_then(|located| located.get(index))
+            .is_some_and(|located_op| located_op.op == *op && located_op.spells_identity);
+
         if matches!(op, CmpOp::Is | CmpOp::IsNot)
             && (helpers::is_constant_non_singleton(left)
                 || helpers::is_constant_non_singleton(right)
                 || helpers::is_mutable_iterable_initializer(left)
                 || helpers::is_mutable_iterable_initializer(right))
+            && (!checker.source_type.is_basedpython() || spells_identity || right.is_literal_expr())
         {
-            let mut diagnostic =
-                checker.report_diagnostic(IsLiteral { cmp_op: op.into() }, expr.range());
+            let mut diagnostic = checker.report_diagnostic(
+                IsLiteral {
+                    cmp_op: op.into(),
+                    spells_identity,
+                },
+                expr.range(),
+            );
             if lazy_located.is_none() {
                 lazy_located = Some(locate_cmp_ops(expr, checker.tokens()));
             }
             diagnostic.try_set_optional_fix(|| {
-                if let Some(located_op) =
-                    lazy_located.as_ref().and_then(|located| located.get(index))
-                {
-                    assert_eq!(located_op.op, *op);
+                let located_op = lazy_located.as_ref().and_then(|located| located.get(index));
+                // the tokens and the operators come from one parse, so they line up. a
+                // basedpython file is the one place the two can legitimately disagree,
+                // because a spelling the token scan does not know reads as a different
+                // operator there — hence a dropped fix rather than a panic
+                debug_assert!(
+                    checker.source_type.is_basedpython()
+                        || located_op.is_none_or(|located_op| located_op.op == *op),
+                    "located `{:?}` where the comparison has `{op:?}`",
+                    located_op.map(|located_op| located_op.op)
+                );
+                if let Some(located_op) = located_op.filter(|located_op| located_op.op == *op) {
                     if let Ok(content) = match located_op.op {
                         CmpOp::Is => Ok::<String, Error>("==".to_string()),
                         CmpOp::IsNot => Ok("!=".to_string()),
@@ -197,6 +227,12 @@ fn locate_cmp_ops(expr: &Expr, tokens: &Tokens) -> Vec<LocatedCmpOp> {
                 };
                 ops.push(op);
             }
+            TokenKind::EqEqEqual => {
+                ops.push(LocatedCmpOp::identity(token.range(), CmpOp::Is));
+            }
+            TokenKind::BangEqEqual => {
+                ops.push(LocatedCmpOp::identity(token.range(), CmpOp::IsNot));
+            }
             TokenKind::NotEqual => {
                 ops.push(LocatedCmpOp::new(token.range(), CmpOp::NotEq));
             }
@@ -225,6 +261,11 @@ fn locate_cmp_ops(expr: &Expr, tokens: &Tokens) -> Vec<LocatedCmpOp> {
 struct LocatedCmpOp {
     range: TextRange,
     op: CmpOp,
+    /// Whether the operator was written with basedpython's `===` / `!==`, the
+    /// spellings that compare identity there. A plain `is` in a basedpython file
+    /// is a [parametric type test](https://docs.basedpython.org/features/parametric-type-tests)
+    /// and parses to the same [`CmpOp`], so the two can only be told apart here.
+    spells_identity: bool,
 }
 
 impl LocatedCmpOp {
@@ -232,6 +273,14 @@ impl LocatedCmpOp {
         Self {
             range: range.into(),
             op,
+            spells_identity: false,
+        }
+    }
+
+    fn identity<T: Into<TextRange>>(range: T, op: CmpOp) -> Self {
+        Self {
+            spells_identity: true,
+            ..Self::new(range, op)
         }
     }
 }

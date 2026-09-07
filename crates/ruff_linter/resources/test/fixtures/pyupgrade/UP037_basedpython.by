@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+
+# basedpython reads a bare string in a type position as the literal type
+# `Literal["c"]` rather than as a forward reference, so its quotes carry the
+# meaning and removing them would name a variable instead
+c: "c" = "b"
+
+
+def parameter(mode: "read") -> "write": ...
+
+
+def body() -> None:
+    local: "held" = "held"
+    print(local)
+
+
+# a forward reference is written the way every other type is
+class Node:
+    parent: Node | None

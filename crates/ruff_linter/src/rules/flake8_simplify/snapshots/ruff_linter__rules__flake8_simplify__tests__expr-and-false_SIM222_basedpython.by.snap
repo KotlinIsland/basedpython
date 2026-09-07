@@ -1,0 +1,20 @@
+---
+source: crates/ruff_linter/src/rules/flake8_simplify/mod.rs
+---
+SIM223 [*] Use `False` instead of `... and False`
+  --> SIM222_basedpython.by:19:8
+   |
+17 |     if a or True:  # SIM222
+18 |         pass
+19 |     if b and False:  # SIM223
+   |        ^^^^^^^^^^^
+20 |         pass
+   |
+help: Replace with `False`
+   |
+18 |         pass
+   -     if b and False:  # SIM223
+19 +     if False:  # SIM223
+20 |         pass
+   |
+note: This is an unsafe fix and may change runtime behavior

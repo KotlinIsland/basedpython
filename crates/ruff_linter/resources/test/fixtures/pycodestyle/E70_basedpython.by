@@ -14,3 +14,55 @@ class Members:
 
 # a class definition written on one line is still reported
 class OneLiner: x = 1
+
+
+# a match type's `case` arms are type expressions, so the `:` in one separates a
+# pattern from a type and opens no suite
+class A: ...
+
+
+class B: ...
+
+
+type Swap[*Ts] = match *Ts:
+    case (A, B): (B, A)
+    case _: ()
+
+
+def nested_alias[T]() -> None:
+    type Widen[X] = match X:
+        case int: float
+        case _: X
+
+    # a `match` statement after the alias is a compound statement again
+    match T:
+        case int(): pass
+        case _: pass
+
+
+# a statement-expression `match` really does hold statements
+def statement_expression(v: object) -> int:
+    result = match v:
+        case int(): 1
+        case _: 0
+    return result
+
+
+class Holder:
+    type Inner[X] = match X:
+        case int: float
+        case _: X
+
+    def method(self, v: object) -> None:
+        match v:
+            case int(): pass
+
+
+def guarded(flag: bool) -> None:
+    if flag:
+        type Guarded[X] = match X:
+            case int: float
+            case _: X
+
+    match flag:
+        case True: pass

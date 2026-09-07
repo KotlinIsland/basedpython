@@ -2,9 +2,10 @@ use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast as ast;
 use ruff_python_ast::helpers;
 use ruff_python_ast::helpers::{NameFinder, StoredNameFinder};
-use ruff_python_ast::visitor::Visitor;
+use ruff_python_ast::visitor::{Visitor, walk_pattern};
 use ruff_python_semantic::Binding;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
+use rustc_hash::FxHashMap;
 
 use crate::checkers::ast::Checker;
 use crate::codes::Category;
@@ -83,10 +84,26 @@ impl Violation for UnusedLoopControlVariable {
 
 /// B007
 pub(crate) fn unused_loop_control_variable(checker: &Checker, stmt_for: &ast::StmtFor) {
-    let control_names = {
+    let control_names: FxHashMap<&str, TextRange> = {
         let mut finder = StoredNameFinder::default();
         finder.visit_expr(stmt_for.target.as_ref());
-        finder.names
+        let mut names: FxHashMap<&str, TextRange> = finder
+            .names
+            .into_iter()
+            .map(|(name, expr)| (name, expr.range()))
+            .collect();
+
+        // basedpython: a destructuring loop binds its control variables in the header's
+        // pattern rather than in its target, which holds only the synthetic binder the
+        // pattern takes apart. `for Point(x, y) in points` controls `x` and `y` exactly
+        // as `for x, y in points` does
+        if let Some(pattern) = &stmt_for.pattern {
+            let mut finder = PatternCaptureFinder::default();
+            finder.visit_pattern(pattern);
+            names.extend(finder.names);
+        }
+
+        names
     };
 
     let used_names = {
@@ -101,7 +118,7 @@ pub(crate) fn unused_loop_control_variable(checker: &Checker, stmt_for: &ast::St
         clippy::iter_over_hash_type,
         reason = "iteration order does not affect the diagnostics or fixes produced"
     )]
-    for (name, expr) in control_names {
+    for (name, range) in control_names {
         // Ignore names that are already underscore-prefixed.
         if checker.settings().ignores_unused_binding(name) {
             continue;
@@ -137,7 +154,7 @@ pub(crate) fn unused_loop_control_variable(checker: &Checker, stmt_for: &ast::St
                 rename: rename.clone(),
                 certainty,
             },
-            expr.range(),
+            range,
         );
 
         if certainty == Certainty::Certain {
@@ -152,16 +169,40 @@ pub(crate) fn unused_loop_control_variable(checker: &Checker, stmt_for: &ast::St
                 if scope
                     .get_all(name)
                     .map(|binding_id| checker.semantic().binding(binding_id))
-                    .filter(|binding| binding.start() >= expr.start())
+                    .filter(|binding| binding.start() >= range.start())
                     .all(Binding::is_unused)
                 {
-                    diagnostic.set_fix(Fix::unsafe_edit(Edit::range_replacement(
-                        rename,
-                        expr.range(),
-                    )));
+                    diagnostic.set_fix(Fix::unsafe_edit(Edit::range_replacement(rename, range)));
                 }
             }
         }
+    }
+}
+
+/// A [`Visitor`] that collects the names a pattern captures, with the range of each.
+///
+/// basedpython binds a destructuring loop's control variables here rather than in the
+/// loop target, so the rule has to read them out of the pattern to see them at all.
+#[derive(Default)]
+struct PatternCaptureFinder<'a> {
+    names: Vec<(&'a str, TextRange)>,
+}
+
+impl<'a> Visitor<'a> for PatternCaptureFinder<'a> {
+    fn visit_pattern(&mut self, pattern: &'a ast::Pattern) {
+        if let ast::Pattern::MatchAs(ast::PatternMatchAs {
+            name: Some(name), ..
+        })
+        | ast::Pattern::MatchStar(ast::PatternMatchStar {
+            name: Some(name), ..
+        })
+        | ast::Pattern::MatchMapping(ast::PatternMatchMapping {
+            rest: Some(name), ..
+        }) = pattern
+        {
+            self.names.push((name.as_str(), name.range()));
+        }
+        walk_pattern(self, pattern);
     }
 }
 

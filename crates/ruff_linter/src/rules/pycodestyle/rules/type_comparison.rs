@@ -51,13 +51,21 @@ use crate::codes::Category;
 /// ```
 #[derive(ViolationMetadata)]
 #[violation_metadata(stable_since = "v0.0.39", category = Category::Pedantic)]
-pub(crate) struct TypeComparison;
+pub(crate) struct TypeComparison {
+    basedpython: bool,
+}
 
 impl Violation for TypeComparison {
     #[derive_message_formats]
     fn message(&self) -> String {
-        "Use `is` and `is not` for type comparisons, or `isinstance()` for isinstance checks"
-            .to_string()
+        // basedpython spells identity `===` and an isinstance check `x is C`, so the
+        // python wording names the wrong two operators there
+        if self.basedpython {
+            "Use `===` and `!==` for type comparisons, or `is` for isinstance checks".to_string()
+        } else {
+            "Use `is` and `is not` for type comparisons, or `isinstance()` for isinstance checks"
+                .to_string()
+        }
     }
 }
 
@@ -78,7 +86,12 @@ pub(crate) fn type_comparison(checker: &Checker, compare: &ast::ExprCompare) {
             }
 
             // Disallow the comparison.
-            checker.report_diagnostic(TypeComparison, compare.range());
+            checker.report_diagnostic(
+                TypeComparison {
+                    basedpython: checker.source_type.is_basedpython(),
+                },
+                compare.range(),
+            );
         }
     }
 }

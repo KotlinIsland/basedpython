@@ -45,3 +45,39 @@ def ordinary_capture(value: object) -> int:
             return 1
         case _:
             return 0
+
+
+# a destructuring binder always binds, so its captures are the ones the
+# equivalent python spelling makes: `for Point(x, y) in points` binds like
+# `for x, y in points`, and `let Point(x, y) := p` like `x, y = p`. None of
+# those are the plain assignment this rule reports
+class Point:
+    __match_args__ = ("x", "y")
+    x: int
+    y: int
+
+
+def destructuring_binders(points: list[Point], p: Point) -> None:
+    let Point(a, b) := p
+    print(a)
+
+    for Point(c, d) in points:
+        print(c)
+
+    with open("f") as Point(e, g):
+        print(e)
+
+
+def destructuring_parameter(Point(h, i): Point) -> int:
+    return h
+
+
+# a `match` case and an `if let` bind only when the pattern matches, which is
+# what python's own capture pattern does, so an unused capture still fires
+def matching_binders(p: Point) -> int:
+    if let Point(j, k) := p:  # F841 on `k`
+        return j
+    match p:
+        case Point(l, m):  # F841 on `m`
+            return l
+    return 0

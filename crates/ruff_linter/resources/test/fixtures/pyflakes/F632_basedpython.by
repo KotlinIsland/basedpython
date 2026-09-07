@@ -1,0 +1,19 @@
+# basedpython spells identity `===` / `!==`; a plain `is` is a parametric type
+# test, which the parser flattens to the same operator. Only the identity
+# spellings, and an `is` whose right-hand side is a literal, compare identity
+def identity(x: object) -> None:
+    print(1 === 1)  # F632
+    print(x !== "a")  # F632
+
+
+def literal_right_hand_side(x: object) -> None:
+    print(1 is 1)  # F632
+    print(x is not "a")  # F632
+
+
+def type_tests[T](x: T, xs: list[int]) -> None:
+    print(1 is T)
+    print(xs is list[int])
+    # this one lowers to `isinstance([], [])`, which raises at runtime — but the
+    # mistake in it is the target, not the operator, so it is ty's to report
+    print([] is [])

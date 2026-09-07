@@ -6,6 +6,7 @@ use libcst_native::CompOp;
 use ruff_macros::{ViolationMetadata, derive_message_formats};
 use ruff_python_ast::{self as ast, CmpOp, Expr, UnaryOp};
 use ruff_python_codegen::Stylist;
+use ruff_python_semantic::SemanticModel;
 use ruff_python_stdlib::str::{self};
 use ruff_text_size::Ranged;
 
@@ -84,48 +85,58 @@ enum ConstantLikelihood {
     Definitely = 2,
 }
 
-impl From<&Expr> for ConstantLikelihood {
+impl ConstantLikelihood {
     /// Determine the [`ConstantLikelihood`] of an expression.
-    fn from(expr: &Expr) -> Self {
+    fn of(expr: &Expr, semantic: &SemanticModel) -> Self {
+        let of = |expr: &Expr| ConstantLikelihood::of(expr, semantic);
         match expr {
             _ if expr.is_literal_expr() => ConstantLikelihood::Definitely,
             Expr::Attribute(ast::ExprAttribute { attr, .. }) => {
                 ConstantLikelihood::from_identifier(attr)
             }
-            Expr::Name(ast::ExprName { id, .. }) => ConstantLikelihood::from_identifier(id),
+            Expr::Name(name) => {
+                // A type parameter is not a constant, however it is spelled: `T` in
+                // `def f[T](...)` names a type the caller chooses. The one-letter
+                // convention makes almost every one of them read as `SCREAMING_CASE`,
+                // so without this a comparison against a type parameter is a Yoda
+                // condition whose "fix" reverses a perfectly ordinary comparison.
+                if semantic
+                    .resolve_name(name)
+                    .is_some_and(|id| semantic.binding(id).kind.is_type_param())
+                {
+                    ConstantLikelihood::Unlikely
+                } else {
+                    ConstantLikelihood::from_identifier(&name.id)
+                }
+            }
             Expr::Tuple(tuple) => tuple
                 .iter()
-                .map(ConstantLikelihood::from)
+                .map(of)
                 .min()
                 .unwrap_or(ConstantLikelihood::Definitely),
             Expr::List(list) => list
                 .iter()
-                .map(ConstantLikelihood::from)
+                .map(of)
                 .min()
                 .unwrap_or(ConstantLikelihood::Definitely),
             Expr::Dict(dict) => dict
                 .items
                 .iter()
                 .flat_map(|item| std::iter::once(&item.value).chain(item.key.as_ref()))
-                .map(ConstantLikelihood::from)
+                .map(of)
                 .min()
                 .unwrap_or(ConstantLikelihood::Definitely),
-            Expr::BinOp(ast::ExprBinOp { left, right, .. }) => cmp::min(
-                ConstantLikelihood::from(&**left),
-                ConstantLikelihood::from(&**right),
-            ),
+            Expr::BinOp(ast::ExprBinOp { left, right, .. }) => cmp::min(of(left), of(right)),
             Expr::UnaryOp(ast::ExprUnaryOp {
                 op: UnaryOp::UAdd | UnaryOp::USub | UnaryOp::Invert,
                 operand,
                 range: _,
                 node_index: _,
-            }) => ConstantLikelihood::from(&**operand),
+            }) => of(operand),
             _ => ConstantLikelihood::Unlikely,
         }
     }
-}
 
-impl ConstantLikelihood {
     /// Determine the [`ConstantLikelihood`] of an identifier.
     fn from_identifier(identifier: &str) -> Self {
         if str::is_cased_uppercase(identifier) {
@@ -223,7 +234,8 @@ pub(crate) fn yoda_conditions(
         return;
     }
 
-    if ConstantLikelihood::from(left) <= ConstantLikelihood::from(right) {
+    let semantic = checker.semantic();
+    if ConstantLikelihood::of(left, semantic) <= ConstantLikelihood::of(right, semantic) {
         return;
     }
 
