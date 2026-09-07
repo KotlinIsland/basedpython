@@ -9,9 +9,9 @@ files any python tool can read
 - **a python type checker with [framework support](frameworks/index.md)** —
     pydantic, sqlalchemy, pytest and django are modelled directly, so the magic
     they do at runtime checks like ordinary code
-- **a build system** — write code against the latest version of python, and ship wheels that are compatible with old ones, no more waiting for 5 years to use something
-- **basedpython, a python-like language that builds into python wheels** — `uv build`, and see [packaging](packaging.md)
-- **compiles into high performance python extension modules**
+- **polyfill and transpilation** — write code against the latest version of python, and ship wheels that are compatible with old ones, no more waiting for 5 years to use new features
+- **basedpython-language** — based on Python, powerful and modern. fully backwards compatible
+- **compiles into high performance python extension modules** — or ordinary Python
 - **a language server, formatter and linter** — high performance and feature rich tooling
 
 <div class="by-actions" markdown>
@@ -60,7 +60,7 @@ def main():
 >
 > \- Guido van Rossum
 
-Python and it's type system are held back due to an inability to make breaking changes and a
+Python and its type system are held back due to an inability to make breaking changes and a
 hesitation to introduce new syntax
 
 other languages have indulged in modern features, powerful type systems, and integrated tooling.
@@ -77,7 +77,7 @@ we want to close that gap
     `by build` writes ordinary `.py` files. pytest, mypy, ruff and everything
     else in your stack keep working, because what they see is python
 
-    [:octicons-arrow-right-24: how transpilation works](development/how-transpilation-works.md)
+    [:octicons-arrow-right-24: how to build](cli-reference.md)
 
 - :lucide-shapes:{ .lg .middle } **syntax python doesn't have**
 
