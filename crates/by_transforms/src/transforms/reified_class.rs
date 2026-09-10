@@ -187,27 +187,26 @@ impl<'ast> Visitor<'ast> for ReifiedClass<'_> {
 pub(crate) struct ReifiedClassPass<'src> {
     source: &'src str,
     min_version: PythonVersion,
-    is_stub: bool,
 }
 
 impl<'src> ReifiedClassPass<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion, is_stub: bool) -> Self {
+    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
         Self {
             source,
             min_version,
-            is_stub,
         }
     }
 }
 
 impl TypeAwarePass for ReifiedClassPass<'_> {
+    // a stub describes a runtime that lives elsewhere; there is no
+    // specialization to build here, and the decorator would name a
+    // polyfill the stub never carries
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
-        // a stub describes a runtime that lives elsewhere; there is no
-        // specialization to build here, and the decorator would name a
-        // polyfill the stub never carries
-        if self.is_stub {
-            return;
-        }
         let mut inner = ReifiedClass::new(self.source, self.min_version);
         for stmt in stmts {
             inner.visit_stmt(stmt);

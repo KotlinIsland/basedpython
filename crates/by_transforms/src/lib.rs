@@ -110,6 +110,11 @@ fn run_erased_union_phase<'a>(
     file: File,
     config: &Config,
 ) -> std::borrow::Cow<'a, str> {
+    // the reified parameter carries a call's specialization into the body, and a
+    // stub has no body to carry it to. its declaration keeps the union written
+    if config.is_stub {
+        return std::borrow::Cow::Borrowed(source);
+    }
     let parsed = ruff_db::parsed::parsed_module(db, db.program_file(file).python_file(db)).load(db);
     if !parsed.errors().is_empty() {
         return std::borrow::Cow::Borrowed(source);
@@ -173,7 +178,7 @@ fn transpile_with_report(
 
     // --- Enum lowering: rewrite `enum` sum types to Python before the main
     // pipeline, so member bodies (copied verbatim) are lowered downstream ---
-    let enum_lowered = transforms::enums::lower(source, config.min_version);
+    let enum_lowered = transforms::enums::lower(source, config);
     if let Some(first) = enum_lowered.errors.first() {
         return Err(first.clone());
     }
@@ -320,6 +325,13 @@ pub fn transpile_typed_with_report(
     config: &Config,
     rebuild: Option<RebuildProject<'_>>,
 ) -> Result<(String, Vec<Option<u32>>, RuntimeRequirements), TranspileError> {
+    // whether the output is a stub is a fact about the file rather than about
+    // the command that asked for it. `by build` hands every source it stages
+    // the one config, so a flag each caller had to set would go unset there
+    let config = &Config {
+        is_stub: file.source_type(db).is_stub(),
+        ..config.clone()
+    };
     let source_ref = ruff_db::source::source_text(db, file);
     let original_source = source_ref.as_str();
 
@@ -367,7 +379,7 @@ pub fn transpile_typed_with_report(
     // enum lowering: rewrite `enum` sum types to Python first. when it fires,
     // the working source differs from the project file, so type-aware passes
     // and the final lowering run against a single-file db built from it
-    let enum_lowered = transforms::enums::lower(qualified.as_ref(), config.min_version);
+    let enum_lowered = transforms::enums::lower(qualified.as_ref(), config);
     if let Some(first) = enum_lowered.errors.first() {
         return Err(first.clone().into());
     }
@@ -617,7 +629,9 @@ fn run_import_redirect_phase(source: String, config: &Config) -> (String, Runtim
     (
         output,
         RuntimeRequirements {
-            typing_extensions: true,
+            // a stub is never imported, and the checker that reads it brings
+            // its own `typing_extensions`
+            typing_extensions: !config.is_stub,
         },
     )
 }
@@ -638,6 +652,9 @@ fn run_import_redirect_phase(source: String, config: &Config) -> (String, Runtim
 /// `eager_names` names the *bindings* that must be bound to the real object: a
 /// lazy proxy cannot stand where cpython checks for a real class, which is what
 /// `except` does
+///
+/// A stub defers nothing: it is never executed, and deferring its imports would
+/// hand a checker a call result where the stub declares a module or a class
 fn run_lazy_import_phase(
     source: String,
     config: &Config,
@@ -657,13 +674,18 @@ fn run_lazy_import_phase(
     )
     .load(&db);
 
-    let keyword_supported = config.min_version >= ruff_python_ast::PythonVersion::from((3, 15));
+    let deferral = if config.is_stub {
+        transforms::lazy_import::Deferral::Never
+    } else if config.min_version >= ruff_python_ast::PythonVersion::from((3, 15)) {
+        transforms::lazy_import::Deferral::Keyword
+    } else {
+        transforms::lazy_import::Deferral::Polyfill
+    };
     // the runtime is what the polyfill itself runs on, and a helper reached
     // through a proxy would be a proxy call on every use
     let mut eager = eager.to_vec();
     eager.extend(config.runtime_module.clone());
-    let mut lazy =
-        transforms::lazy_import::LazyImport::new(src, keyword_supported, &eager, eager_names);
+    let mut lazy = transforms::lazy_import::LazyImport::new(src, deferral, &eager, eager_names);
     for stmt in module.suite() {
         lazy.visit_stmt(stmt);
     }

@@ -159,6 +159,11 @@ pub(crate) trait AstPass {
     /// to mutate any statement in place, declare hoisted statements,
     /// and request runtime imports via [`PassContext`].
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext);
+
+    /// See [`TypeAwarePass::runtime_only`].
+    fn runtime_only(&self) -> bool {
+        false
+    }
 }
 
 /// Type-aware pass that reads semantic info from the salsa-owned parsed
@@ -167,6 +172,17 @@ pub(crate) trait AstPass {
 /// because `inferred_type` queries bind to its exact node identities
 pub(crate) trait TypeAwarePass {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext);
+
+    /// whether everything this pass emits exists for what the code does when
+    /// it runs — a check, a registration, an entry point — rather than to spell
+    /// something a checker reads. a stub is read and never run, so the driver
+    /// leaves such a pass out of a stub's transpile
+    ///
+    /// a pass that lowers syntax must never say so: left out, its construct
+    /// would reach the output as something python cannot parse
+    fn runtime_only(&self) -> bool {
+        false
+    }
 }
 
 /// Adapter: lift a [`Transformer`] (visitor that mutates AST in place)
@@ -568,7 +584,8 @@ pub(crate) fn run_against_source<'a>(
     let dedent_string_pass = dedent_string::DedentString::new(source_ref);
     let super_keyword_pass = super_keyword::SuperKeyword::new();
     let postfix_await_pass = postfix_await::PostfixAwait::new(source_ref);
-    let mutable_defaults_pass = mutable_defaults::MutableDefaultsPass::new(source_ref);
+    let mutable_defaults_pass =
+        mutable_defaults::MutableDefaultsPass::new(source_ref, config.is_stub);
     let unique_loop_bindings_pass =
         unique_loop_bindings::UniqueLoopBindingsPass::new(source_ref, config.unique_loop_bindings);
     let auto_quote_pass = auto_quote::AutoQuote::new(
@@ -576,7 +593,8 @@ pub(crate) fn run_against_source<'a>(
         config.min_version,
         config.inject_future_annotations,
     );
-    let init_method_pass = init_method::InitMethod::new(source_ref, config.float_literals);
+    let init_method_pass =
+        init_method::InitMethod::new(source_ref, config.float_literals, config.is_stub);
     let properties_pass = properties::PropertiesPass::new(source_ref, accessor_value_ranges);
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
@@ -588,8 +606,8 @@ pub(crate) fn run_against_source<'a>(
         raises_clause::RaisesGuardPass::new(source_ref, config.runtime_raises_checks);
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
     let match_type_pass = match_type::MatchTypePass::new(source_ref);
-    let modifiers_pass = modifiers::ModifiersPass::new(source_ref);
-    let main_function_pass = main_function::MainFunction::new(source_ref, config.is_stub);
+    let modifiers_pass = modifiers::ModifiersPass::new(source_ref, config.is_stub);
+    let main_function_pass = main_function::MainFunction::new(source_ref);
     let build_stamps_pass = build_stamps::BuildStampsPass::new(source_ref, config.stamps.clone());
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
     let overload_pass = overload::Overload::new(source_ref, config.is_stub);
@@ -602,10 +620,8 @@ pub(crate) fn run_against_source<'a>(
     let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
-    let reified_class_pass =
-        reified_class::ReifiedClassPass::new(source_ref, config.min_version, config.is_stub);
-    let type_reification_pass =
-        type_reification::TypeReificationPass::new(config.min_version, config.is_stub);
+    let reified_class_pass = reified_class::ReifiedClassPass::new(source_ref, config.min_version);
+    let type_reification_pass = type_reification::TypeReificationPass::new(config.min_version);
     let visibility_rename_pass = visibility_rename::VisibilityRenamePass;
     let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
@@ -633,7 +649,7 @@ pub(crate) fn run_against_source<'a>(
     let destructure_pass = destructure::DestructurePass::new(source_ref);
     let statement_expression_pass = statement_expression::StatementExpressionPass::new(source_ref);
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
-    let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
+    let extension_block_pass = extension::ExtensionBlockPass::new(source_ref, config.is_stub);
     let extension_call_pass = extension::ExtensionCallPass;
     let witness_dispatch_pass = conformance::WitnessDispatchPass;
     let conversion_pass = conversion::ConversionPass::new(source_ref);
@@ -738,6 +754,9 @@ pub(crate) fn run_against_source<'a>(
         &static_resource_pass,
     ];
     for pass in passes {
+        if config.is_stub && pass.runtime_only() {
+            continue;
+        }
         pass.run(&mut module, &mut ctx);
     }
 
@@ -921,6 +940,9 @@ pub(crate) fn run_against_source<'a>(
         &anon_named_tuple_pass,
     ];
     for pass in type_aware {
+        if config.is_stub && pass.runtime_only() {
+            continue;
+        }
         pass.run(parsed_handle.suite(), &semantic_model, &mut ctx);
     }
 

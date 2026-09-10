@@ -195,4 +195,20 @@ mod tests {
             "from typing import Self\n",
         );
     }
+
+    /// a stub is never imported, so a name it takes from `typing_extensions` is
+    /// the checker's to resolve and nothing the built package has to install
+    #[test]
+    fn a_stub_needs_nothing_installed() {
+        let source = "from typing import Self\n";
+        let (_, needed) = crate::transpile_with_report(source, &Config::test_default()).unwrap();
+        assert_eq!(needed.specifiers(), ["typing_extensions>=4.12"]);
+        let stub = Config {
+            is_stub: true,
+            ..Config::test_default()
+        };
+        let (out, needed) = crate::transpile_with_report(source, &stub).unwrap();
+        assert_eq!(out, "from typing_extensions import Self\n");
+        assert!(needed.specifiers().is_empty());
+    }
 }

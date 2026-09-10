@@ -176,11 +176,12 @@ fn parameter_fragments(parameters: &ast::Parameters, fragments: &mut Vec<Fragmen
 /// lowers `extension` blocks to module-level backing functions
 pub(crate) struct ExtensionBlockPass<'a> {
     source: &'a str,
+    is_stub: bool,
 }
 
 impl<'a> ExtensionBlockPass<'a> {
-    pub(crate) fn new(source: &'a str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'a str, is_stub: bool) -> Self {
+        Self { source, is_stub }
     }
 
     /// lower one extension block to its backing functions, in place. the block
@@ -312,14 +313,17 @@ impl<'a> ExtensionBlockPass<'a> {
         }
 
         // a conformance extension also registers its witness table, after the
-        // backing functions its entries name
-        super::conformance::registration_fragments(
-            class,
-            types,
-            ctx,
-            &mut fragments,
-            !first_member,
-        );
+        // backing functions its entries name. the registration runs as the
+        // declaring module is imported, and a stub is never imported
+        if !self.is_stub {
+            super::conformance::registration_fragments(
+                class,
+                types,
+                ctx,
+                &mut fragments,
+                !first_member,
+            );
+        }
 
         ctx.template_edits.push((class.range, fragments));
     }

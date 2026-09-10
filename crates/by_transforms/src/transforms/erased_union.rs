@@ -380,4 +380,17 @@ mod tests {
             "a collision leaves the annotation untouched: {out}"
         );
     }
+
+    /// the reified parameter carries a call's specialization into the body, and a
+    /// stub has no body to carry it to. it declares the union as written
+    #[test]
+    fn a_stub_keeps_the_union() {
+        let source = "def f(data: list[int] | list[str]) -> None: ...\n";
+        let config = Config {
+            is_stub: true,
+            min_version: PythonVersion::PY313,
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(source, &config).unwrap(), source);
+    }
 }

@@ -96,6 +96,10 @@ struct MutableDefaults<'src> {
     /// functions whose body starts with parser-synthesized statements, so a
     /// guard has no source position to anchor to
     unanchored: Vec<String>,
+    is_stub: bool,
+    /// `(function, parameter)` for each parameter a stub cannot declare. see
+    /// [`ParameterGuards::undeclarable`]
+    undeclarable: Vec<(String, String)>,
 }
 
 /// replace a default with the sentinel. a template rather than plain text so
@@ -134,12 +138,26 @@ pub(crate) struct ParameterGuards {
     /// relocate nothing; they add text at the end of a parameter
     pub(crate) written: Vec<(TextRange, Vec<Fragment>)>,
     pub(crate) guards: Vec<Guard>,
+    /// in a stub, the parameters python cannot declare where they stand: a
+    /// required one after a defaulted one. python rejects the shape, and the
+    /// sentinel default a module gets for it would declare the parameter
+    /// optional — only the guard in the body says otherwise, and a stub has none
+    pub(crate) undeclarable: Vec<String>,
 }
 
-pub(crate) fn parameter_guards(f: &StmtFunctionDef, types: &dyn TypeInfo) -> ParameterGuards {
+/// The parameter guards `f` calls for. A stub is never run, so it gets only what
+/// its signature declares: an inherited default, and none of the guards or the
+/// sentinels they re-evaluate — the defaults it writes are never shared between
+/// calls.
+pub(crate) fn parameter_guards(
+    f: &StmtFunctionDef,
+    types: &dyn TypeInfo,
+    is_stub: bool,
+) -> ParameterGuards {
     let mut sentinels = Vec::new();
     let mut written = Vec::new();
     let mut guards = Vec::new();
+    let mut undeclarable = Vec::new();
     let params = f.parameters.as_ref();
     // positional parameters: swap non-scalar defaults for the sentinel, and give
     // basedpython's required-after-defaulted parameters a sentinel default plus
@@ -150,7 +168,7 @@ pub(crate) fn parameter_guards(f: &StmtFunctionDef, types: &dyn TypeInfo) -> Par
         match pw.default.as_deref() {
             Some(d) => {
                 seen_default = true;
-                if !is_immutable_scalar_default(d) && !body_cannot_evaluate(d) {
+                if !is_stub && !is_immutable_scalar_default(d) && !body_cannot_evaluate(d) {
                     sentinels.push(sentinel_edit(d.range()));
                     guards.push(Guard::Reevaluate {
                         name: pw.parameter.name.id.to_string(),
@@ -164,6 +182,9 @@ pub(crate) fn parameter_guards(f: &StmtFunctionDef, types: &dyn TypeInfo) -> Par
                 seen_default = true;
                 written.push(written_default(pw, &value));
             }
+            None if seen_default && is_stub => {
+                undeclarable.push(pw.parameter.name.id.to_string());
+            }
             None if seen_default => {
                 written.push(written_default(pw, "_MISSING"));
                 guards.push(Guard::Required {
@@ -176,7 +197,7 @@ pub(crate) fn parameter_guards(f: &StmtFunctionDef, types: &dyn TypeInfo) -> Par
     }
     for pw in &params.kwonlyargs {
         match pw.default.as_deref() {
-            Some(d) if !is_immutable_scalar_default(d) && !body_cannot_evaluate(d) => {
+            Some(d) if !is_stub && !is_immutable_scalar_default(d) && !body_cannot_evaluate(d) => {
                 sentinels.push(sentinel_edit(d.range()));
                 guards.push(Guard::Reevaluate {
                     name: pw.parameter.name.id.to_string(),
@@ -195,7 +216,17 @@ pub(crate) fn parameter_guards(f: &StmtFunctionDef, types: &dyn TypeInfo) -> Par
         sentinels,
         written,
         guards,
+        undeclarable,
     }
+}
+
+/// the error for a parameter a stub cannot declare. see
+/// [`ParameterGuards::undeclarable`]
+pub(crate) fn undeclarable_error(function: &str, parameter: &str) -> String {
+    format!(
+        "a stub cannot declare parameter `{parameter}` of `{function}`: it is required but \
+         follows a defaulted parameter, and python has no spelling for that in a signature"
+    )
 }
 
 /// Whether the *callee's* body could evaluate `default` at all.
@@ -257,7 +288,13 @@ impl MutableDefaults<'_> {
             sentinels,
             written,
             guards,
-        } = parameter_guards(f, self.types);
+            undeclarable,
+        } = parameter_guards(f, self.types, self.is_stub);
+        self.undeclarable.extend(
+            undeclarable
+                .into_iter()
+                .map(|parameter| (f.name.to_string(), parameter)),
+        );
         self.relocating.extend(sentinels);
         self.edits.extend(written);
         if guards.is_empty() {
@@ -288,11 +325,12 @@ impl<'ast> Visitor<'ast> for MutableDefaults<'_> {
 
 pub(crate) struct MutableDefaultsPass<'src> {
     source: &'src str,
+    is_stub: bool,
 }
 
 impl<'src> MutableDefaultsPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, is_stub: bool) -> Self {
+        Self { source, is_stub }
     }
 }
 
@@ -306,9 +344,15 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
             guards: Vec::new(),
             used: false,
             unanchored: Vec::new(),
+            is_stub: self.is_stub,
+            undeclarable: Vec::new(),
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
+        }
+        if let Some((function, parameter)) = inner.undeclarable.first() {
+            ctx.errors.push(undeclarable_error(function, parameter));
+            return;
         }
         if let Some(name) = inner.unanchored.first() {
             // the `init(…)` shorthand is the one construct that generates its
@@ -984,6 +1028,61 @@ mod tests {
                     a: int | None = None
                     return a if a is not None else len(xs)
             "},
+        );
+    }
+
+    fn stub() -> crate::Config {
+        crate::Config {
+            is_stub: true,
+            ..crate::Config::test_default()
+        }
+    }
+
+    /// a stub is never run, so a default it declares is never shared between
+    /// calls. it stays as written, with no guard
+    #[test]
+    fn a_stub_keeps_a_mutable_default() {
+        let source = "def f(xs: list[int] = [], *, ys: list[int] = []) -> None: ...\n";
+        assert_eq!(transpile(source, &stub()).unwrap(), source);
+    }
+
+    /// an inherited default is part of what an override declares, which a stub
+    /// is for
+    #[test]
+    fn a_stub_writes_the_default_an_override_inherits() {
+        let out = transpile(
+            indoc! {"
+                class A:
+                    def f(self, a: int = 1) -> None: ...
+
+                class B(A):
+                    def f(self, a: int) -> None: ...
+            "},
+            &stub(),
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            indoc! {"
+                class A:
+                    def f(self, a: int = 1) -> None: ...
+
+                class B(A):
+                    def f(self, a: int = 1) -> None: ...
+            "}
+        );
+    }
+
+    /// python rejects a required parameter after a defaulted one. a module gets
+    /// a sentinel default and a guard in the body that raises, and a stub has no
+    /// body for the guard, so the default alone would declare the parameter
+    /// optional
+    #[test]
+    fn a_stub_cannot_declare_a_required_parameter_after_a_default() {
+        let error = transpile("def f(x: int = 1, y: int) -> None: ...\n", &stub()).unwrap_err();
+        assert!(
+            error.contains("a stub cannot declare parameter `y` of `f`"),
+            "got: {error}"
         );
     }
 }

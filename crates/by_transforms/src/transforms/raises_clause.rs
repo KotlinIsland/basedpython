@@ -95,6 +95,11 @@ impl<'src> RaisesGuardPass<'src> {
 }
 
 impl super::ast_driver::TypeAwarePass for RaisesGuardPass<'_> {
+    // the guard checks what a call raises as it raises it
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         if !self.enabled {
             return;
@@ -442,5 +447,19 @@ mod tests {
         )
         .unwrap();
         assert!(!out.contains("_by_raises"), "unexpected guard:\n{out}");
+    }
+
+    /// the guard checks what a call raises as it raises it, and nothing calls
+    /// into a stub
+    #[test]
+    fn a_stub_gets_no_guard() {
+        let config = Config {
+            is_stub: true,
+            ..guarded()
+        };
+        assert_eq!(
+            transpile("def f() -> int raises ValueError:\n    return 1\n", &config).unwrap(),
+            "def f() -> int:\n    return 1\n"
+        );
     }
 }

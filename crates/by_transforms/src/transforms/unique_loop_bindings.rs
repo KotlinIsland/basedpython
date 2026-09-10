@@ -540,6 +540,11 @@ impl<'src> UniqueLoopBindingsPass<'src> {
 }
 
 impl TypeAwarePass for UniqueLoopBindingsPass<'_> {
+    // what a closure captured only matters once it is called
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         if !self.enabled {
             return;
@@ -1071,6 +1076,22 @@ mod tests {
         "};
         let config = Config {
             unique_loop_bindings: false,
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(source, &config).unwrap(), source);
+    }
+
+    /// what a closure captured only matters once it is called, and nothing in a
+    /// stub is
+    #[test]
+    fn a_stub_binds_nothing() {
+        let source = indoc! {"
+            fns = []
+            for i in [1, 2, 3]:
+                fns.append(lambda: print(i))
+        "};
+        let config = Config {
+            is_stub: true,
             ..Config::test_default()
         };
         assert_eq!(transpile(source, &config).unwrap(), source);

@@ -22,12 +22,11 @@ use super::source_util::{is_synthetic_decorator, python_string_literal};
 
 pub(crate) struct MainFunction<'src> {
     source: &'src str,
-    is_stub: bool,
 }
 
 impl<'src> MainFunction<'src> {
-    pub(crate) fn new(source: &'src str, is_stub: bool) -> Self {
-        Self { source, is_stub }
+    pub(crate) fn new(source: &'src str) -> Self {
+        Self { source }
     }
 
     /// true when `main` carries the synthetic `private` modifier, which the
@@ -42,11 +41,13 @@ impl<'src> MainFunction<'src> {
 }
 
 impl AstPass for MainFunction<'_> {
+    // the guard runs `main` when the module is executed as a script, which a
+    // stub never is
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
-        // stubs declare types only; they are never executed as scripts
-        if self.is_stub {
-            return;
-        }
         let Some(main) = last_top_level_main(&module.body) else {
             return;
         };
@@ -786,5 +787,16 @@ mod tests {
             def main(argv):
                 pass
         "});
+    }
+
+    /// a stub is never run as a script, so it declares `main` and nothing calls it
+    #[test]
+    fn a_stub_gets_no_entry_point() {
+        let source = "def main(name: str) -> None: ...\n";
+        let config = Config {
+            is_stub: true,
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(source, &config).unwrap(), source);
     }
 }

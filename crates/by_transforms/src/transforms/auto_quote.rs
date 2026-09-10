@@ -44,6 +44,12 @@ impl<'src> AutoQuote<'src> {
 }
 
 impl AstPass for AutoQuote<'_> {
+    // nothing in a stub is evaluated, and a checker reads a forward reference
+    // in one without quotes
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         // annotation positions need no quoting when they won't be eagerly
         // evaluated: native deferral on 3.14+ (PEP 649), or a future import
@@ -691,5 +697,17 @@ mod tests {
             out.contains("-> A:"),
             "should leave the self-ref bare when future is injected, got: {out}"
         );
+    }
+
+    /// nothing in a stub is evaluated, and a checker reads a forward reference in
+    /// one without quotes
+    #[test]
+    fn a_stub_quotes_nothing() {
+        let source = "class A(list[A]):\n    def f(self, other: list[A]) -> A: ...\n";
+        let config = Config {
+            is_stub: true,
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(source, &config).unwrap(), source);
     }
 }

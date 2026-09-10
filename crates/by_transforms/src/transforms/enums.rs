@@ -33,6 +33,7 @@ use ruff_python_parser::parse_unchecked_source;
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 
 use super::source_util::{is_synthetic_decorator, line_indent, line_start};
+use crate::Config;
 
 /// Result of the enum-lowering phase: the rewritten source and an output-line →
 /// original-`.by`-line table (`None` for generated lines).
@@ -45,7 +46,7 @@ pub(crate) struct EnumLowering<'a> {
 /// Lower every module-level `enum` declaration in `source`. Returns the source
 /// unchanged (borrowed) when there are no based enums or the source fails to
 /// parse — in which case the normal pipeline surfaces the parse error.
-pub(crate) fn lower(source: &str, min_version: PythonVersion) -> EnumLowering<'_> {
+pub(crate) fn lower<'a>(source: &'a str, config: &Config) -> EnumLowering<'a> {
     let parsed = parse_unchecked_source(source, PySourceType::BasedPython);
     if !parsed.errors().is_empty() {
         return borrowed(source);
@@ -124,12 +125,17 @@ pub(crate) fn lower(source: &str, min_version: PythonVersion) -> EnumLowering<'_
     // a sealed hierarchy is mutually recursive (base methods reference variants
     // and the union alias; recursive enums reference themselves), so annotations
     // must be lazy. emit `from __future__ import annotations` and skip the
-    // user's own leading copy if they wrote one
-    let future_skip = leading_future_skip(suite, source);
+    // user's own leading copy if they wrote one. a stub's annotations are never
+    // evaluated, so it gets neither
+    let future_skip = if config.is_stub {
+        None
+    } else {
+        leading_future_skip(suite, source)
+    };
     let mut cursor = future_skip.unwrap_or_default();
     for enum_def in &enums {
         out.push_verbatim(source, TextRange::new(cursor, enum_def.range().start()));
-        emit_enum(&mut out, source, enum_def, &mut imports, min_version);
+        emit_enum(&mut out, source, enum_def, &mut imports, config);
         cursor = enum_def.range().end();
     }
     out.push_verbatim(source, TextRange::new(cursor, source.text_len()));
@@ -139,7 +145,11 @@ pub(crate) fn lower(source: &str, min_version: PythonVersion) -> EnumLowering<'_
 
     // prologue: the `__future__` import (always first) then the deduplicated
     // imports the lowered classes need, prepended ahead of the rewritten body
-    let prologue = format!("from __future__ import annotations\n{}", imports.render());
+    let prologue = if config.is_stub {
+        imports.render()
+    } else {
+        format!("from __future__ import annotations\n{}", imports.render())
+    };
     let mut text = String::with_capacity(prologue.len() + body.len());
     let mut line_map = Vec::with_capacity(body_map.len());
     for _ in prologue.bytes().filter(|&b| b == b'\n') {
@@ -312,7 +322,7 @@ fn emit_enum(
     source: &str,
     class: &StmtClassDef,
     imports: &mut ImportSet,
-    min_version: PythonVersion,
+    config: &Config,
 ) {
     let (variants, members) = partition(class, source);
     let name = class.name.as_str();
@@ -333,15 +343,7 @@ fn emit_enum(
         let vis = enum_visibility_prefix(class, source);
         emit_plain_enum(out, source, name, vis, &variants, &members, imports);
     } else {
-        emit_sealed_hierarchy(
-            out,
-            source,
-            class,
-            &variants,
-            &members,
-            imports,
-            min_version,
-        );
+        emit_sealed_hierarchy(out, source, class, &variants, &members, imports, config);
     }
 
     // the replaced source range excludes its trailing newline, so the lowered
@@ -392,7 +394,7 @@ fn emit_sealed_hierarchy(
     variants: &[Variant],
     members: &[&Stmt],
     imports: &mut ImportSet,
-    min_version: PythonVersion,
+    config: &Config,
 ) {
     // visibility prefix derived from the class (see `lower`): `private`/`export`
     // ride through to phase-1's `modifiers` pass on the synthesized base line
@@ -447,18 +449,17 @@ fn emit_sealed_hierarchy(
     // variant subclasses, emitted at module level and attached to the enum
     for variant in variants {
         out.push_gen("\n");
-        emit_variant_class(out, name, variant, min_version);
+        emit_variant_class(out, name, variant, config);
     }
 }
 
 /// Emit one variant as a module-level subclass of the enum and attach it (or, for
 /// a unit variant, its singleton instance) as `EnumName.Variant`.
-fn emit_variant_class(
-    out: &mut Out,
-    enum_name: &str,
-    variant: &Variant,
-    min_version: PythonVersion,
-) {
+///
+/// A stub gets the subclass alone. The attachment and the name reset run as the
+/// module does, and the enum's body already declares `EnumName.Variant` to a
+/// checker
+fn emit_variant_class(out: &mut Out, enum_name: &str, variant: &Variant, config: &Config) {
     // a private module-level name holds the subclass; the public binding is the
     // attached `EnumName.Variant`
     let mangled = format!("_{enum_name}_{}", variant.name);
@@ -479,14 +480,16 @@ fn emit_variant_class(
             // returning a name makes both return the original object, which is
             // what the idiomatic `Enum` lowering of an all-unit enum already does
             out.push_gen("    def __reduce__(self): return type(self).__qualname__\n");
-            emit_variant_name_reset(out, enum_name, &variant.name, &mangled);
-            out.push_gen(&format!("{enum_name}.{} = {mangled}()\n", variant.name));
+            if !config.is_stub {
+                emit_variant_name_reset(out, enum_name, &variant.name, &mangled);
+                out.push_gen(&format!("{enum_name}.{} = {mangled}()\n", variant.name));
+            }
         }
         VariantKind::Tuple => {
             // `slots=True` is a dataclass option only on python 3.10+; a frozen
             // dataclass already blocks attribute mutation, so on older targets
             // we simply omit it
-            let slots = if min_version >= PythonVersion::PY310 {
+            let slots = if config.min_version >= PythonVersion::PY310 {
                 ", slots=True"
             } else {
                 ""
@@ -510,8 +513,10 @@ fn emit_variant_class(
                     }
                 }
             }
-            emit_variant_name_reset(out, enum_name, &variant.name, &mangled);
-            out.push_gen(&format!("{enum_name}.{} = {mangled}\n", variant.name));
+            if !config.is_stub {
+                emit_variant_name_reset(out, enum_name, &variant.name, &mangled);
+                out.push_gen(&format!("{enum_name}.{} = {mangled}\n", variant.name));
+            }
         }
     }
 }
@@ -1181,5 +1186,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("without a default"), "got: {err}");
+    }
+
+    /// the enum's body declares each variant. attaching it and resetting its name
+    /// happen as the module runs, and so does the `__future__` import that keeps
+    /// the annotations naming the variants lazy — a stub never runs
+    #[test]
+    fn a_stub_declares_variants_without_attaching_them() {
+        let out = transpile(
+            indoc! {"
+                enum class Shape:
+                    case Circle(radius: int)
+                    case Point
+            "},
+            &Config {
+                is_stub: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            indoc! {"
+                from dataclasses import dataclass
+                from typing import final, ClassVar
+                class Shape:
+                    Circle: ClassVar[type[_Shape_Circle]]
+                    Point: ClassVar[_Shape_Point]
+
+                @final
+                @dataclass(frozen=True, slots=True)
+                class _Shape_Circle(Shape):
+                    radius: int
+
+                class _Shape_Point(Shape):
+                    __slots__ = ()
+                    def __repr__(self): return \"Point\"
+                    def __reduce__(self): return type(self).__qualname__
+            "}
+        );
     }
 }

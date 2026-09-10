@@ -4120,6 +4120,33 @@ fn build_writes_a_stub_as_a_stub() {
     );
 }
 
+/// a stub is read by a checker and never run, so a built one holds what its
+/// source declares and none of what a module gets for running: its imports stay
+/// imports, and `main` gets no entry point. a build hands every source the same
+/// config, so it is the file that says it is a stub
+#[test]
+fn build_writes_a_stub_as_declarations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+    let stub =
+        "import json\nfrom dataclasses import dataclass\n\ndef main(name: str) -> None: ...\n";
+    fs::write(dir.path().join("shapes.byi"), stub).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("build/shapes.pyi")).unwrap(),
+        stub
+    );
+}
+
 /// `a.by` and a hand-written `a.py` are both the module `a`. picking one and
 /// carrying on means the build disagrees with what python will import, so this
 /// is reported rather than resolved

@@ -329,4 +329,19 @@ mod tests {
             "got:\n{out}"
         );
     }
+
+    /// the witness table is registered as the declaring module is imported, and
+    /// a stub is never imported
+    #[test]
+    fn a_stub_registers_no_conformance() {
+        let out = transpile(
+            "protocol Show:\n    def show(self) -> str\n\nextension str(Show):\n    override def show(self) -> str\n",
+            &Config {
+                is_stub: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(!out.contains("_by_conform"), "got:\n{out}");
+    }
 }

@@ -179,6 +179,12 @@ impl<'src> ReifiedGenericPass<'src> {
 }
 
 impl TypeAwarePass for ReifiedGenericPass<'_> {
+    // reification hands a function its type arguments as values when it is
+    // called, and a call through the stub's declaration is one it never sees
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = ReifiedGeneric::new(self.source, self.min_version);
         for stmt in stmts {
@@ -732,6 +738,22 @@ mod tests {
         assert!(
             out.contains("f(data)") && !out.contains("f[T](data)"),
             "an erased type parameter has no cell to forward: {out}"
+        );
+    }
+
+    /// a stub declares the function. the wrapper that hands it its type
+    /// arguments belongs to the implementation, and in a stub it would stand a
+    /// runtime class where the signature should be
+    #[test]
+    fn a_stub_declares_a_reified_function_unwrapped() {
+        let config = Config {
+            is_stub: true,
+            min_version: PythonVersion::PY312,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile("def make[reified T]() -> T: ...\n", &config).unwrap(),
+            "def make[T]() -> T: ...\n"
         );
     }
 }

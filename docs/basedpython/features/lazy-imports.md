@@ -39,6 +39,9 @@ what actually loads the module
 `import a.b` without an alias stays eager (write `import a.b as ab` to opt
 in). `from __future__ import …` and `from x import *` are always eager
 
+a stub is never executed, so it has nothing to defer: a `.byi` keeps every import
+as written, less any `lazy`
+
 ## target version
 
 on python 3.15 and later, the PEP 810 `lazy` keyword is used directly.
