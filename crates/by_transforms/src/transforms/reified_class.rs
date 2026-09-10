@@ -58,119 +58,6 @@ use super::reified_generic::REIFIED_MARKER;
 use super::source_util::{PrologueStatement, body_prologue, line_indent, line_start};
 use crate::type_info::TypeInfo;
 
-/// the `generic_class` decorator, injected into the preamble when any class
-/// reifies.
-///
-/// it replaces the class's `__class_getitem__`, so `A[int]` no longer builds a
-/// `typing` alias but a memoized subclass of `A` carrying the type arguments —
-/// which is what makes them readable from `__new__` and `__init__` onwards,
-/// where an `__orig_class__` stamp applied after construction is not yet there.
-/// being a real subclass also keeps `isinstance(a, A)` and `class B(A[int])`
-/// working, neither of which survives an alias standing in for a class; the
-/// specialization declares an empty `__slots__` so a slotted class stays slotted,
-/// and `__init_subclass__` is held back for it, since it is the same class with
-/// its arguments fixed rather than a subclass the program wrote.
-///
-/// each specialization composes what it binds with what its bases already bound
-/// and resolves the chain, so `class B[U](A[U])` specialized as `B[int]` answers
-/// `T` with `int` and not with `U`. `__orig_class__` is carried as a class
-/// attribute, which is where the alias would have put it, so every reader of a
-/// runtime specialization — `_parametric_is` included — sees the same thing it
-/// saw before.
-///
-/// `_type_argument` answers one read. it takes the receiver rather than the
-/// class so a `classmethod` can pass `cls` and everything else `self`, and it
-/// raises rather than returning the `TypeVar` object the parameter would
-/// otherwise still name — whether because nothing specialized the class or
-/// because a base's argument was never filled in
-const GENERIC_CLASS_RUNTIME: &str = "\
-def generic_class(cls):
-    cls.__class_getitem__ = classmethod(_specialize)
-    return cls
-
-
-def _specialize(cls, item):
-    args = item if isinstance(item, tuple) else (item,)
-    if \"__by_type_arguments__\" in cls.__dict__:
-        raise TypeError(f\"{cls.__name__} is already specialized\")
-    cache = cls.__dict__.get(\"__by_specializations__\")
-    if cache is None:
-        cache = {}
-        cls.__by_specializations__ = cache
-    try:
-        made = cache.get(args)
-    except TypeError:
-        raise TypeError(
-            f\"a type argument to {cls.__name__} is not hashable, so the \"
-            f\"specialization it names cannot be built\"
-        ) from None
-    if made is not None:
-        return made
-    params = cls.__type_params__
-    bound = {}
-    for base in reversed(cls.__mro__):
-        bound.update(base.__dict__.get(\"__by_type_arguments__\") or {})
-    bound.update(_bind_type_params(params, args, {}, cls.__name__))
-    for param in params:
-        if param.__name__ not in bound:
-            raise TypeError(
-                f\"too few type arguments for {cls.__name__}: \"
-                f\"no argument for {param.__name__!r}\"
-            )
-    for name, value in bound.items():
-        seen = {name}
-        while isinstance(value, (TypeVar, TypeVarTuple)) and value.__name__ in bound:
-            if value.__name__ in seen:
-                break
-            seen.add(value.__name__)
-            value = bound[value.__name__]
-        bound[name] = value
-    namespace = {
-        \"__by_type_arguments__\": bound,
-        \"__orig_class__\": GenericAlias(cls, args),
-        # the specialization declares nothing of its own, so a slotted class
-        # stays slotted instead of gaining a `__dict__` here
-        \"__slots__\": (),
-    }
-    # a specialization is the same class with its arguments fixed, not a
-    # subclass the program wrote, so the hook that greets a subclass must not
-    # run for it: it would be handed neither the class keywords the definition
-    # was given nor a class anybody declared
-    saved = cls.__dict__.get(\"__init_subclass__\", _by_absent)
-    cls.__init_subclass__ = classmethod(lambda cls, **kwargs: None)
-    try:
-        made = type(cls)(cls.__name__, (cls,), namespace)
-    except TypeError as exc:
-        # a metaclass that takes class-creation keywords cannot be given them
-        # again: nothing records what the definition was written with
-        raise TypeError(
-            f\"cannot build a specialization of {cls.__name__}: {exc}\"
-        ) from exc
-    finally:
-        if saved is _by_absent:
-            del cls.__init_subclass__
-        else:
-            cls.__init_subclass__ = saved
-    made.__module__ = cls.__module__
-    made.__qualname__ = cls.__qualname__
-    cache[args] = made
-    return made
-
-
-def _type_argument(owner, name):
-    cls = owner if isinstance(owner, type) else type(owner)
-    bound = getattr(cls, \"__by_type_arguments__\", None)
-    value = _by_absent if bound is None else bound.get(name, _by_absent)
-    # a value still standing as a type parameter is a base's argument that
-    # nothing filled in, which means the instance came from the bare class
-    if value is _by_absent or isinstance(value, (TypeVar, TypeVarTuple)):
-        raise TypeError(
-            f\"{cls.__name__} has no type argument for {name!r}: it was not \"
-            f\"constructed from a specialization\"
-        )
-    return value
-";
-
 /// one reified type parameter bound from the receiver at the top of a method
 struct TypeArgumentBinding {
     name: String,
@@ -374,15 +261,8 @@ impl TypeAwarePass for ReifiedClassPass<'_> {
             return;
         }
         if inner.used {
-            ctx.required_imports
-                .push("from types import GenericAlias".to_owned());
-            ctx.required_imports
-                .push("_by_absent = object()".to_owned());
-            ctx.required_imports
-                .push("from typing import ParamSpec, TypeVar, TypeVarTuple".to_owned());
-            ctx.required_imports
-                .push(super::reified_generic::BIND_TYPE_PARAMS_RUNTIME.to_owned());
-            ctx.required_imports.push(GENERIC_CLASS_RUNTIME.to_owned());
+            ctx.runtime.insert(crate::runtime::GENERIC_CLASS);
+            ctx.runtime.insert(crate::runtime::TYPE_ARGUMENT);
         }
         ctx.text_edits.extend(inner.edits);
         ctx.statement_inserts.extend(inner.prologues);

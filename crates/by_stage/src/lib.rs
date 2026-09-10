@@ -49,6 +49,7 @@ pub mod emit;
 pub mod project;
 pub mod record;
 pub mod restage;
+pub mod runtime;
 pub mod sourcemap;
 pub mod staging;
 pub mod verbatim;

@@ -71,6 +71,11 @@ pub struct Config {
     /// how a float or complex literal written in a type position is spelled in
     /// the emitted python. see [`FloatLiteralLowering`]
     pub float_literals: FloatLiteralLowering,
+    /// the module the emitted code imports its runtime helpers from, or `None`
+    /// to paste the definitions in. a build names the package-qualified copy it
+    /// writes into its tree; a transpile with nowhere to write one leaves it
+    /// `None`
+    pub runtime_module: Option<String>,
 }
 
 /// What a float or complex literal type becomes in the emitted python.
@@ -192,6 +197,7 @@ impl Default for Config {
             runtime_raises_checks: false,
             unique_loop_bindings: true,
             float_literals: FloatLiteralLowering::Nominal,
+            runtime_module: None,
             stamps: BTreeMap::new(),
         }
     }

@@ -5419,3 +5419,279 @@ fn init_refuses_to_write_over_a_project() {
         "the existing project must be untouched"
     );
 }
+
+/// a project for the runtime tests: a package whose modules import one another
+/// relatively, a subpackage, a hoisted named tuple and a call to a helper, and a
+/// script in a folder that is no package at all
+fn runtime_project(name: &str) -> PathBuf {
+    let dir = cli_root().join(name);
+    let _ = fs::remove_dir_all(&dir);
+    let app = dir.join("src").join("app");
+    fs::create_dir_all(app.join("sub")).unwrap();
+    fs::create_dir_all(dir.join("scripts")).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.11\"\n",
+    )
+    .unwrap();
+    fs::write(app.join("__init__.py"), "").unwrap();
+    fs::write(app.join("sub").join("__init__.py"), "").unwrap();
+    // `cast!` of an `object` to a parameterized class is a runtime probe, and
+    // `int??` in a named tuple
+    // field is the runtime's `Optional` evaluated as the hoisted class is built
+    fs::write(
+        app.join("one.by"),
+        "import json\n\n\ndef dumps(a: object) -> str:\n    return json.dumps(a cast! dict[str, int])\n\n\n\
+         def pair() -> (a: int??, b: int):\n    return (a=None, b=2)\n",
+    )
+    .unwrap();
+    fs::write(
+        app.join("sub").join("deep.by"),
+        "from .. import one\n\n\ndef twice(a: dict[str, int]) -> str:\n    return one.dumps(a) * 2\n",
+    )
+    .unwrap();
+    fs::write(
+        app.join("main.by"),
+        "from . import one\nfrom .sub import deep\n\n\ndef main():\n    \
+         print(one.dumps({}), deep.twice({}), one.pair().b)\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("scripts").join("tool.by"),
+        "def f(a: object) -> int:\n    return a cast! int\n\n\nprint(f(3))\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("src").join("cli.by"),
+        "def f(a: object) -> int:\n    return a cast! int\n\n\nprint(f(4))\n",
+    )
+    .unwrap();
+    dir
+}
+
+fn build_in(dir: &Path) {
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        result.status.success(),
+        "by build failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+fn run_python(python: &str, dir: &Path, args: &[&str]) -> String {
+    let ran = Command::new(python)
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn python");
+    assert!(
+        ran.status.success(),
+        "python failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    String::from_utf8_lossy(&ran.stdout).trim().to_owned()
+}
+
+/// a build writes the runtime once per package and its modules call into it
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_built_package_runs_off_one_copy_of_the_runtime() {
+    let Some(python) = native_interpreter() else {
+        eprintln!("skipping: no interpreter new enough to run the built tree");
+        return;
+    };
+    let dir = runtime_project("shared_runtime_build");
+    build_in(&dir);
+
+    let build = dir.join("build");
+    assert!(
+        build.join("app").join("_by_runtime.py").is_file(),
+        "the package carries the runtime"
+    );
+    assert!(
+        !build
+            .join("app")
+            .join("sub")
+            .join("_by_runtime.py")
+            .exists(),
+        "which its subpackage shares"
+    );
+    // a distribution ships packages, so a copy at the root would not ship
+    assert!(!build.join("_by_runtime.py").exists());
+
+    let one = fs::read_to_string(build.join("app").join("one.py")).unwrap();
+    assert!(
+        one.contains("from app._by_runtime import"),
+        "the module imports what it calls:\n{one}"
+    );
+    assert!(
+        !one.contains("def _checked_cast("),
+        "and does not define it as well:\n{one}"
+    );
+    // a helper reached through the lazy-import proxy is a proxy call on every use
+    assert!(
+        !one.contains("_lazy_attr(\"app._by_runtime\""),
+        "the runtime import is eager:\n{one}"
+    );
+
+    assert_eq!(
+        run_python(
+            &python,
+            &build,
+            &["-c", "from app.main import main; main()"]
+        ),
+        "{} {}{} 2"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn by_run_runs_a_package_that_imports_relatively() {
+    let Some(python) = native_interpreter() else {
+        eprintln!("skipping: no interpreter new enough to run the program");
+        return;
+    };
+    let dir = runtime_project("shared_runtime_run");
+    let ran = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "app.main"])
+        .env("PYTHON", &python)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        ran.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "{} {}{} 2");
+}
+
+/// a script in a folder that is no package has no import that works when it is
+/// run, since the folder above it is not on the path — so it carries its own
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_script_in_no_package_carries_its_own_helpers() {
+    let Some(python) = native_interpreter() else {
+        eprintln!("skipping: no interpreter new enough to run the script");
+        return;
+    };
+    let dir = runtime_project("shared_runtime_script");
+    build_in(&dir);
+
+    let scripts = dir.join("build").join("scripts");
+    let tool = fs::read_to_string(scripts.join("tool.py")).unwrap();
+    assert!(
+        !tool.contains("_by_runtime"),
+        "the script imports no runtime:\n{tool}"
+    );
+    assert!(!scripts.join("_by_runtime.py").exists());
+    assert_eq!(run_python(&python, &dir, &["build/scripts/tool.py"]), "3");
+}
+
+/// a copy at the root would be a top-level module, which a second basedpython
+/// wheel built by another version overwrites on install — so a module at the
+/// module root carries its own helpers too
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_root_module_carries_its_own_helpers() {
+    let Some(python) = native_interpreter() else {
+        eprintln!("skipping: no interpreter new enough to run the module");
+        return;
+    };
+    let dir = runtime_project("shared_runtime_root_module");
+    build_in(&dir);
+
+    let build = dir.join("build");
+    let cli = fs::read_to_string(build.join("cli.py")).unwrap();
+    assert!(
+        !cli.contains("_by_runtime"),
+        "the root module imports no runtime:\n{cli}"
+    );
+    assert!(!build.join("_by_runtime.py").exists());
+    assert_eq!(run_python(&python, &build, &["cli.py"]), "4");
+}
+
+fn holds_file(dir: &Path, name: &str) -> bool {
+    fs::read_dir(dir).unwrap().any(|entry| {
+        let path = entry.unwrap().path();
+        path.file_name().is_some_and(|file| file == name)
+            || (path.is_dir() && holds_file(&path, name))
+    })
+}
+
+/// transpiling in place writes into the source tree, where a runtime file with
+/// no `.by` beside it would read as a module the author wrote
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn transpiling_a_directory_in_place_writes_no_runtime_file() {
+    let Some(python) = native_interpreter() else {
+        eprintln!("skipping: no interpreter new enough to run the output");
+        return;
+    };
+    let dir = runtime_project("shared_runtime_in_place");
+    let result = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["transpile", "src"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        result.status.success(),
+        "by transpile failed:\n{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!holds_file(&dir.join("src"), "_by_runtime.py"));
+    assert_eq!(
+        run_python(
+            &python,
+            &dir.join("src"),
+            &["-c", "from app.main import main; main()"]
+        ),
+        "{} {}{} 2"
+    );
+}
+
+/// a re-stage patches one module into a tree an earlier build wrote, so an edit
+/// that calls a helper nothing in that build called still has to find it there
+#[test]
+fn a_restaged_module_finds_a_helper_the_build_never_used() {
+    let dir = runtime_project("shared_runtime_restage");
+    build_in(&dir);
+    let runtime = fs::read_to_string(dir.join("build").join("app").join("_by_runtime.py")).unwrap();
+    assert!(runtime.contains("def _try_cast("));
+
+    fs::write(
+        dir.join("src").join("app").join("main.by"),
+        "from . import one\n\n\ndef check(x: object) -> str | None:\n    return x cast? str\n\n\ndef main():\n    print(one.dumps({}), check(1))\n",
+    )
+    .unwrap();
+    let restaged = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["restage", "build", "src/app/main.by"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn by");
+    let answer = String::from_utf8_lossy(&restaged.stdout);
+    assert!(
+        answer.contains("_try_cast") && answer.contains("app._by_runtime"),
+        "the re-staged module imports the helper from the tree's copy:\n{answer}\n{}",
+        String::from_utf8_lossy(&restaged.stderr)
+    );
+}

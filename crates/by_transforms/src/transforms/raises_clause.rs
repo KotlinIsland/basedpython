@@ -27,61 +27,6 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use super::ast_driver::{AstPass, PassContext};
 use crate::type_info::TypeInfo;
 
-/// Fails when a guarded function raises outside its declared set.
-///
-/// The wrapper shape is chosen at decoration time rather than by the transform:
-/// a coroutine must be awaited, and a generator or async generator iterated,
-/// before the body runs at all — wrapping any of them with a plain call would
-/// catch nothing. An async generator is checked first because it answers `False`
-/// to both `iscoroutinefunction` and `isgeneratorfunction`.
-const RAISES_RUNTIME: &str = r#"def _by_raises(_allowed, _name):
-    import functools
-    import inspect
-
-    def _check(_exc):
-        if not isinstance(_exc, _allowed):
-            raise AssertionError(
-                f"{_name} raised {type(_exc).__name__}, which its `raises` clause does not include"
-            ) from _exc
-
-    def _decorate(_fn):
-        if inspect.isasyncgenfunction(_fn):
-            @functools.wraps(_fn)
-            async def _wrapper(*_args, **_kwargs):
-                try:
-                    async for _item in _fn(*_args, **_kwargs):
-                        yield _item
-                except BaseException as _exc:
-                    _check(_exc)
-                    raise
-        elif inspect.iscoroutinefunction(_fn):
-            @functools.wraps(_fn)
-            async def _wrapper(*_args, **_kwargs):
-                try:
-                    return await _fn(*_args, **_kwargs)
-                except BaseException as _exc:
-                    _check(_exc)
-                    raise
-        elif inspect.isgeneratorfunction(_fn):
-            @functools.wraps(_fn)
-            def _wrapper(*_args, **_kwargs):
-                try:
-                    yield from _fn(*_args, **_kwargs)
-                except BaseException as _exc:
-                    _check(_exc)
-                    raise
-        else:
-            @functools.wraps(_fn)
-            def _wrapper(*_args, **_kwargs):
-                try:
-                    return _fn(*_args, **_kwargs)
-                except BaseException as _exc:
-                    _check(_exc)
-                    raise
-        return _wrapper
-
-    return _decorate"#;
-
 /// Deletes every `raises` clause.
 pub(crate) struct RaisesStripPass<'src> {
     source: &'src str,
@@ -179,7 +124,7 @@ impl super::ast_driver::TypeAwarePass for RaisesGuardPass<'_> {
             return;
         }
 
-        ctx.required_imports.push(RAISES_RUNTIME.to_owned());
+        ctx.runtime.insert(crate::runtime::RAISES);
         ctx.text_edits.extend(guards);
     }
 }

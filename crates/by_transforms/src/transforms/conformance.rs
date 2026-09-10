@@ -17,7 +17,7 @@
 //! Two things then read that table. A requirement accessed on a receiver the
 //! checker typed as the interface cannot be a plain attribute — the value may
 //! be a conforming type that carries no such member — so it goes through
-//! [`WITNESS_RUNTIME`]'s dispatcher, which falls back to the attribute when
+//! the runtime's dispatcher, which falls back to the attribute when
 //! nothing registered one. And `x is A` answers from the table first, so a
 //! conforming value tests positive even though `isinstance` would not.
 //!
@@ -37,94 +37,18 @@ use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::extension::spine_has_optional;
 use crate::type_info::TypeInfo;
 
-/// the runtime a conformance needs: the registry, the per-member lookup, the
-/// `is`-test, and the two dispatchers (a method is fetched and called by the
-/// parentheses that already follow the access; a data member is read).
+/// The registry helpers a module touching conformances calls.
 ///
-/// three things here are load-bearing and were each a bug before:
-///
-/// - **the registry is per *process*, not per module.** every transpiled module
-///   carries its own copy of this preamble, so a module-level `{}` would give
-///   each one a private registry and a conformance would never be visible to the
-///   module that uses it. it is parked in `sys.modules` instead, which is the one
-///   namespace every module already shares
-/// - **the lookup is per *member*.** walking the MRO for the first class with
-///   *any* table would let a base's conformance beat a subclass's own method —
-///   the same object answering two ways depending on its static type. whichever
-///   comes first in the MRO wins: a table entry for this member, or a class that
-///   defines it
-/// - **a conformance registers under every interface it implies.** conforming to
-///   `Loud(Show)` conforms to `Show`, and a receiver typed as `Show` looks up
-///   under `Show`
-pub(crate) const WITNESS_RUNTIME: &str = "\
-def _by_registry():
-    # one registry per process: each transpiled module carries its own copy of
-    # this preamble, and a conformance registered by any of them has to be
-    # visible to all of them. `sys.modules` is the namespace they already share.
-    # imported inside the function so the lazy-import pass has no statement to
-    # rewrite
-    import sys
-    import types
-    module = sys.modules.get(\"_by_conformance_registry\")
-    if module is None:
-        module = types.ModuleType(\"_by_conformance_registry\")
-        module.table = {}
-        sys.modules[\"_by_conformance_registry\"] = module
-    return module.table
-
-_by_conformances = _by_registry()
-
-def _by_conform(interface, cls, witness):
-    # conforming to an interface conforms to everything it derives, so a
-    # receiver typed as a supertype finds the same witness
-    for base in getattr(interface, \"__mro__\", (interface,)):
-        if base is object or getattr(base, \"__module__\", None) == \"typing\":
-            continue
-        _by_conformances.setdefault(base, {}).setdefault(cls, {}).update(witness)
-
-def _by_witness_entry(value, interface, name):
-    table = _by_conformances.get(interface)
-    if table is None:
-        return None
-    for cls in type(value).__mro__:
-        witness = table.get(cls)
-        if witness is not None and name in witness:
-            return witness[name]
-        # a class that defines the member itself answers it, and beats any
-        # conformance registered further up the mro
-        if name in cls.__dict__:
-            return None
-    return None
-
-def _by_conforms(value, interface, members=None):
-    table = _by_conformances.get(interface)
-    if table is not None:
-        for cls in type(value).__mro__:
-            if cls in table:
-                return True
-    if members is None:
-        return isinstance(value, interface)
-    return all(hasattr(value, name) for name in members)
-
-def _by_witness(value, interface, name):
-    function = _by_witness_entry(value, interface, name)
-    if function is None:
-        return getattr(value, name)
-    return lambda *args, **kwargs: function(value, *args, **kwargs)
-
-def _by_witness_class(value, interface, name):
-    function = _by_witness_entry(value, interface, name)
-    if function is None:
-        return getattr(value, name)
-    owner = value if isinstance(value, type) else type(value)
-    return lambda *args, **kwargs: function(owner, *args, **kwargs)
-
-def _by_witness_get(value, interface, name):
-    function = _by_witness_entry(value, interface, name)
-    if function is None:
-        return getattr(value, name)
-    return function(value)
-";
+/// The whole set at either site: a module that declares a conformance and one
+/// that tests one are reading and writing the same registry, so the split is
+/// not worth the risk of a site missing the one name it turned out to need
+pub(crate) const WITNESS_HELPERS: &[crate::runtime::Helper] = &[
+    crate::runtime::CONFORM,
+    crate::runtime::CONFORMS,
+    crate::runtime::WITNESS,
+    crate::runtime::WITNESS_CLASS,
+    crate::runtime::WITNESS_GET,
+];
 
 /// the `from <module> import <name> as <alias>` a cross-module interface
 /// spelling needs
@@ -157,7 +81,7 @@ pub(crate) fn registration_fragments(
     if registrations.is_empty() {
         return;
     }
-    ctx.required_imports.push(WITNESS_RUNTIME.to_owned());
+    ctx.runtime.extend(WITNESS_HELPERS.iter().copied());
     let mut first = !had_members;
     for registration in registrations {
         if let Some(import) = &registration.import {
@@ -260,7 +184,7 @@ impl TypeAwarePass for WitnessDispatchPass {
         if inner.edits.is_empty() {
             return;
         }
-        ctx.required_imports.push(WITNESS_RUNTIME.to_owned());
+        ctx.runtime.extend(WITNESS_HELPERS.iter().copied());
         ctx.required_imports.extend(inner.imports);
         ctx.template_edits.extend(inner.edits);
     }

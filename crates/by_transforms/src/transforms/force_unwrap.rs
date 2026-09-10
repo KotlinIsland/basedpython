@@ -25,24 +25,7 @@ use ruff_python_ast::{Expr, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
-use super::wrapped_runtime::OPTIONAL_RUNTIME;
 use crate::type_info::TypeInfo;
-
-// peels one absent layer. a present wrapped value (`Some(x)` → `Optional(x)`)
-// yields its inner `.value`; a plain `T | None` yields the value or raises on
-// `None`; a result-like `T | E` raises on a `BaseException` value, chaining it
-// as `__cause__`. referencing `Optional` means the runtime class is co-injected
-// below.
-const FORCE_HELPER: &str = "\
-def _force_unwrap(_v):
-    if isinstance(_v, Optional):
-        return _v.value
-    if _v is None:
-        raise RuntimeError(\"force-unwrap of absent value\")
-    if isinstance(_v, BaseException):
-        raise RuntimeError(\"force-unwrap of absent value\") from _v
-    return _v
-";
 
 struct ForceUnwrap {
     edits: Vec<(TextRange, String)>,
@@ -107,8 +90,8 @@ impl TypeAwarePass for ForceUnwrapPass<'_> {
         if inner.used {
             // the helper unwraps the `Optional` value wrapper, so its runtime
             // class must be present (deduped if `Some`/`int??` already added it)
-            ctx.required_imports.push(OPTIONAL_RUNTIME.to_owned());
-            ctx.required_imports.push(FORCE_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::OPTIONAL);
+            ctx.runtime.insert(crate::runtime::FORCE_UNWRAP);
         }
         ctx.text_edits.extend(inner.edits);
     }

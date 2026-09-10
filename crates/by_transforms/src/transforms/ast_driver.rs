@@ -87,6 +87,11 @@ pub(crate) struct PassContext {
     /// Full source lines to prepend to the file (e.g. `from typing import cast`).
     /// Deduped before emission.
     pub(crate) required_imports: Vec<String>,
+    /// Runtime helpers the emitted code calls, by the name it calls them under.
+    /// The driver turns these into an import of the module a build writes them
+    /// to, or — when there is no such module — into the definitions themselves.
+    /// See [`crate::runtime`]
+    pub(crate) runtime: BTreeSet<crate::runtime::Helper>,
     /// Indices into the *original* module body of statements any pass
     /// mutated (so the driver knows to re-render them). Indices may
     /// repeat — the driver dedupes.
@@ -362,7 +367,7 @@ fn apply_within(
 /// `from <module> import X, Y, ...` line. Preserves any non-matching
 /// lines (e.g. `import foo`, `_MISSING = object()`) in their original
 /// order. Names within a merged line are sorted and deduped
-fn merge_from_imports(lines: Vec<String>) -> Vec<String> {
+fn merge_from_imports(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
     // preserve first-seen module order so tests that depend on specific
     // import sequence (e.g. `from typing import TypeVar, Generic` before
     // `from typing import Final`) stay stable. names within a module
@@ -386,13 +391,13 @@ fn merge_from_imports(lines: Vec<String>) -> Vec<String> {
     }
     // `from` imports first (first-seen module order), then raw lines
     // (synthesized class defs etc.) so any class body referencing imported
-    // names sees them already in scope
-    let mut from_lines: Vec<String> = groups
+    // names sees them already in scope. returned apart, so the runtime can go
+    // between them
+    let from_lines: Vec<String> = groups
         .into_iter()
         .map(|(module, names)| format!("from {module} import {}", names.join(", ")))
         .collect();
-    from_lines.extend(other);
-    from_lines
+    (from_lines, other)
 }
 
 /// Run every registered AST pass against `source` and splice the rewritten
@@ -983,7 +988,22 @@ pub(crate) fn run_against_source<'a>(
 
     ctx.required_imports.sort();
     ctx.required_imports.dedup();
-    ctx.required_imports = merge_from_imports(std::mem::take(&mut ctx.required_imports));
+    let (imports, definitions) = merge_from_imports(std::mem::take(&mut ctx.required_imports));
+    ctx.required_imports = imports;
+    // the runtime goes after the imports and ahead of everything else: it needs
+    // nothing from the module, and a synthesized class may name one of its
+    // helpers where it is evaluated at once — `Optional` in the annotation of a
+    // `NamedTuple` field. never sorted: set-up code follows its definition
+    if !ctx.runtime.is_empty() {
+        let helpers = ctx.runtime.iter().copied();
+        match config.runtime_module.as_deref() {
+            Some(module) => ctx
+                .required_imports
+                .push(crate::runtime::import_line(module, helpers)),
+            None => ctx.required_imports.extend(crate::runtime::inline(helpers)),
+        }
+    }
+    ctx.required_imports.extend(definitions);
     ctx.changed.sort_unstable();
     ctx.changed.dedup();
 

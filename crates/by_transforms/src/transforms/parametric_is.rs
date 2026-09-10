@@ -84,326 +84,6 @@ pub(crate) fn variance_tuple(variances: &[u8]) -> String {
     }
 }
 
-pub(crate) const PARAMETRIC_IS_RUNTIME: &str = "\
-def _by_type_param_defaults(args):
-    # a class records its generic bases *unsubstituted* — `class L[T = Never]
-    # (list[T])` stores `list[T]`, never `list[Never]` — so a type parameter
-    # left at its pep 696 default resolves to that default rather than staying a
-    # bare TypeVar that matches nothing
-    resolved = []
-    substituted = False
-    for arg in args:
-        has_default = getattr(arg, \"has_default\", None)
-        if has_default is not None and has_default():
-            resolved.append(arg.__default__)
-            substituted = True
-        else:
-            resolved.append(arg)
-    return tuple(resolved) if substituted else args
-
-def _by_alias(value):
-    # a reified generic class specializes to a *subclass*, which records the
-    # alias it stands for; anything else already is what it says it is. read
-    # from the class's own dict, so an ordinary subclass of a specialization is
-    # not mistaken for one
-    if isinstance(value, type):
-        return value.__dict__.get(\"__orig_class__\", value)
-    return value
-
-def _by_subst(annotation, mapping):
-    # replace type parameters with the arguments bound to them, rebuilding
-    # nested aliases (`list[dict[str, T]]` with `T = int` → `list[dict[str, int]]`)
-    annotation = _by_alias(annotation)
-    try:
-        if annotation in mapping:
-            return mapping[annotation]
-    except TypeError:
-        pass
-    args = getattr(annotation, \"__args__\", ())
-    if not args:
-        return annotation
-    replaced = tuple(_by_subst(arg, mapping) for arg in args)
-    if replaced == args:
-        return annotation
-    origin = getattr(annotation, \"__origin__\", None)
-    if origin is None:
-        return annotation
-    try:
-        return origin[replaced]
-    except TypeError:
-        return annotation
-
-def _by_specialize(alias, origin, depth=0):
-    # the arguments with which `alias` satisfies `origin`, resolved *down the
-    # declared base chain* rather than assumed to line up positionally. a base
-    # that fixes or reorders its arguments is then followed faithfully:
-    # `class Odd[T](list[int])` is a `list[int]` whatever `T` is, and
-    # `class Swap[A, B](dict[B, A])` specializes `dict` in the other order
-    if depth > 16:
-        return None
-    alias = _by_alias(alias)
-    klass = getattr(alias, \"__origin__\", alias)
-    if not isinstance(klass, type):
-        return None
-    args = getattr(alias, \"__args__\", ())
-    params = getattr(klass, \"__type_params__\", ())
-    if not args:
-        defaulted = _by_type_param_defaults(params)
-        if defaulted is not params:
-            args = defaulted
-    if klass is origin:
-        return args or None
-    mapping = {}
-    for param, arg in zip(params, args):
-        try:
-            mapping[param] = arg
-        except TypeError:
-            pass
-    bases = klass.__dict__.get(\"__orig_bases__\")
-    if bases is None:
-        # a class inheriting only plain classes records no `__orig_bases__`
-        bases = getattr(klass, \"__bases__\", ())
-    for base in bases:
-        found = _by_specialize(_by_subst(base, mapping) if mapping else base, origin, depth + 1)
-        if found is not None:
-            return found
-    # the declared bases don't reach `origin`: a builtin registered as a *virtual*
-    # subclass of an abc (`list` for `Sequence`) has no base to walk. its
-    # arguments do line up positionally once membership is established. this runs
-    # only after resolution has failed, so it applies to the already-resolved base
-    # (`list[int]`), never to a subclass that fixes or reorders arguments
-    if args and isinstance(origin, type):
-        try:
-            if issubclass(klass, origin):
-                return args
-        except TypeError:
-            pass
-    return None
-
-def _by_generic_args(value, origin):
-    # an explicit `A[int]()` records its specialization on the instance;
-    # otherwise the class itself is the starting point and any pep 696 defaults
-    # stand in for the arguments it was constructed with
-    reified = getattr(value, \"__orig_class__\", None)
-    found = _by_specialize(reified if reified is not None else type(value), origin)
-    return [found] if found is not None else []
-
-def _parametric_is(value, alias, variances):
-    alias = _by_alias(getattr(alias, \"__value__\", alias))
-    origin = getattr(alias, \"__origin__\", alias)
-    if not isinstance(value, origin):
-        return False
-    target_args = getattr(alias, \"__args__\", ())
-    if len(target_args) != len(variances):
-        return False
-    for reified_args in _by_generic_args(value, origin):
-        if len(reified_args) != len(target_args):
-            continue
-        for r, t, v in zip(reified_args, target_args, variances):
-            if v == 3 or r == t:
-                continue
-            if v == 1 and _parametric_is_sub(r, t):
-                continue
-            if v == 2 and _parametric_is_sub(t, r):
-                continue
-            break
-        else:
-            return True
-    return False
-
-def _parametric_is_sub(a, b):
-    if a is b or b is object:
-        return True
-    a_origin = getattr(a, \"__origin__\", a)
-    b_origin = getattr(b, \"__origin__\", b)
-    if isinstance(a_origin, type) and isinstance(b_origin, type) and not getattr(b, \"__args__\", ()):
-        try:
-            return issubclass(a_origin, b_origin)
-        except TypeError:
-            return False
-    return a == b
-
-def _parametric_is_lenient(value, alias, variances):
-    # the checked-cast form: a value that records no reification has no
-    # arguments to check, so the base class test is the whole guarantee. this is
-    # what keeps `[1, 2] cast list[int]` legal while still rejecting a value
-    # whose recorded arguments contradict the target
-    alias = _by_alias(getattr(alias, \"__value__\", alias))
-    origin = getattr(alias, \"__origin__\", alias)
-    if not isinstance(value, origin):
-        return False
-    if not _by_generic_args(value, origin):
-        return True
-    return _parametric_is(value, alias, variances)
-";
-
-/// runtime residue for a parametric test against a *protocol* target
-/// (`value is A[int]`). a protocol's instances never record which
-/// specialization they satisfy, so `__orig_class__` can't answer it — but
-/// basedpython reifies annotations, so the value's class is checked
-/// structurally: each protocol member's reified annotation must match the
-/// member's specialized type. `members` is a list of kind-tagged tuples:
-///
-/// - `("attr", name, expected_type, variance)` — a data member, checked against
-///   the value class's annotation for `name`
-/// - `("method", name, [(type, variance), …], return_or_None)` — a method
-///   member, whose parameters (contravariant) and return (covariant) are checked
-///   against the value method's reified parameter/return annotations; a
-///   parameter with no annotation but a default falls back to `type(default)`
-///
-/// `variance` matches [`ArgVariance`]'s codes (0 invariant → equality, 1
-/// covariant → subtype, 2 contravariant → supertype, 3 bivariant → any).
-/// annotations are read with `typing.get_type_hints` (resolving string
-/// annotations and inherited members), falling back to a raw `__mro__` walk
-const PROTOCOL_IS_RUNTIME: &str = "\
-_by_proto_missing = object()
-
-def _by_member_annotation(klass, name):
-    try:
-        import typing
-        hints = typing.get_type_hints(klass)
-    except Exception:
-        hints = None
-    if hints is not None and name in hints:
-        return hints[name]
-    for base in klass.__mro__:
-        annotations = base.__dict__.get(\"__annotations__\", {})
-        if name in annotations:
-            return annotations[name]
-    return _by_proto_missing
-
-def _by_lit(*values):
-    # rebuild `typing.Literal[…]` for a literal type argument (`A[True]`
-    # specializes `T` to `Literal[True]`). spelled as a call so the member list
-    # needs no import of its own — this helper ships with the check
-    import typing
-    return typing.Literal[values]
-
-def _by_literal_args(t):
-    import typing
-    return typing.get_args(t) if typing.get_origin(t) is typing.Literal else None
-
-def _by_proto_sub(a, b):
-    if a is b or b is object:
-        return True
-    a_values = _by_literal_args(a)
-    b_values = _by_literal_args(b)
-    if a_values is not None:
-        # `Literal[True]` is a subtype of another literal that lists all its
-        # values, and of any class every value is an instance of
-        if b_values is not None:
-            return all(value in b_values for value in a_values)
-        return isinstance(b, type) and all(isinstance(value, b) for value in a_values)
-    if b_values is not None:
-        # a whole class is never a subtype of a narrower literal
-        return False
-    a_origin = getattr(a, \"__origin__\", a)
-    b_origin = getattr(b, \"__origin__\", b)
-    if isinstance(a_origin, type) and isinstance(b_origin, type) and not getattr(b, \"__args__\", ()):
-        try:
-            return issubclass(a_origin, b_origin)
-        except TypeError:
-            return False
-    return a == b
-
-def _by_variance_ok(actual, expected, variance):
-    # 0 invariant (equality), 1 covariant (actual <: expected),
-    # 2 contravariant (expected <: actual), 3 bivariant (any)
-    if variance == 3 or actual == expected:
-        return True
-    if variance == 1 and _by_proto_sub(actual, expected):
-        return True
-    if variance == 2 and _by_proto_sub(expected, actual):
-        return True
-    return False
-
-def _by_method_matches(klass, name, params, ret):
-    method = getattr(klass, name, None)
-    if not callable(method):
-        return False
-    import inspect, typing
-    try:
-        signature = inspect.signature(method)
-        hints = typing.get_type_hints(method)
-    except Exception:
-        return False
-    positional = [
-        p for p in signature.parameters.values()
-        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    ]
-    # drop the receiver (`self` / `cls`) an unbound method still carries
-    positional = positional[1:]
-    if len(positional) < len(params):
-        return False
-    # extra positional parameters the protocol doesn't supply must be optional,
-    # else a caller matching the protocol would fail to provide them
-    for p in positional[len(params):]:
-        if p.default is inspect.Parameter.empty:
-            return False
-    # likewise any required keyword-only parameter would break a protocol call
-    for p in signature.parameters.values():
-        if p.kind == inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty:
-            return False
-    for (expected, variance), p in zip(params, positional):
-        if p.name in hints:
-            actual = hints[p.name]
-        elif p.default is not inspect.Parameter.empty:
-            # a reified default gives the parameter's inferred type at runtime
-            actual = type(p.default)
-        else:
-            return False
-        if not _by_variance_ok(actual, expected, variance):
-            return False
-    if ret is not None:
-        expected, variance = ret
-        if \"return\" not in hints or not _by_variance_ok(hints[\"return\"], expected, variance):
-            return False
-    return True
-
-def _by_protocol_is(value, members):
-    klass = type(value)
-    for member in members:
-        kind = member[0]
-        if kind == \"attr\":
-            _, name, expected, variance = member
-            actual = _by_member_annotation(klass, name)
-            if actual is _by_proto_missing:
-                # the member is *there*, it just carries no annotation any
-                # runtime can read — python records nothing for a `self.a: int`
-                # written inside `__init__`. answering `False` would contradict
-                # the checker, which accepts that class as satisfying the
-                # protocol, so refuse to answer rather than answer wrongly
-                if hasattr(value, name):
-                    raise TypeError(
-                        \"cannot check `\" + klass.__qualname__ + \".\" + name
-                        + \"` against a parameterized protocol: its type is declared \"
-                        + \"inside a method, and only a class-level annotation \"
-                        + \"survives to runtime. declare it in the class body\"
-                    )
-                return False
-            if not _by_variance_ok(actual, expected, variance):
-                return False
-        else:
-            _, name, params, ret = member
-            if not _by_method_matches(klass, name, params, ret):
-                return False
-    return True
-";
-
-/// matches a value against a template literal type — a pattern such as
-/// `f"a{int}b"`, whose type is the set of strings it can produce.
-///
-/// the regular expression comes from the checker, which builds it from the same
-/// reading of the pattern's holes that decides the static answer, so the test
-/// accepts exactly the strings the type contains. a non-`str` value is not one
-/// of them
-const PATTERN_IS_RUNTIME: &str = "\
-import re as _by_re
-
-def _by_pattern_is(value, pattern):
-    return isinstance(value, str) and _by_re.fullmatch(pattern, value) is not None
-";
-
 /// the runtime variance code `_by_variance_ok` expects
 fn variance_code(variance: ArgVariance) -> u8 {
     match variance {
@@ -924,13 +604,23 @@ pub(crate) enum PredicateRuntime {
 }
 
 impl PredicateRuntime {
-    /// the definitions this helper needs in the emitted module
-    pub(crate) fn source(self) -> &'static str {
+    /// the runtime helpers the emitted predicate calls by name. what each of
+    /// those in turn needs is settled in [`crate::runtime`], off the calls in
+    /// their own bodies
+    pub(crate) fn helpers(self) -> &'static [crate::runtime::Helper] {
         match self {
-            Self::Parametric => PARAMETRIC_IS_RUNTIME,
-            Self::Protocol => PROTOCOL_IS_RUNTIME,
-            Self::Conformance => super::conformance::WITNESS_RUNTIME,
-            Self::Pattern => PATTERN_IS_RUNTIME,
+            // both strictnesses are spelled at the use site — which one a probe
+            // gets depends on how much the checker could already settle — so
+            // the pair travels together
+            Self::Parametric => &[
+                crate::runtime::PARAMETRIC_IS,
+                crate::runtime::PARAMETRIC_IS_LENIENT,
+            ],
+            // `_by_lit` is spelled into the member list itself, not just called
+            // from inside the check, so it travels with the protocol runtime
+            Self::Protocol => &[crate::runtime::PROTOCOL_IS, crate::runtime::LITERAL],
+            Self::Conformance => super::conformance::WITNESS_HELPERS,
+            Self::Pattern => &[crate::runtime::PATTERN_IS],
         }
     }
 
@@ -1018,7 +708,7 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         // reified-generic requirement; a user-generic probe (`A[int]`) works
         // on any target
         for runtime in inner.runtimes {
-            ctx.required_imports.push(runtime.source().to_owned());
+            ctx.runtime.extend(runtime.helpers());
         }
         ctx.template_edits.extend(inner.edits);
     }

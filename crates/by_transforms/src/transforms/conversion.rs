@@ -29,7 +29,6 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::{ConversionInfo, ConversionRuntime, PreludeDunderReceiver};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::wrapped_runtime::discard_return_runtime;
 use crate::type_info::TypeInfo;
 
 /// emit the conversion the checker resolved at every conversion site
@@ -142,7 +141,7 @@ impl TypeAwarePass for ConversionPass<'_> {
                 // same adapter still define it once
                 match runtime {
                     Some(ConversionRuntime::DiscardReturn) => {
-                        ctx.required_imports.push(discard_return_runtime());
+                        ctx.runtime.insert(crate::runtime::DISCARD);
                     }
                     None => {}
                 }

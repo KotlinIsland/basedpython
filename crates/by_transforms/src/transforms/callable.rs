@@ -31,7 +31,6 @@ use ruff_text_size::{Ranged, TextRange};
 use super::ast_driver::{PassContext, TypeAwarePass};
 use super::intersection::{collect_intersect, collect_union, is_intersection_node};
 use super::just_float::rewrite_type_expr_with_imports;
-use super::wrapped_runtime::OPTIONAL_RUNTIME;
 use crate::config::FloatLiteralLowering;
 use crate::type_info::{TypeInfo, UnpackedKwargsLowering};
 
@@ -135,9 +134,14 @@ impl<'src> CallableSyntax<'src> {
         &self.protocol_class_defs
     }
 
-    /// The import lines everything this lowerer emitted needs, including the
-    /// per-leaf rewrites it folded into its own wide replacements.
-    pub(crate) fn take_import_lines(&mut self) -> Vec<String> {
+    /// What everything this lowerer emitted needs: import lines, and the names
+    /// of any runtime helpers, including for the per-leaf rewrites it folded
+    /// into its own wide replacements.
+    ///
+    /// the two come back together because they are one answer: a caller that
+    /// took the imports and dropped the helpers would emit code calling a name
+    /// nothing defines
+    pub(crate) fn take_requirements(&mut self) -> (Vec<String>, Vec<crate::runtime::Helper>) {
         let mut lines = Vec::new();
         for (needed, line) in [
             (self.needs_import, "from typing import Callable"),
@@ -153,13 +157,16 @@ impl<'src> CallableSyntax<'src> {
             (self.needs_typeof_import, "from ty_extensions import TypeOf"),
             (self.needs_not_import, "from ty_extensions import Not"),
             (self.needs_annotated_import, "from typing import Annotated"),
-            (self.needs_optional_runtime, OPTIONAL_RUNTIME),
         ] {
             if needed {
                 lines.push(line.to_owned());
             }
         }
         lines.append(&mut self.extra_imports);
+        let mut helpers = Vec::new();
+        if self.needs_optional_runtime {
+            helpers.push(crate::runtime::OPTIONAL);
+        }
         // reset so a second call is a no-op rather than re-emitting every line
         self.needs_import = false;
         self.needs_concatenate_import = false;
@@ -169,7 +176,7 @@ impl<'src> CallableSyntax<'src> {
         self.needs_not_import = false;
         self.needs_annotated_import = false;
         self.needs_optional_runtime = false;
-        lines
+        (lines, helpers)
     }
 
     /// Lower a single type expression to python source: the structural forms
@@ -982,7 +989,9 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
         // callable type) — the dedicated leaf passes' own import requests are
         // dropped along with their edits when our edit wins the overlap, so
         // they are re-requested here
-        ctx.required_imports.extend(inner.take_import_lines());
+        let (imports, helpers) = inner.take_requirements();
+        ctx.required_imports.extend(imports);
+        ctx.runtime.extend(helpers);
         let defs = inner.class_defs().to_owned();
         for fix in inner.edits {
             for edit in fix.edits() {

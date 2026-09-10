@@ -186,6 +186,12 @@ extend-exclude = [
     # the isort rule alone would put `from __future__ import annotations` at the
     # top of every one of them
     "scripts/native-bench/programs/",
+    # the helpers the transpiler emits into the python it produces. reformatting
+    # them rewrites transpiled output, and the isort rule would put a
+    # `from __future__ import annotations` at the top of every module that gets
+    # a helper pasted into it. what shape they take is pinned by the
+    # transpiler's own tests
+    "crates/by_transforms/src/runtime/",
     "crates/ty_vendored/vendor/",
     "crates/ruff/resources/",
     "crates/ruff_linter/resources/",

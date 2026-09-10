@@ -22,7 +22,8 @@ source (.by)
   │     │  (intersection, callable, generics, literal-types, anon-NT, …)
   │     └─ splice it together: re-render changed statements, apply text edits
   │        (ruff-style first-wins overlap skip), emit hoisted class defs, prepend
-  │        required imports, append `__all__` epilogue
+  │        required imports and the runtime helpers the emitted code calls
+  │        (see "the runtime" below), append `__all__` epilogue
   │
   ├─ phase 1  lowering preamble
   │     └─ optionally prepend `from __future__ import annotations`
@@ -54,6 +55,11 @@ source (.by)
         │  (`is_anon_named_tuple`, `is_anon_named_tuple_value`, `is_typeof`).
         │  a leftover flag means a transform failed to lower its construct; the
         │  pipeline aborts rather than emit syntactically-valid-but-wrong Python
+        ├─ reject a call to one of the transpiler's own runtime helpers that the
+        │  module never got. a transform emits the call and records the need in
+        │  two different places, and forgetting the second half produces python
+        │  that parses, checks, and raises `NameError` the first time the lowered
+        │  line runs
         └─ parse it again *as the target version* and report any construct that
            version cannot parse. the first check asks whether the output is
            python at all; this one asks whether it is python the declared floor
@@ -70,6 +76,43 @@ entry points in `crates/by_transforms/src/lib.rs`:
     `by transpile`, `by build` and `by run`)
 - `transpile_typed_with_map(db, file, config, rebuild)` — also returns a line
     table for traceback rewriting and diagnostic mapping
+
+## the runtime
+
+the emitted python calls helpers of its own: `_lazy_module` for a lowered
+import, `_parametric_is` for a runtime type test, `_by_loop_bind` for a closure
+that captures a loop binding by value. they live in
+`crates/by_transforms/src/runtime/_by_runtime.py`, and `runtime.rs` slices them
+out by name
+
+a transform names the helpers the code it emits calls, through the typed
+constants in `runtime.rs`. what each of those calls in turn is read out of its
+body, so a helper brings the rest of what it needs along
+
+`Config::runtime_module` decides how a module gets them:
+
+- `by build`, `by run` and `by compile` stage a tree of their own. they write
+    `_by_runtime.py` into each package they stage — a directory with an
+    `__init__` — and each module imports what it calls from its package's copy
+- a module at a module root gets the definitions pasted in. a copy at the root
+    would be a top-level module, which a second basedpython wheel built by
+    another version overwrites on install
+- so does a module in a directory that is not a package, a `scripts/` folder
+    say, which has no import that works both when it is run and when it is
+    imported
+- `by transpile <file>` and the language server's `by/transpile` answer with one
+    module's text, and `by transpile <dir>` writes into the source tree itself,
+    where a file with no `.by` beside it would read as a module the author wrote.
+    all three paste the definitions in
+
+both renderings are slices of the same text. the lazy-import pass leaves the
+runtime import eager, since a helper reached through its proxy would be a proxy
+call on every use
+
+`_by_runtime.py` is excluded from this repository's own ruff configuration.
+reformatting it rewrites transpiled output, and the isort rule would put a
+`from __future__ import annotations` at the top of every module that gets a
+helper pasted into it
 
 ## the phase-0 database
 

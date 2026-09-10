@@ -22,12 +22,13 @@ use walkdir::WalkDir;
 use crate::ExitStatus;
 use crate::args::LoweringArgs;
 use crate::by_lowering::SettledLowering;
-use by_stage::emit::{CheckGate, Transpiled, is_unusable_source, transpile_bug_diagnostic};
+use by_stage::emit::{CheckGate, Emit, Transpiled, is_unusable_source, transpile_bug_diagnostic};
 use by_stage::project::{
     BY_SOURCES, COMPILABLE_SOURCES, Rebuilder, build_project_db, may_contain_sources, module_roots,
     source_files,
 };
 use by_stage::record::{BuildRecord, parse_soundness, stage_build_record};
+use by_stage::runtime::RuntimeLayout;
 use by_stage::sourcemap::{TracebackEntry, stage_module, write_sourcemap_module};
 use by_stage::staging::{Staging, transpiled_destination};
 use by_stage::verbatim::stage_verbatim;
@@ -211,13 +212,19 @@ pub(crate) fn cmd_run(
     // lifts generated line numbers back to `.by` lines (for traceback rewriting)
     let mut traceback_entries: Vec<TracebackEntry> = Vec::new();
     let mut staging = Staging::new(tmp.path());
+    let mut layout = RuntimeLayout::default();
     let ok = render_check_and_transpile(
         &db,
         &handles,
-        &config,
-        CheckGate::AllErrors,
-        &rebuilder,
-        &mut by_transforms::RuntimeRequirements::default(),
+        &mut Emit {
+            config: &config,
+            gate: CheckGate::AllErrors,
+            rebuilder: &rebuilder,
+            requirements: &mut by_transforms::RuntimeRequirements::default(),
+            runtime: Some(&mut layout),
+            roots: &roots,
+            root: &root,
+        },
         |emitted| {
             let relative = transpiled_destination(&roots, &root, emitted.by_path);
             traceback_entries.push(stage_module(&mut staging, &relative, emitted)?);
@@ -231,6 +238,7 @@ pub(crate) fn cmd_run(
     // json file it opens, a template it renders. running out of a directory
     // holding only the transpiled half fails on the first of them
     stage_verbatim(&db, &root, &roots, &mut staging)?;
+    stage_runtime(&mut staging, &layout)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_traceback_runtime(&mut staging, &traceback_entries)?;
     // what this build *was*, written into the build itself. a tree that is going
@@ -379,6 +387,21 @@ fn staged_packages(staging: &Staging, roots: &[PathBuf], root: &Path) -> Vec<Str
     packages.sort();
     packages.dedup();
     packages
+}
+
+/// Write the runtime helpers into every place a staged module imports them
+/// from.
+///
+/// One copy per package rather than one at the tree root: a distribution ships
+/// packages, so a root module would either not be packaged at all or claim a
+/// top-level name a second basedpython wheel overwrites on install.
+/// [`by_stage::runtime`] is where that rule lives; this only puts the bytes
+/// where it says.
+fn stage_runtime(staging: &mut Staging, layout: &RuntimeLayout) -> anyhow::Result<()> {
+    for relative in layout.files() {
+        staging.write(&relative, None, by_transforms::runtime::SOURCE)?;
+    }
+    Ok(())
 }
 
 /// Write the `by.typed` marker into every package the build ships.
@@ -862,13 +885,19 @@ pub(crate) fn cmd_build(
     // is what the digests beside the map are for
     let mut entries: Vec<TracebackEntry> = Vec::new();
     let mut requirements = by_transforms::RuntimeRequirements::default();
+    let mut layout = RuntimeLayout::default();
     let ok = render_check_and_transpile(
         &db,
         &handles,
-        &config,
-        CheckGate::ParseErrorsOnly,
-        &rebuilder,
-        &mut requirements,
+        &mut Emit {
+            config: &config,
+            gate: CheckGate::ParseErrorsOnly,
+            rebuilder: &rebuilder,
+            requirements: &mut requirements,
+            runtime: Some(&mut layout),
+            roots: &roots,
+            root: &root,
+        },
         |emitted| {
             let relative = transpiled_destination(&roots, &root, emitted.by_path);
             let entry = stage_module(&mut staging, &relative, emitted)?;
@@ -885,6 +914,7 @@ pub(crate) fn cmd_build(
     // so they are staged whether or not something was reported — a `build/` a
     // debugger cannot read is worse than one built from a partial check
     stage_verbatim(&db, &root, &roots, &mut staging)?;
+    stage_runtime(&mut staging, &layout)?;
     stage_by_typed_markers(&db, &mut staging, &roots, &root)?;
     write_sourcemap_module(&mut staging, &entries)?;
     // `build/` outlives the build that wrote it and is what a debugger, a test
@@ -1140,13 +1170,19 @@ pub(crate) fn cmd_compile(
         .collect();
     let mut entries: Vec<TracebackEntry> = Vec::new();
     let mut requirements = by_transforms::RuntimeRequirements::default();
+    let mut layout = RuntimeLayout::default();
     let transpiled = render_check_and_transpile(
         &db,
         &transpilable,
-        &tree_config,
-        CheckGate::ParseErrorsOnly,
-        &rebuilder,
-        &mut requirements,
+        &mut Emit {
+            config: &tree_config,
+            gate: CheckGate::ParseErrorsOnly,
+            rebuilder: &rebuilder,
+            requirements: &mut requirements,
+            runtime: Some(&mut layout),
+            roots: &roots,
+            root: &root,
+        },
         |emitted| {
             let relative = transpiled_destination(&roots, &root, emitted.by_path);
             entries.push(stage_module(&mut staging, &relative, emitted)?);
@@ -1284,6 +1320,9 @@ pub(crate) fn cmd_compile(
         // is where a file the project keeps on top of an artefact is reported,
         // which is a failure this change deliberately introduced
         if let Err(error) = stage_verbatim(&db, &root, &roots, &mut staging) {
+            break 'compiling Err(error);
+        }
+        if let Err(error) = stage_runtime(&mut staging, &layout) {
             break 'compiling Err(error);
         }
         if let Err(error) = stage_by_typed_markers(&db, &mut staging, &roots, &root) {
@@ -1572,19 +1611,28 @@ fn reverse_dir_converting(
 /// build`, but written in place rather than to `build/`).
 #[allow(clippy::print_stderr)]
 fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
-    let (db, handles, rebuilder, _root) = build_project_db(dir, BY_SOURCES, None)?;
+    let (db, handles, rebuilder, root) = build_project_db(dir, BY_SOURCES, None)?;
     if handles.is_empty() {
         eprintln!("no .by files found");
         return Ok(ExitStatus::Success);
     }
 
+    let roots = module_roots(&db, &root);
     let ok = render_check_and_transpile(
         &db,
         &handles,
-        config,
-        CheckGate::ParseErrorsOnly,
-        &rebuilder,
-        &mut by_transforms::RuntimeRequirements::default(),
+        &mut Emit {
+            config,
+            gate: CheckGate::ParseErrorsOnly,
+            rebuilder: &rebuilder,
+            requirements: &mut by_transforms::RuntimeRequirements::default(),
+            // the output lands in the source tree itself, where a runtime file
+            // with no `.by` beside it would read as a module the author wrote —
+            // to `by check`, to the linter, to `by transpile --reverse`
+            runtime: None,
+            roots: &roots,
+            root: &root,
+        },
         |emitted| {
             let py = emitted.by_path.with_extension("py");
             fs::write(&py, emitted.python).with_context(|| format!("{}", py.display()))?;
@@ -1886,21 +1934,10 @@ fn compilable_files(root: &Path) -> Vec<PathBuf> {
 fn render_check_and_transpile(
     db: &ProjectDatabase,
     handles: &[(PathBuf, ruff_db::files::File)],
-    config: &Config,
-    gate: CheckGate,
-    rebuilder: &Rebuilder,
-    requirements: &mut by_transforms::RuntimeRequirements,
+    emit: &mut Emit<'_>,
     consume: impl FnMut(&Transpiled<'_>) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
-    let emitted = by_stage::emit::check_and_transpile(
-        db,
-        handles,
-        config,
-        gate,
-        rebuilder,
-        requirements,
-        consume,
-    )?;
+    let emitted = by_stage::emit::check_and_transpile(db, handles, emit, consume)?;
     if !emitted.diagnostics.is_empty() {
         render_diagnostics(db, &emitted.diagnostics)?;
     }

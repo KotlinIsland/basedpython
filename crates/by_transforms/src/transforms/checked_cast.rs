@@ -57,39 +57,6 @@ use crate::type_info::{CastCheck, SoundnessCheck, TypeInfo};
 /// is evaluated exactly once and the predicate can reference it
 const CAST_VALUE_PARAM: &str = "_by_cast_value";
 
-// `<value> cast! <type>`: verify at runtime, raise on mismatch.
-const CHECKED_CAST_HELPER: &str = "\
-def _checked_cast(_v, _t):
-    if not isinstance(_v, _t):
-        raise TypeError(
-            f\"cast to {getattr(_t, '__name__', _t)} failed: value is {type(_v).__name__}\"
-        )
-    return _v
-";
-
-// `<value> cast? <type>`: yield the value when it matches, else `None`.
-const TRY_CAST_HELPER: &str = "\
-def _try_cast(_v, _t):
-    return _v if isinstance(_v, _t) else None
-";
-
-// predicate forms, for any target the shared parametric engine can decide at
-// runtime — a reified-cell comparison (`T == int`), an `__orig_class__` probe, a
-// structural protocol check, or a disjunction of those across a union's arms.
-// the predicate is a lambda so the value is evaluated exactly once (as `_v`) and
-// referenced from inside the test
-const CHECKED_CAST_PRED_HELPER: &str = "\
-def _checked_cast_pred(_v, _pred):
-    if not _pred(_v):
-        raise TypeError(f\"cast failed: value is {type(_v).__name__}\")
-    return _v
-";
-
-const TRY_CAST_PRED_HELPER: &str = "\
-def _try_cast_pred(_v, _pred):
-    return _v if _pred(_v) else None
-";
-
 /// the runtime helper a cast occurrence lowers to
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Helper {
@@ -132,13 +99,15 @@ impl Helper {
     }
 
     /// the preamble this helper's call needs
-    fn runtime(self) -> &'static str {
+    /// the runtime helper this form calls, or `None` for the one form that
+    /// calls nothing of ours — `typing.cast`, which is an import
+    fn runtime(self) -> Option<crate::runtime::Helper> {
         match self {
-            Self::Checked => CHECKED_CAST_HELPER,
-            Self::Try => TRY_CAST_HELPER,
-            Self::CheckedPredicate => CHECKED_CAST_PRED_HELPER,
-            Self::TryPredicate => TRY_CAST_PRED_HELPER,
-            Self::TypingCast => "from typing import cast",
+            Self::Checked => Some(crate::runtime::CHECKED_CAST),
+            Self::Try => Some(crate::runtime::TRY_CAST),
+            Self::CheckedPredicate => Some(crate::runtime::CHECKED_CAST_PRED),
+            Self::TryPredicate => Some(crate::runtime::TRY_CAST_PRED),
+            Self::TypingCast => None,
         }
     }
 }
@@ -283,10 +252,17 @@ impl TypeAwarePass for CheckedCastPass {
         // `_parametric_is` / `_by_protocol_is` must precede the predicates that
         // call them
         for runtime in inner.runtimes {
-            ctx.required_imports.push(runtime.source().to_owned());
+            ctx.runtime.extend(runtime.helpers());
         }
         for helper in &inner.used {
-            ctx.required_imports.push(helper.runtime().to_owned());
+            match helper.runtime() {
+                Some(name) => {
+                    ctx.runtime.insert(name);
+                }
+                None => ctx
+                    .required_imports
+                    .push("from typing import cast".to_owned()),
+            }
         }
         ctx.template_edits.extend(inner.edits);
     }

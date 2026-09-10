@@ -20,92 +20,6 @@ use ruff_python_ast::{self as ast, CmpOp, Expr, ModModule, Parameters, Stmt, Stm
 use super::ast_driver::{AstPass, PassContext};
 use super::source_util::{is_synthetic_decorator, python_string_literal};
 
-/// Parses `sys.argv` into `main`'s parameters. Driven by a spec of
-/// `(name, converter, kind, required)` tuples emitted from the signature, so
-/// the helper itself never introspects the function.
-///
-/// each parameter accepts both spellings — a positional slot and a `--name`
-/// option — which argparse cannot express with a single argument, so they are
-/// registered as two arguments over internal `p<i>` / `o<i>` destinations and
-/// merged afterwards. `bool` is a flag pair (`--name` / `--no-name`) and takes
-/// no positional slot
-///
-/// `_extra` is the converter of `main`'s leading `*rest`, which asks for
-/// whatever the interface does not claim. everything declared after it is
-/// keyword-only, so the extras are the only positional arguments and bind to
-/// `*rest`. `None` means there is no such parameter
-const MAIN_ARGS_RUNTIME: &str = r#"def _by_main_args(_fn, _params, _extra=None):
-    import argparse
-
-    _parser = argparse.ArgumentParser(description=_fn.__doc__)
-    for _i, (_name, _type, _kind, _required, _choices) in enumerate(_params):
-        _flags = [f"--{_name.replace('_', '-')}"]
-        if "_" in _name:
-            _flags.append(f"--{_name}")
-        if _type is None:
-            _parser.add_argument(*_flags, dest=f"o{_i}", action="store_true", default=None)
-            _parser.add_argument(
-                *[f"--no-{_flag[2:]}" for _flag in _flags],
-                dest=f"o{_i}",
-                action="store_false",
-                default=None,
-            )
-            continue
-        if _kind != "keyword":
-            _parser.add_argument(
-                f"p{_i}",
-                metavar=_name,
-                nargs="?",
-                type=_type,
-                default=None,
-                choices=_choices,
-            )
-        _parser.add_argument(
-            *_flags,
-            dest=f"o{_i}",
-            metavar=_name.upper(),
-            type=_type,
-            default=None,
-            choices=_choices,
-        )
-    if _extra is None:
-        _parsed = vars(_parser.parse_args())
-        _rest = []
-    else:
-        _namespace, _rest = _parser.parse_known_args()
-        _parsed = vars(_namespace)
-        # `parse_known_args` hands back what it did not recognise as it was
-        # written, so the vararg's own annotation is what converts it
-        _rest = [_extra(_value) for _value in _rest]
-    _args = []
-    _kwargs = {}
-    _omitted = None
-    for _i, (_name, _type, _kind, _required, _choices) in enumerate(_params):
-        _value = _parsed.get(f"o{_i}")
-        _positional = _parsed.get(f"p{_i}")
-        if _value is not None and _positional is not None:
-            _parser.error(f"argument {_name}: given both positionally and as an option")
-        if _value is None:
-            _value = _positional
-        if _value is None:
-            if _required:
-                _parser.error(f"the following arguments are required: {_name}")
-            if _kind == "positional":
-                _omitted = _name
-            continue
-        if _kind == "positional":
-            if _omitted is not None:
-                _parser.error(f"argument {_name}: cannot be given without {_omitted}")
-            _args.append(_value)
-        else:
-            _kwargs[_name] = _value
-    for _value in _rest:
-        if _omitted is not None:
-            _parser.error(f"argument {_value}: cannot be given without {_omitted}")
-        _args.append(_value)
-    return _args, _kwargs
-"#;
-
 pub(crate) struct MainFunction<'src> {
     source: &'src str,
     is_stub: bool,
@@ -152,7 +66,7 @@ impl AstPass for MainFunction<'_> {
         let call = if params.is_empty() && extra.is_none() {
             "main()".to_owned()
         } else {
-            ctx.required_imports.push(MAIN_ARGS_RUNTIME.to_owned());
+            ctx.runtime.insert(crate::runtime::MAIN_ARGS);
             ctx.epilogue
                 .push("    _by_args, _by_kwargs = _by_main_args(main, [".to_owned());
             for param in &params {

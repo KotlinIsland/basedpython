@@ -53,41 +53,6 @@ use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::coalesce::is_trivially_pure;
 use crate::type_info::TypeInfo;
 
-/// runtime helper injected when `character_count` / `first` / `last` /
-/// `characters` / `character_at` are lowered. splits a string into extended
-/// grapheme clusters (one `Character` each) via the `regex` module's `\X` — the only widely
-/// available python engine that implements UAX #29 correctly (including ZWJ
-/// emoji sequences and regional-indicator flags). `regex` is therefore a
-/// runtime dependency of the grapheme surface: if it is missing we raise an
-/// actionable error rather than silently miscounting with `list()`, whose
-/// code-point split gives a wrong answer for any multi-code-point grapheme
-const GRAPHEME_HELPER: &str = "\
-def _by_graphemes(_text):
-    try:
-        import regex as _regex
-    except ImportError as _err:
-        raise ImportError(
-            \"basedpython's grapheme string surface (character_count / first / last / \"
-            \"characters / character_at / ...) needs the 'regex' package: uv add regex\"
-        ) from _err
-    return _regex.findall(r\"\\X\", _text)
-";
-
-/// `s.prefix(n)` — the first `n` grapheme clusters, joined. clamps `n` to `>= 0`,
-/// so `prefix(0)` is empty and `prefix(large)` is the whole string
-const PREFIX_HELPER: &str = "\
-def _by_prefix(_text, _n):
-    return \"\".join(_by_graphemes(_text)[:max(0, _n)])
-";
-
-/// `s.suffix(n)` — the last `n` grapheme clusters, joined. computed from the
-/// front (not `[-n:]`) so `suffix(0)` is empty rather than the whole string
-const SUFFIX_HELPER: &str = "\
-def _by_suffix(_text, _n):
-    _g = _by_graphemes(_text)
-    return \"\".join(_g[max(0, len(_g) - _n):])
-";
-
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent which-helpers-to-inject flags, not a state machine"
@@ -339,7 +304,7 @@ impl TypeAwarePass for GraphemeStringPass {
         // the prefix / suffix helpers call `_by_graphemes`, so the base helper
         // is always injected first when either is used
         if inner.needs_grapheme_helper {
-            ctx.required_imports.push(GRAPHEME_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::GRAPHEMES);
         }
         // `Character`-producing accessors construct real instances; import the
         // name so the lazy-import phase materialises `class Character(str)`
@@ -348,10 +313,10 @@ impl TypeAwarePass for GraphemeStringPass {
                 .push("from ty_extensions import Character".to_owned());
         }
         if inner.needs_prefix_helper {
-            ctx.required_imports.push(PREFIX_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::PREFIX);
         }
         if inner.needs_suffix_helper {
-            ctx.required_imports.push(SUFFIX_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::SUFFIX);
         }
         ctx.template_edits.extend(inner.template_edits);
     }

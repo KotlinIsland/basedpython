@@ -388,7 +388,9 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
             ctx.required_imports
                 .push(format!("{}\n", defs.trim_end_matches('\n')));
         }
-        ctx.required_imports.extend(leaves.take_import_lines());
+        let (imports, helpers) = leaves.take_requirements();
+        ctx.required_imports.extend(imports);
+        ctx.runtime.extend(helpers);
     }
 }
 

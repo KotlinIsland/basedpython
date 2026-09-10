@@ -4,8 +4,9 @@
 //!   - **`min_version >= 3.15`** — prepend the `lazy` keyword (PEP 810)
 //!   - **`min_version < 3.15`** — rewrite the statement to call a runtime
 //!     polyfill (`_lazy_module` for module imports, `_lazy_attr` for `from`
-//!     imports). The polyfill defines helpers in the preamble that wrap
-//!     `importlib.util.LazyLoader` and a small proxy class
+//!     imports). The helpers wrap `importlib.util.LazyLoader` and a small proxy
+//!     class, and live in [`crate::runtime`] with the rest of what the emitted
+//!     python calls
 //!
 //! Both modes skip:
 //!   - `from __future__ import ...` — compiler directive
@@ -336,16 +337,14 @@ impl<'src> LazyImport<'src> {
                 // package. Resolve the relative target at runtime
                 self.needs_module_helper = true;
                 let rel = format!("{dots}{name}");
-                lines.push(format!(
-                    "{bind} = _lazy_module(_by_iu.resolve_name(\"{rel}\", __package__))"
-                ));
+                lines.push(format!("{bind} = _lazy_module(\"{rel}\", __package__)"));
             } else if is_relative {
                 // `from .pkg import x` — lazy attribute on the resolved
                 // parent, matching the `from pkg import x` shape
                 self.needs_attr_helper = true;
                 let rel = format!("{dots}{module_part}");
                 lines.push(format!(
-                    "{bind} = _lazy_attr(_by_iu.resolve_name(\"{rel}\", __package__), \"{name}\")"
+                    "{bind} = _lazy_attr(\"{rel}\", \"{name}\", __package__)"
                 ));
             } else {
                 self.needs_attr_helper = true;
@@ -424,194 +423,36 @@ impl<'ast> Visitor<'ast> for LazyImport<'_> {
     }
 }
 
-/// `from x import y` proxy for the polyfill mode (python < 3.15, which has no
-/// PEP 810 `lazy` keyword). deferring the *attribute read* is what needs a
-/// proxy at all: `_lazy_module` already defers the module's execution, but
-/// reading `y` off it would force that execution immediately.
-///
-/// the proxy must be *transparent*: python looks special methods up on the
-/// type, never through `__getattr__`, so a dunder that isn't forwarded here
-/// silently falls back to `object`'s version. that is not a missing feature
-/// but a correctness bug — an unforwarded `__eq__` makes `a == b` compare
-/// proxy identity and answer `False` for equal values. the forwarding table
-/// below is generated in a loop rather than hand-written so the set stays
-/// auditable, and each operator is applied to the *resolved* value so
-/// python's full binary-op protocol (reflected operands, `NotImplemented`)
-/// still runs.
-///
-/// `__class__` makes `isinstance(proxy, C)` work, and `__instancecheck__`
-/// makes `isinstance(x, proxy)` work for a lazily-imported class (`isinstance`
-/// looks `__instancecheck__` up on `type(classinfo)`, which is `_LazyAttr`).
-/// `type(proxy)` and `proxy is x` cannot be fixed by any proxy — that is
-/// exactly why PEP 810 is a language feature — and are documented limits of
-/// this polyfill
-const LAZY_ATTR_PROXY: &str = r#"class _LazyAttr:
-    __slots__ = ("_by_mod", "_by_attr", "_by_val", "_by_has")
-    def __init__(self, mod, attr):
-        object.__setattr__(self, "_by_mod", mod)
-        object.__setattr__(self, "_by_attr", attr)
-        object.__setattr__(self, "_by_val", None)
-        object.__setattr__(self, "_by_has", False)
-    def _by_resolve(self):
-        if not self._by_has:
-            m = _lazy_module(self._by_mod)
-            try:
-                v = getattr(m, self._by_attr)
-            except AttributeError:
-                # a submodule rather than an attribute: `urllib/__init__.py` never
-                # imports `parse`, and cpython binds it only because `__import__` is
-                # handed a fromlist. reading the attribute alone never triggers that
-                try:
-                    v = _by_il.import_module(self._by_mod + "." + self._by_attr)
-                except ImportError:
-                    # worded as the import machinery words it, down to the module's
-                    # file: a `from x import y` that fails is something programs catch
-                    # and report, so the report must not say where the import was
-                    # written. `name_from` is left off — cpython's own constructor
-                    # only took it from 3.12, and this polyfill runs on 3.9
-                    p = getattr(m, "__file__", None)
-                    raise ImportError("cannot import name " + repr(self._by_attr) +
-                                      " from " + repr(self._by_mod) +
-                                      ("" if p is None else " (" + p + ")"),
-                                      name=self._by_mod, path=p) from None
-            object.__setattr__(self, "_by_val", v)
-            object.__setattr__(self, "_by_has", True)
-        return self._by_val
-    @property
-    def __class__(self): return self._by_resolve().__class__
-    def __getattr__(self, k): return getattr(self._by_resolve(), k)
-    def __setattr__(self, k, v): setattr(self._by_resolve(), k, v)
-    def __delattr__(self, k): delattr(self._by_resolve(), k)
-    def __call__(self, *a, **k): return self._by_resolve()(*a, **k)
-    def __class_getitem__(cls, k): return cls
-    def __instancecheck__(self, o): return isinstance(o, self._by_resolve())
-    def __subclasscheck__(self, o): return issubclass(o, self._by_resolve())
-    def __mro_entries__(self, bases):
-        r = self._by_resolve()
-        m = getattr(r, "__mro_entries__", None)
-        if m is None: return (r,)
-        return m(tuple(r if b is self else b for b in bases))
-def _by_lazy_forward():
-    import operator as op
-    def one(f): return lambda s: f(s._by_resolve())
-    def two(f): return lambda s, o: f(s._by_resolve(), o)
-    def rtwo(f): return lambda s, o: f(o, s._by_resolve())
-    for n, f in (("add", op.add), ("sub", op.sub), ("mul", op.mul), ("matmul", op.matmul),
-                 ("truediv", op.truediv), ("floordiv", op.floordiv), ("mod", op.mod),
-                 ("divmod", divmod), ("pow", op.pow), ("lshift", op.lshift),
-                 ("rshift", op.rshift), ("and", op.and_), ("xor", op.xor), ("or", op.or_)):
-        setattr(_LazyAttr, "__" + n + "__", two(f))
-        setattr(_LazyAttr, "__r" + n + "__", rtwo(f))
-    for n in ("lt", "le", "eq", "ne", "gt", "ge"):
-        setattr(_LazyAttr, "__" + n + "__", two(getattr(op, n)))
-    for n, f in (("neg", op.neg), ("pos", op.pos), ("abs", abs), ("invert", op.inv),
-                 ("len", len), ("iter", iter), ("next", next), ("bool", bool),
-                 ("str", str), ("repr", repr), ("bytes", bytes), ("int", int),
-                 ("float", float), ("complex", complex), ("index", op.index),
-                 ("hash", hash), ("reversed", reversed)):
-        setattr(_LazyAttr, "__" + n + "__", one(f))
-    setattr(_LazyAttr, "__getitem__", two(op.getitem))
-    setattr(_LazyAttr, "__contains__", two(op.contains))
-    setattr(_LazyAttr, "__delitem__", two(op.delitem))
-    setattr(_LazyAttr, "__setitem__", lambda s, k, v: op.setitem(s._by_resolve(), k, v))
-    setattr(_LazyAttr, "__format__", lambda s, f: format(s._by_resolve(), f))
-    setattr(_LazyAttr, "__round__", lambda s, *a: round(s._by_resolve(), *a))
-    setattr(_LazyAttr, "__enter__", lambda s: s._by_resolve().__enter__())
-    setattr(_LazyAttr, "__exit__", lambda s, *a: s._by_resolve().__exit__(*a))
-_by_lazy_forward()
-def _lazy_attr(mod, attr): return _LazyAttr(mod, attr)
-"#;
-
-/// `Character` — a concrete `str` subclass, so the grapheme accessors can
-/// construct genuine instances and `isinstance(x, Character)` works.
-///
-/// it is interned in a `sys.modules` registry rather than defined per file
-/// because class *identity* is what `isinstance` tests: a plain
-/// `class Character(str)` in each transpiled module would make every module's
-/// `Character` a distinct class object, so a value built in one module would
-/// fail `isinstance(v, Character)` in another. the registry gives every module
-/// in a process the one class — first definer wins, the rest reuse it.
-///
-/// this keeps transpiled output self-contained, which a shared import would
-/// not: `x: Character = "a"` currently needs nothing installed. if `Character`
-/// ever moves into a shipped `basedpython.by`, it becomes an ordinary import
-/// from that module and this registry goes away
-const CHARACTER_CLASS: &str = r#"import types as _by_types
-_by_rt = _by_sys.modules.setdefault("_by_runtime", _by_types.ModuleType("_by_runtime"))
-if not hasattr(_by_rt, "Character"):
-    class Character(str):
-        __slots__ = ()
-    _by_rt.Character = Character
-Character = _by_rt.Character
-"#;
-
-/// Preamble snippet defining the runtime helpers used by polyfill-mode
-/// lazified imports. Emitted once per file when any lazification fires
+/// The runtime helpers a polyfill-mode lazified module calls, by the name it
+/// calls them under. What each of those needs in turn — the proxy class, the
+/// `sys` binding, the operator forwarding — is settled in [`crate::runtime`],
+/// off the calls in their own bodies.
 #[expect(
     clippy::fn_params_excessive_bools,
-    reason = "independent which-helpers-to-emit flags, not a state machine"
+    reason = "independent which-helpers-are-needed flags, not a state machine"
 )]
-pub(crate) fn polyfill_preamble(
+pub(crate) fn polyfill_helpers(
     needs_module: bool,
     needs_attr: bool,
     needs_ty_ext: bool,
     needs_character_class: bool,
-) -> String {
-    if !needs_module && !needs_attr && !needs_ty_ext && !needs_character_class {
-        return String::new();
-    }
-    let needs_module = needs_module || needs_attr;
-    let mut out = String::new();
+) -> Vec<crate::runtime::Helper> {
+    let mut helpers = Vec::new();
+    // each only where the emitted code names it: a `from` import calls
+    // `_lazy_attr` alone, and what that calls in turn is the runtime's business
     if needs_module {
-        out.push_str("import importlib as _by_il, importlib.util as _by_iu, sys as _by_sys\n");
-        out.push_str("def _lazy_module(name):\n");
-        out.push_str("    mod = _by_sys.modules.get(name)\n");
-        out.push_str("    if mod is not None:\n");
-        out.push_str("        return mod\n");
-        // a dotted submodule can't take the `LazyLoader` path: `find_spec`
-        // needs the parent package imported, and a frozen alias like
-        // `collections.abc` (-> `_collections_abc`) fails to re-execute under a
-        // lazy load. import it eagerly — laziness is still preserved at the
-        // attribute level, since `_LazyAttr` only calls this on first use
-        out.push_str("    if \".\" in name:\n");
-        out.push_str("        return _by_il.import_module(name)\n");
-        out.push_str("    spec = _by_iu.find_spec(name)\n");
-        // `find_spec` returns `None` when the module isn't installed; raise
-        // a clean `ImportError` instead of letting the next line crash with
-        // `AttributeError: 'NoneType' object has no attribute 'loader'`
-        out.push_str("    if spec is None or spec.loader is None:\n");
-        out.push_str("        raise ImportError(f\"No module named {name!r}\", name=name)\n");
-        out.push_str("    spec.loader = _by_iu.LazyLoader(spec.loader)\n");
-        out.push_str("    mod = _by_iu.module_from_spec(spec)\n");
-        // publishing before `exec_module` leaves a module nothing has executed
-        // in `sys.modules`, and `exec_module` is not quiet: it opens with
-        // `import threading`, which through 3.12 reached `functools` and its
-        // `from collections import namedtuple`. lazifying `collections` then
-        // handed that shell back and the import failed. which stdlib module
-        // sits in the window is an accident of the version, so the name is
-        // claimed only once the module really is lazy, and `setdefault` yields
-        // to whoever imported it for real while the window was open
-        out.push_str("    spec.loader.exec_module(mod)\n");
-        out.push_str("    return _by_sys.modules.setdefault(name, mod)\n");
-    } else if needs_character_class {
-        // the `Character` registry reads `sys.modules`, so `sys` must be bound
-        // even when no import was lazified
-        out.push_str("import sys as _by_sys\n");
+        helpers.push(crate::runtime::LAZY_MODULE);
     }
     if needs_attr {
-        out.push_str(LAZY_ATTR_PROXY);
+        helpers.push(crate::runtime::LAZY_ATTR);
     }
     if needs_ty_ext {
-        // type-only marker for `ty_extensions` imports. Supports the type
-        // expression operations the language allows on these names without
-        // attempting a (non-existent) runtime import
-        out.push_str("class _TyExtMarker:\n");
-        out.push_str("    def __class_getitem__(cls, k): return cls\n");
+        helpers.push(crate::runtime::TY_EXT_MARKER);
     }
     if needs_character_class {
-        out.push_str(CHARACTER_CLASS);
+        helpers.push(crate::runtime::CHARACTER);
     }
-    out
+    helpers
 }
 
 #[cfg(test)]
@@ -721,7 +562,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("def _lazy_module(name):"),
+            out.contains("def _lazy_module("),
             "missing _lazy_module helper in:\n{out}"
         );
         assert!(
@@ -864,7 +705,7 @@ mod tests {
     fn polyfill_relative_submodule() {
         check_polyfill_body(
             "from . import x\n",
-            "x = _lazy_module(_by_iu.resolve_name(\".x\", __package__))\n",
+            "x = _lazy_module(\".x\", __package__)\n",
         );
     }
 
@@ -872,7 +713,7 @@ mod tests {
     fn polyfill_relative_attr() {
         check_polyfill_body(
             "from .pkg import x\n",
-            "x = _lazy_attr(_by_iu.resolve_name(\".pkg\", __package__), \"x\")\n",
+            "x = _lazy_attr(\".pkg\", \"x\", __package__)\n",
         );
     }
 
@@ -880,7 +721,7 @@ mod tests {
     fn polyfill_relative_double_dot() {
         check_polyfill_body(
             "from .. import x\n",
-            "x = _lazy_module(_by_iu.resolve_name(\"..x\", __package__))\n",
+            "x = _lazy_module(\"..x\", __package__)\n",
         );
     }
 
