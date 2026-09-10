@@ -1542,7 +1542,7 @@
         },
         "invalid-raises-clause": {
           "title": "detects a `raises` clause that is not a set of exceptions",
-          "description": "## What it does\nChecks for a basedpython `raises` clause that does not describe a set of\nexceptions.\n\n## Why is this bad?\nOnly a `BaseException` subclass can be raised, so a clause with no\nexception in it can never be satisfied by anything the function does.\n\n## Example\n\n```by\ndef f() raises int:  # error: `int` is not an exception\n    ...\n```",
+          "description": "## What it does\nChecks for a basedpython `raises` clause that does not describe a set of\nexceptions.\n\n## Why is this bad?\nOnly a `BaseException` subclass can be raised, so a clause with no\nexception in it can never be satisfied by anything the function does.\n\nA type parameter in a clause stands for one type the caller chooses, so\nit has to be declared an exception as well — a parameter with no bound\ncan be `int` as easily as `OSError`.\n\n## Example\n\n```by\ndef f() raises int:  # error: `int` is not an exception\n    ...\n\ndef g[T](value: T) raises T:  # error: `T@g` is not always an exception\n    ...\n```",
           "default": "error",
           "oneOf": [
             {

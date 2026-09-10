@@ -10579,6 +10579,24 @@ Source with applied edits:
     }
 
     #[test]
+    fn basedpython_inferred_raises_of_a_generic_callee() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def rethrow[T: BaseException](error: T) raises T:
+                raise error
+
+            def caller():
+                rethrow(TypeError())
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_raises: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
     fn basedpython_inferred_variance() {
         let mut test = basedpython_inlay_hint_test(
             "

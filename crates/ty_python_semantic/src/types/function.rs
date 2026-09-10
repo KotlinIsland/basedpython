@@ -85,7 +85,7 @@ use crate::types::diagnostic::{
     report_runtime_check_against_typed_dict,
 };
 use crate::types::display::DisplaySettings;
-use crate::types::generics::{GenericContext, typing_self};
+use crate::types::generics::{ApplySpecialization, GenericContext, Specialization, typing_self};
 use crate::types::infer::{
     function_known_decorators, infer_definition_types, nearest_enclosing_class, original_class_type,
 };
@@ -2058,20 +2058,93 @@ pub struct UpdatedFunctionSignatures<'db> {
     ///
     /// See also: [`FunctionLiteral::last_definition_signature`].
     implementation_callables: Option<Box<[CallableType<'db>]>>,
+
+    /// basedpython: the specializations applied to this function, one per generic context, each
+    /// already composed with every specialization applied after it.
+    ///
+    /// Applying a specialization rewrites the signature and keeps nothing of the mapping. A
+    /// function's exception set is not part of its signature, though: it is written in terms of
+    /// the function's own type parameters and its class's, and has to be specialized the same
+    /// way for a call through `f[OSError]`, `Reader[KeyError].read` or a bound method to raise
+    /// what it says. Only a basedpython function has an exception set, so only its type records
+    /// them.
+    specializations: Box<[Specialization<'db>]>,
 }
 
 impl<'db> UpdatedFunctionSignatures<'db> {
     fn new(
         signature: Option<CallableSignature<'db>>,
         implementation_callables: Option<Box<[CallableType<'db>]>>,
+        specializations: Box<[Specialization<'db>]>,
     ) -> Option<Box<Self>> {
-        (signature.is_some() || implementation_callables.is_some()).then(|| {
-            Box::new(Self {
-                signature,
-                implementation_callables,
+        (signature.is_some() || implementation_callables.is_some() || !specializations.is_empty())
+            .then(|| {
+                Box::new(Self {
+                    signature,
+                    implementation_callables,
+                    specializations,
+                })
             })
-        })
     }
+}
+
+/// `recorded` with the specialization `type_mapping` applies composed onto it, when that
+/// specialization can change what a call to `literal` raises.
+///
+/// Every earlier entry has the new specialization applied to its types, so a class projection
+/// (`T@Reader` to `U@Sub`) followed by a specialization of the subclass (`U@Sub` to `KeyError`)
+/// records `T@Reader` to `KeyError`. A generic context keeps its first entry: once its variables
+/// are substituted they no longer appear, so a later specialization of the same context changes
+/// nothing.
+///
+/// Anything recorded is part of the function type's identity, so nothing is recorded that cannot
+/// matter: a specialization that substitutes nothing, or one
+/// [`specialization_reaches_exception_set`](crate::types::exceptions::specialization_reaches_exception_set)
+/// rules out. Without that, passing a function through a generic call (`reveal_type(f)`) would
+/// hand back a type that differs from `f` by the call's own solution.
+fn compose_applied_specializations<'db>(
+    db: &'db dyn Db,
+    literal: FunctionLiteral<'db>,
+    recorded: &[Specialization<'db>],
+    type_mapping: &TypeMapping<'_, 'db>,
+) -> Box<[Specialization<'db>]> {
+    let (TypeMapping::ApplySpecialization(ApplySpecialization::Specialization {
+        specialization,
+        ..
+    })
+    | TypeMapping::ApplySpecializationWithMaterialization {
+        specialization: ApplySpecialization::Specialization { specialization, .. },
+        ..
+    }
+    | TypeMapping::ProjectUseSiteVariance {
+        specialization: ApplySpecialization::Specialization { specialization, .. },
+        ..
+    }) = type_mapping
+    else {
+        return recorded.into();
+    };
+    let specialization = *specialization;
+    if specialization.substitutes_nothing(db)
+        || !crate::types::exceptions::specialization_reaches_exception_set(
+            db,
+            literal,
+            specialization,
+        )
+    {
+        return recorded.into();
+    }
+
+    let mut composed: Vec<Specialization<'db>> = recorded
+        .iter()
+        .map(|earlier| earlier.apply_specialization(db, specialization))
+        .collect();
+    if !composed
+        .iter()
+        .any(|earlier| earlier.generic_context(db) == specialization.generic_context(db))
+    {
+        composed.push(specialization);
+    }
+    composed.into_boxed_slice()
 }
 
 /// Represents a function type, which might be a non-generic function, or a specialization of a
@@ -2107,6 +2180,14 @@ pub(super) fn walk_function_type<'db, V: super::visitor::TypeVisitor<'db> + ?Siz
 
 #[salsa::tracked]
 impl<'db> FunctionType<'db> {
+    /// basedpython: the specializations applied to this function — see
+    /// [`UpdatedFunctionSignatures::specializations`].
+    pub(crate) fn applied_specializations(self, db: &'db dyn Db) -> &'db [Specialization<'db>] {
+        self.updated_signatures(db)
+            .as_deref()
+            .map_or(&[], |updated| &updated.specializations)
+    }
+
     pub(super) fn updated_signature(self, db: &'db dyn Db) -> Option<&'db CallableSignature<'db>> {
         self.updated_signatures(db)
             .as_deref()
@@ -2154,6 +2235,7 @@ impl<'db> FunctionType<'db> {
             UpdatedFunctionSignatures::new(
                 self.updated_signature(db).cloned(),
                 Some(implementation_callables),
+                self.applied_specializations(db).into(),
             ),
         )
     }
@@ -2186,6 +2268,7 @@ impl<'db> FunctionType<'db> {
             UpdatedFunctionSignatures::new(
                 Some(updated_signature),
                 updated_implementation_callables,
+                self.applied_specializations(db).into(),
             ),
         )
     }
@@ -2267,7 +2350,16 @@ impl<'db> FunctionType<'db> {
             Self::new(
                 db,
                 literal,
-                UpdatedFunctionSignatures::new(updated_signature, updated_implementation_callables),
+                UpdatedFunctionSignatures::new(
+                    updated_signature,
+                    updated_implementation_callables,
+                    compose_applied_specializations(
+                        db,
+                        literal,
+                        self.applied_specializations(db),
+                        type_mapping,
+                    ),
+                ),
             )
         }
     }
@@ -2733,6 +2825,7 @@ impl<'db> FunctionType<'db> {
                     UpdatedFunctionSignatures::new(
                         updated_signature,
                         updated_implementation_callables,
+                        self.applied_specializations(db).into(),
                     ),
                 ))
             },

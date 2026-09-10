@@ -3830,6 +3830,471 @@ def main():
 }
 
 #[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn raises_guard_of_a_reified_generic_tests_the_type_argument() {
+    // a reified type parameter carries the type the caller chose, so the guard
+    // tests exactly that rather than the ceiling: `PermissionError` is an
+    // `OSError`, which the bound allows and `T = FileNotFoundError` does not.
+    // the specialization is applied after the guard decorator, so this also says
+    // the guard kept `rethrow[...]` answering
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "def boom(kind: dynamic):
+    raise kind(\"boom\")
+
+def rethrow[reified T: OSError](kind: dynamic) raises T:
+    boom(kind)
+
+def main():
+    try:
+        rethrow[FileNotFoundError](FileNotFoundError)
+    except BaseException as e:
+        print(\"declared\", type(e).__name__)
+    try:
+        rethrow[FileNotFoundError](PermissionError)
+    except BaseException as e:
+        print(\"undeclared\", type(e).__name__)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main", "--runtime-raises-checks"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "declared FileNotFoundError\nundeclared AssertionError"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn raises_guard_of_a_reified_class_reads_the_receiver() {
+    // a class's type argument belongs to the instance, so a method's guard asks
+    // the receiver it was called on for it
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "def boom(kind: dynamic):
+    raise kind(\"boom\")
+
+class Rethrower[reified T: OSError]:
+    def rethrow(self, kind: dynamic) raises T:
+        boom(kind)
+
+def main():
+    r = Rethrower[FileNotFoundError]()
+    try:
+        r.rethrow(FileNotFoundError)
+    except BaseException as e:
+        print(\"declared\", type(e).__name__)
+    try:
+        r.rethrow(PermissionError)
+    except BaseException as e:
+        print(\"undeclared\", type(e).__name__)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main", "--runtime-raises-checks"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "declared FileNotFoundError\nundeclared AssertionError"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn raises_guard_of_an_unreified_parameter_tests_its_ceiling() {
+    // nothing carries `T` at runtime here, and asking for it would mean reifying
+    // the parameter — an option that adds a check must not change the shape of
+    // the program. so the guard tests what the declaration states without it:
+    // an `OSError` passes, anything else does not. built for 3.9, the generic
+    // `def` goes through the pep 695 polyfill, whose `TypeVar` definitions have
+    // to land above the guard
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "def boom(kind: dynamic):
+    raise kind(\"boom\")
+
+def rethrow[T: OSError](kind: dynamic) raises T:
+    boom(kind)
+
+def main():
+    try:
+        rethrow(PermissionError)
+    except BaseException as e:
+        print(\"inside the bound\", type(e).__name__)
+    try:
+        rethrow(ValueError)
+    except BaseException as e:
+        print(\"outside the bound\", type(e).__name__)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args([
+            "run",
+            "main",
+            "--runtime-raises-checks",
+            "--min-version",
+            "3.9",
+        ])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "inside the bound PermissionError\noutside the bound AssertionError"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn raises_guard_of_a_reified_generic_method_reads_the_bound_instance() {
+    // a method that is itself reified is wrapped in `generic`, which binds the
+    // receiver and passes the rest on: the class's argument comes from the
+    // instance the method was looked up on, not from whatever is passed first
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def boom(kind: dynamic):
+    raise kind(\"boom\")
+
+class R[reified T: OSError]:
+    def m[reified U](self, other: dynamic, marker: U, kind: dynamic) raises T:
+        boom(kind)
+
+def main():
+    r = R[FileNotFoundError]()
+    try:
+        r.m(R[PermissionError](), 1, PermissionError)
+    except BaseException as e:
+        print(\"undeclared\", type(e).__name__)
+    try:
+        r.m(R[PermissionError](), 1, FileNotFoundError)
+    except BaseException as e:
+        print(\"declared\", type(e).__name__)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main", "--runtime-raises-checks"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "undeclared AssertionError\ndeclared FileNotFoundError"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn raises_guard_of_a_nested_function_tests_a_class_parameter_at_its_ceiling() {
+    // `inner` is not a method, so its first argument is not a receiver and the
+    // class's argument cannot be read off it: the guard tests the bound instead
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def boom(kind: dynamic):
+    raise kind(\"boom\")
+
+class R[reified T: OSError]:
+    def m(self):
+        def inner(source: dynamic, kind: dynamic) raises T:
+            boom(kind)
+        for kind in [FileNotFoundError, PermissionError, ValueError]:
+            try:
+                inner(R[PermissionError](), kind)
+            except BaseException as e:
+                print(kind.__name__, type(e).__name__)
+
+def main():
+    R[FileNotFoundError]().m()
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main", "--runtime-raises-checks"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "FileNotFoundError FileNotFoundError\nPermissionError PermissionError\nValueError AssertionError"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn raises_guard_of_a_nested_function_reads_an_enclosing_reified_argument() {
+    // the guard on `inner` is evaluated inside a call of `outer`, where `T` is
+    // already the argument `outer` was specialized with
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def boom(kind: dynamic):
+    raise kind(\"boom\")
+
+def outer[reified T: OSError](kind: dynamic):
+    def inner() raises T:
+        boom(kind)
+    try:
+        inner()
+    except BaseException as e:
+        print(kind.__name__, type(e).__name__)
+
+def main():
+    outer[FileNotFoundError](FileNotFoundError)
+    outer[FileNotFoundError](PermissionError)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main", "--runtime-raises-checks"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "FileNotFoundError FileNotFoundError\nPermissionError AssertionError"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn raises_guard_tests_a_subscripted_type_argument_by_its_origin() {
+    // `isinstance` refuses `MyErr[int]`, and a guard that raised `TypeError`
+    // there would replace the exception the function legitimately raised. the
+    // shallow test is the origin, as `list[str]` is tested as `list`
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def boom(kind: dynamic):
+    raise kind(\"boom\")
+
+class MyErr[X](OSError): ...
+
+def rethrow[reified T: OSError](kind: dynamic) raises T:
+    boom(kind)
+
+def main():
+    try:
+        rethrow[MyErr[int]](MyErr)
+    except BaseException as e:
+        print(\"declared\", type(e).__name__)
+    try:
+        rethrow[MyErr[int]](PermissionError)
+    except BaseException as e:
+        print(\"undeclared\", type(e).__name__)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main", "--runtime-raises-checks"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "declared MyErr\nundeclared AssertionError"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn raises_guard_keeps_a_reified_generic_documented() {
+    // the guard wraps a reified generic in an object of its own, which must not
+    // answer for the function's docstring with its own
+    let Some(python) = python_at_least_312() else {
+        eprintln!("skipping: no python 3.12+ interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def rethrow[reified T: OSError](error: T) raises T:
+    \"\"\"rethrows what it is given\"\"\"
+    raise error
+
+def main():
+    print(rethrow.__doc__)
+    print(rethrow[OSError].__doc__)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main", "--runtime-raises-checks"])
+        .env("PYTHON", &python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "rethrows what it is given\nrethrows what it is given"
+    );
+}
+
+#[test]
 fn raises_guard_covers_an_async_generator() {
     // an async generator answers `False` to both `iscoroutinefunction` and
     // `isgeneratorfunction`, so a wrapper that forgets it returns the generator

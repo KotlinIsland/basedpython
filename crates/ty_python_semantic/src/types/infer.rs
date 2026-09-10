@@ -55,6 +55,7 @@ use std::borrow::Cow;
 pub(super) use ty_python_core::frozen::{FrozenMap, FrozenSet, FrozenValueMap};
 
 use crate::types::diagnostic::TypeCheckDiagnostics;
+use crate::types::exceptions::CallSolution;
 use crate::types::function::{FunctionDecorators, FunctionType};
 use crate::types::generics::Specialization;
 use crate::types::unpacker::{UnpackResult, Unpacker};
@@ -1087,6 +1088,10 @@ struct ScopeInferenceExtra<'db> {
     /// candidate's typevars adopts and locks the specialization.
     fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
+    /// basedpython: what each call to a generic function solved that function's own type
+    /// parameters to — see [`CallSolution`].
+    call_solutions: FxHashMap<ExpressionNodeKey, CallSolution<'db>>,
+
     /// The fallback type for missing expressions/bindings/declarations or recursive type inference.
     cycle_recovery: Option<Type<'db>>,
 
@@ -1095,6 +1100,15 @@ struct ScopeInferenceExtra<'db> {
 }
 
 impl<'db> ScopeInference<'db> {
+    /// basedpython: what `call` solved its callee's own type parameters to.
+    pub(crate) fn call_solution(&self, call: &ast::ExprCall) -> Option<CallSolution<'db>> {
+        self.extra
+            .as_deref()?
+            .call_solutions
+            .get(&ExpressionNodeKey::from(call))
+            .copied()
+    }
+
     fn cycle_initial(cycle_recovery: Type<'db>) -> Self {
         Self {
             extra: Some(Box::new(ScopeInferenceExtra {
@@ -1498,6 +1512,10 @@ struct OtherDefinitionInferenceExtra<'db> {
     /// bidirectional type context, the contextual type. A context that constrains the
     /// candidate's typevars adopts and locks the specialization.
     fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
+
+    /// basedpython: what each call to a generic function solved that function's own type
+    /// parameters to — see [`CallSolution`].
+    call_solutions: FxHashMap<ExpressionNodeKey, CallSolution<'db>>,
 
     /// The creation-time type of a fluid specialization candidate defined by this
     /// region, with literal types retained.
@@ -2021,6 +2039,10 @@ struct ExpressionInferenceExtra<'db> {
     /// candidate's typevars adopts and locks the specialization.
     fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
+    /// basedpython: what each call to a generic function solved that function's own type
+    /// parameters to — see [`CallSolution`].
+    call_solutions: FxHashMap<ExpressionNodeKey, CallSolution<'db>>,
+
     /// The creation-time type of a fluid specialization candidate whose assigned value
     /// is this region, with literal types retained.
     fluid_creation: Option<Type<'db>>,
@@ -2324,6 +2346,10 @@ struct StatementInferenceInnerExtra<'db> {
     /// bidirectional type context, the contextual type. A context that constrains the
     /// candidate's typevars adopts and locks the specialization.
     fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
+
+    /// basedpython: what each call to a generic function solved that function's own type
+    /// parameters to — see [`CallSolution`].
+    call_solutions: FxHashMap<ExpressionNodeKey, CallSolution<'db>>,
 
     /// The fallback type for missing expressions/bindings/declarations or recursive type inference.
     cycle_recovery: Option<Type<'db>>,

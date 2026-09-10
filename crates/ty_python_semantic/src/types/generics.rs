@@ -1624,8 +1624,20 @@ impl<'db> Specialization<'db> {
     /// `{U: int}`, we can apply the second specialization to the first, resulting in `T: int`.
     /// That lets us produce the generic alias `A[int]`, which is the corresponding entry in the
     /// MRO of `B[int]`.
-    fn apply_specialization(self, db: &'db dyn Db, other: Specialization<'db>) -> Self {
+    pub(super) fn apply_specialization(self, db: &'db dyn Db, other: Specialization<'db>) -> Self {
         self.apply_specialization_with_recursion(db, other, None)
+    }
+
+    /// basedpython: whether this maps every type variable of its generic context to an
+    /// occurrence of that same parameter, so that applying it substitutes nothing — see
+    /// [`BoundTypeVarInstance::is_occurrence_of_same_parameter`].
+    pub(crate) fn substitutes_nothing(self, db: &'db dyn Db) -> bool {
+        self.generic_context(db)
+            .variables(db)
+            .zip(self.types(db))
+            .all(|(variable, ty)| {
+                matches!(ty, Type::TypeVar(solved) if solved.is_occurrence_of_same_parameter(db, variable))
+            })
     }
 
     pub(super) fn apply_specialization_with_recursion(

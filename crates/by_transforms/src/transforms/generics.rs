@@ -69,6 +69,15 @@ pub(crate) struct GenericPolyfill<'src> {
     /// ranges of `pending_edits` this pass re-rendered; the driver drops them so
     /// the stale un-renamed text cannot win the overlap race
     superseded: Vec<TextRange>,
+    /// the `TypeVar` definitions a polyfilled `class` / `def` needs, keyed on the
+    /// start of the line its definition begins on
+    ///
+    /// these are statements, so they go through the driver's statement-insert
+    /// channel rather than an ordinary text edit: that channel leads every other
+    /// insertion at the same offset, which keeps a decorator another lowering
+    /// writes there — the `raises` runtime guard on a top-level `def` — below
+    /// them. a statement between a decorator and its `def` is not python at all
+    statement_prefixes: Vec<(TextSize, String)>,
 }
 
 #[derive(Default)]
@@ -168,6 +177,7 @@ impl<'src> GenericPolyfill<'src> {
             symbolic_substitutions,
             pending_edits,
             superseded: Vec::new(),
+            statement_prefixes: Vec::new(),
         }
     }
 
@@ -728,8 +738,7 @@ impl<'src> GenericPolyfill<'src> {
         let indent = indent.to_owned();
         let prefix = self.dedupe_defs(&defs, &indent);
         if !prefix.is_empty() {
-            self.edits
-                .push(Fix::safe_edit(Edit::insertion(prefix, line_start)));
+            self.statement_prefixes.push((line_start, prefix));
         }
 
         // Rename type param references in class body.
@@ -793,8 +802,7 @@ impl<'src> GenericPolyfill<'src> {
         let indent = indent.to_owned();
         let prefix = self.dedupe_defs(&defs, &indent);
         if !prefix.is_empty() {
-            self.edits
-                .push(Fix::safe_edit(Edit::insertion(prefix, line_start)));
+            self.statement_prefixes.push((line_start, prefix));
         }
 
         // Rename type param references in parameter annotations, return type, and body.
@@ -1325,6 +1333,10 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
         if emits_any {
             ctx.required_imports
                 .push("from typing import Any".to_owned());
+        }
+        for (at, prefix) in std::mem::take(&mut inner.statement_prefixes) {
+            ctx.statement_inserts
+                .push((at, vec![super::ast_driver::Fragment::Lit(prefix)]));
         }
         for fix in inner.edits {
             for edit in fix.edits() {

@@ -377,7 +377,7 @@ pub fn inferred_reified_class_type_param_names(
 ///
 /// `None` when the function is called without one: a `staticmethod`, or a
 /// signature whose parameters are all keyword-only or variadic
-fn method_receiver(function: &ast::StmtFunctionDef) -> Option<&str> {
+pub(crate) fn method_receiver(function: &ast::StmtFunctionDef) -> Option<&str> {
     if function
         .decorator_list
         .iter()
