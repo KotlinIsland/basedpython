@@ -895,8 +895,9 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
                 ctx.required_imports.push(format!("{trimmed}\n"));
             }
         }
-        ctx.required_imports
-            .extend(inner.callable.take_import_lines());
+        let (imports, helpers) = inner.callable.take_requirements();
+        ctx.required_imports.extend(imports);
+        ctx.runtime.extend(helpers);
         ctx.type_only_imports.extend(
             inner
                 .type_only_imports

@@ -115,3 +115,19 @@ fn a_plain_tuple_under_an_alias_is_coerced() {
 fn both_construction_spellings_build_one_class() {
     run(SPELLING_PROGRAM);
 }
+
+/// a wrapped-optional field lowers to the runtime's `Optional`, which a
+/// `NamedTuple` evaluates as the class is created — so the hoisted class has to
+/// come after the runtime's definitions, not ahead of them
+const WRAPPED_OPTIONAL_PROGRAM: &str = r#"
+def g() -> (a: int??, b: int):
+    return (a=None, b=2)
+
+assert g().b == 2, "b"
+print("ok")
+"#;
+
+#[test]
+fn a_hoisted_class_sees_the_runtime() {
+    run(WRAPPED_OPTIONAL_PROGRAM);
+}

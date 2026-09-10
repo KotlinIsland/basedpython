@@ -68,6 +68,7 @@ use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::source_util::{preamble_offset, temporary_name};
+use crate::Config;
 
 /// the version that understands `match` natively; at or above it nothing here runs
 const MATCH_VERSION: PythonVersion = PythonVersion::PY310;
@@ -77,11 +78,11 @@ const MATCH_VERSION: PythonVersion = PythonVersion::PY310;
 const LOWERING_VERSION: PythonVersion = PythonVersion::PY38;
 
 /// the sentinel a helper returns for "this sub-pattern did not match"
-const MISS: &str = "_by_match_miss";
+const MISS: &str = crate::runtime::MATCH_MISS.name();
 
 /// Rewrite every `match` statement in `source` for a target that predates them.
-pub(crate) fn lower(source: String, min_version: PythonVersion) -> String {
-    if !(LOWERING_VERSION..MATCH_VERSION).contains(&min_version) {
+pub(crate) fn lower(source: String, config: &Config) -> String {
+    if !(LOWERING_VERSION..MATCH_VERSION).contains(&config.min_version) {
         return source;
     }
 
@@ -106,7 +107,7 @@ pub(crate) fn lower(source: String, min_version: PythonVersion) -> String {
         .iter()
         .any(|(_, replacement)| replacement.contains(MISS));
     let body = apply(&source, edits);
-    let preamble = preamble(&needs, sentinel);
+    let preamble = crate::runtime_preamble(config, &helpers(&needs, sentinel));
     let at = preamble_offset(&body);
     format!("{}{preamble}{}", &body[..at], &body[at..])
 }
@@ -492,93 +493,33 @@ fn disjoin(parts: &[String]) -> String {
 /// lacks an attribute or a key falls through to the next case — while a subject
 /// whose class is malformed (a `__match_args__` that is not a tuple of names)
 /// still raises the `TypeError` python raises for it.
-fn preamble(needs: &Needs, sentinel: bool) -> String {
-    let mut out = String::new();
+/// The runtime helpers a lowered `match` calls, by the name it calls them
+/// under. What each needs in turn — the sentinel a lookup returns, the sequence
+/// types it tests against — is settled in [`crate::runtime`].
+fn helpers(needs: &Needs, sentinel: bool) -> Vec<crate::runtime::Helper> {
+    let mut helpers = Vec::new();
+    // the chain names the sentinel itself where a pattern compares against it,
+    // rather than only reaching it through a helper that returns it
     if sentinel {
-        out.push_str("_by_match_miss = object()\n");
-    }
-
-    if needs.sequence || needs.mapping {
-        out.push_str("import collections.abc as _by_match_abc\n");
+        helpers.push(crate::runtime::MATCH_MISS);
     }
     if needs.sequence {
-        // python decides "is a sequence" by a type flag rather than by an ABC,
-        // and sets it on a handful of builtins that register no ABC of their
-        // own. str, bytes and bytearray carry the flag's opposite: they are
-        // sequences everywhere else, and never match a sequence pattern
-        out.push_str("import array as _by_match_array\n");
-        out.push_str(
-            "_by_match_seq_types = (list, tuple, range, memoryview, _by_match_array.array, \
-             _by_match_abc.Sequence)\n",
-        );
-        out.push_str("def _by_match_seq(subject):\n");
-        out.push_str(
-            "    return isinstance(subject, _by_match_seq_types) and not isinstance(subject, \
-             (str, bytes, bytearray))\n",
-        );
+        helpers.push(crate::runtime::MATCH_SEQ);
     }
     if needs.mapping {
-        out.push_str("def _by_match_map(subject):\n");
-        out.push_str("    return isinstance(subject, _by_match_abc.Mapping)\n");
-        out.push_str("def _by_match_key(subject, key):\n");
-        out.push_str("    try:\n");
-        out.push_str("        return subject[key]\n");
-        out.push_str("    except KeyError:\n");
-        out.push_str("        return _by_match_miss\n");
+        helpers.push(crate::runtime::MATCH_MAP);
+        helpers.push(crate::runtime::MATCH_KEY);
     }
     if needs.mapping_rest {
-        out.push_str("def _by_match_rest(subject, matched):\n");
-        out.push_str(
-            "    return {key: value for key, value in subject.items() if key not in matched}\n",
-        );
+        helpers.push(crate::runtime::MATCH_REST);
     }
     if needs.class_positional {
-        // a handful of builtins take one positional sub-pattern that matches
-        // the subject itself, in place of reading `__match_args__`
-        out.push_str(
-            "_by_match_self = (bool, bytearray, bytes, dict, float, frozenset, int, list, set, \
-             str, tuple)\n",
-        );
-        out.push_str("def _by_match_args(cls, subject, count):\n");
-        out.push_str("    if cls in _by_match_self:\n");
-        out.push_str("        if count > 1:\n");
-        out.push_str(
-            "            raise TypeError(f\"{cls.__name__}() accepts 1 positional sub-pattern \
-             ({count} given)\")\n",
-        );
-        out.push_str("        return (subject,)\n");
-        out.push_str("    args = getattr(cls, \"__match_args__\", ())\n");
-        out.push_str("    if not isinstance(args, tuple):\n");
-        out.push_str(
-            "        raise TypeError(f\"{cls.__name__}.__match_args__ must be a tuple \
-             (got {type(args).__name__})\")\n",
-        );
-        out.push_str("    if count > len(args):\n");
-        out.push_str(
-            "        raise TypeError(f\"{cls.__name__}() accepts {len(args)} positional \
-             sub-patterns ({count} given)\")\n",
-        );
-        out.push_str("    values = []\n");
-        out.push_str("    for name in args[:count]:\n");
-        out.push_str("        if not isinstance(name, str):\n");
-        out.push_str(
-            "            raise TypeError(f\"__match_args__ elements must be strings \
-             (got {type(name).__name__})\")\n",
-        );
-        out.push_str("        try:\n");
-        out.push_str("            values.append(getattr(subject, name))\n");
-        out.push_str("        except AttributeError:\n");
-        out.push_str("            return _by_match_miss\n");
-        out.push_str("    return tuple(values)\n");
+        helpers.push(crate::runtime::MATCH_ARGS);
     }
     if needs.class_keyword {
-        out.push_str("def _by_match_attr(subject, name):\n");
-        out.push_str("    try:\n");
-        out.push_str("        return getattr(subject, name)\n");
-        out.push_str("    except AttributeError:\n");
-        out.push_str("        return _by_match_miss\n");
+        helpers.push(crate::runtime::MATCH_ATTR);
     }
-    out
+    helpers
 }
 
 #[cfg(test)]

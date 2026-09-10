@@ -440,8 +440,12 @@ pub(crate) fn cleanup(
         }
     };
     push_missing(&mut preamble, "from typing import Protocol");
-    for line in inner.callable.take_import_lines() {
-        push_missing(&mut preamble, &line);
+    let (imports, helpers) = inner.callable.take_requirements();
+    for line in imports
+        .into_iter()
+        .chain(crate::runtime_entries(config, &helpers))
+    {
+        push_missing(&mut preamble, line.trim_end_matches('\n'));
     }
     for defs in [inner.callable.class_defs().to_owned(), inner.class_defs()] {
         for class_def in defs.split_inclusive("\n\n") {
@@ -470,8 +474,9 @@ impl TypeAwarePass for ProtocolTypePass<'_> {
                     .push(defs.trim_end_matches('\n').to_owned());
             }
         }
-        ctx.required_imports
-            .extend(inner.callable.take_import_lines());
+        let (imports, helpers) = inner.callable.take_requirements();
+        ctx.required_imports.extend(imports);
+        ctx.runtime.extend(helpers);
         for fix in inner.edits {
             for edit in fix.edits() {
                 ctx.text_edits

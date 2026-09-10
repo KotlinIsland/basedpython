@@ -1,7 +1,7 @@
 //! Runtime lowering for the `Some(...)` optional constructor.
 //!
 //! `Some` is the present-case constructor for a wrapped optional. It lowers to
-//! the runtime `Optional` wrapper class (see [`wrapped_runtime`]), so `Some(x)`
+//! the runtime `Optional` wrapper class (see [`crate::runtime`]), so `Some(x)`
 //! becomes `Optional(x)`. The class is injected as a polyfill when any `Some`
 //! reference is rewritten.
 //!
@@ -13,7 +13,6 @@ use ruff_python_ast::{Expr, ExprContext, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
-use super::wrapped_runtime::OPTIONAL_RUNTIME;
 use crate::type_info::TypeInfo;
 
 struct SomeCtor {
@@ -62,7 +61,7 @@ impl TypeAwarePass for SomeCtorPass {
             inner.visit_stmt(stmt);
         }
         if inner.used {
-            ctx.required_imports.push(OPTIONAL_RUNTIME.to_owned());
+            ctx.runtime.insert(crate::runtime::OPTIONAL);
         }
         ctx.text_edits.extend(inner.edits);
     }

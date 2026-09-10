@@ -18,7 +18,7 @@
 //! directly wrapping another optional keeps the outer layer as the runtime
 //! `Optional[...]` wrapper (`int??` ⇒ `Optional[int | None]`) so its distinct
 //! outer-`None` state is not collapsed into the inner one. the wrapper's runtime
-//! class (see [`wrapped_runtime`](super::wrapped_runtime)) is injected when emitted.
+//! class (see [`crate::runtime`]) is injected when emitted.
 //!
 //! The result form `T ? E` (`ExprBinOp` with `Operator::Result`) and the
 //! postfix `^` / `!` operators are intentionally left for a later pass — their
@@ -29,7 +29,6 @@ use ruff_python_ast::{Expr, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
-use super::wrapped_runtime::OPTIONAL_RUNTIME;
 use crate::type_info::TypeInfo;
 
 /// Walks the source AST and emits narrow text edits that lower each optional in
@@ -227,7 +226,7 @@ impl TypeAwarePass for OptionalTypePass<'_> {
             lower.visit_stmt(stmt);
         }
         if lower.needs_runtime {
-            ctx.required_imports.push(OPTIONAL_RUNTIME.to_owned());
+            ctx.runtime.insert(crate::runtime::OPTIONAL);
         }
         if lower.needs_union {
             ctx.required_imports

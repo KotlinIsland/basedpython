@@ -457,8 +457,7 @@ impl AstPass for TypedDictLiteralPass<'_> {
                 .push("from typing import Literal".to_owned());
         }
         if inner.needs_optional_runtime {
-            ctx.required_imports
-                .push(super::wrapped_runtime::OPTIONAL_RUNTIME.to_owned());
+            ctx.runtime.insert(crate::runtime::OPTIONAL);
         }
         if inner.needs_import {
             // synthesized classes use `closed=True` / `extra_items=T` (PEP 728),

@@ -1,5 +1,6 @@
 pub mod config;
 mod reverse_transforms;
+pub mod runtime;
 pub(crate) mod source_map;
 mod transforms;
 pub(crate) mod type_info;
@@ -138,6 +139,16 @@ fn transpile_with_report(
     // and — as long as nothing rewrites the source — by phase 0's type-aware
     // passes, which would otherwise build an identical one of their own
     let (local_db, local_file) = make_in_memory_db(source);
+    // what the author wrote, before any rewrite, so phase 3 can tell a helper
+    // call the transpiler emitted from a name the program reads itself
+    let written = names_written(
+        ruff_db::parsed::parsed_module(
+            &local_db,
+            ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
+        )
+        .load(&local_db)
+        .suite(),
+    );
 
     // --- Erased-union reification: give a `list[int] | list[str]` parameter a
     // reified type parameter, while the source is still the one ty checks ---
@@ -215,7 +226,7 @@ fn transpile_with_report(
     let final_output = run_version_polyfill_phase(final_output, config);
 
     // --- Phase 3: syntax verification ---
-    verify_syntax(&final_output).map_err(|e| e.message)?;
+    verify_syntax(&final_output, &written).map_err(|e| e.message)?;
     verify_target_syntax(&final_output, config).map_err(|e| e.message)?;
 
     Ok((final_output, requirements))
@@ -320,6 +331,15 @@ pub fn transpile_typed_with_report(
             RuntimeRequirements::default(),
         ));
     }
+
+    let written = names_written(
+        ruff_db::parsed::parsed_module(
+            db,
+            ty_python_semantic::Db::program_file(db, file).python_file(db),
+        )
+        .load(db)
+        .suite(),
+    );
 
     // erased-union reification: give a `list[int] | list[str]` parameter a
     // reified type parameter, against the source ty checks. edits stay inside
@@ -466,8 +486,8 @@ pub fn transpile_typed_with_report(
     line_map.extend(composed[kept..].iter().copied());
 
     // verify last: on failure, map the generated span back to a `.by` range
-    let verified =
-        verify_syntax(&final_output).and_then(|()| verify_target_syntax(&final_output, config));
+    let verified = verify_syntax(&final_output, &written)
+        .and_then(|()| verify_target_syntax(&final_output, config));
     if let Err(mut err) = verified {
         err.by_range = err.output_range.and_then(|r| {
             output_offset_to_by_range(&line_map, &final_output, original_source, r.start())
@@ -544,8 +564,9 @@ fn run_anon_named_tuple_cleanup(mut source: String, config: &Config) -> Result<S
                 }
             };
             push_missing(&mut preamble, "from typing import NamedTuple");
-            for line in anon.callable.take_import_lines() {
-                push_missing(&mut preamble, &line);
+            let (imports, helpers) = anon.callable.take_requirements();
+            for line in imports.into_iter().chain(runtime_entries(config, &helpers)) {
+                push_missing(&mut preamble, line.trim_end_matches('\n'));
             }
             for defs in [anon.callable.class_defs().to_owned(), anon.class_defs()] {
                 for class_def in defs.split_inclusive("\n\n") {
@@ -637,8 +658,12 @@ fn run_lazy_import_phase(
     .load(&db);
 
     let keyword_supported = config.min_version >= ruff_python_ast::PythonVersion::from((3, 15));
+    // the runtime is what the polyfill itself runs on, and a helper reached
+    // through a proxy would be a proxy call on every use
+    let mut eager = eager.to_vec();
+    eager.extend(config.runtime_module.clone());
     let mut lazy =
-        transforms::lazy_import::LazyImport::new(src, keyword_supported, eager, eager_names);
+        transforms::lazy_import::LazyImport::new(src, keyword_supported, &eager, eager_names);
     for stmt in module.suite() {
         lazy.visit_stmt(stmt);
     }
@@ -647,21 +672,47 @@ fn run_lazy_import_phase(
     let needs_ty_ext = lazy.needs_ty_ext_marker;
     let needs_character_class = lazy.needs_character_class;
 
-    let preamble = transforms::lazy_import::polyfill_preamble(
+    let helpers = transforms::lazy_import::polyfill_helpers(
         needs_module,
         needs_attr,
         needs_ty_ext,
         needs_character_class,
     );
-    if lazy.edits.is_empty() && preamble.is_empty() {
+    if lazy.edits.is_empty() && helpers.is_empty() {
         return source;
     }
 
+    let preamble = runtime_preamble(config, &helpers);
     let (body, _) = apply_transforms_once(src, lazy.edits);
     if preamble.is_empty() {
         body
     } else {
         splice_preamble(&body, &preamble)
+    }
+}
+
+/// The lines that give a module the runtime helpers it calls: an import of the
+/// module a build wrote them to, or the definitions themselves when this
+/// transpile has nowhere to write one.
+///
+/// Both come out of `_by_runtime.py`, so the pasted-in form and the imported one
+/// are the same code either way.
+fn runtime_preamble(config: &Config, helpers: &[runtime::Helper]) -> String {
+    runtime_entries(config, helpers).concat()
+}
+
+/// The same lines, one per entry and each newline-terminated, for a caller that
+/// prepends them one at a time.
+fn runtime_entries(config: &Config, helpers: &[runtime::Helper]) -> Vec<String> {
+    if helpers.is_empty() {
+        return Vec::new();
+    }
+    match config.runtime_module.as_deref() {
+        Some(module) => vec![format!(
+            "{}\n",
+            runtime::import_line(module, helpers.iter().copied())
+        )],
+        None => runtime::inline(helpers.iter().copied()),
     }
 }
 
@@ -676,7 +727,7 @@ fn run_lazy_import_phase(
 /// lines it adds are the runtime preamble's, at the top, where the line map
 /// already accounts for generated leading lines.
 fn run_version_polyfill_phase(source: String, config: &Config) -> String {
-    transforms::match_polyfill::lower(source, config.min_version)
+    transforms::match_polyfill::lower(source, config)
 }
 
 /// Re-parse the transpiled output *as the target python version* and report any
@@ -764,7 +815,7 @@ impl From<String> for TranspileError {
     }
 }
 
-fn verify_syntax(source: &str) -> Result<(), TranspileError> {
+fn verify_syntax(source: &str, written: &HashSet<String>) -> Result<(), TranspileError> {
     use ruff_python_ast::{PySourceType, visitor::Visitor};
 
     let parsed = ruff_python_parser::parse_unchecked_source(source, PySourceType::Python);
@@ -852,7 +903,84 @@ fn verify_syntax(source: &str) -> Result<(), TranspileError> {
         });
     }
 
-    Ok(())
+    verify_runtime_helpers(parsed.suite(), written)
+}
+
+/// every name the author's own source reads
+fn names_written(suite: &[Stmt]) -> HashSet<String> {
+    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
+
+    struct Reads(HashSet<String>);
+    impl SourceOrderVisitor<'_> for Reads {
+        fn visit_expr(&mut self, expr: &ruff_python_ast::Expr) {
+            if let ruff_python_ast::Expr::Name(name) = expr
+                && name.ctx.is_load()
+            {
+                self.0.insert(name.id.to_string());
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut reads = Reads(HashSet::new());
+    for stmt in suite {
+        walk_stmt(&mut reads, stmt);
+    }
+    reads.0
+}
+
+/// reject output that calls a runtime helper the module was never given
+///
+/// a transform emits a call and records the helper it needs in two different
+/// places. forgetting the second half produces python that parses, checks, and
+/// raises `NameError` the first time the lowered line runs
+///
+/// only a name the author's source never reads is put down to the transpiler:
+/// one the author wrote is theirs to have bound, however they bound it. the
+/// runtime is only ever provided at module scope, as an import or a pasted
+/// definition, so that is where the name has to be bound
+fn verify_runtime_helpers(suite: &[Stmt], written: &HashSet<String>) -> Result<(), TranspileError> {
+    use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
+
+    struct Emitted<'a> {
+        written: &'a HashSet<String>,
+        reads: Vec<(String, TextRange)>,
+    }
+    impl SourceOrderVisitor<'_> for Emitted<'_> {
+        fn visit_expr(&mut self, expr: &ruff_python_ast::Expr) {
+            if let ruff_python_ast::Expr::Name(name) = expr
+                && name.ctx.is_load()
+                && runtime::defines(name.id.as_str())
+                && !self.written.contains(name.id.as_str())
+            {
+                self.reads.push((name.id.to_string(), Ranged::range(name)));
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    let provided: HashSet<String> = suite.iter().flat_map(runtime::bindings).collect();
+    let mut emitted = Emitted {
+        written,
+        reads: Vec::new(),
+    };
+    for stmt in suite {
+        walk_stmt(&mut emitted, stmt);
+    }
+    match emitted
+        .reads
+        .into_iter()
+        .find(|(name, _)| !provided.contains(name))
+    {
+        Some((name, range)) => Err(TranspileError {
+            message: format!(
+                "transpiler emitted a call to the runtime helper `{name}` without asking for \
+                 it, so the module it produced does not define it"
+            ),
+            output_range: Some(range),
+            by_range: None,
+        }),
+        None => Ok(()),
+    }
 }
 
 /// The first `match` in `suite` that python's own parse-time checks reject.
@@ -1557,7 +1685,7 @@ mod transpile_error {
             // nested in a function, which the scan has to reach
             "def f(x):\n    match x:\n        case a | b:\n            pass\n",
         ] {
-            let err = verify_syntax(source).unwrap_err();
+            let err = verify_syntax(source, &std::collections::HashSet::new()).unwrap_err();
             assert!(
                 err.message
                     .starts_with("transpiler produced invalid Python:"),
@@ -1573,13 +1701,15 @@ mod transpile_error {
     fn verify_syntax_accepts_a_qualified_match() {
         verify_syntax(
             "match x:\n    case Color.Red | Color.Green:\n        pass\n    case Color.Blue:\n        pass\n",
+            &std::collections::HashSet::new(),
         )
         .unwrap();
     }
 
     #[test]
     fn verify_syntax_message_has_no_byte_range() {
-        let err = verify_syntax("def f(:\n    pass\n").unwrap_err();
+        let err =
+            verify_syntax("def f(:\n    pass\n", &std::collections::HashSet::new()).unwrap_err();
         assert!(
             !err.message.contains("byte range"),
             "message must not leak internal byte ranges: {}",
@@ -2324,5 +2454,63 @@ mod cross_file {
                 "one entry per generated line for {body:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod runtime_helper_check {
+    use std::collections::HashSet;
+
+    use super::{Config, transpile, verify_syntax};
+
+    fn verify(output: &str, written: &[&str]) -> Result<(), String> {
+        let written: HashSet<String> = written.iter().map(|name| (*name).to_owned()).collect();
+        verify_syntax(output, &written).map_err(|error| error.message)
+    }
+
+    #[test]
+    fn a_helper_call_nothing_provides_is_rejected() {
+        let error = verify("x = _lazy_module(\"os\")\n", &[]).unwrap_err();
+        assert!(error.contains("`_lazy_module`"), "{error}");
+    }
+
+    /// the runtime is only ever provided at module scope, so a binding inside a
+    /// function provides nothing to a call outside it
+    #[test]
+    fn a_binding_inside_a_function_provides_nothing() {
+        let error = verify(
+            "def f():\n    _lazy_module = 1\nx = _lazy_module(\"os\")\n",
+            &[],
+        )
+        .unwrap_err();
+        assert!(error.contains("`_lazy_module`"), "{error}");
+    }
+
+    #[test]
+    fn an_import_provides_the_helper() {
+        verify(
+            "from app._by_runtime import _lazy_module\nx = _lazy_module(\"os\")\n",
+            &[],
+        )
+        .unwrap();
+    }
+
+    /// a helper whose name the program could share is checked all the same when
+    /// the author never wrote it
+    #[test]
+    fn a_public_helper_is_checked() {
+        assert!(verify("x = Optional(1)\n", &[]).is_err());
+        verify("x = Optional(1)\n", &["Optional"]).unwrap();
+    }
+
+    /// a name the author wrote is theirs, however they bound it — here through a
+    /// star import nothing can see into
+    #[test]
+    fn a_helper_name_the_author_reads_is_theirs() {
+        transpile(
+            "from helpers import *\n\nprint(_by_alias(1))\n",
+            &Config::test_default(),
+        )
+        .unwrap();
     }
 }

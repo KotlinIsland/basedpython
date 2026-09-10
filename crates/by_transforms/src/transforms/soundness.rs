@@ -69,33 +69,11 @@ use ruff_python_ast::{Comprehension, Expr, ExprCall, Parameter, Stmt, StmtFuncti
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::parametric_is::{PARAMETRIC_IS_RUNTIME, variance_tuple};
+use super::parametric_is::variance_tuple;
 use super::source_util::{line_indent, line_start};
 use crate::Config;
 use crate::config::SoundnessPositions;
 use crate::type_info::{SoundnessCheck, TypeInfo};
-
-const CHECK_HELPER: &str = "\
-def _soundness_check(_v, _t):
-    if not isinstance(_v, _t):
-        raise TypeError(
-            f\"type soundness violation: expected {getattr(_t, '__name__', _t)}, \"
-            f\"got {type(_v).__name__}\"
-        )
-    return _v
-";
-
-const ITER_HELPER: &str = "\
-def _soundness_iter(_it, _t):
-    for _x in _it:
-        yield _soundness_check(_x, _t)
-";
-
-const AITER_HELPER: &str = "\
-async def _soundness_aiter(_it, _t):
-    async for _x in _it:
-        yield _soundness_check(_x, _t)
-";
 
 // deep check for a user-generic-specialized target: validates the base class
 // always, and the reified type arguments when the value carries them
@@ -103,33 +81,6 @@ async def _soundness_aiter(_it, _t):
 // passes the argument check — its parameters aren't available to check,
 // leaving the base `isinstance` as the guarantee. reuses `_parametric_is`
 // (and its `_parametric_is_sub`) from `PARAMETRIC_IS_RUNTIME`
-const PARAMETRIC_HELPER: &str = "\
-def _soundness_parametric(_v, _alias, _variances):
-    _alias = _by_alias(_alias)
-    _origin = getattr(_alias, \"__origin__\", _alias)
-    if not isinstance(_v, _origin):
-        raise TypeError(
-            f\"type soundness violation: expected {getattr(_origin, '__name__', _origin)}, \"
-            f\"got {type(_v).__name__}\"
-        )
-    if getattr(_v, \"__orig_class__\", None) is not None and not _parametric_is(_v, _alias, _variances):
-        raise TypeError(
-            f\"type soundness violation: expected {_alias}, got {_v.__orig_class__}\"
-        )
-    return _v
-";
-
-const ITER_P_HELPER: &str = "\
-def _soundness_iter_p(_it, _alias, _variances):
-    for _x in _it:
-        yield _soundness_parametric(_x, _alias, _variances)
-";
-
-const AITER_P_HELPER: &str = "\
-async def _soundness_aiter_p(_it, _alias, _variances):
-    async for _x in _it:
-        yield _soundness_parametric(_x, _alias, _variances)
-";
 
 /// which parameter an argument binds to, for the `arguments` gate
 enum ArgSlot<'a> {
@@ -596,25 +547,24 @@ impl TypeAwarePass for SoundnessPass<'_> {
         if inner.edits.is_empty() && inner.guards.is_empty() {
             return;
         }
-        ctx.required_imports.push(CHECK_HELPER.to_owned());
+        ctx.runtime.insert(crate::runtime::SOUNDNESS_CHECK);
         if inner.used_iter {
-            ctx.required_imports.push(ITER_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::SOUNDNESS_ITER);
         }
         if inner.used_aiter {
-            ctx.required_imports.push(AITER_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::SOUNDNESS_AITER);
         }
         // a deep parametric check reuses the `_parametric_is` probe (which
         // brings its own `_parametric_is_sub`); function names resolve at call
         // time, so the def order among these preamble helpers is irrelevant
         if inner.used_parametric {
-            ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
-            ctx.required_imports.push(PARAMETRIC_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::SOUNDNESS_PARAMETRIC);
         }
         if inner.used_iter_p {
-            ctx.required_imports.push(ITER_P_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::SOUNDNESS_ITER_P);
         }
         if inner.used_aiter_p {
-            ctx.required_imports.push(AITER_P_HELPER.to_owned());
+            ctx.runtime.insert(crate::runtime::SOUNDNESS_AITER_P);
         }
         ctx.template_edits.extend(inner.edits);
         ctx.statement_inserts.extend(inner.guards);

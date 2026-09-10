@@ -54,38 +54,6 @@ use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::source_util::{line_indent, line_start};
 use crate::type_info::{CaptureKind, TypeInfo};
 
-/// rebuilds a function with fresh cells for the loop bindings it captured, so
-/// the iteration that defined it keeps its own values. cells the call does not
-/// name — outer locals, `__class__`, reified type parameters — are carried
-/// over, as are the attributes `FunctionType` does not copy
-const LOOP_BIND_RUNTIME: &str = "\
-def _by_loop_bind(**_by_values):
-    def _by_rebind(_by_fn):
-        _by_code = _by_fn.__code__
-        _by_bound = FunctionType(
-            _by_code,
-            _by_fn.__globals__,
-            _by_fn.__name__,
-            _by_fn.__defaults__,
-            tuple(
-                CellType(_by_values[_by_name]) if _by_name in _by_values else _by_cell
-                for _by_name, _by_cell in zip(_by_code.co_freevars, _by_fn.__closure__ or ())
-            ),
-        )
-        _by_bound.__kwdefaults__ = _by_fn.__kwdefaults__
-        _by_bound.__qualname__ = _by_fn.__qualname__
-        _by_bound.__doc__ = _by_fn.__doc__
-        _by_bound.__dict__.update(_by_fn.__dict__)
-        if hasattr(_by_fn, \"__annotate__\"):
-            _by_bound.__annotate__ = _by_fn.__annotate__
-        else:
-            _by_bound.__annotations__ = _by_fn.__annotations__
-        if hasattr(_by_fn, \"__type_params__\"):
-            _by_bound.__type_params__ = _by_fn.__type_params__
-        return _by_bound
-    return _by_rebind
-";
-
 /// which of a loop's bindings a lowering can bind by value
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reach {
@@ -581,9 +549,7 @@ impl TypeAwarePass for UniqueLoopBindingsPass<'_> {
             inner.visit_stmt(stmt);
         }
         if inner.used_runtime {
-            ctx.required_imports
-                .push("from types import CellType, FunctionType".to_owned());
-            ctx.required_imports.push(LOOP_BIND_RUNTIME.to_owned());
+            ctx.runtime.insert(crate::runtime::LOOP_BIND);
         }
         ctx.text_edits.extend(inner.decorators);
         ctx.template_edits.extend(inner.wraps);
@@ -603,14 +569,14 @@ mod tests {
         );
     }
 
-    /// the decorated form emits the rebind runtime ahead of the body; the tests
-    /// below assert the body only
+    /// the decorated form emits the rebind runtime; the tests below assert
+    /// everything else. exactly the runtime's text is removed, so whatever else
+    /// the preamble holds is still asserted
     fn check_body(input: &str, expected: &str) {
         let out = transpile(input, &Config::test_default()).unwrap();
-        let body = out
-            .split_once("    return _by_rebind\n")
-            .map(|(_, body)| body.trim_start_matches('\n').to_owned())
-            .unwrap_or(out);
+        let mut runtime = crate::runtime::inline([crate::runtime::LOOP_BIND]).join("\n");
+        runtime.push('\n');
+        let body = out.replacen(&runtime, "", 1);
         assert_eq!(body, crate::python_passthrough::lazify_expected(expected));
     }
 
@@ -678,6 +644,7 @@ mod tests {
                             return value
             "},
             indoc! {"
+                _MISSING = object()
                 def build():
                     for i in items:
                         @_by_loop_bind(i=i)
@@ -848,6 +815,7 @@ mod tests {
                             return cb
             "},
             indoc! {"
+                _MISSING = object()
                 def build():
                     for i in items:
                         @_by_loop_bind(i=i)

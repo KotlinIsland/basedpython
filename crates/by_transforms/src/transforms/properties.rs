@@ -149,19 +149,6 @@ impl<'src> PropertiesPass<'src> {
     }
 }
 
-/// The runtime half of a `static let` property. Python dropped `classmethod`
-/// chaining onto `property` in 3.13, and a read-only class-level property needs
-/// nothing else a metaclass would offer, so a plain non-data descriptor is the
-/// whole implementation. Mirrors `_by_static_property` in `ty_extensions._internal`,
-/// which is ty's type-only view of the same thing.
-const STATIC_PROPERTY_HELPER: &str = "\
-class _by_static_property:
-    def __init__(self, fget):
-        self._fget = fget
-    def __get__(self, instance, owner=None):
-        return self._fget(owner if owner is not None else type(instance))
-";
-
 /// Whether `func` is the `@<prop>.setter` half of property `prop`.
 fn is_setter_of(func: &StmtFunctionDef, prop: &str) -> bool {
     func.decorator_list.iter().any(|dec| match &dec.expression {
@@ -501,7 +488,7 @@ impl PropertiesPass<'_> {
             let Stmt::FunctionDef(getter) = member else {
                 continue;
             };
-            // `static let` lowers to [`STATIC_PROPERTY_HELPER`] rather than to `property`
+            // `static let` lowers to the runtime's `_by_static_property` rather than to `property`
             let Some(PropertyConstruct {
                 range: construct,
                 is_static,
@@ -635,7 +622,7 @@ impl PropertiesPass<'_> {
             // getter. a `static` property is a descriptor taking the owning class
             // rather than a `property` taking an instance
             let (decorator, receiver) = if is_static {
-                ctx.required_imports.push(STATIC_PROPERTY_HELPER.to_owned());
+                ctx.runtime.insert(crate::runtime::STATIC_PROPERTY);
                 ("_by_static_property", "cls")
             } else {
                 ("property", "self")

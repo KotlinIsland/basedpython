@@ -1750,8 +1750,8 @@ pub(crate) fn protocol_structural_members<'db>(
 /// A literal has no bare runtime spelling, so it is rendered as a call to the
 /// structural check's own `_by_lit` helper, which rebuilds `typing.Literal[…]`.
 /// That keeps the check exact — an invariant member typed `Literal[True]` must
-/// not match a `bool` annotation — and, because the helper ships with the
-/// protocol runtime, needs no import at the use site.
+/// not match a `bool` annotation — and, because the helper travels with the
+/// protocol runtime, the use site never has to ask for it separately.
 ///
 /// This deliberately does *not* widen [`runtime_spelling`] itself: that spelling
 /// is also injected into reified calls (`f[int](…)`) and constructor

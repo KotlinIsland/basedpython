@@ -33,9 +33,10 @@ use ruff_db::diagnostic::{
 };
 use ty_project::ProjectDatabase;
 
-use crate::emit::{CheckGate, Transpiled, check_and_transpile};
+use crate::emit::{CheckGate, Emit, Transpiled, check_and_transpile};
 use crate::project::{BY_SOURCES, Rebuilder, project_sources};
 use crate::record::{BuildRecord, build_identity};
+use crate::runtime::RuntimeLayout;
 use crate::sourcemap::{
     BY_SOURCEMAP_FILENAME, content_digest, describe_module, rewrite_sourcemap_entry,
     sourcemap_key_for,
@@ -226,12 +227,22 @@ fn restage_transpiled(
     let outcome = check_and_transpile(
         db,
         std::slice::from_ref(&handle),
-        config,
-        // the gate `by run` uses: a program that fails `by check` must not run, and
-        // a module reloaded into a running one is that program continuing
-        CheckGate::AllErrors,
-        &Rebuilder::for_project(db),
-        &mut by_transforms::RuntimeRequirements::default(),
+        &mut Emit {
+            config,
+            // the gate `by run` uses: a program that fails `by check` must not
+            // run, and a module reloaded into a running one is that program
+            // continuing
+            gate: CheckGate::AllErrors,
+            rebuilder: &Rebuilder::for_project(db),
+            requirements: &mut by_transforms::RuntimeRequirements::default(),
+            // a re-stage writes one module back into a tree the build already
+            // laid out, so what it claims is thrown away: whatever copy of the
+            // runtime that module imports is already sitting where the build
+            // put it
+            runtime: Some(&mut RuntimeLayout::default()),
+            roots: &record.module_roots,
+            root: &record.project_root,
+        },
         |emitted: &Transpiled<'_>| {
             produced = Some((describe_module(emitted), emitted.python.to_owned()));
             Ok(())

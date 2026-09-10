@@ -36,52 +36,6 @@ use crate::Config;
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
 
-/// PEP 750 `Template` / `Interpolation` polyfill for runtimes before 3.14.
-///
-/// matches the `string.templatelib` shape a tag relies on: `Template.strings`
-/// is the literal segments (always one more than the interpolations),
-/// `Template.interpolations` is the replacement fields, and `Template.values`
-/// is their evaluated values. iterating a `Template` yields the segments and
-/// interpolations interleaved in source order, the same as the stdlib type
-const TEMPLATE_RUNTIME: &str = "\
-class _Interpolation:
-    def __init__(self, value, expression, conversion=None, format_spec=\"\"):
-        self.value = value
-        self.expression = expression
-        self.conversion = conversion
-        self.format_spec = format_spec
-
-
-class _Template:
-    def __init__(self, *args):
-        strings = []
-        interpolations = []
-        if not args or isinstance(args[-1], _Interpolation):
-            args = (*args, \"\")
-        pending = \"\"
-        for arg in args:
-            if isinstance(arg, _Interpolation):
-                strings.append(pending)
-                pending = \"\"
-                interpolations.append(arg)
-            else:
-                pending += arg
-        strings.append(pending)
-        self.strings = tuple(strings)
-        self.interpolations = tuple(interpolations)
-
-    @property
-    def values(self):
-        return tuple(i.value for i in self.interpolations)
-
-    def __iter__(self):
-        for index, string in enumerate(self.strings):
-            if string:
-                yield string
-            if index < len(self.interpolations):
-                yield self.interpolations[index]
-";
-
 pub(crate) struct StringTagPass<'src> {
     source: &'src str,
     config: Config,
@@ -109,7 +63,8 @@ impl AstPass for StringTagPass<'_> {
         ctx.text_edits.extend(state.text_edits);
         ctx.template_edits.extend(state.template_edits);
         if state.used_polyfill {
-            ctx.required_imports.push(TEMPLATE_RUNTIME.to_owned());
+            ctx.runtime.insert(crate::runtime::TEMPLATE);
+            ctx.runtime.insert(crate::runtime::INTERPOLATION);
         }
     }
 }
@@ -292,14 +247,21 @@ mod tests {
     }
 
     /// transpile at the default 3.10 target, where the polyfill is injected.
-    /// the polyfill class is prepended and separated from the body by a blank
-    /// line, the same as other injected runtime classes
+    /// the polyfill classes are prepended, each separated from what follows by
+    /// a blank line, the same as other injected runtime definitions. what they
+    /// are is read back from the runtime rather than repeated here, so this
+    /// test says where the polyfill goes and `_by_runtime.py` says what it is
     fn polyfilled(input: &str, expected_body: &str) {
         let out = transpile(input, &Config::test_default()).unwrap();
-        let body = out
-            .strip_prefix(super::TEMPLATE_RUNTIME)
-            .and_then(|rest| rest.strip_prefix('\n'))
-            .unwrap_or_else(|| panic!("template polyfill not prepended; got:\n{out}"));
+        let mut body = out.as_str();
+        for definition in
+            crate::runtime::inline([crate::runtime::TEMPLATE, crate::runtime::INTERPOLATION])
+        {
+            body = body
+                .strip_prefix(definition.as_str())
+                .and_then(|rest| rest.strip_prefix('\n'))
+                .unwrap_or_else(|| panic!("template polyfill not prepended; got:\n{out}"));
+        }
         assert_eq!(body, expected_body);
     }
 

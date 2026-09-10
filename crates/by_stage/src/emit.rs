@@ -20,6 +20,8 @@ use ty_project::ProjectDatabase;
 use ty_project::parallel::ParallelIteratorExt;
 
 use crate::project::Rebuilder;
+use crate::runtime::RuntimeLayout;
+use crate::staging::transpiled_destination;
 
 /// How much of the check outcome blocks emitting output.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -68,17 +70,41 @@ pub struct Emitted {
     pub blocked: bool,
 }
 
+/// how and where a build turns its sources into python: one value, because it
+/// is one decision taken once per command and carried unchanged through the run
+pub struct Emit<'a> {
+    /// what the transpiler lowers for. its `runtime_module` is settled per file
+    pub config: &'a Config,
+    pub gate: CheckGate,
+    pub rebuilder: &'a Rebuilder,
+    /// what the emitted python needs that the standard library does not provide
+    pub requirements: &'a mut by_transforms::RuntimeRequirements,
+    /// where the runtime helpers go, and which copy each module imports. `None`
+    /// pastes the definitions into every module instead
+    pub runtime: Option<&'a mut RuntimeLayout>,
+    /// the project's module roots, longest first, and the project root
+    pub roots: &'a [PathBuf],
+    pub root: &'a Path,
+}
+
 /// Check every file, then for each non-blocked file call `consume` with the
 /// transpiled Python.
 pub fn check_and_transpile(
     db: &ProjectDatabase,
     handles: &[(PathBuf, ruff_db::files::File)],
-    config: &Config,
-    gate: CheckGate,
-    rebuilder: &Rebuilder,
-    requirements: &mut by_transforms::RuntimeRequirements,
+    emit: &mut Emit<'_>,
     mut consume: impl FnMut(&Transpiled<'_>) -> anyhow::Result<()>,
 ) -> anyhow::Result<Emitted> {
+    let Emit {
+        config,
+        gate,
+        rebuilder,
+        requirements,
+        runtime,
+        roots,
+        root,
+    } = emit;
+    let gate = *gate;
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
     let mut unusable: Vec<ruff_db::files::File> = Vec::new();
 
@@ -148,7 +174,17 @@ pub fn check_and_transpile(
         if unusable.contains(file) {
             continue;
         }
-        match by_transforms::transpile_typed_with_report(db, *file, config, Some(&rebuild)) {
+        // the helpers this module calls come from a copy written beside it, and
+        // which copy depends on where it lands — so the config is settled per
+        // file rather than once for the build
+        let relative = transpiled_destination(roots, root, bpy);
+        let config = Config {
+            runtime_module: runtime
+                .as_deref_mut()
+                .and_then(|layout| layout.claim(&relative, bpy, ruff_db::Db::system(db))),
+            ..config.clone()
+        };
+        match by_transforms::transpile_typed_with_report(db, *file, &config, Some(&rebuild)) {
             Ok((out, line_map, needed)) => {
                 requirements.merge(needed);
                 let by_source = source_text(db, *file);
