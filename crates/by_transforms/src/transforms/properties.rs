@@ -46,7 +46,9 @@ use std::fmt::Write;
 use ruff_python_ast::helpers::{MemberVisibility, property_backing_name};
 use ruff_python_ast::token::{Tokens, parenthesized_range};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{AnyNodeRef, Expr, ExprRef, Stmt, StmtClassDef, StmtFunctionDef};
+use ruff_python_ast::{
+    AnyNodeRef, Expr, ExprRef, PropertyConstruct, Stmt, StmtClassDef, StmtFunctionDef,
+};
 use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
@@ -159,36 +161,6 @@ class _by_static_property:
     def __get__(self, instance, owner=None):
         return self._fget(owner if owner is not None else type(instance))
 ";
-
-/// A property accessor block's marker, as recorded by the parser on the getter.
-struct PropertyMarker {
-    /// The whole `var`/`let` declaration plus its accessor suite — the span the
-    /// lowering replaces.
-    construct: TextRange,
-    /// `static let`: a class-level property, lowered to [`STATIC_PROPERTY_HELPER`]
-    /// rather than to `property`.
-    is_static: bool,
-}
-
-/// The property marker on `func`, or `None` for any other function.
-fn property_marker(func: &StmtFunctionDef) -> Option<PropertyMarker> {
-    func.decorator_list
-        .iter()
-        .find_map(|dec| match &dec.expression {
-            Expr::Name(name) => match name.id.as_str() {
-                "__property__" => Some(PropertyMarker {
-                    construct: dec.range(),
-                    is_static: false,
-                }),
-                "__static_property__" => Some(PropertyMarker {
-                    construct: dec.range(),
-                    is_static: true,
-                }),
-                _ => None,
-            },
-            _ => None,
-        })
-}
 
 /// Whether `func` is the `@<prop>.setter` half of property `prop`.
 fn is_setter_of(func: &StmtFunctionDef, prop: &str) -> bool {
@@ -368,7 +340,6 @@ impl PropertiesPass<'_> {
     fn accessor_body(
         &self,
         func: &StmtFunctionDef,
-        is_getter: bool,
         body_indent: &str,
         backing_name: &str,
         ctx: &mut PassContext,
@@ -405,27 +376,39 @@ impl PropertiesPass<'_> {
         // is also passed through whole, parentheses included, which is what lets
         // the continuation lines keep their source column: inside parentheses they
         // are continuations rather than a block, so their depth means nothing
-        let value = self.value_range(first);
         // a `get() = <expr>` accessor's `return` exists only in the AST, so the
         // parser gives it the expression's own range; a `return` the author wrote
         // starts at the keyword, several characters earlier. that is an exact fact
         // about which shape this is, where the line position is only a proxy for it
-        // — and the proxy is wrong for a value held off the accessor's line by a
-        // backslash, which came out as a body with no `return` at all
+        // — and the proxy is wrong both for a value held off the accessor's line by a
+        // backslash, which came out as a body with no `return` at all, and for a
+        // suite written on the accessor's line, whose `get(): pass` came out as
+        // `return pass`
         let synthesized_return = matches!(
             first,
             Stmt::Return(ret)
                 if ret.value.as_ref().is_some_and(|v| v.range() == first.range())
         );
-        let inline = synthesized_return
-            || line_start(self.source, value.start())
-                == line_start(self.source, func.range().start());
-        if inline {
-            let mut frags = vec![Fragment::Lit(body_indent.to_owned())];
-            if is_getter {
-                frags.push(Fragment::Lit("return ".to_owned()));
+        if synthesized_return {
+            return vec![
+                Fragment::Lit(format!("{body_indent}return ")),
+                Fragment::Src(self.value_range(first)),
+            ];
+        }
+        // a suite on the accessor's own line — `get(): pass`, `set(v): a = v; field = a`,
+        // and `set(v) = <expr>`, whose expression stands as the statement — can only
+        // hold simple statements, so each one becomes a body line of its own
+        if line_start(self.source, first.range().start())
+            == line_start(self.source, func.range().start())
+        {
+            let mut frags = Vec::new();
+            for (idx, stmt) in func.body.iter().enumerate() {
+                if idx > 0 {
+                    frags.push(Fragment::Lit("\n".to_owned()));
+                }
+                frags.push(Fragment::Lit(body_indent.to_owned()));
+                frags.push(Fragment::Src(self.value_range(stmt)));
             }
-            frags.push(Fragment::Src(value));
             frags
         } else {
             // the source body sits at the accessor suite's indent; the emitted
@@ -518,10 +501,11 @@ impl PropertiesPass<'_> {
             let Stmt::FunctionDef(getter) = member else {
                 continue;
             };
-            let Some(PropertyMarker {
-                construct,
+            // `static let` lowers to [`STATIC_PROPERTY_HELPER`] rather than to `property`
+            let Some(PropertyConstruct {
+                range: construct,
                 is_static,
-            }) = property_marker(getter)
+            }) = getter.property_construct()
             else {
                 continue;
             };
@@ -668,7 +652,7 @@ impl PropertiesPass<'_> {
                 frags.push(Fragment::Lit(": ...".to_owned()));
             } else {
                 frags.push(Fragment::Lit(":\n".to_owned()));
-                frags.extend(self.accessor_body(getter, true, &body_indent, &backing_name, ctx));
+                frags.extend(self.accessor_body(getter, &body_indent, &backing_name, ctx));
             }
 
             // setter
@@ -688,13 +672,7 @@ impl PropertiesPass<'_> {
                     frags.push(Fragment::Lit(") -> None: ...".to_owned()));
                 } else {
                     frags.push(Fragment::Lit(") -> None:\n".to_owned()));
-                    frags.extend(self.accessor_body(
-                        setter,
-                        false,
-                        &body_indent,
-                        &backing_name,
-                        ctx,
-                    ));
+                    frags.extend(self.accessor_body(setter, &body_indent, &backing_name, ctx));
                 }
             }
 
@@ -908,6 +886,62 @@ mod tests {
         assert!(
             out.contains("            return \"\"\"one\n    two\n        three\"\"\"\n"),
             "got:\n{out}"
+        );
+    }
+
+    /// a suite written on the accessor's line is a body like any other, not the
+    /// value of a `get() = <expr>` accessor: it has no `return` to add
+    #[test]
+    fn a_getter_suite_on_the_accessor_line_is_a_body() {
+        check(
+            indoc! {"
+                class A:
+                    let n: None
+                        get(): pass
+
+                class B:
+                    let v: int = 0
+                        get(): return field
+            "},
+            indoc! {"
+                class A:
+                    @property
+                    def n(self) -> None:
+                        pass
+
+                class B:
+                    def __init__(self) -> None:
+                        self.__v: int = 0
+                    @property
+                    def v(self) -> int:
+                        return self.__v
+            "},
+        );
+    }
+
+    /// every statement of a suite on the accessor's line is emitted, each on a
+    /// line of its own
+    #[test]
+    fn a_suite_on_the_accessor_line_keeps_every_statement() {
+        check(
+            indoc! {"
+                class A:
+                    var v: int = 0
+                        get() = field
+                        set(value): checked = abs(value); field = checked
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self) -> None:
+                        self.__v: int = 0
+                    @property
+                    def v(self) -> int:
+                        return self.__v
+                    @v.setter
+                    def v(self, value: int) -> None:
+                        checked = abs(value)
+                        self.__v = checked
+            "},
         );
     }
 

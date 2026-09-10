@@ -100,16 +100,6 @@ fn member_kind(func: &ast::StmtFunctionDef, source: &str) -> ExtensionMemberKind
     ExtensionMemberKind::Method
 }
 
-/// Whether `func` is the getter the parser synthesized for a property accessor
-/// block, rather than a member the author wrote as a `def`.
-fn is_accessor_block_member(func: &ast::StmtFunctionDef, source: &str) -> bool {
-    func.decorator_list.iter().any(|decorator| {
-        is_synthetic_decorator(source, decorator)
-            && matches!(&decorator.expression, Expr::Name(name)
-                if matches!(name.id.as_str(), "__property__" | "__static_property__"))
-    })
-}
-
 fn kind_word(kind: ExtensionMemberKind) -> &'static str {
     match kind {
         ExtensionMemberKind::Method => "method",
@@ -294,7 +284,7 @@ impl<'a> ExtensionBlockPass<'a> {
             // `return` is nowhere in the source), so it has to be rendered rather
             // than passed through. same trade-off the properties pass already
             // makes: a basedpython construct inside an accessor body is not lowered
-            if is_accessor_block_member(func, source) {
+            if func.property_construct_range().is_some() {
                 fragments.push(Fragment::Lit(format!(
                     ":  {marker}\n{}",
                     super::properties::render_body(&func.body, "    ")

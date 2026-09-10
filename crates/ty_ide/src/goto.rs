@@ -1577,11 +1577,9 @@ fn property_declaration_name(syntax: AnyNodeRef<'_>, offset: TextSize) -> Option
         let function = member.as_function_def_stmt()?;
         // only a *synthesized* property answers: an ordinary `def` keeps its name
         // inside its own range, so the walk above would already have found it
-        let is_property = function.decorator_list.iter().any(|decorator| {
-            matches!(&decorator.expression, ast::Expr::Name(name) if is_synthetic_marker(name.into()))
-        });
-        (is_property && function.name.range().contains_range(token_range))
-            .then_some(GotoTarget::FunctionDef(function))
+        (function.property_construct_range().is_some()
+            && function.name.range().contains_range(token_range))
+        .then_some(GotoTarget::FunctionDef(function))
     })
 }
 

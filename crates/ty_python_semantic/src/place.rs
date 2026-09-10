@@ -104,9 +104,22 @@ impl PublicTypePolicy {
     ) -> Type<'db> {
         match self {
             Self::Raw => ty,
-            Self::Promote => ty.promote(db, env).promote_singletons(db, env),
+            Self::Promote => promote_undeclared(db, env, ty),
         }
     }
+}
+
+/// the type an undeclared place exposes publicly: what an instance reads back off a class-body
+/// `x = 0` is `int`, not the literal the assignment stores
+///
+/// basedpython: this is also the type an untyped declaration declares, wherever something else
+/// is held to it — see `OverloadLiteral::property_initialiser_type`
+pub(crate) fn promote_undeclared<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+) -> Type<'db> {
+    ty.promote(db, env).promote_singletons(db, env)
 }
 
 /// The source definition provenance for a place.

@@ -29,7 +29,51 @@ use crate::{
     str::{Quote, TripleQuotes},
 };
 
+/// basedpython: the property construct a getter was synthesized from — see
+/// [`StmtFunctionDef::property_construct`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PropertyConstruct {
+    /// the `var` / `let` declaration and its accessor suite, the whole span the
+    /// construct was written as
+    pub range: TextRange,
+    /// `static let`: a class-level property rather than an instance one
+    pub is_static: bool,
+}
+
 impl StmtFunctionDef {
+    /// basedpython: the property construct this function was synthesized from,
+    /// when it is that construct's getter
+    ///
+    /// the parser lowers a `var` / `let` declaration carrying a `get` / `set` /
+    /// `field` suite into several class-body members — a getter, an optional
+    /// backing declaration, an optional setter — and marks the getter with a
+    /// synthetic decorator spanning the whole construct. the other members are
+    /// ranged inside that span, and the source spells one member, so whatever
+    /// reads the construct back finds it through the getter and this range
+    pub fn property_construct(&self) -> Option<PropertyConstruct> {
+        self.decorator_list
+            .iter()
+            .find_map(|decorator| match &decorator.expression {
+                Expr::Name(marker) if marker.is_invalid() => {
+                    let is_static = match marker.id.as_str() {
+                        "__property__" => false,
+                        "__static_property__" => true,
+                        _ => return None,
+                    };
+                    Some(PropertyConstruct {
+                        range: decorator.range(),
+                        is_static,
+                    })
+                }
+                _ => None,
+            })
+    }
+
+    /// basedpython: the range of [`StmtFunctionDef::property_construct`]
+    pub fn property_construct_range(&self) -> Option<TextRange> {
+        self.property_construct().map(|construct| construct.range)
+    }
+
     /// basedpython: the expression whose signature decides how a trailing
     /// lambda block is passed. The synthetic decorator carries the called
     /// expression; for a plain parenthesized call (`f(2):`) the deciding

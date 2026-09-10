@@ -327,6 +327,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let inherited_return_range = function.returns.as_ref().map_or_else(
             || {
                 let enclosing = enclosing_function_for_return_check?;
+                // basedpython: the getter of an untyped property with an initialiser is held to
+                // the type that initialiser declares, as it would be to a written one. the
+                // property's name is where that type was stated
+                if function.property_construct_range().is_some()
+                    && enclosing
+                        .literal(db)
+                        .last_definition
+                        .property_initialiser_type(db)
+                        .is_some()
+                {
+                    return Some(function.name.range());
+                }
                 let (overloads, implementation) = enclosing.overloads_and_implementation(db);
                 if overloads.is_empty() || implementation.is_none() {
                     return None;
@@ -611,6 +623,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // an `init(...)` is given its `-> None` by the parser, zero-width and after the
         // parameter list. there is nothing in the source to remove, so there is nothing to say
         if returns.range().is_empty() {
+            return;
+        }
+
+        // basedpython: a property getter's return annotation is the type its declaration wrote.
+        // `let n: None` states the property's type, and there is no `-> None` to remove
+        if function.property_construct_range().is_some() {
             return;
         }
 

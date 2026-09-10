@@ -1310,7 +1310,7 @@ impl<'db> SymbolVisitor<'db> {
     fn visit_stmt_impl(&mut self, stmt: &'db ast::Stmt) {
         match stmt {
             ast::Stmt::FunctionDef(func_def) => {
-                if let Some(construct) = property_construct(func_def) {
+                if let Some(construct) = func_def.property_construct_range() {
                     self.property_construct = Some(construct);
                     self.add_symbol(SymbolTree {
                         parent: None,
@@ -1562,22 +1562,6 @@ impl<'db> SymbolVisitor<'db> {
             _ => source_order::walk_stmt(self, stmt),
         }
     }
-}
-
-/// basedpython: the range of the property construct `func` was synthesized
-/// from, if it is that construct's getter.
-///
-/// The parser lowers `var x: int` plus its accessor blocks into a getter, an
-/// optional backing declaration and an optional setter, and marks the getter
-/// with a synthetic decorator spanning the whole construct. All three are
-/// ranged inside that span, and the source spells one member.
-fn property_construct(func: &ast::StmtFunctionDef) -> Option<TextRange> {
-    func.decorator_list.iter().find_map(|decorator| {
-        let ast::Expr::Name(marker) = &decorator.expression else {
-            return None;
-        };
-        matches!(marker.id.as_str(), "__property__" | "__static_property__").then(|| marker.range())
-    })
 }
 
 impl<'db> SourceOrderVisitor<'db> for SymbolVisitor<'db> {

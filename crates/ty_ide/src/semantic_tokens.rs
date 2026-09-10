@@ -409,22 +409,6 @@ const EXPORT_IMPORT: &[&str] = &["export"];
 /// ranged onto the accessor bodies, not onto the headers.
 const ACCESSOR_KEYWORDS: &[&str] = &["get", "set", "field", "late"];
 
-/// basedpython: the range of the property construct `func` was synthesized from,
-/// if it is a property getter.
-///
-/// The parser lowers `var x: int` plus its accessor blocks into a getter, an
-/// optional backing declaration and an optional setter, and marks the getter with
-/// a synthetic decorator spanning the whole construct — the same span the
-/// transpiler and the formatter claim for it.
-fn property_construct(func: &ast::StmtFunctionDef) -> Option<TextRange> {
-    func.decorator_list.iter().find_map(|decorator| {
-        let Expr::Name(marker) = &decorator.expression else {
-            return None;
-        };
-        matches!(marker.id.as_str(), "__property__" | "__static_property__").then(|| marker.range())
-    })
-}
-
 /// One member of a property construct, and which part of the source it stands
 /// for. Only a setter can declare a name in its header.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1347,7 +1331,7 @@ impl<'db> SemanticTokenVisitor<'db> {
         while let Some(statement) = members.next() {
             let Some(construct) = statement
                 .as_function_def_stmt()
-                .and_then(property_construct)
+                .and_then(ast::StmtFunctionDef::property_construct_range)
                 .filter(|construct| construct.contains_range(statement.range()))
             else {
                 self.visit_stmt(statement);

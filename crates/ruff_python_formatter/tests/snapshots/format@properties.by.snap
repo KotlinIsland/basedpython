@@ -23,6 +23,15 @@ class Bag:
 
 class Loader:
     late var handle: str
+
+class Anon:
+    let a
+        get() = 1
+
+    var b = 0
+        get() = field
+        set(value):
+            field = value
 ```
 
 ## Output
@@ -50,4 +59,14 @@ class Bag:
 
 class Loader:
     late var handle: str
+
+
+class Anon:
+    let a
+        get() = 1
+
+    var b = 0
+        get() = field
+        set(value):
+            field = value
 ```
