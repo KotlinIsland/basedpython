@@ -2,7 +2,7 @@ use ruff_formatter::{
     FormatContext, FormatOwnedWithRule, FormatRefWithRule, FormatRuleWithOptions, write,
 };
 use ruff_python_ast::helpers::is_compound_statement;
-use ruff_python_ast::{self as ast, Expr, ExprContext, PySourceType, Stmt, Suite};
+use ruff_python_ast::{self as ast, Expr, PySourceType, Stmt, Suite};
 use ruff_python_ast::{AnyNodeRef, StmtExpr};
 use ruff_python_trivia::{
     SimpleTokenKind, SimpleTokenizer, lines_after, lines_after_ignoring_end_of_line_trivia,
@@ -960,34 +960,18 @@ impl Format<PyFormatContext<'_>> for SuiteChildStatement<'_> {
     }
 }
 
-/// The construct range a basedpython property accessor block was parsed from, if
-/// `stmt` is the getter the parser synthesised for one.
+/// the construct range a basedpython property accessor block was parsed from, if
+/// `stmt` is the getter the parser synthesised for one
 ///
-/// A `var` / `let` declaration carrying a `get` / `set` / `field` suite lowers to
-/// several class-body members (a backing field, a getter, a setter), none of which
-/// has an AST-faithful surface printer — their `self` parameters and backing
-/// attributes are synthetic and zero-width. The getter leads the group and carries
-/// a synthetic property marker whose range spans the whole construct, so the
-/// suite formatter can emit that source verbatim and swallow the rest of the group,
-/// exactly as it does for a `# fmt: skip` region.
+/// none of the members the construct lowers to has an AST-faithful surface printer
+/// — their `self` parameters and backing attributes are synthetic and zero-width —
+/// so the suite formatter emits the construct's source verbatim and swallows the
+/// rest of the group, exactly as it does for a `# fmt: skip` region
 fn property_construct_range(stmt: &Stmt) -> Option<TextRange> {
-    let Stmt::FunctionDef(function) = stmt else {
-        return None;
-    };
-    function
-        .decorator_list
-        .iter()
-        .find_map(|decorator| match &decorator.expression {
-            // `__static_property__` is the `static let` (class-level) variant; both
-            // are synthesised the same way and neither has a surface printer
-            Expr::Name(name)
-                if matches!(name.id.as_str(), "__property__" | "__static_property__")
-                    && name.ctx == ExprContext::Invalid =>
-            {
-                Some(decorator.range())
-            }
-            _ => None,
-        })
+    match stmt {
+        Stmt::FunctionDef(function) => function.property_construct_range(),
+        _ => None,
+    }
 }
 
 pub(crate) fn skip_range(

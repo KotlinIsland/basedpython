@@ -6092,6 +6092,19 @@ impl<'src> Parser<'src> {
         // a backing `self.__x` in a `cls`-receiver getter, or a `@x.setter` on the
         // descriptor, would each add a second round of errors about the first one
         let has_backing = !is_static && (references_field || field_decl.is_some());
+        // an initialiser is stored in the backing field, so a computed property has
+        // nowhere to put one. a `static` property has already been told so above
+        if !is_static
+            && !has_backing
+            && let Some(init) = prop_init.as_ref()
+        {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "a property with no backing `field` takes no initialiser".to_string(),
+                ),
+                init.range(),
+            );
+        }
 
         // a getter that only reads the field lets the class see storage at its own
         // type; one with real logic must keep being called, so it stays public-typed

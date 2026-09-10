@@ -1,0 +1,8 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ property_types: false, ..InlayHintSettings::default() })"
+---
+
+class A:
+    let a
+        get() = 1

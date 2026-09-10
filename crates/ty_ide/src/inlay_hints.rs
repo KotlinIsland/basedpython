@@ -26,11 +26,11 @@ use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     InferredInvalidations, InferredStateReads, InlayHintCallArgumentDetails, StateRead, WriteSite,
     hintable_parameter_type, implicit_enum_member_value, inferred_derived_dependencies,
-    inferred_invalidations, inferred_override, inferred_raises, inferred_return_annotation,
-    inferred_state_reads, inferred_type_param_variance, inherited_parameter_annotation,
-    inherited_parameter_default, inlay_hint_call_argument_details, is_composable_function,
-    is_reveal_type_function, is_union_special_form, numeric_promotion, parameter_stability,
-    trailing_lambda_implicit_parameters, type_parameter_names,
+    inferred_invalidations, inferred_override, inferred_property_type, inferred_raises,
+    inferred_return_annotation, inferred_state_reads, inferred_type_param_variance,
+    inherited_parameter_annotation, inherited_parameter_default, inlay_hint_call_argument_details,
+    is_composable_function, is_reveal_type_function, is_union_special_form, numeric_promotion,
+    parameter_stability, trailing_lambda_implicit_parameters, type_parameter_names,
 };
 use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
@@ -605,9 +605,10 @@ impl InlayHint {
         }
     }
 
-    /// The type of a parameter the source leaves unannotated, shown where the
-    /// annotation would be written.
-    fn parameter_type(
+    /// the type of a place the source leaves unannotated — a parameter, or a
+    /// basedpython property declaration — shown where the annotation would be
+    /// written
+    fn inferred_annotation(
         db: &dyn Db,
         env: &ProgramEnvironment<'_>,
         position: TextSize,
@@ -1004,6 +1005,16 @@ pub struct InlayHintSettings {
     /// ```
     pub inferred_return_types: bool,
 
+    /// basedpython: whether to show the type a property declaration leaves to its
+    /// accessors.
+    ///
+    /// ```by
+    /// class A:
+    ///     let a": 1"
+    ///         get() = 1
+    /// ```
+    pub property_types: bool,
+
     /// basedpython: whether to show the arguments a call site fills implicitly
     /// from the `context` declarations in scope.
     ///
@@ -1067,6 +1078,7 @@ impl InlayHintSettings {
             inherited_parameter_types: false,
             inherited_parameter_defaults: false,
             inferred_return_types: false,
+            property_types: false,
             implicit_arguments: false,
             enum_values: false,
             template_binding_types: false,
@@ -1096,6 +1108,7 @@ impl InlayHintSettings {
             inherited_parameter_types,
             inherited_parameter_defaults,
             inferred_return_types,
+            property_types,
             implicit_arguments,
             enum_values,
             template_binding_types,
@@ -1122,6 +1135,7 @@ impl InlayHintSettings {
             || inherited_parameter_types
             || inherited_parameter_defaults
             || inferred_return_types
+            || property_types
             || implicit_arguments
             || enum_values
             || template_binding_types
@@ -1152,6 +1166,7 @@ impl Default for InlayHintSettings {
             inherited_parameter_types: true,
             inherited_parameter_defaults: true,
             inferred_return_types: true,
+            property_types: true,
             implicit_arguments: true,
             enum_values: true,
             template_binding_types: true,
@@ -1809,7 +1824,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::parameter_type(
+        self.hints.push(InlayHint::inferred_annotation(
             self.db,
             env,
             parameter.name.range().end(),
@@ -1836,7 +1851,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::parameter_type(
+        self.hints.push(InlayHint::inferred_annotation(
             self.db,
             env,
             parameter.name.range().end(),
@@ -1882,7 +1897,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
         let Some(returned) = function
             .inferred_type(&self.model)
-            .and_then(|ty| inferred_return_annotation(self.db, ty))
+            .and_then(|ty| inferred_return_annotation(self.db, env, ty))
         else {
             return;
         };
@@ -1892,6 +1907,38 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             env,
             function.parameters.end(),
             returned,
+        ));
+    }
+
+    /// basedpython: hint the type a property declaration leaves to its accessors
+    ///
+    /// the construct writes its name once and the getter carries that name's range,
+    /// so the type goes where the declaration would have written it — after the
+    /// name, exactly as it does for an unannotated variable
+    fn add_property_type(&mut self, getter: &ast::StmtFunctionDef) {
+        if !self.settings.property_types
+            || !self.is_basedpython()
+            || getter.property_construct_range().is_none()
+            // the declaration named a type; the getter carries it as its return
+            || getter.returns.is_some()
+            // a malformed accessor recovers to one with no body, which states nothing
+            || getter.body.is_empty()
+            // the getter is visited for the whole construct, but the hint sits on its name
+            || self.range.intersect(getter.name.range()).is_none()
+        {
+            return;
+        }
+
+        let Some(ty) = inferred_property_type(&self.model, getter) else {
+            return;
+        };
+
+        let env = &self.model.program_environment();
+        self.hints.push(InlayHint::inferred_annotation(
+            self.db,
+            env,
+            getter.name.range().end(),
+            ty,
         ));
     }
 
@@ -1925,7 +1972,18 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
 impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
     fn enter_node(&mut self, node: AnyNodeRef<'a>) -> TraversalSignal {
-        if self.range.intersect(node.range()).is_some() {
+        // basedpython: a property getter is ranged onto its accessor, but the
+        // construct it was synthesized from reaches back over the declaration —
+        // the line the property's own hint sits on. asking about the accessor
+        // alone loses that hint whenever the accessor is below the visible range
+        let range = match node {
+            AnyNodeRef::StmtFunctionDef(function) => function
+                .property_construct_range()
+                .unwrap_or_else(|| function.range()),
+            node => node.range(),
+        };
+
+        if self.range.intersect(range).is_some() {
             TraversalSignal::Traverse
         } else {
             TraversalSignal::Skip
@@ -2014,10 +2072,12 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 return;
             }
             // basedpython: a property accessor's whole header is synthesized — the
-            // parameter list stands for no source and the name and declared type
-            // belong to the construct's head, which is written once and hinted
-            // there — so only the accessor body is real
+            // parameter list stands for no source, and the name belongs to the
+            // construct's head, which is written once and takes the one hint above
+            // — so beyond that only the accessor body is real
             Stmt::FunctionDef(function) if has_synthesized_header(function) => {
+                self.add_property_type(function);
+
                 let enclosing_class = self.enclosing_class.take();
                 self.visit_body(&function.body);
                 self.enclosing_class = enclosing_class;
@@ -3082,6 +3142,171 @@ Source with applied edits:
         10 |             return y
            |
         ");
+    }
+
+    /// a property declaration that names no type takes one from its initialiser, or
+    /// from what its getter returns when it has none, and it is shown where the
+    /// declaration would have written it
+    #[test]
+    fn property_type_hints() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                let a
+                    get() = 1
+
+                let b
+                    field = 'two'
+
+                var c = 0
+                    get() = field
+                    set(value): field = value
+
+                let d: bytes
+                    get() = b''
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            property_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// the declaration a property hint sits on is a line above the accessor the
+    /// parser ranged the getter onto, so a request that stops short of the
+    /// accessor still has to reach it
+    #[test]
+    fn property_type_hint_above_the_requested_range() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+            <START>    let a<END>
+                    get() = 1
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            property_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// a request covering only the accessor leaves out the declaration the hint
+    /// sits on
+    #[test]
+    fn property_type_hint_outside_the_requested_range() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                let a
+            <START>        get() = 1<END>
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            property_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// a `private` property's getter is named `_b` while the source spells `b`, and
+    /// a `static let` is a class-level descriptor rather than a `property`, but both
+    /// are hinted after the name the declaration wrote. a getter that falls off its
+    /// end returns `None`, which is the property's type like any other
+    #[test]
+    fn property_type_hint_shapes() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                private let b
+                    get() = 'b'
+
+                static let c
+                    get() = 3
+
+                let n
+                    get(): pass
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            property_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// a type ty could not settle on says nothing a reader could write: a getter
+    /// that reads its own property never settles, and a malformed accessor recovers
+    /// to one with no body
+    #[test]
+    fn property_type_hint_without_a_settled_type() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                let rec
+                    get() = self.rec
+
+                let m
+                    get()
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            property_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// accessor blocks are basedpython syntax: a python file reports them as invalid
+    /// and hints nothing about them
+    #[test]
+    fn property_type_hint_in_a_python_file() {
+        let mut test = inlay_hint_test(
+            "
+            class A:
+                let a
+                    get() = 1
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            property_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn property_type_hint_can_be_turned_off() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                let a
+                    get() = 1
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            property_types: false,
+            ..InlayHintSettings::default()
+        }));
+    }
+
+    /// a function that only ever calls itself never settles on a return type, so
+    /// there is nothing to hint
+    #[test]
+    fn inferred_return_type_that_never_settles() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def f():
+                return f()
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_return_types: true,
+            ..InlayHintSettings::none()
+        }));
     }
 
     #[test]

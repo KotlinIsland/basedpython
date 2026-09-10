@@ -131,6 +131,38 @@ set(value):
     field = value
 ```
 
+## inferred type
+
+a property that carries an accessor block may leave its type out. with an
+initialiser, the property's type is the one the initialiser declares, exactly as
+if it were written: `var count = 0` is `var count: int = 0`, so `get` must return
+an `int` and `set` accepts one
+
+```by
+class Counter:
+    var count = 0
+        get() = field
+        set(value):
+            assert value >= 0
+            field = value
+```
+
+without an initialiser the type is whatever `get` returns. only a `let` can leave
+both out — a `var` needs a type or an initialiser
+
+```by
+class A:
+    let a
+        get() = 1
+```
+
+`A().a` reads as `1`. the editor draws the recovered type where the declaration
+left it out — `var count⟨: int⟩ = 0`, `let a⟨: 1⟩` — and
+`ty.inlayHints.propertyTypes` turns that off; see [editor features](editor.md)
+
+an initialiser is stored in the backing field, so a computed property — one whose
+accessors never mention `field` — takes none
+
 ## `field` keyword
 
 inside `get`/`set` body, `field` refers to backing storage. lowers to

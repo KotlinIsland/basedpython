@@ -79,6 +79,64 @@ reveal_type(p.name)  # revealed: str
 p.name = "bob"
 ```
 
+## an untyped property takes its type from its initialiser
+
+a declaration that names no type but has an initialiser is the typed declaration with the type left
+for the initialiser to say, the way any declaration's is: `var count = 0` is `var count: int = 0`.
+the setter accepts that type and the property reads as it
+
+```by
+class Counter:
+    var count = 0
+        get() = field
+        set(value):
+            reveal_type(value)  # revealed: int
+            field = value
+
+c = Counter()
+reveal_type(c.count)  # revealed: int
+# error: [invalid-assignment]
+c.count = "many"
+```
+
+## a getter is held to the type its initialiser declares
+
+as it would be to a written type, so a getter that returns something else is an error rather than a
+second type for the property to read as
+
+```by
+class Counter:
+    var count = 0
+        # error: [invalid-return-type]
+        get() = str(field)
+        set(value):
+            field = value
+```
+
+## without an initialiser a property takes its type from the getter
+
+only a `let` can leave both the type and the initialiser out. what `get` returns is the property's
+type, as precisely as the accessor states it
+
+```by
+class A:
+    let a
+        get() = 1
+
+reveal_type(A().a)  # revealed: 1
+```
+
+## a property declared `None` has no return annotation to remove
+
+the declared type rides on the getter as its return annotation, but it is the property's type.
+writing it is not the redundant `-> None` of a `def` that falls off its end
+
+```by
+class A:
+    let n: None
+        get(): pass
+```
+
 ## a computed property has no backing storage
 
 An accessor block that never mentions `field` allocates no backing field — the property is computed
@@ -93,6 +151,19 @@ class Rect:
 
 r = Rect()
 reveal_type(r.area)  # revealed: int
+```
+
+## a computed property takes no initialiser
+
+an initialiser is stored in the backing field, and a property whose accessors never mention `field`
+has none to store it in
+
+```by
+class Rect:
+    var w: int = 0
+    # error: [invalid-syntax] "a property with no backing `field` takes no initialiser"
+    let area: int = 0
+        get() = self.w * 2
 ```
 
 ## an explicit `field` declaration decouples storage from the public type
@@ -161,6 +232,20 @@ class A:
 
     def f(self):
         reveal_type(self.a)  # revealed: int
+```
+
+## an explicit `field` initialiser types the storage, not the property
+
+only an initialiser written on the declaration itself states the property's type. one on an explicit
+`field` states the storage's, so an untyped property still takes its type from the getter
+
+```by
+class Name:
+    let length
+        field = "ada"
+        get() = len(field)
+
+reveal_type(Name().length)  # revealed: int
 ```
 
 ## the property's type is the context an unannotated `field` is solved against
@@ -326,6 +411,24 @@ class A:
 a = A()
 a.x = 3
 reveal_type(a.x)  # revealed: int
+```
+
+## a suite on the accessor's line runs every statement
+
+a suite may share the accessor's line, as it may a `def`'s. every statement in it runs, not only the
+first
+
+```by
+class Account:
+    var balance: int = 0
+        get() = field
+        set(value): checked = max(value, 0); field = checked
+
+a = Account()
+a.balance = -5
+assert a.balance == 0
+a.balance = 7
+assert a.balance == 7
 ```
 
 ## accessor bodies are type-checked

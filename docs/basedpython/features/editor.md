@@ -223,6 +223,7 @@ on
 | `inheritedParameterTypes`    | the type a parameter takes from the method it overrides         |
 | `inheritedParameterDefaults` | the [default](inherited-defaults.md) it takes from that method  |
 | `inferredReturnTypes`        | the return type of a `def` that leaves it out                   |
+| `propertyTypes`              | the type a [property](properties.md) leaves to its accessors    |
 | `implicitArguments`          | the [context arguments](context-parameters.md) a call fills     |
 | `enumValues`                 | the value an [enum](enums.md) member takes implicitly           |
 | `templateBindingTypes`       | a django template `{% for %}` binding's element type            |

@@ -67,7 +67,10 @@ use ruff_text_size::Ranged;
 use salsa::plumbing::AsId;
 use ty_module_resolver::{ImportingFile, KnownModule, ModuleName, file_to_module, resolve_module};
 
-use crate::place::{DefinedPlace, Definedness, Place, declared_type_at_load, place_from_bindings};
+use crate::place::{
+    DefinedPlace, Definedness, Place, declared_type_at_load, place_from_bindings,
+    promote_undeclared,
+};
 use crate::types::call::{Binding, CallArguments};
 use crate::types::callable::CallableTypeKind;
 use crate::types::constraints::ConstraintSet;
@@ -450,6 +453,67 @@ pub(crate) struct CallbackParameterModifiers {
 
 #[salsa::tracked]
 impl<'db> OverloadLiteral<'db> {
+    /// basedpython: the type an untyped property declares through its initialiser, when this
+    /// function is one of that property's accessors
+    ///
+    /// `var c = 0` with an accessor block is the property `var c: int = 0` with its type left for
+    /// the initialiser to say, the way a declaration's type is — `int`, not the literal `0`. both
+    /// accessors are held to it: the getter returns it and the setter accepts it. without an
+    /// initialiser (only a `let` may leave both out) the property's type is whatever its getter
+    /// returns, and this answers `None`
+    ///
+    /// the parser lowers the construct to a getter carrying the construct's range, a backing
+    /// declaration and a setter, all ranged inside that span — see
+    /// [`ast::StmtFunctionDef::property_construct_range`]
+    #[salsa::tracked(
+        returns(copy),
+        cycle_initial=|_, _, _| None,
+        heap_size=ruff_memory_usage::heap_size,
+    )]
+    pub(crate) fn property_initialiser_type(self, db: &'db dyn Db) -> Option<Type<'db>> {
+        if !self.file(db).source_type(db).is_basedpython() {
+            return None;
+        }
+        let body_scope = self.body_scope(db);
+        let module = parsed_module(db, self.python_file(db)).load(db);
+        let accessor = body_scope.node(db).expect_function().node(&module);
+        let index = semantic_index(db, body_scope.program_file(db));
+        let class = index
+            .class_definition_of_method(body_scope.file_scope_id(db))?
+            .kind(db)
+            .as_class()?
+            .node(&module);
+
+        let (getter, construct) = class.body.iter().find_map(|member| {
+            let getter = member.as_function_def_stmt()?;
+            let construct = getter.property_construct_range()?;
+            (getter.name.id == accessor.name.id && construct.contains_range(accessor.range()))
+                .then_some((getter, construct))
+        })?;
+        // a written type rides on the getter as its return annotation
+        if getter.returns.is_some() {
+            return None;
+        }
+
+        // the initialiser written on the declaration is stored by a backing assignment the parser
+        // synthesizes, which spans no source of its own. an explicit `field = ...` is ranged on
+        // what was written, and states the storage's type rather than the property's
+        let target = class.body.iter().find_map(|member| match member {
+            ast::Stmt::Assign(assign)
+                if assign.range.is_empty() && construct.contains_range(assign.range) =>
+            {
+                match assign.targets.as_slice() {
+                    [ast::Expr::Name(target)] => Some(target),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })?;
+        let definition = index.try_definition(target)?;
+        let env = ProgramEnvironment::from_scope(body_scope);
+        Some(promote_undeclared(db, &env, binding_type(db, definition)))
+    }
+
     pub(super) fn with_deprecated(
         self,
         db: &'db dyn Db,
@@ -1099,6 +1163,22 @@ impl<'db> OverloadLiteral<'db> {
             }
         });
 
+        // basedpython: an untyped property with an initialiser is held to the type that
+        // initialiser declares as though it were written — see `property_initialiser_type`. so it
+        // counts as written for every source below, which only fill in what the source left out
+        let property_type = self.property_initialiser_type(db);
+        let is_property_getter = function_stmt_node.property_construct_range().is_some();
+        if let Some(property_type) = property_type {
+            if is_property_getter {
+                raw_signature.return_ty = property_type;
+            } else if let Some(value) = function_stmt_node.parameters.args.get(1) {
+                raw_signature
+                    .declare_unannotated_parameter(&value.parameter.name.id, property_type);
+            }
+        }
+        let returns_written =
+            function_stmt_node.returns.is_some() || (is_property_getter && property_type.is_some());
+
         // basedpython: if this is the implementation of an overloaded function
         // (i.e. preceded by `@overload` stubs), infer unannotated parameter
         // types and an unannotated return type from the union of the sibling
@@ -1118,7 +1198,7 @@ impl<'db> OverloadLiteral<'db> {
                     db,
                     env,
                     &overload_sigs,
-                    function_stmt_node.returns.is_none(),
+                    !returns_written,
                 );
             }
         }
@@ -1130,13 +1210,13 @@ impl<'db> OverloadLiteral<'db> {
         // while skipping this would answer with what the placeholder body happens to do rather
         // than with what the base already declared
         if infers_unannotated_signatures(db, self.file(db))
-            && raw_signature.has_inherited_annotations_to_fill(function_stmt_node.returns.is_none())
+            && raw_signature.has_inherited_annotations_to_fill(!returns_written)
             && let Some(base_signature) = self.overridden_signature(db, env)
         {
             // a narrowing return type is the exception. it is a claim about what the body tests,
             // so an override that tests something else — or nothing — would be handed a claim it
             // does not make, and every call through it would narrow on the strength of it
-            let inherits_return_type = function_stmt_node.returns.is_none()
+            let inherits_return_type = !returns_written
                 && !matches!(
                     base_signature.return_ty,
                     Type::TypeIs(_) | Type::TypeGuard(_)
@@ -1172,7 +1252,7 @@ impl<'db> OverloadLiteral<'db> {
         // not make, and every call through it would narrow on the strength of it. so that one is
         // left to the override's own body
         if infers_unannotated_signatures(db, self.file(db))
-            && function_stmt_node.returns.is_none()
+            && !returns_written
             && !function_stmt_node.is_asserts_return
             && raw_signature.return_ty.is_unknown()
             && let OverriddenReturnType::Declared(base_return) =
@@ -1213,7 +1293,7 @@ impl<'db> OverloadLiteral<'db> {
         // type out draws on; [`OverloadLiteral::return_type_without_annotation`] mirrors them in
         // this order, so a change here belongs there too
         if infers_unannotated_signatures(db, self.file(db))
-            && function_stmt_node.returns.is_none()
+            && !returns_written
             && !function_stmt_node.is_asserts_return
             && raw_signature.return_ty.is_unknown()
             && self.recovers_return_type_from_body(db, env)
@@ -1371,6 +1451,14 @@ impl<'db> OverloadLiteral<'db> {
         env: &ProgramEnvironment<'db>,
         from_body: impl FnOnce() -> Type<'db>,
     ) -> Type<'db> {
+        // the getter of an untyped property with an initialiser — the setter always writes its
+        // `-> None` — is held to that initialiser's type ahead of everything below
+        if !self.has_explicit_return_annotation(db)
+            && let Some(property_type) = self.property_initialiser_type(db)
+        {
+            return property_type;
+        }
+
         let mut return_ty = Type::unknown();
 
         if !self.is_overload(db)

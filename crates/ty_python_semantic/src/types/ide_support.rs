@@ -19,7 +19,7 @@ use crate::types::extensions::{
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
 use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
-use crate::types::infer::nearest_enclosing_function;
+use crate::types::infer::{infer_definition_types, nearest_enclosing_function};
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::overrides::is_constructor_like_method;
 use crate::types::receivers;
@@ -3356,7 +3356,11 @@ pub fn inherited_parameter_default(
 ///
 /// `None` is what such a `def` already means, so recovering it says nothing the source did not
 /// — the `redundant-return-annotation` lint reports writing it down.
-pub fn inferred_return_annotation<'db>(db: &'db dyn Db, function: Type<'db>) -> Option<Type<'db>> {
+pub fn inferred_return_annotation<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    function: Type<'db>,
+) -> Option<Type<'db>> {
     let Type::FunctionLiteral(function) = function else {
         return None;
     };
@@ -3365,7 +3369,40 @@ pub fn inferred_return_annotation<'db>(db: &'db dyn Db, function: Type<'db>) -> 
         .last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public)
         .return_ty;
 
-    (!return_ty.is_unknown() && !return_ty.is_none(db)).then_some(return_ty)
+    (!return_ty.is_none(db) && is_settled(db, env, return_ty)).then_some(return_ty)
+}
+
+/// whether `ty` is one ty settled on, rather than a stand-in for one it could not read
+///
+/// `Unknown` is what nothing supplied, and a type mentioning the marker a cycle leaves behind
+/// (`def f(): return f()`) is one the cycle never settled. neither says anything a reader could
+/// write down
+fn is_settled<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Type<'db>) -> bool {
+    !ty.is_unknown() && !ty.mentions_divergence(db, env)
+}
+
+/// basedpython: the type recovered for a property whose declaration names none
+///
+/// a property construct (`let a` plus a `get` / `set` / `field` suite) is lowered to a getter
+/// whose return type is the property's type — the one its initialiser declares, or what the
+/// getter's body returns when it has none — so what the reader would have written after the name
+/// is what that getter returns. `None` when ty could not read a return type from it at all
+pub fn inferred_property_type<'db>(
+    model: &SemanticModel<'db>,
+    getter: &ast::StmtFunctionDef,
+) -> Option<Type<'db>> {
+    let db = model.db();
+    let index = semantic_index(db, model.program_file());
+    // the getter is decorated with `property`, so its *binding* type is the descriptor —
+    // the undecorated function is what carries the signature the source wrote
+    let definition = index.try_definition(getter)?;
+    let function = infer_definition_types(db, definition).function_type(definition)?;
+
+    let return_ty = function
+        .last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public)
+        .return_ty;
+
+    is_settled(db, &model.program_environment(), return_ty).then_some(return_ty)
 }
 
 /// The type worth showing for a parameter the source leaves unannotated.

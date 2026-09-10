@@ -1339,6 +1339,20 @@ impl<'db> Signature<'db> {
                 .any(|param| param.inferred_annotation && param.annotated_type.is_unknown())
     }
 
+    /// basedpython: give the parameter `name` the type `ty` as though it had been written, when
+    /// the source left it unannotated. every source consulted after this one sees it as declared
+    pub(crate) fn declare_unannotated_parameter(&mut self, name: &Name, ty: Type<'db>) {
+        for parameter in &mut Arc::make_mut(&mut self.parameters.data).value {
+            if parameter.inferred_annotation
+                && parameter.annotated_type.is_unknown()
+                && parameter.name() == Some(name)
+            {
+                parameter.annotated_type = ty;
+                parameter.inferred_annotation = false;
+            }
+        }
+    }
+
     pub(crate) fn inherit_unannotated_from_overloads(
         &mut self,
         db: &'db dyn Db,
