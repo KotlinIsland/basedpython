@@ -668,8 +668,8 @@ def kept(a: str, b: str) -> object:
     )
     .expect("the module emits");
     let emitted = std::fs::read_to_string(&built.artifact.source).expect("the C is readable");
-    let appends = emitted.matches("By_StrAppend(").count();
-    let copies = emitted.matches("By_StrConcat(").count();
+    let appends = emitted.matches("By_StrAddAppend(").count();
+    let copies = emitted.matches("By_StrAdd(").count();
     // one per copy of the loop body — `unswitch` duplicates it
     assert!(
         appends >= 1,

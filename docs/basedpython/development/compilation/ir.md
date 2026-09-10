@@ -216,7 +216,7 @@ the ops that exist, beyond the arithmetic and control-flow ones above:
 | `CallPython` / `CallMethod`                       | a call resolved by name, or on a receiver                    |
 | `LoadGlobal`                                      | the module namespace then its builtins, resolved per read    |
 | `ImportModule` / `ImportFrom`                     | `from x import y` — the module with a fromlist, then a name  |
-| `NewInstance` / `MakeClosure`                     | allocate an emitted class; bind a method to it               |
+| `NewInstance` / `MakeClosure`                     | allocate an emitted class; make a nested function over one   |
 | `GetAttr` / `SetAttr`                             | the attribute protocol, for a receiver with no layout        |
 | `GetIter` / `IterNext`                            | the iteration protocol                                       |
 | `BuildList` / `Set` / `Tuple` / `Dict`            | a display                                                    |

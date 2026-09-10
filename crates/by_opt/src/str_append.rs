@@ -34,10 +34,10 @@
 //!   resizing. the runtime helper refuses this case too, so the hazard does not
 //!   depend on this pass being right about it
 
-use std::collections::HashSet;
-
 use by_ir::function::{Function, ModuleIr};
 use by_ir::ops::{BlockId, Op, RegisterId, Value};
+
+use crate::liveness;
 
 pub(crate) fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
@@ -46,23 +46,12 @@ pub(crate) fn run(module: &mut ModuleIr) {
 }
 
 fn consume_dying_operands(function: &mut Function) {
-    let live_in = live_in_sets(function);
+    let live_in = liveness::live_in(function, &liveness::read_registers);
     let mut consumed: Vec<(BlockId, usize)> = Vec::new();
 
     for (index, block) in function.blocks.iter().enumerate() {
-        let error_live = block
-            .error_target
-            .and_then(|target| live_in.get(target.index()))
-            .cloned()
-            .unwrap_or_default();
-        let mut live: HashSet<RegisterId> = block
-            .successors()
-            .iter()
-            .filter_map(|successor| live_in.get(successor.index()))
-            .flatten()
-            .copied()
-            .collect();
-        live.extend(block.terminator.operands().into_iter().filter_map(register));
+        let error_live = liveness::error_live(block, &live_in);
+        let mut live = liveness::live_out(block, &live_in);
 
         for (position, op) in block.ops.iter().enumerate().rev() {
             // an exception leaves from the middle of the block, so what the handler
@@ -91,11 +80,7 @@ fn consume_dying_operands(function: &mut Function) {
             if let Some(dest) = op.dest() {
                 live.remove(&dest);
             }
-            // `del x` leaves its destination unbound, but it reads the value first —
-            // to release it — so the reference is still needed here and must not be
-            // handed to an append below
-            live.extend(op.unbinds());
-            live.extend(op.operands().into_iter().filter_map(register));
+            live.extend(liveness::read_registers(op));
         }
     }
 
@@ -120,64 +105,11 @@ fn may_hand_over(function: &Function, register: RegisterId) -> bool {
         .is_some_and(|decl| !decl.borrowed)
 }
 
-/// the registers live on entry to each block
-fn live_in_sets(function: &Function) -> Vec<HashSet<RegisterId>> {
-    let mut live_in: Vec<HashSet<RegisterId>> = vec![HashSet::new(); function.blocks.len()];
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for index in (0..function.blocks.len()).rev() {
-            let Some(block) = function.block(BlockId(index)) else {
-                continue;
-            };
-            let mut live: HashSet<RegisterId> = block
-                .successors()
-                .iter()
-                .filter_map(|successor| live_in.get(successor.index()))
-                .flatten()
-                .copied()
-                .collect();
-            live.extend(block.terminator.operands().into_iter().filter_map(register));
-
-            // an exception leaves from the middle of the block, so the handler's
-            // needs survive every kill below it
-            let error_live = block
-                .error_target
-                .and_then(|target| live_in.get(target.index()))
-                .cloned()
-                .unwrap_or_default();
-            for op in block.ops.iter().rev() {
-                live.extend(error_live.iter().copied());
-                if let Some(dest) = op.dest() {
-                    live.remove(&dest);
-                }
-                live.extend(op.unbinds());
-                live.extend(op.operands().into_iter().filter_map(register));
-            }
-
-            if live != live_in[index] {
-                live_in[index] = live;
-                changed = true;
-            }
-        }
-    }
-
-    live_in
-}
-
-fn register(value: &Value) -> Option<RegisterId> {
-    match value {
-        Value::Register(id) => Some(*id),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{CmpOp, Op, Terminator, Value};
+    use by_ir::ops::{CmpOp, Concatenation, Mutation, Op, Terminator, Value};
     use by_ir::rtype::RType;
     use by_ir::verify::verify;
 
@@ -219,12 +151,14 @@ mod tests {
             lhs: Value::Str("a".to_string()),
             rhs: Value::Register(piece),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.push(Op::StrConcat {
             dest: second,
             lhs: Value::Register(first),
             rhs: Value::Str("b".to_string()),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(second)));
 
@@ -247,6 +181,7 @@ mod tests {
             lhs: Value::Register(held),
             rhs: Value::Str("b".to_string()),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         // the second read is what makes the first one not the last
         builder.push(Op::StrConcat {
@@ -254,6 +189,7 @@ mod tests {
             lhs: Value::Register(joined),
             rhs: Value::Register(held),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(doubled)));
 
@@ -277,6 +213,7 @@ mod tests {
             lhs: Value::Register(out),
             rhs: Value::Register(piece),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
 
@@ -302,6 +239,7 @@ mod tests {
             lhs: Value::Register(out),
             rhs: Value::Register(piece),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         builder.switch_to(handler);
@@ -324,6 +262,7 @@ mod tests {
             lhs: Value::Register(text),
             rhs: Value::Str("b".to_string()),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(joined)));
 
@@ -369,6 +308,7 @@ mod tests {
             lhs: Value::Register(out),
             rhs: Value::Register(piece),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.assign(out, Value::Register(grown));
         builder.terminate(Terminator::Goto(header));
@@ -401,6 +341,7 @@ mod tests {
             lhs: Value::Register(held),
             rhs: Value::Str("b".to_string()),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(joined)));
         builder.switch_to(handler);
@@ -423,12 +364,14 @@ mod tests {
             lhs: Value::Str("a".to_string()),
             rhs: Value::Register(piece),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.push(Op::StrConcat {
             dest: doubled,
             lhs: Value::Register(made),
             rhs: Value::Register(made),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(doubled)));
 

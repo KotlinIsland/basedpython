@@ -953,6 +953,7 @@ mod tests {
         m.classes.push(by_ir::function::ClassIr {
             name: "Vec2".to_string(),
             immutable: true,
+            environment: false,
             resume: None,
             keywords: Vec::new(),
             exported: true,
@@ -961,6 +962,7 @@ mod tests {
             fields_are_parameters: true,
             dataclass: false,
             fields: vec![by_ir::function::FieldDecl {
+                cell: false,
                 name: "x".to_string(),
                 ty: RType::FLOAT,
                 default: None,
@@ -1020,6 +1022,7 @@ mod tests {
         m.classes.push(by_ir::function::ClassIr {
             name: "Loose".to_string(),
             immutable: false,
+            environment: false,
             resume: None,
             keywords: Vec::new(),
             exported: true,
@@ -1028,6 +1031,7 @@ mod tests {
             fields_are_parameters: true,
             dataclass: false,
             fields: vec![by_ir::function::FieldDecl {
+                cell: false,
                 name: "x".to_string(),
                 ty: RType::FLOAT,
                 default: None,
@@ -1078,6 +1082,7 @@ mod tests {
         m.classes.push(by_ir::function::ClassIr {
             name: "Vec2".to_string(),
             immutable: true,
+            environment: false,
             resume: None,
             keywords: Vec::new(),
             exported: true,
@@ -1086,6 +1091,7 @@ mod tests {
             fields_are_parameters: true,
             dataclass: false,
             fields: vec![by_ir::function::FieldDecl {
+                cell: false,
                 name: "x".to_string(),
                 ty: RType::FLOAT,
                 default: None,
@@ -1138,6 +1144,7 @@ mod tests {
         m.classes.push(by_ir::function::ClassIr {
             name: "Vec2".to_string(),
             immutable: true,
+            environment: false,
             resume: None,
             keywords: Vec::new(),
             exported: true,
@@ -1146,6 +1153,7 @@ mod tests {
             fields_are_parameters: true,
             dataclass: false,
             fields: vec![by_ir::function::FieldDecl {
+                cell: false,
                 name: "x".to_string(),
                 ty: RType::FLOAT,
                 default: None,

@@ -189,10 +189,11 @@ pub(crate) fn state_names(function: &ast::StmtFunctionDef, locals: &[String]) ->
         out.push(iterator_field(index));
     }
     let mut seen: HashSet<String> = out.iter().cloned().collect();
+    // `*args` and `**kwargs` included: they are parameters the body reads like any other
     for name in function
         .parameters
-        .iter_non_variadic_params()
-        .map(|parameter| parameter.parameter.name.to_string())
+        .iter()
+        .map(|parameter| parameter.name().to_string())
         .chain(locals.iter().cloned())
     {
         if seen.insert(name.clone()) {
@@ -369,6 +370,7 @@ pub(crate) fn park_live_registers(
             };
             if declared.insert(*id) {
                 fields.push(by_ir::function::FieldDecl {
+                    cell: false,
                     name: park_field(*id),
                     ty: decl.ty.clone(),
                     default: None,
@@ -384,6 +386,8 @@ pub(crate) fn park_live_registers(
                 class: class.to_string(),
                 field: park_field(*id),
                 value: Value::Register(*id),
+                moves: false,
+                present: false,
             }));
         }
         let moved = BlockId(function.blocks.len());
@@ -564,8 +568,8 @@ pub(crate) fn definitely_assigned(function: &ast::StmtFunctionDef) -> HashSet<St
     // a parameter is assigned on entry: the constructor seeds its field
     let mut out: HashSet<String> = function
         .parameters
-        .iter_non_variadic_params()
-        .map(|parameter| parameter.parameter.name.to_string())
+        .iter()
+        .map(|parameter| parameter.name().to_string())
         .collect();
 
     let mut mentioned: HashSet<String> = HashSet::new();

@@ -8,7 +8,7 @@
 //! this is the guard on the representation invariant. a pass that produces
 //! ill-typed BIR is a bug that would otherwise surface as miscompiled C.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use crate::function::{Function, ModuleIr};
@@ -42,9 +42,10 @@ impl fmt::Display for VerifyError {
 
 /// verify every function in a module
 pub fn verify_module(module: &ModuleIr) -> Result<(), Vec<VerifyError>> {
+    let bases = base_chain(module);
     let mut errors: Vec<VerifyError> = module
         .all_functions()
-        .filter_map(|function| verify_in(function, Some(module)).err())
+        .filter_map(|function| verify_in(function, Some(module), Some(&bases)).err())
         .flatten()
         .collect();
     errors.extend(check_accessor_coverage(module));
@@ -55,19 +56,53 @@ pub fn verify_module(module: &ModuleIr) -> Result<(), Vec<VerifyError>> {
     }
 }
 
+/// each class's in-module base, which is the whole of the layout chain
+///
+/// an external base has no struct here, so nothing downstream of it is a free pointer
+/// cast and the chain stops where one appears
+fn base_chain(module: &ModuleIr) -> HashMap<String, String> {
+    module
+        .classes
+        .iter()
+        .filter_map(|class| {
+            let base = class.base.as_ref()?.in_module()?;
+            Some((class.name.clone(), base.to_string()))
+        })
+        .collect()
+}
+
 /// verify one function, on its own
 ///
 /// a check that needs to look at another function — a call's arguments against the
 /// callee's parameters — is skipped. [`verify_module`] is where those run
 pub fn verify(function: &Function) -> Result<(), Vec<VerifyError>> {
-    verify_in(function, None)
+    verify_in(function, None, None)
+}
+
+/// verify one function against the layout chain of the module being lowered
+///
+/// the frontend verifies each function as it lowers it, before there is a `ModuleIr` to
+/// verify against — but a receiver may name a base's field, and deciding that takes the
+/// chain. so the chain is handed over on its own: everything else stays the single
+/// function's business, and [`verify_module`] is still where the cross-function checks
+/// run
+pub fn verify_within(
+    function: &Function,
+    bases: &HashMap<String, String>,
+) -> Result<(), Vec<VerifyError>> {
+    verify_in(function, None, Some(bases))
 }
 
 /// verify one function, against the module it belongs to where that is known
-fn verify_in(function: &Function, module: Option<&ModuleIr>) -> Result<(), Vec<VerifyError>> {
+fn verify_in(
+    function: &Function,
+    module: Option<&ModuleIr>,
+    bases: Option<&HashMap<String, String>>,
+) -> Result<(), Vec<VerifyError>> {
     let mut verifier = Verifier {
         function,
         module,
+        bases,
         errors: Vec::new(),
     };
     verifier.run();
@@ -208,6 +243,11 @@ struct Verifier<'a> {
     /// only a cross-function check needs it: a call's arguments are checked against
     /// the callee's parameters, which live in another `Function`
     module: Option<&'a ModuleIr>,
+    /// each class's in-module base, where the caller knows the layout chain
+    ///
+    /// separate from `module` because the frontend has the chain before it has a
+    /// module — see [`verify_within`]
+    bases: Option<&'a HashMap<String, String>>,
     errors: Vec<VerifyError>,
 }
 
@@ -293,25 +333,37 @@ impl Verifier<'_> {
         else {
             return false;
         };
-        let Some(module) = self.module else {
+        let Some(bases) = self.bases else {
             return false;
         };
-        let mut current = Some(from.clone());
+        let mut current = Some(from.as_str());
         while let Some(name) = current {
-            if name == *declared {
+            if name == declared.as_str() {
                 return true;
             }
-            // only an in-module base continues the chain: an external one has no struct
-            // here, so nothing downstream of it is a free pointer cast
-            current = module
-                .classes
-                .iter()
-                .find(|class| class.name == name)
-                .and_then(|class| class.base.as_ref())
-                .and_then(|base| base.in_module())
-                .map(str::to_owned);
+            current = bases.get(name).map(String::as_str);
         }
         false
+    }
+
+    /// whether a field op naming `class` may take a receiver of representation `actual`
+    ///
+    /// the same upcast a call argument gets, for the same reason: the receiver is the
+    /// class the op names or one standing on it through this module's own layout chain,
+    /// and a subclass's struct begins with its base's. a class that adds no field of its
+    /// own is the shape that needs this — it is laid out with none at all, so the field
+    /// it reaches is always named against a base
+    fn names_the_receivers_layout(&self, actual: &RType, class: &str) -> bool {
+        match actual {
+            RType::Instance { class: got, .. } if got == class => true,
+            _ => self.upcasts(
+                actual,
+                &RType::Instance {
+                    class: class.to_string(),
+                    exact: false,
+                },
+            ),
+        }
     }
 
     fn run(&mut self) {
@@ -345,9 +397,10 @@ impl Verifier<'_> {
     ///
     /// `borrowed` means the frame never took a reference and so never gives one back:
     /// the emitter writes a plain store and the cleanup skips the register entirely.
-    /// that is only true of the four shapes the emitter recognises — a copy, a
-    /// narrowing test, an element read off a tuple, and a field read — each of which
-    /// leaves some other place still owning the value. every *other* operation
+    /// that is only true of the five shapes the emitter recognises — a copy, a
+    /// narrowing test, an element read off a tuple, a field read, and a box of `None`,
+    /// `True` or `False` — each of which leaves some other place still owning the value,
+    /// the last of them the interpreter itself. every *other* operation
     /// produces a reference of its own, and storing one into a register nothing
     /// releases leaks it.
     ///
@@ -382,6 +435,9 @@ impl Verifier<'_> {
                 }
                 let lends = match op {
                     Op::Assign { .. } | Op::TupleGet { .. } | Op::GetField { .. } => true,
+                    Op::Box { src, .. } => {
+                        matches!(src, Value::None | Value::Bool(_) | Value::Bit(_))
+                    }
                     Op::Unbox { to, .. } => matches!(
                         to,
                         RType::Primitive(Primitive::Str | Primitive::List) | RType::Instance { .. }
@@ -676,11 +732,14 @@ impl Verifier<'_> {
                 }
                 self.expect_dest(block, *dest, &RType::OBJECT, "a class pattern");
             }
+            Op::BuiltinStands { dest, .. } => {
+                self.expect_dest(block, *dest, &RType::BIT, "a builtin test");
+            }
             Op::MethodStands { dest, src, .. } => {
                 self.expect(block, src, &RType::OBJECT, "a dispatch test");
                 self.expect_dest(block, *dest, &RType::BIT, "a dispatch test");
             }
-            Op::AccessorStands { dest, src, .. } => {
+            Op::AccessorStands { dest, src, .. } | Op::FieldStands { dest, src, .. } => {
                 // the test reads the receiver's type and stores the pointer nowhere, so
                 // it borrows — which is why an emitted class's own pointer is taken as it
                 // stands rather than through a `box`, the one widening that would
@@ -788,6 +847,11 @@ impl Verifier<'_> {
                 self.expect(block, lhs, &RType::OBJECT, op.symbol());
                 self.expect(block, rhs, &RType::OBJECT, op.symbol());
                 self.expect_dest(block, *dest, &RType::BIT, op.symbol());
+            }
+            Op::ObjectRichCompare { dest, lhs, rhs, op } => {
+                self.expect(block, lhs, &RType::OBJECT, op.symbol());
+                self.expect(block, rhs, &RType::OBJECT, op.symbol());
+                self.expect_dest(block, *dest, &RType::OBJECT, op.symbol());
             }
             Op::StrCompare { dest, lhs, rhs, op } => {
                 self.expect(block, lhs, &RType::STR, op.symbol());
@@ -978,6 +1042,17 @@ impl Verifier<'_> {
                 self.expect(block, source, &RType::OBJECT, "extend");
                 self.expect_dest(block, *dest, &RType::BIT, "extend");
             }
+            Op::MergeKeywords {
+                dest,
+                container,
+                source,
+                callee,
+            } => {
+                self.expect(block, container, &RType::OBJECT, "a keyword merge");
+                self.expect(block, source, &RType::OBJECT, "a keyword merge");
+                self.expect(block, callee, &RType::OBJECT, "a keyword merge");
+                self.expect_dest(block, *dest, &RType::BIT, "a keyword merge");
+            }
             Op::CallUnpacked {
                 dest,
                 callee,
@@ -1142,7 +1217,19 @@ impl Verifier<'_> {
                     },
                     "a cell read",
                 );
-                self.expect_dest(block, *dest, &RType::OBJECT, "a cell read");
+                // a cell starts unset, so it is read into a representation with an unset
+                // value of its own: NULL for a single reference, the error value for a
+                // tagged `int`
+                let holds = self
+                    .function
+                    .register(*dest)
+                    .is_some_and(|decl| decl.ty == RType::INT || decl.ty.is_object_reference());
+                if !holds {
+                    self.error(
+                        Some(block),
+                        format!("a cell read into {dest:?}, which has no unset value"),
+                    );
+                }
             }
             Op::NewInstance {
                 dest,
@@ -1262,10 +1349,12 @@ impl Verifier<'_> {
                 class,
                 ..
             } => {
-                // the receiver's representation has to *be* that class, or the
+                // the receiver's representation has to *be* that class, or a class
+                // under it — a subclass's struct begins with its base's, so the
+                // offset lands in the same place either way. anything else and the
                 // offset would be read out of the wrong struct
                 if let Some(actual) = self.operand_type(block, receiver)
-                    && !matches!(actual, RType::Instance { class: ref got, .. } if got == class)
+                    && !self.names_the_receivers_layout(&actual, class)
                 {
                     self.error(
                         Some(block),
@@ -1276,14 +1365,56 @@ impl Verifier<'_> {
                     self.error(Some(block), format!("r{} is not declared", dest.0));
                 }
             }
+            Op::RequireField {
+                receiver, class, ..
+            }
+            | Op::FieldIsSet {
+                receiver, class, ..
+            } => {
+                if let Some(actual) = self.operand_type(block, receiver)
+                    && !self.names_the_receivers_layout(&actual, class)
+                {
+                    self.error(
+                        Some(block),
+                        format!("a field test on {class} has a {actual} receiver"),
+                    );
+                }
+                if let Op::FieldIsSet { dest, .. } = op {
+                    self.expect_dest(block, *dest, &RType::BIT, "a field test");
+                }
+            }
             Op::SetField {
                 receiver,
                 class,
                 value,
+                moves,
                 ..
             } => {
+                // a moving store empties its value's register, so the register has to own
+                // what it hands over, and be one an empty value can be written back into
+                if *moves {
+                    let owns = match value {
+                        Value::Register(id) => {
+                            id.index() >= self.function.param_count
+                                && self.function.register(*id).is_some_and(|decl| {
+                                    !decl.borrowed
+                                        && decl.name.is_none()
+                                        && (decl.ty == RType::INT || decl.ty.is_object_reference())
+                                })
+                        }
+                        _ => false,
+                    };
+                    if !owns {
+                        self.error(
+                            Some(block),
+                            format!(
+                                "a moving store of {value:?}, which owns no reference to hand over"
+                            ),
+                        );
+                    }
+                }
                 if let Some(actual) = self.operand_type(block, receiver)
-                    && !matches!(actual, RType::Instance { class: ref got, .. } if got == class)
+                    && !self.names_the_receivers_layout(&actual, class)
                 {
                     self.error(
                         Some(block),
@@ -1446,6 +1577,64 @@ impl Verifier<'_> {
             Op::PopHandled { value } => {
                 self.expect(block, value, &RType::OBJECT, "leaving a handler");
             }
+            Op::Release { value, path } => {
+                let owns = match value {
+                    Value::Register(id) => self.function.register(*id).is_some_and(|decl| {
+                        !decl.borrowed
+                            && decl
+                                .ty
+                                .element(path)
+                                .is_some_and(RType::is_object_reference)
+                    }),
+                    _ => false,
+                };
+                if !owns {
+                    self.error(
+                        Some(block),
+                        format!(
+                            "a release of {value:?} at {path:?}, which owns no single reference"
+                        ),
+                    );
+                }
+            }
+            Op::Move { dest, src, path } => {
+                // the source hands over a reference it owns, and is left empty where it
+                // held it — so it has to be a temporary the frame owns, which nothing
+                // else expects to find still holding its value
+                let element = match src {
+                    Value::Register(id) if id.index() >= self.function.param_count => self
+                        .function
+                        .register(*id)
+                        .filter(|decl| !decl.borrowed && decl.name.is_none())
+                        .and_then(|decl| decl.ty.element(path))
+                        .filter(|ty| **ty == RType::INT || ty.is_object_reference())
+                        .cloned(),
+                    _ => None,
+                };
+                let Some(element) = element else {
+                    self.error(
+                        Some(block),
+                        format!(
+                            "a move of {src:?} at {path:?}, which owns no reference to hand over"
+                        ),
+                    );
+                    return;
+                };
+                if self
+                    .function
+                    .register(*dest)
+                    .is_some_and(|decl| decl.borrowed)
+                {
+                    self.error(
+                        Some(block),
+                        format!(
+                            "r{} is borrowed, so it cannot take over a reference",
+                            dest.0
+                        ),
+                    );
+                }
+                self.expect_dest(block, *dest, &element, "a move");
+            }
             Op::RaiseObject { exception, cause } => {
                 self.expect(block, exception, &RType::OBJECT, "a raise");
                 if let Some(cause) = cause {
@@ -1490,6 +1679,7 @@ impl Verifier<'_> {
                 lhs,
                 rhs,
                 consumes_lhs,
+                ..
             } => {
                 self.expect(block, lhs, &RType::STR, "str concatenation");
                 self.expect(block, rhs, &RType::STR, "str concatenation");
@@ -1535,7 +1725,9 @@ impl Verifier<'_> {
                     }
                 }
             }
-            Op::StrConcatInt { dest, lhs, value } => {
+            Op::StrConcatInt {
+                dest, lhs, value, ..
+            } => {
                 self.expect(block, lhs, &RType::STR, "concatenating the str of an int");
                 self.expect(block, value, &RType::INT, "concatenating the str of an int");
                 // unlike `str-of-int` on its own this *is* a `str`: what the name
@@ -1706,8 +1898,12 @@ impl Verifier<'_> {
                 continue; // unreachable block: nothing to prove about it
             };
             for op in &block.ops {
-                for operand in op.operands() {
-                    self.check_read(id, operand, &state);
+                // a release of a register nothing has written yet lets go of nothing:
+                // every register starts empty, which is what makes that safe
+                if !matches!(op, Op::Release { .. }) {
+                    for operand in op.operands() {
+                        self.check_read(id, operand, &state);
+                    }
                 }
                 if let Some(dest) = op.dest()
                     && dest.index() < state.len()
@@ -1768,7 +1964,7 @@ mod tests {
     use super::*;
     use crate::builder::FunctionBuilder;
     use crate::function::{BasicBlock, CallConvention, RegisterDecl};
-    use crate::ops::{BinOp, CmpOp};
+    use crate::ops::{BinOp, CmpOp, Concatenation, Mutation};
 
     fn reg(name: &str, ty: RType) -> RegisterDecl {
         RegisterDecl {
@@ -1820,6 +2016,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            nested: None,
         }
     }
 
@@ -2010,6 +2207,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            nested: None,
         };
         let errors = verify(&f).unwrap_err();
         assert!(
@@ -2061,6 +2259,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            nested: None,
         };
         assert_eq!(verify(&f), Ok(()));
     }
@@ -2113,6 +2312,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            nested: None,
         };
         let errors = verify(&f).unwrap_err();
         assert!(
@@ -2216,6 +2416,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            nested: None,
         };
         let errors = verify(&f).unwrap_err();
         assert!(errors.iter().any(|e| e.message.contains("past the end")));
@@ -2505,6 +2706,7 @@ mod tests {
             lhs: Value::Register(head),
             rhs: Value::Register(tail),
             consumes_lhs: true,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut function = builder.finish();
@@ -2522,6 +2724,7 @@ mod tests {
             lhs: Value::Register(out),
             rhs: Value::Register(tail),
             consumes_lhs: true,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         };
         assert_eq!(verify(&function), Ok(()));
     }
@@ -2538,6 +2741,7 @@ mod tests {
             lhs: Value::Register(held),
             rhs: Value::Register(tail),
             consumes_lhs: true,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut function = builder.finish();

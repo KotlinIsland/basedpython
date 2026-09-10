@@ -110,6 +110,12 @@ typedef size_t ByTagged;
 #define BY_SHORT_MAX (PY_SSIZE_T_MAX >> 1)
 #define BY_SHORT_MIN (-BY_SHORT_MAX - 1)
 
+/* the compiler decides which integer literals are short when it writes the C, and it
+ * decides against this bound. a narrower word would take a literal the compiler called
+ * short and silently drop its top bits */
+_Static_assert(BY_SHORT_MAX == 4611686018427387903LL,
+               "the emitted C sorts integer literals against a 64-bit short range");
+
 /* a tagged integer is a machine word until it is not, and the not is rare — every
  * loop counter, index and accumulator in a real program stays short. telling the
  * compiler so is what keeps the slow path out of the straight line */
@@ -260,8 +266,41 @@ static inline PyObject *By_BoxInt(ByTagged x) {
     return o;
 }
 
-/* takes a new reference to `o` when it cannot be represented as a short */
+/* an integer literal too wide to be a short, which the module built once at init
+ *
+ * the tag is added and no reference is taken: like a string literal, the module owns
+ * it and a use of it is borrowed. the value lies outside the short range by
+ * construction, which is the invariant every tagged pointer carries */
+BY_HOT ByTagged By_TaggedLiteral(PyObject *o) {
+    return ((ByTagged)(void *)o) | BY_INT_TAG;
+}
+
+static inline void By_TypeError(const char *expected, PyObject *got) {
+    PyErr_Format(PyExc_TypeError, "expected %s, got %s", expected,
+                 got == NULL ? "NULL" : Py_TYPE(got)->tp_name);
+}
+
+/* how many digits an `int` has to have before no value of that length is a short
+ *
+ * python 3.12 onwards keeps the digit count in the object's header, beside the sign.
+ * the smallest magnitude with `n` digits is 2**(PyLong_SHIFT*(n-1)), and to be past
+ * every short it has to be *strictly* past 2**62, because -2**62 is itself one — so
+ * this is the first `n` for which that holds. it is four for 30-bit digits and six
+ * for 15-bit ones, which is why it is worked out rather than written down */
+#if PY_VERSION_HEX >= 0x030C0000 && !defined(Py_LIMITED_API)
+#define BY_DIGITS_PAST_SHORT ((uintptr_t)((sizeof(Py_ssize_t) * 8 - 2) / PyLong_SHIFT + 2))
+#endif
+
+/* takes a new reference to `o` when it cannot be represented as a short
+ *
+ * anything that is not an `int` raises the `TypeError` an unbox of it raises, and the
+ * error path never clears: an operator on a big `int` subclass can answer with any
+ * object at all, and swallowing the failure here once tagged a `str` as an int */
 static inline ByTagged By_TaggedFromLong(PyObject *o) {
+    if (BY_UNLIKELY(o == NULL || !PyLong_Check(o))) {
+        By_TypeError("int", o);
+        return BY_INT_ERROR;
+    }
 #if PY_VERSION_HEX >= 0x030C0000
     /* almost every `int` a program unboxes is one that fits a single digit, and
      * python 3.12 onwards stores such a value in the object's own header rather
@@ -273,24 +312,30 @@ static inline ByTagged By_TaggedFromLong(PyObject *o) {
      * `PyUnstable_Long_*` are cpython's own accessors for exactly this, and the
      * header defines them as inline functions over the macros that name them —
      * so this is the interpreter's own fast path rather than a guess about its
-     * layout. the type test is what makes it safe to take: a caller handing over
-     * something that is not an `int` at all still reaches the checked route
-     * below and gets the `TypeError` from it */
-    if (BY_LIKELY(PyLong_Check(o) && PyUnstable_Long_IsCompact((PyLongObject *)o))) {
+     * layout */
+    if (BY_LIKELY(PyUnstable_Long_IsCompact((PyLongObject *)o))) {
         return By_ShortFrom(PyUnstable_Long_CompactValue((PyLongObject *)o));
     }
 #endif
+#ifdef BY_DIGITS_PAST_SHORT
+    /* and the other end: a value this long is never a short, so the checked
+     * conversion below would only find out what the header already says */
+    if ((((PyLongObject *)o)->long_value.lv_tag >> _PyLong_NON_SIZE_BITS)
+        >= BY_DIGITS_PAST_SHORT) {
+        By_IncRef(o);
+        return ((ByTagged)(void *)o) | BY_INT_TAG;
+    }
+#endif
     {
+    /* an `int` is read without asking `__index__`, so the only failure left is one
+     * too wide for the word, and that is reported through `overflow` rather than
+     * raised */
     int overflow = 0;
-    Py_ssize_t value = PyLong_AsLongLongAndOverflow(o, &overflow);
-    if (!overflow && value != -1) {
-        if (By_FitsShort((Py_ssize_t)value)) {
-            return By_ShortFrom((Py_ssize_t)value);
-        }
-    } else if (!overflow && !PyErr_Occurred() && By_FitsShort((Py_ssize_t)value)) {
+    long long value = PyLong_AsLongLongAndOverflow(o, &overflow);
+    if (value == -1 && PyErr_Occurred()) return BY_INT_ERROR;
+    if (!overflow && By_FitsShort((Py_ssize_t)value)) {
         return By_ShortFrom((Py_ssize_t)value);
     }
-    PyErr_Clear();
     By_IncRef(o);
     return ((ByTagged)(void *)o) | BY_INT_TAG;
     }
@@ -377,37 +422,92 @@ BY_COLD ByTagged By_IntSlowBitwise(ByTagged a, ByTagged b, char op) {
     return tagged;
 }
 
-BY_HOT ByTagged By_IntAdd(ByTagged a, ByTagged b) {
+/* the fast paths alone, for a caller that branches on them: each answers 1 with the
+ * result written where both operands are shorts and so is the result, and 0 where the
+ * slow path has to decide. a short is an even word and each of these results is one
+ * too, so what they write is never the error value — a caller only has to test for an
+ * error on the slow path, which is the only one that calls into cpython */
+static inline int By_IntAddShort(ByTagged a, ByTagged b, ByTagged *out) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
         Py_ssize_t x = (Py_ssize_t)a, y = (Py_ssize_t)b;
         /* wrap in the unsigned domain, where overflow is defined, then use the
          * sign test: overflow happened iff both operands differ in sign from the
          * result */
         Py_ssize_t sum = (Py_ssize_t)((size_t)x + (size_t)y);
-        if (BY_LIKELY(((x ^ sum) & (y ^ sum)) >= 0)) return (ByTagged)sum;
+        if (BY_LIKELY(((x ^ sum) & (y ^ sum)) >= 0)) {
+            *out = (ByTagged)sum;
+            return 1;
+        }
     }
-    return By_IntSlowBinary(a, b, "+");
+    return 0;
 }
 
-BY_HOT ByTagged By_IntSub(ByTagged a, ByTagged b) {
+static inline int By_IntSubShort(ByTagged a, ByTagged b, ByTagged *out) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
         Py_ssize_t x = (Py_ssize_t)a, y = (Py_ssize_t)b;
         Py_ssize_t diff = (Py_ssize_t)((size_t)x - (size_t)y);
-        if (BY_LIKELY(((x ^ y) & (x ^ diff)) >= 0)) return (ByTagged)diff;
+        if (BY_LIKELY(((x ^ y) & (x ^ diff)) >= 0)) {
+            *out = (ByTagged)diff;
+            return 1;
+        }
     }
-    return By_IntSlowBinary(a, b, "-");
+    return 0;
 }
 
 /* a product of two values within this bound cannot leave the short range */
 #define BY_MUL_SAFE (((Py_ssize_t)1) << ((sizeof(Py_ssize_t) * 8 - 4) / 2))
 
-BY_HOT ByTagged By_IntMul(ByTagged a, ByTagged b) {
+static inline int By_IntMulShort(ByTagged a, ByTagged b, ByTagged *out) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
         Py_ssize_t x = By_ShortValue(a), y = By_ShortValue(b);
         if (x > -BY_MUL_SAFE && x < BY_MUL_SAFE && y > -BY_MUL_SAFE && y < BY_MUL_SAFE) {
-            return By_ShortFrom(x * y);
+            *out = By_ShortFrom(x * y);
+            return 1;
         }
     }
+    return 0;
+}
+
+/* `& | ^` are exact on the shifted representation: (2a)&(2b) == 2(a&b) */
+static inline int By_IntAndShort(ByTagged a, ByTagged b, ByTagged *out) {
+    if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
+        *out = a & b;
+        return 1;
+    }
+    return 0;
+}
+
+static inline int By_IntOrShort(ByTagged a, ByTagged b, ByTagged *out) {
+    if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
+        *out = a | b;
+        return 1;
+    }
+    return 0;
+}
+
+static inline int By_IntXorShort(ByTagged a, ByTagged b, ByTagged *out) {
+    if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
+        *out = a ^ b;
+        return 1;
+    }
+    return 0;
+}
+
+BY_HOT ByTagged By_IntAdd(ByTagged a, ByTagged b) {
+    ByTagged sum;
+    if (BY_LIKELY(By_IntAddShort(a, b, &sum))) return sum;
+    return By_IntSlowBinary(a, b, "+");
+}
+
+BY_HOT ByTagged By_IntSub(ByTagged a, ByTagged b) {
+    ByTagged diff;
+    if (BY_LIKELY(By_IntSubShort(a, b, &diff))) return diff;
+    return By_IntSlowBinary(a, b, "-");
+}
+
+BY_HOT ByTagged By_IntMul(ByTagged a, ByTagged b) {
+    ByTagged product;
+    if (BY_LIKELY(By_IntMulShort(a, b, &product))) return product;
     return By_IntSlowBinary(a, b, "*");
 }
 
@@ -454,24 +554,25 @@ BY_HOT ByTagged By_IntFloorDiv(ByTagged a, ByTagged b) {
         }
         Py_ssize_t x = By_ShortValue(a);
         /* the one case where the quotient leaves the range of the operands */
-        if (!(x == PY_SSIZE_T_MIN && y == -1)) {
+        if (!(x == BY_SHORT_MIN && y == -1)) {
             return By_ShortFrom(By_FloorDivSsize(x, y));
         }
     }
     return By_IntSlowBinary(a, b, "/");
 }
 
+/* `%` works on the tagged words themselves, with no shift out and back. a short is
+ * its value shifted left by one, so `(2x) % (2y)` is `2 (x % y)`, and the floor fix-up
+ * adds the divisor, `2y` — the answer is already a tagged short. the one remainder that
+ * overflows is by -1, and a tagged divisor is even, so it never is: only a zero divisor
+ * faults */
 BY_HOT ByTagged By_IntMod(ByTagged a, ByTagged b) {
     if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) {
-        Py_ssize_t y = By_ShortValue(b);
-        if (y == 0) {
+        if (b == By_ShortFrom(0)) {
             By_ZeroDivision(PyNumber_Remainder, 0);
             return BY_INT_ERROR;
         }
-        Py_ssize_t x = By_ShortValue(a);
-        if (!(x == PY_SSIZE_T_MIN && y == -1)) {
-            return By_ShortFrom(By_ModSsize(x, y));
-        }
+        return (ByTagged)By_ModSsize((Py_ssize_t)a, (Py_ssize_t)b);
     }
     return By_IntSlowBinary(a, b, "%");
 }
@@ -490,17 +591,19 @@ static inline double By_IntTrueDiv(ByTagged a, ByTagged b) {
     return value;
 }
 
-/* `& | ^` are exact on the shifted representation: (2a)&(2b) == 2(a&b) */
 BY_HOT ByTagged By_IntAnd(ByTagged a, ByTagged b) {
-    if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) return a & b;
+    ByTagged out;
+    if (BY_LIKELY(By_IntAndShort(a, b, &out))) return out;
     return By_IntSlowBitwise(a, b, '&');
 }
 BY_HOT ByTagged By_IntOr(ByTagged a, ByTagged b) {
-    if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) return a | b;
+    ByTagged out;
+    if (BY_LIKELY(By_IntOrShort(a, b, &out))) return out;
     return By_IntSlowBitwise(a, b, '|');
 }
 BY_HOT ByTagged By_IntXor(ByTagged a, ByTagged b) {
-    if (BY_LIKELY(By_IsShort(a) && By_IsShort(b))) return a ^ b;
+    ByTagged out;
+    if (BY_LIKELY(By_IntXorShort(a, b, &out))) return out;
     return By_IntSlowBitwise(a, b, '^');
 }
 static inline ByTagged By_IntShl(ByTagged a, ByTagged b) {
@@ -521,7 +624,8 @@ static inline ByTagged By_IntInvert(ByTagged a) {
 static inline ByTagged By_IntNeg(ByTagged a) {
     if (By_IsShort(a)) {
         Py_ssize_t x = By_ShortValue(a);
-        if (x != PY_SSIZE_T_MIN) return By_ShortFrom(-x);
+        /* the short range is one wider below zero than above it */
+        if (x != BY_SHORT_MIN) return By_ShortFrom(-x);
     }
     return By_IntSub(By_ShortFrom(0), a);
 }
@@ -529,6 +633,29 @@ static inline ByTagged By_IntNeg(ByTagged a) {
 /* ── int comparison ───────────────────────────────────────────────────────── */
 
 BY_COLD char By_IntCompareSlow(ByTagged a, ByTagged b, int op) {
+#if PY_VERSION_HEX >= 0x030C0000 && !defined(Py_LIMITED_API)
+    /* an exact `int` is only ever held behind a pointer when it does not fit a short,
+     * so against a short the two can never be equal and the pointer's sign alone says
+     * which is larger. a subclass is left to its own comparison, which is what makes
+     * this a fact about the representation rather than about the values */
+    if (By_IsShort(a) != By_IsShort(b)) {
+        PyObject *big = By_LongOf(By_IsShort(a) ? b : a);
+        if (big != NULL && PyLong_CheckExact(big)) {
+            /* the low two bits of the tag are 0 for positive and 2 for negative; a
+             * value too big to be a short is never zero */
+            int negative = (((PyLongObject *)big)->long_value.lv_tag & _PyLong_SIGN_MASK) == 2;
+            /* whether `a < b` */
+            char below = (char)(By_IsShort(a) ? !negative : negative);
+            switch (op) {
+                case Py_EQ: return 0;
+                case Py_NE: return 1;
+                case Py_LT:
+                case Py_LE: return below;
+                default: return (char)!below;
+            }
+        }
+    }
+#endif
     PyObject *left = By_BoxInt(a);
     if (left == NULL) return 2;
     PyObject *right = By_BoxInt(b);
@@ -781,11 +908,6 @@ static inline PyObject *By_BoxNone(void) {
     return Py_None;
 }
 
-static inline void By_TypeError(const char *expected, PyObject *got) {
-    PyErr_Format(PyExc_TypeError, "expected %s, got %s", expected,
-                 got == NULL ? "NULL" : Py_TYPE(got)->tp_name);
-}
-
 /* unboxing is a *narrowing*, so it is always checked — this is the
  * representation invariant's inserted check, not an assumption */
 static inline ByTagged By_UnboxInt(PyObject *o) {
@@ -974,10 +1096,34 @@ static inline PyObject *By_ObjIShr(PyObject *a, PyObject *b) {
 static inline PyObject *By_ObjNeg(PyObject *o) { return PyNumber_Negative(o); }
 static inline PyObject *By_ObjInvert(PyObject *o) { return PyNumber_Invert(o); }
 
-/* a comparison yields a bit, and 2 means an exception is set */
+/* `a <op> b` through the abstract protocol, as a bit — and 2 means an exception is set
+ *
+ * this is `PyObject_RichCompareBool` with its one shortcut removed. that function
+ * answers `Py_EQ` on a pair of identical pointers `True` *before* it asks the type,
+ * on the documented guarantee that identity implies equality — a guarantee ordinary
+ * python does not make. a NaN is not equal to itself, and neither is an instance of
+ * a class whose `__eq__` says so, so a comparison lowered onto it disagreed with the
+ * interpreted twin while raising nothing and declining nothing.
+ *
+ * the shortcut is correct where the *interpreter* takes it, and it does take it in
+ * places this must not disturb: `x in xs` and `xs.index(x)` reach it through
+ * `PySequence_Contains` and `list.index`, and a dict lookup reaches it through
+ * `lookdict`. those are answered by cpython's own code here — [`By_Contains`] and an
+ * ordinary method call — so they keep it by construction and are not this helper's
+ * to decide.
+ *
+ * what is left is the rest of that function: compare, then collapse the answer to a
+ * bit. so the pointer test is the whole of what removing the shortcut costs.
+ *
+ * a NULL operand carries an exception set by whatever produced it, and the comparison
+ * would dereference it — [`By_StrCompare`] hands its own such pair straight here */
 static inline char By_ObjCompare(PyObject *a, PyObject *b, int op) {
-    int result = PyObject_RichCompareBool(a, b, op);
-    return result < 0 ? 2 : (char)result;
+    if (BY_UNLIKELY(a == NULL || b == NULL)) return 2;
+    PyObject *result = PyObject_RichCompare(a, b, op);
+    if (result == NULL) return 2;
+    int truth = PyObject_IsTrue(result);
+    Py_DECREF(result);
+    return truth < 0 ? 2 : (char)truth;
 }
 
 /* the type python names in an `AttributeError`
@@ -990,6 +1136,21 @@ static inline const char *By_TypeName(PyObject *o) {
     const char *name = Py_TYPE(o)->tp_name;
     const char *dot = strrchr(name, '.');
     return dot == NULL ? name : dot + 1;
+}
+
+/* raise python's `AttributeError` for an instance without a field of its layout
+ *
+ * out of line, because it is the rare branch beside every field read nothing proves
+ * assigned, and building the message there made those reads' functions too big to
+ * inline into their callers. `qualified` names the type in full, which is how a slot's
+ * descriptor words it */
+BY_COLD void By_FieldMissing(PyObject *o, const char *name, int qualified) {
+    if (qualified) {
+        PyErr_Format(PyExc_AttributeError, "'%T' object has no attribute '%s'", o, name);
+    } else {
+        PyErr_Format(PyExc_AttributeError, "'%s' object has no attribute '%s'", By_TypeName(o),
+                     name);
+    }
 }
 
 /* python truthiness, which can raise from a user `__bool__` or `__len__` */
@@ -1106,6 +1267,90 @@ static inline PyObject *By_FixedName(PyObject **slot, const char *name, Py_ssize
  * in, and never the caller's. NULL until `By_BindBuiltins` has run, which `by_exec`
  * does before anything can read a global */
 static PyObject *by_module_builtins = NULL;
+
+/* ── one module object per process ───────────────────────────────────────────
+ *
+ * a compiled module keeps its namespace, and every memo of a name in it, in statics the
+ * whole process shares. a second module object — `del sys.modules[name]` and an import,
+ * or an import in another interpreter — would have those statics pointed at its own
+ * namespace, and the first object's compiled code would read and write the second's.
+ *
+ * so the first module to finish executing is recorded in the interpreter that imported
+ * it, and a later import there hands that module back, as it does for a single-phase C
+ * extension. an import in any other interpreter is refused, since there is no second set
+ * of statics to give it. the record is keyed by this build's module definition, so two
+ * builds of one module name are never taken for each other */
+
+/* the interpreter the module executed in, and NULL until it has */
+static PyInterpreterState *by_module_home = NULL;
+
+/* the interpreter-wide dict key the module is recorded under, new, or NULL on failure */
+static PyObject *By_ModuleRecordKey(PyModuleDef *def) {
+    return PyUnicode_FromFormat("by.module:%s:%p", def->m_name, (void *)def);
+}
+
+/* the module this interpreter already holds for `def`, borrowed, or NULL with no error
+ * set where it holds none */
+static PyObject *By_RecordedModule(PyModuleDef *def) {
+    PyObject *registry = PyInterpreterState_GetDict(PyInterpreterState_Get());
+    PyObject *key;
+    PyObject *found;
+    if (registry == NULL) return NULL;
+    key = By_ModuleRecordKey(def);
+    if (key == NULL) return NULL;
+    found = PyDict_GetItemWithError(registry, key);
+    Py_DECREF(key);
+    return found;
+}
+
+/* `Py_mod_create`: the module already imported here, or a new one */
+static PyObject *By_CreateModule(PyObject *spec, PyModuleDef *def) {
+    PyInterpreterState *interp = PyInterpreterState_Get();
+    PyObject *found;
+    PyObject *name;
+    PyObject *module;
+    if (by_module_home != NULL && by_module_home != interp) {
+        PyErr_Format(PyExc_ImportError,
+                     "the compiled module '%s' is already imported in another interpreter, "
+                     "and its state is shared by the whole process",
+                     def->m_name);
+        return NULL;
+    }
+    found = By_RecordedModule(def);
+    if (found != NULL) return By_NewRef(found);
+    if (PyErr_Occurred()) return NULL;
+    name = PyObject_GetAttrString(spec, "name");
+    if (name == NULL) return NULL;
+    module = PyModule_NewObject(name);
+    Py_DECREF(name);
+    return module;
+}
+
+/* whether `module` is the one this interpreter already executed, whose exec slot is then
+ * run again only because the import machinery hands it back to be executed */
+static int By_ModuleExecuted(PyObject *module, PyModuleDef *def) {
+    PyObject *found = By_RecordedModule(def);
+    if (found == NULL && PyErr_Occurred()) return -1;
+    return found == module;
+}
+
+/* record `module` as the one this interpreter holds, once its exec slot has succeeded */
+static int By_RecordModule(PyObject *module, PyModuleDef *def) {
+    PyObject *registry = PyInterpreterState_GetDict(PyInterpreterState_Get());
+    PyObject *key;
+    int failed;
+    if (registry == NULL) {
+        PyErr_SetString(PyExc_ImportError, "the interpreter has no dict to record a module in");
+        return -1;
+    }
+    key = By_ModuleRecordKey(def);
+    if (key == NULL) return -1;
+    failed = PyDict_SetItem(registry, key, module);
+    Py_DECREF(key);
+    if (failed < 0) return -1;
+    by_module_home = PyInterpreterState_Get();
+    return 0;
+}
 
 /* bind that namespace, the way python binds one for an interpreted module
  *
@@ -3176,11 +3421,12 @@ typedef PyObject *(*ByFastKwCall)(PyObject *, PyObject *const *, Py_ssize_t, PyO
  * will never be able to serve — every instance of a class written in the interpreter
  * — is asked about once and then costs the same two comparisons as a hit.
  *
- * that order matters for a second reason. the attribute lookup below is the one step
- * here that another thread can run inside, and it sits *after* the type has been
- * recorded and the answer cleared — so a site another thread arms in the middle of
- * this one is left holding that thread's type against this one's version, which no
- * receiver matches, rather than that thread's type against this one's body */
+ * that order matters for a second reason. the lookup below runs no python of its own,
+ * but it was once an attribute read that could, and nothing here should rest on which
+ * it is: it sits *after* the type has been recorded and the answer cleared, so a site
+ * another thread arms in the middle of this one is left holding that thread's type
+ * against this one's version, which no receiver matches, rather than that thread's type
+ * against this one's body */
 static void By_ArmMethodSite(ByMethodSite *site, PyTypeObject *tp, PyObject *name,
                              Py_ssize_t nargs) {
     site->type = (PyObject *)tp;
@@ -3192,18 +3438,18 @@ static void By_ArmMethodSite(ByMethodSite *site, PyTypeObject *tp, PyObject *nam
     if (tp->tp_flags & BY_INLINE_VALUES_FLAG) return;
     if (tp->tp_dictoffset < 0) return;
     site->dict_offset = tp->tp_dictoffset;
-    PyObject *found = PyObject_GetAttr((PyObject *)tp, name);
-    if (found == NULL) {
-        PyErr_Clear();
-        return;
-    }
-    /* reading the type's own attribute hands back the descriptor rather than a bound
-     * method, so the builtin behind it is reachable through it */
-    PyMethodDef *method = Py_IS_TYPE(found, &PyMethodDescr_Type)
-                              ? ((PyMethodDescrObject *)found)->d_method
-                              : NULL;
-    Py_DECREF(found);
-    if (method == NULL) return;
+    /* the entry an instance's lookup finds on the type, borrowed and with no descriptor
+     * run to find it. reading the attribute off the class instead runs a `__get__` of
+     * the entry's own, and what that hands back for the class need not be what it hands
+     * back for an instance */
+    PyObject *found = _PyType_Lookup(tp, name);
+    if (found == NULL || !Py_IS_TYPE(found, &PyMethodDescr_Type)) return;
+    /* a method descriptor serves the instances of the type that defined it, and refuses
+     * anything else with a `TypeError`. `pop = list.pop` in a class of its own is that
+     * refusal, and calling the entry point directly would hand `list_pop` a receiver
+     * that is not a list */
+    if (!PyType_IsSubtype(tp, PyDescr_TYPE(found))) return;
+    PyMethodDef *method = ((PyMethodDescrObject *)found)->d_method;
     /* the whole of the flags decides, with only the one bit that says nothing about the
      * arguments set aside. a mask naming the conventions this knows would *drop* the
      * bits it does not know rather than refuse them, and `METH_METHOD` is exactly such
@@ -5813,6 +6059,91 @@ static inline char By_Contains(PyObject *container, PyObject *value, int negated
     return (char)(negated ? !found : found);
 }
 
+/* whether a dict's keys table holds nothing but exact `str` keys
+ *
+ * cpython keeps a table of exact `str` keys in a form of its own, and turns it into the
+ * general form the moment any other key is stored. which form a table is in is
+ * `dk_kind`, a field of the private `PyDictKeysObject` head, so reading it trusts a
+ * layout no public header promises. that trust is earned twice over: only on the
+ * versions whose layout was read (3.13 and 3.14, with the GIL, where the head is
+ * `dk_refcnt`, `dk_log2_size`, `dk_log2_index_bytes`, `dk_kind`), and only once
+ * [`By_CheckDictKinds`] has built dicts whose form is known and found the field saying
+ * so. anything else answers 0, which is the answer that is never wrong */
+#if PY_VERSION_HEX >= 0x030D0000 && PY_VERSION_HEX < 0x030F0000 && !defined(Py_GIL_DISABLED) \
+    && !defined(Py_LIMITED_API)
+#define BY_DICT_KINDS 1
+
+typedef struct {
+    Py_ssize_t dk_refcnt;
+    uint8_t dk_log2_size;
+    uint8_t dk_log2_index_bytes;
+    uint8_t dk_kind;
+} ByDictKeysHead;
+
+/* 1 once the layout has been checked and found as read, 0 before that or if it was not */
+static char by_dict_kinds_checked = 0;
+
+static inline const ByDictKeysHead *By_DictKeysHead(PyObject *dict) {
+    return (const ByDictKeysHead *)((PyDictObject *)dict)->ma_keys;
+}
+
+static inline char By_DictKeysAllStr(PyObject *dict) {
+    return by_dict_kinds_checked && By_DictKeysHead(dict)->dk_kind != 0;
+}
+
+/* whether the head of `dict`'s table reads as a fresh table of `kind` would: a minimum
+ * sized table owned by this dict alone, or a table shared between instances */
+static char By_DictKeysReadAs(PyObject *dict, uint8_t kind) {
+    const ByDictKeysHead *head = By_DictKeysHead(dict);
+    if (head->dk_kind != kind) return 0;
+    /* a split table is shared by the class and every instance using it */
+    if (kind == 2) return head->dk_refcnt >= 1;
+    return head->dk_refcnt == 1 && head->dk_log2_size == 3 && head->dk_log2_index_bytes == 3;
+}
+
+/* build one dict of each form and check the private read names each correctly
+ *
+ * `{"a": 1}` is a table of exact `str` keys, `{1: 1}` a general one, and the `__dict__`
+ * of an instance of a fresh class a split one. a failure of any step, or any answer
+ * other than the one the layout predicts, leaves every lookup on the form that reads no
+ * private field, for as long as this module is loaded */
+static void By_CheckDictKinds(void) {
+    PyObject *text = NULL, *number = NULL, *type = NULL, *instance = NULL, *split = NULL;
+    PyObject *name = NULL, *one = NULL;
+    char held = 0;
+    if (by_dict_kinds_checked) return;
+    one = PyLong_FromLong(1);
+    name = PyUnicode_FromString("a");
+    text = PyDict_New();
+    number = PyDict_New();
+    if (one == NULL || name == NULL || text == NULL || number == NULL) goto done;
+    if (PyDict_SetItem(text, name, one) < 0 || PyDict_SetItem(number, one, one) < 0) goto done;
+    type = PyObject_CallFunction((PyObject *)&PyType_Type, "s(){}", "by_dict_kinds");
+    if (type == NULL) goto done;
+    instance = PyObject_CallNoArgs(type);
+    if (instance == NULL || PyObject_SetAttr(instance, name, one) < 0) goto done;
+    split = PyObject_GenericGetDict(instance, NULL);
+    if (split == NULL || !PyDict_CheckExact(split)) goto done;
+    held = By_DictKeysReadAs(text, 1) && By_DictKeysReadAs(number, 0)
+           && By_DictKeysReadAs(split, 2);
+done:
+    if (PyErr_Occurred()) PyErr_Clear();
+    Py_XDECREF(split);
+    Py_XDECREF(instance);
+    Py_XDECREF(type);
+    Py_XDECREF(number);
+    Py_XDECREF(text);
+    Py_XDECREF(name);
+    Py_XDECREF(one);
+    by_dict_kinds_checked = held;
+}
+
+#else
+
+static inline void By_CheckDictKinds(void) {}
+
+#endif /* BY_DICT_KINDS */
+
 /* `k in d` answered by the very lookup `d[k]` would go on to make
  *
  * the two hash the same key and walk the same table, so where the second is only
@@ -5822,32 +6153,30 @@ static inline char By_Contains(PyObject *container, PyObject *value, int negated
  * the caller tells the two apart with `PyErr_Occurred`, the way it already does
  * for an exhausted iterator
  *
- * asking once has to be *earned* at runtime, because both of the things that would
- * make asking twice observable are ordinary python. a dict subclass may have
- * overridden `__contains__` or `__getitem__`, and then the number and order of
- * those calls is the program's own business. a key may have a `__hash__` that
- * counts how often it is called, and then hashing once where the source hashes
- * twice is a different program. so the single probe is taken only for an exact
- * dict keyed by an exact `str`, whose hash and equality are the interpreter's and
- * have nothing to observe; everything else takes the protocol twice over, in the
- * order it would have — and `__getitem__` only where `__contains__` said yes,
- * which is the branch this stands in for */
+ * asking once has to be *earned* at runtime, because everything that would make
+ * asking twice observable is ordinary python. a dict subclass may have overridden
+ * `__contains__` or `__getitem__`, and then the number and order of those calls is
+ * the program's own business. a key may have a `__hash__` that counts how often it is
+ * called, and then hashing once where the source hashes twice is a different program.
+ * and a key already *stored* in the dict, hashing like the probe, has its `__eq__`
+ * asked by every probe that walks past it — which can count, or delete the key or
+ * rewrite its value between the test and the read. so the single probe is taken only
+ * for an exact dict keyed by an exact `str` whose table holds nothing but exact `str`
+ * keys, where every hash and comparison is the interpreter's own; everything else
+ * takes the protocol twice over, in the order it would have — and `__getitem__` only
+ * where `__contains__` said yes, which is the branch this stands in for */
 static inline PyObject *By_DictFind(PyObject *container, PyObject *key) {
     /* a null operand carries an exception already set by whatever produced it */
     if (container == NULL || key == NULL) return NULL;
-    if (BY_LIKELY(PyDict_CheckExact(container) && PyUnicode_CheckExact(key))) {
-#if PY_VERSION_HEX >= 0x030D0000
+#ifdef BY_DICT_KINDS
+    if (BY_LIKELY(PyDict_CheckExact(container) && PyUnicode_CheckExact(key)
+                  && By_DictKeysAllStr(container))) {
         PyObject *value;
         /* -1 failed, 0 absent, 1 there — and absent leaves `value` NULL */
         if (PyDict_GetItemRef(container, key, &value) < 0) return NULL;
         return value;
-#else
-        PyObject *value = PyDict_GetItemWithError(container, key);
-        /* absent and failed are both NULL here, which is what this returns for
-         * both anyway — the exception state is what separates them */
-        return value == NULL ? NULL : By_NewRef(value);
-#endif
     }
+#endif
     int found = PySequence_Contains(container, key);
     if (found <= 0) return NULL;
     return PyObject_GetItem(container, key);
@@ -6059,6 +6388,42 @@ static inline int By_HoldFieldDefault(PyTypeObject *type, const char *name, PyOb
     return 0;
 }
 
+/* work out, once at import, whether `type` still answers `name` with the descriptor its
+ * field `name` was published through — and record the version that held when it was
+ *
+ * a field is published either as a getset or, beside a class-level value, as a descriptor
+ * of this runtime's own; either carries the field's getter, which is what is compared.
+ * a type answering reads or writes with a hook of its own is refused, as an accessor is */
+static inline void By_ArmField(ByAccessorLicence *licence, PyObject *type, const char *name,
+                               getter get) {
+    PyObject *key;
+    PyObject *found;
+    int published;
+    licence->version = 0u;
+    if (type == NULL || !PyType_Check(type)) return;
+    PyTypeObject *owner = (PyTypeObject *)type;
+    if (owner->tp_getattro != PyObject_GenericGetAttr) return;
+    if (owner->tp_setattro != PyObject_GenericSetAttr) return;
+    key = PyUnicode_InternFromString(name);
+    if (key == NULL) {
+        PyErr_Clear();
+        return;
+    }
+    /* borrowed, and no descriptor is run to find it */
+    found = _PyType_Lookup(owner, key);
+    Py_DECREF(key);
+    if (found == NULL) return;
+    published = (Py_IS_TYPE(found, &PyGetSetDescr_Type)
+                 && ((PyGetSetDescrObject *)found)->d_getset->get == get)
+                || (Py_IS_TYPE(found, &By_FieldDefaultType)
+                    && ((By_FieldDefaultObject *)found)->by_get == get);
+    if (!published) return;
+#if PY_VERSION_HEX >= 0x030C0000
+    if (!PyUnstable_Type_AssignVersionTag(owner)) return;
+#endif
+    licence->version = owner->tp_version_tag;
+}
+
 /* ── an emitted instance's `__dict__` ─────────────────────────────────────────
  *
  * an emitted instance keeps its attributes in two places. the ones the class itself
@@ -6097,6 +6462,11 @@ typedef struct {
      * never wrote one, and python's `__dict__` does not name a class attribute. every
      * other field reports its own absence by raising, which the read below reads */
     By_FieldPresent present;
+    /* the field's own setter, which also deletes, and NULL where the class publishes
+     * none. a write through `__dict__` naming the field is a write of the field, and
+     * reaching it through the setter rather than the attribute is what keeps a subclass's
+     * `__setattr__` or a descriptor shadowing the name from running */
+    setter set;
 } By_DictField;
 
 typedef struct {
@@ -6263,88 +6633,178 @@ static int By_InstanceDict_clear(PyObject *selfobj) {
     return PyDict_Type.tp_clear(selfobj);
 }
 
-/* a write goes through the attribute, which is what keeps the two halves one mapping: a
- * name the layout knows lands in the layout and every other name lands in this mapping
- * itself, which *is* the object's dict word — exactly as an assignment through the object
- * would put it there, because that is what this does.
+/* the layout field a key names, or NULL for a key the layout has no field for */
+static const By_DictField *By_InstanceDictFieldNamed(ByInstanceDictObject *self, PyObject *key) {
+    const By_DictField *field;
+    if (!PyUnicode_Check(key)) return NULL;
+    for (field = self->fields; field->name != NULL; field++) {
+        if (PyUnicode_CompareWithASCIIString(key, field->name) == 0) return field;
+    }
+    return NULL;
+}
+
+/* one entry written into, or with a NULL value deleted from, the mapping an instance
+ * answers `__dict__` with
  *
- * nothing is patched into the storage here. the layout half publishes back on its own
- * from the field write, which is what keeps a mapping right when the object is written to
- * some other way, and it publishes what the layout *stored* rather than what it was
- * handed — an unboxed field takes a representation of its own */
+ * python's instance dict is a plain dict, so a write through it runs no descriptor and
+ * no `__setattr__`: it is the entry and nothing else. a compiled instance keeps the names
+ * its layout declares in fields rather than in the dict, so a key naming one writes the
+ * field — through the field's own setter, which publishes what the layout stored back into
+ * this mapping, and which checks the value's representation as any write of the field
+ * does. every other key is an entry here, and this mapping is the object's dict word, so
+ * an attribute read finds it exactly as it finds one python stored */
 static int By_InstanceDict_assign(PyObject *selfobj, PyObject *key, PyObject *value) {
     ByInstanceDictObject *self = (ByInstanceDictObject *)selfobj;
-    int failed;
+    const By_DictField *field;
     /* detached, so there is no object to write back to and this is a plain dict */
     if (self->owner == NULL) {
         return value == NULL ? PyDict_DelItem(selfobj, key)
                              : PyDict_SetItem(selfobj, key, value);
     }
-    failed = value == NULL ? PyObject_DelAttr(self->owner, key)
-                           : PyObject_SetAttr(self->owner, key, value);
-    return failed < 0 ? -1 : 0;
-}
-
-/* every write through the attribute, one at a time, so that a name the layout knows
- * reaches the layout — which is the whole point of the mapping writing back */
-static int By_InstanceDictWriteAll(ByInstanceDictObject *self, PyObject *source) {
-    PyObject *items;
-    Py_ssize_t index;
-    Py_ssize_t count;
-    if (self->owner == NULL) return PyDict_Update((PyObject *)self, source);
-    items = PyMapping_Items(source);
-    if (items == NULL) {
-        PyErr_Clear();
-        items = PySequence_List(source);
-        if (items == NULL) return -1;
+    field = By_InstanceDictFieldNamed(self, key);
+    if (field == NULL) {
+        return value == NULL ? PyDict_DelItem(selfobj, key)
+                             : PyDict_SetItem(selfobj, key, value);
     }
-    count = PySequence_Size(items);
-    if (count < 0) {
-        Py_DECREF(items);
+    if (value == NULL) {
+        /* a field the instance has no value in is a key the mapping does not hold */
+        int held = PyDict_Contains(selfobj, key);
+        if (held < 0) return -1;
+        if (held == 0) {
+            PyErr_SetObject(PyExc_KeyError, key);
+            return -1;
+        }
+    }
+    if (field->set == NULL) {
+        PyErr_Format(PyExc_AttributeError, "attribute '%s' of '%s' objects is not writable",
+                     field->name, Py_TYPE(self->owner)->tp_name);
         return -1;
     }
-    for (index = 0; index < count; index++) {
-        PyObject *pair = PySequence_GetItem(items, index);
-        PyObject *key;
-        PyObject *value;
-        int failed;
-        if (pair == NULL) {
-            Py_DECREF(items);
-            return -1;
-        }
-        key = PySequence_GetItem(pair, 0);
-        value = PySequence_GetItem(pair, 1);
-        Py_DECREF(pair);
-        if (key == NULL || value == NULL) {
-            Py_XDECREF(key);
-            Py_XDECREF(value);
-            Py_DECREF(items);
-            return -1;
-        }
-        failed = PyObject_SetAttr(self->owner, key, value) < 0;
-        Py_DECREF(key);
-        Py_DECREF(value);
-        if (failed) {
-            Py_DECREF(items);
-            return -1;
-        }
-    }
-    Py_DECREF(items);
-    return 0;
+    return field->set(self->owner, value, NULL);
 }
 
-static PyObject *By_InstanceDict_update(PyObject *selfobj, PyObject *const *args,
-                                        Py_ssize_t nargs) {
-    if (nargs != 1) {
-        PyErr_SetString(PyExc_TypeError, "update() takes exactly one argument");
+/* one `key, value` pair of an update, as `By_InstanceDict_assign` writes it */
+static int By_InstanceDictWritePair(PyObject *selfobj, PyObject *key, PyObject *value) {
+    int failed;
+    Py_INCREF(key);
+    Py_INCREF(value);
+    failed = By_InstanceDict_assign(selfobj, key, value);
+    Py_DECREF(value);
+    Py_DECREF(key);
+    return failed;
+}
+
+/* `dict.update`'s positional argument, written one entry at a time in the order python's
+ * own update writes them, so that an entry naming a field reaches the field
+ *
+ * a dict is walked as a dict, anything with `keys` is asked for its keys and then each
+ * value, and anything else is taken as pairs — with python's wording for a pair that is
+ * not one */
+static int By_InstanceDictWriteAll(ByInstanceDictObject *self, PyObject *source) {
+    PyObject *selfobj = (PyObject *)self;
+    PyObject *keys_attr;
+    if (self->owner == NULL) {
+        PyObject *update = PyObject_GetAttrString((PyObject *)&PyDict_Type, "update");
+        PyObject *done;
+        if (update == NULL) return -1;
+        done = PyObject_CallFunctionObjArgs(update, selfobj, source, NULL);
+        Py_DECREF(update);
+        Py_XDECREF(done);
+        return done == NULL ? -1 : 0;
+    }
+    if (PyDict_Check(source)) {
+        PyObject *items = PyDict_Items(source);
+        Py_ssize_t index;
+        if (items == NULL) return -1;
+        for (index = 0; index < PyList_GET_SIZE(items); index++) {
+            PyObject *pair = PyList_GET_ITEM(items, index);
+            if (By_InstanceDictWritePair(selfobj, PyTuple_GET_ITEM(pair, 0),
+                                         PyTuple_GET_ITEM(pair, 1)) < 0) {
+                Py_DECREF(items);
+                return -1;
+            }
+        }
+        Py_DECREF(items);
+        return 0;
+    }
+    keys_attr = PyObject_GetAttrString(source, "keys");
+    if (keys_attr != NULL) {
+        PyObject *keys = PyObject_CallNoArgs(keys_attr);
+        PyObject *iterator;
+        PyObject *key;
+        int failed = 0;
+        Py_DECREF(keys_attr);
+        if (keys == NULL) return -1;
+        iterator = PyObject_GetIter(keys);
+        Py_DECREF(keys);
+        if (iterator == NULL) return -1;
+        while (!failed && (key = PyIter_Next(iterator)) != NULL) {
+            PyObject *value = PyObject_GetItem(source, key);
+            failed = value == NULL || By_InstanceDictWritePair(selfobj, key, value) < 0;
+            Py_XDECREF(value);
+            Py_DECREF(key);
+        }
+        Py_DECREF(iterator);
+        return failed || PyErr_Occurred() ? -1 : 0;
+    }
+    if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return -1;
+    PyErr_Clear();
+    {
+        PyObject *iterator = PyObject_GetIter(source);
+        PyObject *item;
+        Py_ssize_t at = 0;
+        if (iterator == NULL) return -1;
+        while ((item = PyIter_Next(iterator)) != NULL) {
+            PyObject *pair = PySequence_Fast(item, "");
+            int failed;
+            if (pair == NULL) {
+                if (PyErr_ExceptionMatches(PyExc_TypeError)) {
+                    PyErr_Format(PyExc_TypeError,
+                                 "cannot convert dictionary update sequence element #%zd to a sequence",
+                                 at);
+                }
+                Py_DECREF(item);
+                Py_DECREF(iterator);
+                return -1;
+            }
+            if (PySequence_Fast_GET_SIZE(pair) != 2) {
+                PyErr_Format(PyExc_ValueError,
+                             "dictionary update sequence element #%zd has length %zd; 2 is required",
+                             at, PySequence_Fast_GET_SIZE(pair));
+                Py_DECREF(pair);
+                Py_DECREF(item);
+                Py_DECREF(iterator);
+                return -1;
+            }
+            failed = By_InstanceDictWritePair(selfobj, PySequence_Fast_GET_ITEM(pair, 0),
+                                              PySequence_Fast_GET_ITEM(pair, 1));
+            Py_DECREF(pair);
+            Py_DECREF(item);
+            if (failed < 0) {
+                Py_DECREF(iterator);
+                return -1;
+            }
+            at++;
+        }
+        Py_DECREF(iterator);
+        return PyErr_Occurred() ? -1 : 0;
+    }
+}
+
+/* `update(other=(), /, **kwargs)`: the positional argument first, then each keyword */
+static PyObject *By_InstanceDict_update(PyObject *selfobj, PyObject *args, PyObject *kwargs) {
+    PyObject *other = NULL;
+    if (!PyArg_UnpackTuple(args, "update", 0, 1, &other)) return NULL;
+    if (other != NULL && By_InstanceDictWriteAll((ByInstanceDictObject *)selfobj, other) < 0) {
         return NULL;
     }
-    if (By_InstanceDictWriteAll((ByInstanceDictObject *)selfobj, args[0]) < 0) return NULL;
+    if (kwargs != NULL && By_InstanceDictWriteAll((ByInstanceDictObject *)selfobj, kwargs) < 0) {
+        return NULL;
+    }
     Py_RETURN_NONE;
 }
 
 static PyObject *By_InstanceDict_ior(PyObject *selfobj, PyObject *other) {
-    if (!PyDict_Check(other)) Py_RETURN_NOTIMPLEMENTED;
     if (By_InstanceDictWriteAll((ByInstanceDictObject *)selfobj, other) < 0) return NULL;
     return By_NewRef(selfobj);
 }
@@ -6365,8 +6825,7 @@ static PyObject *By_InstanceDict_clearmethod(PyObject *selfobj, PyObject *unused
     if (keys == NULL) return NULL;
     count = PyList_GET_SIZE(keys);
     for (index = 0; index < count; index++) {
-        if (PyObject_DelAttr(((ByInstanceDictObject *)selfobj)->owner,
-                             PyList_GET_ITEM(keys, index)) < 0) {
+        if (By_InstanceDict_assign(selfobj, PyList_GET_ITEM(keys, index), NULL) < 0) {
             Py_DECREF(keys);
             return NULL;
         }
@@ -6438,7 +6897,8 @@ static PyObject *By_InstanceDict_setdefault(PyObject *selfobj, PyObject *const *
  * one `dict` already has, reading the storage this keeps filled — which is the whole
  * reason for being a `dict` at all */
 static PyMethodDef By_InstanceDict_methods[] = {
-    {"update", (PyCFunction)(void (*)(void))By_InstanceDict_update, METH_FASTCALL, NULL},
+    {"update", (PyCFunction)(void (*)(void))By_InstanceDict_update, METH_VARARGS | METH_KEYWORDS,
+     NULL},
     {"clear", By_InstanceDict_clearmethod, METH_NOARGS, NULL},
     {"pop", (PyCFunction)(void (*)(void))By_InstanceDict_pop, METH_FASTCALL, NULL},
     {"popitem", By_InstanceDict_popitem, METH_NOARGS, NULL},
@@ -7454,6 +7914,124 @@ static inline char By_Extend(PyObject *container, PyObject *source, int mapping)
     return PyErr_Occurred() ? 2 : 0;
 }
 
+/* what python calls a callable in an error about the arguments it was handed
+ *
+ * `module.qualname()`, or `qualname()` for one of the builtins, or the object's `str`
+ * where it has no qualified name at all */
+BY_COLD PyObject *By_FunctionStr(PyObject *callable) {
+    PyObject *qualname = PyObject_GetAttrString(callable, "__qualname__");
+    PyObject *module;
+    PyObject *result = NULL;
+    if (qualname == NULL) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return NULL;
+        PyErr_Clear();
+        return PyObject_Str(callable);
+    }
+    module = PyObject_GetAttrString(callable, "__module__");
+    if (module == NULL) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) goto done;
+        PyErr_Clear();
+    } else if (module != Py_None) {
+        int other = PyUnicode_Check(module) ? PyUnicode_CompareWithASCIIString(module, "builtins")
+                                            : 1;
+        if (other != 0) {
+            result = PyUnicode_FromFormat("%S.%S()", module, qualname);
+            goto done;
+        }
+    }
+    result = PyUnicode_FromFormat("%S()", qualname);
+done:
+    Py_XDECREF(module);
+    Py_DECREF(qualname);
+    return result;
+}
+
+/* the error a failed merge into a call's keywords reports, in python's words
+ *
+ * python rewords the two errors a merge raises with a single argument, whatever raised
+ * them: an `AttributeError` says the operand was no mapping, and a `KeyError` names the
+ * keyword given twice. anything else is left as it was raised */
+BY_COLD void By_KeywordsMergeError(PyObject *callee, PyObject *source) {
+    int attribute = PyErr_ExceptionMatches(PyExc_AttributeError);
+    PyObject *type, *value, *traceback, *args, *name;
+    if (!attribute && !PyErr_ExceptionMatches(PyExc_KeyError)) return;
+    PyErr_Fetch(&type, &value, &traceback);
+    PyErr_NormalizeException(&type, &value, &traceback);
+    args = value == NULL ? NULL : ((PyBaseExceptionObject *)value)->args;
+    if (args == NULL || !PyTuple_Check(args) || PyTuple_GET_SIZE(args) != 1) {
+        PyErr_Restore(type, value, traceback);
+        return;
+    }
+    name = By_FunctionStr(callee);
+    if (name != NULL) {
+        PyObject *key = PyTuple_GET_ITEM(args, 0);
+        if (attribute) {
+            PyErr_Format(PyExc_TypeError, "%U argument after ** must be a mapping, not %.200s",
+                         name, Py_TYPE(source)->tp_name);
+        } else {
+            PyErr_Format(PyExc_TypeError, "%U got multiple values for keyword argument '%S'",
+                         name, key);
+        }
+        Py_DECREF(name);
+    }
+    Py_XDECREF(type);
+    Py_XDECREF(value);
+    Py_XDECREF(traceback);
+}
+
+/* one key of a `**` merged into a call's keywords, refusing one already there */
+static int By_MergeKeyword(PyObject *keywords, PyObject *key, PyObject *value) {
+    int present = PyDict_Contains(keywords, key);
+    if (present < 0) return -1;
+    if (present) {
+        PyObject *args = PyTuple_Pack(1, key);
+        if (args != NULL) {
+            PyErr_SetObject(PyExc_KeyError, args);
+            Py_DECREF(args);
+        }
+        return -1;
+    }
+    return PyDict_SetItem(keywords, key, value);
+}
+
+/* `**source` in a call to `callee`, merged into the keywords built so far
+ *
+ * the merge python makes for a call, which differs from a display's in refusing a key
+ * that is already there. a dict that iterates as a dict is walked as one, whatever its
+ * `keys` says; anything else is asked for its keys and then for each value */
+static inline char By_MergeKeywords(PyObject *keywords, PyObject *source, PyObject *callee) {
+    int failed = 0;
+    if (keywords == NULL || source == NULL || callee == NULL) return 2;
+    if (PyDict_Check(source) && Py_TYPE(source)->tp_iter == PyDict_Type.tp_iter) {
+        Py_ssize_t at = 0;
+        PyObject *key, *value;
+        while (!failed && PyDict_Next(source, &at, &key, &value)) {
+            Py_INCREF(key);
+            Py_INCREF(value);
+            failed = By_MergeKeyword(keywords, key, value) < 0;
+            Py_DECREF(value);
+            Py_DECREF(key);
+        }
+    } else {
+        PyObject *keys = PyMapping_Keys(source);
+        PyObject *iterator = keys == NULL ? NULL : PyObject_GetIter(keys);
+        PyObject *key;
+        Py_XDECREF(keys);
+        failed = iterator == NULL;
+        while (!failed && (key = PyIter_Next(iterator)) != NULL) {
+            PyObject *value = PyObject_GetItem(source, key);
+            failed = value == NULL || By_MergeKeyword(keywords, key, value) < 0;
+            Py_XDECREF(value);
+            Py_DECREF(key);
+        }
+        Py_XDECREF(iterator);
+        failed = failed || PyErr_Occurred() != NULL;
+    }
+    if (!failed) return 0;
+    By_KeywordsMergeError(callee, source);
+    return 2;
+}
+
 /* unpack `value` into `count` slots, the way an assignment target list does
  *
  * `starred` is the index that collects the surplus into a list, or -1. this drives
@@ -7628,14 +8206,25 @@ static inline void By_RaiseObject(PyObject *exception, PyObject *cause) {
 
 /* put an exception back, for a handler that did not match or a bare re-raise
  *
+ * the exception is restored as it stands, which is python's re-raise. raising it
+ * with `PyErr_SetObject` would chain it again onto whatever is being handled by
+ * now — and on the way out of an `except` block that is the exception from before
+ * the block, so the context the exception picked up where it was raised would be
+ * overwritten with an older one
+ *
  * the operand is *borrowed*, as every helper's is: the register holding it belongs
- * to the frame, which releases it on each exit path. `PyErr_SetObject` takes its
- * own reference, so a retain here would be a second one nobody owns — which is
- * exactly what leaked a `GeneratorExit` per abandoned generator, and the thrown
- * exception per `throw` */
+ * to the frame, which releases it on each exit path. the restore steals, so the
+ * reference handed over is a new one — keeping a second would be one nobody owns,
+ * which is exactly what leaked a `GeneratorExit` per abandoned generator, and the
+ * thrown exception per `throw` */
 static inline void By_Reraise(PyObject *value) {
     if (value == NULL) return;
-    PyErr_SetObject((PyObject *)Py_TYPE(value), value);
+#if PY_VERSION_HEX >= 0x030C0000
+    PyErr_SetRaisedException(By_NewRef(value));
+#else
+    PyErr_Restore(By_NewRef((PyObject *)Py_TYPE(value)), By_NewRef(value),
+                  PyException_GetTraceback(value));
+#endif
 }
 
 /* ── a compiled method, as a decorator sees it ────────────────────────────────
@@ -8031,8 +8620,35 @@ static inline PyObject *By_CursorStep(PyObject *it, int64_t *at) {
 
 /* ── str ──────────────────────────────────────────────────────────────────── */
 
+/* two strings joined as the pieces of an f-string are, asking neither anything */
 static inline PyObject *By_StrConcat(PyObject *a, PyObject *b) {
     return PyUnicode_Concat(a, b);
+}
+
+/* `a + b`, or `a += b`, over two operands that are not both exact `str`s
+ *
+ * a subclass may define `__add__`, `__radd__` or `__iadd__`, and python asks them the
+ * way it asks any operand's. what they answer is what the register holding a `str` is
+ * given, so an answer that is not one is refused rather than stored */
+BY_COLD PyObject *By_StrAddSlow(PyObject *a, PyObject *b, int in_place) {
+    PyObject *result = in_place ? PyNumber_InPlaceAdd(a, b) : PyNumber_Add(a, b);
+    if (result != NULL && BY_UNLIKELY(!PyUnicode_Check(result))) {
+        By_TypeError("str", result);
+        Py_DECREF(result);
+        return NULL;
+    }
+    return result;
+}
+
+/* `a + b` or `a += b` where the checker says both are `str`
+ *
+ * the interpreter's own concatenation is the answer only for two exact `str`s, which
+ * have no operator methods a program can have replaced */
+static inline PyObject *By_StrAdd(PyObject *a, PyObject *b, int in_place) {
+    if (BY_LIKELY(PyUnicode_CheckExact(a) && PyUnicode_CheckExact(b))) {
+        return PyUnicode_Concat(a, b);
+    }
+    return By_StrAddSlow(a, b, in_place);
 }
 
 /* the widest decimal an ssize_t reaches, with room for a sign and a terminator */
@@ -8075,6 +8691,92 @@ static inline PyObject *By_ShortToStr(Py_ssize_t value) {
     ((PyASCIIObject *)text)->length =
         By_DecimalDigits((char *)PyUnicode_1BYTE_DATA(text), value);
     return text;
+}
+
+/* whether `fn` is the interpreter's own builtin `name`
+ *
+ * what a name resolves to is looked up on every call, and a native lowering of a builtin
+ * is only exact while the lookup answers with the builtin itself. that is a type the
+ * interpreter defines statically under that bare name, which is how a type's module
+ * comes out as `builtins`, or a C function the `builtins` module owns under that name.
+ * neither can be built from python, and a module attribute written from outside or a
+ * patched `builtins` is neither.
+ *
+ * the answer for the object last found to be the builtin is remembered in `genuine`,
+ * which holds a reference to it, so that no other object can come to live at the
+ * address it names and be taken for it */
+static inline char By_IsBuiltin(PyObject *fn, const char *name, PyObject **genuine) {
+    if (BY_LIKELY(fn == *genuine)) return 1;
+    if (PyType_Check(fn)) {
+        PyTypeObject *type = (PyTypeObject *)fn;
+        if ((type->tp_flags & Py_TPFLAGS_HEAPTYPE) || strcmp(type->tp_name, name) != 0) {
+            return 0;
+        }
+    } else if (PyCFunction_CheckExact(fn)) {
+        PyObject *owner = PyCFunction_GET_SELF(fn);
+        const char *module;
+        if (strcmp(((PyCFunctionObject *)fn)->m_ml->ml_name, name) != 0) return 0;
+        if (owner == NULL || !PyModule_CheckExact(owner)) return 0;
+        module = PyModule_GetName(owner);
+        if (module == NULL) {
+            PyErr_Clear();
+            return 0;
+        }
+        if (strcmp(module, "builtins") != 0) return 0;
+    } else {
+        return 0;
+    }
+    Py_XSETREF(*genuine, Py_NewRef(fn));
+    return 1;
+}
+
+/* one site asking whether a name still resolves to the builtin of that name
+ *
+ * the answer is kept beside the lookup's memo and stands exactly as long as that does:
+ * any write to a namespace the answer could have come from moves the counter, and the
+ * next ask looks the name up again */
+typedef struct {
+    ByGlobalSite lookup;
+    char answer;
+    /* interned on the first ask, which is the slow one anyway */
+    PyObject *name;
+    /* see [`By_IsBuiltin`] */
+    PyObject *genuine;
+} ByBuiltinSite;
+
+#define BY_BUILTIN_SITE_INIT { BY_GLOBAL_SITE_INIT, 0, NULL, NULL }
+
+/* resolve the name and work the answer out again. 2 is the `NameError` of a name bound
+ * nowhere, or a failure to intern it */
+static char By_ArmBuiltinSite(ByBuiltinSite *site, PyObject *dict, const char *builtin) {
+    PyObject *found;
+    if (site->name == NULL) {
+        site->name = By_InternedStr(builtin, (Py_ssize_t)strlen(builtin));
+        if (site->name == NULL) return 2;
+    }
+#ifdef BY_GLOBAL_SITES
+    found = By_ArmGlobalSite(&site->lookup, dict, site->name);
+#else
+    found = By_LookupGlobal(dict, site->name);
+#endif
+    if (found == NULL) return 2;
+    site->answer = By_IsBuiltin(found, builtin, &site->genuine);
+    Py_DECREF(found);
+    return site->answer;
+}
+
+/* whether `builtin` resolves, through the module namespace and then builtins, to the
+ * interpreter's own builtin of that name
+ *
+ * no reference is taken on the way, and while nothing has been written to a namespace
+ * the answer is one comparison and a load: it is asked every trip round a loop */
+static inline char By_BuiltinStands(ByBuiltinSite *site, PyObject *dict, const char *builtin) {
+#ifdef BY_GLOBAL_SITES
+    if (BY_LIKELY(by_globals != NULL && site->lookup.generation == by_globals->generation)) {
+        return site->answer;
+    }
+#endif
+    return By_ArmBuiltinSite(site, dict, builtin);
 }
 
 /* `str(n)` for a tagged integer, given whatever the name `str` resolved to
@@ -8142,32 +8844,26 @@ static inline PyObject *By_ConcatShortToStr(PyObject *left, Py_ssize_t value) {
  * is compared rather than assumed, so a module that rebinds `str` is obeyed, and a
  * tagged value that is not short holds an object whose `__str__` has to be asked.
  *
- * the slow path checks what came back before concatenating it, because a rebound
- * `str` may return anything at all — that is the check the unfused shape made
- * between the two operations, in the same place and with the same message. the fast
- * path needs none for the digits: it built them itself.
+ * the slow path hands what came back straight to the operator, because a rebound
+ * `str` may return anything at all and python adds whatever it returned: a `str`
+ * subclass answers through its own `__radd__`, and anything else is refused in the
+ * operator's own words. the fast path needs no such care for the digits: it built
+ * them itself.
  *
- * it does test `left`, which the ir says is a `str` and every path into here should
- * have made one. reading a header that is not a string's would decide how long the
- * answer is from whatever the field happens to overlap, and getting *that* wrong is
- * memory written past the end rather than a wrong answer — so the invariant is
- * tested rather than trusted, and a left operand that fails goes the long way and is
- * refused by `PyUnicode_Concat` exactly as it was before */
-static inline PyObject *By_StrConcatInt(PyObject *left, PyObject *fn, ByTagged n) {
+ * it tests `left` for an exact `str`, both because a subclass may define `__add__`
+ * and because reading a header that is not a string's would decide how long the
+ * answer is from whatever the field happens to overlap — memory written past the end
+ * rather than a wrong answer */
+static inline PyObject *By_StrConcatInt(PyObject *left, PyObject *fn, ByTagged n, int in_place) {
     if (BY_LIKELY(fn == (PyObject *)&PyUnicode_Type && By_IsShort(n)
-                  && PyUnicode_Check(left))) {
+                  && PyUnicode_CheckExact(left))) {
         return By_ConcatShortToStr(left, By_ShortValue(n));
     }
     {
         PyObject *right = By_StrOfInt(fn, n);
         PyObject *result;
         if (right == NULL) return NULL;
-        if (BY_UNLIKELY(!PyUnicode_Check(right))) {
-            By_TypeError("str", right);
-            Py_DECREF(right);
-            return NULL;
-        }
-        result = PyUnicode_Concat(left, right);
+        result = By_StrAdd(left, right, in_place);
         Py_DECREF(right);
         return result;
     }
@@ -8198,6 +8894,24 @@ static inline PyObject *By_StrAppend(PyObject *left, PyObject *right) {
         return left;
     }
     PyObject *result = PyUnicode_Concat(left, right);
+    Py_DECREF(left);
+    return result;
+}
+
+/* `By_StrAppend` for `a + b` or `a += b`, which asks a subclass's operator methods
+ *
+ * the in-place append is the interpreter's own concatenation, so it is taken for two
+ * exact `str`s alone, and the reference to `left` is consumed on every path here too */
+static inline PyObject *By_StrAddAppend(PyObject *left, PyObject *right, int in_place) {
+    if (BY_UNLIKELY(left == NULL || right == NULL)) {
+        Py_XDECREF(left);
+        return NULL;
+    }
+    if (BY_LIKELY(left != right && PyUnicode_CheckExact(left) && PyUnicode_CheckExact(right))) {
+        PyUnicode_Append(&left, right); /* NULLs `left` when it fails */
+        return left;
+    }
+    PyObject *result = By_StrAdd(left, right, in_place);
     Py_DECREF(left);
     return result;
 }
@@ -8249,15 +8963,17 @@ static inline char By_StrCompare(PyObject *a, PyObject *b, int op) {
  * comparison — twelve per cent, against six per cent gained on the inheritance
  * benchmark. so this one stays whole */
 static inline ByTagged By_Len(PyObject *o) {
-    // the common containers know their own size in a field
+    // the common containers know their own size in a field, and hold at least a byte an
+    // item, so the size is below the short range on any address space there is
     if (PyList_CheckExact(o)) return By_ShortFrom(PyList_GET_SIZE(o));
     if (PyUnicode_CheckExact(o)) return By_ShortFrom(PyUnicode_GET_LENGTH(o));
     if (PyTuple_CheckExact(o)) return By_ShortFrom(PyTuple_GET_SIZE(o));
     if (PyDict_CheckExact(o)) return By_ShortFrom(PyDict_GET_SIZE(o));
     if (PyBytes_CheckExact(o)) return By_ShortFrom(PyBytes_GET_SIZE(o));
+    // anything else answers `__len__` with whatever it likes, `range(2**62)` included
     Py_ssize_t length = PyObject_Length(o);
     if (length < 0) return BY_INT_ERROR;
-    return By_ShortFrom(length);
+    return By_IntFromI64((int64_t)length);
 }
 
 /* raise `cls(message)` — the shape `assert` and a bare `raise Cls(...)` need */
@@ -9084,28 +9800,19 @@ typedef struct {
  * same two comparisons as a hit */
 static void By_ArmProtocolSite(ByProtocolSite *site, PyTypeObject *tp, PyObject *name) {
     PyObject *found;
-    int stands;
     site->type = (PyObject *)tp;
     site->version = tp->tp_version_tag;
     site->method = NULL;
-    /* a metaclass can answer the name with something the class's own version tag says
-     * nothing about: `PyType_Modified` on a metaclass reaches that metaclass's
-     * subclasses, and not the classes that are instances of it. refusing anything but a
-     * plain `type` also pins the lookup below to `type.__getattribute__`, so nothing of
-     * the class's own can run inside it */
-    if (!Py_IS_TYPE(tp, &PyType_Type)) return;
-    found = PyObject_GetAttr((PyObject *)tp, name);
-    if (found == NULL) {
-        PyErr_Clear();
-        return;
-    }
-    /* what is kept is borrowed, so it has to be the object the type's dict holds rather
-     * than something a `__get__` built on the way out and handed over. these two are
-     * the ones that give themselves back when the name is read off the class, where a
-     * `classmethod` or a `property` would build something */
-    stands = PyFunction_Check(found) || Py_IS_TYPE(found, &PyMethodDescr_Type);
-    Py_DECREF(found);
-    if (!stands) return;
+    /* the entry the type's mro holds, which is what the interpreter looks a special
+     * method up as. it is borrowed from that dict and no descriptor runs to find it, so
+     * nothing a `__get__` builds on the way — a `functools.partialmethod` builds a new
+     * function every time — can be what is kept */
+    found = _PyType_Lookup(tp, name);
+    if (found == NULL) return;
+    /* the two that bind to the manager by taking it as their first argument, so calling
+     * the entry with the manager in front is what binding it would have done. anything
+     * else binds some other way, or not at all, and is looked up in full every time */
+    if (!PyFunction_Check(found) && !Py_IS_TYPE(found, &PyMethodDescr_Type)) return;
 #if PY_VERSION_HEX >= 0x030C0000
     /* from 3.12 the tag is handed out on request rather than by whoever reads an
      * attribute, and a request is the only thing that reliably produces one */
@@ -9119,23 +9826,143 @@ static void By_ArmProtocolSite(ByProtocolSite *site, PyTypeObject *tp, PyObject 
 
 #endif /* Py_GIL_DISABLED */
 
-/* `getattr(type(manager), name)` through a memo of what it last answered */
+/* a special method of `self`, looked up the way the interpreter looks one up for a
+ * protocol: on the type alone, past the instance and past any metaclass, and bound to
+ * `self` through the descriptor protocol
+ *
+ * `*prepend` says whether the answer still wants `self` in front of the arguments. a
+ * plain function and a method descriptor are handed back unbound, which saves building
+ * the bound method they would give; everything else comes back already bound, or is
+ * not a descriptor and is called as it is. NULL with no exception set is a name the type
+ * does not have */
+static inline PyObject *By_LookupSpecial(PyObject *self, PyObject *name, int *prepend) {
+    PyObject *found = _PyType_Lookup(Py_TYPE(self), name);
+    *prepend = 0;
+    if (found == NULL) return NULL;
+    if (PyFunction_Check(found) || Py_IS_TYPE(found, &PyMethodDescr_Type)) {
+        *prepend = 1;
+        return Py_NewRef(found);
+    }
+    descrgetfunc get = Py_TYPE(found)->tp_descr_get;
+    if (get == NULL) return Py_NewRef(found);
+    /* the entry is only borrowed, and `__get__` is arbitrary python */
+    Py_INCREF(found);
+    PyObject *bound = get(found, self, (PyObject *)Py_TYPE(self));
+    Py_DECREF(found);
+    return bound;
+}
+
+/* [`By_LookupSpecial`] through a memo of what it last answered */
 static inline PyObject *By_ProtocolMethod(ByProtocolSite *site, PyObject *manager,
-                                          PyObject *name) {
+                                          PyObject *name, int *prepend) {
     PyTypeObject *tp = Py_TYPE(manager);
 #ifndef Py_GIL_DISABLED
     if (BY_UNLIKELY((PyObject *)tp != site->type || tp->tp_version_tag != site->version)) {
         if (site->misses >= BY_PROTOCOL_SITE_MISSES) {
-            return PyObject_GetAttr((PyObject *)tp, name);
+            return By_LookupSpecial(manager, name, prepend);
         }
         site->misses++;
         By_ArmProtocolSite(site, tp, name);
     }
-    if (BY_LIKELY(site->method != NULL)) return By_NewRef(site->method);
+    if (BY_LIKELY(site->method != NULL)) {
+        *prepend = 1;
+        return By_NewRef(site->method);
+    }
 #else
     (void)site;
 #endif
-    return PyObject_GetAttr((PyObject *)tp, name);
+    return By_LookupSpecial(manager, name, prepend);
+}
+
+/* call what [`By_ProtocolMethod`] answered with `args`, whose first slot holds the
+ * manager and is left out where the answer is already bound */
+static inline PyObject *By_CallProtocol(PyObject *method, int prepend, PyObject **args,
+                                        Py_ssize_t nargs) {
+    if (prepend) return PyObject_Vectorcall(method, args, (size_t)nargs, NULL);
+    return PyObject_Vectorcall(method, args + 1,
+                               (size_t)(nargs - 1) | PY_VECTORCALL_ARGUMENTS_OFFSET, NULL);
+}
+
+/* whether a manager's type has `name`, the half of the protocol a `with` calls on the way
+ * out: 1 or 0, and -1 with an exception set
+ *
+ * python looks both halves up before it calls either, so a manager missing `__exit__` is
+ * refused before its `__enter__` runs. only the presence is asked here, and the half is
+ * looked up again where it is called. a site whose memo still stands for this type was
+ * armed by a call that got past this test already, and a type written to since is a
+ * miss */
+static inline int By_ManagerHas(ByProtocolSite *site, PyObject *manager, PyObject **cache,
+                                const char *name, Py_ssize_t length) {
+    PyTypeObject *tp = Py_TYPE(manager);
+    PyObject *key;
+#ifndef Py_GIL_DISABLED
+    if (BY_LIKELY((PyObject *)tp == site->type && tp->tp_version_tag == site->version
+                  && site->method != NULL)) {
+        return 1;
+    }
+#else
+    (void)site;
+#endif
+    key = By_FixedName(cache, name, length);
+    if (key == NULL) return -1;
+    return _PyType_Lookup(tp, key) != NULL;
+}
+
+/* the refusal for a manager whose type lacks `exit`, the half a `with` calls on the way
+ * out, where `has_enter` says whether it has the other half
+ *
+ * from 3.14 the half called on the way out is looked up first, and the message names
+ * whichever half is missing; before that the half called on the way in is looked up
+ * first, and only a missing exit is named */
+BY_COLD void By_ManagerMissingExit(PyObject *manager, const char *protocol, const char *exit,
+                                   int has_enter) {
+#if PY_VERSION_HEX >= 0x030E0000
+    (void)has_enter;
+    PyErr_Format(PyExc_TypeError, "'%s' object does not support the %s protocol (missed %s method)",
+                 Py_TYPE(manager)->tp_name, protocol, exit);
+#else
+    if (!has_enter) {
+        PyErr_Format(PyExc_TypeError, "'%s' object does not support the %s protocol",
+                     Py_TYPE(manager)->tp_name, protocol);
+        return;
+    }
+    PyErr_Format(PyExc_TypeError, "'%s' object does not support the %s protocol (missed %s method)",
+                 Py_TYPE(manager)->tp_name, protocol, exit);
+#endif
+}
+
+/* the refusal for a manager whose type has the half called on the way out and lacks
+ * `enter`, the one called on the way in */
+BY_COLD void By_ManagerMissingEnter(PyObject *manager, const char *protocol, const char *enter) {
+#if PY_VERSION_HEX >= 0x030E0000
+    PyErr_Format(PyExc_TypeError, "'%s' object does not support the %s protocol (missed %s method)",
+                 Py_TYPE(manager)->tp_name, protocol, enter);
+#else
+    (void)enter;
+    PyErr_Format(PyExc_TypeError, "'%s' object does not support the %s protocol",
+                 Py_TYPE(manager)->tp_name, protocol);
+#endif
+}
+
+/* a manager's `enter` and its callable, after checking it has `exit` as python does before
+ * calling either — NULL with an exception set where it lacks one */
+static inline PyObject *By_ManagerEnter(ByProtocolSite *site, PyObject *manager,
+                                        PyObject **enter_name, const char *enter,
+                                        PyObject **exit_name, const char *exit,
+                                        const char *protocol, int *prepend) {
+    PyObject *name;
+    PyObject *method;
+    int has_exit = By_ManagerHas(site, manager, exit_name, exit, (Py_ssize_t)strlen(exit));
+    if (has_exit < 0) return NULL;
+    name = By_FixedName(enter_name, enter, (Py_ssize_t)strlen(enter));
+    if (name == NULL) return NULL;
+    if (!has_exit) {
+        By_ManagerMissingExit(manager, protocol, exit, _PyType_Lookup(Py_TYPE(manager), name) != NULL);
+        return NULL;
+    }
+    method = By_ProtocolMethod(site, manager, name, prepend);
+    if (method == NULL && !PyErr_Occurred()) By_ManagerMissingEnter(manager, protocol, enter);
+    return method;
 }
 
 /* `__aenter__` and `__aexit__`, which hand back *awaitables* rather than answers
@@ -9145,19 +9972,14 @@ static inline PyObject *By_ProtocolMethod(ByProtocolSite *site, PyObject *manage
  */
 static inline PyObject *By_AsyncEnter(ByProtocolSite *site, PyObject *manager) {
     static PyObject *by_aenter = NULL;
-    PyObject *name;
+    static PyObject *by_aexit = NULL;
     if (manager == NULL) return NULL;
-    name = By_FixedName(&by_aenter, "__aenter__", 10);
-    if (name == NULL) return NULL;
-    PyObject *method = By_ProtocolMethod(site, manager, name);
-    if (method == NULL) {
-        PyErr_Format(PyExc_TypeError,
-                     "'%s' object does not support the asynchronous context manager protocol",
-                     Py_TYPE(manager)->tp_name);
-        return NULL;
-    }
+    int prepend;
+    PyObject *method = By_ManagerEnter(site, manager, &by_aenter, "__aenter__", &by_aexit,
+                                       "__aexit__", "asynchronous context manager", &prepend);
+    if (method == NULL) return NULL;
     PyObject *args[1] = {manager};
-    PyObject *result = PyObject_Vectorcall(method, args, 1, NULL);
+    PyObject *result = By_CallProtocol(method, prepend, args, 1);
     Py_DECREF(method);
     return result;
 }
@@ -9169,8 +9991,10 @@ static inline PyObject *By_AsyncExit(ByProtocolSite *site, PyObject *manager,
     if (manager == NULL) return NULL;
     name = By_FixedName(&by_aexit, "__aexit__", 9);
     if (name == NULL) return NULL;
-    PyObject *method = By_ProtocolMethod(site, manager, name);
+    int prepend;
+    PyObject *method = By_ProtocolMethod(site, manager, name, &prepend);
     if (method == NULL) {
+        if (PyErr_Occurred()) return NULL;
         PyErr_Format(PyExc_TypeError,
                      "'%s' object does not support the asynchronous context manager protocol "
                      "(missed __aexit__ method)",
@@ -9188,7 +10012,7 @@ static inline PyObject *By_AsyncExit(ByProtocolSite *site, PyObject *manager,
         if (found != NULL) traceback = found;
     }
     PyObject *args[4] = {manager, type, value, traceback};
-    PyObject *result = PyObject_Vectorcall(method, args, 4, NULL);
+    PyObject *result = By_CallProtocol(method, prepend, args, 4);
     Py_DECREF(method);
     Py_XDECREF(found);
     return result;
@@ -9196,18 +10020,14 @@ static inline PyObject *By_AsyncExit(ByProtocolSite *site, PyObject *manager,
 
 static inline PyObject *By_Enter(ByProtocolSite *site, PyObject *manager) {
     static PyObject *by_enter = NULL;
-    PyObject *name;
+    static PyObject *by_exit = NULL;
     if (manager == NULL) return NULL;
-    name = By_FixedName(&by_enter, "__enter__", 9);
-    if (name == NULL) return NULL;
-    PyObject *method = By_ProtocolMethod(site, manager, name);
-    if (method == NULL) {
-        PyErr_Format(PyExc_TypeError, "'%s' object does not support the context manager protocol",
-                     Py_TYPE(manager)->tp_name);
-        return NULL;
-    }
+    int prepend;
+    PyObject *method = By_ManagerEnter(site, manager, &by_enter, "__enter__", &by_exit,
+                                       "__exit__", "context manager", &prepend);
+    if (method == NULL) return NULL;
     PyObject *args[1] = {manager};
-    PyObject *result = PyObject_Vectorcall(method, args, 1, NULL);
+    PyObject *result = By_CallProtocol(method, prepend, args, 1);
     Py_DECREF(method);
     return result;
 }
@@ -9224,8 +10044,17 @@ static inline int By_ExitContext(ByProtocolSite *site, PyObject *manager,
     if (manager == NULL) return -1;
     name = By_FixedName(&by_exit, "__exit__", 8);
     if (name == NULL) return -1;
-    PyObject *method = By_ProtocolMethod(site, manager, name);
-    if (method == NULL) return -1;
+    int prepend;
+    PyObject *method = By_ProtocolMethod(site, manager, name, &prepend);
+    if (method == NULL) {
+        if (!PyErr_Occurred()) {
+            PyErr_Format(PyExc_TypeError,
+                         "'%s' object does not support the context manager protocol "
+                         "(missed __exit__ method)",
+                         Py_TYPE(manager)->tp_name);
+        }
+        return -1;
+    }
     /* `None` is the normal path just as NULL is: the frontend hands over a boxed
        `None`, and reading a traceback off it would be a wild pointer */
     int raising = exception != NULL && exception != Py_None
@@ -9238,7 +10067,7 @@ static inline int By_ExitContext(ByProtocolSite *site, PyObject *manager,
         if (found != NULL) traceback = found;
     }
     PyObject *args[4] = {manager, type, value, traceback};
-    PyObject *result = PyObject_Vectorcall(method, args, 4, NULL);
+    PyObject *result = By_CallProtocol(method, prepend, args, 4);
     Py_DECREF(method);
     if (traceback != Py_None) Py_DECREF(traceback);
     if (result == NULL) return -1;
@@ -9294,6 +10123,22 @@ static inline PyObject *By_DelegateStep(PyObject *inner, PyObject *sent, int *do
     return result;
 }
 
+/* whether a generator's code carries `CO_ITERABLE_COROUTINE`, which `types.coroutine`
+ * sets to let `await` drive it: 1 or 0, and -1 with an exception set */
+static int By_GeneratorIsCoroutine(PyObject *generator) {
+    PyObject *code;
+    int flags;
+#if PY_VERSION_HEX >= 0x030C0000
+    code = (PyObject *)PyGen_GetCode((PyGenObject *)generator);
+#else
+    code = PyObject_GetAttrString(generator, "gi_code");
+#endif
+    if (code == NULL) return -1;
+    flags = PyCode_Check(code) ? ((PyCodeObject *)code)->co_flags : 0;
+    Py_DECREF(code);
+    return (flags & CO_ITERABLE_COROUTINE) != 0;
+}
+
 /* the iterator a delegation drives: `iter(x)` for `yield from`, `x.__await__()` for
  * `await`. keeping them apart matters — awaiting an ordinary iterable is an error
  *
@@ -9310,6 +10155,13 @@ static inline PyObject *By_AwaitIter(PyObject *awaitable) {
     /* a coroutine is already the thing to drive: its own `__await__` only hands
      * back a wrapper around itself */
     if (PyCoro_CheckExact(awaitable)) return By_NewRef(awaitable);
+    /* and so is a generator `types.coroutine` marked as one, which has no `__await__`
+     * at all — python tells it by the flag on its code */
+    if (PyGen_CheckExact(awaitable)) {
+        int marked = By_GeneratorIsCoroutine(awaitable);
+        if (marked < 0) return NULL;
+        if (marked) return By_NewRef(awaitable);
+    }
     type = Py_TYPE(awaitable);
     getter = type->tp_as_async == NULL ? NULL : type->tp_as_async->am_await;
     if (getter == NULL) {
@@ -9444,7 +10296,7 @@ static inline PyObject *By_ReadCell(PyObject *value, const char *name, int free)
          * `UnboundLocalError`, one that closes over it sees a free variable and a
          * plain `NameError`. python distinguishes the two, wording included */
         PyErr_Format(free ? PyExc_NameError : PyExc_UnboundLocalError,
-                     free ? "cannot access free variable '%s' where it is not associated with a value"
+                     free ? "cannot access free variable '%s' where it is not associated with a value in enclosing scope"
                           : "cannot access local variable '%s' where it is not associated with a value",
                      name);
         return NULL;
@@ -9452,12 +10304,265 @@ static inline PyObject *By_ReadCell(PyObject *value, const char *name, int free)
     return By_NewRef(value);
 }
 
-/* bind a method to a receiver, giving a callable. this is what a nested
- * function's name is bound to: the receiver is its closure environment, and the
- * fastcall convention hands it back as `self` on every call */
-static inline PyObject *By_MakeClosure(PyMethodDef *def, PyObject *env) {
+/* read a shared cell held as a tagged `int`. its error value is what unset means,
+ * because a zero is a value like any other */
+static inline ByTagged By_ReadCellTagged(ByTagged value, const char *name, int free) {
+    if (value == BY_INT_ERROR) {
+        (void)By_ReadCell(NULL, name, free);
+        return BY_INT_ERROR;
+    }
+    By_IncRefTagged(value);
+    return value;
+}
+
+/* the flag a type with a vectorcall slot sets, public from 3.12 */
+#ifndef Py_TPFLAGS_HAVE_VECTORCALL
+#define Py_TPFLAGS_HAVE_VECTORCALL _Py_TPFLAGS_HAVE_VECTORCALL
+#endif
+
+/* ── a compiled nested function ──────────────────────────────────────────────
+ *
+ * a nested function is a closure over its environment, and python's own is a
+ * `function`: a descriptor, so installed on a class it binds the receiver; a thing
+ * with a `__dict__` and a writable `__name__`, so `functools.wraps` can dress it; and
+ * a thing that says where it was written, `counter.<locals>.step`, rather than what
+ * holds its captures. a `PyCFunction` over the environment is none of those, and the
+ * first is a silent wrong answer: a method installed from one never receives `self`.
+ *
+ * so a nested function is one of these. a call is `vectorcall` straight into the
+ * function's own boundary, which reads the environment off the object — there is no
+ * trampoline between the caller and the boundary. what the definition says about
+ * itself is in a static `ByFunctionSpec`, and a name, qualname, module or docstring
+ * only becomes an object when something reads it or writes over it.
+ *
+ * where the body reads its own name, the environment holds the function and the
+ * function holds the environment, so both are collected types: this one traverses
+ * the environment, and the environment traverses its cells. `tp_clear` leaves the
+ * environment alone, so a call reached from a finalizer during a collection still has
+ * one to read — clearing the environment's cells is what breaks the cycle.
+ *
+ * `copy` treats only `function` and `builtin_function_or_method` as atomic, so this
+ * says it is atomic itself: a copy of a function is the function. and pickling one
+ * pickles it by name, as python does, which for a nested function is the same refusal
+ * python gives, in its own words */
+typedef struct {
+    /* the boundary, handed the function object itself as the callable */
+    vectorcallfunc call;
+    const char *name;
+    const char *qualname;
+    /* NULL where the definition has no docstring */
+    const char *doc;
+    /* the module's namespace, where `__module__` is read from */
+    PyObject **globals;
+} ByFunctionSpec;
+
+typedef struct {
+    PyObject_HEAD
+    vectorcallfunc vectorcall;
+    PyObject *env;
+    const ByFunctionSpec *spec;
+    PyObject *name;
+    PyObject *qualname;
+    PyObject *module;
+    PyObject *doc;
+    PyObject *dict;
+} ByFunctionObject;
+
+static void By_Function_dealloc(ByFunctionObject *self) {
+    PyObject_GC_UnTrack(self);
+    Py_CLEAR(self->env);
+    Py_CLEAR(self->name);
+    Py_CLEAR(self->qualname);
+    Py_CLEAR(self->module);
+    Py_CLEAR(self->doc);
+    Py_CLEAR(self->dict);
+    PyObject_GC_Del(self);
+}
+
+static int By_Function_traverse(ByFunctionObject *self, visitproc visit, void *arg) {
+    Py_VISIT(self->env);
+    Py_VISIT(self->module);
+    Py_VISIT(self->doc);
+    Py_VISIT(self->dict);
+    return 0;
+}
+
+static int By_Function_clear(ByFunctionObject *self) {
+    Py_CLEAR(self->module);
+    Py_CLEAR(self->doc);
+    Py_CLEAR(self->dict);
+    return 0;
+}
+
+/* bound the way a python function is: through the type it is itself, and through
+ * an instance a method of that instance */
+static PyObject *By_Function_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
+    (void)type;
+    if (obj == NULL || obj == Py_None) return By_NewRef(self);
+    return PyMethod_New(self, obj);
+}
+
+static PyObject *By_Function_repr(ByFunctionObject *self) {
+    PyObject *qualname = self->qualname != NULL
+        ? By_NewRef(self->qualname)
+        : PyUnicode_FromString(self->spec->qualname);
+    if (qualname == NULL) return NULL;
+    PyObject *repr = PyUnicode_FromFormat("<function %U at %p>", qualname, (void *)self);
+    Py_DECREF(qualname);
+    return repr;
+}
+
+/* one of the two names: what was written over it, or else what the definition says */
+static PyObject *By_Function_name_of(PyObject **slot, const char *spelled) {
+    if (*slot == NULL) {
+        *slot = PyUnicode_InternFromString(spelled);
+        if (*slot == NULL) return NULL;
+    }
+    return By_NewRef(*slot);
+}
+
+static int By_Function_set_name_of(PyObject **slot, PyObject *value, const char *which) {
+    if (value == NULL || !PyUnicode_Check(value)) {
+        PyErr_Format(PyExc_TypeError, "%s must be set to a string object", which);
+        return -1;
+    }
+    Py_XSETREF(*slot, By_NewRef(value));
+    return 0;
+}
+
+static PyObject *By_Function_get_name(PyObject *self, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    return By_Function_name_of(&function->name, function->spec->name);
+}
+
+static int By_Function_set_name(PyObject *self, PyObject *value, void *closure) {
+    (void)closure;
+    return By_Function_set_name_of(&((ByFunctionObject *)self)->name, value, "__name__");
+}
+
+static PyObject *By_Function_get_qualname(PyObject *self, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    return By_Function_name_of(&function->qualname, function->spec->qualname);
+}
+
+static int By_Function_set_qualname(PyObject *self, PyObject *value, void *closure) {
+    (void)closure;
+    return By_Function_set_name_of(&((ByFunctionObject *)self)->qualname, value,
+                                   "__qualname__");
+}
+
+/* python takes a function's `__module__` from its globals' `__name__` where the `def`
+ * runs, and lets it be written over afterwards */
+static PyObject *By_Function_get_module(PyObject *self, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    if (function->module == NULL) {
+        PyObject *globals = *function->spec->globals;
+        PyObject *name = globals == NULL ? NULL : PyDict_GetItemString(globals, "__name__");
+        function->module = By_NewRef(name == NULL ? Py_None : name);
+    }
+    return By_NewRef(function->module);
+}
+
+static int By_Function_set_module(PyObject *self, PyObject *value, void *closure) {
+    (void)closure;
+    Py_XSETREF(((ByFunctionObject *)self)->module, By_NewRef(value == NULL ? Py_None : value));
+    return 0;
+}
+
+static PyObject *By_Function_get_doc(PyObject *self, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    if (function->doc == NULL) {
+        function->doc = function->spec->doc == NULL
+            ? By_NewRef(Py_None)
+            : PyUnicode_FromString(function->spec->doc);
+        if (function->doc == NULL) return NULL;
+    }
+    return By_NewRef(function->doc);
+}
+
+static int By_Function_set_doc(PyObject *self, PyObject *value, void *closure) {
+    (void)closure;
+    Py_XSETREF(((ByFunctionObject *)self)->doc, By_NewRef(value == NULL ? Py_None : value));
+    return 0;
+}
+
+static PyObject *By_Function_self(PyObject *self, PyObject *unused) {
+    (void)unused;
+    return By_NewRef(self);
+}
+
+/* pickled by name, as a python function is. the name of a nested one runs through
+ * `<locals>`, so pickle refuses it exactly as it refuses python's */
+static PyObject *By_Function_reduce(PyObject *self, PyObject *unused) {
+    (void)unused;
+    return By_Function_get_qualname(self, NULL);
+}
+
+static PyMethodDef By_Function_methods[] = {
+    {"__copy__", By_Function_self, METH_NOARGS, NULL},
+    {"__deepcopy__", By_Function_self, METH_O, NULL},
+    {"__reduce__", By_Function_reduce, METH_NOARGS, NULL},
+    {NULL, NULL, 0, NULL},
+};
+
+static PyGetSetDef By_Function_getset[] = {
+    {"__name__", By_Function_get_name, By_Function_set_name, NULL, NULL},
+    {"__qualname__", By_Function_get_qualname, By_Function_set_qualname, NULL, NULL},
+    {"__module__", By_Function_get_module, By_Function_set_module, NULL, NULL},
+    {"__doc__", By_Function_get_doc, By_Function_set_doc, NULL, NULL},
+    {"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},
+    {NULL, NULL, NULL, NULL, NULL},
+};
+
+static PyTypeObject By_FunctionType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "by.function",
+    .tp_basicsize = sizeof(ByFunctionObject),
+    .tp_itemsize = 0,
+    .tp_dealloc = (destructor)By_Function_dealloc,
+    .tp_vectorcall_offset = offsetof(ByFunctionObject, vectorcall),
+    .tp_repr = (reprfunc)By_Function_repr,
+    .tp_call = PyVectorcall_Call,
+    .tp_getattro = PyObject_GenericGetAttr,
+    .tp_setattro = PyObject_GenericSetAttr,
+    /* a method descriptor as python's own function is one: `obj.f()` through the type
+     * calls it with `obj` in front rather than building a bound method first */
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_HAVE_VECTORCALL
+                | Py_TPFLAGS_METHOD_DESCRIPTOR,
+    .tp_traverse = (traverseproc)By_Function_traverse,
+    .tp_clear = (inquiry)By_Function_clear,
+    .tp_methods = By_Function_methods,
+    .tp_getset = By_Function_getset,
+    .tp_descr_get = By_Function_descr_get,
+    .tp_dictoffset = offsetof(ByFunctionObject, dict),
+    .tp_free = PyObject_GC_Del,
+};
+
+/* the function a `def` binds, over the environment the frame made for it */
+static inline PyObject *By_MakeFunction(const ByFunctionSpec *spec, PyObject *env) {
+    ByFunctionObject *self;
     if (env == NULL) return NULL;
-    return PyCFunction_NewEx(def, env, NULL);
+    self = PyObject_GC_New(ByFunctionObject, &By_FunctionType);
+    if (self == NULL) return NULL;
+    self->vectorcall = spec->call;
+    self->env = By_NewRef(env);
+    self->spec = spec;
+    self->name = NULL;
+    self->qualname = NULL;
+    self->module = NULL;
+    self->doc = NULL;
+    self->dict = NULL;
+    PyObject_GC_Track(self);
+    return (PyObject *)self;
+}
+
+/* the environment a nested function's boundary reads its captures from */
+static inline PyObject *By_FunctionEnvironment(PyObject *callable) {
+    return ((ByFunctionObject *)callable)->env;
 }
 
 /* narrowing an object to a refcounted type is a test rather than a change of

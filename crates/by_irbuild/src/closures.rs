@@ -3,9 +3,10 @@
 //! a closure needs somewhere for the captured values to live that outlives the
 //! frame that made it. that place is an object with a fixed layout and one field
 //! per capture — which is exactly a [`ClassIr`], so the whole native-class
-//! machinery applies: a captured read is a `GetField` at a compile-time offset, the
-//! nested function is a method whose receiver is the environment, and binding the
-//! name is `PyCFunction_NewEx` with the environment as `self`.
+//! machinery applies: a captured read is a `GetField` at a compile-time offset, and the
+//! nested function is a method whose receiver is the environment. binding the name
+//! makes a function object over the environment — see `By_MakeFunction` — because
+//! python sees a function where the `def` stands, not a method of anything.
 //!
 //! ## what is captured
 //!
@@ -324,6 +325,28 @@ fn nonlocal_names(def: &ast::StmtFunctionDef) -> Vec<&str> {
         .collect()
 }
 
+/// every function nested in `body`, at any depth, that declares `name` `nonlocal`
+///
+/// each is a frame that may write the cell `name` is, so each says something about what
+/// the cell holds. one whose `nonlocal` reaches a nearer frame's own `name` is counted as
+/// well, which can only widen what the cell is taken to hold
+pub(crate) fn nonlocal_writers<'a>(body: &'a [Stmt], name: &str) -> Vec<&'a ast::StmtFunctionDef> {
+    let mut out = Vec::new();
+    for stmt in crate::walk(body) {
+        match stmt {
+            Stmt::FunctionDef(def) => {
+                if nonlocal_names(def).contains(&name) {
+                    out.push(def);
+                }
+                out.extend(nonlocal_writers(&def.body, name));
+            }
+            Stmt::ClassDef(class) => out.extend(nonlocal_writers(&class.body, name)),
+            _ => {}
+        }
+    }
+    out
+}
+
 /// the names a function declares `global`
 fn global_names(def: &ast::StmtFunctionDef) -> Vec<&str> {
     crate::walk(&def.body)
@@ -621,11 +644,15 @@ pub(crate) fn environment_name(enclosing: Option<&str>, owner: &str) -> String {
 /// else a nested function reads lives further up, and is reached through the chain
 /// rather than copied: giving it a field of its own here would shadow the real one
 /// with a copy that is never seeded
+///
+/// `cell` is the representation a shared cell holds — see the caller, which is what can
+/// ask every frame that writes one
 pub(crate) fn environment(
     name: &str,
     enclosing: Option<&str>,
     nested: &[Nested],
     representation: &impl Fn(&str) -> Option<by_ir::rtype::RType>,
+    cell: &impl Fn(&str) -> by_ir::rtype::RType,
     owned: &HashSet<String>,
 ) -> Lowered<Option<Environment>> {
     if nested.is_empty() {
@@ -640,16 +667,17 @@ pub(crate) fn environment(
         if fields.iter().any(|field| field.name == *capture) || !owned.contains(capture) {
             continue;
         }
-        // a *shared* cell is always `object`: it starts unset, and NULL has to be
-        // distinguishable from every value it could hold. an unboxed zero would not be
+        // a *shared* cell starts unset, so it is held in a representation with an unset
+        // value of its own, distinct from every value it could hold
         let ty = if shared.contains(capture.as_str()) {
-            by_ir::rtype::RType::OBJECT
+            cell(capture)
         } else {
             representation(capture).ok_or_else(|| {
                 Decline::new(format!("`{capture}` has no representation to capture"))
             })?
         };
         fields.push(by_ir::function::FieldDecl {
+            cell: shared.contains(capture.as_str()),
             name: capture.clone(),
             ty,
             default: None,
@@ -662,6 +690,7 @@ pub(crate) fn environment(
     // one cell
     if let Some(enclosing) = enclosing {
         fields.push(by_ir::function::FieldDecl {
+            cell: false,
             optional: false,
             defaulted_by: None,
             name: OUTER_FIELD.to_string(),
@@ -676,6 +705,7 @@ pub(crate) fn environment(
     // still needs an object to hang the method on
     if fields.is_empty() {
         fields.push(by_ir::function::FieldDecl {
+            cell: false,
             name: "$empty".to_string(),
             ty: by_ir::rtype::RType::NONE,
             default: None,

@@ -9,6 +9,7 @@
 //! milestone and only the speed varies.
 
 mod closures;
+mod comprehension_scopes;
 mod generators;
 pub mod mapper;
 pub mod shims;
@@ -104,8 +105,8 @@ use by_ir::function::{
     KeywordValue, ModuleIr, ModuleName, SlotAlias, qualify,
 };
 use by_ir::ops::{
-    BinOp, BlockId, CmpOp, Conversion, LicenceKind, Mutation, Op, RegisterId, StandardError,
-    Terminator, UnaryOp, Value,
+    BinOp, BlockId, CmpOp, Concatenation, Conversion, LicenceKind, Mutation, Op, RegisterId,
+    StandardError, Terminator, UnaryOp, Value,
 };
 use by_ir::rtype::{Primitive, RType};
 use mapper::{Decline, Layouts, Lowered, map_fixed_tuple, map_type, map_type_with};
@@ -114,7 +115,7 @@ use ruff_python_ast::{
     helpers,
 };
 use ruff_python_stdlib::identifiers::is_identifier;
-use ruff_text_size::{Ranged, TextSize};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::types::{KnownClass, SpecialFormType, Type, TypeDefinition, TypeQualifier};
 use ty_python_semantic::{HasType, SemanticModel};
@@ -597,6 +598,7 @@ pub fn build_module(
         directs: &no_directs,
         // a module-level frame is in no class body, so nothing it names is mangled
         owner: None,
+        frame: None,
     };
 
     // pass one and a half: the direct editions, before any caller, because an `await`
@@ -612,7 +614,7 @@ pub fn build_module(
             continue;
         }
         if let Ok(edition) = lower_direct_edition(unit, function)
-            .and_then(|mut edition| verify_one(&mut edition).map(|()| edition))
+            .and_then(|mut edition| verify_one(&bases, &mut edition).map(|()| edition))
         {
             directs.insert(function.name.to_string());
             direct_editions.push(edition);
@@ -627,7 +629,7 @@ pub fn build_module(
     // pass two: bodies, with the layouts available
     for stmt in suite {
         if let Stmt::ClassDef(class) = stmt {
-            match lower_class(unit, class).and_then(verified_class) {
+            match lower_class(unit, class).and_then(|lowered| verified_class(&bases, lowered)) {
                 Ok((lowered, environments)) => {
                     module.classes.push(lowered);
                     // an environment a method needed is a sibling class, and the layout
@@ -650,7 +652,7 @@ pub fn build_module(
                 .extend(promoted_places(db, env, model, function, &layouts));
             match defined_once(suite, function)
                 .and_then(|()| lower_function(unit, function))
-                .and_then(verified)
+                .and_then(|lowered| verified(&bases, lowered))
             {
                 Ok((lowered, environments)) => {
                     module.functions.push(lowered);
@@ -660,7 +662,9 @@ pub fn build_module(
                     // boxed one still stands and every caller reaches that
                     for positions in arrays.get(function.name.as_str()).into_iter().flatten() {
                         if let Ok(edition) = lower_array_edition(unit, function, positions)
-                            .and_then(|mut edition| verify_one(&mut edition).map(|()| edition))
+                            .and_then(|mut edition| {
+                                verify_one(&bases, &mut edition).map(|()| edition)
+                            })
                         {
                             module.functions.push(edition);
                         }
@@ -1252,6 +1256,7 @@ fn lower_generator(
     let fields: Vec<by_ir::function::FieldDecl> = names
         .into_iter()
         .map(|name| by_ir::function::FieldDecl {
+            cell: false,
             optional: false,
             defaulted_by: None,
             // the state number is never unset — the constructor writes 0 — so it is
@@ -1328,6 +1333,7 @@ fn lower_generator(
             fields_are_parameters: true,
             dataclass: false,
             immutable: false,
+            environment: false,
             keywords: Vec::new(),
         }],
     ))
@@ -1517,7 +1523,9 @@ fn lower_resume(
         zero_super: Err(
             "a `super()` with no arguments reads slot zero, which a generator's resume frame fills with its state",
         ),
+        unwound: Vec::new(),
         comprehensions: 0,
+        unnarrowed: None,
         language: unit.language,
         recheck_licences: unit.recheck_licences,
         environment: None,
@@ -1622,6 +1630,8 @@ fn lower_resume(
         class: class.to_string(),
         field: generators::STATE_FIELD.to_string(),
         value: Value::Int(-1),
+        moves: false,
+        present: false,
     });
     let nothing = lowering.builder.temp(RType::OBJECT);
     lowering.builder.push(Op::Box {
@@ -1647,20 +1657,22 @@ fn lower_resume(
 /// the optimization passes are held to a stricter standard — a pass bug fails the
 /// build, because it is not user code that provoked it
 fn verified(
+    bases: &HashMap<String, String>,
     lowered: (Function, Vec<by_ir::function::ClassIr>),
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
     let (mut function, mut environments) = lowered;
-    verify_one(&mut function)?;
+    verify_one(bases, &mut function)?;
     for method in environments
         .iter_mut()
         .flat_map(|environment| environment.methods.iter_mut())
     {
-        verify_one(method)?;
+        verify_one(bases, method)?;
     }
     Ok((function, environments))
 }
 
 fn verified_class(
+    bases: &HashMap<String, String>,
     lowered: (by_ir::function::ClassIr, Vec<by_ir::function::ClassIr>),
 ) -> Lowered<(by_ir::function::ClassIr, Vec<by_ir::function::ClassIr>)> {
     let (mut class, mut environments) = lowered;
@@ -1669,16 +1681,16 @@ fn verified_class(
             .iter_mut()
             .flat_map(|environment| environment.methods.iter_mut()),
     ) {
-        verify_one(method)?;
+        verify_one(bases, method)?;
     }
     Ok((class, environments))
 }
 
-fn verify_one(function: &mut Function) -> Lowered<()> {
+fn verify_one(bases: &HashMap<String, String>, function: &mut Function) -> Lowered<()> {
     // a local some path reads before writing is compiled with a byte saying whether it
     // was written, so the flag has to be set before the verifier objects to the read
     by_ir::unbound_locals::mark(function);
-    by_ir::verify::verify(function).map_err(|errors| {
+    by_ir::verify::verify_within(function, bases).map_err(|errors| {
         let detail = errors
             .iter()
             .map(|error| error.message.clone())
@@ -2773,6 +2785,7 @@ fn lower_class<'a>(
             exported: true,
             name: class.name.to_string(),
             immutable,
+            environment: false,
             base,
             // neither written nor generated: a `data class` always gets one, a written
             // `__init__` is a method of its own, and an accessor block's storage is
@@ -3368,6 +3381,7 @@ fn init_fields(
                 continue;
             }
             fields.push(by_ir::function::FieldDecl {
+                cell: false,
                 name: name.clone(),
                 ty: ty.clone(),
                 default: None,
@@ -3392,6 +3406,7 @@ fn init_fields(
                 .map(|(_, rtype)| rtype.clone())
                 .ok_or_else(|| Decline::new("an attribute assignment has no representation"))?;
             fields.push(by_ir::function::FieldDecl {
+                cell: false,
                 name,
                 ty,
                 default: None,
@@ -3408,6 +3423,7 @@ fn init_fields(
             continue;
         }
         fields.push(by_ir::function::FieldDecl {
+            cell: false,
             name: name.clone(),
             ty: ty.clone(),
             default: None,
@@ -3424,6 +3440,7 @@ fn init_fields(
             continue;
         }
         fields.push(by_ir::function::FieldDecl {
+            cell: false,
             name: name.clone(),
             ty: ty.clone(),
             default: None,
@@ -3515,6 +3532,7 @@ fn slot_fields(
             continue;
         }
         fields.push(by_ir::function::FieldDecl {
+            cell: false,
             name,
             ty: RType::OBJECT,
             default: None,
@@ -5549,6 +5567,7 @@ fn class_fields(
                     Decline::new("an accessor block's storage has no inferred type")
                 })?;
                 fields.push(by_ir::function::FieldDecl {
+                    cell: false,
                     name,
                     ty: map_type_with(db, env, ty, layouts)?,
                     default: Some(default),
@@ -5783,6 +5802,7 @@ fn data_fields(
                     .inferred_type(model)
                     .ok_or_else(|| Decline::new("a field has no inferred type"))?;
                 fields.push(by_ir::function::FieldDecl {
+                    cell: false,
                     name,
                     ty: map_type_with(db, env, ty, layouts)?,
                     default,
@@ -6756,6 +6776,7 @@ fn lower_function_with_receiver(
     frame: Frame,
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
     surface::gate_function(unit.language.source_type(), function)?;
+    let function = &comprehension_scopes::scoped(function)?;
     let Unit {
         env,
         db,
@@ -6782,6 +6803,18 @@ fn lower_function_with_receiver(
     // applies them to the closure it just made — see `nested_def`. carrying them here
     // as well would apply them a second time, to the environment class's method
     let nested = matches!(receiver, Some(Receiver::Implicit(_)));
+    // what python calls this frame: a nested function after the frames it is written
+    // in, and anything else after its class and its own name
+    let python_name = match captures {
+        Some(entry) if entry.lambda.is_some() => "<lambda>".to_string(),
+        _ => function.name.to_string(),
+    };
+    let qualname = match (unit.frame, unit.owner) {
+        (Some(enclosing), _) if nested => format!("{enclosing}.<locals>.{python_name}"),
+        (_, Some(class)) => format!("{class}.{python_name}"),
+        (_, None) => python_name.clone(),
+    };
+    let named_by_its_frame = nested;
     let mut decorators = Vec::with_capacity(function.decorator_list.len());
     let mut wrote_a_decorator = false;
     for decorator in function.decorator_list.iter().filter(|_| !nested) {
@@ -6840,7 +6873,15 @@ fn lower_function_with_receiver(
                 "a generator that shares a cell with the frame around it is not lowered yet",
             ));
         }
-        return lower_generator(unit, function, decorators, receiver, captures);
+        let (mut constructor, classes) =
+            lower_generator(unit, function, decorators, receiver, captures)?;
+        if named_by_its_frame {
+            constructor.nested = Some(by_ir::function::NestedName {
+                name: python_name,
+                qualname,
+            });
+        }
+        return Ok((constructor, classes));
     }
 
     let Signature {
@@ -6963,11 +7004,37 @@ fn lower_function_with_receiver(
     } else {
         owned
     };
+    // a shared cell holds what every frame writing it stores: this one, and each nested
+    // function at any depth that writes it through `nonlocal`. where they all store one
+    // representation with an unset value of its own — a tagged `int`'s error value, or a
+    // pointer's NULL — the cell is held that way, and anything else is an `object`
+    let cell = |name: &str| {
+        let mut stored = representation(name);
+        for writer in closures::nonlocal_writers(&function.body, name) {
+            let written = local_representations(
+                db,
+                env,
+                model,
+                &writer.body,
+                layouts,
+                unit.sealed,
+                unit.arrays,
+            )
+            .into_iter()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, rtype)| rtype);
+            stored = stored
+                .zip(written)
+                .map(|(left, right)| covering(&left, &right));
+        }
+        stored.filter(has_an_unset_value).unwrap_or(RType::OBJECT)
+    };
     let outer_environment = closures::environment(
         &frame_name,
         enclosing,
         &nested,
         &representation,
+        &cell,
         &frame_owned,
     )?;
     let (environment, outer_environment) = if split {
@@ -6976,6 +7043,7 @@ fn lower_function_with_receiver(
             Some(&frame_name),
             &nested,
             &representation,
+            &cell,
             &bindings_here,
         )?;
         (closure, outer_environment)
@@ -6991,6 +7059,7 @@ fn lower_function_with_receiver(
         for entry in &nested {
             for parameter in computed_default_names(&entry.def) {
                 environment.fields.push(by_ir::function::FieldDecl {
+                    cell: false,
                     name: by_ir::function::receiver_default_field(
                         entry.def.name.as_str(),
                         &parameter,
@@ -7127,7 +7196,7 @@ fn lower_function_with_receiver(
                 .is_some_and(|id| id.index() < params.len());
             values.push(match locals.get(&field.name) {
                 Some(&id) if is_parameter && shared.contains(&field.name) => {
-                    Some(boxed_object(&mut builder, id))
+                    Some(seeded_cell(&mut builder, id, &field.ty))
                 }
                 Some(&id) if !shared.contains(&field.name) => Some(Value::Register(id)),
                 _ => None,
@@ -7161,7 +7230,7 @@ fn lower_function_with_receiver(
                 // other cell starts unset, so reading it before a write is
                 // `UnboundLocalError`, exactly as python reports it
                 Some(&id) if is_parameter && shared.contains(&field.name) => {
-                    Some(boxed_object(&mut builder, id))
+                    Some(seeded_cell(&mut builder, id, &field.ty))
                 }
                 Some(&id) if !shared.contains(&field.name) => Some(Value::Register(id)),
                 _ => None,
@@ -7297,7 +7366,9 @@ fn lower_function_with_receiver(
         zero_super,
         language: unit.language,
         recheck_licences: unit.recheck_licences,
+        unwound: Vec::new(),
         comprehensions: 0,
+        unnarrowed: None,
         generator: None,
         delegations: 0,
         contexts: 0,
@@ -7339,6 +7410,12 @@ fn lower_function_with_receiver(
 
     let mut lowered = lowering.builder.finish();
     lowered.binding = binding;
+    if named_by_its_frame {
+        lowered.nested = Some(by_ir::function::NestedName {
+            name: python_name,
+            qualname: qualname.clone(),
+        });
+    }
     // the environment's methods are the nested bodies, lowered with the environment
     // as the receiver — so a captured read is a field read like any other
     let environments = match environment {
@@ -7353,6 +7430,7 @@ fn lower_function_with_receiver(
             let inner_unit = Unit {
                 layouts,
                 methods,
+                frame: Some(&qualname),
                 ..unit
             };
             let mut lowered_methods = Vec::with_capacity(nested.len());
@@ -7396,6 +7474,7 @@ fn lower_function_with_receiver(
                     fields_are_parameters: true,
                     dataclass: false,
                     immutable: false,
+                    environment: true,
                 })
                 .collect();
             all.push(by_ir::function::ClassIr {
@@ -7416,6 +7495,7 @@ fn lower_function_with_receiver(
                 fields_are_parameters: true,
                 dataclass: false,
                 immutable: false,
+                environment: true,
             });
             all.extend(inner_environments);
             all
@@ -7515,6 +7595,10 @@ struct Unit<'a> {
     /// decides how python mangles a private name — see [`mangled`]. a nested frame
     /// inherits it, because the mangling follows the source and not the receiver
     owner: Option<&'a str>,
+    /// the `__qualname__` of the frame a nested function is written in, which names the
+    /// nested one — see [`by_ir::function::Function::nested`]. only a nested frame has
+    /// one: anything else is named by its class and its own name
+    frame: Option<&'a str>,
 }
 
 /// what a nested function reads through its environment
@@ -7559,9 +7643,9 @@ enum Place {
     },
     /// a *shared* cell — a field both frames write, so both see one value.
     ///
-    /// it starts unset, and reading it before a write is `UnboundLocalError`. that is
-    /// why a cell is always `object`: NULL has to be distinguishable from every value
-    /// it could hold, and an unboxed zero is not
+    /// it starts unset, and reading it before a write is `UnboundLocalError`. so a cell is
+    /// held in a representation with an unset value distinct from every value it could
+    /// hold — see [`has_an_unset_value`]
     Cell {
         receiver: RegisterId,
         class: String,
@@ -7569,6 +7653,7 @@ enum Place {
         /// whether this frame *closes over* the name rather than owning it, which
         /// decides whether an unset read is `NameError` or `UnboundLocalError`
         free: bool,
+        ty: RType,
     },
     /// a field of an environment further up the chain
     ///
@@ -7645,7 +7730,14 @@ enum Cleanup {
         direct: Option<String>,
     },
     /// an `except` block's handled exception, put back on the way out
-    Handled(RegisterId),
+    ///
+    /// `exception` is what the block marked as handled and `previous` is what that
+    /// displaced. a suspension inside the block gives `previous` back to whoever
+    /// resumed the frame and takes `exception` back when it is resumed again
+    Handled {
+        previous: RegisterId,
+        exception: RegisterId,
+    },
 }
 
 /// an assignment target with its location parts already evaluated
@@ -8051,7 +8143,14 @@ fn signature(
                     deferring.push(params.len());
                     RType::FLOAT
                 } else {
-                    map_type_with(db, env, ty, layouts)?
+                    let rtype = map_type_with(db, env, ty, layouts)?;
+                    // where `float` admits no `int` it still admits a subclass of
+                    // `float`, which a `double` would strip of its type and its
+                    // operators, so the boundary tests the call the same way
+                    if receiver.is_none() && rtype == RType::FLOAT {
+                        deferring.push(params.len());
+                    }
+                    rtype
                 }
             }
         };
@@ -8345,6 +8444,26 @@ fn is_reflected_or_augmented_operator(name: &str) -> bool {
 ///
 /// a cell holds objects, and a parameter that is already one is already what the cell
 /// wants — boxing it again is ill-formed, and the verifier says so
+/// what a parameter that is a shared cell seeds the cell with: its own register where the
+/// cell holds the parameter's representation, and its box where the cell is an `object`
+fn seeded_cell(
+    builder: &mut by_ir::builder::FunctionBuilder,
+    id: RegisterId,
+    cell: &RType,
+) -> Value {
+    if builder.register_type(id) == Some(cell) {
+        return Value::Register(id);
+    }
+    boxed_object(builder, id)
+}
+
+/// whether a representation has a value of its own that says "unset", distinct from every
+/// value it holds, which is what a cell needs before its first write: NULL for a single
+/// reference, and the error value for a tagged `int`
+fn has_an_unset_value(rtype: &RType) -> bool {
+    *rtype == RType::INT || rtype.is_object_reference()
+}
+
 fn boxed_object(builder: &mut by_ir::builder::FunctionBuilder, id: RegisterId) -> Value {
     if builder.register_type(id) == Some(&RType::OBJECT) {
         return Value::Register(id);
@@ -8775,7 +8894,8 @@ fn local_representations(
 
     for stmt in walk(body) {
         // a comprehension's target is a local of this frame — the comprehension is
-        // desugared into it — so a closure inside one captures it like any other
+        // desugared into it, under a spelling of its own (see `comprehension_scopes`) —
+        // so a closure inside one captures it like any other
         let mut targets: Vec<(String, RType)> = Vec::new();
         for expr in crate::closures::statement_expressions(stmt) {
             crate::closures::visit_expressions(expr, &mut |child| {
@@ -9234,6 +9354,11 @@ struct Lowering<'a, 'db> {
     /// the exception each enclosing `except` block caught, innermost last — which is
     /// what a bare `raise` re-raises
     handling: Vec<RegisterId>,
+    /// the stretches of [`Self::cleanups`] an early exit being lowered has already run
+    ///
+    /// they stay on the stack, because the path that falls through has to run them too,
+    /// so this is what says a handled exception among them has been put back already
+    unwound: Vec<std::ops::Range<usize>>,
     /// what a zero-argument `super()` in this frame stands for — the class the `def`
     /// is written in and the parameter python reads out of slot zero — or why this
     /// frame stands for nothing. see [`zero_argument_super`]
@@ -9247,6 +9372,34 @@ struct Lowering<'a, 'db> {
     /// container forms back into the method's. so only the depth being zero says
     /// slot zero is the receiver whatever the interpreter turns out to be
     comprehensions: usize,
+    /// the expression whose value python asks nothing of, so a call's answer is handed
+    /// on as it is rather than narrowed to what the checker declared
+    ///
+    /// an expression statement throws its value away: `cb()` alone on a line, with `cb`
+    /// declared to answer an `int`, is not narrowed to one. `raise` asks only that the
+    /// value be an exception, which raising it checks: `raise Refused(...)` raises
+    /// whatever the name answered, a class rebound after import included. named by its
+    /// range, which no expression inside it shares
+    unnarrowed: Option<TextRange>,
+}
+
+/// where [`Lowering::resolve_builtin`] reads the object a builtin's name resolves to
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wanted {
+    /// on every path, for a use that calls it whether or not it is the builtin
+    Always,
+    /// only where it is not the builtin, which is the only place the use calls it
+    WhereRebound,
+}
+
+/// a `range(...)` a loop may count over, as it stood before anything was counted
+struct CountedRange {
+    /// what the name `range` resolved to
+    callee: Value,
+    /// whether that is the interpreter's own `range`
+    genuine: RegisterId,
+    start: Option<(Value, RType)>,
+    stop: (Value, RType),
 }
 
 /// the two halves of the `super(C, self)` a zero-argument `super()` is sugar for
@@ -9267,6 +9420,187 @@ impl Lowering<'_, '_> {
     /// spelling
     fn attribute_name(&self, written: &str) -> String {
         mangled(self.owner.as_deref(), written)
+    }
+
+    /// the class whose storage keeps `name` for an instance of `class`, and what it keeps
+    /// there
+    ///
+    /// nearly every class carries its base's fields at the head of its own layout, so the
+    /// first rung answers and this is the lookup that was always done. the exception is a
+    /// class that adds no field of its own: it is laid out with *none at all*, because its
+    /// instances are its base's at the base's own offsets and there is no region past them
+    /// for it to own. an attribute such a class reaches has to be named against the base,
+    /// which is the same thing the base's own methods do — `logging.handlers` writes
+    /// `self.closeOnError` in both `SocketHandler.__init__` and the `DatagramHandler`
+    /// below it, and only the second has an empty layout to look in.
+    ///
+    /// answering `None` is not a decline: the caller has a property to try and the dynamic
+    /// form behind that, and [`holds_attribute`](Self::holds_attribute) is what decides
+    /// whether the attribute has anywhere to go at all
+    /// raise `AttributeError` where the instance lacks the field about to be read
+    ///
+    /// an optional field's own read asks for itself, and answers with a class-level value
+    /// where there is one
+    fn require_field(&mut self, receiver: &Value, owner: &str, held: &by_ir::function::FieldDecl) {
+        if held.optional || !held.tracks_absence() {
+            return;
+        }
+        self.builder.push(Op::RequireField {
+            receiver: receiver.clone(),
+            class: owner.to_string(),
+            field: held.name.clone(),
+        });
+    }
+
+    /// `receiver.name` read out of the layout, where `name` is a field `owner` holds
+    ///
+    /// a class something extends or changes can have the name answered by something other
+    /// than the field: a property or a `__getattribute__` on an interpreted subclass, or a
+    /// descriptor put on the class after import. so a receiver of such a class is read at
+    /// the offset only while [`Op::FieldStands`] says none of those has happened, and
+    /// through the attribute otherwise
+    fn field_read(
+        &mut self,
+        receiver: Value,
+        receiver_ty: &RType,
+        class: &str,
+        owner: String,
+        held: &by_ir::function::FieldDecl,
+    ) -> (Value, RType) {
+        let field_ty = held.ty.clone();
+        let dest = self.builder.temp(field_ty.clone());
+        let join = self.mutable.contains(class).then(|| {
+            let (hit, miss, join) = self.field_guard(&receiver, class, &held.name);
+            self.builder.switch_to(miss);
+            let object = self.widen_to_object(receiver.clone(), receiver_ty);
+            let answer = self.builder.temp(RType::OBJECT);
+            self.builder.push(Op::GetAttr {
+                dest: answer,
+                receiver: object,
+                name: held.name.clone(),
+            });
+            // what the checker says the attribute is, asked of whatever answered for it
+            if field_ty == RType::OBJECT {
+                self.builder.assign(dest, Value::Register(answer));
+            } else {
+                self.builder.push(Op::Unbox {
+                    dest,
+                    src: Value::Register(answer),
+                    to: field_ty.clone(),
+                });
+            }
+            self.builder.terminate(Terminator::Goto(join));
+            self.builder.switch_to(hit);
+            join
+        });
+        self.require_field(&receiver, &owner, held);
+        self.builder.push(Op::GetField {
+            dest,
+            receiver,
+            class: owner,
+            field: held.name.clone(),
+        });
+        if let Some(join) = join {
+            self.builder.terminate(Terminator::Goto(join));
+            self.builder.switch_to(join);
+        }
+        (Value::Register(dest), field_ty)
+    }
+
+    /// `receiver.name = value` into the layout, where `name` is a field `owner` holds —
+    /// behind the test [`Self::field_read`] makes, for the same reasons
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the write and everything it is written through"
+    )]
+    fn field_write(
+        &mut self,
+        receiver: &Value,
+        receiver_ty: &RType,
+        class: &str,
+        owner: String,
+        held: &by_ir::function::FieldDecl,
+        value: Value,
+        ty: &RType,
+    ) -> Lowered<()> {
+        let join = if self.mutable.contains(class) {
+            let (hit, miss, join) = self.field_guard(receiver, class, &held.name);
+            self.builder.switch_to(miss);
+            // the value as it was handed over: whatever answers for the name decides
+            // what it accepts
+            let object = self.widen_to_object(receiver.clone(), receiver_ty);
+            let boxed = self.widen_to_object(value.clone(), ty);
+            let refused = self.builder.temp(RType::BIT);
+            self.builder.push(Op::SetAttr {
+                dest: refused,
+                receiver: object,
+                name: held.name.clone(),
+                value: boxed,
+            });
+            self.builder.terminate(Terminator::Goto(join));
+            self.builder.switch_to(hit);
+            Some(join)
+        } else {
+            None
+        };
+        let value = self.coerce(value, ty, &held.ty)?;
+        self.builder.push(Op::SetField {
+            receiver: receiver.clone(),
+            class: owner,
+            field: held.name.clone(),
+            value,
+            moves: false,
+            present: false,
+        });
+        if let Some(join) = join {
+            self.builder.terminate(Terminator::Goto(join));
+            self.builder.switch_to(join);
+        }
+        Ok(())
+    }
+
+    /// the test in front of a field access on a receiver typed `class`, answering with the
+    /// block it goes to when the field stands, the one it goes to otherwise, and the one
+    /// both arms end in
+    fn field_guard(
+        &mut self,
+        receiver: &Value,
+        class: &str,
+        field: &str,
+    ) -> (BlockId, BlockId, BlockId) {
+        let hit = self.builder.new_block();
+        let miss = self.builder.new_block();
+        let join = self.builder.new_block();
+        let stands = self.builder.temp(RType::BIT);
+        self.builder.push(Op::FieldStands {
+            dest: stands,
+            src: receiver.clone(),
+            class: class.to_string(),
+            field: field.to_string(),
+        });
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(stands),
+            then_block: hit,
+            else_block: miss,
+        });
+        (hit, miss, join)
+    }
+
+    fn field_home(&self, class: &str, name: &str) -> Option<(String, by_ir::function::FieldDecl)> {
+        let mut current = class;
+        // bounded by the class count, the way every base walk here is: a chain that
+        // visits a class twice is a cycle, and the layouts never settle on one
+        for _ in 0..=self.bases.len() {
+            if let Some(held) = self
+                .layouts
+                .get(current)
+                .and_then(|fields| fields.iter().find(|field| field.name == name))
+            {
+                return Some((current.to_string(), held.clone()));
+            }
+            current = self.bases.get(current).map(String::as_str)?;
+        }
+        None
     }
 
     /// whether an instance whose type is `class` — or, where the receiver is not exact,
@@ -9468,6 +9802,8 @@ impl Lowering<'_, '_> {
                     class,
                     field: generators::STATE_FIELD.to_string(),
                     value: Value::Int(-1),
+                    moves: false,
+                    present: false,
                 });
                 // the frame is finished, and the value goes with the finish — which is
                 // how it reaches whatever was driving the iteration, and how `await`
@@ -9654,7 +9990,10 @@ impl Lowering<'_, '_> {
             Stmt::Raise(node) => self.raise_statement(node),
             Stmt::Expr(node) => {
                 // an expression statement is only worth lowering for its effect
-                self.expression(&node.value).map(|_| ())
+                let enclosing = self.unnarrowed.replace(node.value.range());
+                let lowered = self.expression(&node.value).map(|_| ());
+                self.unnarrowed = enclosing;
+                lowered
             }
             other => Err(Decline::new(format!(
                 "{} is not lowered yet",
@@ -9849,8 +10188,7 @@ impl Lowering<'_, '_> {
 
             self.builder.switch_to(body_block);
             if let Some(guard) = &case.guard {
-                let (cond, cond_ty) = self.expression(guard)?;
-                let cond = self.truthy(cond, &cond_ty);
+                let cond = self.condition(guard)?;
                 let guarded = self.builder.new_block();
                 self.builder.terminate(Terminator::Branch {
                     cond,
@@ -10266,9 +10604,25 @@ impl Lowering<'_, '_> {
                 // representation the field holds it in. an attribute the pattern names
                 // any other way still goes out through the lookup, where *absent* is an
                 // answer rather than an error
+                // an instance without the field does not match, the way python's lookup
+                // failing with `AttributeError` does not
                 let field_read = |lowering: &mut Self, index: usize| {
                     let receiver = held.clone()?;
                     let (class, field, rtype) = reads.get(index)?.clone()?;
+                    let has = lowering.builder.temp(RType::BIT);
+                    lowering.builder.push(Op::FieldIsSet {
+                        dest: has,
+                        receiver: receiver.clone(),
+                        class: class.clone(),
+                        field: field.clone(),
+                    });
+                    let present = lowering.builder.new_block();
+                    lowering.builder.terminate(Terminator::Branch {
+                        cond: Value::Register(has),
+                        then_block: present,
+                        else_block: unmatched,
+                    });
+                    lowering.builder.switch_to(present);
                     let dest = lowering.builder.temp(rtype.clone());
                     lowering.builder.push(Op::GetField {
                         dest,
@@ -10416,8 +10770,7 @@ impl Lowering<'_, '_> {
     }
 
     fn if_statement(&mut self, node: &ast::StmtIf) -> Lowered<()> {
-        let (cond, cond_ty) = self.expression(&node.test)?;
-        let cond = self.truthy(cond, &cond_ty);
+        let cond = self.condition(&node.test)?;
 
         let then_block = self.builder.new_block();
         let else_block = self.builder.new_block();
@@ -10448,8 +10801,7 @@ impl Lowering<'_, '_> {
                 }
                 // `elif:` — a fresh branch inside the else block
                 Some(test) => {
-                    let (cond, cond_ty) = self.expression(test)?;
-                    let cond = self.truthy(cond, &cond_ty);
+                    let cond = self.condition(test)?;
                     let elif_then = self.builder.new_block();
                     let elif_else = self.builder.new_block();
                     self.builder.terminate(Terminator::Branch {
@@ -10488,8 +10840,12 @@ impl Lowering<'_, '_> {
 
     fn while_statement(&mut self, node: &ast::StmtWhile) -> Lowered<()> {
         // `while i < len(A)` with a counting `i` and an `A` the body leaves alone puts
-        // every `A[i]` inside it in range, which is the one thing the checked read tests
-        let proven = counted_over(node);
+        // every `A[i]` inside it in range, which is the one thing the checked read tests.
+        // that is the builtin `len`'s answer: a name bound to something else is not
+        // asked here, and a `len` rebound at runtime refuses a buffer before the body
+        // can run — see [`Self::len_call`]
+        let proven = counted_over(node)
+            .filter(|_| !self.native_callees.contains("len") && !self.binds("len"));
         let header = self.builder.new_block();
         let body = self.builder.new_block();
         // the natural exit and the `break` exit are different blocks: `else` runs
@@ -10500,8 +10856,7 @@ impl Lowering<'_, '_> {
         self.builder.terminate(Terminator::Goto(header));
 
         self.builder.switch_to(header);
-        let (cond, cond_ty) = self.expression(&node.test)?;
-        let cond = self.truthy(cond, &cond_ty);
+        let cond = self.condition(&node.test)?;
         self.builder.terminate(Terminator::Branch {
             cond,
             then_block: body,
@@ -10581,26 +10936,38 @@ impl Lowering<'_, '_> {
     /// the stack stays intact because the *fall-through* path still has to run them
     /// too — an early exit is an extra path, not a replacement for the normal one
     fn unwind(&mut self, depth: usize) -> Lowered<()> {
-        let pending: Vec<Cleanup> = self.cleanups[depth..].iter().rev().cloned().collect();
-        for cleanup in pending {
-            match cleanup {
-                Cleanup::Finally(body) => self.block(&body)?,
-                Cleanup::Handled(handled) => self.builder.push(Op::PopHandled {
-                    value: Value::Register(handled),
-                }),
-                Cleanup::Context {
-                    manager,
-                    is_async,
-                    direct,
-                } => {
-                    let (manager, _) = self.read_place(&manager)?;
-                    let ignored = self.builder.temp(RType::BIT);
-                    if is_async {
-                        let none = self.widen_to_object(Value::None, &RType::NONE);
-                        self.await_exit(manager, none, ignored)?;
-                    } else {
-                        self.leave_context(manager, ignored, direct.as_deref());
-                    }
+        let end = self.cleanups.len();
+        for at in (depth..end).rev() {
+            let Some(cleanup) = self.cleanups.get(at).cloned() else {
+                continue;
+            };
+            self.unwound.push(at..end);
+            let ran = self.run_cleanup(cleanup);
+            self.unwound.pop();
+            ran?;
+        }
+        Ok(())
+    }
+
+    /// one cleanup of an early exit, the ones above it having already run
+    fn run_cleanup(&mut self, cleanup: Cleanup) -> Lowered<()> {
+        match cleanup {
+            Cleanup::Finally(body) => self.block(&body)?,
+            Cleanup::Handled { previous, .. } => self.builder.push(Op::PopHandled {
+                value: Value::Register(previous),
+            }),
+            Cleanup::Context {
+                manager,
+                is_async,
+                direct,
+            } => {
+                let (manager, _) = self.read_place(&manager)?;
+                let ignored = self.builder.temp(RType::BIT);
+                if is_async {
+                    let none = self.widen_to_object(Value::None, &RType::NONE);
+                    self.await_exit(manager, none, ignored)?;
+                } else {
+                    self.leave_context(manager, ignored, direct.as_deref());
                 }
             }
         }
@@ -10658,6 +11025,12 @@ impl Lowering<'_, '_> {
             class: class.to_string(),
             exact: false,
         };
+        // a manager held in its own class's register is already what the call takes
+        if let Value::Register(id) = &manager
+            && self.builder.register_type(*id) == Some(&ty)
+        {
+            return manager;
+        }
         let narrowed = self.builder.temp(ty.clone());
         self.builder.push(Op::Unbox {
             dest: narrowed,
@@ -10667,9 +11040,22 @@ impl Lowering<'_, '_> {
         Value::Register(narrowed)
     }
 
+    /// the manager as the object the protocol takes, whichever register holds it
+    fn manager_object(&mut self, manager: Value) -> Value {
+        let ty = match &manager {
+            Value::Register(id) => self.builder.register_type(*id).cloned(),
+            other => other.immediate_type(),
+        };
+        match ty {
+            Some(ty) => self.widen_to_object(manager, &ty),
+            None => manager,
+        }
+    }
+
     /// `__enter__`, reached directly where the class licenses it
     fn enter_context(&mut self, manager: Value, dest: RegisterId, direct: Option<&str>) {
         let Some(class) = direct else {
+            let manager = self.manager_object(manager);
             self.builder.push(Op::Enter { dest, manager });
             return;
         };
@@ -10681,6 +11067,7 @@ impl Lowering<'_, '_> {
             "__enter__",
             1,
         ) else {
+            let manager = self.manager_object(manager);
             self.builder.push(Op::Enter { dest, manager });
             return;
         };
@@ -10719,6 +11106,7 @@ impl Lowering<'_, '_> {
             )
         });
         let (Some(class), Some(owner)) = (direct, owner) else {
+            let manager = self.manager_object(manager);
             let no_exception = self.widen_to_object(Value::None, &RType::NONE);
             self.builder.push(Op::ExitContext {
                 dest,
@@ -10774,12 +11162,19 @@ impl Lowering<'_, '_> {
                     _ => None,
                 })
         };
-        let manager = self.widen_to_object(manager, &manager_ty);
         // the manager is read again on both exits, so it lives in a register of its
-        // own rather than being re-evaluated
+        // own rather than being re-evaluated. where both halves are reached directly
+        // that register is the class's own, so neither half narrows back to it — but
+        // inside a generator it is parked in a field every suspension goes through, and
+        // a field there is an `object`
+        let (manager, held_ty) = if direct.is_some() && self.generator.is_none() {
+            (manager, manager_ty.clone())
+        } else {
+            (self.widen_to_object(manager, &manager_ty), RType::OBJECT)
+        };
         let held = self
             .builder
-            .local(format!("$manager{}", self.contexts), RType::OBJECT);
+            .local(format!("$manager{}", self.contexts), held_ty);
         self.contexts += 1;
         self.builder.assign(held, manager);
         // inside a generator the manager outlives the frame: the body suspends and
@@ -10866,6 +11261,7 @@ impl Lowering<'_, '_> {
         // its own read: this block is reached after a suspension the other never
         // saw, and the register the normal exit used is stale by then
         let (raising, _) = self.read_place(&held)?;
+        let raising = self.manager_object(raising);
         // awaiting the exit suspends, and the reraise below still needs the
         // exception afterwards — so it goes into a field too
         let parked_exception = if node.is_async {
@@ -10873,21 +11269,58 @@ impl Lowering<'_, '_> {
         } else {
             None
         };
-        if node.is_async {
-            self.await_exit(raising, Value::Register(exception), suppressed)?;
+        // while `__exit__` decides, the block's exception is the one being handled:
+        // it is what `sys.exception()` answers inside `__exit__`, and what anything
+        // raised there chains onto. the exit gets a block of its own so that leaving
+        // it by raising puts the handled exception back first, as an `except` does
+        let handled = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::PushHandled {
+            dest: handled,
+            value: Value::Register(exception),
+        });
+        let deciding = self.builder.new_block();
+        let exit_raised = self.builder.new_block();
+        self.builder.terminate(Terminator::Goto(deciding));
+        self.builder.switch_to(deciding);
+        let outer = self.builder.set_error_target(Some(exit_raised));
+        self.cleanups.push(Cleanup::Handled {
+            previous: handled,
+            exception,
+        });
+        let decided = if node.is_async {
+            self.await_exit(raising, Value::Register(exception), suppressed)
         } else {
             self.builder.push(Op::ExitContext {
                 dest: suppressed,
                 manager: raising,
                 exception: Value::Register(exception),
             });
-        }
+            Ok(())
+        };
+        self.cleanups.pop();
+        decided?;
+        self.builder.push(Op::PopHandled {
+            value: Value::Register(handled),
+        });
         let reraise = self.builder.new_block();
         self.builder.terminate(Terminator::Branch {
             cond: Value::Register(suppressed),
             then_block: after,
             else_block: reraise,
         });
+        self.builder.set_error_target(outer);
+
+        // what `__exit__` raised leaves in place of the block's exception
+        self.builder.switch_to(exit_raised);
+        let pending = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::FetchException { dest: pending });
+        self.builder.push(Op::PopHandled {
+            value: Value::Register(handled),
+        });
+        self.builder.push(Op::Reraise {
+            value: Value::Register(pending),
+        });
+        self.builder.terminate(Terminator::Unreachable);
         self.builder.switch_to(reraise);
         let exception = match &parked_exception {
             Some(parked) => {
@@ -10968,6 +11401,23 @@ impl Lowering<'_, '_> {
         self.builder.switch_to(handler_entry);
         let exception = self.builder.temp(RType::OBJECT);
         self.builder.push(Op::FetchException { dest: exception });
+        // the exception is being *handled* from before any clause's class is evaluated,
+        // which is what an error raised by that evaluation chains onto and what anything
+        // it calls sees in `sys.exception()`. a raise inside the block — or inside
+        // anything it calls — chains onto it for the same reason
+        let handled = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::PushHandled {
+            dest: handled,
+            value: Value::Register(exception),
+        });
+        // the clauses start in a block of their own, whose error edge leaves with the
+        // exception handled already
+        let clauses = self.builder.new_block();
+        self.builder.terminate(Terminator::Goto(clauses));
+        self.builder.switch_to(clauses);
+        // what evaluating a clause's class raised leaves in place of the exception, once
+        // the handled exception is put back and `finally` has run
+        let mut class_raised: Option<BlockId> = None;
 
         for handler in &node.handlers {
             let ast::ExceptHandler::ExceptHandler(handler) = handler;
@@ -10980,8 +11430,18 @@ impl Lowering<'_, '_> {
                 Some(class) => {
                     // an ordinary expression, so a user-defined class, a tuple of
                     // them and a *shadowed* builtin all take one path
-                    let (value, ty) = self.expression(class)?;
-                    let class = self.widen_to_object(value, &ty);
+                    let raised = *class_raised.get_or_insert_with(|| self.builder.new_block());
+                    let outer = self.builder.set_error_target(Some(raised));
+                    let class = self
+                        .expression(class)
+                        .map(|(value, ty)| self.widen_to_object(value, &ty));
+                    let class = match class {
+                        Ok(class) => class,
+                        Err(decline) => {
+                            self.builder.set_error_target(outer);
+                            return Err(decline);
+                        }
+                    };
                     let test = self.builder.temp(RType::BIT);
                     self.builder.push(Op::ExceptionMatches {
                         dest: test,
@@ -10993,6 +11453,7 @@ impl Lowering<'_, '_> {
                         then_block: matched,
                         else_block: next,
                     });
+                    self.builder.set_error_target(outer);
                 }
             }
 
@@ -11001,13 +11462,6 @@ impl Lowering<'_, '_> {
                 let target = self.binding(bound.as_str(), &RType::OBJECT);
                 self.write_place(&target, Value::Register(exception), &RType::OBJECT)?;
             }
-            // from here the exception is being *handled*, which is what makes a raise
-            // inside the block — or inside anything it calls — chain onto it
-            let handled = self.builder.temp(RType::OBJECT);
-            self.builder.push(Op::PushHandled {
-                dest: handled,
-                value: Value::Register(exception),
-            });
 
             // the body gets its own block for the same reason the `try` body does,
             // and its own error target so leaving by raising still unwinds
@@ -11023,7 +11477,10 @@ impl Lowering<'_, '_> {
                 self.cleanups
                     .push(Cleanup::Finally(node.finalbody.to_vec()));
             }
-            self.cleanups.push(Cleanup::Handled(handled));
+            self.cleanups.push(Cleanup::Handled {
+                previous: handled,
+                exception,
+            });
             self.handling.push(exception);
             let body = self.block(&handler.body);
             self.handling.pop();
@@ -11066,12 +11523,30 @@ impl Lowering<'_, '_> {
             self.builder.switch_to(next);
         }
 
-        // nothing matched: run `finally`, then let the exception continue
+        // nothing matched: put the handled exception back, run `finally`, then let the
+        // exception continue
+        self.builder.push(Op::PopHandled {
+            value: Value::Register(handled),
+        });
         self.block(&node.finalbody)?;
         self.builder.push(Op::Reraise {
             value: Value::Register(exception),
         });
         self.builder.terminate(Terminator::Unreachable);
+
+        if let Some(class_raised) = class_raised {
+            self.builder.switch_to(class_raised);
+            let pending = self.builder.temp(RType::OBJECT);
+            self.builder.push(Op::FetchException { dest: pending });
+            self.builder.push(Op::PopHandled {
+                value: Value::Register(handled),
+            });
+            self.block(&node.finalbody)?;
+            self.builder.push(Op::Reraise {
+                value: Value::Register(pending),
+            });
+            self.builder.terminate(Terminator::Unreachable);
+        }
 
         self.builder.switch_to(after);
         if !after_reached {
@@ -11082,8 +11557,7 @@ impl Lowering<'_, '_> {
 
     /// `assert cond` / `assert cond, "message"`
     fn assert_statement(&mut self, node: &ast::StmtAssert) -> Lowered<()> {
-        let (cond, cond_ty) = self.expression(&node.test)?;
-        let cond = self.truthy(cond, &cond_ty);
+        let cond = self.condition(&node.test)?;
         let fail = self.builder.new_block();
         let ok = self.builder.new_block();
         self.builder.terminate(Terminator::Branch {
@@ -11138,13 +11612,9 @@ impl Lowering<'_, '_> {
         {
             return Ok(());
         }
-        let (value, ty) = self.expression(exception)?;
-        let exception = self.widen_to_object(value, &ty);
+        let exception = self.unnarrowed_object(exception)?;
         let cause = match &node.cause {
-            Some(cause) => {
-                let (value, ty) = self.expression(cause)?;
-                Some(self.widen_to_object(value, &ty))
-            }
+            Some(cause) => Some(self.unnarrowed_object(cause)?),
             None => None,
         };
         self.builder.push(Op::RaiseObject { exception, cause });
@@ -11210,6 +11680,7 @@ impl Lowering<'_, '_> {
                 Expr::Name(callee)
                     if callee.id.as_str() == "range"
                         && !self.native_callees.contains("range")
+                        && !self.binds("range")
                         && call.arguments.keywords.is_empty() =>
                 {
                     Some(call)
@@ -11275,43 +11746,92 @@ impl Lowering<'_, '_> {
             return self.for_over_iterable(node);
         };
 
+        // python reads the name before the bounds, and calls whatever it read
+        let (callee, genuine) = self.resolve_builtin("range", Wanted::Always);
         // the bounds come first, because whether this is a counting loop at all
         // depends on their representations — and they are evaluated in this order
         // either way, so nothing is computed twice
-        let (start_value, start_ty) = match start {
-            None => (Value::Int(0), RType::INT),
-            Some(expr) => self.expression(expr)?,
+        let start = match start {
+            None => None,
+            Some(expr) => Some(self.expression(expr)?),
         };
         let (stop_value, stop_ty) = self.expression(stop)?;
+        // the arguments as written, for the call python makes of whatever `range` is
+        let written = |lowering: &mut Self| {
+            let mut args = Vec::with_capacity(3);
+            if let Some((value, ty)) = &start {
+                args.push(lowering.widen_to_object(value.clone(), ty));
+            }
+            args.push(lowering.widen_to_object(stop_value.clone(), &stop_ty));
+            if step.is_some() {
+                args.push(lowering.widen_to_object(Value::Int(step_value), &RType::INT));
+            }
+            args
+        };
+        let (start_value, start_ty) = start.clone().unwrap_or((Value::Int(0), RType::INT));
         if start_ty != RType::INT || stop_ty != RType::INT {
-            // the bounds are already evaluated, so the protocol path takes the
-            // `range` object built from them rather than the expression again
-            let start_value = self.widen_to_object(start_value, &start_ty);
-            let stop_value = self.widen_to_object(stop_value, &stop_ty);
-            let step_value = self.widen_to_object(Value::Int(step_value), &RType::INT);
+            // the bounds are already evaluated, so the protocol path takes the object
+            // the call builds from them rather than the expression again
+            let args = written(self);
             let iterable = self.builder.temp(RType::OBJECT);
-            self.builder.push(Op::CallPython {
+            self.builder.push(Op::CallValue {
                 dest: iterable,
-                callee: "range".to_string(),
-                args: vec![start_value, stop_value, step_value],
+                callee,
+                args,
             });
             return self.for_over_value(node, Value::Register(iterable), &RType::OBJECT);
         }
 
         let index = self.binding_register(target.id.as_str(), &RType::INT)?;
-        self.builder.assign(index, start_value);
-
         // the stop bound is read once into its own register, so a call or a
         // mutated local cannot change the trip count mid-loop
         let limit = self.builder.temp(RType::INT);
-        self.builder.assign(limit, stop_value);
+        let iterator = self.builder.temp(RType::OBJECT);
 
+        // one body serves both ways of stepping: counting while `range` is the builtin,
+        // and the iteration protocol over what the call answered otherwise
+        let counting = self.builder.new_block();
+        let protocol = self.builder.new_block();
         let header = self.builder.new_block();
+        let next = self.builder.new_block();
+        let bind = self.builder.new_block();
         let body = self.builder.new_block();
         let step_block = self.builder.new_block();
+        let count = self.builder.new_block();
         let natural_exit = self.builder.new_block();
         let after = self.builder.new_block();
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(genuine),
+            then_block: counting,
+            else_block: protocol,
+        });
+
+        // each way writes what only the other reads as well, because nothing that checks
+        // the function can see the two never cross
+        self.builder.switch_to(counting);
+        self.builder.assign(index, start_value);
+        self.builder.assign(limit, stop_value.clone());
+        self.builder.push(Op::Box {
+            dest: iterator,
+            src: Value::None,
+        });
         self.builder.terminate(Terminator::Goto(header));
+
+        self.builder.switch_to(protocol);
+        self.builder.assign(limit, Value::Int(0));
+        let args = written(self);
+        let iterable = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::CallValue {
+            dest: iterable,
+            callee,
+            args,
+        });
+        self.builder.push(Op::GetIter {
+            dest: iterator,
+            src: Value::Register(iterable),
+            cursor: None,
+        });
+        self.builder.terminate(Terminator::Goto(next));
 
         self.builder.switch_to(header);
         let cond = self.builder.temp(RType::BIT);
@@ -11327,6 +11847,34 @@ impl Lowering<'_, '_> {
             else_block: natural_exit,
         });
 
+        self.builder.switch_to(next);
+        let raw = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::IterNext {
+            dest: raw,
+            iter: Value::Register(iterator),
+            cursor: None,
+        });
+        let exhausted = self.builder.temp(RType::BIT);
+        self.builder.push(Op::IsNull {
+            dest: exhausted,
+            src: Value::Register(raw),
+        });
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(exhausted),
+            then_block: natural_exit,
+            else_block: bind,
+        });
+
+        self.builder.switch_to(bind);
+        let item = self.builder.temp(RType::INT);
+        self.builder.push(Op::Unbox {
+            dest: item,
+            src: Value::Register(raw),
+            to: RType::INT,
+        });
+        self.builder.assign(index, Value::Register(item));
+        self.builder.terminate(Terminator::Goto(body));
+
         self.builder.switch_to(body);
         self.for_pattern(node)?;
         // `continue` jumps to the step, not the header, or the index never moves
@@ -11337,6 +11885,13 @@ impl Lowering<'_, '_> {
         self.builder.terminate(Terminator::Goto(step_block));
 
         self.builder.switch_to(step_block);
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(genuine),
+            then_block: count,
+            else_block: next,
+        });
+
+        self.builder.switch_to(count);
         self.builder.push(Op::IntBinary {
             dest: index,
             op: BinOp::Add,
@@ -11678,6 +12233,22 @@ impl Lowering<'_, '_> {
     ///
     /// a register wins over a field: a generator's *parameters* are registers even
     /// where its locals are fields, and a closure's own parameters shadow a capture
+    /// whether `class`'s field `name` is a shared cell, which may be unset
+    fn field_is_cell(&self, class: &str, name: &str) -> bool {
+        self.layouts
+            .get(class)
+            .and_then(|fields| fields.iter().find(|field| field.name == name))
+            .is_some_and(|field| field.cell)
+    }
+
+    /// the representation `class` holds its field `name` in, as the layout says
+    fn field_type(&self, class: &str, name: &str) -> RType {
+        self.layouts
+            .get(class)
+            .and_then(|fields| fields.iter().find(|field| field.name == name))
+            .map_or(RType::OBJECT, |field| field.ty.clone())
+    }
+
     fn place(&self, name: &str) -> Option<Place> {
         // asked first, and it has to be: a `global` declaration says this name is not
         // this frame's to bind, so nothing else may answer for it
@@ -11700,6 +12271,7 @@ impl Lowering<'_, '_> {
                 class: owned.class.clone(),
                 name: name.to_string(),
                 free: owned.free,
+                ty: self.field_type(&owned.class, name),
             });
         }
         let captured = self.captures.as_ref()?;
@@ -11709,6 +12281,7 @@ impl Lowering<'_, '_> {
                 class: captured.class.clone(),
                 name: name.to_string(),
                 free: captured.free,
+                ty: self.field_type(&captured.class, name),
             });
         }
         if !captured.names.contains(name) {
@@ -12051,8 +12624,9 @@ impl Lowering<'_, '_> {
                 class,
                 name,
                 free,
+                ty,
             } => {
-                let dest = self.builder.temp(RType::OBJECT);
+                let dest = self.builder.temp(ty.clone());
                 self.builder.push(Op::GetCell {
                     dest,
                     receiver: Value::Register(*receiver),
@@ -12060,16 +12634,17 @@ impl Lowering<'_, '_> {
                     field: name.clone(),
                     free: *free,
                 });
-                Ok((Value::Register(dest), RType::OBJECT))
+                Ok((Value::Register(dest), ty.clone()))
             }
             Place::Chained { path, name, ty } => {
                 let (path, name, ty) = (path.clone(), name.clone(), ty.clone());
                 let outer = path.last().cloned().unwrap_or_default();
                 let receiver = self.enclosing_environment(&path);
                 let dest = self.builder.temp(ty.clone());
-                // an `object` field up the chain may be a cell, and the checked read is
-                // sound either way — a field that is never unset simply never fails it
-                if ty == RType::OBJECT {
+                // a cell up the chain is read with the test for unset, and so is any
+                // `object` field there, which is sound either way — a field that is never
+                // unset simply never fails it
+                if ty == RType::OBJECT || self.field_is_cell(&outer, &name) {
                     self.builder.push(Op::GetCell {
                         dest,
                         receiver: Value::Register(receiver),
@@ -12118,22 +12693,26 @@ impl Lowering<'_, '_> {
                     class: class.clone(),
                     field: name.clone(),
                     value,
+                    moves: false,
+                    present: false,
                 });
                 Ok(())
             }
-            // a cell holds an `object`, always — see [`Place::Cell`]
             Place::Cell {
                 receiver,
                 class,
                 name,
+                ty: cell_ty,
                 ..
             } => {
-                let value = self.coerce(value, ty, &RType::OBJECT)?;
+                let value = self.coerce(value, ty, cell_ty)?;
                 self.builder.push(Op::SetField {
                     receiver: Value::Register(*receiver),
                     class: class.clone(),
                     field: name.clone(),
                     value,
+                    moves: false,
+                    present: false,
                 });
                 Ok(())
             }
@@ -12151,6 +12730,8 @@ impl Lowering<'_, '_> {
                     class: outer,
                     field: name,
                     value,
+                    moves: false,
+                    present: false,
                 });
                 Ok(())
             }
@@ -12239,18 +12820,9 @@ impl Lowering<'_, '_> {
                 name,
             } => {
                 if let RType::Instance { class, .. } = receiver_ty
-                    && let Some(fields) = self.layouts.get(class)
-                    && let Some(held) = fields.iter().find(|field| field.name == *name)
+                    && let Some((owner, held)) = self.field_home(class, name)
                 {
-                    let (class, field_ty) = (class.clone(), held.ty.clone());
-                    let dest = self.builder.temp(field_ty.clone());
-                    self.builder.push(Op::GetField {
-                        dest,
-                        receiver: receiver.clone(),
-                        class,
-                        field: name.clone(),
-                    });
-                    return Ok((Value::Register(dest), field_ty));
+                    return Ok(self.field_read(receiver.clone(), receiver_ty, class, owner, &held));
                 }
                 // a `@property` whose getter this module lowered is called outright. the
                 // protocol would have arrived at this same body, by way of a lookup on
@@ -12334,18 +12906,9 @@ impl Lowering<'_, '_> {
                 name,
             } => {
                 if let RType::Instance { class, .. } = receiver_ty
-                    && let Some(fields) = self.layouts.get(class)
-                    && let Some(held) = fields.iter().find(|field| field.name == *name)
+                    && let Some((owner, held)) = self.field_home(class, name)
                 {
-                    let (class, field_ty) = (class.clone(), held.ty.clone());
-                    let value = self.coerce(value, ty, &field_ty)?;
-                    self.builder.push(Op::SetField {
-                        receiver: receiver.clone(),
-                        class,
-                        field: name.clone(),
-                        value,
-                    });
-                    return Ok(());
+                    return self.field_write(receiver, receiver_ty, class, owner, &held, value, ty);
                 }
                 // the setter half, called outright, for the reason the read above gives.
                 // a property with no setter is deliberately not here: it falls through to
@@ -12948,6 +13511,8 @@ impl Lowering<'_, '_> {
             class: class.clone(),
             field: generators::KIND_FIELD.to_string(),
             value: Value::Int(kind as i64),
+            moves: false,
+            present: false,
         });
         let state = i64::try_from(generator.resumptions.len()).unwrap_or(i64::MAX - 1) + 1;
         self.builder.push(Op::SetField {
@@ -12955,11 +13520,52 @@ impl Lowering<'_, '_> {
             class: class.clone(),
             field: generators::STATE_FIELD.to_string(),
             value: Value::Int(state),
+            moves: false,
+            present: false,
         });
+        // python hands a suspended frame's handled exception back to its caller and
+        // takes it again on resumption, so each side sees only its own. the frame may
+        // be resumed from somewhere else entirely, which is why what each block
+        // displaced is asked again rather than remembered
+        let handled: Vec<(RegisterId, RegisterId)> = self
+            .cleanups
+            .iter()
+            .enumerate()
+            .filter(|(at, _)| !self.unwound.iter().any(|run| run.contains(at)))
+            .filter_map(|(_, cleanup)| match cleanup {
+                Cleanup::Handled {
+                    previous,
+                    exception,
+                } => Some((*previous, *exception)),
+                _ => None,
+            })
+            .collect();
+        if let Some((outermost, _)) = handled.first() {
+            self.builder.push(Op::PopHandled {
+                value: Value::Register(*outermost),
+            });
+        }
         let suspend_at = self.builder.current_block();
         self.builder.terminate(Terminator::Return(value));
         let resume_at = self.builder.new_block();
         self.builder.switch_to(resume_at);
+        // before the `throw` below is raised, so an exception thrown in at the
+        // suspension chains onto the frame's own. in a block with no error edge: a
+        // handler is entered from before its block's first write, and it reads what
+        // these write
+        if !handled.is_empty() {
+            let outer = self.builder.set_error_target(None);
+            for (previous, exception) in handled {
+                self.builder.push(Op::PushHandled {
+                    dest: previous,
+                    value: Value::Register(exception),
+                });
+            }
+            let resumed = self.builder.new_block();
+            self.builder.terminate(Terminator::Goto(resumed));
+            self.builder.set_error_target(outer);
+            self.builder.switch_to(resumed);
+        }
         if let Some(generator) = &mut self.generator {
             generator.resumptions.push(generators::Resumption {
                 state,
@@ -13017,11 +13623,16 @@ impl Lowering<'_, '_> {
             class,
             field: generators::THROWN_FIELD.to_string(),
             value: cleared,
+            moves: false,
+            present: false,
         });
         // the block's error target is the enclosing handler, which is exactly where a
-        // `throw` at a suspension has to land
-        self.builder.push(Op::Reraise {
-            value: Value::Register(thrown),
+        // `throw` at a suspension has to land. it is *raised* rather than put back:
+        // python chains an exception thrown into a frame onto what that frame is
+        // handling
+        self.builder.push(Op::RaiseObject {
+            exception: Value::Register(thrown),
+            cause: None,
         });
         self.builder.terminate(Terminator::Unreachable);
 
@@ -13057,6 +13668,8 @@ impl Lowering<'_, '_> {
             class: class.clone(),
             field: field.clone(),
             value: Value::Register(iterator),
+            moves: false,
+            present: false,
         });
         Ok(Place::Field {
             receiver: RegisterId(0),
@@ -13173,6 +13786,8 @@ impl Lowering<'_, '_> {
                     parameter.parameter.name.as_str(),
                 ),
                 value,
+                moves: false,
+                present: false,
             });
         }
         Ok(())
@@ -13457,11 +14072,32 @@ impl Lowering<'_, '_> {
         map_type_with(self.db, env, ty, self.layouts)
     }
 
+    /// the representation lowering `expr` as a value answers in
+    ///
+    /// the checker's type, except for a comparison: that answers with the object its
+    /// method returned wherever the operands could have a method of their own, whatever
+    /// the checker was told the method returns
+    fn representation_of(&self, expr: &Expr) -> Lowered<RType> {
+        if let Expr::Compare(node) = expr {
+            let mut left = self.peek_type(&node.left)?;
+            let mut every_bool = true;
+            for (op, right) in node.ops.iter().zip(node.comparators.iter()) {
+                let right = self.peek_type(right)?;
+                every_bool &= Self::compares_to_a_bool(*op, &left, &right);
+                left = right;
+            }
+            if !every_bool {
+                return Ok(RType::OBJECT);
+            }
+        }
+        self.peek_type(expr)
+    }
+
     /// the representation that holds every one of `exprs`
     fn unified_type(&self, exprs: &[&Expr]) -> Lowered<RType> {
         let mut found: Option<RType> = None;
         for expr in exprs {
-            let ty = self.peek_type(expr)?;
+            let ty = self.representation_of(expr)?;
             found = Some(match found {
                 Some(existing) if existing != ty => RType::OBJECT,
                 _ => ty,
@@ -13508,8 +14144,7 @@ impl Lowering<'_, '_> {
         let result_ty = self.unified_type(&[&node.body, &node.orelse])?;
         let result = self.builder.temp(result_ty.clone());
 
-        let (cond, cond_ty) = self.expression(&node.test)?;
-        let cond = self.truthy(cond, &cond_ty);
+        let cond = self.condition(&node.test)?;
         let then_block = self.builder.new_block();
         let else_block = self.builder.new_block();
         let join = self.builder.new_block();
@@ -13925,6 +14560,7 @@ impl Lowering<'_, '_> {
                     lhs,
                     rhs,
                     consumes_lhs: false,
+                    concatenation: Concatenation::Operator(mutation),
                 });
             }
             (RType::Primitive(Primitive::Float), RType::Primitive(Primitive::Float))
@@ -14014,6 +14650,11 @@ impl Lowering<'_, '_> {
         Value::Register(dest)
     }
 
+    /// a comparison whose answer is used as a value
+    ///
+    /// that answer is whatever the comparison method returned, which only an `int`, a
+    /// `float` or a `str` pair — and `is` and `in`, which are no method's — can be relied
+    /// on to make a `bool`. every other pair answers with the object
     fn compare(&mut self, node: &ast::ExprCompare) -> Lowered<(Value, RType)> {
         if node.ops.len() > 1 {
             return self.chained_compare(node);
@@ -14023,9 +14664,81 @@ impl Lowering<'_, '_> {
         };
         let left_value = self.expression(&node.left)?;
         let right_value = self.expression(right)?;
-        let bit =
-            self.emit_compare_of(*op, left_value, right_value, Some(&node.left), Some(right))?;
-        Ok((bit, RType::BIT))
+        self.compare_value_of(*op, left_value, right_value, Some(&node.left), Some(right))
+    }
+
+    /// a condition: the truth of a value, which for a comparison is asked of the
+    /// comparison directly rather than of an object built to hold its answer
+    fn condition(&mut self, expr: &Expr) -> Lowered<Value> {
+        if let Expr::Compare(node) = expr {
+            if node.ops.len() > 1 {
+                return self.chained_condition(node);
+            }
+            if let ([op], [right]) = (node.ops.as_ref(), node.comparators.as_ref()) {
+                let left_value = self.expression(&node.left)?;
+                let right_value = self.expression(right)?;
+                return self.emit_compare_of(
+                    *op,
+                    left_value,
+                    right_value,
+                    Some(&node.left),
+                    Some(right),
+                );
+            }
+        }
+        let (value, ty) = self.expression(expr)?;
+        Ok(self.truthy(value, &ty))
+    }
+
+    /// whether a comparison of this pair answers with a `bool` whatever the operands are
+    fn compares_to_a_bool(op: AstCmpOp, lhs_ty: &RType, rhs_ty: &RType) -> bool {
+        matches!(
+            op,
+            AstCmpOp::In | AstCmpOp::NotIn | AstCmpOp::Is | AstCmpOp::IsNot
+        ) || matches!(
+            (lhs_ty, rhs_ty),
+            (
+                RType::Primitive(Primitive::Int),
+                RType::Primitive(Primitive::Int)
+            ) | (
+                RType::Primitive(Primitive::Float),
+                RType::Primitive(Primitive::Float)
+            ) | (
+                RType::Primitive(Primitive::Str),
+                RType::Primitive(Primitive::Str)
+            )
+        )
+    }
+
+    /// one comparison as a value — see [`Self::compare`]
+    fn compare_value_of(
+        &mut self,
+        op: AstCmpOp,
+        (lhs, lhs_ty): (Value, RType),
+        (rhs, rhs_ty): (Value, RType),
+        left: Option<&Expr>,
+        right: Option<&Expr>,
+    ) -> Lowered<(Value, RType)> {
+        if Self::compares_to_a_bool(op, &lhs_ty, &rhs_ty) {
+            let bit = self.emit_compare_of(op, (lhs, lhs_ty), (rhs, rhs_ty), left, right)?;
+            return Ok((bit, RType::BIT));
+        }
+        // the class's own comparison, where the pair licenses reaching it directly and it
+        // is declared to answer a `bool`: its answer is that value as it stands
+        if let Some(call) = comparison_dunder(op).and_then(|name| {
+            self.operator_dunder(&lhs_ty, &rhs_ty, name).filter(|call| {
+                matches!(call.ret, RType::Primitive(Primitive::Bool | Primitive::Bit))
+            })
+        }) {
+            return self.direct_operator(call, (lhs, &lhs_ty), (rhs, &rhs_ty));
+        }
+        let op = compare_op(op)?;
+        let lhs = self.widen_to_object(lhs, &lhs_ty);
+        let rhs = self.widen_to_object(rhs, &rhs_ty);
+        let dest = self.builder.temp(RType::OBJECT);
+        self.builder
+            .push(Op::ObjectRichCompare { dest, op, lhs, rhs });
+        Ok((Value::Register(dest), RType::OBJECT))
     }
 
     /// one comparison, choosing the representation from the operand pair
@@ -14082,8 +14795,8 @@ impl Lowering<'_, '_> {
         }
         // the class's own comparison, where the pair licenses reaching it directly. a
         // body answering anything but a `bool` is left to the protocol: the value this
-        // produces is a bit, and collapsing something else to one is a decision
-        // `PyObject_RichCompareBool` is already making on its own terms
+        // produces is a bit, and collapsing something else to one is a decision the
+        // protocol path already makes for itself, with `PyObject_IsTrue`
         if let Some(call) = comparison_dunder(op).and_then(|name| {
             self.operator_dunder(&lhs_ty, &rhs_ty, name).filter(|call| {
                 matches!(call.ret, RType::Primitive(Primitive::Bool | Primitive::Bit))
@@ -14218,7 +14931,14 @@ impl Lowering<'_, '_> {
                 class: class.clone(),
                 method: name.clone(),
             });
-            let dest = self.builder.temp(ret.clone());
+            // what the two arms join in: the body's own answer, unless the statement
+            // throws it away, when the shadow's answer is not asked to be one
+            let site = if self.leaves_unnarrowed(&Expr::Call(node.clone())) {
+                RType::OBJECT
+            } else {
+                ret.clone()
+            };
+            let dest = self.builder.temp(site.clone());
             let stored = self.builder.new_block();
             let compiled = self.builder.new_block();
             let join = self.builder.new_block();
@@ -14230,12 +14950,21 @@ impl Lowering<'_, '_> {
 
             self.builder.switch_to(compiled);
             self.licence_holds(&receiver, &class, &name, LicenceKind::Method);
+            let answered = if site == ret {
+                dest
+            } else {
+                self.builder.temp(ret.clone())
+            };
             self.builder.push(Op::CallNative {
-                dest: Some(dest),
+                dest: Some(answered),
                 owner: Some(owner),
                 callee: name.clone(),
                 args: direct,
             });
+            if answered != dest {
+                let widened = self.widen_to_object(Value::Register(answered), &ret);
+                self.builder.assign(dest, widened);
+            }
             self.builder.terminate(Terminator::Goto(join));
 
             self.builder.switch_to(stored);
@@ -14251,12 +14980,12 @@ impl Lowering<'_, '_> {
                 name,
                 args: boxed,
             });
-            let narrowed = self.coerce(Value::Register(answer), &RType::OBJECT, &ret)?;
+            let narrowed = self.coerce(Value::Register(answer), &RType::OBJECT, &site)?;
             self.builder.assign(dest, narrowed);
             self.builder.terminate(Terminator::Goto(join));
 
             self.builder.switch_to(join);
-            return Ok((Value::Register(dest), ret));
+            return Ok((Value::Register(dest), site));
         }
 
         // an override reached through a base-typed name — `shapes[i].area()`, where the
@@ -14558,14 +15287,31 @@ impl Lowering<'_, '_> {
     /// the representation a call site hands on, whatever the callee turns out to be
     ///
     /// the checker's type for the call, where an object can be narrowed to it, and
-    /// `object` otherwise
+    /// `object` otherwise — or where nothing is asked of the value, see [`Self::unnarrowed`]
     fn call_result_type(&mut self, call: &Expr) -> Lowered<RType> {
+        if self.leaves_unnarrowed(call) {
+            return Ok(RType::OBJECT);
+        }
         let declared = self.peek_type(call)?;
         Ok(if self.narrowable_here(&declared) {
             declared
         } else {
             RType::OBJECT
         })
+    }
+
+    /// whether `expr` is a value nothing is asked of — see [`Self::unnarrowed`]
+    fn leaves_unnarrowed(&self, expr: &Expr) -> bool {
+        self.unnarrowed == Some(expr.range())
+    }
+
+    /// `expr` as an object, with nothing asked of what it answers
+    fn unnarrowed_object(&mut self, expr: &Expr) -> Lowered<Value> {
+        let enclosing = self.unnarrowed.replace(expr.range());
+        let lowered = self.expression(expr);
+        self.unnarrowed = enclosing;
+        let (value, ty) = lowered?;
+        Ok(self.widen_to_object(value, &ty))
     }
 
     /// narrow a boxed call result to the representation the checker says it has
@@ -14625,7 +15371,7 @@ impl Lowering<'_, '_> {
         let callee = self.callable(&node.func)?;
         let (args, args_ty) = self.display(&node.arguments.args, Display::Tuple)?;
         let args = self.widen_to_object(args, &args_ty);
-        let kwargs = self.keyword_dict(&node.arguments.keywords)?;
+        let kwargs = self.keyword_dict(&node.arguments.keywords, &callee)?;
         let dest = self.builder.temp(RType::OBJECT);
         self.builder.push(Op::CallUnpacked {
             dest,
@@ -14656,7 +15402,14 @@ impl Lowering<'_, '_> {
     }
 
     /// a call's keywords as a dict, with `**` merging another mapping in
-    fn keyword_dict(&mut self, keywords: &[ast::Keyword]) -> Lowered<Option<Value>> {
+    ///
+    /// every merge is the call's own rather than a display's, because a call refuses a
+    /// keyword it is given twice — whether the first came from a name or an earlier `**`
+    fn keyword_dict(
+        &mut self,
+        keywords: &[ast::Keyword],
+        callee: &Value,
+    ) -> Lowered<Option<Value>> {
         if keywords.is_empty() {
             return Ok(None);
         }
@@ -14681,12 +15434,12 @@ impl Lowering<'_, '_> {
                         pairs: std::mem::take(&mut pairs),
                     });
                     if started {
-                        self.extend(accumulator, Value::Register(target), Display::Dict);
+                        self.merge_keywords(accumulator, Value::Register(target), callee);
                     }
                     started = true;
                     let (value, ty) = self.expression(&keyword.value)?;
                     let source = self.widen_to_object(value, &ty);
-                    self.extend(accumulator, source, Display::Dict);
+                    self.merge_keywords(accumulator, source, callee);
                 }
             }
         }
@@ -14694,7 +15447,7 @@ impl Lowering<'_, '_> {
             if !pairs.is_empty() {
                 let tail = self.builder.temp(RType::OBJECT);
                 self.builder.push(Op::BuildDict { dest: tail, pairs });
-                self.extend(accumulator, Value::Register(tail), Display::Dict);
+                self.merge_keywords(accumulator, Value::Register(tail), callee);
             }
         } else {
             self.builder.push(Op::BuildDict {
@@ -14703,6 +15456,16 @@ impl Lowering<'_, '_> {
             });
         }
         Ok(Some(Value::Register(accumulator)))
+    }
+
+    fn merge_keywords(&mut self, container: RegisterId, source: Value, callee: &Value) {
+        let status = self.builder.temp(RType::BIT);
+        self.builder.push(Op::MergeKeywords {
+            dest: status,
+            container: Value::Register(container),
+            source,
+            callee: callee.clone(),
+        });
     }
 
     /// a comprehension, desugared to an empty container plus a loop that fills it
@@ -14840,8 +15603,7 @@ impl Lowering<'_, '_> {
 
         // each `if` guard skips straight back to this loop's header
         for condition in &generator.ifs {
-            let (cond, cond_ty) = self.expression(condition)?;
-            let cond = self.truthy(cond, &cond_ty);
+            let cond = self.condition(condition)?;
             let kept = self.builder.new_block();
             self.builder.terminate(Terminator::Branch {
                 cond,
@@ -14925,11 +15687,11 @@ impl Lowering<'_, '_> {
         // driving the iteration protocol here cost a `range` object, an iterator, a
         // `next` and an unbox *per element* — for a loop whose bounds are right there
         if let Expr::Name(name) = target
-            && let Some(count) = self.counting_range(&generator.iter)?
+            && let Some(range) = self.counting_range(&generator.iter)?
         {
             return self.comprehension_counted(
                 name,
-                count,
+                range,
                 generator,
                 rest,
                 kind,
@@ -15003,8 +15765,7 @@ impl Lowering<'_, '_> {
 
         // each `if` guard skips straight back to this loop's header
         for condition in &generator.ifs {
-            let (cond, cond_ty) = self.expression(condition)?;
-            let cond = self.truthy(cond, &cond_ty);
+            let cond = self.condition(condition)?;
             let kept = self.builder.new_block();
             self.builder.terminate(Terminator::Branch {
                 cond,
@@ -15021,9 +15782,9 @@ impl Lowering<'_, '_> {
         Ok(())
     }
 
-    /// the `(start, stop)` of a `range` call this frame can count over, when the
-    /// expression is one — a computed step is left to the protocol
-    fn counting_range(&mut self, iter: &Expr) -> Lowered<Option<(Value, Value)>> {
+    /// a `range` call this frame can count over, when the expression is one — a
+    /// computed step is left to the protocol
+    fn counting_range(&mut self, iter: &Expr) -> Lowered<Option<CountedRange>> {
         let Expr::Call(call) = iter else {
             return Ok(None);
         };
@@ -15042,21 +15803,23 @@ impl Lowering<'_, '_> {
             [start, stop] => (Some(start), stop),
             _ => return Ok(None),
         };
-        let stop = {
-            let (value, ty) = self.expression(stop)?;
-            self.coerce(value, &ty, &RType::INT)?
-        };
+        // python reads the name before the bounds, and calls whatever it read
+        let (callee, genuine) = self.resolve_builtin("range", Wanted::WhereRebound);
         let start = match start {
-            None => Value::Int(0),
-            Some(start) => {
-                let (value, ty) = self.expression(start)?;
-                self.coerce(value, &ty, &RType::INT)?
-            }
+            None => None,
+            Some(start) => Some(self.expression(start)?),
         };
-        Ok(Some((start, stop)))
+        let stop = self.expression(stop)?;
+        Ok(Some(CountedRange {
+            callee,
+            genuine,
+            start,
+            stop,
+        }))
     }
 
-    /// a comprehension clause over `range`, as a counting loop
+    /// a comprehension clause over `range`, as a counting loop while `range` is the
+    /// builtin and the iteration protocol over what the call answered otherwise
     #[expect(
         clippy::too_many_arguments,
         reason = "one clause of a comprehension needs all of its context"
@@ -15064,26 +15827,76 @@ impl Lowering<'_, '_> {
     fn comprehension_counted(
         &mut self,
         name: &ast::ExprName,
-        (start, stop): (Value, Value),
+        range: CountedRange,
         generator: &ast::Comprehension,
         rest: &[ast::Comprehension],
         kind: &Comprehension<'_>,
         accumulator: RegisterId,
         accumulator_ty: &RType,
     ) -> Lowered<()> {
+        let CountedRange {
+            callee,
+            genuine,
+            start,
+            stop,
+        } = range;
         let counter = self.binding_register(name.id.as_str(), &RType::INT)?;
-        self.store(counter, start, &RType::INT)?;
         let bound = self
             .builder
             .local(format!("$stop{}", self.contexts), RType::INT);
         self.contexts += 1;
-        self.store(bound, stop, &RType::INT)?;
+        let iterator = self.builder.temp(RType::OBJECT);
 
+        let counting = self.builder.new_block();
+        let protocol = self.builder.new_block();
         let header = self.builder.new_block();
+        let next = self.builder.new_block();
+        let bind = self.builder.new_block();
         let body = self.builder.new_block();
         let step = self.builder.new_block();
+        let count = self.builder.new_block();
         let exit = self.builder.new_block();
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(genuine),
+            then_block: counting,
+            else_block: protocol,
+        });
+
+        self.builder.switch_to(counting);
+        let first = match &start {
+            None => Value::Int(0),
+            Some((value, ty)) => self.coerce(value.clone(), ty, &RType::INT)?,
+        };
+        let last = self.coerce(stop.0.clone(), &stop.1, &RType::INT)?;
+        self.store(counter, first, &RType::INT)?;
+        self.store(bound, last, &RType::INT)?;
+        // each way writes what only the other reads as well, because nothing that checks
+        // the function can see the two never cross
+        self.builder.push(Op::Box {
+            dest: iterator,
+            src: Value::None,
+        });
         self.builder.terminate(Terminator::Goto(header));
+
+        self.builder.switch_to(protocol);
+        self.store(bound, Value::Int(0), &RType::INT)?;
+        let mut args = Vec::with_capacity(2);
+        if let Some((value, ty)) = start {
+            args.push(self.widen_to_object(value, &ty));
+        }
+        args.push(self.widen_to_object(stop.0, &stop.1));
+        let iterable = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::CallValue {
+            dest: iterable,
+            callee,
+            args,
+        });
+        self.builder.push(Op::GetIter {
+            dest: iterator,
+            src: Value::Register(iterable),
+            cursor: None,
+        });
+        self.builder.terminate(Terminator::Goto(next));
 
         self.builder.switch_to(header);
         let more = self.builder.temp(RType::BIT);
@@ -15099,11 +15912,37 @@ impl Lowering<'_, '_> {
             else_block: exit,
         });
 
+        self.builder.switch_to(next);
+        let raw = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::IterNext {
+            dest: raw,
+            iter: Value::Register(iterator),
+            cursor: None,
+        });
+        let exhausted = self.builder.temp(RType::BIT);
+        self.builder.push(Op::IsNull {
+            dest: exhausted,
+            src: Value::Register(raw),
+        });
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(exhausted),
+            then_block: exit,
+            else_block: bind,
+        });
+
+        self.builder.switch_to(bind);
+        let item = self.builder.temp(RType::INT);
+        self.builder.push(Op::Unbox {
+            dest: item,
+            src: Value::Register(raw),
+            to: RType::INT,
+        });
+        self.store(counter, Value::Register(item), &RType::INT)?;
+        self.builder.terminate(Terminator::Goto(body));
+
         self.builder.switch_to(body);
-        let mut inner = body;
         for condition in &generator.ifs {
-            let (cond, cond_ty) = self.expression(condition)?;
-            let cond = self.truthy(cond, &cond_ty);
+            let cond = self.condition(condition)?;
             let kept = self.builder.new_block();
             self.builder.terminate(Terminator::Branch {
                 cond,
@@ -15111,13 +15950,18 @@ impl Lowering<'_, '_> {
                 else_block: step,
             });
             self.builder.switch_to(kept);
-            inner = kept;
         }
-        let _ = inner;
         self.comprehension_loop(rest, kind, accumulator, accumulator_ty)?;
         self.builder.terminate(Terminator::Goto(step));
 
         self.builder.switch_to(step);
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(genuine),
+            then_block: count,
+            else_block: next,
+        });
+
+        self.builder.switch_to(count);
         let stepped = self.builder.temp(RType::INT);
         self.builder.push(Op::IntBinary {
             dest: stepped,
@@ -15357,6 +16201,7 @@ impl Lowering<'_, '_> {
                         lhs: previous,
                         rhs: part,
                         consumes_lhs: false,
+                        concatenation: Concatenation::Join,
                     });
                     Value::Register(dest)
                 }
@@ -15428,6 +16273,7 @@ impl Lowering<'_, '_> {
                                 lhs: prefix,
                                 rhs: piece,
                                 consumes_lhs: false,
+                                concatenation: Concatenation::Join,
                             });
                             Value::Register(dest)
                         }
@@ -15465,6 +16311,7 @@ impl Lowering<'_, '_> {
             lhs: Value::Str(debug.as_str().to_string()),
             rhs: Value::Register(dest),
             consumes_lhs: false,
+            concatenation: Concatenation::Join,
         });
         Ok(Value::Register(joined))
     }
@@ -15495,18 +16342,10 @@ impl Lowering<'_, '_> {
         // one load at a compile-time offset, no hash lookup and no descriptor
         let name = self.attribute_name(&node.attr);
         if let RType::Instance { class, .. } = &receiver_ty
-            && let Some(fields) = self.layouts.get(class)
-            && let Some(held) = fields.iter().find(|field| field.name == name)
+            && let Some((owner, held)) = self.field_home(class, &name)
         {
-            let field_ty = held.ty.clone();
-            let dest = self.builder.temp(field_ty.clone());
-            self.builder.push(Op::GetField {
-                dest,
-                receiver,
-                class: class.clone(),
-                field: name,
-            });
-            return Ok((Value::Register(dest), field_ty));
+            let class = class.clone();
+            return Ok(self.field_read(receiver, &receiver_ty, &class, owner, &held));
         }
 
         // a `@property` this module lowered a getter for is called outright. the
@@ -15595,6 +16434,20 @@ impl Lowering<'_, '_> {
                 "a `super()` with no arguments needs a receiver this frame still holds",
             ));
         };
+        // python fills the two arguments in only for the builtin `super`, and calls
+        // anything else the name resolves to with none
+        let (callee, genuine) = self.resolve_builtin("super", Wanted::Always);
+        let dest = self.builder.temp(RType::OBJECT);
+        let filled = self.builder.new_block();
+        let bare = self.builder.new_block();
+        let join = self.builder.new_block();
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(genuine),
+            then_block: filled,
+            else_block: bare,
+        });
+
+        self.builder.switch_to(filled);
         let (receiver, receiver_ty) = self.read_place(&place)?;
         let receiver = self.widen_to_object(receiver, &receiver_ty);
         let class = self.builder.temp(RType::OBJECT);
@@ -15602,17 +16455,31 @@ impl Lowering<'_, '_> {
             dest: class,
             class: owner,
         });
-        let dest = self.builder.temp(RType::OBJECT);
-        self.builder.push(Op::CallPython {
-            dest,
-            callee: "super".to_string(),
+        let answer = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::CallValue {
+            dest: answer,
+            callee: callee.clone(),
             args: vec![Value::Register(class), receiver],
         });
+        self.builder.assign(dest, Value::Register(answer));
+        self.builder.terminate(Terminator::Goto(join));
+
+        self.builder.switch_to(bare);
+        let answer = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::CallValue {
+            dest: answer,
+            callee,
+            args: Vec::new(),
+        });
+        self.builder.assign(dest, Value::Register(answer));
+        self.builder.terminate(Terminator::Goto(join));
+
+        self.builder.switch_to(join);
         Ok((Value::Register(dest), RType::OBJECT))
     }
 
     /// `a < b < c` — each operand evaluated once, and short-circuiting
-    fn chained_compare(&mut self, node: &ast::ExprCompare) -> Lowered<(Value, RType)> {
+    fn chained_condition(&mut self, node: &ast::ExprCompare) -> Lowered<Value> {
         let result = self.builder.temp(RType::BIT);
         let join = self.builder.new_block();
 
@@ -15636,7 +16503,40 @@ impl Lowering<'_, '_> {
         }
         self.builder.terminate(Terminator::Goto(join));
         self.builder.switch_to(join);
-        Ok((Value::Register(result), RType::BIT))
+        Ok(Value::Register(result))
+    }
+
+    /// `a < b < c` as a value: `a < b and b < c`, with `b` evaluated once — so the answer
+    /// is the first link's answer that is false, or the last link's
+    fn chained_compare(&mut self, node: &ast::ExprCompare) -> Lowered<(Value, RType)> {
+        let result_ty = self.representation_of(&Expr::Compare(node.clone()))?;
+        let result = self.builder.temp(result_ty.clone());
+        let join = self.builder.new_block();
+
+        let mut left = self.expression(&node.left)?;
+        for (index, (op, right)) in node.ops.iter().zip(node.comparators.iter()).enumerate() {
+            let right = self.expression(right)?;
+            let (answer, answer_ty) =
+                self.compare_value_of(*op, left.clone(), right.clone(), None, None)?;
+            let stored = self.coerce(answer.clone(), &answer_ty, &result_ty)?;
+            self.builder.assign(result, stored);
+
+            // every link but the last short-circuits on a false result
+            if index + 1 < node.ops.len() {
+                let truth = self.truthy(answer, &answer_ty);
+                let next = self.builder.new_block();
+                self.builder.terminate(Terminator::Branch {
+                    cond: truth,
+                    then_block: next,
+                    else_block: join,
+                });
+                self.builder.switch_to(next);
+            }
+            left = right;
+        }
+        self.builder.terminate(Terminator::Goto(join));
+        self.builder.switch_to(join);
+        Ok((Value::Register(result), result_ty))
     }
 
     /// the builtins whose answer is about the frame that called them
@@ -15681,8 +16581,31 @@ impl Lowering<'_, '_> {
             // arguments is a `TypeError` python has to raise rather than a namespace
             // question — and the interpreted definition raises it with python's wording
             "globals" if node.arguments.is_empty() => {
+                let (callee, genuine) = self.resolve_builtin("globals", Wanted::WhereRebound);
                 let dest = self.builder.temp(RType::OBJECT);
-                self.builder.push(Op::ModuleDict { dest });
+                let native = self.builder.new_block();
+                let called = self.builder.new_block();
+                let join = self.builder.new_block();
+                self.builder.terminate(Terminator::Branch {
+                    cond: Value::Register(genuine),
+                    then_block: native,
+                    else_block: called,
+                });
+                self.builder.switch_to(native);
+                let namespace = self.builder.temp(RType::OBJECT);
+                self.builder.push(Op::ModuleDict { dest: namespace });
+                self.builder.assign(dest, Value::Register(namespace));
+                self.builder.terminate(Terminator::Goto(join));
+                self.builder.switch_to(called);
+                let answer = self.builder.temp(RType::OBJECT);
+                self.builder.push(Op::CallValue {
+                    dest: answer,
+                    callee,
+                    args: Vec::new(),
+                });
+                self.builder.assign(dest, Value::Register(answer));
+                self.builder.terminate(Terminator::Goto(join));
+                self.builder.switch_to(join);
                 Ok(Some((Value::Register(dest), RType::OBJECT)))
             }
             // `vars(x)` is `x.__dict__` and `dir(x)` is that object's names; only the
@@ -16107,21 +17030,7 @@ impl Lowering<'_, '_> {
             && !self.binds("len")
             && node.arguments.keywords.is_empty()
         {
-            let [argument] = node.arguments.args.as_ref() else {
-                return Err(Decline::new("`len` takes exactly one argument"));
-            };
-            let (value, ty) = self.expression(argument)?;
-            // an array knows its own length, and it is a field read rather than a
-            // call into the object protocol
-            if matches!(ty, RType::Array(_)) {
-                let dest = self.builder.temp(RType::INT);
-                self.builder.push(Op::ArrayLen { dest, array: value });
-                return Ok((Value::Register(dest), RType::INT));
-            }
-            let boxed = self.widen_to_object(value, &ty);
-            let dest = self.builder.temp(RType::INT);
-            self.builder.push(Op::Len { dest, src: boxed });
-            return Ok((Value::Register(dest), RType::INT));
+            return self.len_call(node);
         }
 
         // a closure this frame made itself is called at its native entry point: the
@@ -16221,6 +17130,149 @@ impl Lowering<'_, '_> {
         }
 
         self.native_call(node, name)
+    }
+
+    /// whether `name` still resolves to the interpreter's own builtin, and what it
+    /// resolves to
+    ///
+    /// python reads the name before it evaluates anything the call is handed, so this
+    /// comes first. `wanted` says where the object itself is read: a use in a loop that
+    /// only calls it where it is not the builtin reads it only there, so the native
+    /// path pays for the test and nothing else, and holds `None` in its place
+    fn resolve_builtin(&mut self, name: &str, wanted: Wanted) -> (Value, RegisterId) {
+        let callee = self.builder.temp(RType::OBJECT);
+        if wanted == Wanted::Always {
+            self.builder.push(Op::LoadGlobal {
+                dest: callee,
+                name: name.to_string(),
+            });
+        }
+        let genuine = self.builder.temp(RType::BIT);
+        self.builder.push(Op::BuiltinStands {
+            dest: genuine,
+            name: name.to_string(),
+        });
+        if wanted == Wanted::Always {
+            return (Value::Register(callee), genuine);
+        }
+        let builtin = self.builder.new_block();
+        let rebound = self.builder.new_block();
+        let resolved = self.builder.new_block();
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(genuine),
+            then_block: builtin,
+            else_block: rebound,
+        });
+        self.builder.switch_to(builtin);
+        self.builder.push(Op::Box {
+            dest: callee,
+            src: Value::None,
+        });
+        self.builder.terminate(Terminator::Goto(resolved));
+        self.builder.switch_to(rebound);
+        self.builder.push(Op::LoadGlobal {
+            dest: callee,
+            name: name.to_string(),
+        });
+        self.builder.terminate(Terminator::Goto(resolved));
+        self.builder.switch_to(resolved);
+        (Value::Register(callee), genuine)
+    }
+
+    /// `len(x)` on a name that resolves to a builtin statically: read directly while
+    /// it still is the builtin, and called otherwise
+    fn len_call(&mut self, node: &ast::ExprCall) -> Lowered<(Value, RType)> {
+        let [argument] = node.arguments.args.as_ref() else {
+            return Err(Decline::new("`len` takes exactly one argument"));
+        };
+        // python reads `len` before the argument, and calls what it read even if the
+        // argument rebinds the name. reading a name this frame binds runs nothing, so
+        // there the object can be read where it is called, and the builtin's path is
+        // left with the test alone — which is what a loop guard pays every trip
+        let inert = matches!(argument, Expr::Name(name) if self.binds(name.id.as_str()));
+        let (early, genuine) = if inert {
+            let genuine = self.builder.temp(RType::BIT);
+            self.builder.push(Op::BuiltinStands {
+                dest: genuine,
+                name: "len".to_string(),
+            });
+            (None, genuine)
+        } else {
+            let (callee, genuine) = self.resolve_builtin("len", Wanted::WhereRebound);
+            (Some(callee), genuine)
+        };
+        let (value, ty) = self.expression(argument)?;
+        let call = Expr::Call(node.clone());
+        let site = self.call_result_type(&call)?;
+        let dest = self.builder.temp(site.clone());
+        let native = self.builder.new_block();
+        let called = self.builder.new_block();
+        let join = self.builder.new_block();
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(genuine),
+            then_block: native,
+            else_block: called,
+        });
+
+        self.builder.switch_to(native);
+        let length = self.builder.temp(RType::INT);
+        // an array knows its own length, and it is a field read rather than a call
+        // into the object protocol
+        if matches!(ty, RType::Array(_)) {
+            self.builder.push(Op::ArrayLen {
+                dest: length,
+                array: value.clone(),
+            });
+        } else {
+            let boxed = self.widen_to_object(value.clone(), &ty);
+            self.builder.push(Op::Len {
+                dest: length,
+                src: boxed,
+            });
+        }
+        let answer = self.coerce(Value::Register(length), &RType::INT, &site)?;
+        self.builder.assign(dest, answer);
+        self.builder.terminate(Terminator::Goto(join));
+
+        self.builder.switch_to(called);
+        // a list held as a buffer has no list object to hand over, and building one
+        // would be a copy, which a `len` of its own could tell apart — so this refuses,
+        // loudly, rather than calling it with a different list
+        if matches!(ty, RType::Array(_)) {
+            self.builder.push(Op::RaiseStandard {
+                error: StandardError::RuntimeError,
+                message: "`len` no longer names the builtin, and this compiled function holds \
+                          the list as an unboxed buffer it cannot hand to anything else"
+                    .to_string(),
+            });
+            self.builder.terminate(Terminator::Unreachable);
+            self.builder.switch_to(join);
+            return Ok((Value::Register(dest), site));
+        }
+        let callee = match early {
+            Some(callee) => callee,
+            None => {
+                let callee = self.builder.temp(RType::OBJECT);
+                self.builder.push(Op::LoadGlobal {
+                    dest: callee,
+                    name: "len".to_string(),
+                });
+                Value::Register(callee)
+            }
+        };
+        let boxed = self.widen_to_object(value, &ty);
+        let result = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::CallValue {
+            dest: result,
+            callee,
+            args: vec![boxed],
+        });
+        let (answer, _) = self.narrow_call_result(result, &call)?;
+        self.builder.assign(dest, answer);
+        self.builder.terminate(Terminator::Goto(join));
+
+        self.builder.switch_to(join);
+        Ok((Value::Register(dest), site))
     }
 
     /// a call that reaches a definition in this same unit at its native entry point
