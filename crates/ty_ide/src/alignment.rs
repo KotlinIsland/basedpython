@@ -1,4 +1,4 @@
-//! which assignments the author lined up, so a client drawing inlay hints can keep them lined up
+//! which assignments share an `=` column, so a client drawing inlay hints can keep them sharing it
 //!
 //! an inlay hint costs horizontal room. drawn after the target of an assignment — which is where a
 //! variable's type hint goes — it pushes everything to its right along, and a column of `=` the
@@ -49,20 +49,17 @@ pub struct AlignmentMember {
     pub gap_start: TextSize,
 
     /// the `=` the author lined up — the end of the run of spaces, and the column to preserve
+    ///
+    /// the distance back to [`Self::gap_start`] is the room a hint has to spend before the line has
+    /// to grow. nothing here reads it: how much of that room a hint wants is the client's question,
+    /// and since the column no longer has to be padded to be a column, it is not this module's
+    /// either
     pub gap_end: TextSize,
-}
-
-impl AlignmentMember {
-    /// the spaces the author left between the target and the `=`, which is the room a hint has to
-    /// spend before the line has to grow
-    fn gap(self) -> TextSize {
-        self.gap_end - self.gap_start
-    }
 }
 
 /// assignments the author put in one column, reported together because they have to move together
 ///
-/// always two or more members, and always with evidence that the column was deliberate — see
+/// always two or more members, and always already sharing one `=` column — see
 /// [`alignment_groups`]
 #[derive(Debug)]
 pub struct AlignmentGroup {
@@ -76,20 +73,26 @@ pub struct AlignmentGroup {
 /// - siblings in one suite, so an `if` in the middle ends the run rather than being aligned across
 /// - unseparated by a blank line, which is how a reader tells one block of assignments from the
 ///   next (a comment on its own line does *not* break the run — it is still one block to read)
-/// - already sharing an `=` column, since a column that is not there yet is not one to preserve
-/// - and padded: at least one member has two or more spaces before its `=`
+/// - and already sharing an `=` column, since a column that is not there yet is not one to preserve
 ///
-/// that last condition is the whole of the conservatism, and it is what keeps ordinary code out
+/// nothing more is asked of the padding. a run of spaces before an `=` is what a *hand-aligned*
+/// block looks like, and it is tempting to require one as proof the column was deliberate — but the
+/// column is the thing being preserved, and this reads the same either way
 ///
 /// ```python
-/// x = 1
-/// y = 2
+/// a = 1 + 1
+/// b = True or False
 /// ```
 ///
-/// those two share an `=` column, but only because the names are the same length — nobody aligned
-/// anything, and a client that padded them out when their hints came back different widths would be
-/// injecting space into code the author never spaced. one member with a padding run is the smallest
-/// evidence that the column was typed on purpose
+/// those `=` are in one column because the names are the same length rather than because anyone
+/// padded them, and a reader has no way to tell the two apart, nor any reason to want to. hints of
+/// unequal width (`a: Literal[2]`, `b: Literal[True]`) break that column exactly as they break a
+/// padded one, and leaving it broken is the surprise. so the shared column *is* the evidence, and
+/// the padding a member carries is only room the client gets to spend before the line has to grow
+///
+/// the cost of taking the wider reading is a block where some lines have hints and some do not: the
+/// hintless ones are pushed out to keep the column, having no hint of their own to narrow. that is
+/// the same trade a padded block already makes, and it keeps the block square either way
 ///
 /// a group is reported whole even when only one of its lines is in `range`: the column is a
 /// property of every member at once, so half a group would be sized against the wrong maximum
@@ -179,8 +182,8 @@ impl<'a> SourceOrderVisitor<'a> for AlignmentVisitor<'a> {
 }
 
 impl AlignmentVisitor<'_> {
-    /// cuts one suite into runs of assignments that share a column, and keeps the ones that were
-    /// deliberate
+    /// cuts one suite into runs of assignments that share a column, and keeps the ones with
+    /// somebody to share it with
     fn collect(&mut self, body: &[Stmt]) {
         let mut run: Vec<AlignmentMember> = Vec::new();
         // the end of the last *member*, which is where the search for a blank line starts. it does
@@ -216,9 +219,12 @@ impl AlignmentVisitor<'_> {
     }
 
     /// keeps a finished run if it is a group worth reporting, and starts the next one either way
+    ///
+    /// two members is the whole of the test. a run got this far by sharing a column, and a column is
+    /// a column however it came to be one — see [`alignment_groups`] on why the padding a member
+    /// happens to carry is not the evidence it looks like
     fn flush(&mut self, run: &mut Vec<AlignmentMember>) {
-        let padded = run.iter().any(|member| member.gap() > TextSize::from(1));
-        if run.len() >= 2 && padded {
+        if run.len() >= 2 {
             self.groups.push(AlignmentGroup {
                 members: std::mem::take(run),
             });
@@ -365,7 +371,7 @@ mod tests {
                         .unwrap_or_default()
                         .trim_end_matches('\r');
                     let lead = (member.gap_start - start).to_usize();
-                    let gap = member.gap().to_usize();
+                    let gap = (member.gap_end - member.gap_start).to_usize();
                     writeln!(out, "  {line}").unwrap();
                     writeln!(
                         out,
@@ -410,11 +416,47 @@ basdf = 1
     }
 
     #[test]
-    fn leaves_unpadded_assignments_alone() {
+    fn an_unpadded_column_is_still_a_column() {
+        let test = cursor_test(
+            "\
+a = 1 + 1
+b = True or False
+<CURSOR>",
+        );
+        assert_snapshot!(test.alignment_groups(), @r"
+        group 1
+          a = 1 + 1
+           - gap 1
+          b = True or False
+           - gap 1
+        ");
+    }
+
+    #[test]
+    fn a_column_can_have_no_gap_at_all() {
+        // no spaces is a gap of nought rather than no member: the `=` still share a column, and a
+        // member left out would leave the group sized against the wrong maximum. only reachable now
+        // that a run no longer needs a padded member to qualify
+        let test = cursor_test(
+            "\
+ab=f()
+a =1
+<CURSOR>",
+        );
+        assert_snapshot!(test.alignment_groups(), @r"
+        group 1
+          ab=f()
+            - gap 0
+          a =1
+           - gap 1
+        ");
+    }
+
+    #[test]
+    fn a_column_of_one_is_no_column() {
         let test = cursor_test(
             "\
 x = 1
-y = 2
 <CURSOR>",
         );
         assert_snapshot!(test.alignment_groups(), @"no groups");
