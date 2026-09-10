@@ -140,6 +140,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNBOUND_TYPE_VARIABLE);
     registry.register_lint(&MISSING_ARGUMENT);
     registry.register_lint(&MISSING_DIRECT_DEPENDENCY);
+    registry.register_lint(&MISSING_FUNCTION_BODY);
     registry.register_lint(&MISSING_TYPE_ARGUMENT);
     registry.register_lint(&NO_MATCHING_OVERLOAD);
     registry.register_lint(&NON_CALLABLE_INIT_SUBCLASS);
@@ -564,6 +565,16 @@ declare_lint! {
         summary: "detects functions with empty bodies that have a non-`None` return type annotation",
         status: LintStatus::stable("0.0.14"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/missing-function-body.md")]
+    pub(crate) static MISSING_FUNCTION_BODY = {
+        summary: "detects a `def` written with no body in a position that needs an implementation",
+        status: LintStatus::stable("0.0.81"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -5761,6 +5772,35 @@ pub(super) fn report_implicit_return_type(
 
         diagnostic.info("See https://typing.python.org/en/latest/spec/protocol.html#");
     }
+}
+
+/// basedpython: report a `def` written with no body at all, where the position asks for an
+/// implementation rather than a declaration.
+///
+/// The lowering fills the missing body in with `: ...`, so what runs is a function that returns
+/// `None`. In a stub file, a protocol, an `abstract def`, an overload group or an
+/// `if TYPE_CHECKING` block that is exactly what was meant, and nothing is reported. Everywhere
+/// else the declaration stands where the implementation should be, and nothing else says so: the
+/// return type may well be `None` already, in which case `empty-body` has nothing to complain
+/// about either.
+pub(super) fn report_missing_function_body(
+    context: &InferContext,
+    function: &ast::StmtFunctionDef,
+) {
+    let Some(builder) = context.report_lint(&MISSING_FUNCTION_BODY, &function.name) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "Function `{name}` is declared with no body",
+        name = function.name.id
+    ));
+    diagnostic.info("A `def` with no body declares a signature, which is only permitted:");
+    diagnostic.info(" - in stub files");
+    diagnostic.info(" - in `if TYPE_CHECKING` blocks");
+    diagnostic.info(" - as a member of a protocol class");
+    diagnostic.info(" - as an `abstract def` or an `@abstractmethod`-decorated method");
+    diagnostic.info(" - or as an overload declaration");
+    diagnostic.help("Write the body, or `: ...` if the function is meant to do nothing");
 }
 
 pub(super) fn report_invalid_type_checking_constant(context: &InferContext, node: AnyNodeRef) {

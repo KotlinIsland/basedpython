@@ -60,7 +60,7 @@ parameters of a lambda passed to `d` directly, and it is not particular to `deco
 `bidirectional.md`
 
 ```by
-decorator def d(fn: (int) -> None)
+decorator def d(fn: (int) -> None): ...
 
 @d
 def f(i):

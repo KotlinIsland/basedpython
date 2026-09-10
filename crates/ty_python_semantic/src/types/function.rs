@@ -617,6 +617,13 @@ impl<'db> OverloadLiteral<'db> {
             let Some(definition) = binding.binding.definition() else {
                 continue;
             };
+            // a loop header is not a `def`: it stands for whatever the loop carries round to
+            // the next iteration, which for a `def` in a loop body is that same `def`. the
+            // definitions it stands for are in this very list, so skipping it loses nothing
+            // and keeps a lone `def` in a loop body from reading as a run of two
+            if definition.kind(db).is_loop_header() {
+                continue;
+            }
             if definition != self.definition(db) {
                 return true;
             }

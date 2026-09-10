@@ -145,7 +145,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import Unpack
-                def f(*args: *tuple[int, ...])
+                def f(*args: *tuple[int, ...]): ...
             "},
         );
     }
@@ -161,7 +161,7 @@ mod tests {
             indoc! {"
                 from typing import Unpack
                 class A:
-                    def method(self, *args: *tuple[str, ...])
+                    def method(self, *args: *tuple[str, ...]): ...
             "},
         );
     }
@@ -171,7 +171,7 @@ mod tests {
     fn paramspec_pair_reversed() {
         check(
             "def f(*args: P.args, **kwargs: P.kwargs): ...\n",
-            "def f(*args: *P, **kwargs: **P)\n",
+            "def f(*args: *P, **kwargs: **P): ...\n",
         );
     }
 
@@ -184,7 +184,7 @@ mod tests {
             &Config::test_default(),
         )
         .expect("reverse failed");
-        assert_eq!(reversed, "def f(*args: *P, **kwargs: **P)\n");
+        assert_eq!(reversed, "def f(*args: *P, **kwargs: **P): ...\n");
         let forward = transpile(&reversed, &Config::test_default()).expect("forward failed");
         assert!(
             forward.contains("*args: P.args, **kwargs: P.kwargs"),
@@ -195,7 +195,7 @@ mod tests {
     /// only the paired form identifies a `ParamSpec`; a lone `.args` is left alone
     #[test]
     fn lone_args_component_unchanged() {
-        check("def f(*args: P.args): ...\n", "def f(*args: P.args)\n");
+        check("def f(*args: P.args): ...\n", "def f(*args: P.args): ...\n");
     }
 
     /// two different receivers are not a pair
@@ -203,14 +203,14 @@ mod tests {
     fn mismatched_receivers_unchanged() {
         check(
             "def f(*args: P.args, **kwargs: Q.kwargs): ...\n",
-            "def f(*args: P.args, **kwargs: Q.kwargs)\n",
+            "def f(*args: P.args, **kwargs: Q.kwargs): ...\n",
         );
     }
 
     #[test]
     fn regular_arg_unchanged_by_unpack() {
-        // unpack reverse leaves it alone; empty-declarations strips `: ...`
-        check("def f(x: int): ...\n", "def f(x: int)\n");
+        // nothing here to reverse, and outside a stub the body stays
+        check("def f(x: int): ...\n", "def f(x: int): ...\n");
     }
 
     /// the inner type keeps an edit another reverse transform made inside it —
@@ -224,7 +224,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import Unpack
-                def f(*args: *(int, (str, bytes)))
+                def f(*args: *(int, (str, bytes))): ...
             "},
         );
     }
@@ -238,7 +238,7 @@ mod tests {
             "},
             indoc! {"
                 Unpack = object()
-                def f(*args: Unpack[tuple[int, ...]])
+                def f(*args: Unpack[tuple[int, ...]]): ...
             "},
         );
     }

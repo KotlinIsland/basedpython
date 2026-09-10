@@ -1880,6 +1880,16 @@
             }
           ]
         },
+        "missing-function-body": {
+          "title": "detects a `def` written with no body in a position that needs an implementation",
+          "description": "## What it does\n\nChecks for a `def` written with no body at all, in a position that needs an implementation.\n\n## Why is this bad?\n\nA `def` with no body declares a signature. The lowering fills in `: ...`, so the function exists and\nreturns `None`. That is what a declaration means in a stub file; anywhere else it is an\nimplementation that was never written, silently stood in for by one that does nothing.\n\nA body may be left out where a declaration is what the position asks for:\n\n- in a stub file\n- in an `if TYPE_CHECKING` block\n- as a member of a protocol class\n- as an `abstract def`, or an `@abstractmethod`-decorated method\n- as an overload declaration, written `@overload` or as a run of same-name `def`s\n\nAn `init(...)` may also be written without a body: what it does is store the attribute parameters it\ndeclares, and that body is built for it.\n\n## Examples\n\n```by\ndef parse(s: str) -> int  # ok: the run below makes this an overload declaration\ndef parse(s: bytes) -> int\ndef parse(s):\n    return int(s)\n\n# error: [missing-function-body]\ndef lookup() -> int\n```\n\nA function that is meant to do nothing says so with a body of its own:\n\n```by\ndef ignore(event: str): ...\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "missing-override-decorator": {
           "title": "detects methods that override a superclass member without an `@override` annotation",
           "description": "## What it does\n\nChecks for methods that override a method or attribute in a superclass but are not decorated with\n`@override`.\n\nThis rule is disabled by default. Enable it to opt in to strict `@override` enforcement for a\nproject.\n\n## Exemptions\n\nOverriding `__init__`, `__new__`, `__init_subclass__`, or `__post_init__` does not require\n`@override`, even if the method is explicitly declared by a superclass.\n\n## Why is this bad?\n\nWithout an `@override` annotation, refactors can silently change whether a method is an override.\nRequiring `@override` on every override lets ty report when an intended override stops overriding\nanything, and when a method unexpectedly starts overriding a superclass member.\n\n## Example\n\n```toml\n[environment]\npython-version = \"3.12\"\n```\n\n```python\nfrom typing import override\n\n\nclass Parent:\n    def method(self) -> int:\n        return 1\n\n\nclass Child(Parent):\n    # when the rule is enabled\n    def method(self) -> int:  # error\n        return 2\n\n\nclass ExplicitChild(Parent):\n    @override\n    def method(self) -> int:  # fine\n        return 2\n```",

@@ -15,7 +15,8 @@ use crate::{
             UNSOUND_RETURN_STATEMENT, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
             is_invalid_typed_dict_literal, report_bool_as_int, report_implicit_return_type,
             report_invalid_generator_function_return_type, report_invalid_return_type,
-            report_shadowed_type_variable, report_unsound_return_statement,
+            report_missing_function_body, report_shadowed_type_variable,
+            report_unsound_return_statement,
         },
         extensions,
         function::{
@@ -65,6 +66,24 @@ fn parameters_have_defaults(parameters: &ast::Parameters) -> bool {
     parameters
         .iter_non_variadic_params()
         .any(|param| param.default.is_some())
+}
+
+/// basedpython: whether the parser built this function node out of a construct that is not a
+/// `def` at all — an `init(...)`, a property accessor block, or a trailing-lambda block. Each of
+/// those records the form it was written as with a synthetic marker decorator.
+fn is_synthesized_from_another_construct(function: &ast::StmtFunctionDef) -> bool {
+    function.is_trailing_lambda
+        || function.decorator_list.iter().any(|decorator| {
+            matches!(
+                &decorator.expression,
+                ast::Expr::Name(marker)
+                    if matches!(marker.ctx, ast::ExprContext::Invalid)
+                        && matches!(
+                            marker.id.as_str(),
+                            "__init_method__" | "__property__" | "__static_property__"
+                        )
+            )
+        })
 }
 
 fn function_has_deferred_annotations(function: &ast::StmtFunctionDef) -> bool {
@@ -315,6 +334,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // with nothing behind it
         self.check_redundant_return_annotation(function);
 
+        // basedpython: a `def` written with no body at all declares a signature. where the
+        // position asks for an implementation, the missing body is the whole of the problem
+        self.check_missing_function_body(function);
+
         let enclosing_function_for_return_check =
             nearest_enclosing_function(db, self.index, self.scope());
 
@@ -362,6 +385,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let mut enclosing_class_context = None;
 
             if has_empty_body {
+                // basedpython: a `def` written with no body at all is
+                // `missing-function-body`'s to report, whatever it declares it returns. it
+                // has no body to check a return type against, and where the position does
+                // not ask for a declaration the body is what went missing — saying instead
+                // that the function returns `None` describes the consequence, and says
+                // nothing at all when the return type is `None` already
+                if function.body.is_empty() {
+                    return;
+                }
                 if self.in_stub() {
                     return;
                 }
@@ -369,19 +401,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     return;
                 }
                 if self.is_in_type_checking_block(self.scope(), function) {
-                    return;
-                }
-                // basedpython: a bodyless `def f(...) -> T` in a run of same-name defs is
-                // an implicit overload stub — the lowering writes the `@overload`
-                // decorators the source leaves out — so it is exempt for the same reason a
-                // written `@overload` is. one that is *not* in such a run declares an
-                // ordinary function, and the `: ...` the lowering fills in returns `None`
-                // exactly as a written one would
-                if function.body.is_empty()
-                    && enclosing_function_for_return_check.is_some_and(|enclosing| {
-                        enclosing.literal(db).last_definition.is_overload(db)
-                    })
-                {
                     return;
                 }
                 if let Some(class) = self.class_context_of_current_method() {
@@ -599,6 +618,61 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 );
             }
         }
+    }
+
+    /// basedpython: report a `def` written with no body at all, where the position asks for an
+    /// implementation.
+    ///
+    /// The lowering fills the missing body in with `: ...`, so a `def` that declares nothing but
+    /// a signature still produces a function — one that returns `None`. That is what a stub
+    /// file, a protocol, an `abstract def`, an overload group and an `if TYPE_CHECKING` block
+    /// each ask for. Everywhere else the implementation the signature promises was never
+    /// written, and the `: ...` stands in for it silently.
+    fn check_missing_function_body(&self, function: &ast::StmtFunctionDef) {
+        if !function.body.is_empty() || !self.is_basedpython_file() {
+            return;
+        }
+        // only a `def` the source wrote can be missing a body. every other construct the
+        // parser builds a function out of is given the body its own form means — an
+        // `init(...)` gets one built from its attribute parameters, an accessor block gets
+        // the accessors — so an empty one reaching here failed to parse, which has been
+        // reported already. a `decorator def` is not one of them: it is a `def` with a
+        // keyword in front, and the dispatcher its lowering writes calls the body the source
+        // is supposed to supply
+        if is_synthesized_from_another_construct(function) {
+            return;
+        }
+        if self.bodyless_def_declares_a_signature(function) {
+            return;
+        }
+        report_missing_function_body(&self.context, function);
+    }
+
+    /// basedpython: whether a `def` written with no body at all declares a signature in this
+    /// position, rather than leaving out an implementation.
+    fn bodyless_def_declares_a_signature(&self, function: &ast::StmtFunctionDef) -> bool {
+        let db = self.db();
+
+        if self.in_stub() || self.is_in_type_checking_block(self.scope(), function) {
+            return true;
+        }
+
+        // `@overload` and `@abstractmethod`, which the `abstract` modifier resolves to
+        if self.in_function_overload_or_abstractmethod() {
+            return true;
+        }
+
+        // a bodyless `def` in a run of same-name defs is an overload declaration: the lowering
+        // writes the `@overload` decorator the source leaves out, so it declares a signature
+        // for the same reason a written one does
+        if nearest_enclosing_function(db, self.index, self.scope())
+            .is_some_and(|enclosing| enclosing.literal(db).last_definition.is_overload(db))
+        {
+            return true;
+        }
+
+        self.class_context_of_current_method()
+            .is_some_and(|class| class.is_protocol(db))
     }
 
     /// basedpython: report an explicit `-> None` that leaves the function's type exactly where

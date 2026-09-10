@@ -130,7 +130,7 @@ mod tests {
             "},
             indoc! {"
                 from ty_extensions import Not
-                def f() -> not str
+                def f() -> not str: ...
             "},
         );
     }

@@ -39,12 +39,18 @@ keyword-only and have defaults — they are the decorator's options
 
 ## declaring one without a body
 
-like any other `def`, a `decorator def` can be written with no body at all — a
-declaration of the shape, with nothing to run
+like any other `def`, a `decorator def` can be written with no body at all. what
+that declares is the shape, with nothing to run, so it belongs where a
+declaration does — a stub file, or an `if TYPE_CHECKING` block:
 
-```by
+```byi
 decorator def route(fn: (int) -> None)
 ```
+
+in a module that runs, the body is required
+([`missing-function-body`](empty-declarations.md)): the dispatcher the lowering
+writes is the machinery around the body, and calls it for every shape the
+decorator is applied in
 
 ## scope
 
