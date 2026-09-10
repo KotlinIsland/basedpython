@@ -85,6 +85,20 @@ pub enum Mutation {
     InPlace,
 }
 
+/// what a concatenation of two `str` registers stands for
+///
+/// the two look alike and are not the same operation. python joins the pieces of an
+/// f-string without asking either piece anything, while `a + b` asks the operands'
+/// `__add__` and `__radd__` — which are the interpreter's own concatenation only when
+/// both operands are exact `str`s, and a subclass's own methods otherwise
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Concatenation {
+    /// the pieces of an f-string
+    Join,
+    /// `a + b`, or `a += b` where the mutation is in place
+    Operator(Mutation),
+}
+
 /// arithmetic operators, over both tagged integers and doubles
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOp {
@@ -288,8 +302,17 @@ pub enum Op {
         rhs: Value,
         mutation: Mutation,
     },
-    /// comparison through the abstract object protocol
+    /// comparison through the abstract object protocol, as a condition: the truth of
+    /// whatever the comparison answered
     ObjectCompare {
+        dest: RegisterId,
+        op: CmpOp,
+        lhs: Value,
+        rhs: Value,
+    },
+    /// comparison through the abstract object protocol, as a value: whatever object the
+    /// comparison method answered, which need not be a `bool`
+    ObjectRichCompare {
         dest: RegisterId,
         op: CmpOp,
         lhs: Value,
@@ -400,6 +423,17 @@ pub enum Op {
         class: String,
         method: String,
     },
+    /// whether `name` resolves, through the module namespace and then builtins, to the
+    /// interpreter's own builtin of that name
+    ///
+    /// a few builtins have a native lowering, and python calls whatever the name
+    /// resolves to when the call runs — a module attribute written from outside, which
+    /// is what `mock.patch("mod.len")` does, or a patched `builtins`. so the native
+    /// path is taken only where this answers yes. it resolves the name itself and keeps
+    /// no reference, because the answer is asked in loops and the object is only
+    /// wanted where it is not the builtin. what it costs at runtime is in
+    /// `By_BuiltinStands`
+    BuiltinStands { dest: RegisterId, name: String },
     /// whether a read or a write of `name` on `src` may go straight to the property
     /// half this module emitted for `class`, rather than round the descriptor protocol
     ///
@@ -413,6 +447,19 @@ pub enum Op {
         src: Value,
         class: String,
         name: String,
+    },
+    /// whether `field` of `src` may be read and written at its offset in `class`'s layout
+    ///
+    /// the questions [`Op::AccessorStands`] asks, about the descriptor a field publishes:
+    /// `src` has to be *exactly* a `class`, since an interpreted subclass may answer the
+    /// name with a property or take over `__getattribute__` or `__setattr__`, and `class`
+    /// has to still answer the name with the field's own descriptor. only a class
+    /// something can extend or change needs asking
+    FieldStands {
+        dest: RegisterId,
+        src: Value,
+        class: String,
+        field: String,
     },
     /// re-ask, against the receiver in hand, the lookup one licensed direct call
     /// skipped — and abort naming `class` and `member` when the answer is not the body
@@ -581,6 +628,16 @@ pub enum Op {
         source: Value,
         mapping: bool,
     },
+    /// merge the mapping a `**` names into the keywords of a call to `callee`
+    ///
+    /// not the `**` of a display: a call refuses a keyword given twice, where a display
+    /// keeps the later value, and both refusals name the callee
+    MergeKeywords {
+        dest: RegisterId,
+        container: Value,
+        source: Value,
+        callee: Value,
+    },
     /// build an unboxed array from its elements — a `list` display whose elements
     /// are stored in a buffer of their own rather than as a `PyObject *` each
     ArrayNew { dest: RegisterId, items: Vec<Value> },
@@ -744,10 +801,10 @@ pub enum Op {
         /// which is how a shared closure cell starts
         fields: Vec<Option<Value>>,
     },
-    /// bind a method of an emitted class to a receiver, giving a callable
+    /// make the function object a nested function's name is bound to
     ///
-    /// this is what a nested function's name is bound to: `PyCFunction_NewEx` with
-    /// the environment as `self`
+    /// the body is a method of the environment class, and the function object holds
+    /// the environment it hands that method as its receiver
     MakeClosure {
         dest: RegisterId,
         class: String,
@@ -883,12 +940,43 @@ pub enum Op {
         class: String,
         field: String,
     },
+    /// raise `AttributeError` unless `receiver` has `field`
+    ///
+    /// an instance made by `__new__` without `__init__` has none of the fields
+    /// `__init__` would have given it, and a field read at a compile-time offset would
+    /// read what the allocation left there. so a read that nothing proves assigned is
+    /// preceded by this, and [`Self::GetField`] itself stays a plain load. once a field
+    /// is written nothing can take it away again — only a field `__init__` might leave
+    /// out can be deleted, and that one's read tests for itself — which is what lets a
+    /// later pass drop the ones an earlier write or test already answered
+    RequireField {
+        receiver: Value,
+        class: String,
+        field: String,
+    },
+    /// whether `receiver` has `field`, as [`Self::RequireField`] asks it, for a
+    /// question that has an answer other than raising: a class pattern naming an
+    /// attribute the instance lacks does not match
+    FieldIsSet {
+        dest: RegisterId,
+        receiver: Value,
+        class: String,
+        field: String,
+    },
     /// `receiver.field = value` as a direct struct write
     SetField {
         receiver: Value,
         class: String,
         field: String,
         value: Value,
+        /// whether the store takes over the reference `value`'s register holds and
+        /// leaves the register empty, rather than retaining one of its own. set where
+        /// the store is the register's last read
+        moves: bool,
+        /// whether the instance is already known to have the field, so a field with a
+        /// byte saying whether it has been written need not be told again. set where an
+        /// earlier write or test of the same field of the same object proves it
+        present: bool,
     },
     /// `receiver.name`
     GetAttr {
@@ -1008,6 +1096,28 @@ pub enum Op {
     PushHandled { dest: RegisterId, value: Value },
     /// leave one, putting back what [`Self::PushHandled`] handed over
     PopHandled { value: Value },
+    /// let go of what a register holds, and leave it empty
+    ///
+    /// the value is always a register the frame owns. emptying it is what lets every
+    /// later release of the same register — the one each exit makes, and the one a
+    /// write makes of the value it replaces — find nothing rather than release twice
+    ///
+    /// a non-empty `path` lets go of one reference inside a fixed-length tuple instead:
+    /// the element it names, following elements outermost first. only that one is
+    /// emptied, and the rest of the tuple goes on holding what it holds
+    Release { value: Value, path: Box<[usize]> },
+    /// `dest = src`, or one element of it, taking over the reference `src` holds
+    /// there rather than retaining one of its own, and leaving that place empty
+    ///
+    /// a copy or an element read that is the last thing to read its source place
+    /// becomes one of these, and the release that would have followed it goes: the
+    /// value is handed along, so nothing is let go of and nothing is retained. the
+    /// empty place is what every later release of it finds
+    Move {
+        dest: RegisterId,
+        src: Value,
+        path: Box<[usize]>,
+    },
     /// `raise <exception>`, optionally `from <cause>`
     ///
     /// the general form. a class is instantiated, an instance raised as it is
@@ -1067,6 +1177,7 @@ pub enum Op {
         /// nothing reads again — the error edge included, so a failure that empties
         /// the register cannot be observed either
         consumes_lhs: bool,
+        concatenation: Concatenation,
     },
     /// `str(n)` where `n` is a tagged integer
     ///
@@ -1107,6 +1218,8 @@ pub enum Op {
         dest: RegisterId,
         lhs: Value,
         value: Value,
+        /// whether this is `lhs += str(n)`, which asks a subclass's `__iadd__` first
+        mutation: Mutation,
     },
     /// raise a standard error with a fixed message
     RaiseStandard {
@@ -1135,6 +1248,8 @@ impl Op {
             | Self::MakeClosure { class, .. }
             | Self::LoadClass { class, .. }
             | Self::GetField { class, .. }
+            | Self::RequireField { class, .. }
+            | Self::FieldIsSet { class, .. }
             | Self::SetField { class, .. } => vec![class.as_str()],
             // a method reached directly rather than through the type, which only a
             // class the emitter laid out has
@@ -1148,6 +1263,7 @@ impl Op {
             | Self::IntCompare { .. }
             | Self::ObjectBinary { .. }
             | Self::ObjectCompare { .. }
+            | Self::ObjectRichCompare { .. }
             | Self::StrCompare { .. }
             | Self::Truthy { .. }
             | Self::FloatCompare { .. }
@@ -1157,7 +1273,9 @@ impl Op {
             | Self::IsInstance { .. }
             | Self::MatchAttr { .. }
             | Self::MethodStands { .. }
+            | Self::BuiltinStands { .. }
             | Self::AccessorStands { .. }
+            | Self::FieldStands { .. }
             | Self::DictShadows { .. }
             | Self::IsMissing { .. }
             | Self::MatchSlice { .. }
@@ -1175,6 +1293,7 @@ impl Op {
             | Self::Unpack { .. }
             | Self::CallUnpacked { .. }
             | Self::Extend { .. }
+            | Self::MergeKeywords { .. }
             | Self::ArrayNew { .. }
             | Self::ArrayGet { .. }
             | Self::ArraySet { .. }
@@ -1220,6 +1339,8 @@ impl Op {
             | Self::ExceptionMatches { .. }
             | Self::PushHandled { .. }
             | Self::PopHandled { .. }
+            | Self::Release { .. }
+            | Self::Move { .. }
             | Self::RaiseObject { .. }
             | Self::Reraise { .. }
             | Self::GetIter { .. }
@@ -1273,6 +1394,7 @@ impl Op {
     pub fn dest(&self) -> Option<RegisterId> {
         match self {
             Self::Assign { dest, .. }
+            | Self::Move { dest, .. }
             | Self::Contains { dest, .. }
             | Self::AsyncContext { dest, .. }
             | Self::AsyncIter { dest, .. }
@@ -1282,7 +1404,9 @@ impl Op {
             | Self::IsMapping { dest, .. }
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
+            | Self::BuiltinStands { dest, .. }
             | Self::AccessorStands { dest, .. }
+            | Self::FieldStands { dest, .. }
             | Self::DictShadows { dest, .. }
             | Self::IsMissing { dest, .. }
             | Self::MatchSlice { dest, .. }
@@ -1296,6 +1420,7 @@ impl Op {
             | Self::IntCompare { dest, .. }
             | Self::ObjectBinary { dest, .. }
             | Self::ObjectCompare { dest, .. }
+            | Self::ObjectRichCompare { dest, .. }
             | Self::StrCompare { dest, .. }
             | Self::Truthy { dest, .. }
             | Self::FloatCompare { dest, .. }
@@ -1328,6 +1453,7 @@ impl Op {
             | Self::MakeClosure { dest, .. }
             | Self::CallMethod { dest, .. }
             | Self::GetField { dest, .. }
+            | Self::FieldIsSet { dest, .. }
             | Self::GetAttr { dest, .. }
             | Self::SetAttr { dest, .. }
             | Self::BuildList { dest, .. }
@@ -1358,6 +1484,7 @@ impl Op {
             | Self::DeleteAttr { dest, .. }
             | Self::ArrayPush { dest, .. }
             | Self::Extend { dest, .. }
+            | Self::MergeKeywords { dest, .. }
             | Self::CallUnpacked { dest, .. }
             | Self::PushHandled { dest, .. } => Some(*dest),
             Self::CallNative { dest, .. } => *dest,
@@ -1366,8 +1493,10 @@ impl Op {
             | Self::FinishFrame { .. }
             | Self::RaiseObject { .. }
             | Self::PopHandled { .. }
+            | Self::Release { .. }
             | Self::Reraise { .. }
             | Self::LicenceHolds { .. }
+            | Self::RequireField { .. }
             | Self::SetField { .. } => None,
         }
     }
@@ -1380,6 +1509,7 @@ impl Op {
     pub fn dest_mut(&mut self) -> Option<&mut RegisterId> {
         match self {
             Self::Assign { dest, .. }
+            | Self::Move { dest, .. }
             | Self::Contains { dest, .. }
             | Self::AsyncContext { dest, .. }
             | Self::AsyncIter { dest, .. }
@@ -1389,7 +1519,9 @@ impl Op {
             | Self::IsMapping { dest, .. }
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
+            | Self::BuiltinStands { dest, .. }
             | Self::AccessorStands { dest, .. }
+            | Self::FieldStands { dest, .. }
             | Self::DictShadows { dest, .. }
             | Self::IsMissing { dest, .. }
             | Self::MatchSlice { dest, .. }
@@ -1403,6 +1535,7 @@ impl Op {
             | Self::IntCompare { dest, .. }
             | Self::ObjectBinary { dest, .. }
             | Self::ObjectCompare { dest, .. }
+            | Self::ObjectRichCompare { dest, .. }
             | Self::StrCompare { dest, .. }
             | Self::Truthy { dest, .. }
             | Self::FloatCompare { dest, .. }
@@ -1435,6 +1568,7 @@ impl Op {
             | Self::MakeClosure { dest, .. }
             | Self::CallMethod { dest, .. }
             | Self::GetField { dest, .. }
+            | Self::FieldIsSet { dest, .. }
             | Self::GetAttr { dest, .. }
             | Self::SetAttr { dest, .. }
             | Self::BuildList { dest, .. }
@@ -1465,6 +1599,7 @@ impl Op {
             | Self::DeleteAttr { dest, .. }
             | Self::ArrayPush { dest, .. }
             | Self::Extend { dest, .. }
+            | Self::MergeKeywords { dest, .. }
             | Self::CallUnpacked { dest, .. }
             | Self::PushHandled { dest, .. } => Some(dest),
             Self::CallNative { dest, .. } => dest.as_mut(),
@@ -1473,8 +1608,10 @@ impl Op {
             | Self::FinishFrame { .. }
             | Self::RaiseObject { .. }
             | Self::PopHandled { .. }
+            | Self::Release { .. }
             | Self::Reraise { .. }
             | Self::LicenceHolds { .. }
+            | Self::RequireField { .. }
             | Self::SetField { .. } => None,
         }
     }
@@ -1488,9 +1625,11 @@ impl Op {
                 ..
             } => vec![manager, exception],
             Self::Assign { src, .. }
+            | Self::Move { src, .. }
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
             | Self::AccessorStands { src, .. }
+            | Self::FieldStands { src, .. }
             | Self::LicenceHolds { src, .. }
             | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
@@ -1549,6 +1688,7 @@ impl Op {
             | Self::IntCompare { lhs, rhs, .. }
             | Self::ObjectBinary { lhs, rhs, .. }
             | Self::ObjectCompare { lhs, rhs, .. }
+            | Self::ObjectRichCompare { lhs, rhs, .. }
             | Self::StrCompare { lhs, rhs, .. }
             | Self::StrConcat { lhs, rhs, .. }
             | Self::StrConcatInt {
@@ -1571,7 +1711,10 @@ impl Op {
                 all.extend(args.iter());
                 all
             }
-            Self::GetAttr { receiver, .. } | Self::GetField { receiver, .. } => vec![receiver],
+            Self::GetAttr { receiver, .. }
+            | Self::GetField { receiver, .. }
+            | Self::RequireField { receiver, .. }
+            | Self::FieldIsSet { receiver, .. } => vec![receiver],
             Self::ImportFrom { module, .. } => vec![module],
             Self::SetField {
                 receiver, value, ..
@@ -1612,6 +1755,7 @@ impl Op {
             Self::RaiseStandard { .. }
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
+            | Self::BuiltinStands { .. }
             | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }
@@ -1655,6 +1799,12 @@ impl Op {
             Self::Extend {
                 container, source, ..
             } => vec![container, source],
+            Self::MergeKeywords {
+                container,
+                source,
+                callee,
+                ..
+            } => vec![container, source, callee],
             Self::CallUnpacked {
                 callee,
                 args,
@@ -1672,6 +1822,7 @@ impl Op {
             Self::Reraise { value }
             | Self::PushHandled { value, .. }
             | Self::PopHandled { value }
+            | Self::Release { value, .. }
             | Self::FinishFrame { value }
             | Self::RaiseWith { value, .. } => vec![value],
         }
@@ -1690,9 +1841,11 @@ impl Op {
                 ..
             } => vec![manager, exception],
             Self::Assign { src, .. }
+            | Self::Move { src, .. }
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
             | Self::AccessorStands { src, .. }
+            | Self::FieldStands { src, .. }
             | Self::LicenceHolds { src, .. }
             | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
@@ -1751,6 +1904,7 @@ impl Op {
             | Self::IntCompare { lhs, rhs, .. }
             | Self::ObjectBinary { lhs, rhs, .. }
             | Self::ObjectCompare { lhs, rhs, .. }
+            | Self::ObjectRichCompare { lhs, rhs, .. }
             | Self::StrCompare { lhs, rhs, .. }
             | Self::StrConcat { lhs, rhs, .. }
             | Self::StrConcatInt {
@@ -1775,7 +1929,10 @@ impl Op {
                 all.extend(args.iter_mut());
                 all
             }
-            Self::GetAttr { receiver, .. } | Self::GetField { receiver, .. } => vec![receiver],
+            Self::GetAttr { receiver, .. }
+            | Self::GetField { receiver, .. }
+            | Self::RequireField { receiver, .. }
+            | Self::FieldIsSet { receiver, .. } => vec![receiver],
             Self::ImportFrom { module, .. } => vec![module],
             Self::SetField {
                 receiver, value, ..
@@ -1816,6 +1973,7 @@ impl Op {
             Self::RaiseStandard { .. }
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
+            | Self::BuiltinStands { .. }
             | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }
@@ -1859,6 +2017,12 @@ impl Op {
             Self::Extend {
                 container, source, ..
             } => vec![container, source],
+            Self::MergeKeywords {
+                container,
+                source,
+                callee,
+                ..
+            } => vec![container, source, callee],
             Self::CallUnpacked {
                 callee,
                 args,
@@ -1876,6 +2040,7 @@ impl Op {
             Self::Reraise { value }
             | Self::PushHandled { value, .. }
             | Self::PopHandled { value }
+            | Self::Release { value, .. }
             | Self::FinishFrame { value }
             | Self::RaiseWith { value, .. } => vec![value],
         }
@@ -2025,6 +2190,8 @@ mod tests {
                 class: "Held".to_string(),
                 field: "tag".to_string(),
                 value: Value::Int(1),
+                moves: false,
+                present: false,
             },
             Op::CallNative {
                 owner: Some("Held".to_string()),

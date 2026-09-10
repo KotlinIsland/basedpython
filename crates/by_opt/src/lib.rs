@@ -11,9 +11,13 @@ pub(crate) mod copy_propagation;
 mod dead_allocations;
 pub(crate) mod dead_registers;
 pub(crate) mod dict_find;
+mod field_proofs;
 pub(crate) mod fold;
 pub(crate) mod infallible;
+mod liveness;
 pub(crate) mod refcount;
+pub(crate) mod release_temporaries;
+mod store_moves;
 pub(crate) mod str_append;
 mod str_concat_int;
 pub(crate) mod str_item_compare;
@@ -35,6 +39,12 @@ const PASSES: &[Pass] = &[
     Pass {
         name: "copy-propagation",
         run: copy_propagation::run,
+    },
+    // after copy propagation, which is what makes two reads of one object name one
+    // register, and before folding, which is what turns a test it answered into a jump
+    Pass {
+        name: "field-proofs",
+        run: field_proofs::run,
     },
     // folding runs after copy propagation, which is what turns a comparison's
     // temp into an immediate the branch can see
@@ -135,6 +145,18 @@ const PASSES: &[Pass] = &[
     Pass {
         name: "str-concat-int",
         run: str_concat_int::run,
+    },
+    // after every pass that decides what a register owns — the borrow pass above all —
+    // because where a temporary can be let go of rests on the final answer
+    Pass {
+        name: "release-temporaries",
+        run: release_temporaries::run,
+    },
+    // after the release pass, whose release straight after a dying store is what a
+    // moving store replaces
+    Pass {
+        name: "store-moves",
+        run: store_moves::run,
     },
     // last: it reads the final shape of every block
     Pass {
@@ -303,6 +325,7 @@ mod tests {
             name: "Pair".to_string(),
             fields: vec![
                 by_ir::function::FieldDecl {
+                    cell: false,
                     name: "a".to_string(),
                     ty: RType::FLOAT,
                     default: None,
@@ -310,6 +333,7 @@ mod tests {
                     defaulted_by: None,
                 },
                 by_ir::function::FieldDecl {
+                    cell: false,
                     name: "b".to_string(),
                     ty: RType::FLOAT,
                     default: None,
@@ -329,6 +353,7 @@ mod tests {
             fields_are_parameters: true,
             dataclass: false,
             immutable: false,
+            environment: false,
         });
 
         assert_eq!(optimize(&mut module), Ok(()));

@@ -195,6 +195,143 @@ fn a_function_returning_nothing_returns_none() {
 }
 
 #[test]
+fn a_call_whose_value_is_discarded_is_not_narrowed() {
+    // `cb()` alone on a line throws its value away, so the declared `int` is not asked
+    // of it — while the same call used as a value still is
+    let ir = ir("\
+from collections.abc import Callable
+
+def discard(cb: Callable[[], int]) -> None:
+    cb()
+
+def keep(cb: Callable[[], int]) -> int:
+    return cb()
+");
+    let discard = &ir[ir.find("def discard").unwrap_or(0)..ir.find("def keep").unwrap_or(ir.len())];
+    let keep = &ir[ir.find("def keep").unwrap_or(0)..];
+    assert!(discard.contains("callobj cb()"), "{ir}");
+    assert!(!discard.contains("unbox"), "{ir}");
+    assert!(keep.contains("unbox"), "{ir}");
+}
+
+#[test]
+fn a_raised_call_is_not_narrowed() {
+    // `raise` asks only that the value be an exception, which raising it checks, so what
+    // the call answered is raised as it is
+    let ir = ir("\
+class Refused(Exception):
+    pass
+
+def fail(text: str) -> int:
+    raise Refused(text)
+");
+    assert!(ir.contains("raise "), "{ir}");
+    assert!(!ir.contains("unbox"), "{ir}");
+}
+
+#[test]
+fn a_builtin_lowered_natively_is_tested_for_being_the_builtin() {
+    // `len` and `range` are looked up and compared on every use, and the native path
+    // is only one arm of the answer
+    let ir = ir("\
+def length(xs: list[int]) -> int:
+    return len(xs)
+
+def count(n: int) -> int:
+    total = 0
+    for i in range(n):
+        total = total + i
+    return total
+");
+    assert!(ir.contains("= global len"), "{ir}");
+    assert!(
+        ir.contains("builtin-stands") && ir.contains(" len\n"),
+        "{ir}"
+    );
+    assert!(ir.contains("= global range"), "{ir}");
+    assert!(ir.contains(" range\n"), "{ir}");
+}
+
+#[test]
+fn a_field_read_tests_the_field_is_there_and_a_pattern_does_not_match_without_it() {
+    // an instance `__new__` made without `__init__` has no fields yet: a read raises, and
+    // a class pattern capturing one does not match
+    let ir = ir("\
+class P:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+def get(p: P) -> int:
+    return p.n
+
+def bump(p: P) -> None:
+    p.n += 1
+
+def pick(value: object) -> int:
+    match value:
+        case P(n=k):
+            return k
+        case _:
+            return 0
+");
+    let get = &ir[ir.find("def get").unwrap_or(0)..ir.find("def bump").unwrap_or(ir.len())];
+    assert!(get.contains("require p.<P.n>"), "{ir}");
+    let bump = &ir[ir.find("def bump").unwrap_or(0)..ir.find("def pick").unwrap_or(ir.len())];
+    assert!(bump.contains("require p.<P.n>"), "{ir}");
+    let pick = &ir[ir.find("def pick").unwrap_or(0)..];
+    assert!(!pick.contains("require"), "{ir}");
+}
+
+#[test]
+fn a_comparison_of_objects_answers_an_object_as_a_value_and_a_bit_as_a_condition() {
+    with_source(
+        "\
+def value(a: object, b: object) -> object:
+    return a > b
+
+def condition(a: object, b: object) -> int:
+    if a > b:
+        return 1
+    return 0
+
+def ints(a: int, b: int) -> object:
+    return a > b
+",
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", crate::Language::Python);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let named = |name: &str| {
+                module
+                    .functions
+                    .iter()
+                    .find(|function| function.name == name)
+                    .map(print_function)
+                    .unwrap_or_default()
+            };
+            let rich = |name: &str| {
+                module.functions.iter().any(|function| {
+                    function.name == name
+                        && has_op(function, |op| matches!(op, Op::ObjectRichCompare { .. }))
+                })
+            };
+            let bit = |name: &str| {
+                module.functions.iter().any(|function| {
+                    function.name == name
+                        && has_op(function, |op| matches!(op, Op::ObjectCompare { .. }))
+                })
+            };
+            assert!(rich("value") && !bit("value"), "{}", named("value"));
+            assert!(
+                bit("condition") && !rich("condition"),
+                "{}",
+                named("condition")
+            );
+            assert!(!rich("ints") && !bit("ints"), "{}", named("ints"));
+        },
+    );
+}
+
+#[test]
 fn a_bool_condition_converts_to_a_bit() {
     let ir = ir("\
 def pick(flag: bool) -> int:
@@ -496,10 +633,11 @@ def before(a: str, b: object) -> bool:
                 print_function(same)
             );
             // only *both* operands being `str` settles whose comparison runs, so a
-            // gradual right-hand side stays on the protocol
+            // gradual right-hand side stays on the protocol — and answers with whatever
+            // the protocol answered
             let before = function("before");
             assert!(
-                has_op(before, |op| matches!(op, Op::ObjectCompare { .. })),
+                has_op(before, |op| matches!(op, Op::ObjectRichCompare { .. })),
                 "{}",
                 print_function(before)
             );
@@ -836,6 +974,26 @@ def f(rows: list[list[int]]) -> object:
 }
 
 #[test]
+fn a_comprehension_clause_reading_a_variable_before_it_is_bound_declines() {
+    // `y` in the first clause's own iterable is the enclosing frame's, and in the second
+    // clause's iterable it is the comprehension's, which nothing has bound yet: python
+    // raises `UnboundLocalError` there
+    assert_eq!(
+        declines(
+            "\
+def outer(xs: list[list[int]], y: list[int]) -> object:
+    ok = [x for x in y]
+    return [x for x in xs for y in y]
+"
+        ),
+        [(
+            "outer".to_string(),
+            "a comprehension clause reads `y` before the clause that binds it".to_string()
+        )]
+    );
+}
+
+#[test]
 fn a_target_list_unpacks_into_a_fixed_tuple() {
     // one op with one destination, read back element by element — a second
     // destination would be invisible to liveness
@@ -1055,6 +1213,62 @@ def f(n: int) -> int:
                 .filter(|op| matches!(op, Op::PopHandled { .. }))
                 .count();
             assert!(pops >= 2, "{}", print_function(f));
+        },
+    );
+}
+
+#[test]
+fn a_with_block_reaching_its_manager_directly_holds_it_as_its_own_class() {
+    // both halves of the protocol are this module's own methods, called directly. the
+    // manager is held in the class's register, so neither call narrows it back from an
+    // `object` it never needed to become
+    with_source(
+        "\
+class Guard:
+    depth: int
+
+    def __init__(self):
+        self.depth = 0
+
+    def __enter__(self) -> \"Guard\":
+        self.depth = self.depth + 1
+        return self
+
+    def __exit__(self, kind: object, value: object, trace: object):
+        self.depth = self.depth - 1
+
+
+def run(guard: Guard) -> int:
+    with guard:
+        pass
+    return guard.depth
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            let run = module
+                .all_functions()
+                .find(|function| function.name == "run")
+                .expect("run is compiled");
+            assert!(
+                !has_op(run, |op| matches!(
+                    op,
+                    Op::Unbox {
+                        to: RType::Instance { .. },
+                        ..
+                    }
+                )),
+                "{}",
+                print_function(run)
+            );
+            assert!(
+                has_op(
+                    run,
+                    |op| matches!(op, Op::CallNative { callee, .. } if callee == "__exit__")
+                ),
+                "{}",
+                print_function(run)
+            );
         },
     );
 }
@@ -2232,6 +2446,64 @@ class Derived(Base):
             ("parent".to_string(), RType::OBJECT, false),
             ("depth".to_string(), RType::INT, false),
         ]
+    );
+}
+
+/// a class that adds no field of its own still reaches the ones its base declares
+///
+/// such a class is laid out with an *empty* layout — its instances are its base's, at the
+/// base's offsets, with no region past them for it to own. so an attribute of its own
+/// reaches nothing, and the field op has to name the base that keeps it. looking only in
+/// the receiver's own layout sent every read and write of an inherited attribute out
+/// through the dynamic form instead, which on an emitted instance is what stops the whole
+/// module from ever narrowing a refusal
+#[test]
+fn a_class_that_adds_no_field_reaches_its_base_s_storage_directly() {
+    with_source(
+        "\
+class Held(list):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.notes = []
+
+
+class Restated(Held):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.notes = ['restated']
+
+    def first_note(self):
+        return self.notes[0]
+",
+        |db, env, model, suite| {
+            let module = crate::build_module(db, env, model, suite, "app", crate::Language::Python);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let restated = module
+                .classes
+                .iter()
+                .find(|class| class.name == "Restated")
+                .expect("Restated is emitted");
+            assert!(restated.fields.is_empty(), "{:?}", restated.fields);
+            let method = |name: &str| {
+                restated
+                    .methods
+                    .iter()
+                    .find(|candidate| candidate.name == name)
+                    .unwrap_or_else(|| panic!("Restated.{name} is emitted"))
+            };
+            // a class something extends is written and read through the attribute too,
+            // on the arm where the field does not stand — see `Op::FieldStands` — so what
+            // is asserted is that the field op is there, and that the test in front of it
+            // names the receiver's own class
+            let written = method("__init__");
+            let body = print_function(written);
+            assert!(body.contains("self.<Held.notes> ="), "{body}");
+            assert!(body.contains("field-stands self Restated.notes"), "{body}");
+            let read = method("first_note");
+            let body = print_function(read);
+            assert!(body.contains("= self.<Held.notes>"), "{body}");
+            assert!(body.contains("field-stands self Restated.notes"), "{body}");
+        },
     );
 }
 
@@ -4810,7 +5082,7 @@ def f(a: int) -> int:
 fn concatenating_two_strings_stays_a_string() {
     let ir = ir("def f(a: str, b: str) -> str:\n    return a + b\n");
     assert!(ir.contains("-> str"), "{ir}");
-    assert!(ir.contains(" ++ "), "{ir}");
+    assert!(ir.contains(" + "), "{ir}");
 }
 
 #[test]
@@ -5456,7 +5728,9 @@ def f(n: object) -> None:
     for i in range(n):
         pass
 ");
-    assert_eq!(ir.matches("pycall range").count(), 1, "{ir}");
+    assert_eq!(ir.matches("callobj ").count(), 1, "{ir}");
+    assert_eq!(ir.matches("= global range").count(), 1, "{ir}");
+    assert!(ir.contains("callobj r2(n)"), "{ir}");
     assert!(ir.contains("= iter "), "{ir}");
 }
 
@@ -6431,6 +6705,32 @@ def make_adder(n: int) -> object:
 }
 
 #[test]
+fn a_cell_two_frames_store_different_representations_in_is_an_object() {
+    // the nested frame stores a `str` where the enclosing one only ever stored an `int`,
+    // so no one representation holds both and the cell is an `object` — asked of every
+    // frame that writes it, not only of the one that owns it
+    with_source(
+        "\
+def counter() -> (() -> object):
+    n = 0
+    def get() -> object:
+        nonlocal n
+        n = 'x'
+        return n
+    return get
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let environment = &module.classes[0];
+            assert_eq!(environment.fields[0].name, "n");
+            assert_eq!(environment.fields[0].ty, RType::OBJECT);
+        },
+    );
+}
+
+#[test]
 fn a_capture_either_frame_writes_becomes_a_shared_cell() {
     // python closes over the *variable*: the write after the `def` is visible through
     // the closure, so the name cannot live in a register in either frame
@@ -6448,10 +6748,10 @@ def counter() -> (() -> int):
                 crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
             assert!(module.declined.is_empty(), "{:?}", module.declined);
             let environment = &module.classes[0];
-            // a cell is always `object`: it starts unset, and NULL has to be
-            // distinguishable from every value it could hold
+            // both frames only ever store an `int`, so the cell holds a tagged one, whose
+            // error value is what unset means
             assert_eq!(environment.fields[0].name, "n");
-            assert_eq!(environment.fields[0].ty, RType::OBJECT);
+            assert_eq!(environment.fields[0].ty, RType::INT);
 
             // the *enclosing* frame writes the field too
             let outer = print_function(&module.functions[0]);
@@ -6951,10 +7251,7 @@ def run(times: int, k: int) -> int:
             let outer = &module.functions[0];
             let text = print_function(outer);
             assert!(text.contains("call run$env.step("), "{text}");
-            assert!(
-                !has_op(outer, |op| matches!(op, Op::CallValue { .. })),
-                "{text}"
-            );
+            assert!(!text.contains("callobj step("), "{text}");
         },
     );
 }
@@ -8241,10 +8538,14 @@ data class B(A):
         "B",
         "label",
     );
-    // `class B` is the pivot and `r1` the boxed receiver: the two-argument form
-    // python's own compiler would have built from the frame
+    // `class B` is the pivot and `r4` the boxed receiver: the two-argument form
+    // python's own compiler would have built from the frame, taken while `super` is
+    // the builtin — and a `super` rebound at runtime is called with nothing, as python
+    // calls it
     assert!(ir.contains("= class B"), "{ir}");
-    assert!(ir.contains("pycall super(r2, r1)"), "{ir}");
+    assert!(ir.contains("r2 = builtin-stands super"), "{ir}");
+    assert!(ir.contains("callobj r1(r5, r4)"), "{ir}");
+    assert!(ir.contains("callobj r1()"), "{ir}");
 }
 
 #[test]

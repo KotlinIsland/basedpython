@@ -84,25 +84,32 @@
 //! ## why none of them asks for a temporary written once
 //!
 //! the obvious way to say "this copy is the register's whole life" is to ask that the
-//! register be written exactly once over the function and carry no name from the
-//! source program. both stand in for something rather than saying it, and both are
-//! wrong often enough to matter:
+//! register be written exactly once over the function. that stands in for something
+//! rather than saying it, and is wrong often enough to matter: `unswitch` runs before
+//! this pass and emits a *second copy of every loop body*, reusing the same registers.
+//! so no register written inside a duplicated loop is ever written once, however
+//! plainly its copy dominates its uses. this is what was keeping a table subscripted
+//! three times a trip — the key widened into an operand of its own each time, in the
+//! hottest block of the program — paying a retain and a release per subscript
 //!
-//! - `unswitch` runs before this pass and emits a *second copy of every loop body*,
-//!   reusing the same registers. so no register written inside a duplicated loop is
-//!   ever written once, however plainly its copy dominates its uses. this is what was
-//!   keeping a table subscripted three times a trip — the key widened into an operand
-//!   of its own each time, in the hottest block of the program — paying a retain and
-//!   a release per subscript
-//! - `pair = Pair(i, i + 1)` in a loop body writes a register the source program
-//!   named, and a name says nothing at all about whether the copy still owns
-//!
-//! so the property those two stood for is stated instead: every write of the register
+//! so the property that stood for is stated instead: every write of the register
 //! lends from the same source, at most one per block, no block reads the register
 //! without having written it first, no terminator reads it, and nothing writes over
 //! the source between the write and the last read. the first three together are what
 //! make each write's window its own block, which is the window the last one is stated
 //! against.
+//!
+//! ## a name owns what it holds
+//!
+//! a register the source program named never borrows. python lets go of what a name
+//! holds when the name is rebound or deleted, and a borrowed register lets go of
+//! nothing: the value would go when its lender is next written, which is somewhere
+//! else entirely. in a loop body that is before the new value is built
+//!
+//! ```python
+//! while i < n:
+//!     held = Cell(i)   # the previous `Cell` goes once this one is built
+//! ```
 //!
 //! ## a chain of lends is one borrow each, not one borrow between them
 //!
@@ -234,51 +241,63 @@ fn write_counts(function: &Function) -> HashMap<RegisterId, usize> {
     writes
 }
 
-/// every register that only ever holds a literal, which may borrow rather than own
+/// every register that only ever holds a constant, which may borrow rather than own
 ///
 /// a string or bytes literal is a module static the emitter builds once at import and
-/// never gives back, so unlike a copy there is no window to reason about at all: the
-/// value cannot go away while the frame is running, whatever happens in between.
+/// never gives back, and `None`, `True` and `False` are the interpreter's own
+/// singletons, so unlike a copy there is no window to reason about at all: the value
+/// cannot go away while the frame is running, whatever happens in between.
+///
+/// the condition is on every write rather than on there being one. a register whose
+/// every write is a constant never owns anything, however many writes there are — and
+/// `unswitch` gives each loop it duplicates a second copy of its body, so a register
+/// written once in the source is written twice by here.
 ///
 /// what this is worth is a loop. `if part.startswith("w")` reads the literal into a
-/// register of its own every trip, and today that is a retain and a release per trip
-/// on a value that was never going anywhere
+/// register of its own every trip, and a `with` block hands `__exit__` three `None`s,
+/// and each was a retain and a release per trip on a value that was never going
+/// anywhere
 fn constants(function: &Function) -> Vec<RegisterId> {
     let writes = write_counts(function);
+    let mut constant_writes: BTreeMap<RegisterId, usize> = BTreeMap::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        if let Op::Assign {
+            dest,
+            src: Value::Str(_) | Value::Bytes(_),
+        }
+        | Op::Box {
+            dest,
+            src: Value::None | Value::Bool(_) | Value::Bit(_),
+        } = op
+        {
+            *constant_writes.entry(*dest).or_default() += 1;
+        }
+    }
 
     let mut candidates = Vec::new();
-    for block in &function.blocks {
-        for op in &block.ops {
-            let Op::Assign {
-                dest,
-                src: Value::Str(_) | Value::Bytes(_),
-            } = op
-            else {
-                continue;
-            };
-            // written once, unnamed, and refcounted — as for a copy, this is what
-            // makes the literal the register's whole life
-            if writes.get(dest) != Some(&1) {
-                continue;
-            }
-            let Some(decl) = function.register(*dest) else {
-                continue;
-            };
-            if decl.name.is_some() || !decl.ty.is_refcounted() {
-                continue;
-            }
-            // a use in a terminator would hand a reference out of the frame
-            if function.blocks.iter().any(|block| {
-                block
-                    .terminator
-                    .operands()
-                    .iter()
-                    .any(|operand| reads(operand, *dest))
-            }) {
-                continue;
-            }
-            candidates.push(*dest);
+    for (dest, count) in constant_writes {
+        if writes.get(&dest) != Some(&count) {
+            continue;
         }
+        // unnamed and refcounted: a name says the source may rebind it to anything, and
+        // a value with no reference has nothing to save
+        let Some(decl) = function.register(dest) else {
+            continue;
+        };
+        if decl.name.is_some() || !decl.ty.is_refcounted() {
+            continue;
+        }
+        // a use in a terminator would hand a reference out of the frame
+        if function.blocks.iter().any(|block| {
+            block
+                .terminator
+                .operands()
+                .iter()
+                .any(|operand| reads(operand, dest))
+        }) {
+            continue;
+        }
+        candidates.push(dest);
     }
     candidates
 }
@@ -287,34 +306,37 @@ fn constants(function: &Function) -> Vec<RegisterId> {
 fn field_reads(function: &Function) -> Vec<RegisterId> {
     // a parameter is already borrowed by the frame, and a named local outlives any
     // single statement — only a temporary is a candidate
-    let writes = write_counts(function);
-
-    let mut candidates = Vec::new();
-    for block in &function.blocks {
-        for (index, op) in block.ops.iter().enumerate() {
-            let Op::GetField { dest, .. } = op else {
-                continue;
-            };
-            // written once, unnamed, and refcounted — otherwise there is either
-            // nothing to save or no single window to reason about
-            if writes.get(dest) != Some(&1) {
-                continue;
-            }
-            let Some(decl) = function.register(*dest) else {
-                continue;
-            };
-            if decl.name.is_some() || !decl.ty.is_refcounted() {
-                continue;
-            }
-            if reads_outside(function, block, *dest) {
-                continue;
-            }
-            if borrow_is_safe(function, block, index, *dest) {
-                candidates.push(*dest);
-            }
-        }
-    }
-    candidates
+    (function.param_count..function.registers.len())
+        .map(RegisterId)
+        .filter(|register| {
+            function
+                .register(*register)
+                .is_some_and(|decl| decl.name.is_none() && decl.ty.is_refcounted())
+        })
+        // every write a field read, and each write's window its own block: `unswitch`
+        // copies a loop body and its copy writes the same registers, so a register may be
+        // written once in each of several blocks, and what the argument below needs is
+        // only that no block reads what another one left
+        .filter(|register| {
+            lender(function, *register, |op| match op {
+                Op::GetField {
+                    receiver: Value::Register(receiver),
+                    ..
+                } => Some(*receiver),
+                _ => None,
+            })
+            .is_some()
+        })
+        .filter(|register| {
+            function.blocks.iter().all(|block| {
+                block
+                    .ops
+                    .iter()
+                    .position(|op| op.dest() == Some(*register))
+                    .is_none_or(|at| borrow_is_safe(function, block, at, *register))
+            })
+        })
+        .collect()
 }
 
 /// every register filled only by copies of one other register, paired with the
@@ -380,11 +402,11 @@ fn lending_writes(
     // a parameter is already borrowed by the frame, so there is nothing to save on it
     for index in function.param_count..function.registers.len() {
         let register = RegisterId(index);
-        // a register with nothing to save is not worth an answer either way
-        if function
-            .register(register)
-            .is_none_or(|decl| !decl.ty.is_refcounted())
-        {
+        // a register with nothing to save is not worth an answer either way, and a name
+        // owns an object it holds
+        if function.register(register).is_none_or(|decl| {
+            !decl.ty.is_refcounted() || (decl.name.is_some() && decl.ty.holds_object_reference())
+        }) {
             continue;
         }
         if let Some(source) = lender(function, register, lends) {
@@ -540,6 +562,10 @@ fn borrow_is_safe(
                 // field value first, and that `__del__` could free the very object
                 // being written through
                 Op::GetField { receiver, .. } if reads(receiver, register) => {}
+                // and asking whether the receiver has a field reads it no further than
+                // the load
+                Op::RequireField { receiver, .. } | Op::FieldIsSet { receiver, .. }
+                    if reads(receiver, register) => {}
                 // tagged integer arithmetic lowers to one of the `By_Int*` helpers,
                 // and each of those either stays on a fast path over two tagged
                 // shorts — which hold no reference to keep alive — or hands both
@@ -570,25 +596,6 @@ fn borrow_is_safe(
     used
 }
 
-/// whether any block but this one reads `register`
-///
-/// the safety argument only covers one block's worth of straight-line code, so a
-/// use anywhere else takes the borrow off the table
-fn reads_outside(function: &Function, home: &BasicBlock, register: RegisterId) -> bool {
-    function
-        .blocks
-        .iter()
-        .filter(|block| !std::ptr::eq(*block, home))
-        .any(|block| {
-            block
-                .ops
-                .iter()
-                .flat_map(Op::operands)
-                .chain(block.terminator.operands())
-                .any(|operand| reads(operand, register))
-        })
-}
-
 fn reads(operand: &Value, register: RegisterId) -> bool {
     matches!(operand, Value::Register(id) if *id == register)
 }
@@ -614,8 +621,13 @@ fn is_inert(function: &Function, op: &Op) -> bool {
             .is_some_and(|decl| !decl.ty.is_refcounted() || decl.borrowed)
     };
     match op {
-        // pure double arithmetic touches no reference at all
-        Op::FloatBinary { .. } | Op::FloatCompare { .. } => true,
+        // pure double arithmetic touches no reference at all, and neither does asking
+        // whether an instance has a field: a load and a comparison, and a raise at worst,
+        // which leaves before any later use of what is borrowed
+        Op::FloatBinary { .. }
+        | Op::FloatCompare { .. }
+        | Op::RequireField { .. }
+        | Op::FieldIsSet { .. } => true,
         Op::Assign { dest, .. } | Op::TupleGet { dest, .. } | Op::GetField { dest, .. } => {
             plain(dest)
         }
@@ -630,7 +642,7 @@ fn is_inert(function: &Function, op: &Op) -> bool {
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BinOp, Terminator};
+    use by_ir::ops::{BinOp, Concatenation, Mutation, Terminator};
     use by_ir::rtype::{IntWidth, RType};
     use by_ir::verify::verify;
 
@@ -673,6 +685,57 @@ mod tests {
         });
         builder.terminate(Terminator::Return(Value::Register(label)));
         builder.finish()
+    }
+
+    /// `sum = self.x + k`, twice over: once in a loop body and once in the copy of it
+    /// `unswitch` makes, which writes the same registers. `read_first` puts a read of the
+    /// field's register ahead of the second copy's write
+    fn read_in_two_copies(read_first: bool) -> (Function, RegisterId) {
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let receiver = builder.param("p", nested());
+        let k = builder.param("k", RType::INT);
+        let read = builder.temp(RType::INT);
+        let sum = builder.temp(RType::INT);
+        let field = Op::GetField {
+            dest: read,
+            receiver: Value::Register(receiver),
+            class: "Holder".to_string(),
+            field: "count".to_string(),
+        };
+        let add = Op::IntBinary {
+            dest: sum,
+            op: BinOp::Add,
+            lhs: Value::Register(read),
+            rhs: Value::Register(k),
+        };
+        let copy = builder.new_block();
+        builder.push(field.clone());
+        builder.push(add.clone());
+        builder.terminate(Terminator::Goto(copy));
+        builder.switch_to(copy);
+        if read_first {
+            builder.push(add.clone());
+        }
+        builder.push(field);
+        builder.push(add);
+        builder.terminate(Terminator::Return(Value::Register(sum)));
+        (builder.finish(), read)
+    }
+
+    #[test]
+    fn a_field_read_in_each_copy_of_an_unswitched_loop_borrows() {
+        // each write's window is its own block, and each is safe, which is all the
+        // borrow rests on — that the register is written twice is not
+        let (function, read) = read_in_two_copies(false);
+        assert_eq!(field_reads(&function), vec![read]);
+    }
+
+    #[test]
+    fn a_field_read_its_block_reads_before_writing_does_not_borrow() {
+        // the second block reads the register before writing it, so what it reads there
+        // is what the first block left, and nothing holds that any more
+        let (function, _) = read_in_two_copies(true);
+        assert_eq!(field_reads(&function), Vec::new());
     }
 
     #[test]
@@ -865,6 +928,8 @@ mod tests {
             class: "Holder".to_string(),
             field: "label".to_string(),
             value: Value::Str("x".to_string()),
+            moves: false,
+            present: false,
         });
         builder.terminate(Terminator::Return(Value::None));
         let mut m = module(builder.finish());
@@ -943,6 +1008,8 @@ mod tests {
             class: "Nest".to_string(),
             field: "other".to_string(),
             value: Value::Register(inner),
+            moves: false,
+            present: false,
         });
         builder.terminate(Terminator::Return(Value::None));
         let mut m = module(builder.finish());
@@ -1166,10 +1233,10 @@ mod tests {
     }
 
     #[test]
-    fn a_named_destination_borrows_a_copy() {
-        // `v = build()` in a loop body writes a register the source program named, and
-        // the name says nothing about whether the copy still owns: the write is the
-        // only one, and every read of it follows that write in the same block
+    fn a_named_destination_owns_its_copy() {
+        // the write is the only one and every read of it follows that write in the same
+        // block, which would let a temporary borrow — but a name holds its value until
+        // it is rebound, which the lender knows nothing about
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let line = builder.param("line", RType::STR);
         let held = builder.local("held", RType::OBJECT);
@@ -1182,7 +1249,41 @@ mod tests {
         builder.terminate(Terminator::Return(Value::Register(length)));
         let mut m = module(builder.finish());
         run(&mut m);
-        assert!(m.functions[0].registers[held.index()].borrowed);
+        assert!(!m.functions[0].registers[held.index()].borrowed);
+        assert_eq!(verify(&m.functions[0]), Ok(()));
+    }
+
+    #[test]
+    fn a_named_int_destination_borrows_an_element() {
+        // an `int` has no finalizer, so when python lets go of what the name held is
+        // not something a program can see, and `part` in `head, part = split(s)` may
+        // hold its element on loan from the tuple
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let text = builder.param("s", RType::STR);
+        let pair = builder.temp(RType::Tuple(Box::new([RType::STR, RType::INT])));
+        let part = builder.local("part", RType::INT);
+        let sum = builder.temp(RType::INT);
+        builder.push(Op::CallNative {
+            owner: None,
+            dest: Some(pair),
+            callee: "split".to_string(),
+            args: vec![Value::Register(text)],
+        });
+        builder.push(Op::TupleGet {
+            dest: part,
+            src: Value::Register(pair),
+            index: 1,
+        });
+        builder.push(Op::IntBinary {
+            dest: sum,
+            op: BinOp::Add,
+            lhs: Value::Register(part),
+            rhs: Value::Int(1),
+        });
+        builder.terminate(Terminator::Return(Value::Register(sum)));
+        let mut m = module(builder.finish());
+        run(&mut m);
+        assert!(m.functions[0].registers[part.index()].borrowed);
         assert_eq!(verify(&m.functions[0]), Ok(()));
     }
 
@@ -1381,6 +1482,71 @@ mod tests {
     }
 
     #[test]
+    fn a_boxed_singleton_borrows_it() {
+        // `None`, `True` and `False` are the interpreter's own objects, which outlive
+        // every frame, so a register holding one owns nothing a release could drop
+        let mut builder = FunctionBuilder::new("f", RType::OBJECT);
+        let none = builder.temp(RType::OBJECT);
+        let yes = builder.temp(RType::OBJECT);
+        let answer = builder.temp(RType::OBJECT);
+        builder.push(Op::Box {
+            dest: none,
+            src: Value::None,
+        });
+        builder.push(Op::Box {
+            dest: yes,
+            src: Value::Bool(true),
+        });
+        builder.push(Op::CallPython {
+            dest: answer,
+            callee: "pick".to_string(),
+            args: vec![Value::Register(none), Value::Register(yes)],
+        });
+        builder.terminate(Terminator::Return(Value::Register(answer)));
+        let mut m = module(builder.finish());
+        run(&mut m);
+        assert!(m.functions[0].registers[none.index()].borrowed);
+        assert!(m.functions[0].registers[yes.index()].borrowed);
+    }
+
+    #[test]
+    fn a_register_only_ever_written_with_a_constant_borrows_however_often() {
+        // `unswitch` gives a loop a second copy of its body, so a register the source
+        // writes once is written twice by the time this runs — and each write still
+        // lends. two arms writing the same singleton are the same shape
+        let mut builder = FunctionBuilder::new("f", RType::OBJECT);
+        let flag = builder.param("c", RType::BIT);
+        let none = builder.temp(RType::OBJECT);
+        let answer = builder.temp(RType::OBJECT);
+        let left = builder.new_block();
+        let right = builder.new_block();
+        let join = builder.new_block();
+        builder.terminate(Terminator::Branch {
+            cond: Value::Register(flag),
+            then_block: left,
+            else_block: right,
+        });
+        for arm in [left, right] {
+            builder.switch_to(arm);
+            builder.push(Op::Box {
+                dest: none,
+                src: Value::None,
+            });
+            builder.terminate(Terminator::Goto(join));
+        }
+        builder.switch_to(join);
+        builder.push(Op::CallPython {
+            dest: answer,
+            callee: "pick".to_string(),
+            args: vec![Value::Register(none)],
+        });
+        builder.terminate(Terminator::Return(Value::Register(answer)));
+        let mut m = module(builder.finish());
+        run(&mut m);
+        assert!(m.functions[0].registers[none.index()].borrowed);
+    }
+
+    #[test]
     fn a_returned_literal_does_not_borrow() {
         // as for a copy, the frame would be handing out a reference it never took
         let mut builder = FunctionBuilder::new("f", RType::OBJECT);
@@ -1450,12 +1616,11 @@ mod tests {
     #[test]
     fn an_element_read_off_a_tuple_borrows() {
         // the tuple register owns both elements, so reading one is a copy of a place
-        // it holds — and the destination is a name, which is what `head, tail = ...`
-        // always produces
+        // it holds
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         call_pair(&mut builder, pair, text);
         builder.push(Op::TupleGet {
@@ -1485,7 +1650,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         let second = builder.new_block();
         for block in [None, Some(second)] {
@@ -1520,7 +1685,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         let next = builder.new_block();
         call_pair(&mut builder, pair, text);
@@ -1546,7 +1711,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let first = builder.temp(RType::INT);
         let second = builder.temp(RType::INT);
         builder.push(Op::Len {
@@ -1576,7 +1741,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         call_pair(&mut builder, pair, text);
         builder.push(Op::TupleGet {
@@ -1601,7 +1766,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::STR);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         call_pair(&mut builder, pair, text);
         builder.push(Op::TupleGet {
             dest: head,
@@ -1621,7 +1786,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         let next = builder.new_block();
         call_pair(&mut builder, pair, text);
@@ -1641,6 +1806,7 @@ mod tests {
             lhs: Value::Str("a".to_string()),
             rhs: Value::Str("b".to_string()),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.push(Op::Len {
             dest: length,
@@ -1658,7 +1824,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         call_pair(&mut builder, pair, text);
         for index in [0, 1] {
@@ -1686,7 +1852,7 @@ mod tests {
         let text = builder.param("s", RType::STR);
         let first = builder.temp(pair_type());
         let second = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         let next = builder.new_block();
         for (pair, last) in [(first, false), (second, true)] {
@@ -1719,7 +1885,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         call_pair(&mut builder, pair, text);
         builder.push(Op::TupleGet {
@@ -1748,7 +1914,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let widened = builder.temp(RType::OBJECT);
         let length = builder.temp(RType::INT);
         call_pair(&mut builder, pair, text);
@@ -1785,7 +1951,7 @@ mod tests {
         let text = builder.param("s", RType::STR);
         let widened = builder.temp(RType::OBJECT);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let length = builder.temp(RType::INT);
         assert!(widened < head, "the copy has to be settled first");
         call_pair(&mut builder, pair, text);
@@ -1815,7 +1981,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(pair_type());
-        let head = builder.local("head", RType::STR);
+        let head = builder.temp(RType::STR);
         let widened = builder.temp(RType::OBJECT);
         let length = builder.temp(RType::INT);
         call_pair(&mut builder, pair, text);
@@ -1843,7 +2009,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let held = builder.temp(RType::OBJECT);
-        let part = builder.local("part", to.clone());
+        let part = builder.temp(to.clone());
         let length = builder.temp(RType::INT);
         builder.push(Op::CallNative {
             owner: None,
@@ -1943,7 +2109,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("f", RType::FLOAT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(RType::Tuple(Box::new([RType::FLOAT, RType::FLOAT])));
-        let head = builder.local("head", RType::FLOAT);
+        let head = builder.temp(RType::FLOAT);
         let doubled = builder.temp(RType::FLOAT);
         call_pair(&mut builder, pair, text);
         builder.push(Op::TupleGet {

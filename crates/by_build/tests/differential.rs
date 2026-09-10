@@ -1062,13 +1062,40 @@ def mix(a: int, b: int) -> int:
 }
 
 #[test]
+fn a_remainder_of_two_shorts_agrees_for_every_sign() {
+    // `%` floors, so its answer takes the divisor's sign, and it works on the tagged words
+    // directly. every sign pairing, both ends of the short range, a zero divisor in the
+    // running interpreter's own words, and operands past the short range on the way out
+    agree(
+        "tagmod",
+        "\
+def fmod(a: int, b: int) -> int:
+    return a % b
+
+def by_seven(a: int) -> int:
+    return a % 7
+",
+        &[
+            "[m.fmod(a, b) for a in (7, -7, 0, 1, -1) for b in (2, -2, 3, -3, 7, -7, 1, -1)]",
+            "[m.fmod(a, b) for a in (-(2**62), 2**62 - 1) for b in (-(2**62), 2**62 - 1, -1, 1, 3, -3)]",
+            "[m.by_seven(a) for a in range(-15, 16)]",
+            "str(_capture(m.fmod, 5, 0))",
+            "str(_capture(m.fmod, 0, 0))",
+            "[m.fmod(a, b) for a in (2**70, -(2**70)) for b in (7, -7, 2**65)]",
+            "[m.fmod(a, b) for a in (7, -7) for b in (2**70, -(2**70))]",
+        ],
+    );
+}
+
+#[test]
 fn arithmetic_that_leaves_the_short_range_agrees() {
     // a tagged integer holds one bit fewer than a machine word, so an operation whose
     // operands are both short can still produce a result that is not, and the answer
     // then has to come back through cpython's own arithmetic. the runtime keeps that
     // half of each operator out of line, so this is the boundary between two pieces of
     // code rather than two branches of one — including at the very edge, where the
-    // result is exactly one past what a short can hold
+    // result is exactly one past what a short can hold. the short range is not
+    // symmetric, so negating its minimum, or dividing it by -1, is the other way out
     agree(
         "shortedge",
         "\
@@ -1080,8 +1107,20 @@ def sub(a: int, b: int) -> int:
 
 def mul(a: int, b: int) -> int:
     return a * b
+
+def neg(a: int) -> int:
+    return -a
+
+def fdiv(a: int, b: int) -> int:
+    return a // b
+
+def fmod(a: int, b: int) -> int:
+    return a % b
 ",
         &[
+            "[m.neg(a) for a in (-(2**62), -(2**62) + 1, 2**62 - 1)]",
+            "[m.fdiv(a, b) for a in (-(2**62), 2**62 - 1) for b in (-1, 1, -2, 2)]",
+            "[m.fmod(a, b) for a in (-(2**62), 2**62 - 1) for b in (-1, 1, -2, 2)]",
             "m.add(2**62 - 1, 1)",
             "m.add(-(2**62), -1)",
             "m.sub(-(2**62), 1)",
@@ -1090,6 +1129,82 @@ def mul(a: int, b: int) -> int:
             "m.mul(-(2**31), 2**31)",
             "[m.add(a, b) for a in (2**62 - 1, -(2**62)) for b in (-1, 0, 1)]",
             "[m.mul(a, b) for a in (2**40, -(2**40)) for b in (2**40, -(2**40), 0)]",
+        ],
+    );
+}
+
+#[test]
+fn a_big_int_against_a_short_one_compares_by_value() {
+    // a big `int` is held behind a pointer and a small one in the word, so a comparison
+    // between the two is always between two different representations. every operator,
+    // both ways round, and both signs: a value too big to be a short is never equal to
+    // one and is larger or smaller by its sign alone. an `int` subclass is compared by
+    // its own methods, which is what the last two calls pin — the comparisons there
+    // answer the opposite of what the numbers would
+    agree(
+        "bigcompare",
+        "\
+def compare(a: int, b: int) -> list[bool]:
+    return [a < b, a <= b, a > b, a >= b, a == b, a != b]
+",
+        &[
+            "[m.compare(a, b) for a in (10**30, -(10**30), 2**62, -(2**62) - 1) for b in (0, 5, -5)]",
+            "[m.compare(b, a) for a in (10**30, -(10**30), 2**62, -(2**62) - 1) for b in (0, 5, -5)]",
+            "m.compare(type('Big', (int,), {'__gt__': lambda s, o: False, '__lt__': lambda s, o: True})(10**30), 0)",
+            "m.compare(0, type('Big', (int,), {'__gt__': lambda s, o: True, '__lt__': lambda s, o: False})(10**30))",
+        ],
+    );
+}
+
+#[test]
+fn an_integer_literal_outside_the_short_range_agrees() {
+    // a short holds one bit fewer than a machine word, so a literal can fit an `i64`
+    // and still be too wide to tag. such a literal is a real `int` the module builds
+    // once, wherever it is written: returned, compared against, stepped by, taken as
+    // a default, or made by folding two short ones. returning it many times over
+    // shows the frame hands out a reference of its own rather than the module's
+    agree(
+        "longliteral",
+        "\
+def edge() -> int:
+    return 4611686018427387904
+
+def edges() -> list[int]:
+    return [4611686018427387903, 4611686018427387904, -4611686018427387904, -4611686018427387905, 9223372036854775807]
+
+def below(a: int) -> bool:
+    return a < 4611686018427387904
+
+def plus(a: int) -> int:
+    return a + 4611686018427387904
+
+def folded() -> int:
+    return 4611686018427387903 + 1
+
+def defaulted(a: int = 4611686018427387904) -> int:
+    return a
+
+def boxed() -> object:
+    return 4611686018427387904
+
+def stepped(n: int) -> list[int]:
+    out: list[int] = []
+    for i in range(0, n, 4611686018427387904):
+        out.append(i)
+        if len(out) == 3:
+            break
+    return out
+",
+        &[
+            "m.edge()",
+            "sum(m.edge() for _ in range(10000))",
+            "m.edges()",
+            "[m.below(a) for a in (2**62 - 1, 2**62, 2**62 + 1)]",
+            "[m.plus(a) for a in (0, -1, -(2**62), 2**62)]",
+            "m.folded()",
+            "(m.defaulted(), m.defaulted(1))",
+            "m.boxed()",
+            "m.stepped(2**63)",
         ],
     );
 }
@@ -1137,6 +1252,49 @@ def climb(a: int, n: int) -> int:
          print('stable' if after <= before + 100 else f'grew {before}->{after}')\n",
     );
     assert_eq!(out, "True\nstable");
+}
+
+#[test]
+fn a_result_that_is_not_an_int_is_refused_rather_than_tagged() {
+    // an operator on a value too big to be a short goes through the object protocol,
+    // and an `int` subclass may answer it with anything at all. a `-> int` body cannot
+    // hold a `str`, so that answer has to raise the `TypeError` an unbox of one raises
+    // — the conversion back used to swallow its own error and tag the `str` as an int.
+    // this asserts on the compiled leg alone: python hands the `str` back
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_notanint");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def halve(value: int) -> int:
+    return value // 2
+";
+    if build_source(
+        source,
+        "by_diff_notanint",
+        &toolchain,
+        &dir,
+        &Options::default(),
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_notanint as m\n\
+         assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+         Loud = type('Loud', (int,), {'__floordiv__': lambda self, other: 'floordiv override'})\n\
+         print(m.halve(10**30) == 5 * 10**29)\n\
+         try:\n\
+         \x20   print(repr(m.halve(Loud(10**30))))\n\
+         except TypeError as error:\n\
+         \x20   print(f'TypeError: {error}')\n",
+    );
+    assert_eq!(out, "True\nTypeError: expected int, got str");
 }
 
 #[test]
@@ -1656,6 +1814,269 @@ def reassigns(n: int) -> int:
             "sum(m.twice(10 ** 25 + i) for i in range(200))",
         ],
     );
+}
+
+#[test]
+fn a_value_nothing_names_is_dropped_as_soon_as_it_is_used() {
+    // python drops a value no name holds the moment the expression that made it is done
+    // with it: a file written through `open(p, 'w').write(...)` is closed, and so
+    // flushed, before the next line reads it back, and a finalizer on a discarded
+    // result runs before the statement after it. a named local is held until the name
+    // is rebound, which `a_value_a_name_held_is_dropped_when_the_name_is_rebound` asks
+    // about, so only the unnamed values are asked about here
+    agree_python(
+        "temporaries",
+        "\
+import os
+import tempfile
+from collections.abc import Callable
+
+
+def write_then_read() -> str:
+    fd, path = tempfile.mkstemp()
+    os.close(fd)
+    try:
+        open(path, 'w').write('written')
+        with open(path) as handle:
+            return handle.read()
+    finally:
+        os.unlink(path)
+
+
+class Fresh:
+    make: Callable[[], object]
+    log: list[str]
+
+    def __init__(self, make: Callable[[], object], log: list[str]) -> None:
+        self.make = make
+        self.log = log
+
+    def __enter__(self) -> object:
+        return self.make()
+
+    def __exit__(self, kind: object, value: object, trace: object) -> None:
+        self.log.append('exit')
+
+
+class Swallow:
+    def __enter__(self) -> 'Swallow':
+        return self
+
+    def __exit__(self, kind: object, value: object, trace: object) -> bool:
+        return True
+
+
+def fresh_enter(make: Callable[[], object], log: list[str]) -> list[str]:
+    with Fresh(make, log):
+        log.append('body')
+    log.append('after')
+    return list(log)
+
+
+def swallowed(make: Callable[[], BaseException], log: list[str]) -> list[str]:
+    with Swallow():
+        raise make()
+    log.append('after')
+    return list(log)
+
+
+def discarded(make: Callable[[], object], log: list[str]) -> list[str]:
+    make()
+    log.append('after')
+    return list(log)
+",
+        &[
+            "m.write_then_read()",
+            "(lambda log: m.fresh_enter(type('T', (), {'__del__': lambda s: log.append('dropped')}), log))([])",
+            "(lambda log: m.swallowed(type('E', (Exception,), {'__del__': lambda s: log.append('dropped')}), log))([])",
+            "(lambda log: m.discarded(type('T', (), {'__del__': lambda s: log.append('dropped')}), log))([])",
+        ],
+    );
+}
+
+#[test]
+fn a_tuple_nothing_names_is_dropped_as_soon_as_it_is_used() {
+    // a fixed-length tuple is held as a struct of its elements, and python drops the
+    // tuple the moment the expression that made it is done with it: a discarded one
+    // before the next statement, and the rest of one subscripted for a single element
+    // before that element is used. a tuple drops its elements last to first. the
+    // element read off `nested(i)[0]` is itself a tuple, held on loan from the outer one,
+    // so letting go of both at once would free the inner one twice
+    agree_python(
+        "tupletemps",
+        "\
+log: list[str] = []
+
+
+class Loud:
+    name: str
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __del__(self) -> None:
+        log.append('del ' + self.name)
+
+
+def make(i: int) -> tuple[Loud, int]:
+    return Loud(str(i)), i
+
+
+def pair(i: int) -> tuple[Loud, Loud]:
+    return Loud('a' + str(i)), Loud('b' + str(i))
+
+
+def nested(i: int) -> tuple[tuple[Loud, int], Loud]:
+    return (Loud('in' + str(i)), i), Loud('out' + str(i))
+
+
+def show(held: Loud) -> None:
+    log.append('show ' + held.name)
+
+
+def discarded(n: int) -> list[str]:
+    log.clear()
+    i = 0
+    while i < n:
+        make(i)
+        log.append('after ' + str(i))
+        i = i + 1
+    return list(log)
+
+
+def indexed(n: int) -> list[str]:
+    log.clear()
+    i = 0
+    while i < n:
+        part = make(i)[1]
+        log.append('part ' + str(part))
+        i = i + 1
+    return list(log)
+
+
+def both_discarded(n: int) -> list[str]:
+    log.clear()
+    i = 0
+    while i < n:
+        pair(i)
+        log.append('after ' + str(i))
+        i = i + 1
+    return list(log)
+
+
+def one_passed_on(n: int) -> list[str]:
+    log.clear()
+    i = 0
+    while i < n:
+        show(pair(i)[0])
+        log.append('after ' + str(i))
+        i = i + 1
+    return list(log)
+
+
+def through_the_inner_tuple(n: int) -> list[str]:
+    log.clear()
+    i = 0
+    while i < n:
+        part = nested(i)[0][1]
+        log.append('part ' + str(part))
+        i = i + 1
+    return list(log)
+",
+        &[
+            "m.discarded(3)",
+            "m.indexed(3)",
+            "m.both_discarded(2)",
+            "m.one_passed_on(2)",
+            "m.through_the_inner_tuple(2)",
+        ],
+    );
+}
+
+#[test]
+fn a_value_stored_into_a_field_lives_as_long_as_the_field() {
+    // a store that is its value's last read hands the register's reference to the field
+    // rather than taking one of its own. the field is then the only thing holding the
+    // value, as it is in python once the expression that made it is done — so rewriting
+    // the field is what drops it, and a counter kept in one agrees with the interpreter
+    const SOURCE: &str = "\
+from collections.abc import Callable
+
+
+class Holder:
+    held: object
+    depth: int
+
+    def __init__(self) -> None:
+        self.held = None
+        self.depth = 0
+
+    def keep(self, make: Callable[[], object]) -> None:
+        self.held = make()
+
+    def step(self, k: int) -> int:
+        self.depth = self.depth + k
+        return self.depth
+
+
+def swap(make: Callable[[], object], log: list[str]) -> list[str]:
+    h = Holder()
+    h.keep(make)
+    log.append('kept')
+    h.keep(lambda: None)
+    log.append('replaced')
+    return list(log)
+
+
+def count(n: int) -> int:
+    h = Holder()
+    i = 0
+    while i < n:
+        h.step(i)
+        i = i + 1
+    return h.depth
+";
+    agree_python(
+        "fieldmove",
+        SOURCE,
+        &[
+            "(lambda log: m.swap(type('T', (), {'__del__': lambda s: log.append('dropped')}), log))([])",
+            "m.count(1000)",
+        ],
+    );
+
+    // and the stores are the compiled methods' own: an interpreted `Holder` would answer
+    // the same, so which build answered is asked directly
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_fieldmove_pin");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        SOURCE,
+        "by_diff_fieldmove_pin",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_fieldmove_pin as m\n\
+         print(type(m.Holder.keep).__name__, type(m.Holder.step).__name__, m.count(1000))\n",
+    );
+    assert_eq!(out, "method_descriptor method_descriptor 499500");
 }
 
 #[test]
@@ -3779,6 +4200,52 @@ def unmatched(a: int, b: int) -> int:
             // an unmatched handler must let the exception continue, with `finally`
             // having run
             "[(type(e).__name__) for e in [_capture(m.unmatched, 1, 0)]]",
+        ],
+    );
+}
+
+#[test]
+fn an_exception_leaving_a_handler_keeps_the_context_it_was_raised_with() {
+    // an exception raised inside an `except` block chains onto the one being handled
+    // at the moment it is raised. leaving the block puts the previous handled exception
+    // back and lets the new one continue as it is — python's re-raise never chains a
+    // second time, so the context it picked up where it was raised is the one it keeps
+    agree_python(
+        "handledchain",
+        "\
+def nested() -> None:
+    try:
+        raise ValueError('a')
+    except ValueError:
+        try:
+            raise KeyError('b')
+        except KeyError:
+            raise IndexError('c')
+
+
+def unmatched() -> None:
+    try:
+        raise ValueError('a')
+    except ValueError:
+        try:
+            raise KeyError('b')
+        except IndexError:
+            pass
+
+
+def through_finally() -> None:
+    try:
+        raise ValueError('a')
+    except ValueError:
+        try:
+            raise KeyError('b')
+        finally:
+            pass
+",
+        &[
+            "_chain(_capture(m.nested))",
+            "_chain(_capture(m.unmatched))",
+            "_chain(_capture(m.through_finally))",
         ],
     );
 }
@@ -6122,6 +6589,122 @@ def grow(seed: str, n: int) -> str:
     assert_eq!(out, "stable");
 }
 
+/// a `str` subclass defining `__add__`, `__radd__` and `__iadd__`, built in the calling
+/// process so that neither leg compiles it
+const ADDS: &str = "type('Adds', (str,), {'__add__': lambda s, o: 'ADD', \
+                    '__radd__': lambda s, o: 'RADD', '__iadd__': lambda s, o: 'IADD'})";
+
+#[test]
+fn a_str_concatenation_asks_a_str_subclass_for_its_operators() {
+    // `a + b` over two `str`s is the interpreter's own concatenation only while both
+    // are exact: a subclass may define `__add__` or `__radd__`, and `a += b` asks the
+    // left operand's `__iadd__` first. python asks them whichever side the subclass is
+    // on, in an accumulation as much as in one expression, and in the fused `s +
+    // str(n)`. an f-string joins its pieces without asking anything, which is the case
+    // that has to stay as it is
+    let adds = ADDS;
+    let radd = "type('RAdd', (str,), {'__radd__': lambda s, o: 'RADD'})";
+    let adds_int = "type('AddsInt', (str,), {'__add__': lambda s, o: 42})";
+    // each call runs in a process of its own, so nothing has to put `str` back
+    let with_str = |value: &str| {
+        format!("(m.__dict__.__setitem__('str', {value}), repr(_capture(m.key, 7)), m.key(7))[1:]")
+    };
+    let calls = [
+        format!("m.cat({adds}('x'), 'y')"),
+        format!("m.cat('x', {adds}('y'))"),
+        format!("m.lit_plus({adds}('y'))"),
+        format!("m.acc_right({adds}('y'))"),
+        format!("m.acc_left({adds}('s'))"),
+        format!("m.aug({adds}('s'))"),
+        format!("m.aug_loop({adds}('s'), 3)"),
+        format!("m.aug_loop({adds}('s'), 0)"),
+        format!("m.join_all(['a', {adds}('q'), 'b'])"),
+        format!("(m.chain({adds}('a'), 'b'), m.chain('a', {adds}('b')))"),
+        format!("type(_capture(m.chain, {adds_int}('a'), 'b')).__name__"),
+        format!("(m.plus_digits({adds}('k'), 7), m.plus_digits({adds}('k'), 10**30))"),
+        format!("(m.plus_digits('k', 7), type(m.plus_digits({radd}('k'), 7)).__name__)"),
+        // the module's own `str` bound to a subclass that answers `__radd__`, and to a
+        // function answering something that is no `str` at all
+        with_str(radd),
+        "(m.__dict__.__setitem__('str', lambda n: 5), repr(_capture(m.key, 7)))[1]".to_string(),
+        format!("(m.shown({adds}('v')), type(m.shown({adds}('v'))).__name__)"),
+        "(m.build(4), m.aug_loop('', 0))".to_string(),
+    ];
+    let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+    agree_python(
+        "strsubadd",
+        "\
+def cat(a: str, b: str) -> str:
+    return a + b
+
+
+def lit_plus(b: str) -> str:
+    return \"w\" + b
+
+
+def acc_right(b: str) -> str:
+    out = \"a\"
+    out = out + b
+    return out
+
+
+def acc_left(start: str) -> str:
+    out = start
+    out = out + \"w\"
+    return out
+
+
+def aug(start: str) -> str:
+    out = start
+    out += \"w\"
+    return out
+
+
+def aug_loop(start: str, n: int) -> str:
+    out = start
+    i = 0
+    while i < n:
+        out += \"w\"
+        i = i + 1
+    return out
+
+
+def join_all(parts: list[str]) -> str:
+    out = \"\"
+    for p in parts:
+        out = out + p
+    return out
+
+
+def chain(a: str, b: str) -> str:
+    out = a + \"-\" + b + \".\"
+    return out
+
+
+def plus_digits(left: str, n: int) -> str:
+    return left + str(n)
+
+
+def key(n: int) -> str:
+    return \"k\" + str(n)
+
+
+def build(n: int) -> str:
+    out = \"\"
+    i = 0
+    while i < n:
+        out = out + \"word\" + str(i % 10) + \" \"
+        i = i + 1
+    return out
+
+
+def shown(v: str) -> str:
+    return f\"<{v}>{v}\"
+",
+        &calls,
+    );
+}
+
 #[test]
 fn native_classes_agree() {
     agree(
@@ -6194,6 +6777,91 @@ fn a_native_constructor_checks_its_argument_types() {
          else:\n    print('accepted a str')\n",
     );
     assert_eq!(out, "TypeError: expected int, got str");
+}
+
+#[test]
+fn importing_a_compiled_module_again_hands_back_the_module_already_imported() {
+    // a compiled module keeps its namespace, and every memo of a global in it, in state the
+    // whole process shares. a second module object would have that state pointed at its own
+    // namespace, and the first object's compiled code would then read and write the second's
+    // — so a second import in the same interpreter hands back the module the first one made,
+    // as a single-phase C extension's does, and an import in another interpreter is refused
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    if !supports(&toolchain, (3, 13)) {
+        return;
+    }
+    let dir = diff_root().join("by_diff_reimport");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+_step = 0
+_limit = 0
+
+
+def total() -> int:
+    acc = 0
+    i = 0
+    while i < _limit:
+        acc = acc + _step
+        i = i + 1
+    return acc
+
+
+def setup() -> None:
+    global _step, _limit
+    _step = 15
+    _limit = 10
+
+
+def drop() -> None:
+    global _step
+    del _step
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(source, "by_diff_reimport", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import importlib, sys\n\
+         import by_diff_reimport as first\n\
+         assert first.__file__.endswith('.so'), first.__file__\n\
+         first.setup()\n\
+         print(first.total())\n\
+         del sys.modules['by_diff_reimport']\n\
+         import by_diff_reimport as second\n\
+         print(second is first, first.total(), second.total())\n\
+         importlib.reload(first)\n\
+         print(sys.modules['by_diff_reimport'] is first, first.total())\n\
+         first._limit = 1\n\
+         first.drop()\n\
+         print('_step' in vars(first), second.total() if '_step' in vars(second) else 'dropped')\n",
+    );
+    assert_eq!(out, "150\nTrue 150 150\nTrue 150\nFalse dropped");
+    // a legacy subinterpreter shares the process, and with it the module's state
+    let out = run(
+        &python,
+        &dir,
+        "import _interpreters\n\
+         import by_diff_reimport as m\n\
+         m.setup()\n\
+         sub = _interpreters.create('legacy')\n\
+         import os\n\
+         home = os.path.dirname(m.__file__)\n\
+         err = _interpreters.exec(sub, f'import sys; sys.path.insert(0, {home!r}); import by_diff_reimport')\n\
+         print(err.type.__name__, 'another interpreter' in err.msg)\n\
+         m._step = 2\n\
+         print(m.total())\n\
+         _interpreters.destroy(sub)\n\
+         print(m.total())\n",
+    );
+    assert_eq!(out, "ImportError True\n20\n20");
 }
 
 #[test]
@@ -6304,6 +6972,141 @@ fn a_class_takes_an_attribute_its_layout_never_had() {
             "(lambda o: (setattr(o, 'count', 5), o.bump()))(m.Counter())",
         ],
     );
+}
+
+/// classes whose instances' `__dict__` is written to directly
+const DICT_WRITES: &str = "\
+class Cell:
+    def __init__(self) -> None:
+        self._v = 0
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    @v.setter
+    def v(self, given: int) -> None:
+        self._v = given
+
+
+class Ro:
+    def __init__(self) -> None:
+        self._v = 1
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+
+class Ext:
+    def __init__(self) -> None:
+        self._v = 0
+
+    def width(self) -> int:
+        return self._v
+
+
+class Dropped:
+    def __init__(self) -> None:
+        self._v = 0
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    def drop(self) -> None:
+        del self._v
+
+
+class ExtSub(Ext):
+    pass
+
+
+def bump(cell: Cell, n: int) -> int:
+    i = 0
+    while i < n:
+        cell.v = cell.v + 1
+        i = i + 1
+    return cell.v
+";
+
+#[test]
+fn writing_into_an_instance_dict_runs_nothing_but_the_write() {
+    // python's instance `__dict__` is a plain dict: a write through it stores the entry
+    // and runs no descriptor and no `__setattr__`. a compiled instance keeps the names its
+    // layout declares in fields, so a key naming one writes the field; any other key is an
+    // entry in the dict and nothing more — even one a property on the class answers for
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_dictwrites_check");
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(
+        DICT_WRITES,
+        "by_diff_dictwrites",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_dictwrites as m\n\
+         print(type(m.Ext.width).__name__, type(m.Cell().__dict__).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor instance_dict");
+    let subclass = "type('S', (m.Ext,), {'__setattr__': lambda s, k, x: s.log.append(k)})";
+    let calls = [
+        "(lambda c: (c.__dict__.__setitem__('v', 500), m.bump(c, 3), c.__dict__.get('v'), c.v))\
+         (m.Cell())"
+            .to_string(),
+        "(lambda c: (c.__dict__.update({'v': 41}), c.v, dict(c.__dict__)))(m.Cell())".to_string(),
+        "(lambda c: (c.__dict__.update(v=40, _v=1), c.v, vars(c)))(m.Cell())".to_string(),
+        "(lambda c: (c.__dict__.update([('v', 2), ('_v', 3)], w=4), c.v, vars(c)))(m.Cell())"
+            .to_string(),
+        "(lambda c: (repr(_capture(c.__dict__.update, [('v', 2), ('_v',)])), vars(c)))(m.Cell())"
+            .to_string(),
+        "(lambda c: (c.__dict__.setdefault('v', 9), c.__dict__.setdefault('_v', 9), c.v, \
+         vars(c)))(m.Cell())"
+            .to_string(),
+        "(lambda c: (c.__dict__.__setitem__('_v', 7), m.bump(c, 3), vars(c)))(m.Cell())"
+            .to_string(),
+        "(lambda c: (c.__dict__.__setitem__('v', 5), c.__dict__.__delitem__('v'), c.v, \
+         repr(_capture(c.__dict__.__delitem__, 'v'))))(m.Cell())"
+            .to_string(),
+        "(lambda c: (c.__dict__.__setitem__('w', 3), c.__dict__.pop('w'), \
+         c.__dict__.pop('w', 'gone'), repr(_capture(c.__dict__.pop, 'w')), c.__dict__.pop('v', 0), \
+         c.v))(m.Cell())"
+            .to_string(),
+        // a field python can take away again, which is one some method of the class deletes
+        "(lambda c: (c.__dict__.__setitem__('extra', 1), c.__dict__.clear(), hasattr(c, 'extra'), \
+         repr(_capture(getattr, c, '_v')), vars(c)))(m.Dropped())"
+            .to_string(),
+        "(lambda c: (c.__dict__.pop('_v'), repr(_capture(getattr, c, 'v')), \
+         repr(_capture(c.__dict__.__delitem__, '_v')), c.__dict__.__setitem__('_v', 8), c.v))\
+         (m.Dropped())"
+            .to_string(),
+        "(lambda r: (r.__dict__.__setitem__('v', 5), r.v, r.__dict__.get('v'), \
+         r.__dict__.__delitem__('v'), vars(r)))(m.Ro())"
+            .to_string(),
+        "(lambda c: (c.__dict__.__ior__({'v': 6, '_v': 2}), c.v, vars(c)))(m.Cell())".to_string(),
+        format!(
+            "(lambda s: (s.__dict__.__setitem__('log', []), s.__dict__.__setitem__('zz', 1), \
+             s.__dict__.__setitem__('_v', 4), s.zz, s.width(), s.log))\
+             ((lambda cls: cls.__new__(cls))({subclass}))"
+        ),
+    ];
+    let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+    agree_python("dictwrites", DICT_WRITES, &calls);
 }
 
 #[test]
@@ -7634,6 +8437,51 @@ def counted(table: dict[str, int], keys: list[str], passes: int) -> int:
 ";
 
 #[test]
+fn a_field_read_in_a_loop_python_can_see_the_bound_of_agrees() {
+    // a loop whose bound is an `int` is copied once for a bound that fits a machine word,
+    // and a field read in its body is written once in each copy. the read holds the
+    // field's value on loan for the add that uses it, which a value past the short range
+    // exercises — and a body that writes the field between the read and the use must go
+    // on holding what it read
+    agree_python(
+        "unswitchfield",
+        "\
+class Holder:
+    count: int
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+
+
+def total(h: Holder, n: int) -> int:
+    t = 0
+    i = 0
+    while i < n:
+        t = t + h.count
+        i = i + 1
+    return t
+
+
+def rebinding(h: Holder, n: int) -> int:
+    t = 0
+    i = 0
+    while i < n:
+        c = h.count
+        h.count = c + 1
+        t = t + c
+        i = i + 1
+    return t
+",
+        &[
+            "m.total(m.Holder(3), 5)",
+            "m.total(m.Holder(2**70), 3)",
+            "m.rebinding(m.Holder(2**70), 4)",
+            "(lambda h: (m.total(h, 1000), __import__('sys').getrefcount(h.count)))(m.Holder(2**70))",
+        ],
+    );
+}
+
+#[test]
 fn a_borrowed_narrowing_does_not_over_release_what_it_narrowed() {
     // the narrowing no longer retains, so the register is reading through something it
     // does not own. the subscript's temporary holds the only reference the borrow
@@ -8768,6 +9616,317 @@ def make(n: int) -> object:
     assert_eq!(out, "[]\n3");
 }
 
+/// nested functions a decorator hands back, for the tests below on what one is
+const DECORATING_CLOSURES: &str = "\
+import functools
+from collections.abc import Callable
+
+
+def tag(f: Callable[[object], str]) -> Callable[..., str]:
+    def wrapper(self: object = None) -> str:
+        return f(self)
+
+    return wrapper
+
+
+def strict(f: Callable[[object, int], int]) -> Callable[..., int]:
+    def wrapper(self: object, k: int) -> int:
+        return f(self, k)
+
+    return wrapper
+
+
+def double(x: int) -> int:
+    \"twice as much\"
+    return x * 2
+
+
+def logged(f: Callable[[int], int]) -> Callable[[int], int]:
+    @functools.wraps(f)
+    def inner(x: int) -> int:
+        return f(x) + 1
+
+    return inner
+";
+
+#[test]
+fn a_nested_function_installed_on_a_class_binds_the_receiver() {
+    // python's function is a descriptor, so one stored on a class is handed the instance
+    // it is reached through. a decorator that returns its own nested function is the
+    // ordinary way to put one there, and a receiver with a default is where missing the
+    // binding is silent rather than an arity error
+    agree_python(
+        "nestedbind",
+        DECORATING_CLOSURES,
+        &[
+            "type('Thing', (), {'label': m.tag(lambda s: 'bound' if s is not None else 'UNBOUND')})().label()",
+            "type('Thing', (), {'add': m.strict(lambda s, k: k + (1 if type(s).__name__ == 'Thing' else 100))})().add(2)",
+            "type('Thing', (), {'add': m.strict(lambda s, k: k)}).add(None, 5)",
+            "m.tag(repr)()",
+        ],
+    );
+}
+
+#[test]
+fn a_nested_function_can_be_dressed_by_functools_wraps() {
+    // `functools.wraps` writes the wrapped function's name, qualname and docstring over
+    // the wrapper's, fills in its `__dict__` and points `__wrapped__` back
+    agree_python(
+        "nestedwraps",
+        DECORATING_CLOSURES,
+        &[
+            "(lambda w: (w(3), w.__name__, w.__qualname__, w.__doc__, w.__wrapped__ is m.double))(m.logged(m.double))",
+            "(lambda w: (setattr(w, 'label', 7), w.label, sorted(w.__dict__)))(m.tag(repr))",
+        ],
+    );
+}
+
+#[test]
+fn a_nested_function_answers_for_where_it_was_written() {
+    // a nested function is named by the frames it is written in, `counter.<locals>.step`,
+    // in its `__qualname__`, its `repr` and the arity errors a call raises. it belongs to
+    // the module whose body wrote it, and copying one hands back the same function, as
+    // copying any function does. pickling one refuses because it cannot be found by that
+    // name, and the refusal names it
+    agree_python(
+        "nestedname",
+        "\
+from collections.abc import Callable
+
+
+def counter(start: int) -> Callable[[int], int]:
+    total = start
+
+    def step(by: int) -> int:
+        \"add to the total\"
+        nonlocal total
+        total = total + by
+        return total
+
+    return step
+
+
+def lam(k: int) -> Callable[[int], int]:
+    return lambda x: x + k
+
+
+def two_deep(n: int) -> Callable[[], Callable[[], int]]:
+    def middle() -> Callable[[], int]:
+        def inner() -> int:
+            return n
+
+        return inner
+
+    return middle
+
+
+class Box:
+    def method(self, n: int) -> Callable[[], int]:
+        def inner() -> int:
+            return n
+
+        return inner
+",
+        &[
+            "(lambda f: (f.__name__, f.__qualname__, f.__module__, f.__doc__))(m.counter(0))",
+            "(lambda f: (f.__name__, f.__qualname__, f(2)))(m.lam(1))",
+            "(lambda f: (f.__name__, f.__qualname__, f()))(m.two_deep(1)())",
+            "(lambda f: (f.__name__, f.__qualname__, f()))(m.Box().method(4))",
+            "repr(m.counter(0)).split(' at ')[0]",
+            "str(_capture(m.counter(0), 1, 2))",
+            "str(_capture(m.counter(0)))",
+            "str(_capture(lambda: m.counter(0)(by=1, other=2)))",
+            "(lambda copy, f: (copy.copy(f) is f, copy.deepcopy(f) is f, copy.deepcopy([f])[0] is f))(__import__('copy'), m.counter(0))",
+            "(lambda e: (type(e).__name__, __import__('re').sub(' at 0x[0-9a-f]+', '', str(e))))(_capture(__import__('pickle').dumps, m.counter(0)))",
+        ],
+    );
+}
+
+#[test]
+fn a_recursive_closure_and_its_environment_are_collected() {
+    // a nested function that calls itself reads its own name out of its environment,
+    // so the environment holds the function and the function holds the environment.
+    // reference counting never frees that; python's collector does, and so the captured
+    // value's finalizer runs once nothing else holds either
+    agree_python(
+        "nestedcycle",
+        "\
+from collections.abc import Callable
+
+
+def recursive(held: object) -> Callable[[int], int]:
+    def again(n: int) -> int:
+        if n <= 0:
+            return 0 if held is None else 1
+        return again(n - 1)
+
+    return again
+",
+        &[
+            "(lambda log: (m.recursive(type('L', (), {'__del__': lambda s: log.append('del')})())(3), gc.collect() >= 0, log))([])",
+        ],
+    );
+}
+
+#[test]
+fn a_shared_cell_holding_an_int_agrees() {
+    // a cell both frames write holds whatever is stored in it, and one only ever given
+    // an `int` is held as one. it starts unset all the same: a read before the first
+    // write raises, in either frame, and a zero is a value like any other
+    agree_python(
+        "intcell",
+        "\
+from collections.abc import Callable
+
+
+def counter(start: int) -> Callable[[int], int]:
+    total = start
+
+    def step(by: int) -> int:
+        nonlocal total
+        total = total + by
+        return total
+
+    return step
+
+
+def early(flag: bool) -> int:
+    def peek() -> int:
+        return total
+
+    if flag:
+        return peek()
+    total = 0
+    return peek()
+
+
+def late(flag: bool) -> Callable[[], int]:
+    def peek() -> int:
+        return count
+
+    if flag:
+        count = 5
+    return peek
+
+
+def local_first(flag: bool) -> int:
+    def bump() -> None:
+        nonlocal count
+        count = count + 1
+
+    if flag:
+        return count
+    count = 0
+    bump()
+    return count
+
+
+def written_inside(n: int) -> int:
+    seen = 0
+
+    def fill() -> None:
+        nonlocal seen
+        seen = n * 2
+
+    fill()
+    return seen
+
+
+def parameter(seed: int) -> Callable[[], int]:
+    def grow() -> int:
+        nonlocal seed
+        seed = seed * 10
+        return seed
+
+    return grow
+
+
+def two_deep(start: int) -> Callable[[], Callable[[], int]]:
+    total = start
+
+    def middle() -> Callable[[], int]:
+        def inner() -> int:
+            nonlocal total
+            total = total + 1
+            return total
+
+        return inner
+
+    return middle
+",
+        &[
+            "(lambda s: (s(3), s(4), s(-7)))(m.counter(0))",
+            "(lambda s: (s(2**70), s(1)))(m.counter(2**62 - 1))",
+            "m.early(False)",
+            "str(_capture(m.early, True))",
+            "m.late(True)()",
+            "str(_capture(m.late(False)))",
+            "str(_capture(m.local_first, True))",
+            "m.local_first(False)",
+            "m.written_inside(21)",
+            "(lambda g: (g(), g()))(m.parameter(7))",
+            "(lambda g: (g(), g()))(m.parameter(2**61))",
+            "(lambda f: (f(), f()))(m.two_deep(0)())",
+            "(lambda f: (f(), f()))(m.two_deep(2**63)())",
+        ],
+    );
+}
+
+#[test]
+fn an_unbound_free_variable_is_reported_in_python_s_words() {
+    agree_python(
+        "unboundfree",
+        "\
+def viaif(x: object) -> object:
+    if x:
+        a = 1
+
+    def inner() -> object:
+        return a
+
+    return inner()
+",
+        &["str(_capture(m.viaif, 0))", "m.viaif(1)"],
+    );
+}
+
+#[test]
+fn a_nested_function_is_the_compiled_one() {
+    // `agree` cannot say which build answered. a compiled nested function is a type of
+    // the runtime's own rather than python's `function`, which is how to tell
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_nestedwhich");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        DECORATING_CLOSURES,
+        "by_diff_nestedwhich",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import types, by_diff_nestedwhich as m\n\
+         f = m.tag(repr)\n\
+         print(type(f).__module__, type(f).__name__, isinstance(f, types.FunctionType))\n",
+    );
+    assert_eq!(out, "by function False");
+}
+
 #[test]
 fn a_raise_out_of_a_try_body_does_not_leak_what_it_wrote() {
     // the exception edge is a CFG edge, and the refcount pass used not to follow it
@@ -9521,6 +10680,132 @@ async def forwards(n: int) -> int:
             "__import__('asyncio').run(m.forwards(1))",
             "[__import__('asyncio').run(m.plain(a)) for a in (0, -3, 10 ** 20)]",
         ],
+    );
+}
+
+#[test]
+fn a_coroutine_reads_its_variadic_parameters() {
+    // `*args` and `**kwargs` are parameters like any other, and a coroutine's body reads
+    // them whether it suspends before doing so or never suspends at all — reached by
+    // `asyncio.run`, or awaited from another coroutine
+    agree_python(
+        "asyncvariadic",
+        "\
+import asyncio
+
+
+async def counted(*args: object) -> int:
+    return len(args)
+
+
+async def named(first: int, *rest: int, **extra: int) -> tuple[int, int, list[str]]:
+    await asyncio.sleep(0)
+    return (first + sum(rest), len(rest), sorted(extra))
+
+
+async def awaiting(n: int) -> tuple[int, tuple[int, int, list[str]]]:
+    a = await counted(n, n, n)
+    b = await named(n, 1, 2, k=3)
+    return (a, b)
+
+
+def each(*args: int, **extra: int):
+    for arg in args:
+        yield arg + len(extra)
+",
+        &[
+            "__import__('asyncio').run(m.counted(1, 2))",
+            "__import__('asyncio').run(m.counted())",
+            "__import__('asyncio').run(m.named(1, 2, 3, z=4, a=5))",
+            "__import__('asyncio').run(m.awaiting(4))",
+            // a generator keeps its parameters in the same kind of state object
+            "list(m.each(1, 2, k=0, j=0))",
+        ],
+    );
+}
+
+#[test]
+fn a_generator_based_coroutine_can_be_awaited() {
+    // `types.coroutine` marks a generator as a coroutine python's `await` accepts, with
+    // no `__await__` of its own. an `async with` awaits what `__aenter__` and `__aexit__`
+    // answer the same way a written `await` does. the generator function is python's own,
+    // installed by each call, so that nothing compiled stands in for what is awaited
+    let install = "m.__dict__.__setitem__('ready', \
+                   __import__('types').coroutine(lambda value: ((yield), value)[1]))";
+    let calls = [
+        format!("({install}, __import__('asyncio').run(m.awaited()))[1]"),
+        format!("({install}, __import__('asyncio').run(m.managed(m.Manager())))[1]"),
+    ];
+    let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+    agree_python(
+        "genawait",
+        "\
+from collections.abc import Callable
+
+ready: Callable[[object], object]
+
+
+class Manager:
+    def __init__(self) -> None:
+        self.log: list[str] = []
+
+    def __aenter__(self):
+        self.log.append(\"enter\")
+        return ready(\"entered\")
+
+    def __aexit__(self, *exc: object):
+        self.log.append(\"exit\")
+        return ready(False)
+
+
+async def awaited() -> object:
+    return await ready(7)
+
+
+async def managed(m: Manager) -> tuple[object, list[str]]:
+    async with m as got:
+        m.log.append(\"body\")
+    return (got, m.log)
+",
+        &calls,
+    );
+}
+
+#[test]
+fn a_context_manager_missing_half_its_protocol_is_refused_before_it_is_entered() {
+    // python looks up both halves of the protocol before it calls either, so a manager
+    // with no `__exit__` is refused before its `__enter__` runs, and one with no
+    // `__enter__` is refused whatever it has. which half is looked up first, and so which
+    // one the message names, changed in 3.14
+    let log = "__import__('builtins').__dict__.setdefault('_entered', [])";
+    let only_enter =
+        format!("type('OnlyEnter', (), {{'__enter__': lambda s: {log}.append('enter')}})");
+    let only_exit = "type('OnlyExit', (), {'__exit__': lambda s, *a: None})";
+    let only_aenter =
+        format!("type('OnlyAenter', (), {{'__aenter__': lambda s: {log}.append('aenter')}})");
+    let only_aexit = "type('OnlyAexit', (), {'__aexit__': lambda s, *a: None})";
+    let calls = [
+        format!("(repr(_capture(m.entered, {only_enter}())), {log})"),
+        format!("(repr(_capture(m.entered, {only_exit}())), {log})"),
+        "(repr(_capture(m.entered, object())), 0)".to_string(),
+        format!("(_capture_async(m.aentered, {only_aenter}()), {log})"),
+        format!("(_capture_async(m.aentered, {only_aexit}()), {log})"),
+        "_capture_async(m.aentered, object())".to_string(),
+    ];
+    let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+    agree_python(
+        "withhalves",
+        "\
+def entered(manager: object) -> str:
+    with manager:  # type: ignore
+        return \"body\"
+
+
+async def aentered(manager: object) -> str:
+    async with manager:  # type: ignore
+        return \"body\"
+",
+        &calls,
     );
 }
 
@@ -10492,6 +11777,59 @@ def recovering(n: int) -> object:
 ///
 /// `close()` asks the same question and answers `None`: there is nothing to unwind
 #[test]
+fn a_generator_suspended_in_an_except_block_keeps_its_exception_to_itself() {
+    // python gives a suspended frame its own handled exception: whoever resumes it sees
+    // their own again the moment it yields, and it sees its own again the moment it is
+    // resumed, whatever its caller was handling by then. an exception thrown in at the
+    // suspension chains onto the frame's, not onto the caller's
+    agree_python(
+        "handledsuspend",
+        "\
+import sys
+from collections.abc import Iterator
+
+
+def gen() -> Iterator[str]:
+    try:
+        raise ValueError('inner')
+    except ValueError:
+        yield repr(sys.exception())
+        yield repr(sys.exception())
+    yield repr(sys.exception())
+
+
+def outside() -> list[str]:
+    out: list[str] = []
+    g = gen()
+    out.append(next(g))
+    out.append(repr(sys.exception()))
+    try:
+        raise KeyError('caller')
+    except KeyError:
+        out.append(next(g))
+        out.append(repr(sys.exception()))
+    out.append(next(g))
+    out.append(repr(sys.exception()))
+    return out
+
+
+def thrown() -> str:
+    g = gen()
+    next(g)
+    try:
+        raise KeyError('caller')
+    except KeyError:
+        try:
+            g.throw(IndexError('thrown'))
+        except IndexError as error:
+            return repr(error.__context__)
+    return 'none'
+",
+        &["m.outside()", "m.thrown()"],
+    );
+}
+
+#[test]
 fn a_throw_into_a_frame_with_no_suspension_raises_at_the_call_site() {
     agree_python(
         "throwfinished",
@@ -10792,6 +12130,123 @@ def swallowed(mgr: object) -> str:
     return \"suppressed\"
 ",
         &["_rebound(m)"],
+    );
+}
+
+#[test]
+fn an_exit_that_is_deciding_sees_the_exception_as_the_one_being_handled() {
+    // `with` runs its exit inside what python treats as an `except` block for the
+    // exception unwinding the body: `sys.exception()` answers it there, and an exception
+    // the exit raises chains onto it, which is what puts "during handling of the above
+    // exception" into a traceback. an `async with` does the same across an exit that
+    // suspends, and while it is suspended the exception is its own: another task running
+    // in the meantime sees nothing being handled
+    const SOURCE: &str = "\
+import asyncio
+import sys
+
+
+class Seeing:
+    seen: list[str]
+
+    def __init__(self) -> None:
+        self.seen = []
+
+    def __enter__(self) -> 'Seeing':
+        return self
+
+    def __exit__(self, kind: object, value: object, trace: object) -> bool:
+        self.seen.append(repr(sys.exception()))
+        return True
+
+
+class Replacing:
+    def __enter__(self) -> 'Replacing':
+        return self
+
+    def __exit__(self, kind: object, value: object, trace: object) -> None:
+        raise KeyError('from exit')
+
+
+class Awaiting:
+    seen: list[str]
+
+    def __init__(self) -> None:
+        self.seen = []
+
+    async def __aenter__(self) -> 'Awaiting':
+        return self
+
+    async def __aexit__(self, kind: object, value: object, trace: object) -> bool:
+        self.seen.append(repr(sys.exception()))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.seen.append(repr(sys.exception()))
+        return True
+
+
+class AsyncReplacing:
+    async def __aenter__(self) -> 'AsyncReplacing':
+        return self
+
+    async def __aexit__(self, kind: object, value: object, trace: object) -> None:
+        raise KeyError('from exit')
+
+
+def seen() -> list[str]:
+    s = Seeing()
+    with s:
+        raise ValueError('body')
+    s.seen.append(repr(sys.exception()))
+    return s.seen
+
+
+def context() -> str:
+    try:
+        with Replacing():
+            raise ValueError('body')
+    except KeyError as error:
+        return repr(error.__context__)
+    return 'none'
+
+
+async def async_seen() -> list[str]:
+    s = Awaiting()
+    async with s:
+        raise ValueError('body')
+    s.seen.append(repr(sys.exception()))
+    return s.seen
+
+
+async def async_context() -> str:
+    try:
+        async with AsyncReplacing():
+            raise ValueError('body')
+    except KeyError as error:
+        return repr(error.__context__)
+    return 'none'
+
+
+async def watcher(seen: list[str]) -> None:
+    await asyncio.sleep(0)
+    seen.append(repr(sys.exception()))
+
+
+async def watched() -> list[str]:
+    seen: list[str] = []
+    await asyncio.gather(async_seen(), watcher(seen))
+    return seen
+";
+    agree_python(
+        "withhandled",
+        SOURCE,
+        &[
+            "m.seen()",
+            "m.context()",
+            "_run(m.async_seen())",
+            "_run(m.async_context())",
+            "_run(m.watched())",
+        ],
     );
 }
 
@@ -12098,6 +13553,91 @@ def raised(fn: object) -> str:
 /// only a getter has no setter at all — the base's is not inherited into it. the emitted
 /// type has to shadow the base's entry the same way, or a write the interpreted class
 /// refuses would quietly reach the base's setter
+/// a class something extends, whose field an interpreted subclass or the class itself can
+/// take over by name
+const EXTENDED_FIELD: &str = "\
+class Field:
+    def __init__(self) -> None:
+        self.n = 3
+
+    def doubled(self) -> int:
+        self.n = self.n * 2
+        return self.n
+
+
+class FieldSub(Field):
+    pass
+
+
+def read_n(f: Field) -> int:
+    return f.n
+
+
+def write_n(f: Field, x: int) -> None:
+    f.n = x
+
+
+def bump_n(f: Field) -> int:
+    f.n += 1
+    return f.n
+";
+
+#[test]
+fn a_field_of_a_class_something_extends_is_read_by_name_where_the_name_is_taken_over() {
+    // a field is a descriptor on the class, and a class that can be extended can have that
+    // name answered by something else: a property on an interpreted subclass, an override
+    // of `__getattribute__` or `__setattr__`, or a property put on the class itself after
+    // import. a read or a write at the field's offset is only what python does while none
+    // of those has happened, and every other receiver goes through the attribute
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_extfield_check");
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(
+        EXTENDED_FIELD,
+        "by_diff_extfield",
+        &toolchain,
+        &dir,
+        &options,
+    )
+    .is_err()
+    {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_extfield as m\n\
+         print(type(m.Field.doubled).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor");
+    let property = "type('S', (m.Field,), {'n': property(lambda s: 77, lambda s, x: None)})";
+    let getattribute = "type('S', (m.Field,), {'__getattribute__': \
+                        lambda s, k: 55 if k == 'n' else object.__getattribute__(s, k)})";
+    let setattr = "type('S', (m.Field,), {'__setattr__': \
+                   lambda s, k, x: object.__setattr__(s, k, x + 100)})";
+    let calls = [
+        "(m.read_n(m.Field()), m.bump_n(m.Field()), m.Field().doubled())".to_string(),
+        "(lambda f: (m.write_n(f, 9), m.read_n(f), f.n))(m.FieldSub())".to_string(),
+        format!("(lambda s: (m.write_n(s, 9), m.read_n(s), s.n, m.bump_n(s)))({property}())"),
+        format!("(lambda s: (m.read_n(s), s.doubled()))({property}())"),
+        format!("(lambda s: (m.read_n(s), s.n))({getattribute}())"),
+        format!("(lambda s: (m.write_n(s, 1), s.n, m.bump_n(s), s.doubled()))({setattr}())"),
+        // the class itself, changed after import
+        "(lambda f: (setattr(m.Field, 'n', property(lambda s: 42, lambda s, x: None)), \
+         m.read_n(f), m.bump_n(f), f.doubled()))(m.Field())"
+            .to_string(),
+    ];
+    let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+    agree_python("extfield", EXTENDED_FIELD, &calls);
+}
+
 #[test]
 fn a_subclass_overriding_one_half_of_a_property_agrees() {
     agree_python(
@@ -14065,6 +15605,124 @@ fn a_subclass_that_appends_nothing_is_the_compiled_type() {
         "method_descriptor method_descriptor\n\
          True\n\
          [] ['restated']"
+    );
+}
+
+/// a class that adds no field of its own, reaching one its base declares, beside a class
+/// that has to fall back
+///
+/// `Restated` writes and reads `notes`, which `Held` declares. it adds nothing of its
+/// own, so it is laid out with no fields at all — its instances are `Held`'s, at `Held`'s
+/// offsets — and the attribute has to be named against `Held` to be reached at all.
+///
+/// naming it against `Restated` instead cost far more than the load. the write went out
+/// as `PyObject_SetAttr` over a boxed receiver, which is the shape
+/// `answers_for_its_classes` hunts for, and a module holding one keeps whatever
+/// whole-module answer it already gave: nothing in it may fall back on its own. so
+/// `Refused` — which cannot be built from a spec, its storage sitting past a heap base —
+/// took `Held` and `Restated` down with it at import, and the module answered every one
+/// of its own definitions from the interpreted source. `logging.handlers` is the stdlib's
+/// version of this, and gave up all fourteen of its classes to one write of
+/// `self.closeOnError` in `DatagramHandler.__init__`
+const WRITES_A_BASE_S_FIELD: &str = "\
+from subprocess import SubprocessError
+
+
+class Refused(SubprocessError):
+    def __init__(self, tag):
+        super().__init__(tag)
+        self.tag = tag
+
+    def read(self):
+        return self.tag
+
+
+class Held(list):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.notes = []
+
+    def note_count(self):
+        return len(self.notes)
+
+
+class Restated(Held):
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.notes = ['restated']
+
+    def first_note(self):
+        return self.notes[0]
+
+    def note(self, value):
+        self.notes = self.notes + [value]
+        return self.note_count()
+";
+
+#[test]
+fn a_subclass_write_to_a_base_s_field_agrees() {
+    agree_python(
+        "basefieldwrite",
+        WRITES_A_BASE_S_FIELD,
+        &[
+            "(list(m.Restated([1, 2])), m.Restated([1, 2]).notes, m.Restated([1]).first_note())",
+            "(m.Restated([1]).note('x'), m.Restated([1]).note_count(), m.Held([1]).notes)",
+            "(m.Held([3]).note_count(), isinstance(m.Restated([1]), m.Held))",
+            // written from outside the family, where the receiver is not `self`
+            "[(r.notes, r.note_count()) for r in [m.Restated([1])] if setattr(r, 'notes', ['a', 'b']) is None]",
+            "(m.Refused('t').read(), m.Refused('t').args)",
+        ],
+    );
+}
+
+#[test]
+fn a_subclass_write_to_a_base_s_field_keeps_the_rest_of_the_module() {
+    // the behaviour above is the same either way — the base publishes a descriptor over
+    // the field, so the dynamic write reached it too. what moved is which build answers,
+    // and only `type(...).__name__` says: `Refused` falls back on its own, and `Held` and
+    // `Restated` stand where the whole module used to give itself up with it
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_basefieldwrite_t");
+    let _ = std::fs::remove_dir_all(&dir);
+    let built = match build_source(
+        WRITES_A_BASE_S_FIELD,
+        "by_diff_basefieldwrite_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    // nothing declines at compile time: `Refused` is turned down by the import, where the
+    // spec meets the heap base it would have to append to
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_basefieldwrite_t as m\n\
+         print(type(m.Held.__dict__['note_count']).__name__,\n\
+         \x20     type(m.Restated.__dict__['first_note']).__name__,\n\
+         \x20     type(m.Restated.__dict__['note']).__name__)\n\
+         print(type(m.Refused.__dict__['read']).__name__)\n\
+         print(m.Held.__basicsize__ == m.Restated.__basicsize__)\n\
+         print(m.Restated([1]).notes, m.Restated([1]).first_note())\n",
+    );
+    assert_eq!(
+        out,
+        "method_descriptor method_descriptor method_descriptor\n\
+         function\n\
+         True\n\
+         ['restated'] restated"
     );
 }
 
@@ -20889,6 +22547,64 @@ def other_array(xs: list[float], ys: list[float]) -> float:
 }
 
 #[test]
+fn a_float_subclass_handed_to_a_float_parameter_reaches_the_interpreted_definition() {
+    // a `float` parameter compiles to a `double`, and a subclass of `float` is more than
+    // its value: it can define its own operators, and it is its own type. the boundary
+    // unboxing one would run the body on the bare value, so a call handed a subclass goes
+    // to the interpreted definition — which is what already happens where python's
+    // `float` admits an `int`, and has to happen as well in `.by`, where it does not
+    let loud = "type('Loud', (float,), {'__mul__': lambda s, o: 'Loud.__mul__', \
+                '__rmul__': lambda s, o: 'Loud.__rmul__', '__neg__': lambda s: 'Loud.__neg__', \
+                '__gt__': lambda s, o: 'Loud.__gt__'})";
+    let plain = "type('Plain', (float,), {})";
+    let calls = [
+        format!("m.mul({loud}(2.0), 3.0)"),
+        format!("m.mul(3.0, {loud}(2.0))"),
+        format!("m.neg({loud}(1.0))"),
+        format!("m.gt4({loud}(1.0))"),
+        format!("type(m.ident({plain}(1.5))).__name__"),
+        format!("repr(_capture(m.escape, {loud}(0.3), 0.0, 40))"),
+        format!("m.escape({plain}(0.3), 0.0, 40)"),
+        "(m.mul(2.0, 3.5), m.neg(1.0), m.gt4(5.0), m.escape(0.3, 0.0, 40))".to_string(),
+    ];
+    let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+    agree(
+        "floatsubclass",
+        "\
+def mul(a: float, b: float) -> float:
+    return a * b
+
+
+def neg(a: float) -> float:
+    return -a
+
+
+def gt4(a: float) -> bool:
+    return a > 4.0
+
+
+def ident(a: float) -> float:
+    return a
+
+
+def escape(cr: float, ci: float, limit: int) -> int:
+    zr = 0.0
+    zi = 0.0
+    k = 0
+    while k < limit:
+        if zr * zr + zi * zi > 4.0:
+            return k
+        t = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = t
+        k = k + 1
+    return limit
+",
+        &calls,
+    );
+}
+
+#[test]
 fn a_buffer_reaches_a_callee_without_being_boxed() {
     // one body cannot have two representations, so a function whose `list[T]`
     // parameter never escapes is lowered twice: the boxed edition python reaches,
@@ -23679,6 +25395,134 @@ def kept(d: dict[str, int], k: str) -> object:
 }
 
 #[test]
+fn a_membership_test_and_its_read_run_a_stored_keys_eq_as_python_does() {
+    // an exact dict and an exact `str` key are not enough for the fused lookup to ask
+    // the table once: a key *already stored* beside the probe, hashing like it, has its
+    // own `__eq__` asked on every probe that walks past it, and that `__eq__` can count
+    // the probes or change the dict between the test and the read. only a table holding
+    // nothing but exact `str` keys has no such key in it.
+    //
+    // how many times one lookup walks past the stored key depends on where the string's
+    // hash sends the probe, and each leg runs under a hash seed of its own. so a count is
+    // reported in lookups, divided by what one plain membership test asks in the same
+    // process, and an `__eq__` that acts does so on the first call the read makes
+    agree_python(
+        "dictfindeq",
+        "\
+class Collide:
+    def __init__(self, like: str) -> None:
+        self.like = like
+        self.calls = 0
+        self.fire = 0
+        self.rewrite = False
+        self.table: dict[object, int] = {}
+
+    def __hash__(self) -> int:
+        return hash(self.like)
+
+    def __eq__(self, other: object) -> bool:
+        self.calls = self.calls + 1
+        if self.calls == self.fire:
+            if self.rewrite:
+                self.table[self.like] = 999
+            else:
+                del self.table[self.like]
+        return False
+
+
+class Tagged(str):
+    def __eq__(self, other: object) -> bool:
+        return str.__eq__(self, other)
+
+    def __hash__(self) -> int:
+        return str.__hash__(self)
+
+
+def beside(c: Collide) -> Collide:
+    c.table[c] = 0
+    c.table[c.like] = 5
+    c.calls = 0
+    return c
+
+
+def per_lookup(c: Collide) -> int:
+    c.calls = 0
+    found = c.like in c.table
+    asked = c.calls
+    c.calls = 0
+    return asked
+
+
+def read_hit(d: dict[object, int], k: str) -> int:
+    if k in d:
+        return d[k]
+    return -1
+
+
+def counted(words: list[str], seen: dict[object, int]) -> int:
+    for word in words:
+        if word in seen:
+            seen[word] = seen[word] + 1
+        else:
+            seen[word] = 1
+    return len(seen)
+
+
+def turned_general(words: list[str], late: Collide) -> tuple[int, int, int]:
+    seen: dict[object, int] = {}
+    late.calls = 0
+    i = 0
+    for word in words:
+        if i == 2:
+            seen[late] = 0
+        if word in seen:
+            seen[word] = seen[word] + 1
+        else:
+            seen[word] = 1
+        i = i + 1
+    return (len(seen), seen[late.like], late.calls)
+
+
+def turned_general_by_get(words: list[str], late: Collide) -> tuple[int, int, int]:
+    seen: dict[object, int] = {}
+    late.calls = 0
+    i = 0
+    for word in words:
+        if i == 2:
+            seen[late] = 0
+        if word in seen:
+            seen[word] = seen.get(word, 0) + 1
+        else:
+            seen[word] = 1
+        i = i + 1
+    return (len(seen), seen[late.like], late.calls)
+",
+        &[
+            "(lambda c: (lambda n: (m.read_hit(c.table, 'a'), c.calls // n))(m.per_lookup(c)))\
+             (m.beside(m.Collide('a')))",
+            "(lambda c: (lambda n: (m.counted(['a', 'a', 'a'], c.table), c.calls // n))\
+             (m.per_lookup(c)))(m.beside(m.Collide('a')))",
+            // the read's first `__eq__` deletes the key the test found, or rewrites the
+            // value the test saw
+            "(lambda c: (lambda n: repr(_capture(m.read_hit, c.table, 'a')) \
+             if c.__setattr__('fire', n + 1) is None else None)(m.per_lookup(c)))\
+             (m.beside(m.Collide('a')))",
+            "(lambda c: (lambda n: (m.read_hit(c.table, 'a'), c.table['a']) \
+             if (c.__setattr__('fire', n + 1), c.__setattr__('rewrite', True)) else None)\
+             (m.per_lookup(c)))(m.beside(m.Collide('a')))",
+            // a table that holds only exact `str` keys when the loop starts, and has a key
+            // with an `__eq__` of its own inserted part way through. the same loop reading
+            // through `get`, which is never fused, says what python asks
+            "(lambda w: m.turned_general(w, m.Collide('b')) == \
+             m.turned_general_by_get(w, m.Collide('b')))(['x', 'x', 'b', 'b', 'b'])",
+            "m.turned_general(['x', 'x', 'b', 'b', 'b'], m.Collide('b'))[:2]",
+            "m.counted([m.Tagged('a'), 'a', m.Tagged('b')], {'a': 1})",
+            "m.read_hit({m.Tagged('a'): 3}, 'a')",
+        ],
+    );
+}
+
+#[test]
 fn a_dict_subscript_answers_only_for_an_exact_dict() {
     // `d[k]` and `d[k] = v` are read and written straight into the table, which is
     // only the interpreter's own answer where nothing can have replaced it. a
@@ -24036,6 +25880,119 @@ class Hashed:
             "len({m.Hashed(1), m.Hashed(1), m.Hashed(2)})",
             "m.Hashed(1) in {m.Hashed(1)}",
             "m.Money(1).__eq__(m.Money(1))",
+        ],
+    );
+}
+
+#[test]
+fn an_equality_on_the_object_protocol_asks_the_type_rather_than_the_pointer() {
+    // python's `==` never takes identity as equality. `a == a` is whatever the type's
+    // `__eq__` answers, and for a NaN, or for a class that refuses itself, that is
+    // `False`. the C API's `PyObject_RichCompareBool` does short-circuit on identity
+    // before it asks the type at all, so a comparison lowered onto it answered `True`
+    // for both — a compiled program quietly disagreeing with ordinary python.
+    //
+    // the operands are typed `object`, which is what keeps the comparison on the
+    // abstract protocol: a pair of one emitted class is called directly and never
+    // reaches this. so a mixed pair, an `object`-typed pair and a builtin whose type
+    // the compiler cannot name are the shapes left
+    agree_python(
+        "richcmpidentity",
+        "\
+class Odd:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __eq__(self, other: object) -> bool:
+        return False
+
+    def __hash__(self) -> int:
+        return 0
+
+
+class Always:
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __ne__(self, other: object) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return 0
+
+
+def equal(a: object, b: object) -> bool:
+    return a == b
+
+
+def unequal(a: object, b: object) -> bool:
+    return a != b
+",
+        &[
+            // two distinct instances, which never needed the shortcut to answer
+            "m.equal(m.Odd(1), m.Odd(1))",
+            // and the same instance twice, which did
+            "(lambda o: m.equal(o, o))(m.Odd(1))",
+            "(lambda o: m.unequal(o, o))(m.Odd(1))",
+            // a written `__ne__` that says `True` whatever it is handed
+            "(lambda o: m.unequal(o, o))(m.Always())",
+            "(lambda o: m.equal(o, o))(m.Always())",
+            // no class of ours at all: a NaN is not equal to itself
+            "(lambda x: m.equal(x, x))(float('nan'))",
+            "(lambda x: m.unequal(x, x))(float('nan'))",
+            // the shapes that were already right, so a fix cannot cost them
+            "(lambda x: m.equal(x, x))(1.5)",
+            "m.equal('ab', 'a' + 'b')",
+            "m.unequal(1, 1.0)",
+            "(lambda x: m.equal(x, x))([1, 2])",
+        ],
+    );
+}
+
+#[test]
+fn membership_and_index_keep_the_identity_shortcut() {
+    // `x in xs` and `xs.index(x)` are not comparisons. python answers the first with
+    // `PySequence_Contains` and the second with `list.index`, and *both* of those
+    // compare identity before they ask `__eq__` — so a class that refuses even itself
+    // is still found in a list holding it, and interpreted python says so too.
+    //
+    // that shortcut is the interpreter's own semantics rather than a shortcut the
+    // compiler took, and removing it along with the one `==` had would make these
+    // disagree in the other direction
+    agree_python(
+        "containsidentity",
+        "\
+class Odd:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __eq__(self, other: object) -> bool:
+        return False
+
+    def __hash__(self) -> int:
+        return 0
+
+
+def holds(xs: list[object], x: object) -> bool:
+    return x in xs
+
+
+def missing(xs: list[object], x: object) -> bool:
+    return x not in xs
+
+
+def at(xs: list[object], x: object) -> int:
+    return xs.index(x)
+",
+        &[
+            "(lambda o: m.holds([o], o))(m.Odd(1))",
+            "(lambda o: m.missing([o], o))(m.Odd(1))",
+            "(lambda o: m.at([o], o))(m.Odd(1))",
+            "(lambda x: m.holds([x], x))(float('nan'))",
+            "(lambda x: m.at([x], x))(float('nan'))",
+            // a *different* instance is the one `__eq__` gets asked about, and it says no
+            "m.holds([m.Odd(1)], m.Odd(1))",
+            "type(_capture(m.at, [m.Odd(1)], m.Odd(1))).__name__",
         ],
     );
 }
@@ -26471,6 +28428,90 @@ def through(f: object, x: str) -> object:
 }
 
 #[test]
+fn a_keyword_given_twice_through_a_merge_is_refused_as_python_refuses_it() {
+    // a call's `**` merges a mapping into the keywords, and unlike a dict display it
+    // refuses a keyword that is already there — from a name written before it, from an
+    // earlier `**`, or from a name written after it. both refusals, and the one for an
+    // operand that is no mapping, name the callee the way python does. python rewords
+    // any single-argument `KeyError` the merge raises the same way, one a mapping's own
+    // `__getitem__` raised included
+    agree_python(
+        "kwmerge",
+        "\
+class Keys:
+    def __init__(self, keys: list[str]) -> None:
+        self.names = keys
+
+    def keys(self) -> list[str]:
+        return self.names
+
+    def __getitem__(self, key: str) -> int:
+        if key == \"missing\":
+            raise KeyError(key)
+        return len(key)
+
+
+class Counter:
+    def m(self, a: int, **extra: int) -> int:
+        return a + len(extra)
+
+
+def f(a: int, step: int = 1, **extra: int) -> int:
+    return a + step + len(extra)
+
+
+def explicit_then_merged(d: dict[str, int]) -> int:
+    return f(1, step=5, **d)
+
+
+def merged_then_explicit(d: dict[str, int]) -> int:
+    return f(1, **d, step=5)
+
+
+def merged_twice(d: dict[str, int], e: dict[str, int]) -> int:
+    return f(1, **d, **e)
+
+
+def merged_mapping(k: Keys) -> int:
+    return f(1, step=2, **k)
+
+
+def not_a_mapping(x: object) -> int:
+    return f(1, **x)  # type: ignore
+
+
+def method(c: Counter, d: dict[str, int]) -> int:
+    return c.m(1, b=2, **d)
+
+
+def display(d: dict[str, int], e: dict[str, int]) -> dict[str, int]:
+    return {**d, \"x\": 0, **e}
+",
+        &[
+            "m.explicit_then_merged({'other': 7})",
+            "repr(_capture(m.explicit_then_merged, {'step': 7}))",
+            "repr(_capture(m.merged_then_explicit, {'step': 7}))",
+            "m.merged_twice({'x': 1}, {'y': 2})",
+            "repr(_capture(m.merged_twice, {'x': 1}, {'x': 2}))",
+            "m.merged_mapping(m.Keys(['x', 'yy']))",
+            "repr(_capture(m.merged_mapping, m.Keys(['x', 'step'])))",
+            "repr(_capture(m.merged_mapping, m.Keys(['missing'])))",
+            "repr(_capture(m.not_a_mapping, [1]))",
+            "repr(_capture(m.not_a_mapping, 3))",
+            // a dict subclass is walked as a dict, whatever its `keys` says
+            "m.merged_twice(type('D', (dict,), {'keys': lambda s: ['step']})({'z': 1}), {})",
+            "repr(_capture(m.merged_twice, {1: 1}, {1: 2}))",
+            // a compiled method carries no `__module__`, which is its own difference, so
+            // only what follows the callee's name is compared
+            "str(_capture(m.method, m.Counter(), {'b': 1})).split('()', 1)[1]",
+            "m.method(m.Counter(), {'x': 1, 'y': 2})",
+            // a display keeps the later value
+            "m.display({'x': 1}, {'x': 2})",
+        ],
+    );
+}
+
+#[test]
 fn the_remaining_statement_forms_agree() {
     agree(
         "statementrest",
@@ -26704,6 +28745,123 @@ def unpacked(n: int) -> str:
 }
 
 #[test]
+fn a_comprehensions_targets_are_its_own() {
+    // a comprehension is a scope of its own, so the names its `for` clauses bind are not
+    // the enclosing function's: a local, a parameter or a global of the same name keeps
+    // what it held, and a read of the name before the comprehension still reads the
+    // global. the first iterable is read in the enclosing scope and every later clause
+    // inside the comprehension's. a walrus is the one binding that reaches out, and a
+    // closure made inside captures the comprehension's variable, whose last value every
+    // one of them sees
+    agree_python(
+        "compscope",
+        "\
+G = 5
+
+
+def local_float(xs: list[float]) -> float:
+    x = 5.0
+    out = [x + 0.5 for x in xs]
+    return x
+
+
+def parameter(x: int, xs: list[int]) -> int:
+    out = [x * 2 for x in xs]
+    return x
+
+
+def text(xs: list[str]) -> str:
+    s = \"kept\"
+    out = [s.upper() for s in xs]
+    return s
+
+
+def each_form(xs: list[int]) -> tuple[int, int, int, int]:
+    x = 5
+    a = {x for x in xs}
+    b = x
+    c = {x: 1 for x in xs}
+    d = x
+    e = sum(x for x in xs)
+    return (b, d, x, len(a) + len(c) + e)
+
+
+def clauses(xss: list[list[int]]) -> tuple[int, int, list[int]]:
+    x = 5
+    ys = [7, 7, 7]
+    out = [x + 1 for ys in xss for x in ys]
+    return (x, len(ys), out)
+
+
+def iterable_named_like_target(x: list[int]) -> tuple[list[int], list[int]]:
+    return ([x * 2 for x in x], x)
+
+
+def global_after(xs: list[int]) -> int:
+    out = [G + 1 for G in xs]
+    return G
+
+
+def global_before(xs: list[int]) -> tuple[int, list[int]]:
+    before = G
+    out = [G + 1 for G in xs]
+    return (before, out)
+
+
+def walrus(xs: list[int]) -> tuple[int, list[int]]:
+    y = 0
+    out = [(y := x * 3) for x in xs]
+    return (y, out)
+
+
+def reused(rows: list[list[int]]) -> tuple[list[list[int]], int]:
+    x = -1
+    out = [[x * 10 for x in x] + [len(x)] for x in rows]
+    return (out, x)
+
+
+def closures(xs: list[int]) -> tuple[list[int], int]:
+    x = 100
+    made = [lambda: x for x in xs]
+    return ([f() for f in made], x)
+
+
+def closures_twice(xs: list[int], ys: list[int]) -> list[int]:
+    first = [lambda: x for x in xs]
+    second = [lambda: x for x in ys]
+    return [f() for f in first] + [f() for f in second]
+",
+        &[
+            "m.local_float([1.0, 2.0])",
+            "m.parameter(9, [1, 2])",
+            "m.text(['a', 'b'])",
+            "m.each_form([1, 2])",
+            "m.clauses([[1, 2], [3]])",
+            "m.iterable_named_like_target([1, 2])",
+            "(m.global_after([1, 2]), m.G)",
+            "m.global_before([1, 2])",
+            "m.walrus([1, 2])",
+            "m.walrus([])",
+            "m.reused([[1, 2], [3]])",
+            "m.closures([1, 2, 3])",
+            "m.closures_twice([1, 2], [7, 8])",
+        ],
+    );
+    // basedpython gives each trip of a loop its own binding, a comprehension's included,
+    // so each closure holds the value it was made with — and still not the frame's `x`
+    agree(
+        "compscopeby",
+        "\
+def closures(xs: list[int]) -> tuple[list[int], int]:
+    x = 100
+    made = [lambda: x for x in xs]
+    return ([f() for f in made], x)
+",
+        &["m.closures([1, 2, 3])"],
+    );
+}
+
+#[test]
 fn the_debug_f_string_form_agrees() {
     agree(
         "debugfstring",
@@ -26923,6 +29081,133 @@ def through(n: int) -> str:
             "m.through(4)",
             "[(type(e).__name__, str(e)) for e in [_capture(m.guarded, -1)]]",
             "[(type(e).__name__, str(e)) for e in [_capture(m.through, -1)]]",
+        ],
+    );
+}
+
+#[test]
+fn an_except_clauses_class_is_evaluated_while_the_exception_is_handled() {
+    // python takes the exception as the one being handled before it evaluates any
+    // `except` clause's class. so an error raised by that evaluation chains onto it,
+    // anything the evaluation calls sees it in `sys.exception()`, and when no clause
+    // matches the exception handled before the `try` is back in place
+    agree_python(
+        "handlerclass",
+        "\
+import sys
+
+
+class Refused(Exception):
+    pass
+
+
+class Other(Exception):
+    pass
+
+
+def parse(text: str) -> int:
+    if len(text) == 0:
+        raise Refused(\"empty\")
+    return len(text)
+
+
+def current() -> object:
+    return type(sys.exception())
+
+
+def missing_name() -> int:
+    try:
+        parse(\"\")
+    except Other:
+        return 1
+    return 0
+
+
+def missing_second() -> int:
+    try:
+        parse(\"\")
+    except KeyError:
+        return 1
+    except Other:
+        return 2
+    return 0
+
+
+def asked_while_handling() -> str:
+    try:
+        parse(\"\")
+    except current() as e:  # type: ignore
+        return \"matched \" + type(e).__name__
+    return \"none\"
+
+
+def restored_after(log: list[str]) -> str:
+    try:
+        raise KeyError(\"outer\")
+    except KeyError:
+        try:
+            try:
+                parse(\"\")
+            except Other:
+                return \"other\"
+        except Refused:
+            log.append(repr(sys.exception()))
+        return repr(sys.exception())
+",
+        &[
+            "(m.__dict__.pop('Other'), (lambda e: (type(e).__name__, \
+             repr(e.__context__), repr(sys.exception())))(_capture(m.missing_name)))[1]",
+            "(m.__dict__.pop('Other'), (lambda e: (type(e).__name__, \
+             repr(e.__context__)))(_capture(m.missing_second)))[1]",
+            "m.asked_while_handling()",
+            "(lambda log: (m.restored_after(log), log))([])",
+        ],
+    );
+}
+
+#[test]
+fn a_raise_raises_what_the_constructor_answered() {
+    // `raise Refused(...)` raises whatever calling the name answered. python asks
+    // nothing of that object beyond its being an exception, so a module whose `Refused`
+    // has been rebound raises the replacement — and a handler naming `Refused` reads the
+    // same rebound name, so it still catches it
+    agree_python(
+        "raiserebound",
+        "\
+class Refused(Exception):
+    pass
+
+
+def parse(text: str) -> int:
+    if len(text) == 0:
+        raise Refused(\"empty\")
+    return len(text)
+
+
+def caught() -> str:
+    try:
+        parse(\"\")
+    except Refused:
+        return \"caught by name\"
+    return \"none\"
+
+
+def chained(text: str) -> int:
+    try:
+        return int(text)
+    except ValueError as e:
+        raise Refused(text) from e
+",
+        &[
+            "(m.__dict__.__setitem__('Refused', type('Replacement', (Exception,), {})), \
+             m.caught(), repr(_capture(m.parse, '')))[1:]",
+            "(m.__dict__.__setitem__('Refused', type('Replacement', (Exception,), {})), \
+             (lambda e: (repr(e), repr(e.__cause__)))(_capture(m.chained, 'x')))[1]",
+            "(m.__dict__.__setitem__('Refused', lambda text: KeyError(text)), \
+             repr(_capture(m.parse, '')))[1]",
+            "(m.__dict__.__setitem__('Refused', lambda text: 5), \
+             repr(_capture(m.parse, '')))[1]",
+            "(repr(_capture(m.parse, '')), m.caught())",
         ],
     );
 }
@@ -30395,7 +32680,7 @@ def joined(n: int) -> str:
     // be quadratic — which is worth more than the one small allocation fusing it
     // would save
     let body = emitted_function(&emitted, "by_by_diff_strconcatint_shape_joined");
-    assert!(body.contains("By_StrAppend("), "{body}");
+    assert!(body.contains("By_StrAddAppend("), "{body}");
     assert!(!body.contains("By_StrConcatInt("), "{body}");
 }
 
@@ -30449,15 +32734,14 @@ def once(i: int) -> str:
 }
 
 #[test]
-fn fusing_a_prefix_onto_the_digits_does_not_change_what_a_bad_str_raises() {
-    // a rebound `str` may hand back anything, and what the unfused shape did with
-    // that is raise from its own unbox — before the concatenation, and in the
-    // compiler's own words rather than the interpreter's. the fused operation makes
-    // the same check in the same place, so the two shapes have to say the same thing.
+fn fusing_a_prefix_onto_the_digits_raises_what_python_raises_for_a_bad_str() {
+    // a rebound `str` may hand back anything. the fused operation hands what it answered
+    // straight to `+`, as python does, so a value that is no `str` is refused by the
+    // operator in cpython's own words — and a `str` subclass is asked for its `__radd__`.
     //
-    // that they say something other than what cpython says for `'k' + 1` is older
-    // than this fusion and is what any annotated `-> str` already answers; the point
-    // here is only that fusing did not move it
+    // the unfused shape names the answer first, and narrowing that name to the `str` the
+    // checker says it holds is what refuses it there, in the compiler's words: the
+    // annotation-trust refusal any `-> str` answer already gets
     let Some((python, toolchain)) = environment() else {
         return;
     };
@@ -30512,7 +32796,11 @@ def unfused(n: int) -> str:
          print(said[0])\n\
          print('same' if said[0] == said[1] else f'differs: {said[1]}')\n",
     );
-    assert_eq!(out, "TypeError: expected str, got int\nsame");
+    assert_eq!(
+        out,
+        "TypeError: can only concatenate str (not \"int\") to str\n\
+         differs: TypeError: expected str, got int"
+    );
 }
 
 #[test]
@@ -30809,6 +33097,853 @@ class Counting:
             // drops nor doubles the reference the list still holds
             "[_xs := [object(), object()], m.last_of(_xs, 2) is _xs[1]][1]",
             "[_xs := [object()], [m.last_of(_xs, 1) for _ in range(200)][-1] is _xs[0]][1]",
+        ],
+    );
+}
+
+#[test]
+fn a_value_a_name_held_is_dropped_when_the_name_is_rebound() {
+    // python holds what a name is bound to until the name is rebound or deleted, not
+    // until the function returns: rebinding drops the old value straight after the new
+    // one is built, so its finalizer runs before the next statement. that holds whether
+    // or not anything reads the name again, whatever the name is annotated as, and
+    // however the value reached the name — a constructor, a call, or an element of a
+    // tuple a call answered
+    agree_python(
+        "namerebind",
+        "\
+log: list[str] = []
+
+
+class Cell:
+    x: int
+
+    def __init__(self, x: int) -> None:
+        log.append('init ' + str(x))
+        self.x = x
+
+    def __del__(self) -> None:
+        log.append('del ' + str(self.x))
+
+
+class Linked:
+    x: int
+    other: 'Linked | None'
+
+    def __init__(self, x: int, other: 'Linked | None') -> None:
+        self.x = x
+        self.other = other
+
+    def __del__(self) -> None:
+        if self.other is not None:
+            self.other.x = 99
+
+
+class Slotted:
+    __slots__ = ('x',)
+
+    def __init__(self, x: int) -> None:
+        log.append('init ' + str(x))
+        self.x = x
+
+    def __del__(self) -> None:
+        log.append('del ' + str(self.x))
+
+
+class Bare:
+    def __del__(self) -> None:
+        log.append('del bare')
+
+
+def make(x: int) -> Cell:
+    return Cell(x)
+
+
+def split(cell: Linked, value: int) -> tuple[Linked, int]:
+    return cell, value % 7
+
+
+def ctor_rebound() -> list[str]:
+    log.clear()
+    held = Cell(1)
+    held = Cell(2)
+    log.append('after rebind')
+    return list(log)
+
+
+def call_rebound() -> list[str]:
+    log.clear()
+    held = make(1)
+    held = make(2)
+    log.append('after rebind')
+    return list(log)
+
+
+def ctor_deleted() -> list[str]:
+    log.clear()
+    held = Cell(1)
+    del held
+    log.append('after del')
+    return list(log)
+
+
+def read_then_deleted() -> list[str]:
+    log.clear()
+    held = Cell(1)
+    log.append('read ' + str(held.x))
+    del held
+    log.append('after del')
+    return list(log)
+
+
+def bare_rebound() -> list[str]:
+    log.clear()
+    held = Bare()
+    held = Bare()
+    log.append('after rebind')
+    return list(log)
+
+
+def object_rebound() -> list[str]:
+    log.clear()
+    held: object = Cell(1)
+    held = Cell(2)
+    log.append('after rebind')
+    return list(log)
+
+
+def loop_rebound() -> list[str]:
+    log.clear()
+    i = 0
+    while i < 3:
+        held = Cell(i)
+        log.append('made ' + str(i))
+        i = i + 1
+    return list(log)
+
+
+def for_rebound() -> list[str]:
+    log.clear()
+    for i in range(3):
+        held = Cell(i)
+    return list(log)
+
+
+def slotted_rebound() -> list[str]:
+    log.clear()
+    i = 0
+    while i < 3:
+        held = Slotted(i)
+        i = i + 1
+    return list(log)
+
+
+def slotted_for_rebound() -> list[str]:
+    log.clear()
+    for i in range(3):
+        held = Slotted(i)
+    return list(log)
+
+
+def bound_before_the_loop() -> list[str]:
+    log.clear()
+    held = Cell(-1)
+    for i in range(3):
+        held = Cell(i)
+    del held
+    log.append('after del')
+    return list(log)
+
+
+def slotted_bound_before_the_loop() -> list[str]:
+    log.clear()
+    held = Slotted(-1)
+    for i in range(3):
+        held = Slotted(i)
+    del held
+    log.append('after del')
+    return list(log)
+
+
+def through_a_tuple(second: Linked) -> int:
+    held, part = split(Linked(1, second), 0)
+    held, part = split(second, 1)
+    return held.x + part
+",
+        &[
+            "m.ctor_rebound()",
+            "m.call_rebound()",
+            "m.ctor_deleted()",
+            "m.read_then_deleted()",
+            "m.bare_rebound()",
+            "m.object_rebound()",
+            "m.loop_rebound()",
+            // in a loop the old value goes once the new one is built, and not before its
+            // `__init__` has run
+            "m.for_rebound()",
+            "m.slotted_rebound()",
+            "m.slotted_for_rebound()",
+            "m.bound_before_the_loop()",
+            "m.slotted_bound_before_the_loop()",
+            "m.through_a_tuple(m.Linked(5, None))",
+        ],
+    );
+    // a class that fell back to its interpreted definition would agree as well
+    if let Some((python, _)) = environment() {
+        let out = run(
+            &python,
+            &diff_root().join("by_diff_namerebind_c"),
+            "import by_diff_namerebind as m\n\
+             print(m.__file__.endswith(('.so', '.pyd')), type(m.Cell.__dict__['__del__']).__name__, \
+             type(m.Slotted.__dict__['__del__']).__name__)\n",
+        );
+        assert_eq!(out, "True wrapper_descriptor wrapper_descriptor");
+    }
+}
+
+#[test]
+fn a_value_an_expression_statement_discards_is_not_checked() {
+    // python throws an expression statement's value away, so nothing about that value
+    // can make the statement raise. a call declared to answer an `int`, or reached
+    // through a method a subclass overrides to answer something else, answers what it
+    // answers — and the statement goes on to the next line
+    agree_python(
+        "discarded",
+        "\
+from collections.abc import Callable
+
+
+class Loud(list):
+    def append(self, value):
+        super().append(value)
+        return 'appended'
+
+
+class Shout(str):
+    def upper(self):
+        return 42
+
+
+class Counter:
+    def __init__(self) -> None:
+        self.count = 0
+
+    def bump(self) -> int:
+        self.count = self.count + 1
+        return self.count
+
+
+class Shape:
+    def area(self) -> int:
+        return 1
+
+
+class Square(Shape):
+    def area(self) -> int:
+        return 4
+
+
+def helper() -> int:
+    return 1
+
+
+def push(items: list[str], value: str) -> int:
+    items.append(value)
+    return len(items)
+
+
+def touch(s: str) -> str:
+    s.upper()
+    return 'touched'
+
+
+def through_callable(cb: Callable[[], int]) -> str:
+    cb()
+    return 'ok'
+
+
+def parenthesised(cb: Callable[[], int]) -> str:
+    (cb())
+    return 'ok'
+
+
+def unpacked(cb: Callable[..., int], args: tuple[int, ...]) -> str:
+    cb(*args)
+    return 'ok'
+
+
+def through_module_function() -> str:
+    helper()
+    return 'ok'
+
+
+def bumped(counter: Counter) -> int:
+    counter.bump()
+    return counter.count
+
+
+def measured(shapes: list[Shape]) -> str:
+    for shape in shapes:
+        shape.area()
+    return 'ok'
+
+
+def still_checked(cb: Callable[[], int]) -> int:
+    cb()
+    return cb() + 1
+",
+        &[
+            "[m.push([], 'a'), m.push(m.Loud(), 'a')]",
+            "[m.touch('a'), m.touch(m.Shout('a'))]",
+            "[m.through_callable(lambda: 1), m.through_callable(lambda: 'x')]",
+            "m.parenthesised(lambda: 'x')",
+            "m.unpacked(lambda *a: 'x', (1, 2))",
+            "[m.helper.__module__, m.through_module_function()]",
+            // an instance whose own dict holds a callable of the method's name, which
+            // the call reaches instead of the compiled body
+            "[_c := m.Counter(), m.bumped(_c), setattr(_c, 'bump', lambda: 'shadowed'), m.bumped(_c)][1::2]",
+            "m.measured([m.Shape(), m.Square()])",
+            // a value that is used is still what the call was declared to answer
+            "(lambda: m.still_checked(lambda: 2))()",
+        ],
+    );
+}
+
+#[test]
+fn a_builtin_the_module_rebinds_is_the_one_called() {
+    // a compiled `len(xs)`, `for i in range(n)`, `globals()` and zero-argument `super()`
+    // take a native path only while the name still resolves to the interpreter's own
+    // builtin. a module attribute written from outside — which is what
+    // `mock.patch('mod.len')` does — is what python calls instead
+    agree_python(
+        "rebuiltin",
+        "\
+import sys
+from collections.abc import Callable
+
+
+class Base:
+    def who(self) -> str:
+        return 'base'
+
+
+class Child(Base):
+    def who(self) -> str:
+        return 'child ' + super().who()
+
+
+def use_len(xs: list[int]) -> int:
+    return len(xs)
+
+
+def count_chars(s: str) -> int:
+    seen = 0
+    i = 0
+    while i < len(s):
+        seen = seen + 1
+        i = i + 1
+    return seen
+
+
+def built(n: int) -> float:
+    xs = [i * 0.5 for i in range(n)]
+    total = 0.0
+    j = 0
+    while j < len(xs):
+        total = total + xs[j]
+        j = j + 1
+    return total
+
+
+def use_range(n: int) -> int:
+    total = 0
+    for i in range(n):
+        total = total + i
+    return total
+
+
+def gradual(n: object) -> int:
+    total = 0
+    for i in range(n):
+        total = total + i
+    return total
+
+
+def comprehension(n: int) -> list[int]:
+    return [i * 2 for i in range(n)]
+
+
+def use_globals() -> object:
+    return globals()
+
+
+def patched_builtin(name: str, value: object, call: Callable[[], object]) -> object:
+    import builtins
+
+    original = getattr(builtins, name)
+    setattr(builtins, name, value)
+    try:
+        return call()
+    except Exception as error:
+        return repr(error)
+    finally:
+        setattr(builtins, name, original)
+
+
+def patched(name: str, value: object, call: Callable[[], object]) -> object:
+    namespace = sys.modules[__name__].__dict__
+    namespace[name] = value
+    try:
+        return call()
+    except Exception as error:
+        return repr(error)
+    finally:
+        del namespace[name]
+",
+        &[
+            "[m.use_len([1, 2]), m.patched('len', lambda xs: 99, lambda: m.use_len([1, 2]))]",
+            // the interpreter's own builtins are the other namespace a name resolves through
+            "[m.use_len([1, 2]), m.patched_builtin('len', lambda xs: 3, lambda: m.use_len([1, 2]))]",
+            "[m.use_range(3), m.patched_builtin('range', lambda n: iter([4]), lambda: m.use_range(3))]",
+            "[m.count_chars('abc'), m.patched('len', lambda s: 1, lambda: m.count_chars('abc'))]",
+            "m.built(3)",
+            "[m.use_range(3), m.patched('range', lambda n: iter([100, 200]), lambda: m.use_range(3))]",
+            // a bound the counting loop cannot take calls `range` with what was written
+            "[m.gradual(3), m.patched('range', lambda n: iter([7]), lambda: m.gradual(3))]",
+            "[m.comprehension(3), m.patched('range', lambda n: iter([5]), lambda: m.comprehension(3))]",
+            "[m.use_globals() is vars(m), m.patched('globals', lambda: 'fake', m.use_globals)]",
+            // python calls a rebound `super` with no arguments at all
+            "[m.Child().who(), m.patched('super', lambda *a: type('S', (), {'who': lambda self: 'fake' + str(len(a))})(), lambda: m.Child().who())]",
+        ],
+    );
+    if let Some((python, _)) = environment() {
+        let out = run(
+            &python,
+            &diff_root().join("by_diff_rebuiltin_c"),
+            "import by_diff_rebuiltin as m\n\
+             print(m.__file__.endswith(('.so', '.pyd')), type(m.Child.__dict__['who']).__name__)\n\
+             # a list held as a buffer has no list object to hand a rebound `len`, and a\n\
+             # copy would be a different list, so that call refuses rather than answering\n\
+             print(m.patched('len', lambda xs: 1, lambda: m.built(3)).startswith('RuntimeError'))\n",
+        );
+        assert_eq!(out, "True method_descriptor\nTrue");
+    }
+}
+
+#[test]
+fn a_special_method_a_descriptor_builds_is_looked_up_as_python_looks_it_up() {
+    // a `with` statement and a method call each remember what the name resolved to on
+    // the receiver's type. what is on the type is not always what reading it answers: a
+    // `functools.partialmethod`, or any `__get__` of its own, builds a fresh object on
+    // every read, and python binds it to the receiver rather than calling it with one
+    // prepended. a `staticmethod` binds to nothing, a `classmethod` to the class, and a
+    // method a metaclass defines is not the instance's at all
+    agree_python(
+        "specialsite",
+        "\
+def use(manager: object, n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        with manager as got:
+            total = total + 1
+        i = i + 1
+    return total
+
+
+def entered(manager: object) -> object:
+    with manager as got:
+        return got
+
+
+async def aentered(manager: object) -> object:
+    async with manager as got:
+        return got
+
+
+async def tagged(manager: object, tag: str) -> str:
+    return tag
+
+
+async def counted(first: object = None) -> object:
+    return ('fresh', first is None)
+
+
+async def declined(manager: object, *args: object) -> bool:
+    return False
+
+
+def popped(receiver: object) -> object:
+    return receiver.pop()
+",
+        &[
+            // freed as soon as the lookup is done, and then called through what was kept
+            "(lambda P: sum(m.use(P(), 3) + len([object() for _ in range(20)]) for _ in range(2000)))(type('P', (), {'__enter__': __import__('functools').partialmethod(lambda self, tag: tag, 'tag'), '__exit__': lambda self, *a: False}))",
+            "(lambda P: [m.entered(P()) for _ in range(50)][-1])(type('P', (), {'__enter__': __import__('functools').partialmethod(lambda self, tag: tag, 'tag'), '__exit__': lambda self, *a: False}))",
+            "(lambda Get: [m.entered(type('F', (), {'__enter__': Get(), '__exit__': lambda self, *a: False})()) for _ in range(50)][-1])(type('Get', (), {'__get__': lambda self, obj, cls: (lambda *a: ('fresh', obj is not None, len(a)))}))",
+            "[m.entered(type('S', (), {'__enter__': staticmethod(lambda *a: ('static', len(a))), '__exit__': lambda self, *a: False})()) for _ in range(50)][-1]",
+            "[m.entered(type('K', (), {'__enter__': classmethod(lambda cls, *a: (cls.__name__, len(a))), '__exit__': lambda self, *a: False})()) for _ in range(50)][-1]",
+            "(lambda Meta: str(_capture(m.entered, Meta('ByMeta', (), {})())).startswith(\"'ByMeta' object does not support the context manager protocol\"))(type('Meta', (type,), {'__enter__': lambda cls: 'meta', '__exit__': lambda cls, *a: False}))",
+            // `async with` asks through the same kind of site
+            "(lambda P: [(__import__('asyncio').run(m.aentered(P())), len([object() for _ in range(20)]))[0] for _ in range(300)][-1])(type('P', (), {'__aenter__': __import__('functools').partialmethod(m.tagged, 'tag'), '__aexit__': m.declined}))",
+            "(lambda Get: [__import__('asyncio').run(m.aentered(type('A', (), {'__aenter__': Get(), '__aexit__': m.declined})())) for _ in range(50)][-1])(type('Get', (), {'__get__': lambda self, obj, cls: m.counted}))",
+            // a method borrowed from a builtin type answers for that type's instances only
+            "[repr(_capture(m.popped, type('B', (), {'__slots__': (), 'pop': list.pop})())) for _ in range(50)][-1]",
+            "[m.popped(type('G', (), {'__slots__': (), 'pop': type('Get', (), {'__get__': lambda self, obj, cls: (lambda *a: ('fresh', obj is not None, len(a)))})()})()) for _ in range(50)][-1]",
+            "(lambda Q: [(m.popped(Q()), len([object() for _ in range(20)]))[0] for _ in range(3000)][-1])(type('Q', (), {'__slots__': (), 'pop': __import__('functools').partialmethod(lambda self, tag: ('partial', tag), 'tag')}))",
+        ],
+    );
+}
+
+#[test]
+fn a_tuple_holds_its_elements_until_python_would_have_dropped_it() {
+    // python builds a tuple display from every element before anything lets go of one,
+    // and a tuple dropped lets go of its elements last to first. so an element of a
+    // display that is thrown away, or subscripted for another element, lives until the
+    // last element has been made — and a tuple a name holds goes when the name does
+    agree_python(
+        "tuplelife",
+        "\
+from collections.abc import Callable
+
+
+class Loud:
+    def __init__(self, i: int, log: list[str]) -> None:
+        self.i = i
+        self.log = log
+        log.append('make ' + str(i))
+
+    def __del__(self) -> None:
+        self.log.append('del ' + str(self.i))
+
+
+def display_discarded(f: Callable[[int], object], log: list[str]) -> None:
+    (f(1), f(2))
+    log.append('after')
+
+
+def display_indexed(f: Callable[[int], object], log: list[str]) -> None:
+    x = (f(1), f(2))[1]
+    log.append('after')
+    del x
+    log.append('end')
+
+
+def display_named(f: Callable[[int], object], log: list[str]) -> None:
+    t = (f(1), f(2))
+    log.append('after')
+    del t
+    log.append('end')
+
+
+def display_returned(f: Callable[[int], object], log: list[str]) -> int:
+    t = (f(1), f(2))
+    log.append('after')
+    return len(t)
+
+
+def mk2(f: Callable[[int], object]) -> tuple[object, object]:
+    return f(1), f(2)
+
+
+def call_discarded(f: Callable[[int], object], log: list[str]) -> None:
+    mk2(f)
+    log.append('after')
+
+
+def call_named(f: Callable[[int], object], log: list[str]) -> None:
+    t = mk2(f)
+    log.append('after')
+
+
+def call_unpacked(f: Callable[[int], object], log: list[str]) -> None:
+    a, b = mk2(f)
+    log.append('after')
+
+
+def call_rebound(f: Callable[[int], object], log: list[str]) -> None:
+    t = mk2(f)
+    log.append('after')
+    t = mk2(f)
+    log.append('rebound')
+",
+        &[
+            "(lambda log: (m.display_discarded(lambda i: m.Loud(i, log), log), log)[1])([])",
+            "(lambda log: (m.display_indexed(lambda i: m.Loud(i, log), log), log)[1])([])",
+            "(lambda log: (m.display_named(lambda i: m.Loud(i, log), log), log)[1])([])",
+            "(lambda log: (m.display_returned(lambda i: m.Loud(i, log), log), log)[1])([])",
+            "(lambda log: (m.call_discarded(lambda i: m.Loud(i, log), log), log)[1])([])",
+            "(lambda log: (m.call_named(lambda i: m.Loud(i, log), log), log)[1])([])",
+            "(lambda log: (m.call_unpacked(lambda i: m.Loud(i, log), log), log)[1])([])",
+            "(lambda log: (m.call_rebound(lambda i: m.Loud(i, log), log), log)[1])([])",
+        ],
+    );
+}
+
+#[test]
+fn a_length_past_the_short_range_agrees() {
+    // a length is a `Py_ssize_t`, and a tagged `int` holds one bit fewer, so a length an
+    // object answers from `__len__` may need an object of its own
+    agree_python(
+        "biglen",
+        "\
+def length(xs: object) -> int:
+    return len(xs)
+
+
+def nonempty(xs: object) -> bool:
+    return len(xs) > 0
+",
+        &[
+            "[m.length(range(2**62)), m.length(range(2**63 - 1)), m.length(range(2**62 - 1))]",
+            "[m.nonempty(range(2**62)), m.length([1, 2, 3]), m.length('abc')]",
+        ],
+    );
+}
+
+#[test]
+fn an_instance_made_without_init_has_no_fields_until_they_are_assigned() {
+    // `C.__new__(C)` makes an instance `__init__` never ran on, and each attribute
+    // `__init__` would have given it is absent until something assigns it: a read raises
+    // `AttributeError`, wherever it is read from, and the instance's `__dict__`,
+    // `vars()` and `__getstate__` list only what it has. `copy` and `pickle` build their
+    // copies exactly that way and then fill them in
+    agree_python(
+        "unsetfields",
+        "\
+class Fields:
+    i: int
+    f: float
+    b: bool
+    s: str
+    o: object
+
+    def __init__(self, i: int, f: float, b: bool, s: str, o: object) -> None:
+        self.i = i
+        self.f = f
+        self.b = b
+        self.s = s
+        self.o = o
+
+
+def read_i(x: Fields) -> int:
+    return x.i
+
+
+def read_f(x: Fields) -> float:
+    return x.f
+
+
+def read_b(x: Fields) -> bool:
+    return x.b
+
+
+def read_s(x: Fields) -> str:
+    return x.s
+
+
+def read_o(x: Fields) -> object:
+    return x.o
+
+
+def assigned_then_read(x: Fields) -> int:
+    x.i = 4
+    return x.i + x.i
+
+
+class P:
+    def __init__(self, s: str, xs: list[int]) -> None:
+        self.s = s
+        self.xs = xs
+
+    def size(self) -> int:
+        return len(self.s) + len(self.xs)
+
+
+def get_s(p: P) -> str:
+    return p.s
+
+
+class Slotted:
+    __slots__ = ('n', 'label')
+
+    def __init__(self, n: int, label: str) -> None:
+        self.n = n
+        self.label = label
+
+
+class Money:
+    amount: int
+
+    def __init__(self, amount: int) -> None:
+        self.amount = amount
+
+    def __lt__(self, other: 'Money') -> bool:
+        return self.amount < other.amount
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Money) and self.amount == other.amount
+
+
+def less(a: Money, b: Money) -> bool:
+    return a < b
+
+
+class Point:
+    x: int
+    y: int
+
+    __match_args__ = ('x', 'y')
+
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+
+def classify(value: object) -> int:
+    match value:
+        case Point(a, b) if a > b:
+            return a - b
+        case Point(a, b):
+            return a + b
+        case _:
+            return 3
+
+
+def by_keyword(value: object) -> int:
+    match value:
+        case Point(y=b):
+            return b
+        case Point():
+            return 5
+        case _:
+            return 6
+",
+        &[
+            "[repr(_capture(getattr, m.Fields.__new__(m.Fields), name)) for name in 'ifbso']",
+            "[repr(_capture(getattr(m, 'read_' + name), m.Fields.__new__(m.Fields))) for name in 'ifbso']",
+            "[m.read_i(m.Fields(1, 2.0, True, 's', None)), m.assigned_then_read(m.Fields.__new__(m.Fields))]",
+            "(lambda x: [x.i, repr(_capture(getattr, x, 'f'))])((lambda x: (setattr(x, 'i', 7), x)[1])(m.Fields.__new__(m.Fields)))",
+            // `copy` and `pickle` go through `__new__`, `__dict__` and `__getstate__`
+            "(lambda c: (c.s, c.xs, c.size()))(__import__('copy').copy(m.P('ab', [1])))",
+            "(lambda c: (c.s, c.xs, c.size()))(__import__('copy').deepcopy(m.P('ab', [1])))",
+            "(lambda c: (c.s, c.xs, c.size()))(__import__('pickle').loads(__import__('pickle').dumps(m.P('ab', [1]))))",
+            "[repr(_capture(getattr, m.P.__new__(m.P), 's')), repr(_capture(m.get_s, m.P.__new__(m.P))), repr(_capture(m.P.__new__(m.P).size))]",
+            "[m.P.__new__(m.P).__dict__, vars(m.P.__new__(m.P)), m.P.__new__(m.P).__getstate__()]",
+            "(lambda p: [p.__dict__, vars(p), p.__getstate__(), repr(_capture(p.size))])((lambda p: (setattr(p, 's', 'x'), p)[1])(m.P.__new__(m.P)))",
+            "[repr(_capture(getattr, m.Slotted.__new__(m.Slotted), name)) for name in ('n', 'label')]",
+            "[repr(_capture(m.less, m.Money.__new__(m.Money), m.Money(1))), repr(_capture(lambda: m.Money(0) == m.Money.__new__(m.Money)))]",
+            // a class pattern capturing an attribute the instance lacks does not match,
+            // and matching goes on with the next case — a guard reading the capture never
+            // runs
+            "[m.classify(m.Point(3, 1)), m.classify(m.Point(1, 3)), m.classify(m.Point.__new__(m.Point))]",
+            "(lambda p: [m.classify(p), m.by_keyword(p)])((lambda p: (setattr(p, 'x', 9), p)[1])(m.Point.__new__(m.Point)))",
+            "[m.by_keyword(m.Point(1, 2)), m.by_keyword(m.Point.__new__(m.Point)), m.by_keyword(0)]",
+        ],
+    );
+    if let Some((python, _)) = environment() {
+        let out = run(
+            &python,
+            &diff_root().join("by_diff_unsetfields_c"),
+            "import by_diff_unsetfields as m\n\
+             print(m.__file__.endswith(('.so', '.pyd')), type(m.P.__dict__['size']).__name__, \
+             type(m.Money.__dict__['__lt__']).__name__)\n",
+        );
+        assert_eq!(out, "True method_descriptor wrapper_descriptor");
+    }
+}
+
+#[test]
+fn a_comparison_answers_with_what_the_comparison_method_answered() {
+    // `a > b` is whatever `__gt__` returned, which need not be a `bool`: numpy answers an
+    // array, and an `__eq__` may answer anything at all. only a condition asks for the
+    // answer's truth, the way `if` and `while` ask of any value
+    agree_python(
+        "richcompare",
+        "\
+class Loose:
+    def __init__(self, tag: str) -> None:
+        self.tag = tag
+
+    def __gt__(self, other: object) -> object:
+        return 'gt ' + self.tag
+
+    def __lt__(self, other: object) -> object:
+        return ''
+
+    def __eq__(self, other: object) -> object:
+        return [self.tag]
+
+    def __ne__(self, other: object) -> object:
+        return None
+
+    def __le__(self, other: object) -> object:
+        return 0
+
+    def __ge__(self, other: object) -> object:
+        return (1,)
+
+
+def gt(a: object, b: object) -> object:
+    return a > b
+
+
+def every(a: object, b: object) -> list[object]:
+    return [a > b, a < b, a == b, a != b, a <= b, a >= b]
+
+
+def stored(a: object, b: object) -> object:
+    answer = a > b
+    return answer
+
+
+def chained(a: object, b: object, c: object) -> object:
+    return a < b < c
+
+
+def chained_through(a: object, b: object, c: object) -> object:
+    return a > b > c
+
+
+def against_a_float(a: object, x: float) -> object:
+    return x < a
+
+
+def branch(a: object, b: object) -> str:
+    if a > b:
+        return 'taken'
+    return 'not taken'
+
+
+def falsy_branch(a: object, b: object) -> str:
+    while a < b:
+        return 'looped'
+    return 'skipped'
+
+
+def either(a: object, b: object) -> object:
+    return a < b or a > b
+
+
+def negated(a: object, b: object) -> object:
+    return not a == b
+
+
+def plain(a: int, b: int) -> object:
+    return a < b
+",
+        &[
+            "m.gt(m.Loose('x'), 1)",
+            "m.every(m.Loose('y'), 2)",
+            "m.stored(m.Loose('z'), 3)",
+            "[m.chained(1, m.Loose('p'), 3), m.chained(m.Loose('q'), 2, 3)]",
+            "[m.chained_through(m.Loose('r'), 1, 2), m.chained_through(3, 2, 1), m.chained_through(1, 2, 3)]",
+            "[m.against_a_float(m.Loose('f'), 1.5), m.against_a_float(2, 1.5)]",
+            "[m.branch(m.Loose('b'), 0), m.falsy_branch(m.Loose('c'), 0)]",
+            "[m.either(m.Loose('e'), 0), m.negated(m.Loose('n'), 0)]",
+            "[m.plain(1, 2), m.gt(2, 1), m.every(1.5, 2)]",
+            // the answer is the very object the method returned
+            "(lambda marker: m.gt(type('M', (), {'__gt__': lambda self, other: marker})(), 0) is marker)(object())",
         ],
     );
 }

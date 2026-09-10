@@ -13,14 +13,16 @@
 //!
 //! ## the fact is checked at runtime, not inferred from a type
 //!
-//! two ordinary things make asking twice observable. a dict *subclass* may have
+//! three ordinary things make asking twice observable. a dict *subclass* may have
 //! overridden `__contains__` or `__getitem__`, and then how many times each is
-//! called is the program's own business. and a key may have a `__hash__` that
-//! counts its calls, in which case hashing once where the source hashes twice is a
-//! different program. neither is a question this pass answers: the emitted helper
-//! takes its single probe only for an exact dict keyed by an exact `str`, and
-//! everything else goes through the protocol twice over in the order it would
-//! have. so the pass needs no static type at all — it is a *shape* rewrite, and it
+//! called is the program's own business. a key may have a `__hash__` that counts
+//! its calls, in which case hashing once where the source hashes twice is a
+//! different program. and a key already stored in the dict has its `__eq__` asked
+//! by every probe that walks past it, which can count the probes or change the
+//! dict between them. none is a question this pass answers: the emitted helper
+//! takes its single probe only for an exact dict keyed by an exact `str` whose
+//! table holds nothing but exact `str` keys, and everything else goes through the
+//! protocol twice over in the order it would have. so the pass needs no static type at all — it is a *shape* rewrite, and it
 //! is correct over a list, a subclass or anything else that reaches it.
 //!
 //! ## why the branch has to be part of the shape

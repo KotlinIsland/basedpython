@@ -132,6 +132,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         // fixed tuple cannot raise on their own. neither does naming an emitted
         // class: the type object is this module's own, and already built
         Op::Assign { .. }
+        | Op::Move { .. }
         | Op::FloatCompare { .. }
         | Op::TupleGet { .. }
         | Op::LoadClass { .. }
@@ -146,6 +147,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::IntCompare { .. }
         | Op::ObjectBinary { .. }
         | Op::ObjectCompare { .. }
+        | Op::ObjectRichCompare { .. }
         | Op::StrCompare { .. }
         | Op::Truthy { .. }
         | Op::Len { .. }
@@ -198,6 +200,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::GetField { .. }
         | Op::PushHandled { .. }
         | Op::PopHandled { .. }
+        | Op::Release { .. }
         | Op::SetField { .. } => false,
 
         // the module namespace is a dict this module already holds — the extension's
@@ -216,7 +219,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::CallUnpacked { .. } => true,
 
         // merging into a display drives an iterator or a mapping, either of which fails
-        Op::Extend { .. } => true,
+        Op::Extend { .. } | Op::MergeKeywords { .. } => true,
 
         // allocating, growing and indexing can all fail; reading the length is a
         // field read of a buffer we already hold
@@ -248,10 +251,19 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::IsMapping { .. } => false,
         // an object with no `__aiter__` is a `TypeError`, and the call may raise
         Op::AsyncIter { .. } | Op::AsyncContext { .. } => true,
+        // a field the instance does not have is an `AttributeError`
+        Op::RequireField { .. } => true,
+        // and asking whether it has one is a load and a comparison
+        Op::FieldIsSet { .. } => false,
+        // the name is resolved, and one bound nowhere is a `NameError`
+        Op::BuiltinStands { .. } => true,
         // an attribute lookup reaches `__getattr__`, and `__match_args__` with it
         Op::MatchAttr { .. } => true,
         // a pointer comparison against a singleton
-        Op::IsMissing { .. } | Op::MethodStands { .. } | Op::AccessorStands { .. } => false,
+        Op::IsMissing { .. }
+        | Op::MethodStands { .. }
+        | Op::AccessorStands { .. }
+        | Op::FieldStands { .. } => false,
         // it either agrees and returns, or aborts the process. it never sets an
         // exception, so there is no error edge for a caller to take
         Op::LicenceHolds { .. } => false,

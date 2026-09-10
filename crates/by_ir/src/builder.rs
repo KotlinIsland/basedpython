@@ -348,6 +348,7 @@ impl FunctionBuilder {
             coroutine_body: None,
             doc: self.doc,
             takes_a_weak_reference: self.takes_a_weak_reference,
+            nested: None,
         }
     }
 }

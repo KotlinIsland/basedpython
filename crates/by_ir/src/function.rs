@@ -297,7 +297,9 @@ pub struct Function {
     /// so the wrapper hands the whole call to the interpreted definition, which is
     /// exactly the code the annotation describes.
     ///
-    /// `.by` opts out of the promotion, so this is empty for every `.by` function
+    /// `.by` and `strict-float` opt out of the promotion, and the annotation still
+    /// admits a subclass of `float`, whose operators and type a `double` does not
+    /// carry — so every `double` parameter of a module-level function is one of these
     pub deferring: Vec<usize>,
     /// the indices of parameters whose default is not an immediate.
     ///
@@ -364,6 +366,23 @@ pub struct Function {
     /// instead: a frame that hands one of these an instance of a class this module lays
     /// out is the frame that declines, and declining it takes its class with it
     pub takes_a_weak_reference: bool,
+    /// what python calls a *nested* function, which only a nested function has
+    ///
+    /// its receiver is the environment its captures live in, but python sees neither the
+    /// environment nor a method of one: it sees a function, named by the frames it is
+    /// written in. so such a function is published as a function object of its own over
+    /// the environment, and its boundary takes the environment off that object and
+    /// reports arity in its own name, counting no receiver
+    pub nested: Option<NestedName>,
+}
+
+/// the names python gives a nested function — see [`Function::nested`]
+#[derive(Debug, Clone, PartialEq)]
+pub struct NestedName {
+    /// `__name__`, which is `<lambda>` for a lambda
+    pub name: String,
+    /// `__qualname__`: `counter.<locals>.step`
+    pub qualname: String,
 }
 
 impl Function {
@@ -489,6 +508,10 @@ impl Function {
 pub struct FieldDecl {
     pub name: String,
     pub ty: crate::rtype::RType,
+    /// whether this is a closure environment's *shared* cell: a name more than one frame
+    /// writes, which every one of them reads and writes here, and which starts unset. a
+    /// capture that is only copied in is always set, so it is read without the test
+    pub cell: bool,
     /// the constructor's default for it, `None` where it has none
     ///
     /// only an immediate, for the same reason a parameter default is: it is
@@ -523,6 +546,28 @@ impl FieldDecl {
         self.name.contains('$')
     }
 
+    /// whether an instance can be without this field
+    ///
+    /// every field a class declares can be: `C.__new__(C)` makes an instance `__init__`
+    /// never ran on. what cannot is a field the compiler made up, which no instance of
+    /// the class python can see ever lacks, and a closure's shared cell, whose own test
+    /// for being unset is [`Self::cell`]
+    pub fn tracks_absence(&self) -> bool {
+        !self.cell && !self.generated()
+    }
+
+    /// whether this field keeps a byte beside it saying whether it has been written
+    ///
+    /// an [optional](Self::optional) field does, and so does any field whose
+    /// representation has no value to spare for "absent" and is not a tagged `int`,
+    /// whose error value is spare. an object's is `NULL`, which the allocation leaves
+    pub fn has_presence_byte(&self) -> bool {
+        self.optional
+            || (self.tracks_absence()
+                && !self.ty.is_object_reference()
+                && self.ty != crate::rtype::RType::INT)
+    }
+
     /// the C struct member this field is stored in
     ///
     /// prefixed, and unconditionally: a python attribute may be called `int`, `const`
@@ -542,7 +587,7 @@ impl FieldDecl {
 
     /// the C struct member holding whether this field has been written
     ///
-    /// only an [optional](Self::optional) field has one. zero means absent, and
+    /// only a field [with one](Self::has_presence_byte) has one. zero means absent, and
     /// `tp_alloc` zeroes the instance, so "never written" needs no constructor work
     pub fn presence(&self) -> String {
         format!("{}{}", self.member_prefix("p"), mangle(&self.name))
@@ -700,6 +745,10 @@ pub struct ClassIr {
     /// `@dataclass(frozen=True)` has none, and — the part a type system is needed for
     /// — two reads of one field are a *single* read even across an arbitrary call
     pub immutable: bool,
+    /// whether this is a closure environment: the object a frame's nested functions read
+    /// their captures from, which a nested function reading its own name holds a cycle
+    /// through, so the collector has to be able to walk it
+    pub environment: bool,
     /// whether the module's python namespace exposes this class.
     ///
     /// a closure environment is a real type with a real layout, but it is an
@@ -841,9 +890,13 @@ impl ClassIr {
     /// the finished type, because that is the only thing that reaches the slot fixup a
     /// class statement runs and a type spec does not. a table entry would put a second
     /// descriptor under the same name, filled before the assignment and dropped by it
+    ///
+    /// a nested function is left out too: its environment is its receiver, but python
+    /// never sees it as a method of one — see [`Function::nested`]
     pub fn table_methods(&self) -> impl Iterator<Item = &Function> {
         self.methods.iter().filter(|method| {
             method.name != "__new__"
+                && method.nested.is_none()
                 && !self
                     .properties
                     .iter()
@@ -1367,6 +1420,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            nested: None,
         }
     }
 

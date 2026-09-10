@@ -238,6 +238,44 @@ impl RType {
 
     /// the value a register of this type holds before it is assigned, and the
     /// value a fallible function returns on the error path
+    /// whether a value of this type is one reference to one object, which a single
+    /// release lets go of and an empty register spells as `NULL`
+    pub fn is_object_reference(&self) -> bool {
+        matches!(
+            self,
+            Self::Primitive(
+                Primitive::Object
+                    | Primitive::Str
+                    | Primitive::Bytes
+                    | Primitive::List
+                    | Primitive::Dict
+                    | Primitive::Tuple
+            ) | Self::Instance { .. }
+        )
+    }
+
+    /// whether a value of this type is, or holds as an element, a reference to an
+    /// object — something that may have a finalizer, or hold one that does
+    pub fn holds_object_reference(&self) -> bool {
+        match self {
+            Self::Tuple(items) => items.iter().any(Self::holds_object_reference),
+            Self::Array(element) => element.holds_object_reference(),
+            _ => self.is_object_reference(),
+        }
+    }
+
+    /// the type of the element `path` names inside a fixed-length tuple, following
+    /// elements outermost first. the empty path names the whole value
+    pub fn element(&self, path: &[usize]) -> Option<&Self> {
+        match path.split_first() {
+            None => Some(self),
+            Some((index, rest)) => match self {
+                Self::Tuple(items) => items.get(*index)?.element(rest),
+                _ => None,
+            },
+        }
+    }
+
     pub fn undefined(&self) -> String {
         match self {
             Self::Array(_) => "NULL".to_string(),

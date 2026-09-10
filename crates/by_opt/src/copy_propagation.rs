@@ -255,6 +255,7 @@ fn usage_counts(function: &Function) -> HashMap<RegisterId, (usize, usize)> {
 fn retarget(op: &mut Op, new_dest: RegisterId) {
     match op {
         Op::Assign { dest, .. }
+        | Op::Move { dest, .. }
         | Op::IntBinary { dest, .. }
         | Op::FloatBinary { dest, .. }
         | Op::FloatObjectBinary { dest, .. }
@@ -271,13 +272,16 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::AsyncContext { dest, .. }
         | Op::IsMissing { dest, .. }
         | Op::MethodStands { dest, .. }
+        | Op::BuiltinStands { dest, .. }
         | Op::AccessorStands { dest, .. }
+        | Op::FieldStands { dest, .. }
         | Op::DictShadows { dest, .. }
         | Op::MatchSlice { dest, .. }
         | Op::IntCompare { dest, .. }
         | Op::FloatCompare { dest, .. }
         | Op::ObjectBinary { dest, .. }
         | Op::ObjectCompare { dest, .. }
+        | Op::ObjectRichCompare { dest, .. }
         | Op::StrCompare { dest, .. }
         | Op::Truthy { dest, .. }
         | Op::Len { dest, .. }
@@ -332,6 +336,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::DeleteAttr { dest, .. }
         | Op::ArrayPush { dest, .. }
         | Op::Extend { dest, .. }
+        | Op::MergeKeywords { dest, .. }
         | Op::CallUnpacked { dest, .. }
         | Op::StrConcat { dest, .. }
         | Op::StrConcatInt { dest, .. }
@@ -340,6 +345,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::IntToFloat { dest, .. }
         | Op::Unbox { dest, .. }
         | Op::TupleBuild { dest, .. }
+        | Op::FieldIsSet { dest, .. }
         | Op::TupleGet { dest, .. } => *dest = new_dest,
         Op::CallNative { dest, .. } => *dest = Some(new_dest),
         // every other arm here has no destination at all, so the caller never reaches
@@ -350,8 +356,10 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::FinishFrame { .. }
         | Op::RaiseObject { .. }
         | Op::PopHandled { .. }
+        | Op::Release { .. }
         | Op::Reraise { .. }
         | Op::LicenceHolds { .. }
+        | Op::RequireField { .. }
         | Op::SetField { .. } => {}
     }
 }

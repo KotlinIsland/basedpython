@@ -629,6 +629,67 @@ callers and falls back to attribute lookup for the interpreted subclass
 the same reason mypyc does — the fixed layout must be initialized. a
 `data class` satisfies this automatically
 
+## where compiled code differs from python
+
+each of these is a tradeoff made on purpose, and each names the shape of program
+that can tell the two builds apart
+
+### a rebound `len` and a list held as a buffer
+
+a list of unboxed values that never leaves its function is held as a buffer
+rather than as a `list`. `len` of it is a field read while `len` names the
+builtin; a module that rebinds the name has what it rebound called instead, as
+python does. a buffer has no `list` to hand over, though, and building one would
+be a copy that the replacement could tell apart from the list python would have
+passed, by identity or by writing to it. so that one call raises `RuntimeError`
+instead:
+
+```python
+def total(n: int) -> float:
+    xs = [i * 0.5 for i in range(n)]
+    out = 0.0
+    j = 0
+    while j < len(xs):
+        out = out + xs[j]
+        j = j + 1
+    return out
+
+
+# from another module
+mod.len = lambda xs: 1
+mod.total(3)  # python: 0.0; compiled: RuntimeError
+```
+
+### one module object for the whole process
+
+a compiled module keeps its namespace, and every memo of a name in it, in state
+the whole process shares, so it can stand behind one module object and no more.
+importing it again in the same interpreter hands back the module the first import
+made, as importing a C extension that keeps no per-module state does. python would
+build a second module and run its body again:
+
+```python
+import sys
+import mod
+
+del sys.modules["mod"]
+import mod as again
+
+again is mod  # python: False; compiled: True
+```
+
+importing it in a second interpreter — a subinterpreter, legacy or isolated — is
+refused with an `ImportError`, since there is no second copy of that state to give
+it:
+
+```python
+import _interpreters
+import mod
+
+sub = _interpreters.create("legacy")
+_interpreters.exec(sub, "import mod")  # python: imports; compiled: ImportError
+```
+
 ## debugging and inspection
 
 - **`#line` directives** in the generated C point at `.by` source. gdb, lldb,

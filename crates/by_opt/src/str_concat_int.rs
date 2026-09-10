@@ -42,7 +42,7 @@
 use std::collections::{HashMap, HashSet};
 
 use by_ir::function::{Function, ModuleIr};
-use by_ir::ops::{BlockId, Op, RegisterId, Value};
+use by_ir::ops::{BlockId, Concatenation, Op, RegisterId, Value};
 use by_ir::rtype::RType;
 
 pub(crate) fn run(module: &mut ModuleIr) {
@@ -79,13 +79,27 @@ fn fuse(function: &mut Function) {
         let Some(block) = function.blocks.get_mut(chain.block.index()) else {
             continue;
         };
-        let (Some(Op::StrOfInt { value, .. }), Some(Op::StrConcat { dest, lhs, .. })) = (
+        let (
+            Some(Op::StrOfInt { value, .. }),
+            Some(Op::StrConcat {
+                dest,
+                lhs,
+                concatenation: Concatenation::Operator(mutation),
+                ..
+            }),
+        ) = (
             block.ops.get(chain.index).cloned(),
             block.ops.get(chain.index + 2).cloned(),
-        ) else {
+        )
+        else {
             continue;
         };
-        block.ops[chain.index] = Op::StrConcatInt { dest, lhs, value };
+        block.ops[chain.index] = Op::StrConcatInt {
+            dest,
+            lhs,
+            value,
+            mutation,
+        };
         block.ops.drain(chain.index + 1..chain.index + 3);
     }
 }
@@ -104,7 +118,10 @@ fn chains(function: &Function) -> Vec<Chain> {
                     to,
                 },
                 Op::StrConcat {
-                    rhs, consumes_lhs, ..
+                    rhs,
+                    consumes_lhs,
+                    concatenation: Concatenation::Operator(_),
+                    ..
                 },
             ] = window
             else {
@@ -196,7 +213,7 @@ fn wholly_owned(function: &Function, chains: &[Chain]) -> HashSet<RegisterId> {
 mod tests {
     use by_ir::builder::FunctionBuilder;
     use by_ir::function::{Function, ModuleIr};
-    use by_ir::ops::{Op, RegisterId, Terminator, Value};
+    use by_ir::ops::{Concatenation, Mutation, Op, RegisterId, Terminator, Value};
     use by_ir::rtype::RType;
 
     /// `prefix + str(i)`, in the shape the passes before this one leave it
@@ -220,6 +237,7 @@ mod tests {
             lhs: Value::Str(prefix.to_string()),
             rhs: Value::Register(checked),
             consumes_lhs: false,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         wire(&mut builder, checked);
         builder.terminate(Terminator::Return(Value::Register(out)));
@@ -294,6 +312,7 @@ mod tests {
             lhs: Value::Register(held),
             rhs: Value::Register(checked),
             consumes_lhs: true,
+            concatenation: Concatenation::Operator(Mutation::Fresh),
         });
         builder.terminate(Terminator::Return(Value::Register(held)));
         let function = run_on(builder.finish());

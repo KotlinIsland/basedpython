@@ -7,7 +7,9 @@
 use std::fmt::Write;
 
 use crate::function::{Function, ModuleIr};
-use crate::ops::{LicenceKind, Mutation, Op, RegisterId, Terminator, UnaryOp, Value};
+use crate::ops::{
+    Concatenation, LicenceKind, Mutation, Op, RegisterId, Terminator, UnaryOp, Value,
+};
 
 /// render a whole module
 pub fn print_module(module: &ModuleIr) -> String {
@@ -148,6 +150,10 @@ fn print_op(function: &Function, op: &Op) -> String {
             value(subject),
             attribute.as_deref().unwrap_or("<positional>")
         ),
+        Op::BuiltinStands {
+            dest,
+            name: builtin,
+        } => format!("{} = builtin-stands {builtin}", name(*dest)),
         Op::MethodStands {
             dest,
             src,
@@ -165,6 +171,16 @@ fn print_op(function: &Function, op: &Op) -> String {
             name: attribute,
         } => format!(
             "{} = accessor-stands {} {class}.{attribute}",
+            name(*dest),
+            value(src)
+        ),
+        Op::FieldStands {
+            dest,
+            src,
+            class,
+            field,
+        } => format!(
+            "{} = field-stands {} {class}.{field}",
             name(*dest),
             value(src)
         ),
@@ -273,7 +289,8 @@ fn print_op(function: &Function, op: &Op) -> String {
         Op::IntCompare { dest, op, lhs, rhs }
         | Op::FloatCompare { dest, op, lhs, rhs }
         | Op::StrCompare { dest, op, lhs, rhs }
-        | Op::ObjectCompare { dest, op, lhs, rhs } => {
+        | Op::ObjectCompare { dest, op, lhs, rhs }
+        | Op::ObjectRichCompare { dest, op, lhs, rhs } => {
             format!(
                 "{} = {} {} {}",
                 name(*dest),
@@ -399,6 +416,18 @@ fn print_op(function: &Function, op: &Op) -> String {
             if *mapping { "update" } else { "extend" },
             value(source)
         ),
+        Op::MergeKeywords {
+            dest,
+            container,
+            source,
+            callee,
+        } => format!(
+            "{} = {} keywords {} for {}",
+            name(*dest),
+            value(container),
+            value(source),
+            value(callee)
+        ),
         Op::Unpack { dest, src, starred } => match starred {
             Some(index) => format!("{} = unpack {} star {index}", name(*dest), value(src)),
             None => format!("{} = unpack {}", name(*dest), value(src)),
@@ -414,9 +443,14 @@ fn print_op(function: &Function, op: &Op) -> String {
             dest,
             lhs,
             value: src,
+            mutation,
         } => {
+            let form = match mutation {
+                Mutation::Fresh => "",
+                Mutation::InPlace => " in place",
+            };
             format!(
-                "{} = str-concat-int {}, {}",
+                "{} = str-concat-int{form} {}, {}",
                 name(*dest),
                 value(lhs),
                 value(src)
@@ -572,12 +606,34 @@ fn print_op(function: &Function, op: &Op) -> String {
             class,
             field,
         } => format!("{} = {}.<{class}.{field}>", name(*dest), value(receiver)),
+        Op::RequireField {
+            receiver,
+            class,
+            field,
+        } => format!("require {}.<{class}.{field}>", value(receiver)),
+        Op::FieldIsSet {
+            dest,
+            receiver,
+            class,
+            field,
+        } => format!(
+            "{} = has {}.<{class}.{field}>",
+            name(*dest),
+            value(receiver)
+        ),
         Op::SetField {
             receiver,
             class,
             field,
             value: v,
-        } => format!("{}.<{class}.{field}> = {}", value(receiver), value(v)),
+            moves,
+            ..
+        } => format!(
+            "{}.<{class}.{field}> = {}{}",
+            value(receiver),
+            if *moves { "move " } else { "" },
+            value(v)
+        ),
         Op::GetAttr {
             dest,
             receiver,
@@ -681,6 +737,20 @@ fn print_op(function: &Function, op: &Op) -> String {
             format!("{} = push handled {}", name(*dest), value(v))
         }
         Op::PopHandled { value: v } => format!("pop handled {}", value(v)),
+        Op::Release { value: v, path } => {
+            let mut text = format!("release {}", value(v));
+            for index in path {
+                let _ = write!(text, "[{index}]");
+            }
+            text
+        }
+        Op::Move { dest, src, path } => {
+            let mut text = format!("{} = move {}", name(*dest), value(src));
+            for index in path {
+                let _ = write!(text, "[{index}]");
+            }
+            text
+        }
         Op::RaiseObject { exception, cause } => match cause {
             Some(cause) => format!("raise {} from {}", value(exception), value(cause)),
             None => format!("raise {}", value(exception)),
@@ -700,9 +770,20 @@ fn print_op(function: &Function, op: &Op) -> String {
             lhs,
             rhs,
             consumes_lhs,
+            concatenation,
         } => {
             let take = if *consumes_lhs { "move " } else { "" };
-            format!("{} = {take}{} ++ {}", name(*dest), value(lhs), value(rhs))
+            let operator = match concatenation {
+                Concatenation::Join => "++",
+                Concatenation::Operator(Mutation::Fresh) => "+",
+                Concatenation::Operator(Mutation::InPlace) => "+=",
+            };
+            format!(
+                "{} = {take}{} {operator} {}",
+                name(*dest),
+                value(lhs),
+                value(rhs)
+            )
         }
         Op::RaiseStandard { error, message } => {
             format!("raise {error:?}({message:?})")
@@ -816,6 +897,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            nested: None,
         }
     }
 
@@ -889,6 +971,7 @@ b2:
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            nested: None,
         };
         assert!(print_function(&function).contains("return 1.0"));
     }
