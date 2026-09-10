@@ -951,6 +951,20 @@ impl<'db> BoundSuperType<'db> {
     ///
     /// If the pivot class is a dynamic type, its MRO can't be determined,
     /// so we fall back to using the MRO of `DynamicType::Unknown`.
+    /// basedpython: the classes an attribute read through this `super()` object is
+    /// looked up in — the owner's MRO after the pivot. `None` when the owner is not
+    /// a resolved class, which leaves nothing to search
+    pub(super) fn lookup_mro_after_pivot(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<impl Iterator<Item = ClassBase<'db>>> {
+        let SuperOwnerKind::Resolved(resolved_owner) = self.owner(db) else {
+            return None;
+        };
+        Some(self.skip_until_after_pivot(db, env, resolved_owner.lookup_anchor.iter_mro(db)))
+    }
+
     fn skip_until_after_pivot(
         self,
         db: &'db dyn Db,

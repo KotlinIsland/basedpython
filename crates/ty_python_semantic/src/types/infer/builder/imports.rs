@@ -242,6 +242,30 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         }
 
+        // basedpython: `import a.b` binds its top-level package `a`, and no alias
+        // keeps that binding, so it cannot rebind a module-level `private a` under
+        // the underscored name the lowering gives it
+        if asname.is_none()
+            && let Some((top, _)) = name.as_str().split_once('.')
+            && definition
+                .scope(self.db())
+                .file_scope_id(self.db())
+                .is_global()
+            && crate::types::visibility::private_symbols(self.db(), self.file())
+                .contains(&ruff_python_ast::name::Name::new(top))
+            && let Some(builder) = self
+                .context
+                .report_lint(&crate::types::diagnostic::INVALID_VISIBILITY, alias)
+        {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`import {name}` rebinds `{top}`, which this module declares `private`"
+            ));
+            diagnostic.info(format_args!(
+                "a dotted import binds its top-level package, which no alias can keep under \
+                 `_{top}`: write `import {name} as ...` instead"
+            ));
+        }
+
         // The name of the module being imported
         let Some(full_module_name) = ModuleName::new(name) else {
             tracing::debug!("Failed to resolve import due to invalid syntax");

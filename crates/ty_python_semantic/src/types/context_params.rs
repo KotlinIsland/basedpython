@@ -201,6 +201,12 @@ pub struct ImplicitContextArgument {
     /// lowering gives the receiver a name of its own, so the transpiler must
     /// write that rather than `self`
     pub is_block_receiver: bool,
+    /// whether the binding is a module-level `private` variable. The lowering
+    /// emits it under an underscored name, so the transpiler must write that
+    /// rather than the name the source spells. A nearer binding that merely
+    /// shares the name is not this one, which is why the question is answered
+    /// off the binding rather than the name
+    pub is_module_private: bool,
 }
 
 /// the implicit arguments the transpiler must append to `call`: for each
@@ -274,11 +280,19 @@ pub fn implicit_context_arguments<'db>(
                 )),
                 CandidateBinding::BlockArgument(_) | CandidateBinding::BlockReceiver(_) => None,
             };
+            let is_module_private = match binding {
+                CandidateBinding::Written(definition) => {
+                    definition.scope(db).file_scope_id(db).is_global()
+                        && crate::types::visibility::private_symbols(db, file).contains(&variable)
+                }
+                CandidateBinding::BlockArgument(_) | CandidateBinding::BlockReceiver(_) => false,
+            };
             implicit.push(ImplicitContextArgument {
                 parameter: name.clone(),
                 variable,
                 declaration,
                 is_block_receiver: matches!(binding, CandidateBinding::BlockReceiver(_)),
+                is_module_private,
             });
         }
     }

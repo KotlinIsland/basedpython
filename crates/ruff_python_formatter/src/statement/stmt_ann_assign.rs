@@ -1,4 +1,8 @@
 use ruff_formatter::write;
+use ruff_python_ast::helpers::{
+    DeclarationMarker, DeclarationMarkerKind, is_classvar_marker_id, is_final_marker_id,
+    is_let_marker_id,
+};
 use ruff_python_ast::{Expr, StmtAnnAssign};
 use ruff_text_size::Ranged;
 
@@ -45,8 +49,8 @@ impl Format<PyFormatContext<'_>> for AssignedValue<'_> {
 #[allow(clippy::option_option)]
 fn synthetic_let(ann: &Expr) -> Option<Option<&Expr>> {
     match ann {
-        Expr::Name(n) if n.id.as_str() == "__let__" => Some(None),
-        Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__let__") => {
+        Expr::Name(n) if is_let_marker_id(n.id.as_str()) => Some(None),
+        Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if is_let_marker_id(n.id.as_str())) => {
             Some(Some(s.slice.as_ref()))
         }
         _ => None,
@@ -59,7 +63,7 @@ fn synthetic_final(ann: &Expr) -> Option<&Expr> {
     let Expr::Subscript(s) = ann else {
         return None;
     };
-    if !matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__final__") {
+    if !matches!(s.value.as_ref(), Expr::Name(n) if is_final_marker_id(n.id.as_str())) {
         return None;
     }
     Some(s.slice.as_ref())
@@ -99,7 +103,7 @@ fn declaration_prefix<'src>(
 fn synthetic_marker(ann: &Expr) -> Option<&'static str> {
     if let Expr::Name(n) = ann {
         match n.id.as_str() {
-            "__classvar__" => return Some("class"),
+            id if is_classvar_marker_id(id) => return Some("class"),
             "__newtype__" => return Some("newtype"),
             "__sentinel__" => return Some("sentinel"),
             _ => {}
@@ -123,14 +127,12 @@ fn synthetic_modifier_annot<'ast, 'src>(
     let Expr::Name(name) = s.value.as_ref() else {
         return None;
     };
-    if !matches!(
-        name.id.as_str(),
-        "__abstract_annot__"
-            | "__visibility_annot__"
-            | "__private_annot__"
-            | "__modifier_annot__"
-            | "__classvar_annot__"
-    ) {
+    if !DeclarationMarker::from_id(name.id.as_str()).is_some_and(|marker| {
+        matches!(
+            marker.kind,
+            DeclarationMarkerKind::Annot | DeclarationMarkerKind::ClassVarAnnot
+        )
+    }) {
         return None;
     }
     let start = u32::from(name.range.start()) as usize;
@@ -147,7 +149,9 @@ fn synthetic_modifier_assign<'src>(ann: &Expr, src: &'src str) -> Option<&'src s
     let Expr::Name(name) = ann else {
         return None;
     };
-    if name.id.as_str() != "__modifier_assign__" {
+    if !DeclarationMarker::from_id(name.id.as_str())
+        .is_some_and(|marker| marker.kind == DeclarationMarkerKind::Assign)
+    {
         return None;
     }
     let start = u32::from(name.range.start()) as usize;
@@ -222,6 +226,20 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
         {
             // `<keyword chain> <target> = <value>` — the keyword prefix is
             // rendered verbatim from source; the statement carries no annotation
+            write!(f, [text(prefix), space(), target.format()])?;
+            if let Some(v) = value {
+                assigned_value(v, padding).fmt(f)?;
+            }
+            return Ok(());
+        }
+        if f.options().is_basedpython()
+            && let Expr::Name(marker) = annotation.as_ref()
+            && is_classvar_marker_id(marker.id.as_str())
+            && let Some(prefix) = declaration_prefix(item, target, f.context().source())
+        {
+            // `[visibility] class NAME = value` — the keyword prefix is rendered
+            // verbatim from source, so a visibility keyword ahead of `class`
+            // survives the round trip
             write!(f, [text(prefix), space(), target.format()])?;
             if let Some(v) = value {
                 assigned_value(v, padding).fmt(f)?;

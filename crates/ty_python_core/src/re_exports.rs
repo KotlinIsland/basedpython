@@ -27,7 +27,7 @@ use ruff_python_ast::{
     name::Name,
     visitor::{Visitor, walk_expr, walk_pattern, walk_stmt},
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{ImportingFile, resolve_module_for_import_from};
 
 use crate::{Db, ProgramFile};
@@ -55,6 +55,10 @@ struct ExportFinder<'db> {
     program_file: ProgramFile<'db>,
     visiting_stub_file: bool,
     exports: FxHashMap<&'db Name, PossibleExportKind>,
+    /// basedpython: the names the module declares `private`. the lowering renames
+    /// them with a leading underscore, so python's own rule leaves them out of a
+    /// `from m import *` exactly as it does a name written with one
+    private: FxHashSet<&'db Name>,
     dunder_all: DunderAll,
 }
 
@@ -65,6 +69,7 @@ impl<'db> ExportFinder<'db> {
             program_file: file,
             visiting_stub_file: file.file(db).is_stub(db),
             exports: FxHashMap::default(),
+            private: FxHashSet::default(),
             dunder_all: DunderAll::NotPresent,
         }
     }
@@ -86,7 +91,7 @@ impl<'db> ExportFinder<'db> {
                     if kind == PossibleExportKind::StubImportWithoutRedundantAlias {
                         return None;
                     }
-                    if name.starts_with('_') {
+                    if name.starts_with('_') || self.private.contains(&name) {
                         return None;
                     }
                     Some(name.clone())
@@ -186,6 +191,9 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 range: _,
                 node_index: _,
             }) => {
+                if has_private_modifier(decorator_list) {
+                    self.private.insert(&name.id);
+                }
                 self.possibly_add_export(&name.id, PossibleExportKind::Normal);
                 for decorator in decorator_list {
                     self.visit_decorator(decorator);
@@ -209,6 +217,9 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 is_trailing_lambda: _,
                 is_asserts_return: _,
             }) => {
+                if has_private_modifier(decorator_list) {
+                    self.private.insert(&name.id);
+                }
                 self.possibly_add_export(&name.id, PossibleExportKind::Normal);
                 for decorator in decorator_list {
                     self.visit_decorator(decorator);
@@ -232,6 +243,12 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 node_index: _,
                 decorator_list: _,
             }) => {
+                if ruff_python_ast::helpers::declaration_marker_visibility(annotation)
+                    == ruff_python_ast::helpers::MemberVisibility::Private
+                    && let ast::Expr::Name(target_name) = target.as_ref()
+                {
+                    self.private.insert(&target_name.id);
+                }
                 if value.is_some() || self.visiting_stub_file {
                     self.visit_expr(target);
                 }
@@ -248,8 +265,11 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 cases: _,
                 range: _,
                 node_index: _,
-                is_private: _,
+                is_private,
             }) => {
+                if *is_private && let ast::Expr::Name(alias_name) = name.as_ref() {
+                    self.private.insert(&alias_name.id);
+                }
                 self.visit_expr(name);
                 // Neither walrus expressions nor statements cannot appear in type aliases;
                 // no need to recursively visit the `value` or `type_params`
@@ -459,4 +479,16 @@ enum PossibleExportKind {
 enum DunderAll {
     NotPresent,
     Present,
+}
+
+/// basedpython: whether a `def` or `class` carries the synthetic decorator the
+/// `private` keyword parses to. a real `@private` decorator is an ordinary name
+fn has_private_modifier(decorators: &[ast::Decorator]) -> bool {
+    decorators.iter().any(|decorator| {
+        matches!(
+            &decorator.expression,
+            ast::Expr::Name(name)
+                if name.ctx == ast::ExprContext::Invalid && name.id.as_str() == "private"
+        )
+    })
 }

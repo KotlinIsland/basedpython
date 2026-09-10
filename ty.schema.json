@@ -1060,6 +1060,16 @@
             }
           ]
         },
+        "inaccessible-member": {
+          "title": "detects access to a `private` or `protected` member from outside where it may be reached",
+          "description": "## What it does\nChecks for reads and writes of a `private` or `protected` class member\nfrom outside the code allowed to reach it, and for a module's `private`\nsymbol reached as an attribute of the module from another one.\n\n## Why is this bad?\nA visibility keyword draws a boundary around a member: `private` says only\nthe declaring class's own body may use it, and `protected` extends that to\na subclass's body. Reaching past the boundary defeats the point of drawing\nit, and the member may be renamed or removed without notice.\n\nIt is also very likely to fail at runtime. The lowering spells the\nvisibility in the member's name, and for `private` that name is one python\nmangles: an access written outside the class names a different attribute,\nor none at all.\n\n## Example\n\n```by\nclass Account:\n    init(private let balance: int)\n\ndef audit(account: Account) -> int:\n    return account.balance  # error: `balance` is private to `Account`\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "inconsistent-mro": {
           "title": "detects class definitions with an inconsistent MRO",
           "description": "## What it does\n\nChecks for classes with an inconsistent [method resolution order] (MRO).\n\n## Why is this bad?\n\nClasses with an inconsistent MRO will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\nclass A: ...\n\n\nclass B(A): ...\n\n\n# TypeError: Cannot create a consistent method resolution order\nclass C(A, B): ...  # error\n```\n\n[method resolution order]: https://docs.python.org/3/glossary.html#term-method-resolution-order",
@@ -1091,7 +1101,7 @@
           ]
         },
         "ineffective-private": {
-          "title": "detects a `private` modifier on a name it cannot hide",
+          "title": "detects a visibility keyword on a name it cannot act on",
           "description": "## What it does\nChecks for the `private` modifier on a class member whose name it cannot\nhide.\n\n## Why is this bad?\n`private` hides a class member by renaming it so python's name-mangling\napplies, and python mangles only a name with at most one trailing\nunderscore. A dunder is therefore left with the name it was written\nwith, and the modifier does nothing — which is worse than an error,\nbecause the declaration reads as though the member were hidden.\n\n`init` is the exception. It is the one dunder `private` says something\nabout, and it is enforced at the construction site rather than by hiding\na name: see [`private-constructor`](private-constructor.md).\n\n## Example\n\n```by\nclass Point:\n    private def __repr__(self) -> str:  # error: `private` does nothing here\n        return \"Point()\"\n```",
           "default": "error",
           "oneOf": [
@@ -1470,6 +1480,16 @@
             }
           ]
         },
+        "invalid-override-visibility": {
+          "title": "detects a member declared less visible than the one it overrides",
+          "description": "## What it does\nChecks for a class member declared less visible than the one it inherits\nunder the same name.\n\n## Why is this bad?\nA visibility keyword decides the name the member is emitted under, so a\nmember declared less visible than the one it inherits does not override\nit. It sits beside it under a different name, and the inherited member is\nstill what a call finds — which is never what the declaration looks like\nit does.\n\n## Example\n\n```by\nclass A:\n    def f(self) -> int:\n        return 1\n\nclass B(A):\n    private def f(self) -> int:  # error: `f` is public on `A`\n        return 2\n\nB().f()  # 1, not 2\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-parameter-default": {
           "title": "detects default values that can't be assigned to the parameter's annotated type",
           "description": "## What it does\n\nChecks for default values that can't be assigned to the parameter's annotated type.\n\n## Why is this bad?\n\nThis breaks the rules of the type system and weakens a type checker's ability to accurately reason\nabout your code.\n\n## Examples\n\n```python\ndef f(a: int = \"\"): ...  # error\n```",
@@ -1743,6 +1763,16 @@
         "invalid-variance-declaration": {
           "title": "detects a variance keyword the program does not honour",
           "description": "## What it does\nChecks for a basedpython variance keyword (`in`, `out`, `in out`) that\nthe program does not honour: one on a type parameter that never\nspecializes, and one on a type alias that names a variance its expansion\ndoes not have.\n\n## Why is this bad?\nVariance says how two *specializations* relate. A function's type\nparameter is solved afresh at each call and never specializes, and a\n`type def` is erased before anything could observe one — so the keyword\ndecides nothing in either position. Reported rather than dropped, because\na keyword nothing checks reads as a promise that something does.\n\nA generic class and a generic type alias both specialize and both keep\nthe keyword. An alias has no variance of its own — it relates exactly as\nthe type it expands to does — so its keyword is a claim about that\nexpansion, and a claim the expansion contradicts is reported too. A\nclass's own keyword is checked against its members by\n`invalid-generic-class`.\n\n## Example\n\n```by\ndef f[out T](t: T) -> None: ...  # error: a function's `T` has no variance\n\ntype Alias[out T] = list[T]      # error: `list` is invariant\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "invalid-visibility": {
+          "title": "detects a visibility keyword where it cannot do what it says",
+          "description": "## What it does\nChecks for a visibility keyword written where it cannot do what it says.\n\n## Why is this bad?\nA visibility keyword renames the member or symbol it is written on, since\nthat is the only enforcement python offers. Some names cannot be renamed\nwithout changing what they mean: a dataclass field's name is its\nconstructor's keyword, an enum member's name is how the enum is looked up,\na `private` abstract method can never be overridden, and a dotted import\nbinds a package no rename can keep. The declaration would read as\nrestricted while doing something else.\n\n## Example\n\n```by\nfrom dataclasses import dataclass\n\n@dataclass\nclass Point:\n    private x: int  # error: a dataclass field's name is its constructor's keyword\n```",
           "default": "error",
           "oneOf": [
             {
@@ -2123,6 +2153,16 @@
         "private-constructor": {
           "title": "detects construction of a class with a `private` constructor",
           "description": "## What it does\nChecks for constructing a class whose `init` is declared `private`, from\noutside that class's own body.\n\n## Why is this bad?\nA `private` constructor says the class decides how its instances are\nmade: callers go through a factory the class provides, which can pick a\nsubclass, return a cached instance, or reject the arguments. Calling the\nconstructor directly bypasses that.\n\nA subclass is outside the class's body too, so it cannot construct the\nbase either.\n\n## Example\n\n```by\nclass Id:\n    private init(let raw: str)\n\n    @classmethod\n    def parse(cls, text: str) -> Id:\n        return Id(text.strip())  # ok: inside the class\n\nId(\"x\")  # error: `Id`'s constructor is private\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "private-export": {
+          "title": "detects a `private` symbol listed in `__all__`",
+          "description": "## What it does\nChecks for a `private` symbol listed in the module's `__all__`.\n\n## Why is this bad?\n`__all__` lists the module's interface, and a `private` symbol is declared\nnot to be part of it. The lowering renames the symbol with a leading\nunderscore, so `from m import *` would look up a name the module does not\nhave, and raise.\n\n## Example\n\n```by\nprivate def helper() -> int:\n    return 1\n\n__all__ = [\"helper\"]  # error: `helper` is private\n```",
           "default": "error",
           "oneOf": [
             {

@@ -24,7 +24,7 @@
 
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::source_text;
-use ruff_python_ast::helpers::parameter_modifiers;
+use ruff_python_ast::helpers::{is_final_marker_id, is_let_marker_id, parameter_modifiers};
 use ruff_python_ast::statement_visitor::{StatementVisitor, walk_stmt};
 use ruff_python_ast::visitor::{Visitor, walk_expr};
 use ruff_python_ast::{self as ast, Expr, ExprContext, ExprName, ParameterBorrow, Stmt};
@@ -1038,7 +1038,8 @@ fn final_declaration_range(body: &[ast::Stmt], name: &str) -> Option<TextRange> 
             return None;
         };
         (target.id.as_str() == name
-            && matches!(marker(&ann.annotation), Some("__let__" | "__final__")))
+            && marker(&ann.annotation)
+                .is_some_and(|id| is_let_marker_id(id) || is_final_marker_id(id)))
         .then(|| target.range())
     })
 }

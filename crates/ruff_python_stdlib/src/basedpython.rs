@@ -112,6 +112,22 @@ pub fn private_mangles(name: &str) -> bool {
     !name.ends_with("__") && name != "_"
 }
 
+/// the name a class member is emitted under when a visibility keyword spells
+/// itself with `prefix` — `__` for `private`, `_` for `protected`, and the empty
+/// string for a member that is neither
+///
+/// `None` when the member keeps the name it was written with: a name python
+/// looks up verbatim ([`private_mangles`]) cannot be hidden by renaming it, and
+/// a name that already carries the prefix is already spelled that way. the
+/// second case matters most for `protected`, where a further underscore would
+/// not make the member more protected but private
+pub fn visibility_rename(name: &str, prefix: &str) -> Option<String> {
+    if prefix.is_empty() || !private_mangles(name) || name.starts_with(prefix) {
+        return None;
+    }
+    Some(format!("{prefix}{name}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -153,5 +169,34 @@ mod tests {
         assert!(!private_mangles("__"));
         assert!(!private_mangles("__init__"));
         assert!(!private_mangles("__repr__"));
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::visibility_rename;
+    #[test]
+    fn a_visibility_prefix_is_applied_once() {
+        assert_eq!(
+            visibility_rename("helper", "__").as_deref(),
+            Some("__helper")
+        );
+        assert_eq!(visibility_rename("helper", "_").as_deref(), Some("_helper"));
+        assert_eq!(visibility_rename("helper", ""), None);
+    }
+
+    /// a `protected` member written `_x` is already spelled the way `protected`
+    /// spells it; prefixing again would make it `__x`, which python mangles
+    #[test]
+    fn a_name_already_carrying_the_prefix_is_left_alone() {
+        assert_eq!(visibility_rename("_x", "_"), None);
+        assert_eq!(visibility_rename("__x", "__"), None);
+        assert_eq!(visibility_rename("_x", "__").as_deref(), Some("___x"));
+    }
+
+    #[test]
+    fn a_name_python_looks_up_verbatim_is_left_alone() {
+        assert_eq!(visibility_rename("__repr__", "__"), None);
+        assert_eq!(visibility_rename("__repr__", "_"), None);
     }
 }

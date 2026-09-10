@@ -139,19 +139,19 @@ class B:
         reveal_type(self.a)  # revealed: int
 ```
 
-## `private` name-mangles the attribute
+## a visibility keyword decides who may reach the attribute
 
-A `private let` / `private var` parameter self-assigns to the name-mangled `self.__name`. The
-parameter itself keeps its declared name, so the constructor signature is unchanged.
+A `private let` / `private var` parameter declares an attribute the class's own body may reach and
+nothing else. The parameter itself keeps its declared name, so the constructor signature is
+unchanged, and the attribute is reached by the same name from inside the class.
 
 ```by
 class A:
     init(self, private var a: int):
-        reveal_type(self.__a)  # revealed: int
+        reveal_type(self.a)  # revealed: int
 
 x = A(1)
-# the public name is not an attribute — it is name-mangled
-x.a  # error: [unresolved-attribute]
+x.a  # error: [inaccessible-member]
 ```
 
 ## a modifier chain may precede `init`

@@ -253,11 +253,10 @@ a.bump()
 assert a.age == 1
 ```
 
-## a `private` property is not reachable under its public name
+## a `private` property is not reachable from outside its class
 
-`private` emits the property one underscore deeper (`_x`, storage `__x`), so it simply does not
-exist under the name the author wrote. That makes privacy self-enforcing: an access from outside is
-an unresolved attribute rather than something needing its own check.
+`private` renames a property the way it renames any member, so an access from outside the class is
+reported: the property is emitted as `__x`, which Python name-mangles per class.
 
 ```by
 class A:
@@ -272,7 +271,7 @@ class A:
 
 a = A()
 a.bump()
-# error: [unresolved-attribute]
+# error: [inaccessible-member]
 print(a.x)
 ```
 
@@ -287,13 +286,13 @@ class A:
 
 class B(A):
     def f(self):
-        # error: [unresolved-attribute]
+        # error: [inaccessible-member]
         return self.x
 ```
 
 ## a write to a `private` property still runs the setter
 
-The redirect targets the property, not its storage, so validation is not bypassed.
+A write inside the class goes through the property, not its storage, so validation is not bypassed.
 
 ```by
 class A:

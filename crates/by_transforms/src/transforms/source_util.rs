@@ -575,7 +575,7 @@ fn body_range(stmt: &Stmt, header_end: TextSize) -> Option<TextRange> {
 
 /// The offset past everything a `def`'s header can span, so a statement before
 /// it is one the parser synthesized from a parameter rather than a body.
-fn header_end(f: &StmtFunctionDef) -> TextSize {
+pub(crate) fn header_end(f: &StmtFunctionDef) -> TextSize {
     f.parameters.range().end().max(
         f.returns
             .as_ref()

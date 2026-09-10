@@ -104,6 +104,10 @@ pub(crate) struct Parser<'src> {
     /// basedpython: depth of nested class bodies currently being parsed.
     /// Used to recognise `init(...)` as a method shorthand only inside a class.
     class_body_depth: u32,
+    /// basedpython: how many function bodies enclose the statement being parsed,
+    /// counting only those not re-entered by a class body since. a visibility
+    /// keyword on a declaration in one is written on a local
+    function_body_depth: u32,
 
     /// basedpython: extra class-body members a single `parse_statement` produced
     /// but could not return directly. A property accessor block lowers one
@@ -189,6 +193,7 @@ impl<'src> Parser<'src> {
             recursion_depth: 0,
             current_token_id: TokenId::default(),
             class_body_depth: 0,
+            function_body_depth: 0,
             pending_members: Vec::new(),
             pending_narrow_props: Vec::new(),
             expr_consumed_suite: false,

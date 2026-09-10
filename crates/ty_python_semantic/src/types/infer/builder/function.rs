@@ -57,7 +57,7 @@ use ty_python_core::{
 use ruff_db::diagnostic::{Annotation, Span};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
-use ruff_python_ast::helpers::{ReturnGuardForm, return_guards};
+use ruff_python_ast::helpers::{MemberVisibility, ReturnGuardForm, return_guards};
 use ruff_text_size::Ranged;
 use rustc_hash::FxHashSet;
 
@@ -857,7 +857,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let mut function_decorators = FunctionDecorators::empty();
         let mut dataclass_transformer_params = None;
         let mut final_decorator = None;
-        let mut private_modifier = None;
+        let mut visibility_modifier = None;
 
         for decorator in decorator_list {
             // basedpython: a trailing lambda block's synthetic decorator holds the
@@ -877,20 +877,33 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // effect — and would otherwise resolve to `Unknown` and poison the
             // function type. (`final`/`abstract`/`static`/… map to real stdlib
             // decorators via `synthetic_decorator_target_type` and are kept.)
-            // `private` has no decorator either, but it *is* recorded: privacy is
-            // what makes a class's variance safe, so ty has to know about it
+            // `private` and `protected` have no decorator either, but they *are*
+            // recorded: they decide who may reach the method, and a member no
+            // widened view can reach is what makes a class's variance safe
             if let ast::Expr::Name(n) = &decorator.expression
                 && matches!(n.ctx, ast::ExprContext::Invalid)
                 && matches!(
                     n.id.as_str(),
                     // `__init_method__` marks the `init(...)` shorthand — a plain
                     // `__init__`, so the synthetic marker is dropped too
-                    "decorator_keyword" | "private" | "export" | "open" | "__init_method__"
+                    "decorator_keyword"
+                        | "private"
+                        | "protected"
+                        | "export"
+                        | "open"
+                        | "__init_method__"
                 )
             {
-                if n.id.as_str() == "private" {
-                    function_decorators |= FunctionDecorators::PRIVATE;
-                    private_modifier = Some(decorator);
+                match n.id.as_str() {
+                    "private" => {
+                        function_decorators |= FunctionDecorators::PRIVATE;
+                        visibility_modifier = Some((MemberVisibility::Private, decorator));
+                    }
+                    "protected" => {
+                        function_decorators |= FunctionDecorators::PROTECTED;
+                        visibility_modifier = Some((MemberVisibility::Protected, decorator));
+                    }
+                    _ => {}
                 }
                 continue;
             }
@@ -979,10 +992,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             diagnostic.info("`@final` is only meaningful on methods and classes");
         }
 
-        // basedpython: a `private` the lowering cannot act on hides nothing. it is
-        // reported here rather than left to the lowering, which can only silently
-        // do nothing with it
-        if let Some(private_modifier) = private_modifier
+        // basedpython: a visibility keyword the lowering cannot act on hides
+        // nothing. it is reported here rather than left to the lowering, which can
+        // only silently do nothing with it
+        if let Some((visibility, visibility_modifier)) = visibility_modifier
             && !ruff_python_stdlib::basedpython::private_mangles(&name.id)
             && name.id != "__init__"
             && self
@@ -992,17 +1005,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .is_class()
             && let Some(builder) = self
                 .context
-                .report_lint(&INEFFECTIVE_PRIVATE, private_modifier)
+                .report_lint(&INEFFECTIVE_PRIVATE, visibility_modifier)
         {
+            let keyword = visibility.keyword();
             let mut diagnostic = builder.into_diagnostic(format_args!(
-                "`private` has no effect on `{name}`",
+                "`{keyword}` has no effect on `{name}`",
                 name = name.id
             ));
-            diagnostic.info(
-                "`private` renames a member to `__<name>` so python's name-mangling hides it, \
-                 and python mangles only a name with at most one trailing underscore",
-            );
-            diagnostic.info("`init` is the one dunder `private` says something about");
+            diagnostic.info(format_args!(
+                "`{keyword}` renames a member to `{prefix}<name>`, and a dunder is called by \
+                 the exact name python knows it under",
+                prefix = visibility.name_prefix(),
+            ));
+            diagnostic.info("`init` is the one dunder a visibility keyword says something about");
         }
 
         // basedpython: a classmethod cannot have reified type parameters — the

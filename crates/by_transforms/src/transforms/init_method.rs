@@ -22,8 +22,10 @@
 
 use std::cell::RefCell;
 
+use ruff_python_ast::helpers::MemberVisibility;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Parameter, Stmt, StmtFunctionDef};
+use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
@@ -82,7 +84,7 @@ impl TypeAwarePass for InitMethod<'_> {
 fn is_acceptable_init_param_modifier(word: &str) -> bool {
     matches!(
         word,
-        "let" | "var" | "private" | "public" | "local" | "once"
+        "let" | "var" | "private" | "protected" | "public" | "local" | "once"
     )
 }
 
@@ -90,7 +92,7 @@ fn is_acceptable_init_param_modifier(word: &str) -> bool {
 /// opposed to a `local` / `once` lifetime modifier, which the `local_once` pass
 /// strips). a prefix carrying none of these is not this transform's to rewrite
 fn is_init_owned_modifier(word: &str) -> bool {
-    matches!(word, "let" | "var" | "private" | "public")
+    matches!(word, "let" | "var" | "private" | "protected" | "public")
 }
 
 struct State<'src> {
@@ -222,7 +224,14 @@ impl State<'_> {
             };
             let name = param.name.as_str();
             let declares = words.iter().any(|w| matches!(*w, "let" | "var"));
-            let is_private = words.contains(&"private");
+            let visibility = if words.contains(&"private") {
+                MemberVisibility::Private
+            } else if words.contains(&"protected") {
+                MemberVisibility::Protected
+            } else {
+                MemberVisibility::Public
+            };
+            let is_hidden = visibility != MemberVisibility::Public;
             let is_public = words.contains(&"public");
 
             for word in &words {
@@ -232,14 +241,15 @@ impl State<'_> {
                     ));
                 }
             }
-            if is_private && is_public {
+            if is_hidden && is_public {
                 self.error(format!(
-                    "`init` parameter `{name}` cannot be both `private` and `public`"
+                    "`init` parameter `{name}` cannot be both `{keyword}` and `public`",
+                    keyword = visibility.keyword()
                 ));
             }
-            if (is_private || is_public) && !declares {
+            if (is_hidden || is_public) && !declares {
                 self.error(format!(
-                    "`private` / `public` on `init` parameter `{name}` requires `let` or `var`"
+                    "a visibility keyword on `init` parameter `{name}` requires `let` or `var`"
                 ));
             }
 
@@ -255,13 +265,11 @@ impl State<'_> {
                 return;
             }
 
-            // a `private` attribute is name-mangled (`self.__name`); the
-            // parameter itself keeps its declared name
-            let attr = if is_private {
-                format!("__{name}")
-            } else {
-                name.to_owned()
-            };
+            // the attribute's visibility is spelled in its name — `self.__name`
+            // for `private`, which python name-mangles, `self._name` for
+            // `protected`. the parameter itself keeps its declared name
+            let attr = visibility_rename(name, visibility.name_prefix())
+                .unwrap_or_else(|| name.to_owned());
             let line = if let Some(ann) = &param.annotation {
                 let ann_src = self.lower_annotation(ann);
                 format!("self.{attr}: {ann_src} = {name}")
@@ -459,6 +467,21 @@ mod tests {
 
     // modifiers compose with self-omission: self is injected and the mangled
     // attribute is still emitted
+    #[test]
+    fn protected_var_param_prefixes_attribute() {
+        check(
+            indoc! {"
+                class A:
+                    init(protected var a: int)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, a: int):
+                        self._a: int = a
+            "},
+        );
+    }
+
     #[test]
     fn private_var_param_self_omitted() {
         check(

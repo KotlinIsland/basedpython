@@ -77,6 +77,7 @@ KEYWORDS = [
     ("override def f(): ...", "override"),
     ("static let x: int", "static"),
     ("private type X = int", "private"),
+    ("protected def f(): ...", "protected"),
     ("public let x = 1", "public"),
     ("late var x: int", "late"),
     ("class Mapping[out Key]: ...", "out"),

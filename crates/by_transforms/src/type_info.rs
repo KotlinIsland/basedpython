@@ -253,7 +253,36 @@ pub(crate) trait TypeInfo {
 
     /// basedpython: the mangled name a `private` method is reached by in the
     /// emitted python, for an attribute access that resolves to one
-    fn private_method_name(&self, attribute: &ruff_python_ast::ExprAttribute) -> Option<String>;
+    fn restricted_member_name(&self, attribute: &ruff_python_ast::ExprAttribute) -> Option<String>;
+
+    /// the module-level names this file declares `private` — the set
+    /// `private-import` reads, and the one whose references the lowering renames
+    fn private_module_symbols(&self) -> Vec<String>;
+
+    /// whether the name `reference` reads or writes resolves to the module
+    /// scope: no scope between it and the module binds it, or one declares it
+    /// `global`. `None` when ty did not index the reference and cannot place it
+    fn resolves_to_module_scope(&self, reference: &ExprName) -> Option<bool>;
+
+    /// how a bare name in a class body is emitted, when it names a member the
+    /// class declares with a visibility keyword — `y = x + 1` after `private x =
+    /// 1`. `None` for any other name
+    fn class_body_member_name(&self, name: &ExprName) -> Option<String>;
+
+    /// how `class`'s own member `name`, declared with a visibility keyword, is
+    /// spelled in the class body and anywhere else. `None` when it is not renamed
+    fn class_member_spellings(
+        &self,
+        class: &ruff_python_ast::StmtClassDef,
+        name: &str,
+    ) -> Option<(String, String)>;
+
+    /// the name a class pattern's keyword (`case A(x=...)`) is emitted under
+    fn class_pattern_keyword_name(
+        &self,
+        pattern: &ruff_python_ast::PatternMatchClass,
+        keyword: &str,
+    ) -> Option<String>;
 
     /// how `name` resolves through the enclosing trailing lambda block's
     /// receiver: `self` is the receiver itself, any other name is a member of
@@ -677,8 +706,8 @@ impl TypeInfo for SemanticModel<'_> {
         self.reified_constructor_type_arguments(call)
     }
 
-    fn private_method_name(&self, attribute: &ruff_python_ast::ExprAttribute) -> Option<String> {
-        SemanticModel::private_method_name(self, attribute)
+    fn restricted_member_name(&self, attribute: &ruff_python_ast::ExprAttribute) -> Option<String> {
+        SemanticModel::restricted_member_name(self, attribute)
     }
 
     fn erased_union(&self, annotation: &Expr) -> Option<ty_python_semantic::ErasedUnion> {
@@ -907,6 +936,37 @@ impl TypeInfo for SemanticModel<'_> {
             };
         }
         None
+    }
+
+    fn private_module_symbols(&self) -> Vec<String> {
+        SemanticModel::private_module_symbols(self)
+            .into_iter()
+            .map(|name| name.to_string())
+            .collect()
+    }
+
+    fn resolves_to_module_scope(&self, reference: &ExprName) -> Option<bool> {
+        SemanticModel::resolves_to_module_scope(self, reference)
+    }
+
+    fn class_body_member_name(&self, name: &ExprName) -> Option<String> {
+        SemanticModel::class_body_member_name(self, name)
+    }
+
+    fn class_member_spellings(
+        &self,
+        class: &ruff_python_ast::StmtClassDef,
+        name: &str,
+    ) -> Option<(String, String)> {
+        SemanticModel::class_member_spellings(self, class, name)
+    }
+
+    fn class_pattern_keyword_name(
+        &self,
+        pattern: &ruff_python_ast::PatternMatchClass,
+        keyword: &str,
+    ) -> Option<String> {
+        SemanticModel::class_pattern_keyword_name(self, pattern, keyword)
     }
 
     fn shares_a_cell_scope(&self, reference: &ExprName, anchor: &Expr) -> bool {
@@ -1200,6 +1260,10 @@ impl TypeInfo for SemanticModel<'_> {
         .map(|argument| {
             let variable = if argument.is_block_receiver {
                 RECEIVER_PARAMETER.to_string()
+            } else if argument.is_module_private {
+                // the binding is a module-level `private` variable, which the
+                // lowering emits under its underscored name
+                crate::transforms::modifiers::module_private_name(&argument.variable)
             } else {
                 argument.variable.to_string()
             };

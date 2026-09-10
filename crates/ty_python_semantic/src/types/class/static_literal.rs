@@ -7,9 +7,10 @@ use ruff_db::{
     parsed::{ParsedModuleRef, parsed_module},
 };
 use ruff_python_ast as ast;
+use ruff_python_ast::statement_visitor::{StatementVisitor, walk_stmt};
 use ruff_python_ast::{PythonVersion, name::Name};
 use ruff_text_size::{Ranged, TextRange};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 
 use super::implicit_attributes::implicit_attribute_names;
@@ -620,6 +621,27 @@ impl<'db> StaticClassLiteral<'db> {
         let body_scope = self.body_scope(db);
         let index = semantic_index(db, body_scope.program_file(db));
         index.expect_single_definition(body_scope.node(db).expect_class())
+    }
+
+    /// basedpython: the members this class's own body declares with a visibility
+    /// keyword, and the visibility each carries — a `private def`, a `protected x:
+    /// T`, a `private class`, an `init(private let x)` parameter's attribute,
+    /// wherever in the body the declaration is written
+    ///
+    /// read off the declarations rather than the members' types, so a decorated
+    /// method, a nested class and a property answer the same as a plain attribute.
+    /// tracked because it reads the class's AST node
+    #[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+    pub(crate) fn member_visibilities(
+        self,
+        db: &'db dyn Db,
+    ) -> FxHashMap<Name, ruff_python_ast::helpers::MemberVisibility> {
+        let module = parsed_module(db, self.program_file(db).python_file(db)).load(db);
+        let mut collector = MemberVisibilityCollector::default();
+        collector.visit_body(&self.node(db, &module).body);
+        let mut members = collector.members;
+        members.shrink_to_fit();
+        members
     }
 
     /// basedpython: the names a class body *declares without a value* — an
@@ -4516,4 +4538,79 @@ fn annotated_field_specifier<'db>(
             _ => None,
         }
     })
+}
+
+/// basedpython: collects [`StaticClassLiteral::member_visibilities`] from a class
+/// body
+#[derive(Default)]
+struct MemberVisibilityCollector {
+    members: FxHashMap<Name, ruff_python_ast::helpers::MemberVisibility>,
+    /// set inside a method's body, where the only members declared are the
+    /// attributes an `init(...)` parameter stands for (`self.x`)
+    in_method: bool,
+}
+
+impl<'a> StatementVisitor<'a> for MemberVisibilityCollector {
+    fn visit_stmt(&mut self, stmt: &'a ast::Stmt) {
+        match stmt {
+            ast::Stmt::FunctionDef(function) => {
+                // a function nested in a method declares no member
+                if self.in_method {
+                    return;
+                }
+                if let Some(visibility) = visibility_modifier(&function.decorator_list) {
+                    self.members.insert(function.name.id.clone(), visibility);
+                }
+                self.in_method = true;
+                self.visit_body(&function.body);
+                self.in_method = false;
+            }
+            // a nested class is a member, but its own members are its own
+            ast::Stmt::ClassDef(class) => {
+                if !self.in_method
+                    && let Some(visibility) = visibility_modifier(&class.decorator_list)
+                {
+                    self.members.insert(class.name.id.clone(), visibility);
+                }
+            }
+            ast::Stmt::AnnAssign(assign) => {
+                let visibility =
+                    ruff_python_ast::helpers::declaration_marker_visibility(&assign.annotation);
+                if visibility == ruff_python_ast::helpers::MemberVisibility::Public {
+                    return;
+                }
+                match (assign.target.as_ref(), self.in_method) {
+                    (ast::Expr::Name(name), false) => {
+                        self.members.insert(name.id.clone(), visibility);
+                    }
+                    (ast::Expr::Attribute(attribute), true) => {
+                        self.members.insert(attribute.attr.id.clone(), visibility);
+                    }
+                    _ => {}
+                }
+            }
+            // a compound statement's bodies are still the class's body
+            _ => walk_stmt(self, stmt),
+        }
+    }
+}
+
+/// basedpython: the visibility a `def` or `class` declares through the synthetic
+/// decorator its `private` / `protected` keyword parses to. a real `@private`
+/// decorator is an ordinary name, not the modifier
+fn visibility_modifier(
+    decorators: &[ast::Decorator],
+) -> Option<ruff_python_ast::helpers::MemberVisibility> {
+    decorators
+        .iter()
+        .find_map(|decorator| match &decorator.expression {
+            ast::Expr::Name(name) if name.ctx == ast::ExprContext::Invalid => {
+                match name.id.as_str() {
+                    "private" => Some(ruff_python_ast::helpers::MemberVisibility::Private),
+                    "protected" => Some(ruff_python_ast::helpers::MemberVisibility::Protected),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
 }

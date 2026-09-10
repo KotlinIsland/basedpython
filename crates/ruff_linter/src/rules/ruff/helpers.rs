@@ -63,7 +63,9 @@ pub(super) fn is_class_var_annotation(annotation: &Expr, semantic: &SemanticMode
     // what the source wrote `ClassVar` with
     if matches!(
         map_subscript(annotation),
-        Expr::Name(name) if matches!(name.id.as_str(), "__classvar__" | "__classvar_annot__")
+        Expr::Name(name)
+            if ruff_python_ast::helpers::is_classvar_marker_id(name.id.as_str())
+                || ruff_python_ast::helpers::is_classvar_annot_marker_id(name.id.as_str())
     ) {
         return true;
     }
@@ -83,7 +85,7 @@ pub(super) fn is_final_annotation(annotation: &Expr, semantic: &SemanticModel) -
     // and carry a synthetic marker in annotation position until they do
     if matches!(
         map_subscript(annotation),
-        Expr::Name(name) if name.id.as_str() == "__final__"
+        Expr::Name(name) if ruff_python_ast::helpers::is_final_marker_id(name.id.as_str())
     ) {
         return true;
     }

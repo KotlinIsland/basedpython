@@ -85,6 +85,25 @@ class I[T]:
         return self.u
 
 
+# `protected` — the same shapes, plus the `final` chain where both halves of the
+# marker have to survive
+class J:
+    protected step: int = 2
+    protected var seen: int
+    final protected limit: int = 3
+    final private cap: int = 4
+    private let fixed: int = 5
+    protected let bound = 6
+    private tally = 0
+    private class var registry: int = 0
+    protected class let CAP: int = 9
+    private class hits = 0
+    protected def helper(self) -> int:
+        return self.step
+
+    init(protected let base: int, private let tag: str)
+
+
 # `private type` aliases — the modifier has no decorator slot to ride on, so it
 # lives on the node itself and must survive the round trip
 private type Alias = int | str
@@ -178,6 +197,26 @@ class I[T]:
 
     private def helper(self) -> int:
         return self.u
+
+
+# `protected` — the same shapes, plus the `final` chain where both halves of the
+# marker have to survive
+class J:
+    protected step: int = 2
+    protected var seen: int
+    final protected limit: int      = 3
+    final private cap: int          = 4
+    private let fixed: int          = 5
+    protected let bound             = 6
+    private tally                   = 0
+    private class var registry: int = 0
+    protected class let CAP: int    = 9
+    private class hits              = 0
+
+    protected def helper(self) -> int:
+        return self.step
+
+    init(protected let base: int, private let tag: str)
 
 
 # `private type` aliases — the modifier has no decorator slot to ride on, so it

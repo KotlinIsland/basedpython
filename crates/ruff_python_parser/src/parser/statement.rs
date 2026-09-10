@@ -2,7 +2,10 @@ use std::fmt::{Display, Write};
 
 use thin_vec::ThinVec;
 
-use ruff_python_ast::helpers::{is_compound_statement, written_annotation_type};
+use ruff_python_ast::helpers::{
+    DeclarationMarker, DeclarationMarkerKind, MemberVisibility, declaration_annotation_type,
+    is_compound_statement, property_backing_name, written_annotation_type,
+};
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::visitor::transformer::{self, Transformer};
@@ -100,6 +103,7 @@ fn is_modifier_kw(text: &str) -> bool {
             | "export"
             | "public"
             | "private"
+            | "protected"
             // basedpython: `late var x: T` defers a property's initialisation.
             // the keyword strips like any other modifier prefix; validity (only on
             // `var`, never with an initialiser) is checked where the property is lowered
@@ -152,6 +156,7 @@ fn definition_modifier_marker(kw: &str) -> Option<&'static str> {
         "static" => "static",
         "export" | "public" => "export",
         "private" => "private",
+        "protected" => "protected",
         _ => return None,
     })
 }
@@ -199,10 +204,18 @@ fn param_prefix_declares_attribute(prefix: &str) -> bool {
         .any(|word| matches!(word, "let" | "var"))
 }
 
-/// True when a parameter's modifier prefix carries the `private` visibility
-/// keyword — the synthesised attribute is then name-mangled (`self.__name`).
-fn param_prefix_is_private(prefix: &str) -> bool {
-    prefix.split_whitespace().any(|word| word == "private")
+/// The visibility a modifier prefix declares for the member it binds. On a
+/// parameter, the parameter itself always keeps the name it was written with;
+/// only the attribute it synthesises is affected.
+fn prefix_visibility(prefix: &str) -> MemberVisibility {
+    prefix
+        .split_whitespace()
+        .find_map(|word| match word {
+            "private" => Some(MemberVisibility::Private),
+            "protected" => Some(MemberVisibility::Protected),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// The range of the `let` keyword inside a parameter's modifier prefix (the
@@ -463,26 +476,13 @@ fn synth_backing_attr(backing: &Name, ctx: ExprContext, at: TextSize) -> Expr {
 }
 
 /// The declared type of a property, peeled out of the synthetic `let` / `var`
-/// declaration marker: `__let__[T]` / `__modifier_annot__[T]` carry the type in
-/// the subscript slice. A `final` or a `private` anywhere in the modifier chain
-/// swaps the marker for `__final__` / `__private_annot__`, which carry the type the
-/// same way. An untyped declaration (`let x` / `var x = v`, whose marker is a bare
-/// `Name`) has no declared type.
+/// declaration marker. Whatever the modifier chain swapped the marker for — a
+/// `final`, a visibility keyword, both — the type rides in the subscript slice,
+/// and [`declaration_annotation_type`] is the one place that knows every marker
+/// that can carry it. An untyped declaration (`let x` / `var x = v`, whose marker
+/// is a bare `Name`) has no declared type.
 fn property_decl_type(annotation: &Expr) -> Option<Expr> {
-    if let Expr::Subscript(subscript) = annotation
-        && let Expr::Name(marker) = subscript.value.as_ref()
-        && matches!(
-            marker.id.as_str(),
-            "__let__"
-                | "__modifier_annot__"
-                | "__private_annot__"
-                | "__final__"
-                | "__classvar_annot__"
-        )
-    {
-        return Some((*subscript.slice).clone());
-    }
-    None
+    declaration_annotation_type(annotation).cloned()
 }
 
 /// Calls `report` for every part of `expr` that cannot be assigned to.
@@ -872,6 +872,7 @@ impl<'src> Parser<'src> {
                     );
                     self.bump(TokenKind::Name);
                     let mut alias = self.parse_type_alias_statement();
+                    self.check_visibility_placement(MemberVisibility::Private, alias.range);
                     alias.is_private = true;
                     alias.range = self.node_range(start);
                     // a type alias is a *simple* statement, so unlike the
@@ -944,7 +945,8 @@ impl<'src> Parser<'src> {
                             "`var` declarations are not valid in .py files".to_string(),
                         );
                         if following == TokenKind::Colon {
-                            let decl = self.parse_modifier_annot_decl(start, "__modifier_annot__");
+                            let decl =
+                                self.parse_modifier_annot_decl(start, DeclarationMarkerKind::Annot);
                             return Some(mark_context(decl, has_context));
                         }
                         if following != TokenKind::Equal {
@@ -1047,7 +1049,8 @@ impl<'src> Parser<'src> {
                             self.error_if_not_basedpython(format!(
                                 "`{kw}` modifier on annotated assignments is not valid in .py files"
                             ));
-                            let decl = self.parse_modifier_annot_decl(start, "__modifier_annot__");
+                            let decl =
+                                self.parse_modifier_annot_decl(start, DeclarationMarkerKind::Annot);
                             Some(mark_context(decl, has_context))
                         }
                         _ => None,
@@ -1106,14 +1109,17 @@ impl<'src> Parser<'src> {
     }
 
     /// Returns whether the modifier-keyword token at chain position `idx` is a
-    /// visibility keyword (`private`, `public`, or `export`).
+    /// visibility keyword (`private`, `protected`, `public`, or `export`).
     fn is_visibility_modifier_at(&mut self, idx: usize) -> bool {
         let range = if idx == 0 {
             self.current_token_range()
         } else {
             self.peek_nth(idx - 1).1
         };
-        matches!(self.src_text(range), "private" | "public" | "export")
+        matches!(
+            self.src_text(range),
+            "private" | "protected" | "public" | "export"
+        )
     }
 
     /// Whether the parser is sitting on the `init(...)` constructor shorthand:
@@ -1212,16 +1218,34 @@ impl<'src> Parser<'src> {
                 if matches!(self.peek(), TokenKind::Def | TokenKind::Async) {
                     continue;
                 }
-                // `class var x: T` declares a class *variable*, which is not a
-                // definition a modifier chain can hang off — and it carries one
-                // marker, which its own keyword already fills. left alone it
-                // parses on as a nested class named by the binding keyword
-                let binding = self.peek_nth(0).1;
+                // `class var x: T` / `class x = v` declares a class *variable*,
+                // which is not a definition a modifier chain can hang off, and it
+                // carries one marker, which its own keyword already fills. a
+                // visibility keyword is the exception: it says who may reach the
+                // variable, which composes with any declaration. left alone
+                // anything else parses on as a nested class named by the binding
+                // keyword
+                let (first_kind, binding) = self.peek_nth(0);
                 let (named, name_range) = self.peek_nth(1);
-                if matches!(self.src_text(binding), "let" | "var") && declares_a_name(named) {
+                let binding_kw = self.src_text(binding).to_owned();
+                let declares_class_var =
+                    matches!(binding_kw.as_str(), "let" | "var") && declares_a_name(named);
+                let assigns_class_var = declares_a_name(first_kind) && named == TokenKind::Equal;
+                if declares_class_var || assigns_class_var {
+                    let only_visibility = self
+                        .src_text(TextRange::new(start, self.current_token_range().start()))
+                        .split_whitespace()
+                        .all(|word| matches!(word, "private" | "protected"));
+                    if only_visibility {
+                        return if declares_class_var {
+                            self.parse_class_var_annot_decl(start, &binding_kw)
+                        } else {
+                            self.parse_class_var_decl(start)
+                        };
+                    }
                     self.add_error(
                         ParseErrorType::OtherError(
-                            "a `class` variable declaration takes no modifier — write it on its own"
+                            "a `class` variable takes no modifier but `private` or `protected`"
                                 .to_string(),
                         ),
                         TextRange::new(start, name_range.end()),
@@ -1242,6 +1266,25 @@ impl<'src> Parser<'src> {
                 }
             }
             break;
+        }
+
+        // basedpython: a visibility keyword needs a class member or a module-level
+        // declaration to say something about
+        let visibility_marker =
+            decorators
+                .iter()
+                .find_map(|decorator| match &decorator.expression {
+                    Expr::Name(name) if name.ctx == ExprContext::Invalid => {
+                        match name.id.as_str() {
+                            "private" => Some((MemberVisibility::Private, decorator.range)),
+                            "protected" => Some((MemberVisibility::Protected, decorator.range)),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                });
+        if let Some((visibility, range)) = visibility_marker {
+            self.check_visibility_placement(visibility, range);
         }
 
         // the chain is complete, so the definition it modifies is now known: a
@@ -1337,6 +1380,11 @@ impl<'src> Parser<'src> {
     /// Parses `class a = 1` → produces a synthetic `AnnAssign` that the
     /// `modifiers` transform rewrites to `a: ClassVar = 1`.
     fn parse_class_var_decl(&mut self, start: TextSize) -> Stmt {
+        // a visibility keyword ahead of `class` (`private class count = 0`) was
+        // consumed by the modifier chain, so it is read back from the source
+        let visibility = prefix_visibility(
+            self.src_text(TextRange::new(start, self.current_token_range().start())),
+        );
         // consume "class"
         self.bump(TokenKind::Class);
         let name = self.parse_identifier();
@@ -1352,7 +1400,9 @@ impl<'src> Parser<'src> {
             node_index: AtomicNodeIndex::NONE,
         });
         let annotation = Expr::Name(ast::ExprName {
-            id: Name::new_static("__classvar__"),
+            id: Name::new_static(
+                DeclarationMarker::new(DeclarationMarkerKind::ClassVar, visibility).id(),
+            ),
             ctx: ExprContext::Invalid,
             range: class_range,
             node_index: AtomicNodeIndex::NONE,
@@ -1417,9 +1467,9 @@ impl<'src> Parser<'src> {
             );
         }
         let marker = if keyword == "let" {
-            "__final__"
+            DeclarationMarkerKind::Final
         } else {
-            "__classvar_annot__"
+            DeclarationMarkerKind::ClassVarAnnot
         };
         let stmt = self.parse_modifier_annot_decl(start, marker);
 
@@ -1468,15 +1518,25 @@ impl<'src> Parser<'src> {
     /// Parses `let x = 5` → produces a synthetic `AnnAssign` that the
     /// `modifiers` transform rewrites to `x: Final = 5`.
     fn parse_let_decl(&mut self, start: TextSize) -> Stmt {
+        // the caller has already consumed the modifier chain, so the source
+        // between the statement's start and the `let` is what it was written
+        // with — and a visibility keyword in there renames the member the `let`
+        // binds, so it rides in the marker the same way it does elsewhere
+        let visibility = prefix_visibility(
+            self.src_text(TextRange::new(start, self.current_token_range().start())),
+        );
         self.bump(TokenKind::Name); // consume "let"
         let name = self.parse_identifier();
+        self.check_visibility_placement(visibility, TextRange::new(start, name.range.start()));
         // the marker spans the whole keyword prefix, from the statement's start — a
         // modifier ahead of the `let` (`context let a: T`, `private let a = v`) is part of
         // what was written, and everything that re-emits or highlights the declaration
         // reads it from this range
         let let_range = TextRange::new(start, name.range.start());
         let let_name = Expr::Name(ast::ExprName {
-            id: Name::new_static("__let__"),
+            id: Name::new_static(
+                DeclarationMarker::new(DeclarationMarkerKind::Let, visibility).id(),
+            ),
             ctx: ExprContext::Invalid,
             range: let_range,
             node_index: AtomicNodeIndex::NONE,
@@ -1547,7 +1607,10 @@ impl<'src> Parser<'src> {
         let modifier_start = self.current_token_range().start();
         // consume modifier keywords until we reach the variable name (the Name
         // token immediately followed by `=`, or by the end of the statement for
-        // the initializer-less `var x` the caller has already rejected).
+        // the initializer-less `var x` the caller has already rejected). a
+        // visibility keyword in the chain renames the member it binds, so it is
+        // recorded in the marker exactly as the annotated form records it
+        let mut visibility = MemberVisibility::Public;
         loop {
             let (next_kind, _) = self.peek_nth(0);
             if matches!(
@@ -1556,9 +1619,15 @@ impl<'src> Parser<'src> {
             ) {
                 break;
             }
+            match self.src_text(self.current_token_range()) {
+                "private" => visibility = MemberVisibility::Private,
+                "protected" => visibility = MemberVisibility::Protected,
+                _ => {}
+            }
             self.bump(TokenKind::Name);
         }
         let name = self.parse_identifier();
+        self.check_visibility_placement(visibility, TextRange::new(start, name.range.start()));
         let value = self
             .eat(TokenKind::Equal)
             .then(|| self.parse_declaration_value());
@@ -1569,7 +1638,9 @@ impl<'src> Parser<'src> {
             node_index: AtomicNodeIndex::NONE,
         });
         let annotation = Expr::Name(ast::ExprName {
-            id: Name::new_static("__modifier_assign__"),
+            id: Name::new_static(
+                DeclarationMarker::new(DeclarationMarkerKind::Assign, visibility).id(),
+            ),
             ctx: ExprContext::Invalid,
             range: TextRange::new(modifier_start, name.range.start()),
             node_index: AtomicNodeIndex::NONE,
@@ -1657,7 +1728,7 @@ impl<'src> Parser<'src> {
     /// Parses `abstract a: int` → produces a synthetic `AnnAssign` that the
     /// `modifiers` transform rewrites to `a: int` (strips the `abstract` prefix).
     fn parse_abstract_annot_decl(&mut self, start: TextSize) -> Stmt {
-        self.parse_modifier_annot_decl(start, "__abstract_annot__")
+        self.parse_modifier_annot_decl(start, DeclarationMarkerKind::Annot)
     }
 
     /// Parses `final NAME: T [= v]` into an `AnnAssign` whose annotation is the
@@ -1670,7 +1741,9 @@ impl<'src> Parser<'src> {
         self.bump(TokenKind::Name); // consume "final"
         let name = self.parse_identifier();
         let final_marker = Expr::Name(ast::ExprName {
-            id: Name::new_static("__final__"),
+            id: Name::new_static(
+                DeclarationMarker::new(DeclarationMarkerKind::Final, MemberVisibility::Public).id(),
+            ),
             ctx: ExprContext::Invalid,
             range: final_range,
             node_index: AtomicNodeIndex::NONE,
@@ -1714,15 +1787,37 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_visibility_annot_decl(&mut self, start: TextSize) -> Stmt {
-        self.parse_modifier_annot_decl(start, "__visibility_annot__")
+        self.parse_modifier_annot_decl(start, DeclarationMarkerKind::Annot)
     }
 
-    /// Parses `<modifier> name: T [= v]` and emits an `AnnAssign` whose
-    /// annotation is `Subscript(Name(synthetic_id), T)` — a synthetic marker
-    /// spanning the modifier prefix, keeping the declared type `T` in annotation
-    /// position. The downstream transform deletes that prefix from the source
-    /// text, leaving `name: T [= v]` behind.
-    fn parse_modifier_annot_decl(&mut self, start: TextSize, synthetic_id: &'static str) -> Stmt {
+    /// basedpython: reports a visibility keyword written where it has nothing to
+    /// say. `private` and `protected` say who may reach a class member, and
+    /// `private` alone also marks a module-level declaration as the module's own.
+    /// in a function body, outside any class nested in it, a declaration is a
+    /// local, which nothing outside the function reaches anyway
+    fn check_visibility_placement(&mut self, visibility: MemberVisibility, range: TextRange) {
+        if visibility == MemberVisibility::Public || self.class_body_depth > 0 {
+            return;
+        }
+        let message = if self.function_body_depth > 0 {
+            format!(
+                "`{}` is only a modifier on a class member or a module-level declaration",
+                visibility.keyword()
+            )
+        } else if visibility == MemberVisibility::Protected {
+            "`protected` is only a modifier on a class member".to_string()
+        } else {
+            return;
+        };
+        self.add_error(ParseErrorType::OtherError(message), range);
+    }
+
+    /// parses `<modifier> name: T [= v]` into an `AnnAssign` whose annotation is
+    /// `Subscript(Name(<marker>), T)`: a synthetic marker of `kind`, spanning the
+    /// modifier prefix, with the declared type `T` kept in annotation position.
+    /// the downstream transform deletes that prefix from the source text, leaving
+    /// `name: T [= v]` behind
+    fn parse_modifier_annot_decl(&mut self, start: TextSize, kind: DeclarationMarkerKind) -> Stmt {
         // consume modifier keywords until we reach the variable name (the Name
         // token immediately followed by `:`), so chains like `final override x: T`
         // strip in full — not just the first modifier. remember a `final` and a
@@ -1730,19 +1825,26 @@ impl<'src> Parser<'src> {
         // `final`'s `Final` qualifier and `private`'s invisibility to a widened
         // view of the class must both survive
         let mut is_final = false;
-        let mut is_private = false;
+        // a visibility keyword the modifier chain consumed before handing over —
+        // `private class var x: T` arrives here past its `class` — is read back
+        // from the source; the loop below adds whatever is still ahead
+        let mut visibility = prefix_visibility(
+            self.src_text(TextRange::new(start, self.current_token_range().start())),
+        );
         loop {
             if self.peek() == TokenKind::Colon {
                 break;
             }
             match self.src_text(self.current_token_range()) {
                 "final" => is_final = true,
-                "private" => is_private = true,
+                "private" => visibility = MemberVisibility::Private,
+                "protected" => visibility = MemberVisibility::Protected,
                 _ => {}
             }
             self.bump(TokenKind::Name);
         }
         let name = self.parse_identifier();
+        self.check_visibility_placement(visibility, TextRange::new(start, name.range.start()));
         self.bump(TokenKind::Colon); // consume ":"
         let annotation_expr = self
             .parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
@@ -1762,18 +1864,27 @@ impl<'src> Parser<'src> {
         // type stays under the marker in annotation position, so `T` is the
         // declaration — stashing it in `value` instead would make
         // `override x: T = v` declare nothing and read as `x = v`.
-        // `final` wins over `private`: a `Final` member is read-only, so it can
-        // neither be written through a widened view nor lose its qualifier here
+        // a `final` visibility chain carries both, so neither the `Final`
+        // qualifier nor the rename the visibility keyword asks for is dropped
         // the marker spans the whole keyword prefix from the statement's start,
         // which for `class var x: T` is the `class` — the formatter re-emits the
         // prefix from this range, so anything left out of it is dropped
         let marker_range = TextRange::new(start, name.range.start());
         let marker = Expr::Name(ast::ExprName {
-            id: Name::new_static(match (is_final, is_private) {
-                (true, _) => "__final__",
-                (false, true) => "__private_annot__",
-                (false, false) => synthetic_id,
-            }),
+            // `class let` hands in `__final__` as its own marker, so it is final
+            // whether or not a `final` keyword was walked past — without this a
+            // visibility keyword would silently make it writable
+            id: Name::new_static(
+                DeclarationMarker::new(
+                    if is_final || kind == DeclarationMarkerKind::Final {
+                        DeclarationMarkerKind::Final
+                    } else {
+                        kind
+                    },
+                    visibility,
+                )
+                .id(),
+            ),
             ctx: ExprContext::Invalid,
             range: marker_range,
             node_index: AtomicNodeIndex::NONE,
@@ -5440,13 +5551,12 @@ impl<'src> Parser<'src> {
         }
         let name_range = param.name.range;
         let name_id = param.name.id.clone();
-        // a `private` attribute is name-mangled (`self.__name`); the parameter
-        // itself keeps its declared name, so the value read stays `name_id`
-        let attr_id = if param_prefix_is_private(prefix) {
-            Name::new(format!("__{name_id}"))
-        } else {
-            name_id.clone()
-        };
+        // the attribute is declared under the name it was written with, whatever
+        // its visibility: the class's own body reaches a private member by that
+        // name, and the lowering is what spells out the mangled one. recording
+        // the visibility is the annotation marker's job, below
+        let visibility = prefix_visibility(prefix);
+        let attr_id = name_id.clone();
         let self_expr = Expr::Name(ast::ExprName {
             id: Name::new_static("self"),
             ctx: ExprContext::Load,
@@ -5481,7 +5591,22 @@ impl<'src> Parser<'src> {
         );
         let let_marker = |range| {
             Expr::Name(ast::ExprName {
-                id: Name::new_static("__let__"),
+                id: Name::new_static(
+                    DeclarationMarker::new(DeclarationMarkerKind::Let, visibility).id(),
+                ),
+                ctx: ExprContext::Invalid,
+                range,
+                node_index: AtomicNodeIndex::NONE,
+            })
+        };
+        // a `var` parameter declares a writable attribute, so there is no `let`
+        // marker for the visibility to ride on — it gets one of its own, which
+        // wraps the declared type the same way
+        let visibility_marker = |range| {
+            Expr::Name(ast::ExprName {
+                id: Name::new_static(
+                    DeclarationMarker::new(DeclarationMarkerKind::Annot, visibility).id(),
+                ),
                 ctx: ExprContext::Invalid,
                 range,
                 node_index: AtomicNodeIndex::NONE,
@@ -5501,8 +5626,29 @@ impl<'src> Parser<'src> {
             }))),
             // `let a` — a bare marker: read-only, with the type left to the value
             (None, Some(let_range)) => Some(Box::new(let_marker(let_range))),
-            // `var a: T` — an ordinary, writable declaration
+            // `var a: T` — an ordinary, writable declaration. a visibility
+            // keyword on it still has to reach ty, so it rides in a marker of
+            // its own rather than the `let` one
+            (Some(ann), None) if visibility != MemberVisibility::Public => {
+                Some(Box::new(Expr::Subscript(ast::ExprSubscript {
+                    range: TextRange::new(param.range.start(), ann.range().end()),
+                    value: Box::new(visibility_marker(TextRange::new(
+                        param.range.start(),
+                        name_range.start(),
+                    ))),
+                    slice: ann.clone(),
+                    ctx: ExprContext::Load,
+                    node_index: AtomicNodeIndex::NONE,
+                    is_typeof: false,
+                    is_type_decoration: false,
+                })))
+            }
             (Some(ann), None) => Some(ann.clone()),
+            // `private var a` — nothing is declared but the visibility, so the
+            // marker stands alone and the type is read off the value
+            (None, None) if visibility != MemberVisibility::Public => Some(Box::new(
+                visibility_marker(TextRange::new(param.range.start(), name_range.start())),
+            )),
             // `var a` — no declaration at all
             (None, None) => None,
         };
@@ -5621,23 +5767,14 @@ impl<'src> Parser<'src> {
             );
         }
 
-        // `private` shifts the whole construct one level of underscore deeper: the
-        // property becomes `_x` and its storage `__x`. that is self-enforcing —
-        // the property simply does not exist under its public name, so an access
-        // from outside the class is an unresolved attribute rather than something
-        // needing its own check
-        let is_private = prefix.split_whitespace().any(|word| word == "private");
-        let prop_name = if is_private {
-            Name::new(format!("_{public_name}"))
-        } else {
-            public_name.clone()
-        };
-        // storage is an implementation detail, so it gets a dunder name and python's
-        // name mangling hides it: `self.__a` inside the class body resolves to
-        // `_A__a`, and there is no `_a` for anything outside to reach. derived from
-        // the *public* name so a `private` property (already `_x`) gets `__x` rather
-        // than a third underscore
-        let backing = Name::new(format!("__{public_name}"));
+        // a visibility keyword renames the property the way it renames any member:
+        // the AST keeps the name the author wrote, so ty resolves in-class accesses
+        // to it and checks the rest, and the lowering spells it `__x` or `_x`
+        let visibility = prefix_visibility(prefix);
+        let prop_name = public_name.clone();
+        // storage is an implementation detail, so it gets a dunder name python's
+        // name mangling hides — see `property_backing_name`
+        let backing = Name::new(property_backing_name(&public_name, visibility));
 
         // modifier keywords ty must see on the accessors themselves (`override`
         // checked against the base, `final`, `abstract`). they are appended *after*
@@ -5656,7 +5793,10 @@ impl<'src> Parser<'src> {
                 };
                 let word_start = offset + relative;
                 offset = word_start + word.len();
-                if !matches!(word, "override" | "final" | "abstract") {
+                if !matches!(
+                    word,
+                    "override" | "final" | "abstract" | "private" | "protected"
+                ) {
                     continue;
                 }
                 let (Ok(from), Ok(to)) = (
@@ -5962,11 +6102,14 @@ impl<'src> Parser<'src> {
         // in-class accesses are written under the public name, so record what each
         // one should resolve to. a read may reach storage directly (narrowing); a
         // write must reach the property so its setter still runs
-        let read_target = if has_backing && getter_reads_field_only {
-            backing.clone()
-        } else {
-            prop_name.clone()
-        };
+        // a restricted property's in-class reads are renamed along with it, so they
+        // go through the property rather than being pointed at its storage
+        let read_target =
+            if has_backing && getter_reads_field_only && visibility == MemberVisibility::Public {
+                backing.clone()
+            } else {
+                prop_name.clone()
+            };
         if read_target != public_name || prop_name != public_name {
             self.pending_narrow_props.push(PropertyRetarget {
                 public: public_name,
@@ -7544,7 +7687,9 @@ impl<'src> Parser<'src> {
         // inside the body re-establish their own depth
         if matches!(parent_clause, Clause::FunctionDef) {
             let saved = std::mem::take(&mut self.class_body_depth);
+            self.function_body_depth += 1;
             let body = self.parse_body_inner(parent_clause);
+            self.function_body_depth -= 1;
             self.class_body_depth = saved;
             body
         } else if matches!(parent_clause, Clause::Class) {

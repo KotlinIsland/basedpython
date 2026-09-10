@@ -24,6 +24,7 @@ use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 
 use ruff_diagnostics::{Edit, Fix};
+use ruff_python_ast::helpers::{is_classvar_marker_id, is_final_marker_id, is_let_marker_id};
 use ruff_python_ast::{Expr, ExprCallableType, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
@@ -848,7 +849,10 @@ pub(crate) fn lower_type_expr_full(
 fn synthetic_let_slice(expr: &Expr) -> Option<&Expr> {
     if let Expr::Subscript(s) = expr {
         if let Expr::Name(n) = s.value.as_ref() {
-            if matches!(n.id.as_str(), "__let__" | "__classvar__" | "__final__") {
+            if is_let_marker_id(n.id.as_str())
+                || is_final_marker_id(n.id.as_str())
+                || is_classvar_marker_id(n.id.as_str())
+            {
                 return Some(s.slice.as_ref());
             }
         }

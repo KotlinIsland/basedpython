@@ -7702,6 +7702,33 @@ var b: int = 5
     }
 
     #[test]
+    fn semantic_tokens_visibility_keywords() {
+        // `protected` reaches the visitor the same way every other modifier does
+        // — as a synthetic decorator on a `def`, and as the annotation marker on
+        // a declaration
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    protected step: int = 2
+    protected def helper(self): ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "protected" @ 14..23: Keyword
+        "step" @ 24..28: Variable [definition]
+        "int" @ 30..33: Class
+        "2" @ 36..37: Number
+        "protected" @ 42..51: Keyword
+        "helper" @ 56..62: Method [definition]
+        "self" @ 63..67: SelfParameter [definition]
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_modifier_annotation_keywords() {
         // the modifiers that carry no type meaning still declare a type, and it
         // is highlighted like any other annotation

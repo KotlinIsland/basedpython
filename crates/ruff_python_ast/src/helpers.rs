@@ -1368,18 +1368,210 @@ pub fn if_let_keyword_range(
         .map(|token| token.range)
 }
 
-/// basedpython: the synthetic markers a declaration modifier (`let`, `var`,
-/// `final`, `private`, `abstract`, a visibility keyword) wraps its annotation in.
-/// The declared type rides in the subscript slice.
-const DECLARATION_ANNOTATION_MARKERS: [&str; 7] = [
-    "__let__",
-    "__final__",
-    "__modifier_annot__",
-    "__private_annot__",
-    "__visibility_annot__",
-    "__abstract_annot__",
-    "__classvar_annot__",
-];
+/// basedpython: what a declaration's synthetic annotation marker declares,
+/// apart from the member's visibility
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum DeclarationMarkerKind {
+    /// `let x [: T]` — read-only, and `Final` outside a class body
+    Let,
+    /// `final x: T` and `class let x: T` — `Final` in every scope
+    Final,
+    /// `class var x: T` — a class variable whose type is declared
+    ClassVarAnnot,
+    /// `class x = v` — a class variable whose type is read off its value
+    ClassVar,
+    /// `[modifiers] x: T` — a declaration whose modifiers carry no type meaning
+    Annot,
+    /// `[modifiers] x = v` — a declaration that states no type
+    Assign,
+}
+
+/// basedpython: the synthetic marker a declaration's modifier chain parses to,
+/// in annotation position — `let a: T` is `a: __let__[T]`, `private a = v` is
+/// `a: __private_assign__`. the declared type, when there is one, rides in the
+/// subscript slice
+///
+/// [`DeclarationMarker::id`] is the one place a marker's id is spelled: the
+/// parser writes an id from a marker, and everything downstream reads one back
+/// through [`DeclarationMarker::from_id`], so no list of ids can drift from what
+/// the parser actually writes
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct DeclarationMarker {
+    pub kind: DeclarationMarkerKind,
+    pub visibility: MemberVisibility,
+}
+
+impl DeclarationMarker {
+    const ALL: [DeclarationMarker; 18] = {
+        use DeclarationMarkerKind::{Annot, Assign, ClassVar, ClassVarAnnot, Final, Let};
+        use MemberVisibility::{Private, Protected, Public};
+        let kinds = [Let, Final, ClassVarAnnot, ClassVar, Annot, Assign];
+        let visibilities = [Public, Private, Protected];
+        let mut all = [DeclarationMarker::new(Let, Public); 18];
+        let mut index = 0;
+        while index < 18 {
+            all[index] = DeclarationMarker::new(kinds[index / 3], visibilities[index % 3]);
+            index += 1;
+        }
+        all
+    };
+
+    pub const fn new(kind: DeclarationMarkerKind, visibility: MemberVisibility) -> Self {
+        Self { kind, visibility }
+    }
+
+    /// the id the parser writes for this marker
+    pub const fn id(self) -> &'static str {
+        use DeclarationMarkerKind::{Annot, Assign, ClassVar, ClassVarAnnot, Final, Let};
+        use MemberVisibility::{Private, Protected, Public};
+        match (self.kind, self.visibility) {
+            (Let, Public) => "__let__",
+            (Let, Private) => "__private_let__",
+            (Let, Protected) => "__protected_let__",
+            (Final, Public) => "__final__",
+            (Final, Private) => "__final_private__",
+            (Final, Protected) => "__final_protected__",
+            (ClassVarAnnot, Public) => "__classvar_annot__",
+            (ClassVarAnnot, Private) => "__private_classvar_annot__",
+            (ClassVarAnnot, Protected) => "__protected_classvar_annot__",
+            (ClassVar, Public) => "__classvar__",
+            (ClassVar, Private) => "__private_classvar__",
+            (ClassVar, Protected) => "__protected_classvar__",
+            (Annot, Public) => "__modifier_annot__",
+            (Annot, Private) => "__private_annot__",
+            (Annot, Protected) => "__protected_annot__",
+            (Assign, Public) => "__modifier_assign__",
+            (Assign, Private) => "__private_assign__",
+            (Assign, Protected) => "__protected_assign__",
+        }
+    }
+
+    /// the marker `id` names, `None` for an id that is not a declaration marker
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|marker| marker.id() == id)
+    }
+
+    /// the marker `annotation` is, with the declared type when it carries one.
+    /// only a synthetic name counts — a real annotation that happens to be
+    /// spelled like a marker is an ordinary name
+    pub fn of(annotation: &Expr) -> Option<(Self, Option<&Expr>)> {
+        let (name, slice) = match annotation {
+            Expr::Subscript(subscript) => {
+                (subscript.value.as_name_expr()?, Some(&*subscript.slice))
+            }
+            Expr::Name(name) => (name, None),
+            _ => return None,
+        };
+        if name.ctx != crate::ExprContext::Invalid {
+            return None;
+        }
+        Some((Self::from_id(name.id.as_str())?, slice))
+    }
+}
+
+/// basedpython: how far outside the class that declares it a member can be
+/// reached.
+///
+/// The emitted python spells the visibility in the member's name, because that
+/// is the only enforcement the runtime offers: a `private` member becomes
+/// `__name`, which python name-mangles to `_Class__name` so a subclass's body
+/// names something else entirely, and a `protected` member becomes `_name`,
+/// which is python's long-standing convention for "not part of the interface".
+/// The type checker enforces both directly, so neither spelling has to be
+/// relied on.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub enum MemberVisibility {
+    /// Part of the class's interface — reachable from anywhere.
+    #[default]
+    Public,
+    /// Reachable from the declaring class's body and from a subclass's body.
+    Protected,
+    /// Reachable only from the declaring class's body.
+    Private,
+}
+
+#[cfg(feature = "get-size")]
+impl get_size2::GetSize for MemberVisibility {}
+
+impl MemberVisibility {
+    /// The keyword that declares this visibility, for use in a message.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            MemberVisibility::Public => "public",
+            MemberVisibility::Protected => "protected",
+            MemberVisibility::Private => "private",
+        }
+    }
+
+    /// The prefix the emitted python spells this visibility with.
+    pub fn name_prefix(self) -> &'static str {
+        match self {
+            MemberVisibility::Public => "",
+            MemberVisibility::Protected => "_",
+            MemberVisibility::Private => "__",
+        }
+    }
+
+    /// Whether `self` reaches strictly fewer places than `other`.
+    pub fn is_narrower_than(self, other: Self) -> bool {
+        (self as u8) > (other as u8)
+    }
+}
+
+/// basedpython: the storage a property accessor block's `field` names. a
+/// `private` property is itself emitted as `__name`, so its storage takes a name
+/// of its own; any other property's storage is `__name`, which python's name
+/// mangling keeps out of reach
+pub fn property_backing_name(public: &str, visibility: MemberVisibility) -> String {
+    match visibility {
+        MemberVisibility::Private => format!("__{public}_field"),
+        MemberVisibility::Public | MemberVisibility::Protected => format!("__{public}"),
+    }
+}
+
+/// basedpython: whether `marker_id` is the marker a `let` declaration carries,
+/// in any of the visibilities it can be written with.
+pub fn is_let_marker_id(marker_id: &str) -> bool {
+    DeclarationMarker::from_id(marker_id)
+        .is_some_and(|marker| marker.kind == DeclarationMarkerKind::Let)
+}
+
+/// basedpython: whether `marker_id` is the marker a `final` declaration carries,
+/// in any of the visibilities it can be written with.
+pub fn is_final_marker_id(marker_id: &str) -> bool {
+    DeclarationMarker::from_id(marker_id)
+        .is_some_and(|marker| marker.kind == DeclarationMarkerKind::Final)
+}
+
+/// basedpython: the visibility a declaration marker records, `Public` for a
+/// marker that records none.
+pub fn marker_visibility(marker_id: &str) -> MemberVisibility {
+    DeclarationMarker::from_id(marker_id)
+        .map_or(MemberVisibility::Public, |marker| marker.visibility)
+}
+
+/// basedpython: the visibility a declaration's synthetic annotation marker
+/// records — `private a: T` parses as `a: __private_annot__[T]`, `private a = v`
+/// as `a: __private_assign__`. `Public` for an annotation that is no marker.
+pub fn declaration_marker_visibility(annotation: &Expr) -> MemberVisibility {
+    DeclarationMarker::of(annotation)
+        .map_or(MemberVisibility::Public, |(marker, _)| marker.visibility)
+}
+
+/// basedpython: whether `marker_id` is the marker a class variable declared by
+/// value — `class count = 0` — carries, in any visibility it can be written with.
+pub fn is_classvar_marker_id(marker_id: &str) -> bool {
+    DeclarationMarker::from_id(marker_id)
+        .is_some_and(|marker| marker.kind == DeclarationMarkerKind::ClassVar)
+}
+
+/// basedpython: whether `marker_id` is the marker a class variable declared by
+/// type — `class var count: int` — carries, in any visibility it can be written
+/// with.
+pub fn is_classvar_annot_marker_id(marker_id: &str) -> bool {
+    DeclarationMarker::from_id(marker_id)
+        .is_some_and(|marker| marker.kind == DeclarationMarkerKind::ClassVarAnnot)
+}
 
 /// basedpython: the *declared type* inside a declaration marker, if `annotation`
 /// is one — `let a: T` parses as `a: __let__[T]`, and `T` is what a reader of the
@@ -1393,12 +1585,9 @@ pub fn declaration_annotation_type(annotation: &Expr) -> Option<&Expr> {
     let Expr::Subscript(subscript) = annotation else {
         return None;
     };
-    let Expr::Name(marker) = subscript.value.as_ref() else {
-        return None;
-    };
-    DECLARATION_ANNOTATION_MARKERS
-        .contains(&marker.id.as_str())
-        .then(|| subscript.slice.as_ref())
+    let marker = subscript.value.as_name_expr()?;
+    DeclarationMarker::from_id(marker.id.as_str())?;
+    Some(&subscript.slice)
 }
 
 /// basedpython: an `implements A, B` declaration, and the `for` clause that says
@@ -1507,10 +1696,16 @@ pub fn binding_keyword(
         _ => return None,
     };
 
-    if !matches!(
-        marker.id.as_str(),
-        "__let__" | "__modifier_annot__" | "__modifier_assign__"
-    ) {
+    // `let` and `var` bind; the other declaration forms have no binding keyword
+    // to find, whatever their visibility
+    if !DeclarationMarker::from_id(marker.id.as_str()).is_some_and(|marker| {
+        matches!(
+            marker.kind,
+            DeclarationMarkerKind::Let
+                | DeclarationMarkerKind::Annot
+                | DeclarationMarkerKind::Assign
+        )
+    }) {
         return None;
     }
     if source.len() < usize::from(marker.range.end()) {
@@ -1795,8 +1990,16 @@ pub fn is_top_parameters_form(expr: &Expr) -> bool {
 /// annotation is `Name(id="__modifier_assign__", ctx=Invalid)` spanning the
 /// keyword prefix. The marker carries no type, so the statement declares nothing
 /// and binds exactly like the `a = 1` it lowers to.
+///
+/// A visibility keyword in the chain gets a marker of its own, which is *not* one
+/// of these: it says who may reach the member, which has to survive as a
+/// qualifier on the declaration, and that only the declaration path carries.
 pub fn is_untyped_declaration_marker(expr: &Expr) -> bool {
-    matches!(expr, Expr::Name(name) if name.id.as_str() == "__modifier_assign__")
+    matches!(
+        expr,
+        Expr::Name(name) if DeclarationMarker::from_id(name.id.as_str())
+            == Some(DeclarationMarker::new(DeclarationMarkerKind::Assign, MemberVisibility::Public))
+    )
 }
 
 /// basedpython: the inference-context marker an *unannotated* `field = <init>` in a

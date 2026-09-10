@@ -10,8 +10,9 @@ use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::source_text;
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::{
-    BindingKeyword, TypeModifier, is_declaration_marker, is_dotted_name,
-    is_untyped_declaration_marker, statement_expression_values, untyped_declaration_context,
+    BindingKeyword, MemberVisibility, TypeModifier, is_declaration_marker, is_dotted_name,
+    is_let_marker_id, is_untyped_declaration_marker, statement_expression_values,
+    untyped_declaration_context,
 };
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{
@@ -77,10 +78,10 @@ use crate::types::diagnostic::{
     self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
     CYCLIC_TYPE_ALIAS_DEFINITION, DYNAMIC_FUNCTION_DECORATOR_RETURN, ERASED_CAST_ARGUMENT,
     ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind, IMPLICIT_DECLARATION,
-    INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_ATTRIBUTE_ACCESS,
-    INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
-    INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX,
-    INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
+    INACCESSIBLE_MEMBER, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
+    INVALID_ATTRIBUTE_ACCESS, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
+    INVALID_FIELD_LOOKUP, INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC,
+    INVALID_REGEX, INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
     INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
     NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
     NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
@@ -104,7 +105,7 @@ use crate::types::diagnostic::{
     report_match_pattern_against_non_runtime_checkable_protocol,
     report_match_pattern_against_typed_dict, report_mismatched_type_name,
     report_possibly_missing_attribute, report_possibly_unresolved_reference,
-    report_private_constructor, report_too_many_positional_patterns_for_class_pattern,
+    report_restricted_constructor, report_too_many_positional_patterns_for_class_pattern,
     report_unplaceable_starred_class_pattern, report_unsound_assignment, report_unsound_yield,
     report_unsupported_augmented_assignment, report_unsupported_comparison,
 };
@@ -158,7 +159,9 @@ use crate::types::unpacker::{
     UnpackResult, fixed_sequence_elements, sequence_from_literal_elements,
     tuple_literal_needs_promotion,
 };
-use crate::types::visibility::{private_constructor, scope_is_within_class};
+use crate::types::visibility::{
+    AmbiguousAccess, MemberAccess, restricted_constructor, scope_is_within_class,
+};
 use crate::types::{
     BindingContext, BoundTypeVarInstance, CallDunderError, CallableBinding, CallableType,
     CallableTypes, ClassType, DeferredOperation, DeferredType, DynamicType, GeneratorTypeMode,
@@ -2332,6 +2335,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn infer_module(&mut self, module: &ast::ModModule) {
         self.infer_body(&module.body);
 
+        // basedpython: a `private` symbol has no place in the module's interface
+        crate::types::visibility::check_private_exports(&self.context, &module.body);
+
         // basedpython: a trailing-lambda block in a module-level loop that
         // captures a loop variable is a late-binding trap unless its callee
         // confines it (`local` / `once`) — the type-aware complement to `B023`
@@ -3444,6 +3450,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn validate_class_pattern(&mut self, pattern: &ast::PatternMatchClass, cls_ty: Type<'db>) {
         let db = self.db();
         let env = self.program_environment();
+        // basedpython: `case A(x=...)` reads `x` off the subject exactly as `a.x` does
+        if self.context.is_lint_enabled(&INACCESSIBLE_MEMBER) {
+            for keyword in &pattern.arguments.keywords {
+                self.check_member_reach(&keyword.attr, cls_ty, keyword.attr.as_str());
+            }
+        }
         // basedpython `case A(x, *_, y)`: the starred wildcard is not a subpattern of its own,
         // it only says that what follows it is counted back from the end of `__match_args__`
         let (starred, positional_patterns): (Vec<_>, Vec<_>) = pattern
@@ -5553,7 +5565,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // class body a bare `final` assignment is a plain attribute, matching
         // `let`-in-class, so restrict this to non-class scopes.
         if let ast::Expr::Name(ann_name) = annotation
-            && ann_name.id.as_str() == "__modifier_assign__"
+            && ruff_python_ast::helpers::DeclarationMarker::from_id(ann_name.id.as_str())
+                .is_some_and(|marker| {
+                    marker.kind == ruff_python_ast::helpers::DeclarationMarkerKind::Assign
+                })
             && let ast::Expr::Name(target_name) = target
             && self
                 .index
@@ -5633,9 +5648,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // exempts a `let` from the override-of-final check. no `Final` is emitted in
         // the lowered python either — read-only-ness is a type-checker-only marker
         let is_let_marker = match annotation {
-            ast::Expr::Name(n) => n.id.as_str() == "__let__",
+            ast::Expr::Name(n) => is_let_marker_id(n.id.as_str()),
             ast::Expr::Subscript(s) => {
-                matches!(s.value.as_ref(), ast::Expr::Name(n) if n.id.as_str() == "__let__")
+                matches!(s.value.as_ref(), ast::Expr::Name(n) if is_let_marker_id(n.id.as_str()))
             }
             _ => false,
         };
@@ -5950,6 +5965,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 if let Some(name_expr) = target.as_name_expr()
                     && !name_expr.id.starts_with("__")
                     && !matches!(name_expr.id.as_str(), "_ignore_" | "_value_" | "_name_")
+                    // basedpython: a declaration marker with no type under it stands
+                    // for a declaration that wrote none (`private A = 1`)
+                    && !matches!(
+                        ruff_python_ast::helpers::DeclarationMarker::of(annotation),
+                        Some((_, None))
+                    )
                     && (
                         // Not bare Final (bare Final is allowed on enum members)
                         !(declared.qualifiers.contains(TypeQualifiers::FINAL)
@@ -12464,17 +12485,28 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
 
             // basedpython: a `private` constructor may only be called from
-            // inside the body of the class that declares it. `type[A]` is left
-            // alone for the same reason a protocol is: the class it stands for
-            // may be a subclass that declares a constructor of its own.
+            // inside the body of the class that declares it, a `protected` one
+            // from a subclass's body as well. `type[A]` is left alone for the
+            // same reason a protocol is: the class it stands for may be a
+            // subclass that declares a constructor of its own.
             // the lint is asked first because answering the question at all
             // costs a `__init__` lookup on every construction in the program
             if !callable_type.is_subclass_of()
                 && self.context.is_lint_enabled(&PRIVATE_CONSTRUCTOR)
-                && let Some(constructor) = private_constructor(db, class)
-                && !scope_is_within_class(db, self.index, self.scope(), constructor.owner)
+                && let Some(constructor) = restricted_constructor(db, class)
+                && !match constructor.visibility {
+                    MemberVisibility::Protected => {
+                        crate::types::visibility::scope_is_within_subclass_of(
+                            db,
+                            self.index,
+                            self.scope(),
+                            constructor.owner,
+                        )
+                    }
+                    _ => scope_is_within_class(db, self.index, self.scope(), constructor.owner),
+                }
             {
-                report_private_constructor(&self.context, call_expression, class, constructor);
+                report_restricted_constructor(&self.context, call_expression, class, constructor);
             }
 
             // Inference of correctly-placed `TypeVar`, `ParamSpec`, `NewType`, and
@@ -13750,6 +13782,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             diagnostic
                 .info("the block is called as `fn()`, which leaves `it` at its `None` default");
         }
+
+        // basedpython: a class body read that may reach a module's `private` name
+        crate::types::visibility::check_private_class_read(
+            &self.context,
+            self.index,
+            self.scope(),
+            name_node,
+        );
 
         let expr = PlaceExpr::from_expr_name(name_node);
 
@@ -15196,11 +15236,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } = attribute;
 
         match ctx {
-            ExprContext::Load => self
-                .infer_attribute_load(attribute)
-                .unwrap_or_else(|recovery_ty| recovery_ty),
+            ExprContext::Load => {
+                let member_type = self
+                    .infer_attribute_load(attribute)
+                    .unwrap_or_else(|recovery_ty| recovery_ty);
+                self.validate_member_visibility(attribute, self.expression_type(value));
+                member_type
+            }
             ExprContext::Store => {
                 self.infer_expression(value, TypeContext::default());
+                self.validate_member_visibility(attribute, self.expression_type(value));
                 Type::Never
             }
             ExprContext::Del => {
@@ -15211,12 +15256,119 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     attr.as_str(),
                     true,
                 );
+                self.validate_member_visibility(attribute, self.expression_type(value));
                 Type::Never
             }
             ExprContext::Invalid => {
                 self.infer_expression(value, TypeContext::default());
                 Type::unknown()
             }
+        }
+    }
+
+    /// basedpython: `a.x` where `x` carries a visibility keyword and the access is
+    /// written outside the code that keyword admits — anywhere but the declaring
+    /// class's own body for `private`, anywhere but that and a subclass's body for
+    /// `protected` — or where the classes `a` can be disagree about `x`
+    fn validate_member_visibility(&self, attribute: &ast::ExprAttribute, receiver: Type<'db>) {
+        // answering costs a member lookup at every attribute access in the
+        // program, so the lint is asked first
+        if !self.context.is_lint_enabled(&INACCESSIBLE_MEMBER) {
+            return;
+        }
+        let db = self.db();
+        // a module's `private` symbol reached as an attribute of the module from
+        // another one. `from m import x` is `private-import`; this is the same
+        // boundary crossed without an import statement, and the lowering has
+        // renamed the symbol, so the attribute is not there at runtime either
+        if let Type::ModuleLiteral(module) = receiver
+            && let Some(module_file) = module.module(db).file(db)
+            && module_file != self.file()
+            && crate::types::visibility::private_symbols(db, module_file)
+                .contains(&attribute.attr.id)
+        {
+            if let Some(builder) = self.context.report_lint(&INACCESSIBLE_MEMBER, attribute) {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`{name}` is private to module `{module}`",
+                    name = attribute.attr.id,
+                    module = module.module(db).name(db),
+                ));
+                diagnostic.info(
+                    "the lowering renames it with a leading underscore, which is not the name \
+                     written here",
+                );
+            }
+            return;
+        }
+        self.check_member_reach(attribute, receiver, attribute.attr.as_str());
+    }
+
+    /// basedpython: reports `name`, reached through `receiver` at `node`, when a
+    /// visibility keyword keeps it from being reached there — the one check an
+    /// attribute access and a class pattern's keyword share
+    fn check_member_reach(
+        &self,
+        node: impl ruff_text_size::Ranged,
+        receiver: Type<'db>,
+        name: &str,
+    ) {
+        let db = self.db();
+        let env = self.program_environment();
+        let accesses = match crate::types::visibility::member_access(db, env, receiver, name) {
+            Ok(accesses) => accesses,
+            Err(AmbiguousAccess) => {
+                if let Some(builder) = self.context.report_lint(&INACCESSIBLE_MEMBER, node) {
+                    let mut diagnostic = builder.into_diagnostic(format_args!(
+                        "`{name}` is emitted under a different name on the classes `{receiver}` \
+                         can be",
+                        receiver = receiver.display(db, env),
+                    ));
+                    diagnostic.info("no single access reaches all of them");
+                }
+                return;
+            }
+        };
+        for access in accesses {
+            let MemberAccess::Restricted { visibility, owner } = access else {
+                continue;
+            };
+            let reachable = match visibility {
+                MemberVisibility::Public => true,
+                MemberVisibility::Private => {
+                    scope_is_within_class(db, self.index, self.scope(), owner)
+                }
+                MemberVisibility::Protected => {
+                    crate::types::visibility::scope_is_within_subclass_of(
+                        db,
+                        self.index,
+                        self.scope(),
+                        owner,
+                    )
+                }
+            };
+            if reachable {
+                continue;
+            }
+            let Some(builder) = self.context.report_lint(&INACCESSIBLE_MEMBER, node) else {
+                return;
+            };
+            let owner_name = owner.name(db);
+            let mut diagnostic = match visibility {
+                MemberVisibility::Private => {
+                    builder.into_diagnostic(format_args!("`{name}` is private to `{owner_name}`"))
+                }
+                _ => builder.into_diagnostic(format_args!(
+                    "`{name}` is protected: only `{owner_name}` and its subclasses may reach it"
+                )),
+            };
+            if let Some(emitted) =
+                crate::types::visibility::emitted_member_name(db, visibility, owner, name)
+            {
+                diagnostic.info(format_args!(
+                    "the lowering emits it as `{emitted}`, which is not the name written here"
+                ));
+            }
+            return;
         }
     }
 

@@ -17,7 +17,7 @@ use ruff_db::Instant;
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
-use ruff_python_ast::helpers::TypeModifier;
+use ruff_python_ast::helpers::{MemberVisibility, TypeModifier};
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use smallvec::smallvec_inline;
@@ -12273,6 +12273,10 @@ bitflags! {
         /// A private member is invisible to a widened view of its class, which is what
         /// makes a mutable field under a covariant type parameter sound.
         const PRIVATE = 1 << 8;
+        /// A non-standard type qualifier for the basedpython `protected` member keyword.
+        /// A protected member is reachable from the declaring class's body and from a
+        /// subclass's, and from nowhere else.
+        const PROTECTED = 1 << 9;
     }
 }
 
@@ -12307,40 +12311,80 @@ impl TypeQualifiers {
     pub fn is_non_standard(self) -> bool {
         const NON_STANDARD: TypeQualifiers = TypeQualifiers::IMPLICIT_INSTANCE_ATTRIBUTE
             .union(TypeQualifiers::FROM_MODULE_GETATTR)
-            .union(TypeQualifiers::PRIVATE);
+            .union(TypeQualifiers::PRIVATE)
+            .union(TypeQualifiers::PROTECTED);
         self.intersects(NON_STANDARD)
     }
 }
 
-/// basedpython: whether the class member `name`, declared with `qualifiers` and of type
-/// `ty`, is *private* — invisible to any observer outside the class.
+/// basedpython: the visibility a member's declaration states outright, `None` when it
+/// states none and the member's name is all there is to go on.
 ///
-/// Privacy is what makes variance safe: an invisible member cannot be used to tell two
-/// specializations of its class apart, so it neither constrains the class's variance nor
-/// may be reached through a widened view of it. A dunder is *not* private — it is part of
-/// the public protocol surface.
+/// This is the question a *rename* asks. A member whose name already says how visible it
+/// is keeps the name its author wrote; only a modifier keyword asks for a new one.
+fn declared_visibility<'db>(
+    db: &'db dyn Db,
+    qualifiers: TypeQualifiers,
+    ty: Type<'db>,
+) -> Option<MemberVisibility> {
+    if qualifiers.contains(TypeQualifiers::PRIVATE) {
+        return Some(MemberVisibility::Private);
+    }
+    if qualifiers.contains(TypeQualifiers::PROTECTED) {
+        return Some(MemberVisibility::Protected);
+    }
+    // a `private def` carries no qualifier: the keyword parses as a synthetic decorator,
+    // so its visibility is recorded on the function rather than on the declaration. reached
+    // off an instance the member is already bound, so unwrap that too
+    let function = match ty {
+        Type::FunctionLiteral(function) => Some(function),
+        Type::BoundMethod(method) => Some(method.function(db)),
+        _ => None,
+    }?;
+    if function.has_known_decorator(db, FunctionDecorators::PRIVATE) {
+        Some(MemberVisibility::Private)
+    } else if function.has_known_decorator(db, FunctionDecorators::PROTECTED) {
+        Some(MemberVisibility::Protected)
+    } else {
+        None
+    }
+}
+
+/// basedpython: the visibility a member's name states, which is all python itself has.
+///
+/// A dunder is *not* private: it is part of the public protocol surface, and python does
+/// not mangle it either.
+fn visibility_from_name(name: &str) -> MemberVisibility {
+    match NameKind::classify(name) {
+        NameKind::Dunder | NameKind::Normal => MemberVisibility::Public,
+        // `__name` is the spelling python itself mangles, so it is private in
+        // every dialect; a single underscore is the convention for the rest
+        NameKind::Sunder if name.starts_with("__") => MemberVisibility::Private,
+        NameKind::Sunder => MemberVisibility::Protected,
+    }
+}
+
+/// basedpython: whether the class member `name` is invisible to a *widened view* of its
+/// class, which is what makes variance safe: such a member cannot be used to tell two
+/// specializations of its class apart, so it neither constrains the class's variance nor may
+/// be reached through a widened view of it
+///
+/// a `private` member qualifies, however it is spelled. a `protected` one does not: it is
+/// reachable from a subclass's body, where the receiver can be any specialization of the class
+/// rather than only `Self`. a name spelled with a leading underscore and no keyword keeps the
+/// treatment python's convention always had here
 pub(crate) fn is_private_member<'db>(
     db: &'db dyn Db,
     name: &str,
     qualifiers: TypeQualifiers,
     ty: Type<'db>,
 ) -> bool {
-    if qualifiers.contains(TypeQualifiers::PRIVATE)
-        || matches!(NameKind::classify(name), NameKind::Sunder)
-    {
-        return true;
-    }
-    // a `private def` carries no qualifier: the keyword parses as a synthetic decorator,
-    // so its privacy is recorded on the function rather than on the declaration. reached
-    // off an instance the member is already bound, so unwrap that too
-    match ty {
-        Type::FunctionLiteral(function) => {
-            function.has_known_decorator(db, FunctionDecorators::PRIVATE)
+    match declared_visibility(db, qualifiers, ty) {
+        Some(MemberVisibility::Private) => true,
+        Some(MemberVisibility::Protected) => false,
+        Some(MemberVisibility::Public) | None => {
+            visibility_from_name(name) != MemberVisibility::Public
         }
-        Type::BoundMethod(method) => method
-            .function(db)
-            .has_known_decorator(db, FunctionDecorators::PRIVATE),
-        _ => false,
     }
 }
 

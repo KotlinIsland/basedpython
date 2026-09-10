@@ -1083,6 +1083,26 @@ impl<'db> PlaceAndQualifiers<'db> {
         }
     }
 
+    /// basedpython: `Some(…)` if the place carries a visibility qualifier and no
+    /// type of its own — `private x = 1`, whose declaration says who may reach
+    /// the member and nothing else.
+    fn is_bare_visibility(&self) -> Option<TypeQualifiers> {
+        match self {
+            PlaceAndQualifiers { place, qualifiers }
+                if qualifiers.intersects(TypeQualifiers::PRIVATE | TypeQualifiers::PROTECTED)
+                    // a bare `ClassVar` has its own rule below, which keeps every
+                    // qualifier the declaration carries
+                    && !qualifiers.contains(TypeQualifiers::CLASS_VAR)
+                    && place
+                        .ignore_possibly_undefined()
+                        .is_some_and(|ty| ty.is_unknown()) =>
+            {
+                Some(*qualifiers)
+            }
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub(crate) fn map_type(
         self,
@@ -1279,6 +1299,19 @@ pub(crate) fn place_by_id<'db>(
         let bindings = all_considered_bindings();
         return place_from_bindings_impl(db, &env, bindings, requires_explicit_reexport, None)
             .place
+            .with_qualifiers(qualifiers);
+    }
+
+    // basedpython: a visibility keyword on an assignment states who may reach the
+    // member and nothing about its type, so what the right-hand side infers is
+    // what the declaration means — the same reasoning as the bare `Final` above.
+    // the member stays writable, so what it exposes is the promoted view an
+    // undeclared assignment exposes, not the literal the binding inferred
+    if let Some(qualifiers) = declared.is_bare_visibility() {
+        let bindings = all_considered_bindings();
+        return place_from_bindings_impl(db, &env, bindings, requires_explicit_reexport, None)
+            .place
+            .with_public_type_policy(PublicTypePolicy::Promote)
             .with_qualifiers(qualifiers);
     }
 

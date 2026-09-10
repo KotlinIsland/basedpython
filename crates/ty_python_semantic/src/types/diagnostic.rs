@@ -50,6 +50,7 @@ use ruff_db::{
     parsed::parsed_module,
 };
 use ruff_diagnostics::{Edit, Fix, IsolationLevel};
+use ruff_python_ast::helpers::MemberVisibility;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::parentheses_iterator;
 use ruff_python_ast::{self as ast, AnyNodeRef, HasNodeIndex, StringFlags};
@@ -156,6 +157,10 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&PRIVATE_CONSTRUCTOR);
     registry.register_lint(&INEFFECTIVE_PRIVATE);
     registry.register_lint(&PRIVATE_IMPORT);
+    registry.register_lint(&INACCESSIBLE_MEMBER);
+    registry.register_lint(&INVALID_OVERRIDE_VISIBILITY);
+    registry.register_lint(&INVALID_VISIBILITY);
+    registry.register_lint(&PRIVATE_EXPORT);
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&INVALID_CONFORMANCE);
@@ -1182,8 +1187,131 @@ declare_lint! {
     ///         return "Point()"
     /// ```
     pub(crate) static INEFFECTIVE_PRIVATE = {
-        summary: "detects a `private` modifier on a name it cannot hide",
+        summary: "detects a visibility keyword on a name it cannot act on",
         status: LintStatus::stable("0.0.79"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a visibility keyword written where it cannot do what it says.
+    ///
+    /// ## Why is this bad?
+    /// A visibility keyword renames the member or symbol it is written on, since
+    /// that is the only enforcement python offers. Some names cannot be renamed
+    /// without changing what they mean: a dataclass field's name is its
+    /// constructor's keyword, an enum member's name is how the enum is looked up,
+    /// a `private` abstract method can never be overridden, and a dotted import
+    /// binds a package no rename can keep. The declaration would read as
+    /// restricted while doing something else.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// from dataclasses import dataclass
+    ///
+    /// @dataclass
+    /// class Point:
+    ///     private x: int  # error: a dataclass field's name is its constructor's keyword
+    /// ```
+    pub(crate) static INVALID_VISIBILITY = {
+        summary: "detects a visibility keyword where it cannot do what it says",
+        status: LintStatus::stable("0.0.80"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a `private` symbol listed in the module's `__all__`.
+    ///
+    /// ## Why is this bad?
+    /// `__all__` lists the module's interface, and a `private` symbol is declared
+    /// not to be part of it. The lowering renames the symbol with a leading
+    /// underscore, so `from m import *` would look up a name the module does not
+    /// have, and raise.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// private def helper() -> int:
+    ///     return 1
+    ///
+    /// __all__ = ["helper"]  # error: `helper` is private
+    /// ```
+    pub(crate) static PRIVATE_EXPORT = {
+        summary: "detects a `private` symbol listed in `__all__`",
+        status: LintStatus::stable("0.0.80"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for reads and writes of a `private` or `protected` class member
+    /// from outside the code allowed to reach it, and for a module's `private`
+    /// symbol reached as an attribute of the module from another one.
+    ///
+    /// ## Why is this bad?
+    /// A visibility keyword draws a boundary around a member: `private` says only
+    /// the declaring class's own body may use it, and `protected` extends that to
+    /// a subclass's body. Reaching past the boundary defeats the point of drawing
+    /// it, and the member may be renamed or removed without notice.
+    ///
+    /// It is also very likely to fail at runtime. The lowering spells the
+    /// visibility in the member's name, and for `private` that name is one python
+    /// mangles: an access written outside the class names a different attribute,
+    /// or none at all.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class Account:
+    ///     init(private let balance: int)
+    ///
+    /// def audit(account: Account) -> int:
+    ///     return account.balance  # error: `balance` is private to `Account`
+    /// ```
+    pub(crate) static INACCESSIBLE_MEMBER = {
+        summary: "detects access to a `private` or `protected` member from outside where it may be reached",
+        status: LintStatus::stable("0.0.80"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a class member declared less visible than the one it inherits
+    /// under the same name.
+    ///
+    /// ## Why is this bad?
+    /// A visibility keyword decides the name the member is emitted under, so a
+    /// member declared less visible than the one it inherits does not override
+    /// it. It sits beside it under a different name, and the inherited member is
+    /// still what a call finds — which is never what the declaration looks like
+    /// it does.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class A:
+    ///     def f(self) -> int:
+    ///         return 1
+    ///
+    /// class B(A):
+    ///     private def f(self) -> int:  # error: `f` is public on `A`
+    ///         return 2
+    ///
+    /// B().f()  # 1, not 2
+    /// ```
+    pub(crate) static INVALID_OVERRIDE_VISIBILITY = {
+        summary: "detects a member declared less visible than the one it overrides",
+        status: LintStatus::stable("0.0.80"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }
@@ -6445,13 +6573,54 @@ fn add_non_runtime_checkable_protocol_context<'db>(
     diagnostic.sub(class_def_diagnostic);
 }
 
+/// basedpython: a class member declared less visible than the one it inherits
+/// under the same name.
+pub(crate) fn report_invalid_override_visibility<'db>(
+    context: &InferContext<'db, '_>,
+    name: &str,
+    definition: crate::types::Definition<'db>,
+    class: ClassType<'db>,
+    superclass: ClassType<'db>,
+    declared: MemberVisibility,
+    inherited: MemberVisibility,
+) {
+    let db = context.db();
+    let Some(builder) = context.report_lint(
+        &INVALID_OVERRIDE_VISIBILITY,
+        definition.focus_range(db, context.module()),
+    ) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "`{name}` is declared `{keyword}`, so it does not override `{superclass}.{name}`",
+        keyword = declared.keyword(),
+        superclass = superclass.name(db),
+    ));
+    diagnostic.info(format_args!(
+        "`{keyword}` emits the member as `{prefix}{name}`, a different attribute from the \
+         `{inherited_keyword}` one it inherits",
+        keyword = declared.keyword(),
+        prefix = declared.name_prefix(),
+        inherited_keyword = inherited.keyword(),
+    ));
+    diagnostic.info(format_args!(
+        "`{superclass}.{name}` is what `{class}` still answers with",
+        superclass = superclass.name(db),
+        class = class.name(db),
+    ));
+    diagnostic.help(format_args!(
+        "declare it `{keyword}` to override it",
+        keyword = inherited.keyword(),
+    ));
+}
+
 /// basedpython: `A(...)` where `A`'s constructor is declared `private` and the
 /// call is not inside `A`'s own body.
-pub(crate) fn report_private_constructor<'db>(
+pub(crate) fn report_restricted_constructor<'db>(
     context: &InferContext<'db, '_>,
     call: &ast::ExprCall,
     class: ClassType<'db>,
-    constructor: crate::types::visibility::PrivateConstructor<'db>,
+    constructor: crate::types::visibility::RestrictedConstructor<'db>,
 ) {
     let Some(builder) = context.report_lint(&PRIVATE_CONSTRUCTOR, call) else {
         return;
@@ -6465,23 +6634,30 @@ pub(crate) fn report_private_constructor<'db>(
     // and then the two messages would read the same while meaning different
     // things
     let inherited = class.class_literal(db).as_static() != Some(constructor.owner);
+    let keyword = constructor.visibility.keyword();
     let mut diagnostic = if inherited {
         builder.into_diagnostic(format_args!(
-            "Cannot construct `{class_name}`: it inherits `{owner_name}`'s private constructor"
+            "Cannot construct `{class_name}`: it inherits `{owner_name}`'s {keyword} constructor"
         ))
     } else {
         builder.into_diagnostic(format_args!(
-            "Cannot construct `{class_name}`: its constructor is private"
+            "Cannot construct `{class_name}`: its constructor is {keyword}"
         ))
     };
 
-    let mut declaration = SubDiagnostic::new(
-        SubDiagnosticSeverity::Info,
-        format_args!("Only code inside `{owner_name}` may construct it"),
-    );
+    let mut declaration = match constructor.visibility {
+        MemberVisibility::Protected => SubDiagnostic::new(
+            SubDiagnosticSeverity::Info,
+            format_args!("Only code inside `{owner_name}` or a subclass of it may construct it"),
+        ),
+        _ => SubDiagnostic::new(
+            SubDiagnosticSeverity::Info,
+            format_args!("Only code inside `{owner_name}` may construct it"),
+        ),
+    };
     declaration.annotate(
         Annotation::secondary(constructor.function.spans(db).name).message(format_args!(
-            "`{owner_name}`'s constructor declared private here"
+            "`{owner_name}`'s constructor declared {keyword} here"
         )),
     );
     diagnostic.sub(declaration);
