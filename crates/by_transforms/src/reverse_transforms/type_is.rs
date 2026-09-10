@@ -116,7 +116,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import TypeIs
-                def f(x) -> x is int
+                def f(x) -> x is int: ...
             "},
         );
     }
@@ -167,7 +167,7 @@ mod tests {
                     int
                     | str
                     | bytes
-                )
+                ): ...
             "},
         );
     }
@@ -183,7 +183,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import Callable, TypeIs
-                def f(x) -> x is (int) -> str
+                def f(x) -> x is (int) -> str: ...
             "},
         );
     }

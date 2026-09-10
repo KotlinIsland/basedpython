@@ -232,7 +232,7 @@ mod tests {
     fn parameter_and_return_annotations() {
         check(
             "def f(x: str | None = None) -> bytes | None: ...\n",
-            "def f(x: str? = None) -> bytes?\n",
+            "def f(x: str? = None) -> bytes?: ...\n",
         );
     }
 
@@ -272,7 +272,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import Callable
-                def f(cb: (int?) -> str) -> None
+                def f(cb: (int?) -> str) -> None: ...
             "},
         );
     }
@@ -294,7 +294,7 @@ mod tests {
             "},
             indoc! {"
                 class Box[T]:
-                    def get(self) -> T | None
+                    def get(self) -> T | None: ...
             "},
         );
     }
@@ -316,7 +316,7 @@ mod tests {
                 _T = TypeVar("_T")
 
                 class Box(Generic[_T]):
-                    def get(self) -> _T | None
+                    def get(self) -> _T | None: ...
             "#},
         );
     }
@@ -336,7 +336,7 @@ mod tests {
                 from typing import Self
 
                 class Box:
-                    def peek(self) -> Self?
+                    def peek(self) -> Self?: ...
             "},
         );
     }
@@ -352,7 +352,7 @@ mod tests {
             "},
             indoc! {"
                 class Box[T]:
-                    def get(self) -> list[T]?
+                    def get(self) -> list[T]?: ...
             "},
         );
     }

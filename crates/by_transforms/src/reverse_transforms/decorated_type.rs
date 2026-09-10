@@ -212,7 +212,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import Annotated
-                def field(gt: int) -> int
+                def field(gt: int) -> int: ...
                 x: @field(gt=0) int
             "},
         );

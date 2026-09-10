@@ -182,7 +182,7 @@ mod tests {
             "},
             indoc! {"
                 class A(list[A]):
-                    def method(self, x: list[A]) -> list[A]
+                    def method(self, x: list[A]) -> list[A]: ...
             "},
         );
     }

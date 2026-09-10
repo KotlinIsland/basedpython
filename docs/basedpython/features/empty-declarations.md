@@ -1,12 +1,14 @@
 # empty declarations
 
 class and function declarations may be written without a body. basedpython
-fills in `: ...` at transpile time so the output is valid Python:
+fills in `: ...` at transpile time so the output is valid python:
 
 ```by
 class Empty
 class Stub(Base)
-def stub(x: int) -> int
+
+protocol Reader:
+    def read(self) -> str
 ```
 
 transpiles to:
@@ -14,7 +16,9 @@ transpiles to:
 ```python
 class Empty: ...
 class Stub(Base): ...
-def stub(x: int) -> int: ...
+
+class Reader(Protocol):
+    def read(self) -> str: ...
 ```
 
 ## scope
@@ -27,11 +31,11 @@ empty defs that *are* part of an overload run instead receive
 an `abstract def` with no body is given `: raise NotImplementedError` rather
 than `: ...`
 
-the bodyless form is the same empty body written a shorter way, so it is
-allowed in the same places: a stub file, a `Protocol` member, an abstract
-method, an overload, or an `if TYPE_CHECKING` block. anywhere else a `def`
-that declares a return type but no body is reported (`empty-body`) — the
-`: ...` it lowers to returns `None`:
+a `def` with no body is a declaration, so it is allowed where a declaration is
+what the position asks for: a stub file, a `Protocol` member, an abstract
+method, an overload, or an `if TYPE_CHECKING` block. anywhere else the
+implementation the signature promises was never written — the `: ...` it lowers
+to just returns `None` — and that is reported (`missing-function-body`):
 
 ```by
 def parse(s: str) -> int      # ok — the run below makes this an overload
@@ -39,8 +43,15 @@ def parse(s: bytes) -> int
 def parse(s):
     return int(s)
 
-def lookup() -> int           # error: implicitly returns `None`
+def lookup() -> int           # error: no body
 ```
+
+the return type makes no difference: `def lookup()` is reported the same way.
+a function that is meant to do nothing says so with a body of its own,
+`def ignore(event: str): ...`
+
+an empty `class` is reported nowhere: a class with no members is a whole class,
+with nothing left out
 
 ## interaction with modifiers
 

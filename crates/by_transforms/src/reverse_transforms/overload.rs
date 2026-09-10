@@ -229,9 +229,9 @@ mod tests {
 
     #[test]
     fn single_def_overload_pass_unchanged() {
-        // overload reverse leaves a lone def alone; the empty-declarations
-        // reverse pass independently strips the `: ...` body
-        check("def f(a: int) -> int: ...\n", "def f(a: int) -> int\n");
+        // overload reverse leaves a lone def alone, and outside a stub the
+        // empty-declarations reverse pass leaves its `: ...` body alone too
+        check("def f(a: int) -> int: ...\n", "def f(a: int) -> int: ...\n");
     }
 
     #[test]

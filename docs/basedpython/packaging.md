@@ -213,9 +213,11 @@ the declarations that have no python spelling survive the trip:
 
 ```by
 extension FlowContent:
-    def card(self) -> Div
+    def card(self) -> Div:
+        return Div(self)
 
-def load(path: str) -> Config raises ParseError
+def load(path: str) -> Config raises ParseError:
+    return Config.parse(read_text(path))
 ```
 
 a consumer reading only the transpiled python sees `load` returning a `Config`.

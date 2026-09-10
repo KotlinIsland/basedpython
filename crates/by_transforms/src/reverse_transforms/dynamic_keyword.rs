@@ -99,7 +99,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import Any
-                def f() -> dynamic
+                def f() -> dynamic: ...
             "},
         );
     }
@@ -137,7 +137,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import Any
-                def f(x: dynamic) -> None
+                def f(x: dynamic) -> None: ...
             "},
         );
     }

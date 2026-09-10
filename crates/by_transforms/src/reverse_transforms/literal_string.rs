@@ -122,7 +122,7 @@ mod tests {
             "},
             indoc! {"
                 from typing import LiteralString
-                def f(x: literal str) -> literal str
+                def f(x: literal str) -> literal str: ...
             "},
         );
     }

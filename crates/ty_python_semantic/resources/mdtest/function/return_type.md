@@ -126,61 +126,16 @@ def f(x: int | str):
     return x
 ```
 
-### A basedpython bodyless `def`
+### A basedpython `def` with no body
 
-basedpython lets a `def` be written with no body at all, which the lowering fills in with `: ...`.
-That is the same empty body written a shorter way, so it is permissible in the same places and
-reported everywhere else.
+basedpython lets a `def` be written with no body at all. There is no body to check a return type
+against, so this rule has nothing to say about one: where a declaration is not what the position
+asks for, the missing body is reported instead, by `missing-function-body` — see
+`basedpython_empty_declarations.md`.
 
 ```by
-def implicitly_returns_none()
-
-# error: [empty-body]
+# error: [missing-function-body]
 def f() -> int
-
-class C:
-    # error: [empty-body]
-    def m(self) -> int
-```
-
-### A bodyless `def` in an implicit overload run
-
-A run of same-name bodyless `def`s is an overload group — the lowering writes the `@overload`
-decorators the source leaves out — so its members are stubs like any other overload.
-
-```by
-def parse(s: str) -> int
-def parse(s: bytes) -> int
-def parse(s):
-    return int(s)
-```
-
-### A bodyless `def` a `Protocol` or an abstract class declares
-
-```by
-from abc import ABC, abstractmethod
-from typing import Protocol
-
-class P(Protocol):
-    def m(self) -> int
-
-protocol Q:
-    def m(self) -> int
-
-class A(ABC):
-    @abstractmethod
-    def m(self) -> int
-
-    abstract def n(self) -> int
-```
-
-### A bodyless `def` in a stub file
-
-```byi
-def f() -> int
-
-class C:
-    def m(self) -> str
 ```
 
 ### In `if TYPE_CHECKING` block

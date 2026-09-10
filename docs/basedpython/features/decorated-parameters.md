@@ -4,7 +4,7 @@ a decoration hands the function to the decorator, so the callable the decorator 
 accepts gives the decorated function's unannotated parameters their types
 
 ```by
-decorator def route(fn: (int) -> None)
+decorator def route(fn: (int) -> None): ...
 
 @route
 def home(request):

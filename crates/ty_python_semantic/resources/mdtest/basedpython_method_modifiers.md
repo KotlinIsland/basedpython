@@ -12,11 +12,11 @@ python-version = "3.12"
 ## a method modifier needs a class body
 
 ```by
-class def make()  # error: [invalid-syntax] "`class` is only a modifier on a method"
+class def make(): ...  # error: [invalid-syntax] "`class` is only a modifier on a method"
 
-static def helper()  # error: [invalid-syntax] "`static` is only a modifier on a method"
+static def helper(): ...  # error: [invalid-syntax] "`static` is only a modifier on a method"
 
-override def replace()  # error: [invalid-syntax] "`override` is only a modifier on a method"
+override def replace(): ...  # error: [invalid-syntax] "`override` is only a modifier on a method"
 ```
 
 ## a function nested in a method is not itself a method
@@ -26,7 +26,7 @@ the class owns the method, not the functions the method makes
 ```by
 class A:
     def run(self):
-        static def inner()  # error: [invalid-syntax] "`static` is only a modifier on a method"
+        static def inner(): ...  # error: [invalid-syntax] "`static` is only a modifier on a method"
 ```
 
 ## a modifier that reads on a class too is left alone

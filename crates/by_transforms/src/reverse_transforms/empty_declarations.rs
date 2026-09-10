@@ -2,7 +2,7 @@
 //! handling in `crate::transforms::overload`:
 //!
 //!   `class Foo: ...` → `class Foo`
-//!   `def f(x: int) -> int: ...` → `def f(x: int) -> int`
+//!   `def f(x: int) -> int: ...` → `def f(x: int) -> int`   (in a stub)
 //!
 //! Only fires when the body is exactly a single ellipsis expression statement,
 //! which is what the forward transforms emit. `class Foo: pass` /
@@ -10,9 +10,14 @@
 //! alone — they're not what the forward produces and rewriting them would lose
 //! author intent.
 //!
-//! Function defs are skipped if any decorator is attached, since stripping
-//! `: ...` from e.g. `@overload def f(...): ...` would leave the decorator
-//! orphaned (the overload-reverse pass handles those groups itself).
+//! A `def` only loses its body in a stub. A class with no body is a whole class
+//! wherever it is written, but a `def` with no body is a declaration, and
+//! `missing-function-body` reports one written where the position asks for an
+//! implementation. This pass cannot tell those positions apart, so outside a
+//! stub the `: ...` the author wrote stays — valid basedpython either way.
+//!
+//! An `@overload`-decorated `def` is left to the overload-reverse pass, which
+//! strips the decorator and the body together wherever the group is written.
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_body, walk_stmt};
@@ -20,11 +25,8 @@ use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 pub(crate) struct EmptyDeclarations {
-    /// when reversing a non-stub `.py`, an abstract method keeps its `: ...`
-    /// body: the forward pass maps a bodyless `abstract def` to `: raise
-    /// NotImplementedError`, so stripping the body would not round-trip. in a
-    /// stub the body is dropped — bodyless is the stub idiom and the forward
-    /// pass re-emits `: ...` there
+    /// whether a `def` may be left bodyless: only in a stub, where declaring a
+    /// signature is the point and the forward pass re-emits `: ...`
     is_stub: bool,
     pub(crate) edits: Vec<Fix>,
 }
@@ -35,14 +37,6 @@ impl EmptyDeclarations {
             is_stub,
             edits: Vec::new(),
         }
-    }
-
-    fn is_abstract(func: &StmtFunctionDef) -> bool {
-        func.decorator_list.iter().any(|d| match &d.expression {
-            Expr::Name(n) => n.id.as_str() == "abstractmethod",
-            Expr::Attribute(a) => a.attr.id.as_str() == "abstractmethod",
-            _ => false,
-        })
     }
 
     fn is_ellipsis_body(body: &[Stmt]) -> bool {
@@ -75,6 +69,9 @@ impl EmptyDeclarations {
     }
 
     fn process_function(&mut self, func: &StmtFunctionDef) {
+        if !self.is_stub {
+            return;
+        }
         // `@overload`-decorated functions belong to the overload reverse pass,
         // which strips the decorator and the `: ...` body together. other
         // decorators (`@property`, `@deprecated`, modifier-backed ones like
@@ -85,12 +82,6 @@ impl EmptyDeclarations {
             .iter()
             .any(|d| matches!(&d.expression, Expr::Name(n) if n.id.as_str() == "overload"))
         {
-            return;
-        }
-        // outside a stub, an abstract method's `: ...` body must survive: the
-        // forward pass turns a bodyless `abstract def` into `: raise
-        // NotImplementedError`, so dropping it here would not round-trip
-        if !self.is_stub && Self::is_abstract(func) {
             return;
         }
         if !Self::is_ellipsis_body(&func.body) {
@@ -157,6 +148,14 @@ mod tests {
             reverse_transpile(input, &Config::test_default()).unwrap(),
             expected
         );
+    }
+
+    fn check_stub(input: &str, expected: &str) {
+        let config = Config {
+            is_stub: true,
+            ..Config::test_default()
+        };
+        assert_eq!(reverse_transpile(input, &config).unwrap(), expected);
     }
 
     #[test]
@@ -247,24 +246,39 @@ mod tests {
     }
 
     #[test]
-    fn single_empty_function() {
-        check("def f(a: int) -> int: ...\n", "def f(a: int) -> int\n");
+    fn single_empty_function_in_stub() {
+        check_stub("def f(a: int) -> int: ...\n", "def f(a: int) -> int\n");
     }
 
     #[test]
-    fn empty_function_no_return_type() {
-        check("def f(): ...\n", "def f()\n");
+    fn empty_function_no_return_type_in_stub() {
+        check_stub("def f(): ...\n", "def f()\n");
     }
 
     #[test]
-    fn empty_function_multiline_ellipsis() {
-        check(
+    fn empty_function_multiline_ellipsis_in_stub() {
+        check_stub(
             indoc! {"
                 def f(a: int) -> int:
                     ...
             "},
             "def f(a: int) -> int\n",
         );
+    }
+
+    #[test]
+    fn empty_function_keeps_its_body_outside_a_stub() {
+        // a `def` with no body declares a signature, which is what a stub is for. outside one
+        // the position may well need an implementation, and nothing here can tell — so what
+        // the author wrote stays
+        check("def f(a: int) -> int: ...\n", "def f(a: int) -> int: ...\n");
+        check("def f(): ...\n", "def f(): ...\n");
+    }
+
+    #[test]
+    fn empty_class_loses_its_body_outside_a_stub() {
+        // a class with no members is a whole class, so this one is not held back
+        check("class Foo: ...\n", "class Foo\n");
     }
 
     #[test]
@@ -282,10 +296,10 @@ mod tests {
     }
 
     #[test]
-    fn property_decorated_function_stripped() {
+    fn property_decorated_function_stripped_in_stub() {
         // non-`@overload` decorators don't defer to the overload pass; the
         // `: ...` body is stripped and the decorator survives in front
-        check(
+        check_stub(
             indoc! {"
                 class A:
                     @property
@@ -300,10 +314,10 @@ mod tests {
     }
 
     #[test]
-    fn abstract_function_keeps_body_in_non_stub() {
-        // non-stub: `@abstractmethod` reverses to `abstract` but the `: ...`
-        // body is kept — a bodyless `abstract def` forward-maps to `: raise
-        // NotImplementedError`, so stripping would not round-trip
+    fn abstract_function_keeps_body_outside_a_stub() {
+        // `@abstractmethod` reverses to the `abstract` modifier, and the `: ...` body stays
+        // with it: a bodyless `abstract def` forward-maps to `: raise NotImplementedError`,
+        // so stripping it would not round-trip even where a declaration is allowed
         check(
             indoc! {"
                 from abc import abstractmethod
@@ -323,21 +337,13 @@ mod tests {
     fn abstract_function_stripped_in_stub() {
         // stub: bodyless is the idiom and the forward pass re-emits `: ...`
         // for an abstract method in a stub, so the body is dropped here
-        let config = Config {
-            is_stub: true,
-            ..Config::test_default()
-        };
-        assert_eq!(
-            reverse_transpile(
-                indoc! {"
-                    from abc import abstractmethod
-                    class A:
-                        @abstractmethod
-                        def f(self) -> None: ...
-                "},
-                &config,
-            )
-            .unwrap(),
+        check_stub(
+            indoc! {"
+                from abc import abstractmethod
+                class A:
+                    @abstractmethod
+                    def f(self) -> None: ...
+            "},
             indoc! {"
                 from abc import abstractmethod
                 class A:

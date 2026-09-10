@@ -146,7 +146,7 @@ class Node:
             return True
         return other is Node and other.children == self.children
 
-    def find(self, key: str) -> Optional[Node]
+    def find(self, key: str) -> Optional[Node]: ...
 
 
 on_visit: (Node) -> None
@@ -154,9 +154,10 @@ on_visit: (Node) -> None
 
 the identity fast path became `===` and the `isinstance` became
 [`is`](features/identity-swap.md), the quotes came off the self-references,
-`Callable[[Node], None]` became an [arrow type](features/callable.md), the
-`: ...` body became an [empty declaration](features/empty-declarations.md), and
-the now-unused `Callable` import was pruned
+`Callable[[Node], None]` became an [arrow type](features/callable.md), and the
+now-unused `Callable` import was pruned. the `: ...` body stayed: it is a body
+the method is entitled to, and only in a stub does dropping it leave a
+[declaration](features/empty-declarations.md) that says the same thing
 
 point it at a directory to convert a whole tree in place, every `.py` to a
 `.by`:

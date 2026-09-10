@@ -54,7 +54,7 @@ bound on a type parameter:
 
 ```by
 # `*` here means the projected top type, which differs from `*: object, **: object`
-def f[P: (*: *, **: *)](fn: (**P) -> None) -> (**P) -> int
+def f[P: (*: *, **: *)](fn: (**P) -> None) -> (**P) -> int: ...
 ```
 
 call-site arguments for any type parameter can use an enhanced tuple type,
@@ -73,7 +73,7 @@ A[(bool, a: str, b: str)]
 `Concatenate` is replaced with an unpack:
 
 ```by
-def f[P: (*: *, **: *)](fn: (**P) -> None) -> (int, **P) -> None
+def f[P: (*: *, **: *)](fn: (**P) -> None) -> (int, **P) -> None: ...
 ```
 
 ## forwarding
@@ -105,7 +105,7 @@ class Callable[Parameters: (*: *, **: *), Return]:
     returns: Return
 
 class A[Fn: (*: *, **: *) -> object]:
-    def f(self, *args: *Fn.parameters, **kwargs: **Fn.parameters) -> Fn.returns
+    def f(self, *args: *Fn.parameters, **kwargs: **Fn.parameters) -> Fn.returns: ...
 ```
 
 ## a bound can name another type parameter
