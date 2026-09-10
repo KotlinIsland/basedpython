@@ -132,6 +132,31 @@ class C(B):
         raise TypeError
 ```
 
+## a generic base bounds its overrides as the subclass specializes it
+
+A base method's clause can name the base's type parameter. What bounds an override is that clause as
+the subclass specializes the base: `FileReader(Reader[OSError])` inherits a `read` that raises
+`OSError`, and a subclass passing its own `U` inherits one that raises `U`.
+
+```by
+class Reader[T: BaseException]:
+    def read(self) raises T:
+        return
+
+class FileReader(Reader[OSError]):
+    override def read(self) raises OSError:
+        return
+
+class Forwarding[U: BaseException](Reader[U]):
+    override def read(self) raises U:
+        return
+
+class Wider(Reader[OSError]):
+    # error: [override-raise] "`read` can raise `ValueError`, which the method it overrides cannot"
+    override def read(self) raises OSError | ValueError:
+        return
+```
+
 ## a constructor is not checked
 
 `ty` exempts constructors from override compatibility, and this follows that.

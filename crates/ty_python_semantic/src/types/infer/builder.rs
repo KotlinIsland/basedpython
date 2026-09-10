@@ -110,6 +110,7 @@ use crate::types::diagnostic::{
     report_unsupported_augmented_assignment, report_unsupported_comparison,
 };
 use crate::types::enums::{enum_ignored_names, is_enum_class_by_inheritance};
+use crate::types::exceptions::CallSolution;
 use crate::types::extensions;
 use crate::types::format;
 use crate::types::function::{
@@ -402,6 +403,10 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// bidirectional type context, the contextual type.
     fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
+    /// basedpython: what each call to a generic function solved that function's own type
+    /// parameters to — see [`CallSolution`].
+    call_solutions: FxHashMap<ExpressionNodeKey, CallSolution<'db>>,
+
     /// basedpython `?.`: for each link of an optional chain, the type that link has
     /// when every `?.` receiver in the chain is present.
     ///
@@ -654,6 +659,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             type_expression_flags: FxHashMap::default(),
             collection_use_constraints: FxHashMap::default(),
             fluid_adoptions: FxHashMap::default(),
+            call_solutions: FxHashMap::default(),
             basedpython_chain_present: FxHashMap::default(),
             basedpython_statement_expression_values: Vec::new(),
             fluid_creation: None,
@@ -801,6 +807,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
 
                     self.fluid_adoptions.extend(extra.fluid_adoptions.iter());
+
+                    self.call_solutions.extend(extra.call_solutions.iter());
                 }
             }
         }
@@ -906,6 +914,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
 
             self.fluid_adoptions.extend(extra.fluid_adoptions.iter());
+
+            self.call_solutions.extend(extra.call_solutions.iter());
         }
     }
 
@@ -950,6 +960,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.fluid_adoptions
             .extend(inference.fluid_adoptions.iter());
+        self.call_solutions.extend(inference.call_solutions.iter());
 
         if !matches!(self.region, InferenceRegion::Scope(..)) {
             self.bindings.extend(
@@ -986,6 +997,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
 
             self.fluid_adoptions.extend(extra.fluid_adoptions.iter());
+
+            self.call_solutions.extend(extra.call_solutions.iter());
         }
     }
 
@@ -12726,11 +12739,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Ok(()) => bindings,
             Err(_) => {
                 bindings.report_diagnostics(&self.context, call_expression.into());
+                self.record_call_solution(call_expression, callable_type, None);
                 let return_ty = bindings.return_type(self.db(), env);
                 self.record_unsolved_typevar_call(call_expression, return_ty, &bindings);
                 return return_ty;
             }
         };
+        self.record_call_solution(call_expression, callable_type, Some(&bindings));
 
         // Explicit function references already report implementation deprecations.
         // Other calls reference an object or class, not the implicitly invoked method.
@@ -13026,6 +13041,56 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                  one, as in `{name}[int](...)`"
             )),
         }
+    }
+
+    /// basedpython: record what `call` solved its callee's own type parameters to, for the
+    /// exception analysis to specialize the callee's `raises` clause by — see
+    /// [`CallSolution`]. `bindings` is `None` for a call that did not bind.
+    fn record_call_solution(
+        &mut self,
+        call: &ast::ExprCall,
+        callable_type: Type<'db>,
+        bindings: Option<&Bindings<'db>>,
+    ) {
+        // exceptions are only followed through calls to functions and methods, and only
+        // in a `.by` body; nothing else ever reads this
+        if !self.is_basedpython_file()
+            || !matches!(
+                callable_type,
+                Type::FunctionLiteral(_) | Type::BoundMethod(_)
+            )
+        {
+            return;
+        }
+        let solution = match bindings {
+            None => CallSolution::Unbound,
+            Some(bindings) => {
+                let env = self.context.program_environment();
+                let Some(specialization) = bindings
+                    .single_element()
+                    .and_then(|callable| callable.matching_overloads().exactly_one().ok())
+                    .and_then(|(_, binding)| binding.merged_specialization(self.db(), env))
+                else {
+                    return;
+                };
+                // a solution that substitutes nothing is left out, which is also what
+                // tells a recursive call that changes nothing from one that does
+                if specialization.substitutes_nothing(self.db()) {
+                    return;
+                }
+                CallSolution::Solved(specialization)
+            }
+        };
+        self.call_solutions
+            .insert(ExpressionNodeKey::from(call), solution);
+    }
+
+    /// basedpython: what `call` solved its callee's own type parameters to, as recorded so
+    /// far in this region.
+    fn call_solution(&self, call: &ast::ExprCall) -> Option<CallSolution<'db>> {
+        self.call_solutions
+            .get(&ExpressionNodeKey::from(call))
+            .copied()
     }
 
     /// basedpython: remember a call that only returns `Never` because it left a type variable
@@ -16427,6 +16492,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             type_expression_flags,
             collection_use_constraints,
             fluid_adoptions,
+            call_solutions,
             fluid_creation,
             fluid_timeline,
             string_annotations,
@@ -16477,6 +16543,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             type_expression_flags,
             collection_use_constraints,
             fluid_adoptions,
+            call_solutions,
             fluid_creation,
             fluid_timeline,
             string_annotations,
@@ -16503,6 +16570,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation: _,
             fluid_timeline: _,
             mut fluid_adoptions,
+            mut call_solutions,
             mut collection_use_constraints,
             string_annotations,
             expected_types,
@@ -16547,14 +16615,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             || !qualifiers.is_empty()
             || !type_expression_flags.is_empty()
             || !collection_use_constraints.is_empty()
-            || !fluid_adoptions.is_empty())
+            || !fluid_adoptions.is_empty()
+            || !call_solutions.is_empty())
         .then(|| {
             collection_use_constraints.shrink_to_fit();
             fluid_adoptions.shrink_to_fit();
+            call_solutions.shrink_to_fit();
             return_types_and_ranges.shrink_to_fit();
             Box::new(StatementInferenceInnerExtra {
                 string_annotations: FrozenSet::from(string_annotations),
                 fluid_adoptions,
+                call_solutions,
                 expected_types: FrozenMap::from(expected_types),
                 called_functions: called_functions
                     .into_iter()
@@ -16646,6 +16717,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation: _,
             fluid_timeline: _,
             fluid_adoptions: _,
+            call_solutions: _,
             collection_use_constraints: _,
             dataclass_field_specifiers: _,
             slice_materialization: _,
@@ -16693,6 +16765,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation,
             fluid_timeline,
             mut fluid_adoptions,
+            mut call_solutions,
             mut collection_use_constraints,
             string_annotations,
             expected_types,
@@ -16729,6 +16802,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             + usize::from(!expected_types.is_empty())
             + usize::from(!collection_use_constraints.is_empty())
             + usize::from(!fluid_adoptions.is_empty())
+            + usize::from(!call_solutions.is_empty())
             + usize::from(fluid_creation.is_some())
             + usize::from(fluid_timeline.is_some())
             + usize::from(!called_functions.is_empty())
@@ -16782,10 +16856,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             (_, undecorated_type) => {
                 collection_use_constraints.shrink_to_fit();
                 fluid_adoptions.shrink_to_fit();
+                call_solutions.shrink_to_fit();
                 let extra = OtherDefinitionInferenceExtra {
                     string_annotations: FrozenSet::from(string_annotations),
                     expected_types: FrozenMap::from(expected_types),
                     fluid_adoptions,
+                    call_solutions,
                     collection_use_constraints,
                     fluid_creation,
                     fluid_timeline,
@@ -16850,6 +16926,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation: _,
             fluid_timeline: _,
             mut fluid_adoptions,
+            mut call_solutions,
             mut collection_use_constraints,
             expressions,
             comparison_truthiness: _,
@@ -16892,10 +16969,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             || !type_expression_flags.is_empty()
             || !collection_use_constraints.is_empty()
             || !qualifiers.is_empty()
-            || !fluid_adoptions.is_empty())
+            || !fluid_adoptions.is_empty()
+            || !call_solutions.is_empty())
         .then(|| {
             collection_use_constraints.shrink_to_fit();
             fluid_adoptions.shrink_to_fit();
+            call_solutions.shrink_to_fit();
             Box::new(ScopeInferenceExtra {
                 string_annotations: FrozenSet::from(string_annotations),
                 qualifiers: FrozenMap::from(qualifiers),
@@ -16903,6 +16982,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 type_expression_flags: FrozenMap::from(type_expression_flags),
                 collection_use_constraints,
                 fluid_adoptions,
+                call_solutions,
                 cycle_recovery,
                 diagnostics,
             })
@@ -16943,6 +17023,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation: _,
             fluid_timeline: _,
             fluid_adoptions: _,
+            call_solutions: _,
             basedpython_chain_present: _,
             basedpython_statement_expression_values: _,
             collection_use_constraints: _,
@@ -17015,6 +17096,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation: _,
             fluid_timeline: _,
             fluid_adoptions,
+            call_solutions,
             collection_use_constraints,
             string_annotations,
             unsolved_typevar_calls,
@@ -17078,6 +17160,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         self.fluid_adoptions.extend(fluid_adoptions);
+        self.call_solutions.extend(call_solutions);
 
         // adopting the speculative builder's expression types means adopting the optional-chain
         // provenance of those same expressions, or a chain this region goes on to extend would
@@ -17201,6 +17284,7 @@ struct FullExpressionCacheEntry<'db> {
     type_expression_flags: FxHashMap<ExpressionNodeKey, TypeExpressionFlags>,
     collection_use_constraints: CollectionUseConstraints<'db>,
     fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
+    call_solutions: FxHashMap<ExpressionNodeKey, CallSolution<'db>>,
     fluid_creation: Option<Type<'db>>,
     fluid_timeline: Option<FluidTimeline<'db>>,
     string_annotations: FxHashSet<ExpressionNodeKey>,
@@ -17230,6 +17314,7 @@ impl<'db> FullExpressionCacheEntry<'db> {
             && self.type_expression_flags.is_empty()
             && self.collection_use_constraints.is_empty()
             && self.fluid_adoptions.is_empty()
+            && self.call_solutions.is_empty()
             && self.fluid_creation.is_none()
             && self.fluid_timeline.is_none()
             && self.string_annotations.is_empty()
@@ -17251,6 +17336,7 @@ impl<'db> FullExpressionCacheEntry<'db> {
             || !self.type_expression_flags.is_empty()
             || !self.collection_use_constraints.is_empty()
             || !self.fluid_adoptions.is_empty()
+            || !self.call_solutions.is_empty()
             || self.fluid_creation.is_some()
             || self.fluid_timeline.is_some()
             || !self.expected_types.is_empty()
@@ -17270,11 +17356,13 @@ impl<'db> FullExpressionCacheEntry<'db> {
 
             self.collection_use_constraints.shrink_to_fit();
             self.fluid_adoptions.shrink_to_fit();
+            self.call_solutions.shrink_to_fit();
             self.diagnostics.shrink_to_fit();
             Box::new(ExpressionInferenceExtra {
                 string_annotations: FrozenSet::from(self.string_annotations),
                 unsolved_typevar_calls: FrozenSet::from(self.unsolved_typevar_calls),
                 fluid_adoptions: self.fluid_adoptions,
+                call_solutions: self.call_solutions,
                 fluid_creation: self.fluid_creation,
                 fluid_timeline: self.fluid_timeline,
                 comparison_truthiness: FrozenMap::from(self.comparison_truthiness),

@@ -11,6 +11,7 @@ use ruff_text_size::TextRange;
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::call_type_forms::CallTypeForm;
+use ty_python_semantic::types::exceptions::RaisesRuntimeTarget;
 use ty_python_semantic::types::{
     DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
@@ -113,14 +114,15 @@ pub(crate) trait TypeInfo {
     /// `invalid-match-pattern`
     fn class_pattern_positional_count(&self, cls: &Expr) -> Option<usize>;
 
-    /// basedpython: the `isinstance` target for `function`'s declared `raises`
-    /// clause (`(TypeError, ValueError)`, `()` for `raises Never`), or `None`
-    /// when the clause has no faithful runtime test — a gradual `raises ...`, or
-    /// a set with no runtime spelling
+    /// basedpython: the runtime test for `function`'s declared `raises` clause —
+    /// an `isinstance` target (`(TypeError, ValueError)`, `()` for `raises Never`)
+    /// and, for a clause naming a reified type parameter, how to build the exact
+    /// one at the call — or `None` when the clause has no faithful runtime test:
+    /// a gradual `raises ...`, or a set with no runtime spelling
     fn declared_raises_runtime_target(
         &self,
         function: &ruff_python_ast::StmtFunctionDef,
-    ) -> Option<String>;
+    ) -> Option<RaisesRuntimeTarget>;
 
     /// whether `name` resolves to a basedpython return-value marker —
     /// `ignorable_return_value` or `must_use_return_value`. both are pure
@@ -677,7 +679,7 @@ impl TypeInfo for SemanticModel<'_> {
     fn declared_raises_runtime_target(
         &self,
         function: &ruff_python_ast::StmtFunctionDef,
-    ) -> Option<String> {
+    ) -> Option<RaisesRuntimeTarget> {
         ty_python_semantic::types::exceptions::declared_raises_runtime_target(
             self.db(),
             &self.program_environment(),

@@ -168,6 +168,13 @@ impl<'ast> Visitor<'ast> for GuardCollector<'_> {
 }
 
 /// The decorator insertion guarding `function`, when its clause has a runtime test.
+///
+/// It goes directly in front of the `def` keyword, below any decorator the
+/// function is written with, so that it wraps the function itself. That position
+/// is also where a statement another lowering puts before the function lands
+/// — the `TypeVar` definitions the pep 695 polyfill writes, the guard a mutable
+/// default moves into an enclosing body — and those lead any insertion made
+/// there, so they stay above the decorator rather than between it and its `def`.
 fn guard_for(
     source: &str,
     function: &StmtFunctionDef,
@@ -178,14 +185,48 @@ fn guard_for(
         return None;
     }
 
-    let allowed = types.declared_raises_runtime_target(function)?;
-    let (offset, indent) = def_line_start(source, function)?;
+    let target = types.declared_raises_runtime_target(function)?;
+    let (offset, indent) = def_keyword(source, function)?;
     let name = function.name.as_str();
+
+    let arguments = match &target.resolved {
+        Some(resolved) => {
+            let parameters: Vec<&str> = resolved
+                .own
+                .iter()
+                .chain(&resolved.receiver)
+                .map(String::as_str)
+                .collect();
+            let lambda = if parameters.is_empty() {
+                format!("lambda: {}", resolved.expression)
+            } else {
+                format!("lambda {}: {}", parameters.join(", "), resolved.expression)
+            };
+            format!(
+                "{}, \"{name}\", {lambda}, {}, {}",
+                target.ceiling,
+                python_names(&resolved.own),
+                python_names(&resolved.receiver),
+            )
+        }
+        None => format!("{}, \"{name}\"", target.ceiling),
+    };
 
     Some((
         TextRange::empty(offset),
-        format!("{indent}@_by_raises({allowed}, \"{name}\")\n"),
+        format!("@_by_raises({arguments})\n{indent}"),
     ))
+}
+
+/// `names` as a python tuple of strings. The trailing comma is what keeps a
+/// single name a tuple.
+fn python_names(names: &[String]) -> String {
+    let names = names
+        .iter()
+        .map(|name| format!("\"{name}\", "))
+        .collect::<Vec<_>>()
+        .concat();
+    format!("({names})")
 }
 
 /// A body that is exactly `...` declares a signature and runs nothing.
@@ -198,10 +239,7 @@ fn is_stub_body(function: &StmtFunctionDef) -> bool {
 }
 
 /// The offset of the `def` keyword and the indentation of its line.
-///
-/// The statement's own range starts at the first decorator, so the guard — which
-/// must be the innermost wrapper — is placed by finding the `def` itself.
-fn def_line_start<'src>(
+fn def_keyword<'src>(
     source: &'src str,
     function: &StmtFunctionDef,
 ) -> Option<(TextSize, &'src str)> {
@@ -223,13 +261,14 @@ fn def_line_start<'src>(
         return None;
     }
 
-    Some((TextSize::try_from(line).ok()?, indent))
+    Some((TextSize::try_from(keyword).ok()?, indent))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{Config, transpile};
     use indoc::indoc;
+    use ruff_python_ast::PythonVersion;
 
     fn check(input: &str, expected: &str) {
         assert_eq!(
@@ -242,6 +281,15 @@ mod tests {
         Config {
             runtime_raises_checks: true,
             ..Config::test_default()
+        }
+    }
+
+    /// [`guarded`] for a target that keeps pep 695 type parameters, so a generic
+    /// `def` reaches the guard as written rather than through the polyfill.
+    fn guarded_generic() -> Config {
+        Config {
+            min_version: PythonVersion::PY312,
+            ..guarded()
         }
     }
 
@@ -346,6 +394,115 @@ mod tests {
         assert!(
             out.contains("    @_by_raises(ValueError, \"f\")\n    def f():"),
             "guard missing:\n{out}"
+        );
+    }
+
+    #[test]
+    fn guard_of_a_generic_clause_tests_the_parameter_bound() {
+        // which exception `T` is was chosen by the caller, and the guard runs
+        // inside the callee — but every `T` is an `OSError`, so testing that
+        // still catches a function raising outside its clause
+        let out = transpile(
+            "def f[T: OSError](error: T) raises T:\n    raise error\n",
+            &guarded_generic(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("@_by_raises(OSError, \"f\")"),
+            "guard missing:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_reified_clause_carries_a_resolver_beside_its_ceiling() {
+        // `T` reifies, so the guard is handed the names it can read at the call
+        // and a lambda building the test from them. the ceiling stays as what it
+        // falls back to when nothing answers
+        let out = transpile(
+            "def f[reified T: OSError](error: T) raises T | ValueError:\n    raise error\n",
+            &guarded_generic(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "@_by_raises((OSError, ValueError), \"f\", \
+                 lambda T: (T, ValueError), (\"T\", ), ())"
+            ),
+            "resolver missing:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_type_parameter_with_no_exception_ceiling_is_not_guarded() {
+        // `object` says nothing an `isinstance` could test, so there is no guard
+        // to write rather than one that passes everything
+        let out = transpile(
+            "def f[T](error: T) raises T:\n    raise error\n",
+            &guarded_generic(),
+        )
+        .unwrap();
+        assert!(!out.contains("_by_raises"), "unexpected guard:\n{out}");
+    }
+
+    #[test]
+    fn the_pep695_polyfill_writes_its_typevars_above_the_guard() {
+        // below 3.12 a generic `def` grows `_T = TypeVar(...)` before it. that is
+        // a statement, so it has to land above the whole decorated definition —
+        // between a decorator and its `def` is not python at all
+        let out = transpile(
+            "def f[T](value: T) raises TypeError:\n    raise TypeError\n",
+            &guarded(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("_T = TypeVar(\"_T\")\n@_by_raises(TypeError, \"f\")\ndef f("),
+            "wrong order:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_reified_class_parameter_is_read_off_the_receiver() {
+        // a direct method with a receiver reads its class's argument from the
+        // instance, so the guard names it separately from the function's own
+        let out = transpile(
+            "class R[reified T: OSError]:\n    def m(self, error: T) raises T:\n        raise error\n",
+            &guarded_generic(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("@_by_raises(OSError, \"m\", lambda T: T, (), (\"T\", ))"),
+            "receiver resolver missing:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_nested_function_does_not_read_a_class_parameter_off_its_arguments() {
+        // `inner` is not a method: its first argument is not a receiver, so the
+        // class's parameter is tested at its ceiling
+        let out = transpile(
+            "class R[reified T: OSError]:\n    def m(self):\n        def inner(error: T) raises T:\n            raise error\n        return inner\n",
+            &guarded_generic(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("@_by_raises(OSError, \"inner\")"),
+            "nested function should test the ceiling:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_mutable_default_moves_its_guard_above_a_guarded_def() {
+        // the default's guard is a statement placed before the first statement of
+        // the body, which here is a guarded `def`: it has to land above the
+        // decorator, not between the decorator and its `def`
+        let out = transpile(
+            "def outer(x: list[int] = []):\n    def inner() raises TypeError:\n        raise TypeError\n    return inner\n",
+            &guarded(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("    @_by_raises(TypeError, \"inner\")\n    def inner():"),
+            "guard should sit directly above its def:\n{out}"
         );
     }
 

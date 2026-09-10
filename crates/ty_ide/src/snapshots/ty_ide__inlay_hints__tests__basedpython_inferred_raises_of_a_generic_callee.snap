@@ -1,0 +1,10 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_raises: true, ..InlayHintSettings::none() })"
+---
+
+def rethrow[T: BaseException](error: T) raises T:
+    raise error
+
+def caller()[ raises TypeError]:
+    rethrow(TypeError())

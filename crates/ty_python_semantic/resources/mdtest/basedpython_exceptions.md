@@ -232,6 +232,202 @@ def f() raises int:
     return
 ```
 
+## a type parameter in a clause must be bounded by an exception
+
+A type parameter stands for one type the caller chooses, so `raises T` says something about
+exceptions only when every type `T` can be is an exception. That is what its declaration says: a
+parameter with no bound at all can be `int` as easily as `OSError`.
+
+```by
+# error: [invalid-raises-clause] "`T@f` is not always an exception, so it cannot appear in a `raises` clause"
+def f[T](value: T) raises T:
+    return
+```
+
+A set of constraints has to be all exceptions, since the caller can pick any one of them.
+
+```by
+# error: [invalid-raises-clause] "`T@g` is not always an exception, so it cannot appear in a `raises` clause"
+def g[T in (int, KeyError)](value: T) raises T:
+    return
+```
+
+An upper bound of `BaseException`, or of any exception below it, is enough, and so is a set of
+constraints that are all exceptions.
+
+```by
+def bounded[T: OSError](value: T) raises T:
+    return
+
+def constrained[T in (KeyError, IndexError)](value: T) raises T:
+    return
+```
+
+Only a member of the set itself has to be an exception. A type parameter inside one is a type
+argument of an exception class, and `E[int]` is as much an exception as `E[OSError]`.
+
+```by
+class E[X](Exception): ...
+
+def wrapped[X](value: X) raises E[X]:
+    return
+```
+
+## a call reads a clause's type parameter as what it solved
+
+The callee writes its exception set in terms of its own type parameters, so what escapes a
+particular call is that set with what the call solved them to. `raise_it(TypeError())` raises a
+`TypeError`, and nothing else.
+
+```by
+def raise_it[T: BaseException](error: T) raises T:
+    raise error
+
+def caller() raises TypeError:
+    raise_it(TypeError())
+
+def wrong() raises ValueError:
+    # error: [undeclared-raise] "`wrong` can raise `TypeError`, which its `raises` clause does not include"
+    raise_it(TypeError())
+```
+
+A body with no clause of its own is read the same way, since the set recovered from it is in the
+same type parameters.
+
+```by
+def undeclared[T: BaseException](error: T):
+    raise error
+
+def calls_undeclared() raises KeyError:
+    undeclared(KeyError())
+```
+
+The caller's own type parameters survive: a call that solves the callee's `T` to the caller's `U`
+raises `U`, which is exactly what the caller declared.
+
+```by
+def forwards[U: BaseException](error: U) raises U:
+    raise_it(error)
+```
+
+## a recursive call raises what it solves the parameter to
+
+A call back into the same function is read the same way. When it solves the type parameter to
+something else, it raises that something else: `f(KeyError(), False)` raises a `KeyError` whatever
+the outer call was made with.
+
+```by
+def f[T: BaseException](error: T, again: bool) raises T:
+    if again:
+        # error: [undeclared-raise] "`f` can raise `KeyError`, which its `raises` clause does not include"
+        f(KeyError(), False)
+    raise error
+```
+
+A body with no clause gets the same answer, and passes it on to its callers.
+
+```by
+def g[T: BaseException](error: T, again: bool):
+    if again:
+        g(KeyError(), False)
+    raise error
+
+def caller() raises ValueError:
+    # error: [undeclared-raise] "`caller` can raise `KeyError`, which its `raises` clause does not include"
+    g(ValueError(), True)
+```
+
+## a closure names its enclosing function's type parameter
+
+A function nested in a generic one can raise a value of the enclosing function's type parameter.
+Where the closure is called, that parameter is still in scope and still means what the enclosing
+function was called with, so it stays as it is.
+
+```by
+def outer[T: BaseException](error: T) raises T:
+    def inner():
+        raise error
+    inner()
+```
+
+## a class's type parameter in a clause is read through the receiver
+
+A method may name its class's type parameter, and the receiver is what says which exception that is.
+It is found wherever in the receiver's ancestry the method was declared, and a call through the
+class itself reads it the same way.
+
+```by
+class Reader[T: BaseException]:
+    def read(self) raises T:
+        return
+
+class FileReader(Reader[OSError]):
+    pass
+
+def read_one(reader: Reader[KeyError]) raises KeyError:
+    reader.read()
+
+def read_file(reader: FileReader) raises OSError:
+    reader.read()
+
+def read_unbound(reader: Reader[KeyError]) raises KeyError:
+    Reader[KeyError].read(reader)
+```
+
+A classmethod has no instance at all, and the class it is called through says which exception it is.
+
+```by
+class Source[T: BaseException]:
+    @classmethod
+    def open(cls) raises T:
+        return
+
+def open_one() raises KeyError:
+    Source[KeyError].open()
+```
+
+## an explicit specialization is read like a solved call
+
+Specializing a function explicitly names its type parameter where a call would otherwise solve it,
+and the call raises what was named.
+
+```by
+def raise_os[T: OSError](error: T) raises T:
+    raise error
+
+def explicit() raises FileNotFoundError:
+    raise_os[FileNotFoundError](FileNotFoundError())
+
+def wrong() raises PermissionError:
+    # error: [undeclared-raise] "`wrong` can raise `FileNotFoundError`, which its `raises` clause does not include"
+    raise_os[FileNotFoundError](FileNotFoundError())
+```
+
+The specialization belongs to the function's type, so it is still there when that is held in a
+variable, and a caller can specialize with its own type parameter.
+
+```by
+def aliased() raises FileNotFoundError:
+    raise_found = raise_os[FileNotFoundError]
+    raise_found(FileNotFoundError())
+
+def forwards[U: OSError](error: U) raises U:
+    raise_os[U](error)
+```
+
+## a call that does not bind raises nothing known
+
+A call that does not type-check solves nothing, so its callee's type parameter says nothing about
+what it raises. The call is already reported, and the exception analysis adds nothing to it.
+
+```by
+def raise_it[T: BaseException](error: T) raises T:
+    raise error
+
+def caller() raises Never:
+    raise_it(1)  # error: [invalid-argument-type]
+```
+
 ## `assert` raises `AssertionError`
 
 ```by

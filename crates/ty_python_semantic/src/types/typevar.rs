@@ -1727,6 +1727,19 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.identity(db) == other.identity(db)
     }
 
+    /// basedpython: returns whether two bound typevars are occurrences of the same parameter —
+    /// the same declaration in the same binding context — whatever freshness each carries.
+    ///
+    /// A call into a generic function binds a fresh occurrence of its type parameters, so what
+    /// the call solves is keyed on that occurrence rather than on the source-level one the
+    /// function's own types are written in.
+    pub(crate) fn is_occurrence_of_same_parameter(self, db: &'db dyn Db, other: Self) -> bool {
+        let (this, other) = (self.identity(db), other.identity(db));
+        this.identity == other.identity
+            && this.binding_context == other.binding_context
+            && this.paramspec_attr == other.paramspec_attr
+    }
+
     /// Create a new PEP 695 type variable that can be used in signatures
     /// of synthetic generic functions.
     pub(crate) fn synthetic(

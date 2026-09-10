@@ -1822,10 +1822,17 @@ declare_lint! {
     /// Only a `BaseException` subclass can be raised, so a clause with no
     /// exception in it can never be satisfied by anything the function does.
     ///
+    /// A type parameter in a clause stands for one type the caller chooses, so
+    /// it has to be declared an exception as well — a parameter with no bound
+    /// can be `int` as easily as `OSError`.
+    ///
     /// ## Example
     ///
     /// ```by
     /// def f() raises int:  # error: `int` is not an exception
+    ///     ...
+    ///
+    /// def g[T](value: T) raises T:  # error: `T@g` is not always an exception
     ///     ...
     /// ```
     pub(crate) static INVALID_RAISES_CLAUSE = {

@@ -93,53 +93,149 @@ def _force_unwrap(_v):
 # --- effects, entry points and loop capture --------------------------------
 
 
-def _by_raises(_allowed, _name):
+# a clause naming a reified type parameter is passed as `_resolve`, a lambda
+# building the test from the parameters' runtime values, beside the constant
+# ceiling. `_own` names the guarded function's own parameters, read off the
+# specialization its `generic` was called through; `_receiver` names its class's,
+# read off the instance the method was called on — the one the specialization
+# was bound to, or else the first argument. a parameter of an enclosing reified
+# function is neither: the lambda closes over it where the guard is evaluated.
+# whenever a value cannot be read, the guard tests the ceiling
+def _by_raises(_allowed, _name, _resolve=None, _own=(), _receiver=()):
     import functools
     import inspect
 
-    def _check(_exc):
-        if not isinstance(_exc, _allowed):
+    def _target(_generic, _args):
+        if _resolve is None:
+            return _allowed
+        try:
+            _values = []
+            if _own:
+                _bound = _bind_type_params(
+                    _generic.fn.__type_params__,
+                    _generic.args or (),
+                    _generic.fields or {},
+                    _generic.fn.__name__,
+                )
+                _values.extend(_bound[_param] for _param in _own)
+            if _receiver:
+                _instance = None if _generic is None else _generic.instance
+                _owner = _args[0] if _instance is None else _instance
+                _values.extend(_type_argument(_owner, _param) for _param in _receiver)
+            return _resolve(*_values)
+        except Exception:
+            # a parameter nothing answered for: what the declaration says without
+            # it is the ceiling
+            return _allowed
+
+    def _check(_exc, _generic, _args):
+        if not _by_isinstance(_exc, _target(_generic, _args), _allowed):
             raise AssertionError(
                 f"{_name} raised {type(_exc).__name__}, which its `raises` clause does not include"
             ) from _exc
 
-    def _decorate(_fn):
-        if inspect.isasyncgenfunction(_fn):
-            @functools.wraps(_fn)
+    def _wrap(_shape, _call, _generic):
+        if inspect.isasyncgenfunction(_shape):
+            @functools.wraps(_shape)
             async def _wrapper(*_args, **_kwargs):
                 try:
-                    async for _item in _fn(*_args, **_kwargs):
+                    async for _item in _call(*_args, **_kwargs):
                         yield _item
                 except BaseException as _exc:
-                    _check(_exc)
+                    _check(_exc, _generic, _args)
                     raise
-        elif inspect.iscoroutinefunction(_fn):
-            @functools.wraps(_fn)
+        elif inspect.iscoroutinefunction(_shape):
+            @functools.wraps(_shape)
             async def _wrapper(*_args, **_kwargs):
                 try:
-                    return await _fn(*_args, **_kwargs)
+                    return await _call(*_args, **_kwargs)
                 except BaseException as _exc:
-                    _check(_exc)
+                    _check(_exc, _generic, _args)
                     raise
-        elif inspect.isgeneratorfunction(_fn):
-            @functools.wraps(_fn)
+        elif inspect.isgeneratorfunction(_shape):
+            @functools.wraps(_shape)
             def _wrapper(*_args, **_kwargs):
                 try:
-                    yield from _fn(*_args, **_kwargs)
+                    yield from _call(*_args, **_kwargs)
                 except BaseException as _exc:
-                    _check(_exc)
+                    _check(_exc, _generic, _args)
                     raise
         else:
-            @functools.wraps(_fn)
+            @functools.wraps(_shape)
             def _wrapper(*_args, **_kwargs):
                 try:
-                    return _fn(*_args, **_kwargs)
+                    return _call(*_args, **_kwargs)
                 except BaseException as _exc:
-                    _check(_exc)
+                    _check(_exc, _generic, _args)
                     raise
         return _wrapper
 
+    def _decorate(_fn):
+        # a reified generic is specialized after it is decorated (`f[int](…)`),
+        # so the guard has to keep answering the subscript, and it reads the
+        # type arguments off the specialization that subscript produces
+        if getattr(_fn, "__by_generic__", False):
+            return _by_guarded_generic(_fn, _wrap)
+        return _wrap(_fn, _fn, None)
+
     return _decorate
+
+
+def _by_isinstance(_value, _target, _fallback):
+    # a type argument is whatever the caller wrote, and `isinstance` refuses a
+    # subscripted generic. the shallow test is its origin, the way `list[str]`
+    # is tested as `list`, and past that the ceiling
+    try:
+        return isinstance(_value, _target)
+    except TypeError:
+        pass
+    try:
+        return isinstance(_value, _by_runtime_classes(_target))
+    except TypeError:
+        return isinstance(_value, _fallback)
+
+
+def _by_runtime_classes(_target):
+    import typing
+
+    if isinstance(_target, tuple):
+        return tuple(_by_runtime_classes(_member) for _member in _target)
+    return typing.get_origin(_target) or _target
+
+
+class _by_guarded_generic:
+    # a guarded reified generic: still subscriptable, still a descriptor, and
+    # documented by the function it wraps
+    __doc__ = property(lambda self: self._by_inner.__doc__)
+
+    def __init__(self, _inner, _wrap):
+        self._by_inner = _inner
+        self._by_wrap = _wrap
+        self._by_call = None
+
+    def __repr__(self):
+        return repr(self._by_inner)
+
+    def __getattr__(self, _name):
+        if _name in ("_by_inner", "_by_wrap", "_by_call"):
+            raise AttributeError(_name)
+        return getattr(self._by_inner, _name)
+
+    def __get__(self, _obj, _objtype=None):
+        return _by_guarded_generic(self._by_inner.__get__(_obj, _objtype), self._by_wrap)
+
+    def __getitem__(self, *_items, **_fields):
+        return _by_guarded_generic(
+            self._by_inner.__getitem__(*_items, **_fields), self._by_wrap
+        )
+
+    def __call__(self, *_args, **_kwargs):
+        # the wrapper's shape comes from the function this specialization holds,
+        # so it is built once for it rather than once per call
+        if self._by_call is None:
+            _inner = self._by_inner
+            self._by_call = self._by_wrap(_inner.fn, _inner, _inner)
+        return self._by_call(*_args, **_kwargs)
 
 
 def _by_main_args(_fn, _params, _extra=None):
@@ -398,6 +494,12 @@ class _by_static_property:
 # `self` like an ordinary method. attribute access falls through to the
 # wrapped function, keeping introspection (`f.__name__`, `f.__doc__`) working
 class generic:
+    # what tells another lowering's wrapper that this is a reified generic and
+    # not the plain function it forwards to — the `raises` guard has to keep the
+    # specialization subscript working
+    __by_generic__ = True
+    __doc__ = property(lambda self: self.fn.__doc__)
+
     def __init__(self, fn, args=None, instance=None, fields=None):
         self.fn = fn
         self.args = args

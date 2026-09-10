@@ -85,6 +85,43 @@ def f() raises not TypeError:
 the practical way to rule an exception out is to declare what the function does
 raise, or `raises Never`
 
+### type parameters
+
+a clause may name a type parameter, and a call reads it as whatever it solved
+that parameter to:
+
+```by
+def rethrow[T: BaseException](error: T) raises T:
+    raise error
+
+def f() raises KeyError:
+    rethrow(KeyError())  # raises KeyError, not BaseException
+```
+
+an explicit specialization is read the same way, and so is a call back into the
+same function that solves the parameter to something else:
+
+```by
+def g() raises FileNotFoundError:
+    rethrow[FileNotFoundError](FileNotFoundError())
+```
+
+a method may name its class's type parameter, and the receiver says which
+exception that is — `Reader[KeyError].read` as much as `reader.read()`. a
+function nested in a generic one can name the enclosing function's parameter,
+which keeps meaning what the enclosing call was made with
+
+the parameter has to be declared an exception, since it stands for one type the
+caller chooses:
+
+```by
+def bad[T](error: T) raises T:  # error: `T@bad` is not always an exception
+    ...
+```
+
+a parameter left unsolved that names nothing where the call is written stands for
+everything it was declared to allow — its bound, or its set of constraints
+
 ## what is inferred
 
 the analysis reports what it can see in the body:
@@ -227,6 +264,48 @@ generator are each entered before the check rather than after
 only a clause with a faithful runtime test is guarded: a gradual `raises ...`
 and any set with no runtime spelling are left alone, and `raises Never` becomes
 the empty tuple, which nothing is an instance of
+
+a type parameter has no runtime spelling of its own — which exception it is was
+chosen by the caller, and the guard runs inside the callee — so the guard tests
+the parameter's **ceiling**, the bound or set of constraints it was declared
+with. that never rejects an exception the clause allows, and still catches one
+it does not:
+
+```by
+def rethrow[T: OSError](error: T) raises T:
+    raise error
+```
+
+lowers to
+
+```py
+@_by_raises(OSError, "rethrow")
+def rethrow[T: OSError](error: T):
+    raise error
+```
+
+a [reified](reified-generics.md) parameter does carry the type the caller chose,
+and where the guard can read it, it tests exactly that:
+
+```by
+def rethrow[reified T: OSError](error: dynamic) raises T:
+    raise error
+
+rethrow[FileNotFoundError](PermissionError())  # AssertionError: not a FileNotFoundError
+```
+
+- a function's own parameter comes from the specialization it is called through
+- a class's parameter comes from the instance a method is called on. a function
+    nested in a method has no receiver, so there it stays on the ceiling
+- an enclosing function's parameter is already bound where the nested
+    function's guard is evaluated
+- a subscripted argument, which `isinstance` refuses, is tested by its origin,
+    the way `list[str]` is tested as `list`
+
+the guard never asks for an argument a parameter does not already carry: making
+one reified changes how the program is built, and turning a check on must not do
+that. an unreified parameter stays on its ceiling, where a `PermissionError`
+passes
 
 a decorated function whose statement another lowering re-renders cannot carry
 the guard — the insertion sits inside the range being rebuilt — and that is a

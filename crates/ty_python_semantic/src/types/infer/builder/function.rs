@@ -298,6 +298,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.scope(),
             self.index.expect_single_definition(function),
             |expr| self.try_expression_type(expr).unwrap_or_else(Type::unknown),
+            |call| self.call_solution(call),
         );
 
         // basedpython: a trailing-lambda block in a loop that captures a loop
