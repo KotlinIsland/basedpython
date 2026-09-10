@@ -41,6 +41,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let env = self.program_environment();
         let db = self.db();
 
+        // basedpython: a visibility keyword draws the same boundary around a
+        // write as around a read
+        if emit_diagnostics {
+            self.validate_member_visibility(target, object_ty);
+        }
+
         // basedpython use-site variance: writes to an attribute typed with a
         // covariantly-projected (`out`) typevar are statically rejected. The
         // attribute's declared type on the unspecialized class is inspected

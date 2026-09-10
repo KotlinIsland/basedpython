@@ -9,6 +9,7 @@ use ruff_db::{
     files::FileRange,
     parsed::{ParsedModuleRef, parsed_module},
 };
+use ruff_python_ast::helpers::{MemberVisibility, is_let_marker_id};
 use ruff_python_ast::{self as ast, PythonVersion, name::Name};
 use ruff_python_stdlib::identifiers::is_mangled_private;
 use rustc_hash::FxHashSet;
@@ -29,8 +30,9 @@ use crate::{
             INVALID_EXPLICIT_OVERRIDE, INVALID_METHOD_OVERRIDE, INVALID_NAMED_TUPLE,
             INVALID_NAMED_TUPLE_OVERRIDE, MISSING_OVERRIDE_DECORATOR, OVERRIDE_OF_FINAL_METHOD,
             OVERRIDE_OF_FINAL_VARIABLE, report_incompatible_base_method,
-            report_invalid_method_override, report_invalid_reified_override,
-            report_overridden_final_method, report_overridden_final_variable,
+            report_invalid_method_override, report_invalid_override_visibility,
+            report_invalid_reified_override, report_overridden_final_method,
+            report_overridden_final_variable,
         },
         enums::{EnumMetadata, enum_metadata, is_enum_class_by_inheritance},
         function::{FunctionDecorators, FunctionType, KnownFunction, OverloadLiteral},
@@ -451,6 +453,25 @@ fn check_class_declaration<'db>(
     let instance_of_class = Type::instance(db, env, class);
 
     let subclass_instance_member = instance_of_class.member(db, env, &member.name);
+
+    let Some((literal, _)) = class.static_class_literal(db) else {
+        return;
+    };
+    let class_kind = CodeGeneratorKind::from_class(db, literal.into());
+
+    // basedpython: a visibility keyword where the member's name is part of how
+    // the class works at runtime, or where it cannot hide the name. asked before
+    // the instance lookup below, which a typed dict's key does not answer
+    check_member_visibility(
+        context,
+        class,
+        class_kind,
+        enum_info,
+        member,
+        *first_reachable_definition,
+        subclass_instance_member.qualifiers,
+    );
+
     let Place::Defined(DefinedPlace {
         ty: type_on_subclass_instance,
         ..
@@ -458,11 +479,6 @@ fn check_class_declaration<'db>(
     else {
         return;
     };
-
-    let Some((literal, _)) = class.static_class_literal(db) else {
-        return;
-    };
-    let class_kind = CodeGeneratorKind::from_class(db, literal.into());
 
     // Check for prohibited `NamedTuple` attribute overrides.
     //
@@ -626,7 +642,38 @@ fn check_class_declaration<'db>(
     let mut missing_override_target: Option<MissingOverrideTarget<'db>> = None;
     let mut overridden_final_method = None;
     let mut overridden_final_variable: Option<(ClassType<'db>, Option<Definition<'db>>)> = None;
-    let is_private_member = is_mangled_private(member.name.as_str());
+    // basedpython: a `private` member is emitted under a name python mangles per
+    // class, so it is a member of its own rather than an override of anything. a
+    // `protected` one keeps one name across the hierarchy, so it overrides like
+    // any other member
+    let is_private_member = is_private_to(db, class, &member.name);
+
+    // basedpython: a member emitted under a different name from the member it
+    // inherits under the same written name does not override it — it sits
+    // beside it, and the inherited one still answers. that is a keyword declaring
+    // it narrower than what it inherits, and a plain declaration over an
+    // inherited `protected` one. reported before the walk, because a private
+    // member's walk does not happen
+    let changed_visibility = inherited_member_visibility(db, env, class, &member.name).and_then(
+        |(superclass, inherited)| {
+            let declared = own_member_visibility(db, class, &member.name);
+            (inherited != MemberVisibility::Private
+                && emitted_name(&member.name, declared) != emitted_name(&member.name, inherited))
+            .then_some((superclass, declared, inherited))
+        },
+    );
+    if let Some((superclass, declared, inherited)) = changed_visibility {
+        report_invalid_override_visibility(
+            context,
+            &member.name,
+            *first_reachable_definition,
+            class,
+            superclass,
+            declared,
+            inherited,
+        );
+    }
+
     let mut subclass_variable_kind: Option<Option<VariableKind>> = None;
 
     // Track the first superclass that defines this method (the "immediate parent" for this method).
@@ -653,6 +700,14 @@ fn check_class_declaration<'db>(
                 }
                 ClassBase::Class(class) => class,
             };
+
+            // basedpython: a `private` member of a superclass is emitted under a
+            // name mangled with that superclass's own, so nothing a subclass
+            // declares can override it. it is not a contract for this member to
+            // meet, and the subclass's member is not missing an `@override`
+            if is_private_to(db, superclass, &member.name) {
+                continue;
+            }
 
             let Some((superclass_literal, superclass_specialization)) =
                 superclass.static_class_literal(db)
@@ -1006,12 +1061,15 @@ fn check_class_declaration<'db>(
 
     if !subclass_overrides_superclass_declaration
         && !has_dynamic_superclass
+        && changed_visibility.is_none()
         && (
             // accessing `.kind()` here is fine as `definition`
             // will always be a definition in the file currently being checked
             first_reachable_definition.kind(db).is_function_def()
         )
     {
+        // a member whose visibility was already reported as narrowed is not also
+        // told that it overrides nothing: it is the narrowing that stopped it
         check_explicit_overrides(context, member, class_scope, class);
     }
 
@@ -1314,9 +1372,9 @@ fn is_let_declaration<'db>(db: &'db dyn Db, scope: ScopeId<'db>, symbol: ScopedS
 /// `__let__[T]`), which the forward transform emits for a `let` declaration.
 fn is_let_marker(annotation: &ast::Expr) -> bool {
     match annotation {
-        ast::Expr::Name(name) => name.id.as_str() == "__let__",
+        ast::Expr::Name(name) => is_let_marker_id(name.id.as_str()),
         ast::Expr::Subscript(subscript) => {
-            matches!(subscript.value.as_ref(), ast::Expr::Name(name) if name.id.as_str() == "__let__")
+            matches!(subscript.value.as_ref(), ast::Expr::Name(name) if is_let_marker_id(name.id.as_str()))
         }
         _ => false,
     }
@@ -1451,6 +1509,179 @@ pub(super) enum MethodKind<'db> {
     Synthesized(CodeGeneratorKind<'db>),
     #[default]
     NotSynthesized,
+}
+
+/// basedpython: the declaration `class` makes of `name` in its own body, if it
+/// makes one — its qualifiers and the type it declares.
+fn own_member<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassType<'db>,
+    name: &str,
+) -> Option<(TypeQualifiers, Type<'db>)> {
+    let mut member = class.own_instance_member(db, env, name);
+    if member.is_undefined() {
+        member = class.own_class_member(db, env, None, name);
+    }
+    Some((member.qualifiers(), member.ignore_possibly_undefined()?))
+}
+
+/// basedpython: the visibility keyword `class`'s own body declares `name` with,
+/// `Public` when it writes none or does not declare the member at all
+fn own_member_visibility(db: &dyn Db, class: ClassType<'_>, name: &str) -> MemberVisibility {
+    class
+        .class_literal(db)
+        .as_static()
+        .and_then(|literal| literal.member_visibilities(db).get(name).copied())
+        .unwrap_or_default()
+}
+
+/// basedpython: whether `class`'s member `name` is private to it — declared
+/// `private`, or spelled with the leading double underscore python mangles
+fn is_private_to(db: &dyn Db, class: ClassType<'_>, name: &str) -> bool {
+    own_member_visibility(db, class, name) == MemberVisibility::Private || is_mangled_private(name)
+}
+
+/// basedpython: the name a member written `name` and declared with `visibility`
+/// is emitted under
+fn emitted_name(name: &str, visibility: MemberVisibility) -> String {
+    ruff_python_stdlib::basedpython::visibility_rename(name, visibility.name_prefix())
+        .unwrap_or_else(|| name.to_owned())
+}
+
+/// basedpython: the nearest superclass of `class` that declares `name`, and the
+/// visibility keyword it declares it with
+fn inherited_member_visibility<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassType<'db>,
+    name: &str,
+) -> Option<(ClassType<'db>, MemberVisibility)> {
+    class
+        .iter_mro(db)
+        .skip(1)
+        .filter_map(ClassBase::into_class)
+        .find(|superclass| own_member(db, env, *superclass, name).is_some())
+        .map(|superclass| (superclass, own_member_visibility(db, superclass, name)))
+}
+
+/// basedpython: reports a visibility keyword written on a member whose name the
+/// class relies on at runtime — a field, an enum member — on an abstract method,
+/// which a subclass could then never override, and on a name the keyword cannot
+/// act on
+fn check_member_visibility<'db>(
+    context: &InferContext<'db, '_>,
+    class: ClassType<'db>,
+    class_kind: Option<CodeGeneratorKind<'db>>,
+    enum_info: Option<&EnumMetadata<'db>>,
+    member: &Member<'db>,
+    definition: Definition<'db>,
+    qualifiers: TypeQualifiers,
+) {
+    let db = context.db();
+    let name = member.name.as_str();
+    let visibility = own_member_visibility(db, class, name);
+    if visibility == MemberVisibility::Public {
+        return;
+    }
+    let renamed =
+        ruff_python_stdlib::basedpython::visibility_rename(name, visibility.name_prefix());
+    let focus = definition.focus_range(db, context.module());
+    let class_name = class.name(db);
+
+    // a keyword that cannot act on the name. a dunder is reported where the
+    // `def` is inferred
+    let ineffective = if visibility == MemberVisibility::Protected
+        && name.starts_with("__")
+        && !name.ends_with("__")
+    {
+        Some(format!(
+            "`protected` has no effect on `{name}`: python name-mangles it, which makes it private"
+        ))
+    } else if visibility == MemberVisibility::Private
+        && renamed.is_some()
+        && class_name.trim_start_matches('_').is_empty()
+    {
+        Some(format!(
+            "`private` cannot hide `{name}` in `{class_name}`: python does not mangle names in a \
+             class named only with underscores"
+        ))
+    } else {
+        None
+    };
+    if let Some(message) = ineffective {
+        if let Some(builder) =
+            context.report_lint(&crate::types::diagnostic::INEFFECTIVE_PRIVATE, focus)
+        {
+            builder.into_diagnostic(message);
+        }
+        return;
+    }
+    if renamed.is_none() {
+        return;
+    }
+
+    // a field is an annotated class-body attribute the lowering keeps annotated:
+    // an untyped `private x = v` is emitted without one, which no field-collecting
+    // construct reads
+    let is_field = !qualifiers.contains(TypeQualifiers::CLASS_VAR)
+        && match definition.kind(db) {
+            DefinitionKind::AnnotatedAssignment(assignment) => {
+                ruff_python_ast::helpers::DeclarationMarker::of(
+                    assignment.annotation(context.module()),
+                )
+                .is_none_or(|(marker, _)| {
+                    !matches!(
+                        marker.kind,
+                        ruff_python_ast::helpers::DeclarationMarkerKind::Assign
+                            | ruff_python_ast::helpers::DeclarationMarkerKind::ClassVar
+                            | ruff_python_ast::helpers::DeclarationMarkerKind::ClassVarAnnot
+                    )
+                })
+            }
+            _ => false,
+        };
+    let reason = if enum_info.is_some_and(|info| info.members.contains_key(&member.name)) {
+        Some("an enum member's name is how the enum looks it up")
+    } else if is_field {
+        match class_kind {
+            Some(CodeGeneratorKind::NamedTuple) => {
+                Some("a named tuple's field cannot start with an underscore")
+            }
+            Some(CodeGeneratorKind::TypedDict) => {
+                Some("a typed dict's key is the name it is written with")
+            }
+            Some(_) => Some("a field's name is its constructor's keyword"),
+            None => None,
+        }
+    } else if visibility == MemberVisibility::Private
+        && match member.ty {
+            Type::FunctionLiteral(function) => {
+                function.has_known_decorator(db, FunctionDecorators::ABSTRACT_METHOD)
+            }
+            _ => false,
+        }
+    {
+        Some("a `private` member is renamed per class, so no subclass could ever override it")
+    } else {
+        None
+    };
+    let Some(reason) = reason else {
+        return;
+    };
+    let Some(builder) = context.report_lint(&crate::types::diagnostic::INVALID_VISIBILITY, focus)
+    else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "`{name}` cannot be `{keyword}` here",
+        keyword = visibility.keyword(),
+    ));
+    diagnostic.info(format_args!(
+        "{reason}, and `{keyword}` renames it to `{renamed}`",
+        keyword = visibility.keyword(),
+        renamed = renamed.unwrap_or_default(),
+    ));
 }
 
 pub(crate) fn is_constructor_like_method(name: &str) -> bool {

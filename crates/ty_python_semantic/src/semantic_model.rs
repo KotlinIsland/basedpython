@@ -100,15 +100,60 @@ impl<'db> SemanticModel<'db> {
     /// altogether — so the mangled name is written out in full instead, which
     /// reads the same from everywhere.
     ///
-    /// `None` when the attribute is not a private method.
-    pub fn private_method_name(&self, attribute: &ast::ExprAttribute) -> Option<String> {
-        crate::types::visibility::private_method_name(
+    /// `None` when the attribute is not a member a visibility keyword renamed.
+    pub fn restricted_member_name(&self, attribute: &ast::ExprAttribute) -> Option<String> {
+        crate::types::visibility::restricted_member_name(
             self.db,
             &self.program_environment(),
             attribute.value.inferred_type(self)?,
-            attribute.inferred_type(self)?,
             attribute.attr.as_str(),
         )
+    }
+
+    /// basedpython: see `crate::types::visibility::class_member_spellings`
+    pub fn class_member_spellings(
+        &self,
+        class: &ast::StmtClassDef,
+        name: &str,
+    ) -> Option<(String, String)> {
+        crate::types::visibility::class_member_spellings(self.db, self.file, class, name)
+    }
+
+    /// basedpython: the name a class pattern's keyword (`case A(x=...)`) is emitted
+    /// under — the attribute it reads, spelled so it is reached from anywhere
+    pub fn class_pattern_keyword_name(
+        &self,
+        pattern: &ast::PatternMatchClass,
+        keyword: &str,
+    ) -> Option<String> {
+        crate::types::visibility::restricted_member_name(
+            self.db,
+            &self.program_environment(),
+            pattern.cls.inferred_type(self)?,
+            keyword,
+        )
+    }
+
+    /// basedpython: see `crate::types::visibility::class_body_member_name`
+    pub fn class_body_member_name(&self, name: &ast::ExprName) -> Option<String> {
+        crate::types::visibility::class_body_member_name(self.db, self.file, name)
+    }
+
+    /// basedpython: see `crate::types::visibility::resolves_to_module_scope`
+    pub fn resolves_to_module_scope(&self, reference: &ast::ExprName) -> Option<bool> {
+        crate::types::visibility::resolves_to_module_scope(self.db, self.file, reference)
+    }
+
+    /// basedpython: the module-level names this file declares `private` — the
+    /// set `private-import` reads, and whose references the lowering renames
+    pub fn private_module_symbols(&self) -> Vec<ruff_python_ast::name::Name> {
+        let mut names: Vec<ruff_python_ast::name::Name> =
+            crate::types::visibility::private_symbols(self.db, self.file.file(self.db))
+                .iter()
+                .cloned()
+                .collect();
+        names.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+        names
     }
 
     /// basedpython: how many entries `cls`'s `__match_args__` has, which is what

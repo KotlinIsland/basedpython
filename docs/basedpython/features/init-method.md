@@ -103,9 +103,10 @@ def _(box: Box[int]):
 
 `var` is the mutable counterpart of `let`; on an `init` parameter it
 self-assigns identically, but the attribute stays writable — and a class that
-stores one is invariant in its type. a visibility modifier — `private` or `public` — may
-precede `let` / `var`. `private` name-mangles the synthesised attribute to
-`self.__name`, while the parameter itself keeps its declared name:
+stores one is invariant in its type. a visibility modifier — `private`,
+`protected` or `public` — may precede `let` / `var`. it decides who may reach the
+attribute, exactly as it does on a class-body declaration, and the parameter
+itself keeps the name it was declared with:
 
 ```by
 class A:
@@ -119,6 +120,10 @@ class A:
     def __init__(self, a: int):
         self.__a: int = a
 ```
+
+the class's own body reaches the attribute by the name the parameter wrote —
+`self.a` — and the lowering spells out the mangled one. see
+[modifiers](modifiers.md#private-and-protected)
 
 a visibility modifier without `let` / `var` has no attribute to name, and any
 other modifier keyword (`final`, `abstract`, …) is meaningless in this
@@ -179,6 +184,22 @@ unlike an ordinary `private` method, the emitted `__init__` is not renamed:
 python calls a constructor by its exact name, so there is no spelling that would
 hide it and leave the class constructible. a private constructor is a static
 guarantee rather than a runtime one
+
+`protected init` draws the boundary one step wider: the declaring class and the
+classes that inherit it may construct it, and nothing else. that is what a base
+class writes when only its subclasses should build one
+
+```by
+class Shape:
+    protected init(let sides: int)
+
+class Square(Shape):
+    @classmethod
+    def make(cls) -> Square:
+        return Square(4)
+
+Shape(3)  # rejected
+```
 
 ## implicit `self`
 

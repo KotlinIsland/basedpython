@@ -282,7 +282,9 @@ class Optional:
             "var b: dict[str, str]? = None\n",
             "b: dict[str, str] | None = None\n",
         );
-        check("private var c: int? = None\n", "c: int | None = None\n");
+        // a module-level `private` variable is renamed; the optional lowering
+        // keeps the name the declaration is emitted under
+        check("private var c: int? = None\n", "_c: int | None = None\n");
     }
 
     #[test]

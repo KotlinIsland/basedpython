@@ -24,16 +24,30 @@
 //! `private`               → modifier deleted; symbol renamed with `_` prefix and excluded from `__all__`
 //! `private type X = V`    → `type _X = V` (the modifier is a node flag, not a synthetic decorator)
 
-use std::collections::HashMap;
-
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::is_immutable_scalar_default;
-use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, StmtTypeAlias};
-use ruff_python_stdlib::basedpython::private_mangles;
+use ruff_python_ast::helpers::{
+    DeclarationMarker, DeclarationMarkerKind, MemberVisibility, declaration_marker_visibility,
+    is_classvar_annot_marker_id, is_classvar_marker_id, is_final_marker_id, is_let_marker_id,
+};
+use ruff_python_ast::visitor::{Visitor, walk_stmt};
+use ruff_python_ast::{
+    self as ast, Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, StmtTypeAlias,
+};
+use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+
+/// basedpython: the visibility a modifier keyword records, read off the
+/// synthetic decorator the parser leaves in its place
+fn visibility_of(modifier: &str) -> MemberVisibility {
+    match modifier {
+        "private" => MemberVisibility::Private,
+        "protected" => MemberVisibility::Protected,
+        _ => MemberVisibility::Public,
+    }
+}
 
 /// whether a dataclass field's default is already a field specifier —
 /// `field(...)` / `dataclasses.field(...)` — which carries its own factory
@@ -111,6 +125,9 @@ pub(crate) struct Modifiers<'src> {
     /// a sealed subclass (the runtime tuple assignment lives at module scope
     /// and cannot reference a function-local name).
     func_depth: u32,
+    /// whether the innermost enclosing scope is a class body — where a
+    /// visibility keyword names a member — rather than a function body
+    class_body: bool,
 }
 
 impl<'src> Modifiers<'src> {
@@ -133,6 +150,7 @@ impl<'src> Modifiers<'src> {
             class_bases: Vec::new(),
             class_depth: 0,
             func_depth: 0,
+            class_body: false,
         }
     }
 
@@ -297,17 +315,18 @@ impl<'src> Modifiers<'src> {
                         self.exports.push(class.name.as_str().to_owned());
                     }
                 }
-                "private" => {
+                "private" | "protected" => {
                     self.edits
                         .push(Fix::safe_edit(Edit::range_deletion(dec.range())));
-                    if self.class_depth == 0 {
+                    if self.at_module_level() {
                         self.private_renames.push(class.name.as_str().to_owned());
                         self.rename_with_underscore(class.name.range());
-                    } else {
-                        // `private` on a nested class member uses Python
-                        // name-mangling (`__name`) so it's hidden from
-                        // subclass scope
-                        self.rename_with_dunder(class.name.range());
+                    } else if self.class_body {
+                        // a nested class is a member like any other: its
+                        // visibility is spelled in its name, which for `private`
+                        // is the `__name` python name-mangles out of subclass
+                        // scope
+                        self.rename_with_visibility(&class.name, visibility_of(name));
                     }
                 }
                 _ => {}
@@ -367,22 +386,21 @@ impl<'src> Modifiers<'src> {
                         self.exports.push(func.name.as_str().to_owned());
                     }
                 }
-                "private" => {
+                "private" | "protected" => {
                     self.edits
                         .push(Fix::safe_edit(Edit::range_deletion(dec.range())));
-                    if self.class_depth == 0 {
+                    if self.at_module_level() {
                         self.private_renames.push(func.name.as_str().to_owned());
                         self.rename_with_underscore(func.name.range());
-                    } else if private_mangles(func.name.as_str()) {
-                        // a `private` method is name-mangled to `__name`. a
-                        // dunder is left alone: python calls it by its exact
-                        // name, so renaming would change what the method *is*
-                        // rather than who can reach it — and python's own
-                        // mangling rule skips a name with two trailing
-                        // underscores anyway. the one dunder where `private`
-                        // says something, `__init__`, is checked by ty at the
+                    } else if self.class_body {
+                        // a `private` method is name-mangled to `__name`, a
+                        // `protected` one renamed to `_name`. a dunder is left
+                        // alone: python calls it by its exact name, so renaming
+                        // would change what the method *is* rather than who can
+                        // reach it. the one dunder where the keyword says
+                        // something, `__init__`, is checked by ty at the
                         // construction site instead
-                        self.rename_with_dunder(func.name.range());
+                        self.rename_with_visibility(&func.name, visibility_of(name));
                     }
                 }
                 _ => {}
@@ -399,16 +417,20 @@ impl<'src> Modifiers<'src> {
         )));
     }
 
-    /// Replace the identifier at `range` with a double-underscore-prefixed
-    /// copy. Used for `private` class members so Python's name-mangling
-    /// applies and the symbol is hidden from subclass scope
+    /// Replace `name` with the spelling `visibility` gives it. A no-op for a name
+    /// the rename would not hide — see [`visibility_rename`].
     ///
-    /// Only call this for a name [`private_mangles`] accepts.
-    fn rename_with_dunder(&mut self, range: TextRange) {
-        let original = self.src(range).to_owned();
+    /// The decision is made on the name the definition *has*, not on the source
+    /// the range covers: an `init(…)` shorthand is named `__init__` while its
+    /// range covers the `init` keyword, and renaming that would leave the class
+    /// with no constructor.
+    fn rename_with_visibility(&mut self, name: &ast::Identifier, visibility: MemberVisibility) {
+        let Some(renamed) = visibility_rename(name.as_str(), visibility.name_prefix()) else {
+            return;
+        };
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            format!("__{original}"),
-            range,
+            renamed,
+            name.range(),
         )));
     }
 
@@ -457,7 +479,21 @@ impl<'src> Modifiers<'src> {
         if !node.target.is_name_expr() {
             return;
         }
-        let name = self.src(node.target.range()).to_owned();
+        let written = self.src(node.target.range()).to_owned();
+        // a declaration's visibility is spelled in its name, so every branch
+        // below emits the renamed one
+        let visibility = declaration_marker_visibility(node.annotation.as_ref());
+        let name = if self.class_body {
+            visibility_rename(&written, visibility.name_prefix()).unwrap_or(written)
+        } else if visibility == MemberVisibility::Private && self.at_module_level() {
+            // a module-level `private` variable is renamed the way a module-level
+            // `private def` is, and for the same reason. its references are
+            // renamed by `visibility_rename`, which asks ty where each one resolves
+            self.private_renames.push(written.clone());
+            module_private_name(&written)
+        } else {
+            written
+        };
         // every rewrite below replaces what the statement said ahead of the value,
         // which starts past any decorators written above it — those belong to the
         // decorated-binding lowering, which erases them and wraps the value
@@ -468,11 +504,15 @@ impl<'src> Modifiers<'src> {
         // the modifier prefix; the rest of the statement stays exactly as written,
         // with or without an initializer
         if let Expr::Subscript(s) = node.annotation.as_ref()
-            && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__abstract_annot__" | "__visibility_annot__" | "__private_annot__" | "__modifier_annot__"))
+            && matches!(s.value.as_ref(), Expr::Name(n) if DeclarationMarker::from_id(n.id.as_str()).is_some_and(|marker| marker.kind == DeclarationMarkerKind::Annot))
         {
-            let erase_range = TextRange::new(stmt_start, node.target.range().start());
-            self.edits
-                .push(Fix::safe_edit(Edit::range_deletion(erase_range)));
+            // one edit spanning the prefix *and* the name: a `private` member is
+            // emitted under a different name, and a deletion alone would leave
+            // the written one behind
+            self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                name,
+                TextRange::new(stmt_start, node.target.range().end()),
+            )));
             return;
         }
 
@@ -480,7 +520,7 @@ impl<'src> Modifiers<'src> {
             // valueless typed `let x: T` / `final x: T` → `x: Final[T]` — a
             // read-only declaration with no initializer, `Final` in every scope
             if let Expr::Subscript(s) = node.annotation.as_ref()
-                && matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__classvar_annot__")
+                && matches!(s.value.as_ref(), Expr::Name(n) if is_classvar_annot_marker_id(n.id.as_str()))
             {
                 // valueless `class var a: T` → `a: ClassVar[T]`
                 let slice = s.slice.as_ref();
@@ -495,7 +535,7 @@ impl<'src> Modifiers<'src> {
                     slice.range().end(),
                 )));
             } else if let Expr::Subscript(s) = node.annotation.as_ref()
-                && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__"))
+                && matches!(s.value.as_ref(), Expr::Name(n) if is_let_marker_id(n.id.as_str()) || is_final_marker_id(n.id.as_str()))
             {
                 let slice = s.slice.as_ref();
                 // start at the statement, not the marker, so any modifier prefix
@@ -510,7 +550,7 @@ impl<'src> Modifiers<'src> {
                     "]".to_owned(),
                     slice.range().end(),
                 )));
-            } else if matches!(node.annotation.as_ref(), Expr::Name(n) if n.id.as_str() == "__let__")
+            } else if matches!(node.annotation.as_ref(), Expr::Name(n) if is_let_marker_id(n.id.as_str()))
             {
                 // valueless untyped `let x` → `x: Final` — an uninitialized
                 // read-only declaration
@@ -529,20 +569,22 @@ impl<'src> Modifiers<'src> {
                 let value_range = self.value_range(node, value);
                 let prefix_range = TextRange::new(stmt_start, value_range.start());
                 match ann.id.as_str() {
-                    "__let__" => {
+                    id if is_let_marker_id(id) => {
                         self.needs_final_annotation = true;
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
                             format!("{name}: Final = "),
                             prefix_range,
                         )));
                     }
-                    "__modifier_assign__" => {
+                    id if DeclarationMarker::from_id(id)
+                        .is_some_and(|marker| marker.kind == DeclarationMarkerKind::Assign) =>
+                    {
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
                             format!("{name} = "),
                             prefix_range,
                         )));
                     }
-                    "__classvar__" => {
+                    id if is_classvar_marker_id(id) => {
                         self.needs_classvar = true;
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
                             format!("{name}: ClassVar = "),
@@ -560,7 +602,7 @@ impl<'src> Modifiers<'src> {
                     _ => {}
                 }
             }
-            Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__classvar_annot__") =>
+            Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if is_classvar_annot_marker_id(n.id.as_str())) =>
             {
                 // `class var a: T [= v]` → `a: ClassVar[T] [= v]`
                 let slice = s.slice.as_ref();
@@ -577,14 +619,14 @@ impl<'src> Modifiers<'src> {
                     post_range,
                 )));
             }
-            Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__")) =>
+            Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if is_let_marker_id(n.id.as_str()) || is_final_marker_id(n.id.as_str())) =>
             {
                 // typed: `let a: T = v` / `final a: T = v` — annotation is
                 // Subscript(__let__|__final__, T). callable transform visits only
                 // the slice independently, so emit bracket edits around the slice
                 // range; they don't overlap with callable's edit
                 let is_final =
-                    matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__final__");
+                    matches!(s.value.as_ref(), Expr::Name(n) if is_final_marker_id(n.id.as_str()));
                 let slice = s.slice.as_ref();
                 // start at the statement, not the marker, so any modifier prefix
                 // ahead of `let` (e.g. `override let a: T = v`) is erased too
@@ -654,7 +696,9 @@ impl<'ast> Visitor<'ast> for Modifiers<'_> {
                 // Walk the class body with `class_depth` incremented so nested
                 // declarations are not treated as module-level for visibility purposes.
                 self.class_depth += 1;
+                let enclosing = std::mem::replace(&mut self.class_body, true);
                 walk_stmt(self, stmt);
+                self.class_body = enclosing;
                 self.class_depth -= 1;
                 return;
             }
@@ -663,7 +707,9 @@ impl<'ast> Visitor<'ast> for Modifiers<'_> {
                 // Walk the body with `func_depth` incremented so a class defined
                 // inside the function is not treated as a module-level subclass.
                 self.func_depth += 1;
+                let enclosing = std::mem::replace(&mut self.class_body, false);
                 walk_stmt(self, stmt);
+                self.class_body = enclosing;
                 self.func_depth -= 1;
                 return;
             }
@@ -679,7 +725,6 @@ impl<'ast> Visitor<'ast> for Modifiers<'_> {
     }
 }
 
-/// renames all `Name` expression nodes that match a `private`-renamed symbol
 /// The name a module-level `private` symbol is emitted under: one leading
 /// underscore, which is python's own mark for "not part of the interface".
 ///
@@ -687,48 +732,11 @@ impl<'ast> Visitor<'ast> for Modifiers<'_> {
 /// `__name`, and python name-mangles every `__name` it reads inside a class
 /// body — so `private def _has_room` would become `__has_room` at module level
 /// and be looked up as `_Diagnostics__has_room` from a method that calls it.
-fn module_private_name(name: &str) -> String {
+pub(crate) fn module_private_name(name: &str) -> String {
     if name.starts_with('_') {
         return name.to_owned();
     }
     format!("_{name}")
-}
-
-pub(crate) struct NameRenamer {
-    renames: HashMap<String, String>,
-    edits: Vec<Fix>,
-}
-
-impl NameRenamer {
-    fn new(private_names: &[String]) -> Self {
-        let renames = private_names
-            .iter()
-            .map(|n| (n.clone(), module_private_name(n)))
-            .collect();
-        Self {
-            renames,
-            edits: Vec::new(),
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for NameRenamer {
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        walk_stmt(self, stmt);
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Name(n) = expr {
-            if let Some(new_name) = self.renames.get(n.id.as_str()) {
-                self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    new_name.clone(),
-                    expr.range(),
-                )));
-                return;
-            }
-        }
-        walk_expr(self, expr);
-    }
 }
 
 pub(crate) struct ModifiersPass<'src> {
@@ -798,22 +806,9 @@ impl AstPass for ModifiersPass<'_> {
             }
         }
 
-        // 2nd-pass NameRenamer rewrites call sites referencing renamed
-        // module-level symbols. Runs over the same AST as inner above —
-        // exports/private_renames already collected
-        if !private_renames.is_empty() {
-            let mut renamer = NameRenamer::new(&private_renames);
-            for stmt in &module.body {
-                renamer.visit_stmt(stmt);
-            }
-            for fix in renamer.edits {
-                for edit in fix.edits() {
-                    let range = edit.range();
-                    let repl = edit.content().unwrap_or_default().to_owned();
-                    ctx.text_edits.push((range, repl));
-                }
-            }
-        }
+        // the references to a renamed module-level symbol are rewritten by
+        // `visibility_rename`, which asks ty which binding each one resolves to —
+        // a parameter or class attribute that shares the name is not the symbol
 
         // `private` renames the symbol, so a name it claims is not the name the
         // module ends up with — exporting it would put a name in `__all__` that
@@ -1373,7 +1368,7 @@ mod tests {
     fn var_decl_with_modifier_chain() {
         // a visibility modifier ahead of `var` is stripped with it, matching the
         // bare-assignment modifier forms
-        check("private var a = 1\n", "a = 1\n");
+        check("private var a = 1\n", "_a = 1\n");
     }
 
     #[test]
@@ -1838,9 +1833,9 @@ mod tests {
 
     #[test]
     fn private_annot_in_class() {
-        // `private` on a class member carries a meaning ty reads (the member is
-        // invisible to a widened view of the class), so it parses to its own marker.
-        // the lowering is still a bare prefix erasure — no rename, no runtime artefact
+        // `private` on a class member renames it to the `__name` python
+        // name-mangles, whatever else the modifier chain says and whether or not
+        // the declaration binds a value
         check(
             indoc! {"
                 class Foo:
@@ -1850,9 +1845,9 @@ mod tests {
             "},
             indoc! {"
                 class Foo:
-                    t: int
-                    u: int = 1
-                    v: str = \"v\"
+                    __t: int
+                    __u: int = 1
+                    __v: str = \"v\"
             "},
         );
     }
@@ -1903,6 +1898,97 @@ mod tests {
                     def __helper(self): ...
             "},
         );
+    }
+
+    #[test]
+    fn protected_method_inside_class() {
+        // `protected` renames with a single underscore, which python does not
+        // mangle — a subclass reaches the member under the same name
+        check(
+            indoc! {"
+                class Outer:
+                    protected def helper(self): ...
+            "},
+            indoc! {"
+                class Outer:
+                    def _helper(self): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn a_visibility_keyword_renames_an_attribute() {
+        check(
+            indoc! {"
+                class Outer:
+                    private count: int
+                    protected step: int = 2
+            "},
+            indoc! {"
+                class Outer:
+                    __count: int
+                    _step: int = 2
+            "},
+        );
+    }
+
+    #[test]
+    fn final_composes_with_a_visibility_keyword() {
+        // `final` and the visibility keyword each carry something the other does
+        // not — the `Final` qualifier and the rename — so neither is dropped
+        check(
+            indoc! {"
+                class Outer:
+                    final private limit: int = 3
+            "},
+            indoc! {"
+                from typing import Final
+                class Outer:
+                    __limit: Final[int] = 3
+            "},
+        );
+    }
+
+    #[test]
+    fn a_visibility_keyword_renames_a_let_binding() {
+        check(
+            indoc! {"
+                class Outer:
+                    private let fixed: int = 5
+                    protected let bound = 6
+            "},
+            indoc! {"
+                from typing import Final
+                class Outer:
+                    __fixed: int = 5
+                    _bound: Final = 6
+            "},
+        );
+    }
+
+    #[test]
+    fn a_visibility_keyword_renames_an_untyped_attribute() {
+        // the untyped form binds a member exactly as the annotated one does, so
+        // the keyword has to reach it there too
+        check(
+            indoc! {"
+                class Outer:
+                    private count = 0
+                    protected step = 2
+            "},
+            indoc! {"
+                class Outer:
+                    __count = 0
+                    _step = 2
+            "},
+        );
+    }
+
+    #[test]
+    fn a_module_level_private_variable_is_renamed() {
+        // renamed the way a module-level `private def` is: one leading underscore,
+        // python's own mark for "not part of the interface"
+        check("private count: int = 1\n", "_count: int = 1\n");
     }
 
     #[test]

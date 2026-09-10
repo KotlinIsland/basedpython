@@ -2400,8 +2400,15 @@ pub(crate) fn untyped_declaration_value(assign: &ast::StmtAnnAssign) -> Option<&
     if !marker.ctx.is_invalid() {
         return None;
     }
-    matches!(marker.id.as_str(), "__let__" | "__modifier_assign__")
-        .then(|| assign.value.as_deref())
+    ruff_python_ast::helpers::DeclarationMarker::from_id(marker.id.as_str())
+        .is_some_and(|marker| {
+            matches!(
+                marker.kind,
+                ruff_python_ast::helpers::DeclarationMarkerKind::Let
+                    | ruff_python_ast::helpers::DeclarationMarkerKind::Assign
+            )
+        })
+        .then_some(assign.value.as_deref())
         .flatten()
 }
 

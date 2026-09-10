@@ -43,9 +43,11 @@
 use std::collections::HashMap;
 use std::fmt::Write;
 
+use ruff_python_ast::helpers::{MemberVisibility, property_backing_name};
 use ruff_python_ast::token::{Tokens, parenthesized_range};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{AnyNodeRef, Expr, ExprRef, Stmt, StmtClassDef, StmtFunctionDef};
+use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass, render_stmt};
@@ -511,8 +513,6 @@ impl PropertiesPass<'_> {
         // construct's template, because the driver absorbs a zero-width insertion
         // sharing a template's start rather than emitting it alongside
         let mut pending: Vec<(TextRange, Vec<Fragment>)> = Vec::new();
-        // `(public name, emitted name)` for each `private` property in this class
-        let mut renames: Vec<(String, String)> = Vec::new();
 
         for member in &class.body {
             let Stmt::FunctionDef(getter) = member else {
@@ -526,12 +526,25 @@ impl PropertiesPass<'_> {
                 continue;
             };
             let prop = getter.name.as_str();
-            // the getter's name node keeps the *public* name's source range while its
-            // `id` carries the emitted name (they differ for a `private` property), and
-            // storage is `__<public>` — a dunder so python's name mangling hides it
-            let public = &self.source
-                [usize::from(getter.name.range().start())..usize::from(getter.name.range().end())];
-            let backing_name = format!("__{public}");
+            // modifier keywords written ahead of the declaration compose with the
+            // property. the getter's name node keeps the declaration name's real
+            // source range, so the prefix is the span before it
+            let prefix = &self.source
+                [usize::from(construct.start())..usize::from(getter.name.range().start())];
+            let modifiers: Vec<&str> = prefix.split_whitespace().collect();
+            let has = |word: &str| modifiers.contains(&word);
+            // a visibility keyword renames the property the way it renames any
+            // member, and decides the name of its storage
+            let visibility = if has("private") {
+                MemberVisibility::Private
+            } else if has("protected") {
+                MemberVisibility::Protected
+            } else {
+                MemberVisibility::Public
+            };
+            let emitted = visibility_rename(prop, visibility.name_prefix())
+                .unwrap_or_else(|| prop.to_owned());
+            let backing_name = property_backing_name(prop, visibility);
 
             // the setter and backing field the parser synthesised for *this*
             // construct carry ranges inside its span, which keeps a same-named
@@ -579,24 +592,10 @@ impl PropertiesPass<'_> {
             let indent = line_indent(self.source, construct.start()).to_owned();
             let body_indent = format!("{indent}    ");
 
-            // modifier keywords written ahead of the declaration compose with the
-            // property. the getter's name node keeps the declaration name's real
-            // source range, so the prefix is the span before it. these decorators
-            // sit *under* `@property` / `@<name>.setter` so they apply to the
-            // accessor function itself, which is what type checkers expect
-            let prefix = &self.source
-                [usize::from(construct.start())..usize::from(getter.name.range().start())];
-            let modifiers: Vec<&str> = prefix.split_whitespace().collect();
-            let has = |word: &str| modifiers.contains(&word);
+            // these decorators sit *under* `@property` / `@<name>.setter` so they
+            // apply to the accessor function itself, which is what type checkers
+            // expect
             let is_abstract = has("abstract");
-
-            // a `private` property is emitted one underscore deeper than the name
-            // the author wrote, so in-class accesses spelled under the public name
-            // have to be redirected in the output too. the parser has already
-            // retargeted them in the AST, but the source still says `self.x`
-            if has("private") {
-                renames.push((public.to_owned(), prop.to_owned()));
-            }
 
             let mut accessor_decorators = String::new();
             if is_abstract {
@@ -658,7 +657,7 @@ impl PropertiesPass<'_> {
                 ("property", "self")
             };
             frags.push(Fragment::Lit(format!(
-                "@{decorator}\n{indent}{accessor_decorators}def {prop}({receiver})"
+                "@{decorator}\n{indent}{accessor_decorators}def {emitted}({receiver})"
             )));
             if let Some(returns) = &getter.returns {
                 frags.push(Fragment::Lit(" -> ".to_owned()));
@@ -675,7 +674,7 @@ impl PropertiesPass<'_> {
             // setter
             if let Some(setter) = setter {
                 frags.push(Fragment::Lit(format!(
-                    "\n{indent}@{prop}.setter\n{indent}{accessor_decorators}def {prop}(self"
+                    "\n{indent}@{emitted}.setter\n{indent}{accessor_decorators}def {emitted}(self"
                 )));
                 // the value parameter follows the synthetic `self`
                 if let Some(value_param) = setter.parameters.args.get(1) {
@@ -734,79 +733,6 @@ impl PropertiesPass<'_> {
             }
         }
         ctx.template_edits.extend(pending);
-
-        if !renames.is_empty() {
-            self.rename_private_accesses(class, &renames, ctx);
-        }
-    }
-
-    /// Redirects in-class accesses of a `private` property to the name it is
-    /// actually emitted under. The parser retargeted them in the AST so ty resolves
-    /// them; the source still spells the public name, so the output needs an edit
-    /// per occurrence. An access from outside the class is left alone — the property
-    /// genuinely is not there, and ty reports it.
-    fn rename_private_accesses(
-        &self,
-        class: &StmtClassDef,
-        renames: &[(String, String)],
-        ctx: &mut PassContext,
-    ) {
-        for member in &class.body {
-            let Stmt::FunctionDef(func) = member else {
-                continue;
-            };
-            let Some(receiver) = func
-                .parameters
-                .posonlyargs
-                .first()
-                .or_else(|| func.parameters.args.first())
-                .map(|param| param.parameter.name.id.as_str())
-            else {
-                continue;
-            };
-            let mut finder = PrivateAccessFinder {
-                source: self.source,
-                renames,
-                receiver,
-                edits: Vec::new(),
-            };
-            for stmt in &func.body {
-                finder.visit_stmt(stmt);
-            }
-            ctx.text_edits.extend(finder.edits);
-        }
-    }
-}
-
-/// Collects the source ranges of in-class accesses that name a `private` property
-/// under its public spelling.
-struct PrivateAccessFinder<'a> {
-    source: &'a str,
-    renames: &'a [(String, String)],
-    receiver: &'a str,
-    edits: Vec<(TextRange, String)>,
-}
-
-impl<'ast> Visitor<'ast> for PrivateAccessFinder<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        // a nested class has its own `self`
-        if matches!(stmt, Stmt::ClassDef(_)) {
-            return;
-        }
-        walk_stmt(self, stmt);
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Attribute(attr) = expr
-            && matches!(attr.value.as_ref(), Expr::Name(name) if name.id.as_str() == self.receiver)
-        {
-            let range = attr.attr.range();
-            let written = &self.source[usize::from(range.start())..usize::from(range.end())];
-            if let Some((_, emitted)) = self.renames.iter().find(|(public, _)| public == written) {
-                self.edits.push((range, emitted.clone()));
-            }
-        }
-        ruff_python_ast::visitor::walk_expr(self, expr);
     }
 }
 
@@ -1189,15 +1115,46 @@ mod tests {
         );
     }
 
-    /// `private` shifts the construct one underscore deeper — property `_x`,
-    /// storage `__x` — and in-class accesses spelled under the public name are
-    /// redirected to it
+    /// `private` renames the property to the `__x` python mangles, moves its
+    /// storage to `__x_field`, and renames the in-class accesses with it
     #[test]
     fn private_property_is_renamed() {
         check(
             indoc! {"
                 class A:
                     private var x: int = 0
+                        get() = field
+                        set(value):
+                            field = value
+
+                    def bump(self):
+                        self.x = self.x + 1
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self) -> None:
+                        self.__x_field: int = 0
+                    @property
+                    def __x(self) -> int:
+                        return self.__x_field
+                    @__x.setter
+                    def __x(self, value: int) -> None:
+                        self.__x_field = value
+
+                    def bump(self):
+                        self._A__x = self._A__x + 1
+            "},
+        );
+    }
+
+    /// `protected` renames the property to `_x`, whose storage keeps the
+    /// ordinary `__x`
+    #[test]
+    fn protected_property_is_renamed() {
+        check(
+            indoc! {"
+                class A:
+                    protected var x: int = 0
                         get() = field
                         set(value):
                             field = value
@@ -1237,19 +1194,19 @@ mod tests {
             indoc! {"
                 class A:
                     def __init__(self) -> None:
-                        self.__n: int = 5
+                        self.__n_field: int = 5
                     @property
-                    def _n(self) -> int:
-                        return self.__n
+                    def __n(self) -> int:
+                        return self.__n_field
 
                     def f(self):
-                        return self._n
+                        return self._A__n
             "},
         );
     }
 
-    /// a same-named attribute on another object is not a property access and must
-    /// keep its name
+    /// a same-named attribute on another object is not a property access, so it
+    /// keeps its name
     #[test]
     fn private_rename_only_touches_the_receiver() {
         check(
@@ -1264,16 +1221,16 @@ mod tests {
             indoc! {"
                 class A:
                     def __init__(self) -> None:
-                        self.__x: int = 0
+                        self.__x_field: int = 0
                     @property
-                    def _x(self) -> int:
-                        return self.__x
-                    @_x.setter
-                    def _x(self, value: int) -> None:
-                        self.__x = value
+                    def __x(self) -> int:
+                        return self.__x_field
+                    @__x.setter
+                    def __x(self, value: int) -> None:
+                        self.__x_field = value
 
                     def f(self, other):
-                        return other.x + self._x
+                        return other.x + self._A__x
             "},
         );
     }

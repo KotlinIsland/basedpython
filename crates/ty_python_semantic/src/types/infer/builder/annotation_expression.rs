@@ -1,5 +1,8 @@
 use ruff_python_ast as ast;
-use ruff_python_ast::helpers::{is_dotted_name, type_modifier_marker};
+use ruff_python_ast::helpers::{
+    DeclarationMarker, DeclarationMarkerKind, MemberVisibility, is_dotted_name,
+    type_modifier_marker,
+};
 use ty_python_core::scope::ScopeKind;
 
 use super::{DeferredExpressionState, TypeInferenceBuilder};
@@ -12,6 +15,16 @@ use crate::types::string_annotation::parse_string_annotation;
 use crate::types::{
     SpecialFormType, Type, TypeAndQualifiers, TypeContext, TypeQualifier, TypeQualifiers, todo_type,
 };
+
+/// basedpython: the qualifier a declaration marker's visibility contributes,
+/// empty for a marker that records none
+fn visibility_qualifiers(visibility: MemberVisibility) -> TypeQualifiers {
+    match visibility {
+        MemberVisibility::Public => TypeQualifiers::empty(),
+        MemberVisibility::Protected => TypeQualifiers::PROTECTED,
+        MemberVisibility::Private => TypeQualifiers::PRIVATE,
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(super) enum PEP613Policy {
@@ -472,73 +485,77 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             == ScopeKind::Class;
 
         match annotation {
-            ast::Expr::Name(name) => match name.id.as_str() {
-                "__let__" => {
-                    let qualifiers = if in_class_scope {
-                        TypeQualifiers::empty()
-                    } else {
-                        TypeQualifiers::FINAL
-                    };
-                    Some(TypeAndQualifiers::new(
-                        Type::unknown(),
-                        TypeOrigin::Declared,
-                        qualifiers,
-                    ))
+            ast::Expr::Name(name) => {
+                if name.id.as_str() == "__sentinel__" {
+                    return Some(TypeAndQualifiers::declared(Type::unknown()));
                 }
-                "__classvar__" => Some(TypeAndQualifiers::new(
+                let marker = DeclarationMarker::from_id(name.id.as_str())?;
+                let visibility = visibility_qualifiers(marker.visibility);
+                let qualifiers = match marker.kind {
+                    // `let x = v` — read-only, which python spells `Final` outside a
+                    // class body
+                    DeclarationMarkerKind::Let if in_class_scope => TypeQualifiers::empty(),
+                    DeclarationMarkerKind::Let => TypeQualifiers::FINAL,
+                    // `class x = v`
+                    DeclarationMarkerKind::ClassVar => TypeQualifiers::CLASS_VAR,
+                    // `[modifiers] x = v`, and the `init(private var a)` parameter
+                    // that declares nothing but the attribute's visibility: the type
+                    // is left where a bare `let a` leaves it
+                    DeclarationMarkerKind::Annot | DeclarationMarkerKind::Assign => {
+                        TypeQualifiers::empty()
+                    }
+                    // these always wrap a declared type
+                    DeclarationMarkerKind::Final | DeclarationMarkerKind::ClassVarAnnot => {
+                        return None;
+                    }
+                };
+                Some(TypeAndQualifiers::new(
                     Type::unknown(),
                     TypeOrigin::Declared,
-                    TypeQualifiers::CLASS_VAR,
-                )),
-                "__modifier_assign__" => Some(TypeAndQualifiers::declared(Type::unknown())),
-                "__sentinel__" => Some(TypeAndQualifiers::declared(Type::unknown())),
-                _ => None,
-            },
+                    qualifiers | visibility,
+                ))
+            }
             ast::Expr::Subscript(ast::ExprSubscript { value, slice, .. }) => {
                 let ast::Expr::Name(value_name) = value.as_ref() else {
                     return None;
                 };
                 // every modifier declaration keeps the declared type as the slice
-                let always_final = match value_name.id.as_str() {
-                    // typed `let x: T = v` / `final x: T = v`.
-                    // `final` is `Final` everywhere; `let` only at module scope
-                    "__let__" => false,
-                    "__final__" => true,
-                    // modifiers ty places no meaning on (`override x: T`,
-                    // `abstract x: T`, `private x: T`): the declaration is just `x: T`
-                    // `class var x: T` — a class variable whose type is
-                    // declared rather than read off a value
-                    "__classvar_annot__" => {
+                let marker = DeclarationMarker::from_id(value_name.id.as_str())?;
+                let visibility = visibility_qualifiers(marker.visibility);
+                let always_final = match marker.kind {
+                    // typed `let x: T = v` / `final x: T = v`. `final` is `Final`
+                    // everywhere; `let` only outside a class body
+                    DeclarationMarkerKind::Let => false,
+                    DeclarationMarkerKind::Final => true,
+                    // `class var x: T` — a class variable whose type is declared
+                    // rather than read off a value
+                    DeclarationMarkerKind::ClassVarAnnot => {
                         return Some(TypeAndQualifiers::new(
                             self.infer_type_expression(slice),
                             TypeOrigin::Declared,
-                            TypeQualifiers::CLASS_VAR,
+                            TypeQualifiers::CLASS_VAR | visibility,
                         ));
                     }
-                    "__modifier_annot__" | "__abstract_annot__" | "__visibility_annot__" => {
-                        return Some(TypeAndQualifiers::declared(
-                            self.infer_type_expression(slice),
-                        ));
-                    }
-                    // `private x: T` — the declaration is `x: T`, but the privacy
-                    // rides along as a qualifier: a private member is invisible to
-                    // a widened view of its class, which is what makes it sound
-                    // under a covariant type parameter
-                    "__private_annot__" => {
+                    // modifiers ty places no meaning on (`override x: T`, `abstract
+                    // x: T`): the declaration is just `x: T`. a visibility keyword
+                    // rides along as a qualifier — it decides who may reach the
+                    // member
+                    DeclarationMarkerKind::Annot => {
                         return Some(TypeAndQualifiers::new(
                             self.infer_type_expression(slice),
                             TypeOrigin::Declared,
-                            TypeQualifiers::PRIVATE,
+                            visibility,
                         ));
                     }
-                    _ => return None,
+                    DeclarationMarkerKind::ClassVar | DeclarationMarkerKind::Assign => return None,
                 };
                 let inner = self.infer_type_expression(slice);
-                let qualifiers = if always_final || !in_class_scope {
+                let mut qualifiers = if always_final || !in_class_scope {
                     TypeQualifiers::FINAL
                 } else {
                     TypeQualifiers::empty()
                 };
+                qualifiers |= visibility;
                 Some(TypeAndQualifiers::new(
                     inner,
                     TypeOrigin::Declared,

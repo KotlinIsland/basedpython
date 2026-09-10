@@ -277,12 +277,13 @@ declaration: a bodyless `init(...)`, whose body the
 
 property declarations compose with [modifier keywords](modifiers.md):
 
-| basedpython               | Python output                                  |
-| ------------------------- | ---------------------------------------------- |
-| `override var x: int = 0` | `x` overrides parent; `@override` on accessors |
-| `final var x: int = 0`    | property marked `@final`                       |
-| `abstract let x: int`     | `@property` + `@abstractmethod`, no body       |
-| `private var x: int = 0`  | property renamed `_x`, storage `__x`           |
+| basedpython                | Python output                                  |
+| -------------------------- | ---------------------------------------------- |
+| `override var x: int = 0`  | `x` overrides parent; `@override` on accessors |
+| `final var x: int = 0`     | property marked `@final`                       |
+| `abstract let x: int`      | `@property` + `@abstractmethod`, no body       |
+| `private var x: int = 0`   | property renamed `__x`, storage `__x_field`    |
+| `protected var x: int = 0` | property renamed `_x`, storage `__x`           |
 
 `abstract let` / `abstract var` are bodyless. abstract `var` produces both
 abstract getter and abstract setter. the modifiers apply to a declaration that
@@ -341,10 +342,12 @@ inside an [extension](extensions.md) the same declaration needs no descriptor at
 all — the access site is rewritten at transpile time, so the backing function
 just receives the class
 
-## `private`
+## `private` and `protected`
 
-`private` shifts the whole construct one level of underscore deeper — the property
-becomes `_x` and its storage `__x`:
+a visibility keyword renames a property the way it renames any member: `private`
+to `__x`, which python name-mangles per class, and `protected` to `_x`. the storage
+of a `private` property takes a name of its own, `__x_field`, since `__x` is the
+property:
 
 ```by
 class A:
@@ -362,31 +365,29 @@ transpiles to:
 ```python
 class A:
     def __init__(self) -> None:
-        self.__x: int = 0
+        self.__x_field: int = 0
     @property
-    def _x(self) -> int:
-        return self.__x
-    @_x.setter
-    def _x(self, value: int) -> None:
-        self.__x = value
+    def __x(self) -> int:
+        return self.__x_field
+    @__x.setter
+    def __x(self, value: int) -> None:
+        self.__x_field = value
 
     def bump(self):
-        self._x = self._x + 1
+        self._A__x = self._A__x + 1
 ```
 
-accesses written inside the class under the public name are redirected, so the
-declaration site is the only place the name changes. privacy is self-enforcing:
-the property does not exist under its public name, so an access from outside the
-class — or from a subclass — is an unresolved attribute, reported rather than
-failing at runtime
+accesses written inside the class under the declared name are renamed with it, so
+the declaration is written once. an access from outside the class is reported as
+`inaccessible-member`, and so is one from a subclass when the property is
+`private`
 
-a write is redirected to the property, not to its storage, so a validating setter
-still runs
+a write inside the class goes through the property, not its storage, so a
+validating setter still runs
 
-note this differs from a plain `private var x: int = 0` with no accessor block,
-which is [stripped without renaming](modifiers.md) like any other class member
-annotation — it is still private to the type checker, which is what
-[safe variance](safe-variance.md) rests on, but nothing hides it at runtime
+a plain `private var x: int = 0` with no accessor block is the attribute `__x`
+itself — there is no property to keep separate from its storage. see
+[modifiers](modifiers.md#private-and-protected)
 
 ## `late`
 

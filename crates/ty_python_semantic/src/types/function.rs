@@ -218,6 +218,10 @@ bitflags! {
         /// `@builder` — a widget builder, which emits into the composition being
         /// built and so, like a composable, can only be called while composing
         const UI_BUILDER = 1 << 14;
+        /// basedpython: the method carries the `protected` modifier keyword. A
+        /// protected member is reachable from the declaring class's body and from
+        /// a subclass's, and from nowhere else
+        const PROTECTED = 1 << 15;
     }
 }
 

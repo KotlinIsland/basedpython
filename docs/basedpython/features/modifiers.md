@@ -173,7 +173,7 @@ rejects it with `final-on-variable` and points you to `let`, which lowers to
 `Final`. inside a class body it is a plain attribute, matching `let` there, and
 is not flagged
 
-## export / public / private
+## export / public
 
 basedpython infers `__all__` from explicit visibility keywords:
 
@@ -193,31 +193,174 @@ def also_exported(): ...
 def _helper(): ...
 ```
 
-- `export` and `public` are aliases. each marked symbol is added to a synthesized
-    `__all__` list at module level
-- `private` strips the keyword and gives the symbol a leading underscore at the
-    definition site *and* every same-module call site. a name that already has
-    one keeps it — a second would make it a `__name`, which python name-mangles
-    wherever a class body reads it. it is excluded from `__all__` even when no
-    `export`/`public` declarations exist
-- inside a class body only `private` means anything — `export`/`public` are
-    stripped. what `private` renames depends on the member: a `private def` is
-    name-mangled (`__helper`), a `private` [property](properties.md) becomes `_x`
-    with `__x` storage, and a `private` attribute keeps its name. either way the
-    member is private to the type checker, which is what
-    [safe variance](safe-variance.md) rests on
-- a call to a `private def` is written with the mangled name spelled out —
-    `self.helper()` becomes `self._A__helper()`. python mangles lexically, so a
-    bare `self.__helper` would name a different attribute in a subclass's body
-    and none at all outside a class; the full spelling reaches the method from
-    all of them
-- `private` on a name python looks up verbatim — a dunder, or `_` — is reported
-    as having no effect. mangling applies only to a name with at most one
-    trailing underscore, so renaming would change what the member *is* rather
-    than who can reach it, and leaving it alone would make the modifier do
-    nothing. the one dunder where `private` says something is
-    [`init`](init-method.md#private-constructors), which is checked at the
-    construction site instead
+`export` and `public` are aliases. each marked symbol is added to a synthesized
+`__all__` list at module level. inside a class body they are stripped: a class
+member is not a module export
+
+a module-level `private` strips the keyword and gives the symbol a leading
+underscore at the definition site *and* every same-module call site. a name that
+already has one keeps it — a second would make it a `__name`, which python
+name-mangles wherever a class body reads it. it is excluded from `__all__` even
+when no `export`/`public` declarations exist, and another module that imports it
+is reported by `private-import`
+
+a module-level `private` works on a variable exactly as it does on a function,
+class or type alias — `private count: int = 0` is emitted as `_count`, and so is
+every reference to it in the module. a parameter, local or class attribute that
+merely shares the name is a different binding and keeps it. reaching a private
+symbol as an attribute of its module from another one (`helpers.count`) is
+`inaccessible-member`, for the same reason importing it is `private-import`
+
+the rename follows the symbol wherever the module binds it again — a `def` or
+`class` of the same name, an import (`from m import count` becomes `from m import count as _count`), an `except ... as count`, a `match` capture, and a `global count`
+in a function. a dotted `import count.sub` binds its top-level package, which no
+alias can keep under `_count`, so it is an error. a private symbol is left out of
+`from m import *`, and listing one in `__all__` is `private-export`
+
+## private and protected
+
+`private` and `protected` say who may reach a class member:
+
+```by
+class Account:
+    protected rate: float = 0.05
+    init(private let balance: int)
+
+    def interest(self) -> float:
+        return self.balance * self.rate
+
+
+class Savings(Account):
+    def bonus(self) -> float:
+        return self.rate * 2        # `protected` — a subclass may
+```
+
+- **`private`** — only the declaring class's own body
+- **`protected`** — that, and the body of any subclass
+
+reaching one from anywhere else is `inaccessible-member`:
+
+```by
+def audit(account: Account) -> int:
+    return account.balance  # error: `balance` is private to `Account`
+```
+
+the keywords work on every kind of member — a `def`, an attribute, a nested
+class, a [property](properties.md), an [`init`](init-method.md) parameter — and
+the member is written by the name it was declared with wherever it may be
+reached. what changes is the name it is *emitted* under, because that is the only
+enforcement python itself offers: `private` becomes `__name`, which python
+name-mangles per class, and `protected` becomes `_name`, the convention python
+uses for the same thing. a member no widened view can reach is also what
+[safe variance](safe-variance.md) rests on
+
+the mangled name is spelled out at the access site — `self.helper()` becomes
+`self._A__helper()`. python mangles lexically, so a bare `self.__helper` written
+in a nested scope would name whatever class encloses it, and the full spelling
+names the same attribute from every one of them
+
+a visibility keyword on a name python looks up verbatim — a dunder, or `_` — is
+reported as having no effect. mangling applies only to a name with at most one
+trailing underscore, so renaming would change what the member *is* rather than
+who can reach it, and leaving it alone would make the modifier do nothing. the
+one dunder where the keyword says something is
+[`init`](init-method.md#private-constructors), which is checked at the
+construction site instead
+
+`protected` needs a class for the "and its subclasses" half to mean anything, so
+it is only a modifier on a class member:
+
+```by
+protected def helper(): ...   # error: `protected` is only a modifier on a class member
+```
+
+a class variable takes one modifier besides its own `class` keyword — a
+visibility keyword, which composes with any declaration. the class reaches it
+through the class object as readily as through an instance:
+
+```by
+class Counter:
+    private class var made: int = 0
+    protected class let LIMIT: int = 3
+
+    @classmethod
+    def total(cls) -> int:
+        return cls.made + cls.LIMIT
+```
+
+### visibility and inheritance
+
+a visibility keyword decides the name the member is emitted under, so a member
+emitted under a different name from the one it inherits does not override it.
+it sits beside it, and the inherited member is still what a call finds — which is
+never what the declaration looks like it does, so it is
+`invalid-override-visibility`. that happens in two ways: a keyword declaring the
+member narrower than what it inherits, and a plain declaration over an inherited
+`protected` member
+
+```by
+class A:
+    def f(self) -> int:
+        return 1
+
+    protected def g(self) -> int:
+        return 1
+
+
+class B(A):
+    private def f(self) -> int:  # error: `f` is public on `A`
+        return 2
+
+    def g(self) -> int:          # error: `g` is protected on `A`
+        return 2
+```
+
+a `private` member is the exception on the other side. two `private` members that
+share a name are mangled apart, so neither overrides the other and neither has to
+match the other's signature, and a subclass is free to declare a public member
+under a name its base kept private:
+
+```by
+class Base:
+    private def step(self, n: int) -> int:
+        return n
+
+
+class Derived(Base):
+    def step(self) -> str:      # a new member, not a replacement
+        return "x"
+```
+
+a `protected` member keeps one name across the hierarchy, so it overrides like
+any other member and is checked like one
+
+### names a member is looked up by
+
+a visibility keyword renames every place a member is named, not only attribute
+accesses: a bare name in the class body (`y = x + 1`, `@size.setter`), a string in
+`__slots__` or `__match_args__`, and a keyword in a class pattern (`case Point(x=0)`). each is spelled the way that position needs — `__slots__` takes the
+class-body spelling python mangles, `__match_args__` and a pattern keyword the one
+`getattr` reaches
+
+### where a visibility keyword cannot go
+
+some names are how the class works at runtime, and renaming them would change what
+the class does rather than who can reach it. a visibility keyword on one is
+`invalid-visibility`:
+
+- a field of a dataclass-like class, a named tuple or a typed dict — the field's
+    name is its constructor's keyword, or its key
+- an enum member — its name is how the enum looks it up
+- an abstract method — a `private` one is renamed per class, so no subclass could
+    ever override it
+
+a keyword that cannot act on its name is `ineffective-private`: a dunder, `protected`
+on a name that already starts with `__` (python mangles it, which makes it private),
+and `private` in a class named only with underscores (python mangles nothing there)
+
+a visibility keyword says who may reach a class member, or marks a module-level
+declaration as the module's own. a declaration inside a function body is a local,
+which nothing outside the function reaches anyway, so a keyword on one is an error
 
 ## inlay hints
 

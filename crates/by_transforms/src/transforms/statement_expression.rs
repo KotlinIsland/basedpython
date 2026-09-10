@@ -888,18 +888,20 @@ mod tests {
     /// and leak the keyword into the output
     #[test]
     fn a_declarations_lowering_survives_the_moved_prefix() {
-        for (declaration, lowered) in [
-            ("let a", "a: Final"),
-            ("var a", "a"),
-            ("let a: int", "a: Final[int]"),
-            ("final a: int", "a: Final[int]"),
-            ("private a: int", "a: int"),
+        // a module-level `private` variable is emitted under `_a`, and so is the
+        // `print` that reads it
+        for (declaration, lowered, read) in [
+            ("let a", "a: Final", "a"),
+            ("var a", "a", "a"),
+            ("let a: int", "a: Final[int]", "a"),
+            ("final a: int", "a: Final[int]", "a"),
+            ("private a: int", "_a: int", "_a"),
         ] {
             let out = check(&format!(
                 "b: int? = None\n{declaration} = b ?? raise ValueError()\nprint(a)\n"
             ));
             assert!(
-                out.contains(&format!("{lowered} = __by_stmt_expr_0__\nprint(a)")),
+                out.contains(&format!("{lowered} = __by_stmt_expr_0__\nprint({read})")),
                 "`{declaration}`, got:\n{out}"
             );
             assert!(!out.contains(declaration), "`{declaration}`, got:\n{out}");

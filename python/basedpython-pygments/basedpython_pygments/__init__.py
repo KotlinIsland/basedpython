@@ -52,6 +52,7 @@ MODIFIERS = (
     "open",
     "override",
     "private",
+    "protected",
     "public",
     "sealed",
     "static",

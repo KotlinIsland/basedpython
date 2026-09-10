@@ -42,6 +42,21 @@ class A[T]:
         print(a1.t)
 ```
 
+## a protected member is not erased
+
+A `protected` member is reachable from a subclass's body, where the receiver can be any
+specialization of the class rather than only `Self`. It tells specializations apart like a public
+member does, so a read through a specialization picks up its argument.
+
+```by
+class A[T]:
+    protected t: T
+
+    def f(self):
+        a1 = A[int]()
+        reveal_type(a1.t)  # revealed: int
+```
+
 ## …which is what keeps a contravariant read honest
 
 `A[object]` is an `A[int]` under `in T`, so an `A[int]` may really be holding a `str`. The erased
@@ -225,9 +240,9 @@ argument leaves a callback nothing can be passed to.
 class A[T]:
     private def consume(self, t: T): ...
 
-def f(a: A[int]):
-    # error: [invalid-argument-type] "Argument to bound method `A.consume` is incorrect: Expected `Never`, found `1`"
-    a.consume(1)
+    def g(self, other: A[int]):
+        # error: [invalid-argument-type] "Argument to bound method `A.consume` is incorrect: Expected `Never`, found `1`"
+        other.consume(1)
 ```
 
 ## a private producer stays callable through a widened view
@@ -237,8 +252,8 @@ class A[T]:
     private def produce(self) -> T:
         raise NotImplementedError
 
-def f(a: A[int]):
-    reveal_type(a.produce())  # revealed: object
+    def g(self, other: A[int]):
+        reveal_type(other.produce())  # revealed: object
 ```
 
 ## a `__getattr__` result is not a declared member
@@ -348,14 +363,18 @@ class A[T]:
 
 ## a subclass that stays generic carries the constraint forward
 
+The class's own body can hold a widened view of a subclass, and the private member is erased through
+it the same way.
+
 ```by
 class A[T]:
     private t: T
 
-class C[U](A[U]):
     def f(self, other: C[object]):
         # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `Never`"
         other.t = 1
+
+class C[U](A[U]): ...
 ```
 
 ## a nested occurrence is erased soundly
@@ -368,9 +387,9 @@ the erased element stays gradual and a write is neither precise nor rejected.
 class A[T]:
     private items: list[T]
 
-def f(a: A[int]):
-    reveal_type(a.items)  # revealed: list[*]
-    a.items = [1]
+    def g(self, other: A[int]):
+        reveal_type(other.items)  # revealed: list[*]
+        other.items = [1]
 ```
 
 ## a union of two specializations is a widened view of each
@@ -386,7 +405,7 @@ class A[out T]:
     def produce(self) -> T:
         raise NotImplementedError
 
-def f(a: A[int] | A[str]):
-    # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` on type `A[int] | A[str]`"
-    a.t = 1
+    def f(self, a: A[int] | A[str]):
+        # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` on type `A[int] | A[str]`"
+        a.t = 1
 ```

@@ -711,19 +711,21 @@ mod tests {
     /// swallows the newline its block already consumed
     #[test]
     fn block_as_a_declaration_value() {
-        for (declaration, lowered) in [
-            ("let result", "result: Final"),
-            ("let result: str", "result: Final[str]"),
-            ("final result: str", "result: Final[str]"),
-            ("var result", "result"),
-            ("private result: str", "result: str"),
+        // a module-level `private` variable is emitted under `_result`, and so is
+        // the `print` that reads it
+        for (declaration, lowered, read) in [
+            ("let result", "result: Final", "result"),
+            ("let result: str", "result: Final[str]", "result"),
+            ("final result: str", "result: Final[str]", "result"),
+            ("var result", "result", "result"),
+            ("private result: str", "_result: str", "_result"),
         ] {
             let out = check(&format!(
                 "def f(a: (int) -> None) -> str:\n    a(1)\n    return \"done\"\n\n{declaration} = f:\n    print(it)\nprint(result)\n"
             ));
             assert!(
                 out.contains(&format!(
-                    "def _trailing_lambda_0(it=None):\n    print(it)\n{lowered} = f(a=_trailing_lambda_0)\nprint(result)"
+                    "def _trailing_lambda_0(it=None):\n    print(it)\n{lowered} = f(a=_trailing_lambda_0)\nprint({read})"
                 )),
                 "`{declaration}`, got:\n{out}"
             );
