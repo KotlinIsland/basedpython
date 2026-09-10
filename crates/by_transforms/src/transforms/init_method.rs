@@ -30,7 +30,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::callable::lower_type_expr_full;
-use super::mutable_defaults::parameter_guards;
+use super::mutable_defaults::{parameter_guards, undeclarable_error};
 use super::source_util::{PrologueStatement, first_body_statement};
 use crate::config::FloatLiteralLowering;
 use crate::type_info::TypeInfo;
@@ -38,13 +38,19 @@ use crate::type_info::TypeInfo;
 pub(crate) struct InitMethod<'src> {
     source: &'src str,
     float_literals: FloatLiteralLowering,
+    is_stub: bool,
 }
 
 impl<'src> InitMethod<'src> {
-    pub(crate) fn new(source: &'src str, float_literals: FloatLiteralLowering) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        float_literals: FloatLiteralLowering,
+        is_stub: bool,
+    ) -> Self {
         Self {
             source,
             float_literals,
+            is_stub,
         }
     }
 }
@@ -56,6 +62,7 @@ impl TypeAwarePass for InitMethod<'_> {
             types,
             symbolic_substitutions: ctx.symbolic_substitutions.clone(),
             float_literals: self.float_literals,
+            is_stub: self.is_stub,
             edits: RefCell::new(Vec::new()),
             templates: RefCell::new(Vec::new()),
             relocating: RefCell::new(Vec::new()),
@@ -103,6 +110,7 @@ struct State<'src> {
     /// unless it is spliced in here
     symbolic_substitutions: Vec<(TextRange, String)>,
     float_literals: FloatLiteralLowering,
+    is_stub: bool,
     edits: RefCell<Vec<(TextRange, String)>>,
     templates: RefCell<Vec<(TextRange, Vec<Fragment>)>>,
     /// the `_MISSING` substitutions, whose defaults the guards re-evaluate
@@ -318,7 +326,14 @@ impl State<'_> {
                 sentinels,
                 written,
                 guards,
-            } = parameter_guards(func, self.types);
+                undeclarable,
+            } = parameter_guards(func, self.types, self.is_stub);
+            if let Some(parameter) = undeclarable.first() {
+                self.errors
+                    .borrow_mut()
+                    .push(undeclarable_error(func.name.as_str(), parameter));
+                return;
+            }
             let header_indent = self.line_indent(func.range.start()).to_owned();
             let body_indent = format!("{header_indent}    ");
             let mut frags = vec![Fragment::Lit(":".to_owned())];
@@ -761,6 +776,30 @@ mod tests {
                     def __init__(self):
                         init()
             "},
+        );
+    }
+
+    /// a stub is never run, so the `__init__` it declares re-evaluates no default
+    #[test]
+    fn a_stub_declares_a_default_without_a_guard() {
+        let out = transpile(
+            indoc! {"
+                class C:
+                    init(self, let xs: list[int] = [])
+            "},
+            &Config {
+                is_stub: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            indoc! {"
+                class C:
+                    def __init__(self, xs: list[int] = []):
+                        self.xs: list[int] = xs
+            "}
         );
     }
 }

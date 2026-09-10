@@ -741,11 +741,12 @@ pub(crate) fn module_private_name(name: &str) -> String {
 
 pub(crate) struct ModifiersPass<'src> {
     source: &'src str,
+    is_stub: bool,
 }
 
 impl<'src> ModifiersPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, is_stub: bool) -> Self {
+        Self { source, is_stub }
     }
 }
 
@@ -757,7 +758,13 @@ impl AstPass for ModifiersPass<'_> {
         }
         let exports = std::mem::take(&mut inner.exports);
         let private_renames = std::mem::take(&mut inner.private_renames);
-        let sealed_classes = std::mem::take(&mut inner.sealed_classes);
+        // the members tuple is assigned as the module runs, and a stub never
+        // runs. it declares the classes, which is all a checker reads of them
+        let sealed_classes = if self.is_stub {
+            Vec::new()
+        } else {
+            std::mem::take(&mut inner.sealed_classes)
+        };
         let class_bases = std::mem::take(&mut inner.class_bases);
 
         // typing import grouping mirrors lib.rs's preamble logic
@@ -2083,6 +2090,29 @@ mod tests {
                 def _helper(): ...
                 __all__ = [\"api\"]
             "},
+        );
+    }
+
+    /// the members tuple is assigned as the module runs, and a stub never runs
+    #[test]
+    fn a_stub_assigns_no_sealed_members() {
+        let out = transpile(
+            indoc! {"
+                sealed class A
+                class B(A)
+            "},
+            &Config {
+                is_stub: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            indoc! {"
+                class A: ...
+                class B(A): ...
+            "}
         );
     }
 }

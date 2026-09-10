@@ -152,6 +152,20 @@ ordered lists live in `run_against_source`. a complete list of transforms is at
 `crates/by_transforms/src/transforms/mod.rs`; each module's `///` docs describe
 the rewrite it performs
 
+## stubs
+
+a `.byi` transpiles to a `.pyi`, which a checker reads and python never runs.
+whether a file is a stub is read off the file itself by `transpile_typed`, since
+`by build` hands every source it stages the one config
+
+a pass whose output exists only for running — a runtime check, an entry point,
+reification, a quoted forward reference — says so through `runtime_only`, and the
+driver leaves it out of a stub. a pass that lowers syntax never does: left out,
+its construct would reach the `.pyi` as something python cannot parse. the few
+passes that do both keep the declaration and drop the rest themselves: a stub
+keeps its imports eager, declares an enum's variants without attaching them, and
+keeps a mutable default without its guard
+
 ## splicing
 
 after the passes run, the driver assembles the output in one pass:

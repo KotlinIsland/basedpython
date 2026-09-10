@@ -22,11 +22,26 @@
 //!
 //! A multi-name `import a, b` mixing the two is split, keeping a plain import
 //! for the names that stay eager.
+//!
+//! A stub defers nothing — see [`Deferral::Never`].
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
 use ruff_text_size::{Ranged, TextRange, TextSize};
+
+/// How a module-level import is deferred.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Deferral {
+    /// the PEP 810 `lazy` keyword, which python 3.15 and later parse
+    Keyword,
+    /// a call into the runtime's polyfill, for every target before that
+    Polyfill,
+    /// not at all. a stub is read by a checker and never executed, so it has
+    /// no execution to defer, and what a checker reads off each import is the
+    /// binding it makes. every import stays as written, less any `lazy`
+    Never,
+}
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -47,9 +62,7 @@ pub(crate) struct LazyImport<'src> {
     /// `BaseException` and never consults `__instancecheck__`, so an exception
     /// class reached through the proxy raises `TypeError` from the handler
     eager_names: Vec<String>,
-    /// True when the target Python version supports PEP 810 (3.15+). When
-    /// false, the transform uses the runtime polyfill instead
-    keyword_supported: bool,
+    deferral: Deferral,
     pub(crate) edits: Vec<Fix>,
     /// True when at least one statement was rewritten to call
     /// `_lazy_module`; the preamble must define the module helper
@@ -71,7 +84,7 @@ pub(crate) struct LazyImport<'src> {
 impl<'src> LazyImport<'src> {
     pub(crate) fn new(
         source: &'src str,
-        keyword_supported: bool,
+        deferral: Deferral,
         eager: &[String],
         eager_names: &[String],
     ) -> Self {
@@ -80,7 +93,7 @@ impl<'src> LazyImport<'src> {
             at_module_level: true,
             eager: eager.to_vec(),
             eager_names: eager_names.to_vec(),
-            keyword_supported,
+            deferral,
             edits: Vec::new(),
             needs_module_helper: false,
             needs_attr_helper: false,
@@ -144,19 +157,20 @@ impl<'src> LazyImport<'src> {
     }
 
     fn process_import(&mut self, node: &StmtImport) {
-        // a module whose execution is the point of the import is never deferred,
-        // whichever mechanism this target uses
-        if node
-            .names
-            .iter()
-            .any(|alias| self.is_eager(alias.name.id.as_str()))
+        // a stub defers nothing, and a module whose execution is the point of the
+        // import is never deferred, whichever mechanism this target uses
+        if self.deferral == Deferral::Never
+            || node
+                .names
+                .iter()
+                .any(|alias| self.is_eager(alias.name.id.as_str()))
         {
             if node.is_lazy {
                 self.strip_lazy_keyword(node.range());
             }
             return;
         }
-        if self.keyword_supported {
+        if self.deferral == Deferral::Keyword {
             if !node.is_lazy {
                 self.insert_lazy_keyword(node.range().start());
             }
@@ -210,6 +224,12 @@ impl<'src> LazyImport<'src> {
     }
 
     fn process_from(&mut self, node: &StmtImportFrom) {
+        if self.deferral == Deferral::Never {
+            if node.is_lazy {
+                self.strip_lazy_keyword(node.range());
+            }
+            return;
+        }
         let is_future = node
             .module
             .as_ref()
@@ -241,7 +261,7 @@ impl<'src> LazyImport<'src> {
             return;
         }
 
-        if self.keyword_supported {
+        if self.deferral == Deferral::Keyword {
             if is_future || is_star {
                 if node.is_lazy {
                     self.strip_lazy_keyword(node.range());
@@ -882,5 +902,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(py, "import os\n");
+    }
+
+    /// a stub is read by a checker and never executed. an import in one declares
+    /// the binding it makes, where a deferred one would declare a call result
+    #[test]
+    fn a_stub_keeps_its_imports_as_written() {
+        let source = indoc! {"
+            import json
+            from dataclasses import dataclass
+            from ty_extensions import Intersection
+            lazy import csv
+        "};
+        for min_version in [PythonVersion::PY310, PythonVersion::from((3, 15))] {
+            let config = Config {
+                is_stub: true,
+                min_version,
+                ..cfg_315()
+            };
+            assert_eq!(
+                transpile(source, &config).unwrap(),
+                indoc! {"
+                    import json
+                    from dataclasses import dataclass
+                    from ty_extensions import Intersection
+                    import csv
+                "},
+                "for {min_version}"
+            );
+        }
     }
 }

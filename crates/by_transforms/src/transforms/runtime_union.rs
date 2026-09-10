@@ -48,6 +48,12 @@ impl RuntimeUnionPass {
 }
 
 impl TypeAwarePass for RuntimeUnionPass {
+    // only a union the runtime evaluates needs the older spelling. a checker
+    // reads `X | Y` in a stub whatever version the stub is for
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         if self.min_version >= MIN_VERSION {
             return;
@@ -339,5 +345,20 @@ mod tests {
         .unwrap();
         assert!(out.contains("Alias = int | str"), "got:\n{out}");
         assert!(out.contains("isinstance(x, int | str)"), "got:\n{out}");
+    }
+
+    /// nothing in a stub is evaluated, so a union in one keeps the spelling a
+    /// checker reads whatever the target
+    #[test]
+    fn a_stub_keeps_its_unions() {
+        let config = Config {
+            is_stub: true,
+            min_version: PythonVersion::PY39,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile("Alias = int | str\n", &config).unwrap(),
+            "Alias = int | str\n"
+        );
     }
 }

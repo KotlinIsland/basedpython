@@ -176,21 +176,23 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
 
 pub(crate) struct TypeReificationPass {
     min_version: PythonVersion,
-    is_stub: bool,
 }
 
 impl TypeReificationPass {
-    pub(crate) fn new(min_version: PythonVersion, is_stub: bool) -> Self {
-        Self {
-            min_version,
-            is_stub,
-        }
+    pub(crate) fn new(min_version: PythonVersion) -> Self {
+        Self { min_version }
     }
 }
 
 impl TypeAwarePass for TypeReificationPass {
+    // the specialization is spelled out so the value a call constructs
+    // carries it as the program runs
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        if self.min_version < PythonVersion::PY39 || self.is_stub {
+        if self.min_version < PythonVersion::PY39 {
             return;
         }
         let mut reifier = Reifier {

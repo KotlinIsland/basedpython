@@ -519,18 +519,18 @@ pub(crate) struct SoundnessPass<'src> {
 impl<'src> SoundnessPass<'src> {
     pub(crate) fn new(source: &'src str, config: &Config) -> Self {
         Self {
-            // stubs never execute, so checks would only be noise there
-            positions: if config.is_stub {
-                SoundnessPositions::none()
-            } else {
-                config.soundness
-            },
+            positions: config.soundness,
             source,
         }
     }
 }
 
 impl TypeAwarePass for SoundnessPass<'_> {
+    // every check validates a value as the program produces it
+    fn runtime_only(&self) -> bool {
+        true
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         if !self.positions.any() {
             return;
@@ -1271,5 +1271,17 @@ mod tests {
     fn all_includes_parameters() {
         let out = check_with("def f(s: str): ...\n", crate::SoundnessPositions::all());
         assert!(out.contains("_soundness_check(s, str)"), "got:\n{out}");
+    }
+
+    /// a stub is never run, so it produces no value to check
+    #[test]
+    fn a_stub_gets_no_checks() {
+        let source = "def f(x: int) -> int:\n    return x\n";
+        let config = Config {
+            is_stub: true,
+            soundness: crate::SoundnessPositions::all(),
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(source, &config).unwrap(), source);
     }
 }

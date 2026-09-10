@@ -56,7 +56,10 @@ module `app.main`, so it lands at `app/main.py` and not at `src/app/main.py`
 `build/` is a mirror, not a pile: what a previous build wrote and this one did not
 is deleted, so a module you renamed does not go on being importable
 
-a stub stays a stub. `a.byi` builds to `a.pyi`, never to `a.py`
+a stub stays a stub. `a.byi` builds to `a.pyi`, never to `a.py`, and it holds
+declarations only: a `.pyi` is read by a type checker and never run, so nothing
+that exists for running — a deferred import, the `main` entry point, a runtime
+check, a registration — is written into it
 
 ### two sources, one module
 
