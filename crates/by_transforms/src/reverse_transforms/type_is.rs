@@ -132,7 +132,7 @@ mod tests {
             indoc! {"
                 from typing import TypeIs
                 def is_str(x: object) -> x is str:
-                    return x is str
+                    return isinstance(x, str)
             "},
         );
     }

@@ -408,10 +408,7 @@ mod tests {
     /// a value-position union is not an annotation and is never touched
     #[test]
     fn a_runtime_union_is_left_alone() {
-        check(
-            "def f(v: object):\n    return isinstance(v, int | None)\n",
-            "def f(v: object):\n    return v is int | None\n",
-        );
+        unchanged("def f(v: object):\n    return isinstance(v, int | None)\n");
     }
 
     /// `raises` is a plain name, so `-> int? raises E` would read as the result

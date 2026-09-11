@@ -144,7 +144,7 @@ class Node:
     def __eq__(self, other: object) -> bool:
         if other === self:
             return True
-        return other is Node and other.children == self.children
+        return isinstance(other, Node) and other.children == self.children
 
     def find(self, key: str) -> Optional[Node]: ...
 
@@ -152,8 +152,10 @@ class Node:
 on_visit: (Node) -> None
 ```
 
-the identity fast path became `===` and the `isinstance` became
-[`is`](features/identity-swap.md), the quotes came off the self-references,
+the identity fast path became [`===`](features/identity-swap.md). the
+`isinstance` call stays a call: basedpython's `x is Node` is a type test that
+the value's static type can settle, and a python check is there to run
+whatever the annotations say. the quotes came off the self-references,
 `Callable[[Node], None]` became an [arrow type](features/callable.md), and the
 now-unused `Callable` import was pruned. the `: ...` body stayed: it is a body
 the method is entitled to, and only in a stub does dropping it leave a
