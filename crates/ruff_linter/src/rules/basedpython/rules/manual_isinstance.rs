@@ -34,8 +34,12 @@ use crate::{AlwaysFixableViolation, Edit, Fix};
 /// ```
 ///
 /// ## Fix safety
-/// This rule's fix is marked as unsafe when the call contains comments, which
-/// the rewrite would drop.
+/// This rule's fix is always marked as unsafe. `isinstance` runs its check every
+/// time, while a type test the value's static type already decides is emitted as
+/// its answer: on a parameter annotated `int`, `isinstance(x, int)` still rejects
+/// a caller that passes a `str`, but `x is int` is `True`. The two agree only
+/// where the annotations hold at runtime, which is exactly what a guard like this
+/// is written to check. The rewrite also drops any comments inside the call.
 ///
 /// A call whose second argument is a tuple of classes is reported without a fix:
 /// the keyword accepts one, but a tuple written where a type is expected reads
@@ -122,16 +126,10 @@ pub(crate) fn manual_isinstance(checker: &Checker, call: &ast::ExprCall) {
 }
 
 fn report(checker: &Checker, call: TextRange, range: TextRange, replacement: String) {
-    let applicability = if checker.comment_ranges().intersects(range) {
-        Applicability::Unsafe
-    } else {
-        Applicability::Safe
-    };
-
     checker
         .report_diagnostic(ManualIsinstance, call)
         .set_fix(Fix::applicable_edit(
             Edit::range_replacement(replacement, range),
-            applicability,
+            Applicability::Unsafe,
         ));
 }

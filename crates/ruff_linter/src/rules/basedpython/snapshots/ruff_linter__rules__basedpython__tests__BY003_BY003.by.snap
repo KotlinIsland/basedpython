@@ -18,6 +18,7 @@ help: Replace with `is`
 3 +     if x is int:
 4 |         ...
   |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
  --> BY003.by:5:12
@@ -35,6 +36,7 @@ help: Replace with `is`
 5 +     if x is not str:
 6 |         ...
   |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:9:9
@@ -51,6 +53,7 @@ help: Replace with `is`
 9  +     _ = x is t
 10 |     _ = isinstance(x, x.__class__)
    |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:10:9
@@ -69,6 +72,7 @@ help: Replace with `is`
 10 +     _ = x is x.__class__
 11 |
    |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:13:9
@@ -86,6 +90,7 @@ help: Replace with `is`
 13 +     _ = x is int and isinstance(x, str)
 14 |
    |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:13:32
@@ -103,6 +108,7 @@ help: Replace with `is`
 13 +     _ = isinstance(x, int) and x is str
 14 |
    |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:16:11
@@ -119,6 +125,7 @@ help: Replace with `is`
 16 +     print(x is int)
 17 |     _ = [isinstance(x, int)]
    |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:17:10
@@ -137,6 +144,7 @@ help: Replace with `is`
 17 +     _ = [x is int]
 18 |
    |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:21:9
@@ -155,6 +163,7 @@ help: Replace with `is`
 21 +     _ = (x is int) == True
 22 |     _ = isinstance(x, int).__class__
    |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:22:9
@@ -172,6 +181,7 @@ help: Replace with `is`
 22 +     _ = (x is int).__class__
 23 |     _ = -isinstance(x, int)
    |
+note: This is an unsafe fix and may change runtime behavior
 
 BY003 [*] `isinstance` call can be written as `is`
   --> BY003.by:23:10
@@ -187,3 +197,4 @@ help: Replace with `is`
 23 +     _ = -(x is int)
 24 |
    |
+note: This is an unsafe fix and may change runtime behavior
