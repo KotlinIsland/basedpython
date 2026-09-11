@@ -250,6 +250,19 @@ enum SubPatch {
     Relocating(Vec<Fragment>),
 }
 
+/// whether a template spanning `start..end` only wraps it: its one passthrough
+/// is the whole span, and everything else it emits is text around it
+fn is_wrapper(frags: &[Fragment], start: usize, end: usize) -> bool {
+    let mut passthroughs = frags.iter().filter_map(|frag| match frag {
+        Fragment::Src(range) => Some(range),
+        Fragment::Lit(_) => None,
+    });
+    passthroughs
+        .next()
+        .is_some_and(|range| usize::from(range.start()) == start && usize::from(range.end()) == end)
+        && passthroughs.next().is_none()
+}
+
 /// The sub-edits a template materializes, in position order: those nested in
 /// its own range, plus those its `Src` passthrough spans contain.
 ///
@@ -693,7 +706,6 @@ pub(crate) fn run_against_source<'a>(
         &dedent_string_pass,
         &super_keyword_pass,
         &postfix_await_pass,
-        &auto_quote_pass,
         // strip `local` / `once` parameter modifiers (source-span deletions,
         // like init_method's `let` handling — must read ranges before any
         // AST-mutation pass zeroes them)
@@ -767,6 +779,10 @@ pub(crate) fn run_against_source<'a>(
         // order-independent; first, so a hard incompatibility surfaces
         // before any edit-conflict noise
         &frameworks_pass,
+        // forward references are quoted with one wrapper template per span, so
+        // the lowerings inside an annotation (an arrow, a `T?`) land between the
+        // quotes wherever they come in the list
+        &auto_quote_pass,
         // the `raises` runtime guard is a decorator inserted at the start of the
         // `def` line, so it composes with every edit inside the signature and
         // body (the clause deletion among them)
@@ -1157,7 +1173,13 @@ pub(crate) fn run_against_source<'a>(
     //   3. at one identical span, a *relocating* edit leads: it says the
     //      construct has moved, and the pass that moved it re-emits the span
     //      itself, so every other edit there materializes at the new home
-    //   4. then a *substitution* — plain text, or a template with no `Src`
+    //   4. then a *wrapper* — a template whose one passthrough is its whole
+    //      span, adding text around the construct without removing any of it.
+    //      it claims the other edits at that span and materializes them inside
+    //      its passthrough, so whatever the construct becomes ends up inside the
+    //      wrapping (a quoted forward reference around an arrow type the
+    //      callable lowering replaced as text)
+    //   5. then a *substitution* — plain text, or a template with no `Src`
     //      passthrough — ahead of a *rewrite*, a template that re-emits part of
     //      the span. a substitution says the construct does not appear here at
     //      all, which a rewrite of it cannot outrank
@@ -1173,15 +1195,18 @@ pub(crate) fn run_against_source<'a>(
             });
             let statement = i64::from(!matches!(e.2, SubPatch::Statement(_)));
             let relocating = i64::from(!matches!(e.2, SubPatch::Relocating(_)));
+            let wraps = i64::from(
+                !matches!(&e.2, SubPatch::Template(frags) if is_wrapper(frags, e.0, e.1)),
+            );
             // (start, is_replacement_not_insertion, statement-insert-first,
-            //  neg_end-for-wider-first, relocating-first,
+            //  neg_end-for-wider-first, relocating-first, wrapper-first,
             //  substitution-before-rewrite)
             if e.1 == e.0 {
-                (e.0, 0i64, statement, 0i64, relocating, rewrites) // insertion
+                (e.0, 0i64, statement, 0i64, relocating, wraps, rewrites) // insertion
             } else {
                 #[allow(clippy::cast_possible_wrap)]
                 let neg_end = -(e.1 as i64);
-                (e.0, 1i64, statement, neg_end, relocating, rewrites)
+                (e.0, 1i64, statement, neg_end, relocating, wraps, rewrites)
             }
         };
         priority(a).cmp(&priority(b))

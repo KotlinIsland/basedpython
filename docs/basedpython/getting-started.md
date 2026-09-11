@@ -155,7 +155,8 @@ on_visit: (Node) -> None
 the identity fast path became [`===`](features/identity-swap.md). the
 `isinstance` call stays a call: basedpython's `x is Node` is a type test that
 the value's static type can settle, and a python check is there to run
-whatever the annotations say. the quotes came off the self-references,
+whatever the annotations say. the quotes came off the
+[forward references](features/forward-references.md),
 `Callable[[Node], None]` became an [arrow type](features/callable.md), and the
 now-unused `Callable` import was pruned. the `: ...` body stayed: it is a body
 the method is entitled to, and only in a stub does dropping it leave a

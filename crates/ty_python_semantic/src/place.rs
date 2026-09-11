@@ -24,6 +24,8 @@ use crate::types::{
     may_exist_at_runtime,
 };
 use crate::{Db, FxIndexSet, FxOrderSet};
+use ruff_db::parsed::{ParsedModuleRef, parsed_module};
+use ruff_text_size::Ranged;
 use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
 use ty_python_core::narrowing_constraints::ScopedNarrowingConstraint;
 use ty_python_core::place::{PlaceExpr, ScopedPlaceId};
@@ -1748,6 +1750,213 @@ fn declared_place(place: PlaceAndQualifiers<'_>) -> SourceDeclaration<'_> {
         }
         Place::Defined(_) => SourceDeclaration::Undeclared,
         Place::Undefined => SourceDeclaration::Empty,
+    }
+}
+
+/// basedpython: whether the name `expr` loads, read in an annotation, is a forward reference —
+/// a name the program binds, but that python does not find bound when the annotation is
+/// evaluated where it is written.
+///
+/// ty checks every annotation in a basedpython file as deferred, so a name in one resolves
+/// against every binding its scope makes: `def f() -> Later` is fine with `class Later` further
+/// down. Before 3.14 python evaluates annotations as the definition runs, and the same `Later`
+/// raises `NameError` there, so this is how the transpiler learns which annotations it has to
+/// defer. A binding made only under `if TYPE_CHECKING:` never runs, so a name only it binds is
+/// a forward reference too.
+///
+/// A name no binding in the program supplies is not one: it is either a name basedpython
+/// resolves itself (`dynamic`, an implicit `Any`), which the transpiler makes available, or an
+/// error the checker reports already. A name unbound on only some paths is one, since deferring
+/// it costs nothing. `None` when the index never saw `expr`, as for a name inside a string
+/// annotation, which is deferred already.
+pub(crate) fn is_forward_reference<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: ProgramFile<'db>,
+    expr: ast::ExprRef<'_>,
+) -> Option<bool> {
+    let index = semantic_index(db, file);
+    let scope = index.try_expression_scope_id(&expr)?.to_scope_id(db, file);
+    index.try_use_id(expr)?;
+    let module = parsed_module(db, file.python_file(db)).load(db);
+
+    let mut resolution = resolve_place_load(
+        db,
+        index,
+        scope,
+        PlaceExpr::try_from_expr(expr)?,
+        PlaceLoadMode::AtExpression(expr),
+    );
+    let bound_where_written = loop {
+        match resolution.next() {
+            Some(PlaceLoadResolutionStep::Source(source)) => {
+                match runtime_definedness(db, env, index, &module, source) {
+                    RuntimeDefinedness::Defined => break true,
+                    RuntimeDefinedness::PossiblyUndefined => break false,
+                    RuntimeDefinedness::Undefined => {}
+                }
+            }
+            Some(PlaceLoadResolutionStep::MemberResolutionCondition(_)) => {}
+            Some(PlaceLoadResolutionStep::Exhausted(_)) | None => break false,
+        }
+    };
+    if bound_where_written {
+        return Some(false);
+    }
+
+    // resolved as the checker resolves it, against every binding its scope makes: a binding
+    // there means the program supplies the name, only not by the point the annotation runs
+    let mut resolution = resolve_place_load(
+        db,
+        index,
+        scope,
+        PlaceExpr::try_from_expr(expr)?,
+        PlaceLoadMode::Deferred,
+    );
+    loop {
+        match resolution.next() {
+            Some(PlaceLoadResolutionStep::Source(source)) => {
+                if source.is_post_lexical() {
+                    return Some(false);
+                }
+                if lexical_binding_exists(db, source) {
+                    return Some(true);
+                }
+            }
+            Some(PlaceLoadResolutionStep::MemberResolutionCondition(_)) => {}
+            Some(PlaceLoadResolutionStep::Exhausted(_)) | None => return Some(false),
+        }
+    }
+}
+
+/// Whether a lexical source of a place load holds any definition at all, run or not.
+fn lexical_binding_exists<'db>(db: &'db dyn Db, source: PlaceLoadSource<'db>) -> bool {
+    let any_defined = |bindings: BindingWithConstraintsIterator<'_, 'db>| {
+        bindings
+            .into_iter()
+            .any(|binding| matches!(binding.binding, DefinitionState::Defined(_)))
+    };
+    match source.kind {
+        PlaceLoadSourceKind::Bindings(bindings) => any_defined(bindings),
+        PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => {
+            any_defined(use_def_map(db, scope).end_of_scope_bindings(id))
+        }
+        PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ExplicitGlobalSymbol { file, name }) => {
+            let global = global_scope(db, file);
+            place_table(db, global)
+                .symbol_id(&name)
+                .is_some_and(|symbol| {
+                    any_defined(use_def_map(db, global).end_of_scope_symbol_bindings(symbol))
+                })
+        }
+        PlaceLoadSourceKind::Observed(_) | PlaceLoadSourceKind::Implicit(_) => false,
+    }
+}
+
+/// Whether one source of a place load holds a value once the program is running.
+enum RuntimeDefinedness {
+    Defined,
+    /// the source holds a value on some paths to the load and not on others
+    PossiblyUndefined,
+    /// the source holds no value here, so resolution moves on to the next one
+    Undefined,
+}
+
+fn runtime_definedness<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    index: &'db SemanticIndex<'db>,
+    module: &ParsedModuleRef,
+    source: PlaceLoadSource<'db>,
+) -> RuntimeDefinedness {
+    match source.kind {
+        PlaceLoadSourceKind::Bindings(bindings) => {
+            bindings_runtime_definedness(db, index, module, bindings)
+        }
+        // a lazy scope reads the owner's value when it runs, by which point the owner has made
+        // every binding it is going to
+        PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => {
+            bindings_runtime_definedness(
+                db,
+                index,
+                module,
+                use_def_map(db, scope).end_of_scope_bindings(id),
+            )
+        }
+        PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ExplicitGlobalSymbol { file, name }) => {
+            let global = global_scope(db, file);
+            match place_table(db, global).symbol_id(&name) {
+                Some(symbol) => bindings_runtime_definedness(
+                    db,
+                    index,
+                    module,
+                    use_def_map(db, global).end_of_scope_symbol_bindings(symbol),
+                ),
+                None => RuntimeDefinedness::Undefined,
+            }
+        }
+        PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::Builtin(name)) => {
+            defined_if(implicit_builtins_symbol(db, env, &name))
+        }
+        PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ClassBodySymbol(name)) => {
+            defined_if(class_body_implicit_symbol(db, env, &name))
+        }
+        PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ModuleImplicitGlobal { file, name }) => {
+            defined_if(module_type_implicit_global_symbol(db, file, &name))
+        }
+        PlaceLoadSourceKind::Observed(_)
+        | PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::DunderClass(_)) => {
+            RuntimeDefinedness::Defined
+        }
+    }
+}
+
+/// an implicit source holds a value only where its lookup finds one
+fn defined_if(place: PlaceAndQualifiers<'_>) -> RuntimeDefinedness {
+    if place.place.is_definitely_bound() {
+        RuntimeDefinedness::Defined
+    } else {
+        RuntimeDefinedness::Undefined
+    }
+}
+
+fn bindings_runtime_definedness<'db>(
+    db: &'db dyn Db,
+    index: &'db SemanticIndex<'db>,
+    module: &ParsedModuleRef,
+    bindings: BindingWithConstraintsIterator<'_, 'db>,
+) -> RuntimeDefinedness {
+    let predicates = bindings.predicates();
+    let reachability_constraints = bindings.reachability_constraints();
+    let (mut defined, mut undefined) = (false, false);
+    for binding in bindings {
+        if evaluate_reachability_with_cache(
+            db,
+            None,
+            reachability_constraints,
+            predicates,
+            binding.reachability_constraint,
+        )
+        .is_always_false()
+        {
+            continue;
+        }
+        match binding.binding {
+            DefinitionState::Defined(definition)
+                if !index.is_in_type_checking_block(
+                    definition.file_scope(db),
+                    definition.full_range(db, module).range(),
+                ) =>
+            {
+                defined = true;
+            }
+            _ => undefined = true,
+        }
+    }
+    match (defined, undefined) {
+        (true, false) => RuntimeDefinedness::Defined,
+        (true, true) => RuntimeDefinedness::PossiblyUndefined,
+        (false, _) => RuntimeDefinedness::Undefined,
     }
 }
 

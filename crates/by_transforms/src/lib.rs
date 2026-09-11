@@ -1149,7 +1149,11 @@ pub fn optional_marker_edits(source: &str) -> Vec<(TextRange, String)> {
 /// round-trip testing — `transpile(reverse_transpile(py))` should produce
 /// AST-equivalent code to `transpile(py)`.
 pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String> {
-    let (db, file) = make_in_memory_db(source);
+    // every transform below keys its edits on one parse, so the annotation
+    // strings are unquoted first: the transforms then see `A | None` where
+    // the source wrote `"A | None"`
+    let source = reverse_transforms::forward_references::unquote_forward_references(source);
+    let (db, file) = make_in_memory_db(&source);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
     let module = ruff_db::parsed::parsed_module(

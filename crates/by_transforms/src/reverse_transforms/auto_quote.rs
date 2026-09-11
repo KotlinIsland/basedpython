@@ -1,8 +1,12 @@
-//! reverse of `crate::transforms::auto_quote`:
-//!   `"ClassName"` string in subscript slice → bare name within class definition
+//! reverse of `crate::transforms::auto_quote` for the positions that are not
+//! annotations:
+//!   `"ClassName"` string in a base's subscript slice, or in a value-position
+//!   subscript in the class body (`list["A"]()`) → bare name
 //!
-//! mirrors the forward transform's traversal exactly: only fires inside class
-//! base-class subscripts and class body annotation positions
+//! a base and a value subscript evaluate while the class is being built, so the
+//! forward transpile quotes only the class's own name there, and only that is
+//! unquoted: any other string stays one. annotation strings are unquoted before
+//! any reverse transform runs, by [`super::forward_references`]
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
@@ -89,29 +93,8 @@ impl AutoQuoteReverse {
                 Stmt::Expr(e) => self.walk_expr_for_subscripts(&e.value, class_name),
                 Stmt::Assign(a) => self.walk_expr_for_subscripts(&a.value, class_name),
                 Stmt::AnnAssign(a) => {
-                    self.find_quoted_refs_in_annotation(&a.annotation, class_name);
                     if let Some(value) = &a.value {
                         self.walk_expr_for_subscripts(value, class_name);
-                    }
-                }
-                Stmt::FunctionDef(f) => {
-                    for param in f.parameters.iter_non_variadic_params() {
-                        if let Some(ann) = &param.parameter.annotation {
-                            self.find_quoted_refs_in_annotation(ann, class_name);
-                        }
-                    }
-                    if let Some(var) = &f.parameters.vararg {
-                        if let Some(ann) = &var.annotation {
-                            self.find_quoted_refs_in_annotation(ann, class_name);
-                        }
-                    }
-                    if let Some(kwarg) = &f.parameters.kwarg {
-                        if let Some(ann) = &kwarg.annotation {
-                            self.find_quoted_refs_in_annotation(ann, class_name);
-                        }
-                    }
-                    if let Some(ret) = &f.returns {
-                        self.find_quoted_refs_in_annotation(ret, class_name);
                     }
                 }
                 _ => {}

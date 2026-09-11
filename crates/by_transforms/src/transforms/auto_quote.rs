@@ -1,31 +1,44 @@
-//! AST pass: auto-quotes forward self-references in class definitions
+//! Type-aware pass: quotes the forward references python would fail to
+//! evaluate
 //!
-//! `class A(list[A])` → `class A(list["A"])`
+//! basedpython has no manual forward-reference syntax — a string in an
+//! annotation is a string-literal *type* — and the checker reads every
+//! annotation as deferred, so `def f() -> Later` is fine with `class Later`
+//! further down. python before 3.14 evaluates an annotation as its definition
+//! runs, and there the same annotation raises `NameError`. this pass quotes
+//! each reference that would:
 //!
-//! the class name appearing as a subscript slice argument in base classes or
-//! the class body is replaced with a string literal — a PEP 484 forward
-//! reference resolvable at runtime without deferred annotation evaluation.
+//! `class A: def f(self) -> A` → `def f(self) -> "A"`
 //!
-//! fires when the name is inside a subscript slice; direct bases (`class A(A):`)
-//! are left alone — that is a runtime error regardless of quoting.
+//! an annotation is evaluated when its definition runs if it is a parameter or
+//! return annotation, or annotates a class-body or module-level variable. a
+//! local variable's annotation is never evaluated. which names need quoting is
+//! ty's to say ([`TypeInfo::is_forward_reference`]): one the program binds, but
+//! not by the point the annotation runs — defined further down, the class the
+//! annotation sits in, or imported only under `if TYPE_CHECKING:`
 //!
-//! basedpython has no manual forward-reference syntax (a string in an
-//! annotation is a string-literal *type*), so the transpiler is the only
-//! place these self-references can be made runtime-safe. quoting is skipped
-//! when it isn't needed: on python >= 3.14 annotations are deferred natively
-//! (PEP 649), and a user-written or opt-in `from __future__ import annotations`
-//! already defers every annotation
+//! annotation quoting is skipped when annotations are not evaluated eagerly:
+//! on python >= 3.14 they are deferred natively (PEP 649), and a user-written
+//! or opt-in `from __future__ import annotations` defers every one. a class
+//! *base*, and a value-position subscript in a class body (`list[A]()`),
+//! evaluates while the class is being built on every version, so a
+//! self-reference there is always quoted. a direct base (`class A(A):`) is
+//! left alone — that is a runtime error regardless of quoting
 //!
-//! per-class state (class name + PEP-695 typevar names) means each `ClassDef`
-//! drives its own walk; the shared [`type_expr_walker`] traverses each
-//! class's body + bases identifying type positions, and this pass's visitor
-//! checks each one for self-references
+//! an annotation holding a forward reference is quoted whole, as one wrapper
+//! template passing its source through. no lowering reaches past the annotation
+//! it lowers, so whatever the annotation becomes — a callable arrow, a `T?`, a
+//! renamed type parameter, even when a lowering rewrites the whole annotation
+//! as text — ends up between the quotes. a base or a value-position subscript
+//! cannot be a string, so there only the self-reference itself is quoted
 
-use ruff_python_ast::{Expr, ModModule, PythonVersion, Stmt, StmtClassDef};
+use ruff_python_ast::visitor::{Visitor, walk_expr};
+use ruff_python_ast::{AnyParameterRef, Expr, ExprName, PythonVersion, Stmt, StmtClassDef};
 use ruff_text_size::{Ranged, TextRange};
 
-use super::ast_driver::{AstPass, PassContext};
+use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_one_type_expr};
+use crate::type_info::TypeInfo;
 
 pub(crate) struct AutoQuote<'src> {
     source: &'src str,
@@ -43,25 +56,25 @@ impl<'src> AutoQuote<'src> {
     }
 }
 
-impl AstPass for AutoQuote<'_> {
+impl TypeAwarePass for AutoQuote<'_> {
     // nothing in a stub is evaluated, and a checker reads a forward reference
     // in one without quotes
     fn runtime_only(&self) -> bool {
         true
     }
 
-    fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
-        // annotation positions need no quoting when they won't be eagerly
-        // evaluated: native deferral on 3.14+ (PEP 649), or a future import
-        // that defers them all. class *bases* and value-position subscripts
-        // (`class A(list[A])`, `list[A]()`) evaluate eagerly regardless, so
-        // their self-references are always quoted
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let quote_annotations = !(self.min_version.defers_annotations()
             || self.inject_future
-            || has_future_annotations(&module.body));
-        let mut edits: Vec<(TextRange, String)> = Vec::new();
-        process_stmts(&module.body, self.source, &mut edits, quote_annotations);
-        ctx.text_edits.extend(edits);
+            || has_future_annotations(stmts));
+        let mut walk = Walk {
+            source: self.source,
+            types,
+            quote_annotations,
+            edits: Vec::new(),
+        };
+        walk.block(stmts, Scope::Module);
+        ctx.template_edits.extend(walk.edits);
     }
 }
 
@@ -73,341 +86,244 @@ fn has_future_annotations(stmts: &[Stmt]) -> bool {
     })
 }
 
-fn process_stmts(
-    stmts: &[Stmt],
-    source: &str,
-    edits: &mut Vec<(TextRange, String)>,
-    quote_annotations: bool,
-) {
-    for stmt in stmts {
-        if let Stmt::ClassDef(c) = stmt {
-            process_class(c, source, edits, quote_annotations);
-            // nested classes inside this one's body are recursed into by
-            // process_class so the inner ClassDef walks with its own name
-        } else {
-            // top-level non-class statements may contain nested classes via
-            // function bodies — descend
-            walk_for_nested_classes(stmt, source, edits, quote_annotations);
-        }
-    }
+/// the kind of scope a block of statements runs in
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Module,
+    Class,
+    Function,
 }
 
-fn walk_for_nested_classes(
-    stmt: &Stmt,
-    source: &str,
-    edits: &mut Vec<(TextRange, String)>,
+struct Walk<'a> {
+    source: &'a str,
+    types: &'a dyn TypeInfo,
     quote_annotations: bool,
-) {
-    // only walk into structures that may contain nested class defs.
-    // function bodies, if/while/try blocks, etc.
-    match stmt {
-        Stmt::FunctionDef(f) => process_stmts(&f.body, source, edits, quote_annotations),
-        Stmt::If(i) => {
-            process_stmts(&i.body, source, edits, quote_annotations);
-            for clause in &i.elif_else_clauses {
-                process_stmts(&clause.body, source, edits, quote_annotations);
-            }
-        }
-        Stmt::While(w) => process_stmts(&w.body, source, edits, quote_annotations),
-        Stmt::For(f) => {
-            process_stmts(&f.body, source, edits, quote_annotations);
-            process_stmts(&f.orelse, source, edits, quote_annotations);
-        }
-        Stmt::With(w) => process_stmts(&w.body, source, edits, quote_annotations),
-        Stmt::Try(t) => {
-            process_stmts(&t.body, source, edits, quote_annotations);
-            for h in &t.handlers {
-                let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
-                process_stmts(&eh.body, source, edits, quote_annotations);
-            }
-            process_stmts(&t.orelse, source, edits, quote_annotations);
-            process_stmts(&t.finalbody, source, edits, quote_annotations);
-        }
-        _ => {}
-    }
+    edits: Vec<(TextRange, Vec<Fragment>)>,
 }
 
-fn process_class(
-    class: &StmtClassDef,
-    source: &str,
-    edits: &mut Vec<(TextRange, String)>,
-    quote_annotations: bool,
-) {
-    let class_name = class.name.id.as_str();
-    let typevar_names: Vec<String> = class
-        .type_params
-        .as_deref()
-        .map(|tps| {
-            tps.type_params
-                .iter()
-                .map(|tp| tp.name().id.as_str().to_owned())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut visitor = Visitor {
-        source,
-        class_name,
-        typevars: &typevar_names,
-        edits,
-        skip_self_ref_root: false,
-    };
-
-    if let Some(args) = &class.arguments {
-        for base in &args.args {
-            // a direct `class A(A)` base must not be quoted — that would
-            // mask a runtime error rather than fix it. for a base, the
-            // root self-ref is the bare-name direct base; descend into the
-            // subscript slice / union arms but skip a root self-ref name
-            visitor.skip_self_ref_root = true;
-            walk_one_type_expr(base, &mut visitor);
-            visitor.skip_self_ref_root = false;
+impl Walk<'_> {
+    fn block(&mut self, stmts: &[Stmt], scope: Scope) {
+        for stmt in stmts {
+            self.stmt(stmt, scope);
         }
     }
 
-    // body: AnnAssign annotations + function annotations are type positions
-    // (handled by walker), method bodies need separate descent for
-    // `list[A]()` patterns
-    for stmt in &class.body {
-        process_class_body_stmt(stmt, &mut visitor, quote_annotations);
-    }
-
-    // recurse into nested classes inside the body so they get their own
-    // class-context walk (the `visitor` borrow of `edits` ends above)
-    process_stmts(&class.body, source, edits, quote_annotations);
-}
-
-fn process_class_body_stmt(stmt: &Stmt, visitor: &mut Visitor<'_>, quote_annotations: bool) {
-    match stmt {
-        Stmt::Expr(e) => walk_value_subscripts(e.value.as_ref(), visitor),
-        Stmt::Assign(a) => walk_value_subscripts(a.value.as_ref(), visitor),
-        Stmt::AnnAssign(a) => {
-            if quote_annotations {
-                visitor.quote_annotation(a.annotation.as_ref());
+    fn stmt(&mut self, stmt: &Stmt, scope: Scope) {
+        match stmt {
+            Stmt::ClassDef(class) => self.class(class),
+            Stmt::FunctionDef(function) => {
+                if self.quote_annotations {
+                    for parameter in function
+                        .parameters
+                        .iter()
+                        .map(AnyParameterRef::as_parameter)
+                    {
+                        if let Some(annotation) = parameter.annotation.as_deref() {
+                            self.annotation(annotation);
+                        }
+                    }
+                    if let Some(returns) = &function.returns {
+                        self.annotation(returns);
+                    }
+                }
+                self.block(&function.body, Scope::Function);
             }
-            if let Some(value) = &a.value {
-                walk_value_subscripts(value.as_ref(), visitor);
+            // a local variable's annotation is never evaluated
+            Stmt::AnnAssign(assign) if scope != Scope::Function && self.quote_annotations => {
+                self.annotation(&assign.annotation);
             }
-        }
-        Stmt::FunctionDef(f) => {
-            if !quote_annotations {
-                return;
-            }
-            for param in f.parameters.iter_non_variadic_params() {
-                if let Some(ann) = &param.parameter.annotation {
-                    visitor.quote_annotation(ann);
+            Stmt::If(node) => {
+                self.block(&node.body, scope);
+                for clause in &node.elif_else_clauses {
+                    self.block(&clause.body, scope);
                 }
             }
-            if let Some(var) = &f.parameters.vararg
-                && let Some(ann) = &var.annotation
-            {
-                visitor.quote_annotation(ann);
+            Stmt::While(node) => {
+                self.block(&node.body, scope);
+                self.block(&node.orelse, scope);
             }
-            if let Some(kwarg) = &f.parameters.kwarg
-                && let Some(ann) = &kwarg.annotation
-            {
-                visitor.quote_annotation(ann);
+            Stmt::For(node) => {
+                self.block(&node.body, scope);
+                self.block(&node.orelse, scope);
             }
-            if let Some(ret) = &f.returns {
-                visitor.quote_annotation(ret);
+            Stmt::With(node) => self.block(&node.body, scope),
+            Stmt::Try(node) => {
+                self.block(&node.body, scope);
+                for ruff_python_ast::ExceptHandler::ExceptHandler(handler) in &node.handlers {
+                    self.block(&handler.body, scope);
+                }
+                self.block(&node.orelse, scope);
+                self.block(&node.finalbody, scope);
+            }
+            Stmt::Match(node) => {
+                for case in &node.cases {
+                    self.block(&case.body, scope);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn annotation(&mut self, annotation: &Expr) {
+        let types = self.types;
+        let is_forward = |name: &ExprName| types.is_forward_reference(name) == Some(true);
+        let mut quoter = Quoter {
+            source: self.source,
+            is_forward: &is_forward,
+            edits: &mut self.edits,
+            skip_root: false,
+        };
+        if quoter.contains_forward_reference(annotation) {
+            quoter.quote(annotation.range());
+        }
+    }
+
+    /// a class's bases and the value-position subscripts in its body run while
+    /// the class is being built, whatever the version, and the class's own name
+    /// is not bound until it is
+    fn class(&mut self, class: &StmtClassDef) {
+        let class_name = class.name.id.as_str();
+        let is_self = |name: &ExprName| name.id.as_str() == class_name;
+        if let Some(arguments) = &class.arguments {
+            for base in &arguments.args {
+                // a direct `class A(A)` base must not be quoted — that would
+                // mask a runtime error rather than fix it
+                let mut quoter = Quoter {
+                    source: self.source,
+                    is_forward: &is_self,
+                    edits: &mut self.edits,
+                    skip_root: true,
+                };
+                walk_one_type_expr(base, &mut quoter);
             }
         }
-        _ => {}
+        for stmt in &class.body {
+            let value = match stmt {
+                Stmt::Expr(node) => Some(node.value.as_ref()),
+                Stmt::Assign(node) => Some(node.value.as_ref()),
+                Stmt::AnnAssign(node) => node.value.as_deref(),
+                _ => None,
+            };
+            if let Some(value) = value {
+                let mut quoter = Quoter {
+                    source: self.source,
+                    is_forward: &is_self,
+                    edits: &mut self.edits,
+                    skip_root: false,
+                };
+                quoter.value_subscripts(value);
+            }
+        }
+        self.block(&class.body, Scope::Class);
     }
 }
 
-/// `list[A]()` and similar — quote a self-ref inside a value-position
-/// subscript on the LHS of a Call. doesn't descend into Call args
-fn walk_value_subscripts(expr: &Expr, visitor: &mut Visitor<'_>) {
-    match expr {
-        Expr::Subscript(s) => {
-            walk_one_type_expr(s.slice.as_ref(), visitor);
-            walk_value_subscripts(&s.value, visitor);
-        }
-        Expr::Call(c) => walk_value_subscripts(&c.func, visitor),
-        Expr::Attribute(a) => walk_value_subscripts(&a.value, visitor),
-        _ => {}
-    }
-}
-
-struct Visitor<'a> {
+/// quotes the forward references in one type expression
+struct Quoter<'a> {
     source: &'a str,
-    class_name: &'a str,
-    typevars: &'a [String],
-    edits: &'a mut Vec<(TextRange, String)>,
-    /// when walking a class base, the root expression must not be quoted
-    /// even if it's a bare self-ref name — that would mask the runtime error
-    skip_self_ref_root: bool,
+    is_forward: &'a dyn Fn(&ExprName) -> bool,
+    edits: &'a mut Vec<(TextRange, Vec<Fragment>)>,
+    /// when walking a class base, the root expression must not be quoted even
+    /// if it's a bare self-reference — that would mask the runtime error
+    skip_root: bool,
 }
 
-impl TypeExprVisitor for Visitor<'_> {
+impl TypeExprVisitor for Quoter<'_> {
     fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
-        // class base: the root expression must not be quoted even if it
-        // contains a self-ref. for a bare-name direct base (`class A(A):`)
-        // quoting would mask a runtime error; for a subscript/binop, the
-        // self-ref lives inside and the walker descends into it
-        if self.skip_self_ref_root {
-            self.skip_self_ref_root = false;
+        if std::mem::take(&mut self.skip_root) {
             return match expr {
                 Expr::Subscript(_) | Expr::BinOp(_) => Recurse::Descend,
                 _ => Recurse::Stop,
             };
         }
-        if !contains_self_ref(expr, self.class_name) {
+        if !self.contains_forward_reference(expr) {
             return Recurse::Stop;
         }
         match expr {
-            // unparenthesized tuple in a subscript slice (the walker
-            // already passes individual elts; this fires when we somehow
-            // see the Tuple directly — descend)
             Expr::Tuple(_) => Recurse::Descend,
-            // `A | B` arms: quote the whole union since the original
-            // behaviour collapsed it into one string (`"A | None"`) to
-            // avoid the runtime `str | NoneType` computation that quoting
-            // only the self-ref arm would produce
-            Expr::BinOp(_) => {
-                self.emit_quote(expr.range());
-                Recurse::Stop
+            // a generic whose base is not itself a forward reference: quote the
+            // references inside its arguments at their own level
+            Expr::Subscript(subscript) if !self.contains_forward_reference(&subscript.value) => {
+                Recurse::Descend
             }
-            // `A[T]` where A is the class name — quote the whole subscript
-            // since the base name itself is a forward reference
-            Expr::Subscript(s) if is_self_ref_root(&s.value, self.class_name) => {
-                self.emit_quote(expr.range());
-                Recurse::Stop
-            }
-            // generic subscript whose base isn't a self-ref: descend into
-            // the slice so nested self-refs get quoted at their own level
-            Expr::Subscript(_) => Recurse::Descend,
-            // bare-name or any other expression containing a self-ref:
-            // quote whole as a forward reference
+            // a union is quoted whole: quoting one arm alone would evaluate
+            // `str | NoneType` at runtime. anything else that holds a reference
+            // — a name, a generic rooted at one, an arrow type — is quoted whole
+            // as the reference it is
             _ => {
-                self.emit_quote(expr.range());
+                self.quote(expr.range());
                 Recurse::Stop
             }
         }
     }
 }
 
-impl Visitor<'_> {
-    /// Quote the self-references in one annotation.
-    ///
-    /// A [callable type](super::callable) is basedpython syntax, so a
-    /// self-reference inside one cannot be quoted where it is written —
-    /// `"(A) -> None"` is not a python type. The whole annotation is quoted
-    /// instead, as a pair of boundary insertions: the callable lowering's own
-    /// replacement sits strictly inside them and still applies, so what ends up
-    /// between the quotes is the *lowered* `Callable[…]`. Every other
-    /// annotation keeps the narrow leaf quoting.
-    fn quote_annotation(&mut self, annotation: &Expr) {
-        if contains_callable_self_ref(annotation, self.class_name) {
-            let range = annotation.range();
-            self.edits
-                .push((TextRange::empty(range.start()), "\"".to_owned()));
-            self.edits
-                .push((TextRange::empty(range.end()), "\"".to_owned()));
-            return;
+impl Quoter<'_> {
+    fn contains_forward_reference(&self, expr: &Expr) -> bool {
+        struct Finder<'a> {
+            is_forward: &'a dyn Fn(&ExprName) -> bool,
+            found: bool,
         }
-        walk_one_type_expr(annotation, self);
-    }
-
-    fn emit_quote(&mut self, range: TextRange) {
-        let raw = &self.source[usize::from(range.start())..usize::from(range.end())];
-        // basedpython renames PEP 695 typevars (`T` → `_T`) when polyfilling
-        // for runtime. quoting a forward-reference verbatim from source would
-        // capture the pre-rename name and leave it unresolved inside the
-        // string. apply the rename here so the quoted form stays correct
-        let body = if self.typevars.is_empty() {
-            raw.to_owned()
-        } else {
-            substitute_typevars(raw, self.typevars)
+        impl<'ast> Visitor<'ast> for Finder<'_> {
+            fn visit_expr(&mut self, expr: &'ast Expr) {
+                if self.found {
+                    return;
+                }
+                if let Expr::Name(name) = expr
+                    && (self.is_forward)(name)
+                {
+                    self.found = true;
+                    return;
+                }
+                walk_expr(self, expr);
+            }
+        }
+        let mut finder = Finder {
+            is_forward: self.is_forward,
+            found: false,
         };
-        self.edits.push((range, format!("\"{body}\"")));
+        finder.visit_expr(expr);
+        finder.found
     }
-}
 
-fn is_self_ref_root(expr: &Expr, class_name: &str) -> bool {
-    matches!(expr, Expr::Name(n) if n.id.as_str() == class_name)
-}
-
-fn contains_self_ref(expr: &Expr, class_name: &str) -> bool {
-    match expr {
-        Expr::Name(n) => n.id.as_str() == class_name,
-        Expr::Subscript(s) => {
-            contains_self_ref(&s.value, class_name) || contains_self_ref(&s.slice, class_name)
-        }
-        Expr::BinOp(b) => {
-            contains_self_ref(&b.left, class_name) || contains_self_ref(&b.right, class_name)
-        }
-        Expr::Tuple(t) => t.elts.iter().any(|e| contains_self_ref(e, class_name)),
-        Expr::CallableType(c) => {
-            c.receiver
-                .iter()
-                .any(|receiver| contains_self_ref(receiver, class_name))
-                || c.args
-                    .iter()
-                    .any(|argument| contains_self_ref(argument, class_name))
-                || contains_self_ref(&c.returns, class_name)
-        }
-        _ => false,
-    }
-}
-
-/// whether `expr` holds a callable type that names the enclosing class.
-///
-/// A callable type is basedpython syntax, so its self-reference cannot be
-/// quoted where it is written — `"(A) -> None"` is not a python type. The whole
-/// annotation is quoted instead, *after* the callable lowering has rewritten it
-/// to `Callable[…]`, which is what [`quote_lowered_annotation`] arranges.
-fn contains_callable_self_ref(expr: &Expr, class_name: &str) -> bool {
-    match expr {
-        Expr::CallableType(_) => contains_self_ref(expr, class_name),
-        Expr::Subscript(s) => {
-            contains_callable_self_ref(&s.value, class_name)
-                || contains_callable_self_ref(&s.slice, class_name)
-        }
-        Expr::BinOp(b) => {
-            contains_callable_self_ref(&b.left, class_name)
-                || contains_callable_self_ref(&b.right, class_name)
-        }
-        Expr::Tuple(t) => t
-            .elts
-            .iter()
-            .any(|e| contains_callable_self_ref(e, class_name)),
-        _ => false,
-    }
-}
-
-/// Replace each occurrence of `name` with `_name` (the mangled form) when
-/// `name` appears as an identifier token. Identifier boundaries are detected
-/// against the surrounding bytes — `T` matches `T`, `[T]`, `T |`, but not
-/// `Tree` or `_T`. Only matches names that are NOT already prefixed with `_`.
-fn substitute_typevars(text: &str, typevars: &[String]) -> String {
-    let bytes = text.as_bytes();
-    let mut out = String::with_capacity(text.len() + typevars.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        let starts_ident = b.is_ascii_alphabetic() || b == b'_';
-        let prev_ident = i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_');
-        if starts_ident && !prev_ident {
-            let mut j = i;
-            while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-                j += 1;
+    /// `list[A]()` and similar — quote a self-reference inside a value-position
+    /// subscript on the LHS of a call. doesn't descend into call arguments
+    fn value_subscripts(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Subscript(subscript) => {
+                walk_one_type_expr(subscript.slice.as_ref(), self);
+                self.value_subscripts(&subscript.value);
             }
-            let ident = &text[i..j];
-            if typevars.iter().any(|tv| tv == ident) {
-                out.push('_');
-                out.push_str(ident);
-            } else {
-                out.push_str(ident);
-            }
-            i = j;
-            continue;
+            Expr::Call(call) => self.value_subscripts(&call.func),
+            Expr::Attribute(attribute) => self.value_subscripts(&attribute.value),
+            _ => {}
         }
-        out.push(b as char);
-        i += 1;
     }
-    out
+
+    /// wrap `range` in quotes, as one template passing the source through so
+    /// the lowerings inside it land between the quotes. the delimiter is one the
+    /// source it wraps does not already use
+    fn quote(&mut self, range: TextRange) {
+        let text = &self.source[range];
+        let delimiter = ["\"", "'", "\"\"\"", "'''"]
+            .into_iter()
+            .find(|delimiter| {
+                !text.contains(delimiter)
+                    && delimiter
+                        .chars()
+                        .next()
+                        .is_none_or(|quote| !text.ends_with(quote))
+            })
+            .unwrap_or("\"");
+        self.edits.push((
+            range,
+            vec![
+                Fragment::Lit(delimiter.to_owned()),
+                Fragment::Src(range),
+                Fragment::Lit(delimiter.to_owned()),
+            ],
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -425,9 +341,9 @@ mod tests {
     }
 
     /// a callable type is basedpython syntax, so a self-reference inside one
-    /// cannot be quoted where it is written. the whole annotation is quoted
-    /// around the *lowered* `Callable[…]` instead — without it the annotation
-    /// evaluates `Tag` while the class body is still running
+    /// cannot be quoted where it is written. the quote wraps the arrow, and the
+    /// callable lowering's `Callable[…]` lands inside it — without it the
+    /// annotation evaluates `Tag` while the class body is still running
     #[test]
     fn a_callable_annotation_naming_its_class_is_quoted() {
         check(
@@ -551,7 +467,7 @@ mod tests {
             "},
             indoc! {"
                 class A(list[\"A\"]):
-                    x: list[\"A\"] = list[\"A\"]()
+                    x: \"list[A]\" = list[\"A\"]()
             "},
         );
     }
@@ -565,7 +481,7 @@ mod tests {
             "},
             indoc! {"
                 class A(list[\"A\"]):
-                    def method(self, x: list[\"A\"]) -> list[\"A\"]: ...
+                    def method(self, x: \"list[A]\") -> \"list[A]\": ...
             "},
         );
     }
@@ -614,7 +530,7 @@ mod tests {
             "},
             indoc! {"
                 class Tree:
-                    children: list[\"Tree[int]\"]
+                    children: \"list[Tree[int]]\"
             "},
         );
     }
@@ -629,6 +545,159 @@ mod tests {
             indoc! {"
                 class A:
                     def f(self) -> \"A\": ...
+            "},
+        );
+    }
+
+    /// a class defined further down is not bound when a signature above it runs,
+    /// whether the signature is a module-level function's or a method's
+    #[test]
+    fn a_class_defined_later_is_quoted() {
+        check(
+            indoc! {"
+                def later() -> Later:
+                    return Later()
+
+
+                class Plain:
+                    def other(self, x: Later) -> Later: ...
+
+
+                class Later: ...
+            "},
+            indoc! {"
+                def later() -> \"Later\":
+                    return Later()
+
+
+                class Plain:
+                    def other(self, x: \"Later\") -> \"Later\": ...
+
+
+                class Later: ...
+            "},
+        );
+    }
+
+    /// a name bound by the time the annotation runs is left as it is
+    #[test]
+    fn a_class_defined_earlier_is_not_quoted() {
+        check(
+            indoc! {"
+                class Earlier: ...
+
+
+                def f(x: Earlier) -> list[Earlier]: ...
+
+
+                y: Earlier = Earlier()
+            "},
+            indoc! {"
+                class Earlier: ...
+
+
+                def f(x: Earlier) -> list[Earlier]: ...
+
+
+                y: Earlier = Earlier()
+            "},
+        );
+    }
+
+    /// a module-level variable annotation runs too
+    #[test]
+    fn a_module_level_variable_annotation_is_quoted() {
+        check(
+            indoc! {"
+                x: Later
+
+
+                class Later: ...
+            "},
+            indoc! {"
+                x: \"Later\"
+
+
+                class Later: ...
+            "},
+        );
+    }
+
+    /// a local variable's annotation is never evaluated
+    #[test]
+    fn a_local_variable_annotation_is_not_quoted() {
+        check(
+            indoc! {"
+                def f() -> None:
+                    x: Later = Later()
+
+
+                class Later: ...
+            "},
+            indoc! {"
+                def f() -> None:
+                    x: Later = Later()
+
+
+                class Later: ...
+            "},
+        );
+    }
+
+    /// an import made only under `if TYPE_CHECKING:` never runs, so the
+    /// annotation has nothing to find
+    #[test]
+    fn a_type_checking_import_is_quoted() {
+        check(
+            indoc! {"
+                from typing import TYPE_CHECKING
+
+                if TYPE_CHECKING:
+                    from collections import OrderedDict
+
+
+                def f(x: OrderedDict[str, int]) -> None: ...
+            "},
+            indoc! {"
+                from typing import TYPE_CHECKING
+
+                if TYPE_CHECKING:
+                    from collections import OrderedDict
+
+
+                def f(x: \"OrderedDict[str, int]\") -> None: ...
+            "},
+        );
+    }
+
+    /// the lowerings inside a quoted annotation land between the quotes
+    #[test]
+    fn a_lowering_inside_the_reference_is_quoted_with_it() {
+        check(
+            indoc! {"
+                def f(x: Later?) -> list[Later?]: ...
+
+
+                class Later: ...
+            "},
+            indoc! {"
+                def f(x: \"Later | None\") -> \"list[Later | None]\": ...
+
+
+                class Later: ...
+            "},
+        );
+    }
+
+    /// a name basedpython supplies itself is the transpiler's to make available,
+    /// not a reference to quote
+    #[test]
+    fn a_name_basedpython_supplies_is_not_quoted() {
+        check(
+            "def f(x: dynamic) -> None: ...\n",
+            indoc! {"
+                from typing import Any
+                def f(x: Any) -> None: ...
             "},
         );
     }
