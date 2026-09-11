@@ -1691,6 +1691,19 @@ impl<'db> SemanticModel<'db> {
         )
     }
 
+    /// basedpython: whether `name`, read in an annotation, is a forward reference: a name the
+    /// program binds, but not by the point python evaluates the annotation where it is written,
+    /// as it does before 3.14. a binding made only under `if TYPE_CHECKING:` does not count.
+    /// `None` when ty did not index the name
+    pub fn is_forward_reference(&self, name: &ast::ExprName) -> Option<bool> {
+        crate::place::is_forward_reference(
+            self.db,
+            &self.program_environment(),
+            self.program_file(),
+            ast::ExprRef::from(name),
+        )
+    }
+
     /// Returns the scope in which `node` is defined (handles string annotations).
     pub fn scope(&self, node: ast::AnyNodeRef<'_>) -> Option<FileScopeId> {
         let index = semantic_index(self.db, self.program_file());

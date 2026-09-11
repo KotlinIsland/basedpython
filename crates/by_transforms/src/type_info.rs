@@ -266,6 +266,12 @@ pub(crate) trait TypeInfo {
     /// `global`. `None` when ty did not index the reference and cannot place it
     fn resolves_to_module_scope(&self, reference: &ExprName) -> Option<bool>;
 
+    /// whether `name`, read in an annotation, is a forward reference: a name the
+    /// program binds, but not by the point python evaluates the annotation where
+    /// it is written, as it does before 3.14 without `from __future__ import
+    /// annotations`. `None` when ty did not index the name
+    fn is_forward_reference(&self, name: &ExprName) -> Option<bool>;
+
     /// how a bare name in a class body is emitted, when it names a member the
     /// class declares with a visibility keyword — `y = x + 1` after `private x =
     /// 1`. `None` for any other name
@@ -949,6 +955,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn resolves_to_module_scope(&self, reference: &ExprName) -> Option<bool> {
         SemanticModel::resolves_to_module_scope(self, reference)
+    }
+
+    fn is_forward_reference(&self, name: &ExprName) -> Option<bool> {
+        SemanticModel::is_forward_reference(self, name)
     }
 
     fn class_body_member_name(&self, name: &ExprName) -> Option<String> {

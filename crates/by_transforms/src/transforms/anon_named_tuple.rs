@@ -1037,7 +1037,8 @@ mod tests {
     #[test]
     fn an_alias_below_its_use_does_not_coerce() {
         // the table is built in source order, so a name is only an anon-NT alias
-        // from its declaration down — the same rule the binding itself follows
+        // from its declaration down — the same rule the binding itself follows.
+        // the annotation runs before `P` is bound, so it is quoted
         check(
             indoc! {"
                 v: P = (\"a\", 1)
@@ -1049,7 +1050,7 @@ mod tests {
                     name: str
                     age: int
 
-                v: P = (\"a\", 1)
+                v: \"P\" = (\"a\", 1)
                 P = _AnonNamedTuple_7bfb4772
             "},
         );
