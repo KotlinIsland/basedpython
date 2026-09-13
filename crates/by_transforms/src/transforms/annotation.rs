@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::{Expr, PythonVersion, Stmt};
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::Config;
 use crate::config::FloatLiteralLowering;
@@ -51,6 +51,10 @@ pub(crate) struct TupleLiteralType<'src> {
     /// dedicated passes' edits inside it are dropped — without this an element
     /// would reach the output as surface syntax
     leaves: RefCell<CallableSyntax<'src>>,
+    /// the operations `symbolic_type_op` folded, with their rendered types. our
+    /// replacement covers a folded operation nested inside a tuple type, so it
+    /// has to carry the fold rather than re-emit the operation
+    symbolic_substitutions: &'src [(TextRange, String)],
     edits: Vec<Fix>,
 }
 
@@ -60,13 +64,19 @@ impl<'src> TupleLiteralType<'src> {
         types: &'src dyn TypeInfo,
         min_version: PythonVersion,
         float_literals: FloatLiteralLowering,
+        symbolic_substitutions: &'src [(TextRange, String)],
     ) -> Self {
+        let mut leaves = CallableSyntax::new(source, float_literals).with_types(types);
+        for (range, rendered) in symbolic_substitutions {
+            leaves.add_substitution(*range, rendered.clone());
+        }
         Self {
             source,
             types,
             min_version,
             needs_unpack_import: Cell::new(false),
-            leaves: RefCell::new(CallableSyntax::new(source, float_literals).with_types(types)),
+            leaves: RefCell::new(leaves),
+            symbolic_substitutions,
             edits: Vec::new(),
         }
     }
@@ -147,14 +157,25 @@ impl<'src> TupleLiteralType<'src> {
                 Some(format!("tuple[{}]", lowered.join(", ")))
             }
 
-            // `A | B` — propagate into both arms
+            // `(int, str) * n` — an operation `symbolic_type_op` folded is the type it
+            // folded to
+            Expr::BinOp(b)
+                if let Some((_, rendered)) = self
+                    .symbolic_substitutions
+                    .iter()
+                    .find(|(range, _)| *range == b.range()) =>
+            {
+                Some(rendered.clone())
+            }
+
+            // `A | B` — propagate into both operands
             Expr::BinOp(b) => {
                 let left = self.transform_annotation(&b.left);
                 let right = self.transform_annotation(&b.right);
                 if left.is_some() || right.is_some() {
                     let l = left.unwrap_or_else(|| self.fallback_src(&b.left));
                     let r = right.unwrap_or_else(|| self.fallback_src(&b.right));
-                    Some(format!("{l} | {r}"))
+                    Some(format!("{l} {} {r}", b.op.as_str()))
                 } else {
                     None
                 }
@@ -333,6 +354,12 @@ impl TypeExprVisitor for TupleLiteralType<'_> {
         {
             return Recurse::Stop;
         }
+        // an unpacked annotation, `*args: *(int, str)`, keeps its star: `unpack` lowers that
+        // to python's spelling on its own. rewriting the whole expression here would write over
+        // that edit, so the type inside the star is rewritten on its own range
+        if matches!(expr, Expr::Starred(_)) {
+            return Recurse::Descend;
+        }
         // `transform_annotation` is a deep recursive rewriter that produces
         // a single replacement string for the whole expression. emit the
         // edit at the expression's range and tell the walker to stop —
@@ -360,11 +387,13 @@ impl<'src> TupleLiteralTypePass<'src> {
 
 impl TypeAwarePass for TupleLiteralTypePass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
+        let symbolic_substitutions = ctx.symbolic_substitutions.clone();
         let mut inner = TupleLiteralType::new(
             self.source,
             types,
             self.config.min_version,
             self.config.float_literals,
+            &symbolic_substitutions,
         );
         walk_type_positions(stmts, Some(types), &mut inner);
         for fix in inner.edits {

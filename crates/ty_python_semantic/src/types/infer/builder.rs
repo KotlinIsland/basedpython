@@ -203,7 +203,7 @@ mod annotation_expression;
 mod attribute_assignment;
 pub(crate) mod binary_expressions;
 pub(crate) use binary_expressions::{
-    fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
+    fold_tuple_concat, fold_tuple_multiplication, literal_binary_op, literal_unary_op,
 };
 mod class;
 mod conditions;

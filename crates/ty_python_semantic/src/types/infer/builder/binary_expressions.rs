@@ -14,7 +14,7 @@ use crate::types::diagnostic::{
 use crate::types::function::OverloadLiteral;
 use crate::types::inferred_signature::gradual_hole;
 use crate::types::set_theoretic::RecursivelyDefined;
-use crate::types::tuple::Tuple;
+use crate::types::tuple::{Tuple, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::typevar::TypeVarConstraints;
 use crate::types::{
     DeferredOperation, DeferredType, DynamicType, InternedConstraintSet, KnownClass,
@@ -942,20 +942,15 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 binding.return_type(db, env)
             }),
 
-            // fold `(a, b) * n` (and `n * (a, b)`) into a fixed-length tuple with the
-            // elements repeated `n` times, matching the runtime behaviour of
-            // `tuple.__mul__`. without this, typeshed's stub widens the result to
-            // `tuple[T, ...]`, discarding the exact element order and count
+            // fold `(a, b) * n` (and `n * (a, b)`) into the tuple with its elements repeated
+            // `n` times, matching the runtime behaviour of `tuple.__mul__`. without this,
+            // typeshed's stub widens the result to `tuple[T, ...]`, discarding the element order
             (Type::NominalInstance(_), _, ast::Operator::Mult)
-                if right_ty.as_int_like_literal().is_some() =>
+            | (_, Type::NominalInstance(_), ast::Operator::Mult)
+                if left_ty.exact_tuple_instance_spec(db).is_some()
+                    || right_ty.exact_tuple_instance_spec(db).is_some() =>
             {
-                fold_tuple_repeat(db, env, left_ty, right_ty)
-                    .or_else(|| self.infer_binary_dunder(state, left_ty, op, right_ty, tcx))
-            }
-            (_, Type::NominalInstance(_), ast::Operator::Mult)
-                if left_ty.as_int_like_literal().is_some() =>
-            {
-                fold_tuple_repeat(db, env, right_ty, left_ty)
+                fold_tuple_multiplication(db, env, left_ty, right_ty)
                     .or_else(|| self.infer_binary_dunder(state, left_ty, op, right_ty, tcx))
             }
 
@@ -1181,46 +1176,107 @@ fn complex_binary_op_result(
     LiteralArithOutcome::Literal(Type::complex_literal(db, re, im))
 }
 
-/// Fold `tuple * n` into a fixed-length tuple whose elements are those of `tuple_ty`
-/// repeated `n` times, where `multiplier` is a literal integer (or `bool`).
+/// Fold `left * right`, where one operand is an exact tuple, into that tuple with its elements
+/// repeated.
 ///
-/// Returns `None` — leaving the caller to fall back on typeshed's `tuple.__mul__`, which
-/// widens to `tuple[T, ...]` — when `tuple_ty` is not an exact fixed-length tuple, when
-/// `multiplier` is not a literal integer, or when the repeated tuple would grow beyond
-/// `MAX_LENGTH`. A non-positive multiplier folds to the empty tuple.
-pub(crate) fn fold_tuple_repeat<'db>(
+/// A literal integer (or `bool`) repeats a fixed-length tuple into another fixed-length
+/// tuple. Any other multiplier that `tuple.__mul__` accepts repeats it an unknown number of
+/// times, `(a, b) * n` being `(a, b) * int`, whose elements still alternate. A tuple that
+/// already repeats a run of elements with nothing before or after it is its own repetition.
+///
+/// Returns `None`, leaving the caller to fall back on typeshed's `tuple.__mul__`, which widens
+/// to `tuple[T, ...]`, when neither operand is an exact tuple, when the operation does not
+/// reach the tuple's own `__mul__` or `__rmul__`, or when the tuple has elements before or
+/// after its variable-length part, which would interleave with the repetitions.
+pub(crate) fn fold_tuple_multiplication<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
-    tuple_ty: Type<'db>,
-    multiplier: Type<'db>,
+    left_ty: Type<'db>,
+    right_ty: Type<'db>,
 ) -> Option<Type<'db>> {
-    /// Repeating into a longer tuple discards the exact element types, so cap the work.
-    const MAX_LENGTH: usize = 512;
-
-    let factor = multiplier.as_int_like_literal()?;
-    let spec = tuple_ty.exact_tuple_instance_spec(db)?;
-    let Tuple::Fixed(fixed) = spec.as_ref() else {
-        return None;
-    };
-
-    let elements = fixed.all_elements();
-    let factor = usize::try_from(factor).unwrap_or(0);
-    let new_length = elements.len().checked_mul(factor)?;
-    if new_length > MAX_LENGTH {
-        return None;
-    }
-
-    let mut repeated = Vec::with_capacity(new_length);
-    for _ in 0..factor {
-        repeated.extend_from_slice(elements);
-    }
-    Some(Type::heterogeneous_tuple(db, env, repeated))
+    fold_tuple_repeat(db, env, left_ty, right_ty, TupleOperand::Left)
+        .or_else(|| fold_tuple_repeat(db, env, left_ty, right_ty, TupleOperand::Right))
 }
 
-/// Fold `left + right` into a single fixed-length tuple concatenating their elements.
+/// which operand of a multiplication is the tuple being repeated
+#[derive(Clone, Copy)]
+enum TupleOperand {
+    Left,
+    Right,
+}
+
+fn fold_tuple_repeat<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    left_ty: Type<'db>,
+    right_ty: Type<'db>,
+    tuple_operand: TupleOperand,
+) -> Option<Type<'db>> {
+    /// Repeating into a longer tuple spells out every element, so past this length the
+    /// result keeps only the repeated order.
+    const MAX_LENGTH: usize = 512;
+
+    let (tuple_ty, multiplier, method) = match tuple_operand {
+        TupleOperand::Left => (left_ty, right_ty, "__mul__"),
+        TupleOperand::Right => (right_ty, left_ty, "__rmul__"),
+    };
+
+    let spec = tuple_ty.exact_tuple_instance_spec(db)?;
+
+    let factor = match multiplier.as_int_like_literal() {
+        Some(factor) => Some(usize::try_from(factor).unwrap_or(0)),
+        None if Type::bin_op_calls_method_of(
+            db,
+            env,
+            left_ty,
+            ast::Operator::Mult,
+            right_ty,
+            tuple_ty,
+            method,
+        ) =>
+        {
+            None
+        }
+        None => return None,
+    };
+
+    match spec.as_ref() {
+        Tuple::Fixed(fixed) => {
+            let elements = fixed.all_elements();
+            if let Some(factor) = factor
+                && let Some(new_length) = elements.len().checked_mul(factor)
+                && new_length <= MAX_LENGTH
+            {
+                let mut repeated = Vec::with_capacity(new_length);
+                for _ in 0..factor {
+                    repeated.extend_from_slice(elements);
+                }
+                return Some(Type::heterogeneous_tuple(db, env, repeated));
+            }
+            Some(Type::tuple(TupleType::mixed_with_segment(
+                db,
+                env,
+                [],
+                VariableSegment::repeating(db, env, elements),
+                [],
+            )))
+        }
+        Tuple::Variable(_) if factor == Some(0) => Some(Type::empty_tuple(db, env)),
+        Tuple::Variable(variable)
+            if variable.prefix_elements().is_empty()
+                && variable.suffix_elements().is_empty()
+                && variable.variable().typevartuple().is_none() =>
+        {
+            Some(tuple_ty)
+        }
+        Tuple::Variable(_) => None,
+    }
+}
+
+/// Fold `left + right` into a single tuple concatenating their elements.
 ///
 /// Returns `None` — leaving the caller to fall back on typeshed's `tuple.__add__` — unless
-/// both operands are exact fixed-length tuples.
+/// both operands are exact tuples.
 pub(crate) fn fold_tuple_concat<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -1229,17 +1285,13 @@ pub(crate) fn fold_tuple_concat<'db>(
 ) -> Option<Type<'db>> {
     let left = left_ty.exact_tuple_instance_spec(db)?;
     let right = right_ty.exact_tuple_instance_spec(db)?;
-    let (Tuple::Fixed(left), Tuple::Fixed(right)) = (left.as_ref(), right.as_ref()) else {
-        return None;
-    };
-    Some(Type::heterogeneous_tuple(
+    Some(Type::tuple(TupleType::new(
         db,
         env,
-        left.all_elements()
-            .iter()
-            .chain(right.all_elements())
-            .copied(),
-    ))
+        &TupleSpecBuilder::from(left.as_ref())
+            .concat(db, env, &right)
+            .build(),
+    )))
 }
 
 /// basedpython: fold a unary operation on a literal operand (`-3` → `Literal[-3]`,

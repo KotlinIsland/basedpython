@@ -154,6 +154,11 @@ pub(super) fn walk_tuple_type<'db, V: super::visitor::TypeVisitor<'db> + ?Sized>
                 VariableSegment::Homogeneous(element) => {
                     visitor.visit_type(db, element);
                 }
+                VariableSegment::Repeated(unit) => {
+                    for &element in unit.elements(db) {
+                        visitor.visit_type(db, element);
+                    }
+                }
                 VariableSegment::TypeVarTuple(typevartuple) => {
                     visitor.visit_type(db, Type::TypeVar(typevartuple));
                 }
@@ -337,7 +342,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         self.check_tuple_spec_pair(db, source.tuple(db), target.tuple(db))
     }
 
-    fn check_tuple_spec_pair(
+    pub(super) fn check_tuple_spec_pair(
         &self,
         db: &'db dyn Db,
         source: &TupleSpec<'db>,
@@ -436,13 +441,29 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                             self.check_type_pair(db, packed, Type::TypeVar(typevartuple))
                         })
                     }
-                    VariableSegment::Homogeneous(target_ty) => {
+                    target_segment @ (VariableSegment::Homogeneous(_)
+                    | VariableSegment::Repeated(_)) => {
                         // In addition, any remaining elements in this tuple must satisfy the
-                        // variable-length portion of the other tuple.
+                        // variable-length portion of the other tuple, which they can only fill
+                        // with a whole number of its repetitions.
+                        if !source_iter
+                            .len()
+                            .is_multiple_of(target_segment.unit_len(db))
+                        {
+                            return self.never();
+                        }
                         result.and(db, self.constraints, || {
-                            source_iter.when_all(db, self.constraints, |&source_ty| {
-                                self.check_type_pair(db, source_ty, target_ty)
-                            })
+                            source_iter.enumerate().when_all(
+                                db,
+                                self.constraints,
+                                |(index, &source_ty)| {
+                                    self.check_type_pair(
+                                        db,
+                                        source_ty,
+                                        target_segment.unit_element(db, index),
+                                    )
+                                },
+                            )
                         })
                     }
                 }
@@ -454,9 +475,9 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         &self,
         db: &'db dyn Db,
         source: &VariableLengthTuple<Type<'db>, VariableSegment<'db>>,
-        target: &TupleSpec<'db>,
+        target_spec: &TupleSpec<'db>,
     ) -> ConstraintSet<'db, 'c> {
-        match target {
+        match target_spec {
             Tuple::Fixed(target) => {
                 // The `...` length specifier of a variable-length tuple type is interpreted
                 // differently depending on the type of the variable-length elements.
@@ -651,6 +672,17 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                     );
                 }
 
+                if matches!(source.variable(), VariableSegment::Repeated(_))
+                    || matches!(target.variable(), VariableSegment::Repeated(_))
+                {
+                    return self.check_repeated_variable_length_pair(
+                        db,
+                        source,
+                        target,
+                        target_spec,
+                    );
+                }
+
                 // When prenormalizing below, we assume that a dynamic variable-length portion of
                 // one tuple materializes to the variable-length portion of the other tuple.
                 let source_variable = source.variable().element_type(db);
@@ -745,6 +777,127 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 })
             }
         }
+    }
+
+    /// basedpython: relates two variable-length tuples when at least one of their segments
+    /// repeats a unit of several elements.
+    ///
+    /// Every value of the source, `source_prefix + unit * k + source_suffix` for each `k`, must
+    /// be a value of the target. The short values, whose repetitions do not yet reach past the
+    /// target's fixed ends, are checked one at a time as fixed-length tuples. Every longer value
+    /// splits into a front that covers the target's prefix, a middle of whole repetitions, and
+    /// a back that covers the target's suffix. Each of those lines up with the same target
+    /// elements whatever `k` is, provided the source's unit is a whole number of the target's
+    /// units and the two tuples' lengths agree modulo the target's unit.
+    fn check_repeated_variable_length_pair(
+        &self,
+        db: &'db dyn Db,
+        source: &VariableLengthTuple<Type<'db>, VariableSegment<'db>>,
+        target: &VariableLengthTuple<Type<'db>, VariableSegment<'db>>,
+        target_spec: &TupleSpec<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        let env = self.env;
+        let source_segment = source.variable();
+        let target_segment = target.variable();
+        let source_unit_len = source_segment.unit_len(db);
+        let target_unit_len = target_segment.unit_len(db);
+
+        // The `...` of a gradual segment is a gradual choice of length, so the source only needs
+        // to fit one of the target's values. Past the point where the target's repetitions
+        // reach beyond the source's fixed elements, a further repetition lines those elements up
+        // against the same target elements as the one before it.
+        if self.is_eager_assignability() && source_segment.gradual_element_type(db, env).is_some() {
+            let longest = source.len().minimum().div_ceil(target_unit_len);
+            return (0..=longest).when_any(db, self.constraints, |repetitions| {
+                self.check_variable_length_vs_tuple_spec(
+                    db,
+                    source,
+                    &Tuple::Fixed(target.with_repetitions(db, repetitions)),
+                )
+            });
+        }
+
+        // A symbolic pack stands for tuples of every shape, not just the repeated ones.
+        if source_segment.typevartuple().is_some() {
+            return self.never();
+        }
+        if !source_unit_len.is_multiple_of(target_unit_len)
+            || source.len().minimum() % target_unit_len != target.len().minimum() % target_unit_len
+        {
+            if let Some(context) = self.report_context() {
+                context.push(ErrorContext::RepeatedTupleLengthMismatch {
+                    source_len: source_unit_len,
+                    target_len: target_unit_len,
+                });
+            }
+            return self.never();
+        }
+
+        let short_repetitions = (target.prefix_len().saturating_sub(source.prefix_len()))
+            .max(target.suffix_len().saturating_sub(source.suffix_len()))
+            .div_ceil(source_unit_len);
+
+        let mut result = self.always();
+        let check = |result: &mut ConstraintSet<'db, 'c>, source_ty: Type<'db>, target_ty| {
+            let element_constraints = self.check_type_pair(db, source_ty, target_ty);
+            !result
+                .intersect(db, self.constraints, element_constraints)
+                .is_trivially_never_satisfied()
+        };
+
+        for repetitions in 0..2 * short_repetitions {
+            let instance = source.with_repetitions(db, repetitions);
+            let instance_constraints =
+                self.check_fixed_length_tuple_vs_tuple_spec(db, &instance, target_spec);
+            if result
+                .intersect(db, self.constraints, instance_constraints)
+                .is_trivially_never_satisfied()
+            {
+                return result;
+            }
+        }
+
+        let target_front = |index: usize| match target.prefix_elements().get(index) {
+            Some(element) => *element,
+            None => target_segment.unit_element(db, index - target.prefix_len()),
+        };
+        let front_len = source.prefix_len() + short_repetitions * source_unit_len;
+        let front = source.iter_prefix_elements().chain(
+            (0..short_repetitions * source_unit_len)
+                .map(|index| source_segment.unit_element(db, index)),
+        );
+        for (index, source_ty) in front.enumerate() {
+            if !check(&mut result, source_ty, target_front(index)) {
+                return result;
+            }
+        }
+
+        for index in 0..source_unit_len {
+            if !check(
+                &mut result,
+                source_segment.unit_element(db, index),
+                target_front(front_len + index),
+            ) {
+                return result;
+            }
+        }
+
+        let back = source.iter_suffix_elements().rev().chain(
+            (0..short_repetitions * source_unit_len)
+                .map(|distance| source_segment.unit_element_from_end(db, distance)),
+        );
+        for (distance, source_ty) in back.enumerate() {
+            let target_ty = if distance < target.suffix_len() {
+                target.suffix_elements()[target.suffix_len() - 1 - distance]
+            } else {
+                target_segment.unit_element_from_end(db, distance - target.suffix_len())
+            };
+            if !check(&mut result, source_ty, target_ty) {
+                return result;
+            }
+        }
+
+        result
     }
 
     /// Compare the fixed ends, pairing any overhanging elements with the provided variable types.
@@ -899,15 +1052,143 @@ pub(crate) type TupleSpec<'db> = Tuple<Type<'db>, VariableSegment<'db>>;
 pub enum VariableSegment<'db> {
     /// A segment whose elements all have the same type, such as `int` in `tuple[int, ...]`.
     Homogeneous(Type<'db>),
+    /// basedpython: a run of two or more element types repeated as a whole, such as
+    /// `(int, str)` in `(int, str) * int`. A unit of one element is [`Self::Homogeneous`].
+    Repeated(RepeatedUnit<'db>),
     /// An unpacked type variable tuple, such as `Ts` in `tuple[*Ts]`.
     TypeVarTuple(BoundTypeVarInstance<'db>),
 }
 
+/// basedpython: the unit of a [`VariableSegment::Repeated`] segment.
+///
+/// `(1, " ") * n` evaluates to `()`, `(1, " ")`, `(1, " ", 1, " ")` and so on: every element
+/// position is known relative to the start of the run, even though the number of repetitions
+/// is not.
+///
+/// Construct one through [`VariableSegment::repeating`], which holds at least two elements,
+/// none of them `Never`. A unit is not shortened to the run it repeats, because the two say
+/// different things: `(int, str) * int` has an even number of elements, while
+/// `(int, str, int, str) * int` has a multiple of four.
+#[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
+pub struct RepeatedUnit<'db> {
+    #[returns(deref)]
+    pub(crate) elements: Box<[Type<'db>]>,
+
+    /// The union of the elements, which is what iterating the segment produces.
+    #[returns(copy)]
+    pub(crate) element_type: Type<'db>,
+}
+
+// The Salsa heap is tracked separately.
+impl get_size2::GetSize for RepeatedUnit<'_> {}
+
 impl<'db> VariableSegment<'db> {
+    /// The segment that repeats `elements` as a whole any number of times, including zero.
+    ///
+    /// An empty unit, or one with a `Never` element, can only be repeated zero times, which is
+    /// the `Homogeneous(Never)` segment. A single-element unit is [`Self::Homogeneous`].
+    pub(crate) fn repeating(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        elements: &[Type<'db>],
+    ) -> Self {
+        Self::repeating_impl(db, env, elements, false)
+    }
+
+    /// The same segment as [`Self::repeating`], for a caller that is itself part of a cycle
+    /// recovery function, which must not simplify the union of the elements against one
+    /// another (see [`Tuple::homogeneous_element_type_in_cycle_recovery`]).
+    fn repeating_in_cycle_recovery(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        elements: &[Type<'db>],
+    ) -> Self {
+        Self::repeating_impl(db, env, elements, true)
+    }
+
+    fn repeating_impl(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        elements: &[Type<'db>],
+        cycle_recovery: bool,
+    ) -> Self {
+        if elements.is_empty() || elements.contains(&Type::Never) {
+            return Self::Homogeneous(Type::Never);
+        }
+        match elements {
+            [element] => Self::Homogeneous(*element),
+            unit => {
+                let mut element_type = UnionBuilder::new(db, env)
+                    .unpack_aliases(false)
+                    .cycle_recovery(cycle_recovery);
+                for element in unit {
+                    element_type.add_in_place(*element);
+                }
+                Self::Repeated(RepeatedUnit::new(
+                    db,
+                    Box::<[Type<'db>]>::from(unit),
+                    element_type.build(),
+                ))
+            }
+        }
+    }
+
     pub(crate) const fn homogeneous_type(self) -> Option<Type<'db>> {
         match self {
             Self::Homogeneous(element) => Some(element),
-            Self::TypeVarTuple(_) => None,
+            Self::Repeated(_) | Self::TypeVarTuple(_) => None,
+        }
+    }
+
+    /// The elements this segment contributes when [unpacking](Tuple::unpack) its tuple.
+    pub(crate) fn unpacked_elements(self, db: &'db dyn Db) -> SegmentElements<Type<'db>> {
+        match self {
+            Self::Repeated(unit) => SegmentElements::Repeated(unit.elements(db).to_vec()),
+            Self::Homogeneous(_) | Self::TypeVarTuple(_) => {
+                SegmentElements::Unordered(vec![self.element_type(db)])
+            }
+        }
+    }
+
+    /// The number of elements the segment's contents repeat in. A symbolic `TypeVarTuple` has
+    /// no known structure, so it is described as a run of `object`s.
+    pub(crate) fn unit_len(self, db: &'db dyn Db) -> usize {
+        match self {
+            Self::Repeated(unit) => unit.elements(db).len(),
+            Self::Homogeneous(_) | Self::TypeVarTuple(_) => 1,
+        }
+    }
+
+    /// The type of the element at `index` within the segment, counted from its start.
+    pub(crate) fn unit_element(self, db: &'db dyn Db, index: usize) -> Type<'db> {
+        match self {
+            Self::Repeated(unit) => {
+                let elements = unit.elements(db);
+                elements[index % elements.len()]
+            }
+            Self::Homogeneous(_) | Self::TypeVarTuple(_) => self.element_type(db),
+        }
+    }
+
+    /// The type of the element `distance` places from the segment's end, where the last
+    /// element is at distance zero.
+    fn unit_element_from_end(self, db: &'db dyn Db, distance: usize) -> Type<'db> {
+        let len = self.unit_len(db);
+        self.unit_element(db, len - 1 - distance % len)
+    }
+
+    /// The segment whose elements are this segment's in reverse order.
+    fn reversed(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Self {
+        match self {
+            Self::Repeated(unit) => {
+                let reversed: Vec<_> = unit.elements(db).iter().rev().copied().collect();
+                Self::repeating(db, env, &reversed)
+            }
+            // Reversing a `TypeVarTuple` changes its element order, so the result can no longer
+            // use the original symbolic segment.
+            Self::Homogeneous(_) | Self::TypeVarTuple(_) => {
+                Self::Homogeneous(self.element_type(db))
+            }
         }
     }
 
@@ -927,14 +1208,15 @@ impl<'db> VariableSegment<'db> {
 
     pub(crate) const fn typevartuple(self) -> Option<BoundTypeVarInstance<'db>> {
         match self {
-            Self::Homogeneous(_) => None,
+            Self::Homogeneous(_) | Self::Repeated(_) => None,
             Self::TypeVarTuple(typevartuple) => Some(typevartuple),
         }
     }
 
-    pub(crate) fn element_type(self, _db: &'db dyn Db) -> Type<'db> {
+    pub(crate) fn element_type(self, db: &'db dyn Db) -> Type<'db> {
         match self {
             Self::Homogeneous(element) => element,
+            Self::Repeated(unit) => unit.element_type(db),
             Self::TypeVarTuple(_) => Type::object(),
         }
     }
@@ -943,9 +1225,10 @@ impl<'db> VariableSegment<'db> {
     ///
     /// Preserve the `TypeVarTuple` here so that variance inference and generic-context traversal
     /// can still observe it. Runtime element operations must use [`Self::element_type`] instead.
-    fn tuple_class_type(self) -> Type<'db> {
+    fn tuple_class_type(self, db: &'db dyn Db) -> Type<'db> {
         match self {
             Self::Homogeneous(element) => element,
+            Self::Repeated(unit) => unit.element_type(db),
             Self::TypeVarTuple(typevartuple) => Type::TypeVar(typevartuple),
         }
     }
@@ -1245,6 +1528,137 @@ impl<T, V> VariableLengthTuple<T, V> {
             }
             fixed_elements.next().map(TupleElement::Suffix)
         })
+    }
+
+    /// The elements that can be `offset` places past the end of the prefix, when the variable
+    /// segment is `unit_len` elements repeated: the segment's element at that offset, and any
+    /// suffix element a whole number of units before it, which is where it lands when the
+    /// segment is short.
+    fn possible_elements_past_prefix(
+        &self,
+        unit_len: usize,
+        unit_element: impl FnOnce(usize) -> T,
+        offset: usize,
+    ) -> impl Iterator<Item = T>
+    where
+        T: Clone,
+    {
+        std::iter::once(unit_element(offset)).chain(
+            (offset % unit_len..=offset)
+                .step_by(unit_len)
+                .take_while(|suffix_index| *suffix_index < self.suffix_len())
+                .map(|suffix_index| self.suffix_elements()[suffix_index].clone()),
+        )
+    }
+
+    /// The mirror image of [`Self::possible_elements_past_prefix`]: the elements that can be
+    /// `distance` places before the start of the suffix, where the element immediately before
+    /// it is at distance zero. The prefix elements come first, in their order in the prefix.
+    fn possible_elements_before_suffix(
+        &self,
+        unit_len: usize,
+        unit_element_from_end: impl FnOnce(usize) -> T,
+        distance: usize,
+    ) -> impl Iterator<Item = T>
+    where
+        T: Clone,
+    {
+        // The prefix elements this can be, nearest one last, counted in whole units back from
+        // the suffix. They are yielded in their order in the prefix, furthest one first.
+        let nearest = distance % unit_len + 1;
+        let count = (self.prefix_len() + unit_len)
+            .saturating_sub(nearest)
+            .min(distance + 1 - nearest + unit_len)
+            / unit_len;
+        (0..count)
+            .map(move |index| nearest + (count - 1 - index) * unit_len)
+            .map(|prefix_distance| {
+                self.prefix_elements()[self.prefix_len() - prefix_distance].clone()
+            })
+            .chain(std::iter::once(unit_element_from_end(distance)))
+    }
+
+    /// [`Tuple::unpack`] for a source whose variable segment repeats `unit` as a whole.
+    ///
+    /// The position of every element is known relative to either end of the segment. For
+    /// `a, b = (1, "two") * n`, `a` is always `1` and `b` is always `"two"`, and no `n` gives
+    /// `a, b, c = (1, "two") * n` a value for each target.
+    fn unpack_repeated(
+        &self,
+        length: TupleLength,
+        unit: &[T],
+        combine: impl Fn(&[T]) -> T,
+    ) -> Result<Tuple<T, Vec<T>>, ResizeTupleError>
+    where
+        T: Clone,
+    {
+        let unit_len = unit.len();
+        match length {
+            TupleLength::Fixed(length) => {
+                let Some(count) = length.checked_sub(self.len().minimum()) else {
+                    return Err(ResizeTupleError::TooManyValues);
+                };
+                if count % unit_len != 0 {
+                    return Err(ResizeTupleError::NotWholeRepetitions {
+                        repeated_len: unit_len,
+                    });
+                }
+                Ok(Tuple::heterogeneous(
+                    self.prefix_elements()
+                        .iter()
+                        .chain(unit.iter().cycle().take(count))
+                        .chain(self.suffix_elements())
+                        .cloned(),
+                ))
+            }
+            TupleLength::Variable(prefix, suffix) => {
+                let prefix_targets =
+                    (0..prefix).map(|index| match self.prefix_elements().get(index) {
+                        Some(element) => element.clone(),
+                        None => combine(
+                            &self
+                                .possible_elements_past_prefix(
+                                    unit_len,
+                                    |offset| unit[offset % unit_len].clone(),
+                                    index - self.prefix_len(),
+                                )
+                                .collect::<Vec<_>>(),
+                        ),
+                    });
+                let suffix_targets = (0..suffix).rev().map(|distance| {
+                    if distance < self.suffix_len() {
+                        self.suffix_elements()[self.suffix_len() - 1 - distance].clone()
+                    } else {
+                        combine(
+                            &self
+                                .possible_elements_before_suffix(
+                                    unit_len,
+                                    |distance| unit[unit_len - 1 - distance % unit_len].clone(),
+                                    distance - self.suffix_len(),
+                                )
+                                .collect::<Vec<_>>(),
+                        )
+                    }
+                });
+                let collected: Vec<T> = self
+                    .prefix_elements()
+                    .iter()
+                    .skip(prefix)
+                    .chain(unit)
+                    .chain(
+                        self.suffix_elements()
+                            .iter()
+                            .take(self.suffix_len().saturating_sub(suffix)),
+                    )
+                    .cloned()
+                    .collect();
+                Ok(VariableLengthTuple::mixed(
+                    prefix_targets.collect::<Vec<_>>(),
+                    collected,
+                    suffix_targets.collect::<Vec<_>>(),
+                ))
+            }
+        }
     }
 
     fn prefix_len(&self) -> usize {
@@ -1654,12 +2068,24 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
         })
     }
 
-    fn reversed(&self, db: &'db dyn Db) -> Self {
-        // Reversing a `TypeVarTuple` changes its element order, so the result can no longer use
-        // the original symbolic segment.
+    /// The fixed-length value of this tuple whose variable segment is its unit repeated
+    /// `repetitions` times.
+    fn with_repetitions(&self, db: &'db dyn Db, repetitions: usize) -> FixedLengthTuple<Type<'db>> {
+        let variable = self.variable();
+        FixedLengthTuple::from_elements(
+            self.iter_prefix_elements()
+                .chain(
+                    (0..repetitions * variable.unit_len(db))
+                        .map(|index| variable.unit_element(db, index)),
+                )
+                .chain(self.iter_suffix_elements()),
+        )
+    }
+
+    fn reversed(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Self {
         Self::new(
             self.iter_suffix_elements().rev(),
-            VariableSegment::Homogeneous(self.variable().element_type(db)),
+            self.variable().reversed(db, env),
             self.iter_prefix_elements().rev(),
         )
     }
@@ -1691,7 +2117,7 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
                 .forward_slice_plan(start, stop, step)
                 .into_type(db, env, self),
             TupleSliceDirection::Backward => {
-                let reversed = self.reversed(db);
+                let reversed = self.reversed(db, env);
                 reversed
                     .forward_slice_plan(
                         TupleSliceDirection::reverse_bound(start),
@@ -2023,11 +2449,19 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
         index: usize,
     ) -> Type<'db> {
         if let Some(element) = self.prefix_elements().get(index) {
-            *element
-        } else {
-            let suffix_stop = index - self.prefix_len() + 1;
-            self.variable_and_suffix_type(db, env, Some(suffix_stop))
+            return *element;
         }
+
+        let variable = self.variable();
+        UnionType::from_elements_leave_aliases(
+            db,
+            env,
+            self.possible_elements_past_prefix(
+                variable.unit_len(db),
+                |offset| variable.unit_element(db, offset),
+                index - self.prefix_len(),
+            ),
+        )
     }
 
     fn type_at_negative_distance(
@@ -2036,25 +2470,34 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
         env: &ProgramEnvironment<'db>,
         distance: usize,
     ) -> Option<Type<'db>> {
-        if distance == 0 || distance > self.len().minimum() {
-            return None;
-        }
+        let distance = NonZeroUsize::new(distance)?;
+        (distance.get() <= self.len().minimum())
+            .then(|| self.type_at_negative_distance_unbounded(db, env, distance))
+    }
 
+    /// The type of the element `distance` places from the end, where the last element is at
+    /// distance one.
+    fn type_at_negative_distance_unbounded(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        distance: NonZeroUsize,
+    ) -> Type<'db> {
+        let distance = distance.get();
         if distance <= self.suffix_len() {
-            return self
-                .suffix_elements()
-                .get(self.suffix_len() - distance)
-                .copied();
+            return self.suffix_elements()[self.suffix_len() - distance];
         }
 
-        let prefix_and_variable_len = distance - self.suffix_len();
-        Some(UnionType::from_elements_leave_aliases(
+        let variable = self.variable();
+        UnionType::from_elements_leave_aliases(
             db,
             env,
-            self.iter_prefix_elements()
-                .skip(self.prefix_len() - prefix_and_variable_len)
-                .chain(std::iter::once(self.variable().element_type(db))),
-        ))
+            self.possible_elements_before_suffix(
+                variable.unit_len(db),
+                |distance| variable.unit_element_from_end(db, distance),
+                distance - self.suffix_len() - 1,
+            ),
+        )
     }
 
     fn iter_all_elements(
@@ -2069,22 +2512,6 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
     fn homogeneous_type(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Type<'db> {
         let element = UnionType::from_elements_leave_aliases(db, env, self.iter_all_elements(db));
         Type::homogeneous_tuple(db, env, element)
-    }
-
-    fn variable_and_suffix_type(
-        &self,
-        db: &'db dyn Db,
-        env: &ProgramEnvironment<'db>,
-        suffix_stop: Option<usize>,
-    ) -> Type<'db> {
-        UnionType::from_elements_leave_aliases(
-            db,
-            env,
-            std::iter::once(self.variable().element_type(db)).chain(
-                self.iter_suffix_elements()
-                    .take(suffix_stop.unwrap_or_else(|| self.suffix_len())),
-            ),
-        )
     }
 
     /// Returns the prefix of the prenormalization of this tuple.
@@ -2166,6 +2593,15 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
                 VariableSegment::Homogeneous(variable) => VariableSegment::Homogeneous(
                     variable.recursive_type_normalized_impl(db, env, div, true)?,
                 ),
+                VariableSegment::Repeated(unit) => VariableSegment::repeating_in_cycle_recovery(
+                    db,
+                    env,
+                    &unit
+                        .elements(db)
+                        .iter()
+                        .map(|ty| ty.recursive_type_normalized_impl(db, env, div, true))
+                        .collect::<Option<Vec<_>>>()?,
+                ),
                 VariableSegment::TypeVarTuple(typevartuple) => {
                     VariableSegment::TypeVarTuple(typevartuple)
                 }
@@ -2188,6 +2624,18 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
                     variable
                         .recursive_type_normalized_impl(db, env, div, true)
                         .unwrap_or(div),
+                ),
+                VariableSegment::Repeated(unit) => VariableSegment::repeating_in_cycle_recovery(
+                    db,
+                    env,
+                    &unit
+                        .elements(db)
+                        .iter()
+                        .map(|ty| {
+                            ty.recursive_type_normalized_impl(db, env, div, true)
+                                .unwrap_or(div)
+                        })
+                        .collect::<Vec<_>>(),
                 ),
                 VariableSegment::TypeVarTuple(typevartuple) => {
                     VariableSegment::TypeVarTuple(typevartuple)
@@ -2230,6 +2678,19 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
                     tcx,
                     visitor,
                 )),
+                suffix,
+            ),
+            VariableSegment::Repeated(unit) => Self::mixed(
+                prefix,
+                VariableSegment::repeating(
+                    db,
+                    visitor.env,
+                    &unit
+                        .elements(db)
+                        .iter()
+                        .map(|ty| ty.apply_type_mapping_impl(db, env, type_mapping, tcx, visitor))
+                        .collect::<Vec<_>>(),
+                ),
                 suffix,
             ),
             VariableSegment::TypeVarTuple(typevartuple) => {
@@ -2288,6 +2749,11 @@ impl<'db> VariableLengthTuple<Type<'db>, VariableSegment<'db>> {
             VariableSegment::Homogeneous(variable) => {
                 variable.find_legacy_typevars_impl(db, env, binding_context, typevars, visitor);
             }
+            VariableSegment::Repeated(unit) => {
+                for ty in unit.elements(db) {
+                    ty.find_legacy_typevars_impl(db, env, binding_context, typevars, visitor);
+                }
+            }
             VariableSegment::TypeVarTuple(typevartuple) => {
                 Type::TypeVar(typevartuple).find_legacy_typevars_impl(
                     db,
@@ -2316,27 +2782,11 @@ impl<'db> PyIndex<'db> for &VariableLengthTuple<Type<'db>, VariableSegment<'db>>
         match Nth::from_index(index) {
             Nth::FromStart(index) => Ok(self.type_at_nonnegative_index_unbounded(db, env, index)),
 
-            Nth::FromEnd(index_from_end) => {
-                if index_from_end < self.suffix_elements().len() {
-                    // index is small enough that it lands in the suffix of the tuple.
-                    return Ok(
-                        self.suffix_elements()[self.suffix_elements().len() - index_from_end - 1]
-                    );
-                }
-
-                // index is large enough that it lands past the suffix. The tuple can always be
-                // large enough that it lands in the variable-length portion. It might also be
-                // small enough to land in the prefix.
-                let index_past_suffix = index_from_end - self.suffix_elements().len() + 1;
-                Ok(UnionType::from_elements_leave_aliases(
-                    db,
-                    env,
-                    (self.prefix_elements().iter().rev().copied())
-                        .take(index_past_suffix)
-                        .rev()
-                        .chain(std::iter::once(self.variable().element_type(db))),
-                ))
-            }
+            Nth::FromEnd(index_from_end) => Ok(self.type_at_negative_distance_unbounded(
+                db,
+                env,
+                NonZeroUsize::MIN.saturating_add(index_from_end),
+            )),
         }
     }
 }
@@ -2389,12 +2839,24 @@ impl<T, V> Tuple<T, V> {
     pub(crate) fn unpack(
         &self,
         length: TupleLength,
-        variable_elements: impl Fn(&V) -> Vec<T>,
+        variable_elements: impl Fn(&V) -> SegmentElements<T>,
         combine: impl Fn(&[T]) -> T,
     ) -> Result<Tuple<T, Vec<T>>, ResizeTupleError>
     where
         T: Clone,
     {
+        let segment_elements = match self {
+            Self::Fixed(_) => None,
+            Self::Variable(values) => Some(variable_elements(&values.variable_segment)),
+        };
+        if let Self::Variable(values) = self
+            && let Some(SegmentElements::Repeated(unit)) = &segment_elements
+        {
+            return values.unpack_repeated(length, unit, combine);
+        }
+        let variable_elements = segment_elements
+            .map(SegmentElements::into_elements)
+            .unwrap_or_default();
         match (length, self) {
             // Both lengths are fixed, as in `a, b = (1, "two")`; every target needs one value.
             (TupleLength::Fixed(length), Self::Fixed(values)) => match values.len().cmp(&length) {
@@ -2436,7 +2898,7 @@ impl<T, V> Tuple<T, V> {
                 let Some(count) = length.checked_sub(values.len().minimum()) else {
                     return Err(ResizeTupleError::TooManyValues);
                 };
-                let variable = combine(&variable_elements(&values.variable_segment));
+                let variable = combine(&variable_elements);
                 Ok(Tuple::heterogeneous(
                     values
                         .prefix_elements()
@@ -2471,7 +2933,7 @@ impl<T, V> Tuple<T, V> {
                     .iter()
                     .skip(prefix)
                     .cloned()
-                    .chain(variable_elements(&values.variable_segment))
+                    .chain(variable_elements)
                     .chain(
                         values
                             .suffix_elements()
@@ -2621,7 +3083,7 @@ impl<'db> Tuple<Type<'db>, VariableSegment<'db>> {
                 env,
                 tuple
                     .iter_prefix_elements()
-                    .chain(std::iter::once(tuple.variable().tuple_class_type()))
+                    .chain(std::iter::once(tuple.variable().tuple_class_type(db)))
                     .chain(tuple.iter_suffix_elements()),
             ),
         }
@@ -2641,6 +3103,23 @@ impl<'db> Tuple<Type<'db>, VariableSegment<'db>> {
         match self {
             Tuple::Fixed(tuple) => Either::Left(tuple.iter_all_elements()),
             Tuple::Variable(tuple) => Either::Right(tuple.iter_all_elements(db)),
+        }
+    }
+
+    /// basedpython: the same tuple with every element type replaced by `object`, which relates
+    /// two tuples by their possible lengths alone.
+    pub(crate) fn shape(&self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> Self {
+        let object = Type::object();
+        match self {
+            Tuple::Fixed(tuple) => Tuple::heterogeneous(std::iter::repeat_n(object, tuple.len())),
+            Tuple::Variable(tuple) => {
+                let unit_len = tuple.variable().unit_len(db);
+                VariableLengthTuple::mixed(
+                    std::iter::repeat_n(object, tuple.prefix_len()),
+                    VariableSegment::repeating(db, env, &vec![object; unit_len]),
+                    std::iter::repeat_n(object, tuple.suffix_len()),
+                )
+            }
         }
     }
 
@@ -2678,7 +3157,7 @@ impl<'db> Tuple<Type<'db>, VariableSegment<'db>> {
         Ok(self
             .unpack(
                 new_length,
-                |segment| vec![segment.element_type(db)],
+                |segment| segment.unpacked_elements(db),
                 |elements| {
                     UnionType::from_elements_leave_aliases(db, env, elements.iter().copied())
                 },
@@ -2964,6 +3443,36 @@ pub(crate) enum TupleElement<T, V = T> {
 pub(crate) enum ResizeTupleError {
     TooFewValues,
     TooManyValues,
+    /// basedpython: the source repeats a run of `repeated_len` elements, and the length
+    /// falls between two whole numbers of repetitions, as `a, b, c = (1, "two") * n` does.
+    NotWholeRepetitions {
+        repeated_len: usize,
+    },
+}
+
+/// The elements a variable segment contributes when [unpacking](Tuple::unpack) a tuple.
+#[derive(Clone)]
+pub(crate) enum SegmentElements<T> {
+    /// Elements that can appear in any order and any number, such as the elements of `items`
+    /// in `(1, *items)`.
+    Unordered(Vec<T>),
+    /// basedpython: a run of elements that appears in this order, repeated as a whole, such
+    /// as `(1, "two")` in `(1, "two") * n`.
+    Repeated(Vec<T>),
+}
+
+impl<T> SegmentElements<T> {
+    pub(crate) fn elements(&self) -> &[T] {
+        match self {
+            Self::Unordered(elements) | Self::Repeated(elements) => elements,
+        }
+    }
+
+    pub(crate) fn into_elements(self) -> Vec<T> {
+        match self {
+            Self::Unordered(elements) | Self::Repeated(elements) => elements,
+        }
+    }
 }
 
 /// A builder for a fixed or variable-length sequence.
@@ -2978,6 +3487,15 @@ pub(crate) enum TupleBuilder<T, V = T> {
 }
 
 pub(crate) type TupleSpecBuilder<'db> = TupleBuilder<Type<'db>, VariableSegment<'db>>;
+
+/// How [`TupleBuilder::concat_with`] joins two variable segments.
+pub(crate) enum SegmentMerge {
+    /// The left segment now stands for both segments and the elements between them.
+    Merged,
+    /// The left segment is unchanged, and the elements between the segments move to the end of
+    /// the prefix.
+    KeepBetween,
+}
 
 impl<T, V> TupleBuilder<T, V> {
     pub(crate) fn with_capacity(capacity: usize) -> Self {
@@ -3021,10 +3539,16 @@ impl<T, V> TupleBuilder<T, V> {
     /// the suffix, prefix, and right segment into the left segment. Only `1` and `4` remain
     /// fixed in the result. The caller decides how to combine the segments' types or source
     /// expressions; `merge` is not called unless both sequences have variable segments.
+    ///
+    /// `merge` can instead report that the two segments and the elements between them are
+    /// together the left segment followed by those elements, by returning
+    /// [`SegmentMerge::KeepBetween`] without changing the left segment. `(1, *xs, *xs)` with
+    /// `xs: tuple[int, ...]` has the same values as `(1, *xs)`, and with `pair: (int, str) * n`,
+    /// `(*pair, 1, "a", *pair)` has the values of `(1, "a", *pair)`.
     pub(crate) fn concat_with(
         mut self,
         other: &Tuple<T, V>,
-        merge: impl FnOnce(&[T], &mut V, &V, &[T]),
+        merge: impl FnOnce(&[T], &mut V, &V, &[T]) -> SegmentMerge,
     ) -> Self
     where
         T: Clone,
@@ -3076,16 +3600,24 @@ impl<T, V> TupleBuilder<T, V> {
             // ```
             (
                 Self::Variable {
-                    segment, suffix, ..
+                    prefix,
+                    segment,
+                    suffix,
                 },
                 Tuple::Variable(right),
             ) => {
-                merge(
+                match merge(
                     suffix,
                     segment,
                     &right.variable_segment,
                     right.prefix_elements(),
-                );
+                ) {
+                    SegmentMerge::Merged => {}
+                    SegmentMerge::KeepBetween => {
+                        prefix.append(suffix);
+                        prefix.extend_from_slice(right.prefix_elements());
+                    }
+                }
                 suffix.clear();
                 suffix.extend_from_slice(right.suffix_elements());
                 self
@@ -3126,6 +3658,22 @@ impl<'db> TupleSpecBuilder<'db> {
         other: &TupleSpec<'db>,
     ) -> Self {
         self.concat_with(other, |suffix, left, right, prefix| {
+            // `U* W U*` is `W U*` when `W` is a whole number of `U`s: every length of the
+            // combined run is reachable by one segment alone. A symbolic pack is not a repetition
+            // of anything, so two occurrences of it never combine.
+            let unit_len = left.unit_len(db);
+            let between_len = suffix.len() + prefix.len();
+            if left == right
+                && left.typevartuple().is_none()
+                && between_len % unit_len == 0
+                && suffix
+                    .iter()
+                    .chain(prefix)
+                    .enumerate()
+                    .all(|(index, element)| *element == left.unit_element(db, index))
+            {
+                return SegmentMerge::KeepBetween;
+            }
             *left = VariableSegment::Homogeneous(UnionType::from_elements_leave_aliases(
                 db,
                 env,
@@ -3135,6 +3683,7 @@ impl<'db> TupleSpecBuilder<'db> {
                     .chain([left.element_type(db), right.element_type(db)])
                     .chain(prefix.iter().copied()),
             ));
+            SegmentMerge::Merged
         })
     }
 
@@ -3264,6 +3813,27 @@ impl<'db> TupleSpecBuilder<'db> {
                             VariableSegment::TypeVarTuple(left),
                             VariableSegment::TypeVarTuple(right),
                         ) if left == right => VariableSegment::TypeVarTuple(left),
+                        // With the prefixes the same length, both segments start at the same
+                        // position, so when one unit's length divides the other's, the elements
+                        // at each position of the longer unit are known on both sides.
+                        (left, right)
+                            if left.typevartuple().is_none()
+                                && right.typevartuple().is_none()
+                                && (left.unit_len(db) % right.unit_len(db) == 0
+                                    || right.unit_len(db) % left.unit_len(db) == 0) =>
+                        {
+                            let unit: Vec<_> = (0..left.unit_len(db).max(right.unit_len(db)))
+                                .map(|index| {
+                                    IntersectionType::from_two_elements(
+                                        db,
+                                        env,
+                                        left.unit_element(db, index),
+                                        right.unit_element(db, index),
+                                    )
+                                })
+                                .collect();
+                            VariableSegment::repeating(db, env, &unit)
+                        }
                         (left, right) => {
                             VariableSegment::Homogeneous(IntersectionType::from_two_elements(
                                 db,

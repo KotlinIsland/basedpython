@@ -77,6 +77,14 @@ impl InlayHint {
         } else {
             settings
         };
+        // basedpython: a symbolic operation such as a repeated tuple, `(1, "a") * int`, has no
+        // python spelling, so a hint in a python file shows the type it reduces to — which that
+        // file can also hold as an annotation
+        let settings = if file.file(db).source_type(db).is_basedpython() {
+            settings
+        } else {
+            settings.with_reduced_symbolic_operations()
+        };
         let details = ty.display_with(db, &env, settings).to_string_parts();
 
         // Filter out repetitive hints like `x: T = T()`
@@ -3592,6 +3600,150 @@ Source with applied edits:
         LL |     (a[: int], *b[: list[int]]) = x
            |                          ^^^
         ");
+    }
+
+    /// python has no spelling for a repeated tuple, so a hint in a python file shows the type it
+    /// reduces to, which that file can hold as an annotation
+    #[test]
+    fn test_repeated_tuple_hint_is_reduced_in_python() {
+        let mut test = inlay_hint_test(
+            "
+            def f(n: int):
+                pairs = (1, 'a') * n
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @r#"
+
+        def f(n: int):
+            pairs[: tuple[Literal[1, "a"], ...]] = (1, 'a') * n
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class tuple[out Element](Sequence[Element]):
+           |       ^^^^^
+        info: Source
+          --> main2.py:LL:13
+           |
+        LL |     pairs[: tuple[Literal[1, "a"], ...]] = (1, 'a') * n
+           |             ^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/typing.byi:LL:1
+           |
+        LL | Literal: _SpecialForm
+           | ^^^^^^^
+        info: Source
+          --> main2.py:LL:19
+           |
+        LL |     pairs[: tuple[Literal[1, "a"], ...]] = (1, 'a') * n
+           |                   ^^^^^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:27
+           |
+        LL |     pairs[: tuple[Literal[1, "a"], ...]] = (1, 'a') * n
+           |                           ^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+        info: Source
+          --> main2.py:LL:30
+           |
+        LL |     pairs[: tuple[Literal[1, "a"], ...]] = (1, 'a') * n
+           |                              ^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.py:1:1
+          |
+        1 + from typing import Literal
+        2 |
+        3 | def f(n: int):
+          -     pairs = (1, 'a') * n
+        4 +     pairs: tuple[Literal[1, "a"], ...] = (1, 'a') * n
+          |
+        "#);
+    }
+
+    #[test]
+    fn test_repeated_tuple_hint_is_insertable_in_basedpython() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def f(n: int):
+                pairs = (1, 'a') * n
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @r#"
+
+        def f(n: int):
+            pairs[: (1, "a") * int] = (1, 'a') * n
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class tuple[out Element](Sequence[Element]):
+           |       ^^^^^
+        info: Source
+          --> main2.py:LL:13
+           |
+        LL |     pairs[: (1, "a") * int] = (1, 'a') * n
+           |             ^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:14
+           |
+        LL |     pairs[: (1, "a") * int] = (1, 'a') * n
+           |              ^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+        info: Source
+          --> main2.py:LL:17
+           |
+        LL |     pairs[: (1, "a") * int] = (1, 'a') * n
+           |                 ^^^
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+        info: Source
+          --> main2.py:LL:24
+           |
+        LL |     pairs[: (1, "a") * int] = (1, 'a') * n
+           |                        ^^^
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+          |
+        2 | def f(n: int):
+          -     pairs = (1, 'a') * n
+        3 +     pairs: (1, "a") * int = (1, 'a') * n
+          |
+        "#);
     }
 
     #[test]

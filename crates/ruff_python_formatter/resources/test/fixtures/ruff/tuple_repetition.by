@@ -1,0 +1,17 @@
+# a repeated tuple type is a tuple type multiplied by `int`, and fixed elements around
+# the repetitions unpack it into an outer tuple type
+
+
+def pairs(n: int) -> (int, str) * int:
+    return (1, "a") * n
+
+
+framed: (bytes, *(int, str) * int, bytes)
+framed_loose: (bytes,*( int,str )*int,bytes)
+nested: list[(int, str)*int]
+
+type Pairs = (int, str) * int
+
+
+def variadic(*args: *((int, str) * int)) -> None:
+    pass

@@ -30,7 +30,7 @@ use crate::types::protocol_class::{InlineProtocolMemberForm, ProtocolInterface};
 use crate::types::signatures::{
     CallableSignature, Parameter, Parameters, ParametersKind, Signature,
 };
-use crate::types::tuple::{TupleSpec, VariableSegment};
+use crate::types::tuple::{RepeatedUnit, TupleSpec, VariableLengthTuple, VariableSegment};
 use crate::types::typevar::BoundTypeVarIdentity;
 use crate::types::visitor::TypeVisitor;
 use crate::types::{
@@ -2371,6 +2371,12 @@ impl<'db> FmtDetailed<'db> for DisplayTuple<'_, 'db> {
     fn fmt_detailed(&self, f: &mut TypeWriter<'_, '_, 'db>) -> fmt::Result {
         let db = self.db;
         let env = self.env;
+        if let TupleSpec::Variable(tuple) = self.tuple
+            && let VariableSegment::Repeated(unit) = tuple.variable()
+            && !self.settings.reduce_symbolic_operations
+        {
+            return self.fmt_repeated(f, tuple, unit);
+        }
         if basedpython_display_enabled() {
             return self.fmt_basedpython(f);
         }
@@ -2403,7 +2409,8 @@ impl<'db> FmtDetailed<'db> for DisplayTuple<'_, 'db> {
                             .display_with(db, self.env, self.settings.singleline())
                             .fmt_detailed(f)?;
                     }
-                    VariableSegment::Homogeneous(variable) => {
+                    segment @ (VariableSegment::Homogeneous(_) | VariableSegment::Repeated(_)) => {
+                        let variable = segment.element_type(db);
                         if !tuple.prefix_elements().is_empty()
                             || !tuple.suffix_elements().is_empty()
                         {
@@ -2438,6 +2445,61 @@ impl<'db> FmtDetailed<'db> for DisplayTuple<'_, 'db> {
 }
 
 impl<'db> DisplayTuple<'_, 'db> {
+    /// basedpython: a tuple whose variable segment repeats a unit, spelled as the
+    /// multiplication that produces it:
+    ///   (T1, T2) * int
+    ///   (prefix, *(T1, T2) * int, suffix)
+    ///
+    /// Python has no spelling for it, so output that has to be valid python shows the unit's
+    /// elements as a homogeneous segment instead, which is what the other tuple displays do.
+    fn fmt_repeated(
+        &self,
+        f: &mut TypeWriter<'_, '_, 'db>,
+        tuple: &VariableLengthTuple<Type<'db>, VariableSegment<'db>>,
+        unit: RepeatedUnit<'db>,
+    ) -> fmt::Result {
+        let db = self.db;
+        let env = self.env;
+        let basedpython = basedpython_display_enabled();
+        if !basedpython {
+            f.set_invalid_type_annotation();
+        }
+        let has_fixed_elements =
+            !tuple.prefix_elements().is_empty() || !tuple.suffix_elements().is_empty();
+        if has_fixed_elements {
+            let tuple_class = KnownClass::Tuple.to_class_literal(db, env);
+            if basedpython {
+                f.with_type(tuple_class).write_char('(')?;
+            } else {
+                f.with_type(tuple_class).write_str("tuple")?;
+                f.write_char('[')?;
+            }
+            for prefix in tuple.prefix_elements() {
+                prefix
+                    .display_with(db, env, self.settings.singleline())
+                    .fmt_detailed(f)?;
+                f.write_str(", ")?;
+            }
+            f.write_char('*')?;
+        }
+        TupleSpec::heterogeneous(unit.elements(db).iter().copied())
+            .display_with(db, env, self.settings.clone())
+            .fmt_detailed(f)?;
+        f.write_str(" * ")?;
+        f.with_type(KnownClass::Int.to_class_literal(db, env))
+            .write_str("int")?;
+        if has_fixed_elements {
+            for suffix in tuple.suffix_elements() {
+                f.write_str(", ")?;
+                suffix
+                    .display_with(db, env, self.settings.singleline())
+                    .fmt_detailed(f)?;
+            }
+            f.write_char(if basedpython { ')' } else { ']' })?;
+        }
+        Ok(())
+    }
+
     /// basedpython surface syntax for tuple types:
     ///   tuple\[T1, T2\]                         → (T1, T2)
     ///   tuple\[T\]                              → (T,)
@@ -2476,9 +2538,12 @@ impl<'db> DisplayTuple<'_, 'db> {
                 }
                 f.write_str("*: ")?;
                 match tuple.variable() {
-                    VariableSegment::Homogeneous(variable) => variable
-                        .display_with(self.db, env, self.settings.singleline())
-                        .fmt_detailed(f)?,
+                    segment @ (VariableSegment::Homogeneous(_) | VariableSegment::Repeated(_)) => {
+                        segment
+                            .element_type(self.db)
+                            .display_with(self.db, env, self.settings.singleline())
+                            .fmt_detailed(f)?;
+                    }
                     VariableSegment::TypeVarTuple(typevar) => Type::TypeVar(typevar)
                         .display_with(self.db, env, self.settings.singleline())
                         .fmt_detailed(f)?,

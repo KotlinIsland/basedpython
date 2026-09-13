@@ -41,7 +41,7 @@ use crate::types::instance::ProtocolInstanceType;
 use crate::types::relation::{
     HasRelationToVisitor, IsDisjointVisitor, TypeRelation, TypeRelationChecker, TypeVarEvaluation,
 };
-use crate::types::tuple::{Tuple, TupleType, VariableSegment};
+use crate::types::tuple::{Tuple, TupleSpec, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::typed_dict::extract_unpacked_typed_dict_keys_from_kwargs_annotation;
 use crate::types::typevar::{
     MAX_TYPEVAR_FRESHNESS_DELTA, TypeVarInstance, TypeVarKind, TypeVarSet,
@@ -58,6 +58,7 @@ use crate::{Db, FxOrderSet};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::helpers::ReturnGuardForm;
 use ruff_python_ast::{self as ast, ParameterBorrow, name::Name};
+use std::borrow::Cow;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
 
 /// Selects which binding context to use for type variables that only appear in a return-position
@@ -3029,6 +3030,26 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
             .visit(&key, || self.always(), work)
     }
 
+    /// basedpython: relates two parameter lists, one of which has a variadic parameter taking
+    /// whole repetitions, through the tuples of positional arguments they accept.
+    ///
+    /// Parameters are contravariant, so every call the target accepts the source must accept
+    /// too, which is exactly the tuple relation between the two argument tuples.
+    fn check_positional_call_tuples(
+        &self,
+        db: &'db dyn Db,
+        source: &Parameters<'db>,
+        target: &Parameters<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        let (Some(source_tuple), Some(target_tuple)) = (
+            positional_call_tuple(db, self.env, source, ParametersSide::Source),
+            positional_call_tuple(db, self.env, target, ParametersSide::Target),
+        ) else {
+            return self.never();
+        };
+        self.check_tuple_spec_pair(db, &target_tuple, &source_tuple)
+    }
+
     fn check_paramspec_return_pair(
         &self,
         db: &'db dyn Db,
@@ -3307,6 +3328,19 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
             context.push(ErrorContext::IncompatibleReturnTypes {
                 source: source.return_ty,
                 target: target.return_ty,
+            });
+        }
+
+        // basedpython: a variadic parameter that takes whole repetitions of several types,
+        // `*args: *((int, str) * int)`, cannot be written out as a list of parameters, so the two
+        // signatures are compared through the tuples of positional arguments they accept.
+        if !source_parameters.is_gradual()
+            && !target_parameters.is_gradual()
+            && (has_repeated_variadic(db, &source_parameters)
+                || has_repeated_variadic(db, &target_parameters))
+        {
+            return result.and(db, self.constraints, || {
+                self.check_positional_call_tuples(db, &source_parameters, &target_parameters)
             });
         }
 
@@ -5911,8 +5945,6 @@ impl<'db> Parameters<'db> {
                         parameters.extend(tuple.iter_all_elements().map(positional_parameter));
                     }
                     Tuple::Variable(variable) => {
-                        parameters
-                            .extend(variable.iter_prefix_elements().map(positional_parameter));
                         let name = parameter
                             .name()
                             .cloned()
@@ -5925,7 +5957,17 @@ impl<'db> Parameters<'db> {
                             VariableSegment::TypeVarTuple(typevartuple) => variadic
                                 .with_annotated_type(Type::TypeVar(typevartuple))
                                 .with_starred_annotation(),
+                            // basedpython: a parameter list has no way to say that its
+                            // variadic parameter takes whole repetitions of several types, so
+                            // `*args: *((int, str) * int)` stays a single parameter, which call
+                            // binding matches against the tuple as a whole.
+                            VariableSegment::Repeated(_) => {
+                                parameters.push(parameter.clone());
+                                continue;
+                            }
                         };
+                        parameters
+                            .extend(variable.iter_prefix_elements().map(positional_parameter));
                         parameters.push(
                             variadic
                                 .with_definition(parameter.definition())
@@ -7260,4 +7302,86 @@ mod tests {
             &CallableSignature::single(expected_sig)
         );
     }
+}
+
+/// basedpython: which side of a relation a parameter list is on, which decides how the
+/// calls it does not have to accept are approximated.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ParametersSide {
+    /// The parameters of the more specific signature, which must accept every call the target
+    /// accepts. Leaving a call out of its tuple only rejects code that would have been fine.
+    Source,
+    /// The parameters of the signature being satisfied. Every call it promises must be in its
+    /// tuple, so a parameter list whose calls this cannot describe has no tuple at all.
+    Target,
+}
+
+/// basedpython: whether a parameter list takes whole repetitions of several types, as
+/// `*args: *((int, str) * int)` does.
+fn has_repeated_variadic<'db>(db: &'db dyn Db, parameters: &Parameters<'db>) -> bool {
+    parameters.variadic().is_some_and(|(_, parameter)| {
+        parameter.has_starred_annotation()
+            && parameter
+                .annotated_type()
+                .exact_tuple_instance_spec(db)
+                .is_some_and(|tuple| match tuple.as_ref() {
+                    TupleSpec::Variable(variable) => {
+                        matches!(variable.variable(), VariableSegment::Repeated(_))
+                    }
+                    TupleSpec::Fixed(_) => false,
+                })
+    })
+}
+
+/// basedpython: the tuples of positional arguments a parameter list accepts.
+///
+/// Returns `None` when the calls a parameter list accepts are not described by its positional
+/// shape alone: a required keyword-only parameter means it cannot be called positionally at
+/// all, and a target that can be called by keyword, or with a parameter left to its default,
+/// accepts calls this tuple would leave out.
+fn positional_call_tuple<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    parameters: &Parameters<'db>,
+    side: ParametersSide,
+) -> Option<TupleSpec<'db>> {
+    let mut builder = TupleSpecBuilder::with_capacity(parameters.len());
+    for parameter in parameters {
+        match parameter.kind() {
+            ParameterKind::PositionalOnly { .. } | ParameterKind::PositionalOrKeyword { .. } => {
+                if side == ParametersSide::Target
+                    && (parameter.has_default() || !parameter.is_positional_only())
+                {
+                    return None;
+                }
+                builder.push(parameter.annotated_type());
+            }
+            ParameterKind::Variadic { .. } => {
+                let annotation = parameter.annotated_type();
+                let tuple = match annotation {
+                    _ if !parameter.has_starred_annotation() => {
+                        Cow::Owned(TupleSpec::homogeneous(annotation))
+                    }
+                    Type::TypeVar(typevar) if typevar.is_typevartuple(db) => Cow::Owned(
+                        TupleType::unpacked_typevartuple(db, env, typevar)
+                            .tuple(db)
+                            .clone(),
+                    ),
+                    _ => annotation.exact_tuple_instance_spec(db)?,
+                };
+                builder = builder.concat(db, env, &tuple);
+            }
+            ParameterKind::KeywordOnly { .. } => {
+                if side == ParametersSide::Target || !parameter.has_default() {
+                    return None;
+                }
+            }
+            ParameterKind::KeywordVariadic { .. } => {
+                if side == ParametersSide::Target {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(builder.build())
 }

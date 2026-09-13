@@ -16,7 +16,7 @@ use ruff_python_ast::PythonVersion;
 use ruff_python_ast::helpers::top_star_slice_elements;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, ModModule, Stmt};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
 use crate::config::Config;
@@ -131,6 +131,15 @@ impl<'ast> Visitor<'ast> for PackForwarding {
     }
 }
 
+/// The `*` of an unpack, which is what [`Unpack`] replaces.
+///
+/// Only the star itself: the type after it can be parenthesized, `*((int, str) * n)`, and a
+/// range reaching to the start of that type would take the opening parenthesis with it, and
+/// collide with the edit that lowers the type inside it.
+fn star_token_range(unpack: TextRange) -> TextRange {
+    TextRange::at(unpack.start(), TextSize::from(1))
+}
+
 struct State {
     edits: RefCell<Vec<(TextRange, String)>>,
     needs_import: bool,
@@ -140,7 +149,7 @@ struct State {
 impl State {
     fn rewrite_subscript_starred(&mut self, starred: &ruff_python_ast::ExprStarred) {
         self.needs_import = true;
-        let star_range = TextRange::new(starred.range().start(), starred.value.range().start());
+        let star_range = star_token_range(starred.range());
         self.edits
             .borrow_mut()
             .push((star_range, "Unpack[".to_owned()));
@@ -159,7 +168,7 @@ impl State {
             return;
         }
         self.needs_import = true;
-        let star_range = TextRange::new(ann.range().start(), starred.value.range().start());
+        let star_range = star_token_range(ann.range());
         self.edits
             .borrow_mut()
             .push((star_range, "Unpack[".to_owned()));
@@ -216,6 +225,17 @@ mod tests {
         );
     }
 
+    fn check_py311(input: &str, expected: &str) {
+        let config = Config {
+            min_version: PythonVersion::PY311,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile(input, &config).unwrap(),
+            crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
     #[test]
     fn rewrites_starred_vararg_annotation() {
         check(
@@ -224,6 +244,29 @@ mod tests {
                 from typing_extensions import Unpack
                 def f(*args: Unpack[tuple[int, ...]]): ...
             "},
+        );
+    }
+
+    /// a tuple type inside an unpacked annotation is lowered like any other type position. the
+    /// `Unpack[` replacement covers the star alone, so it does not collide with the lowering of a
+    /// parenthesized type after it
+    #[test]
+    fn rewrites_tuple_type_inside_starred_vararg_annotation() {
+        check(
+            "def f(*args: *(int, str)): ...\ndef g(*args: *((int, str) * int)): ...\n",
+            indoc! {"
+                from typing_extensions import Unpack
+                def f(*args: Unpack[tuple[int, str]]): ...
+                def g(*args: Unpack[(tuple[int | str, ...])]): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn starred_vararg_annotation_keeps_the_star_on_py311() {
+        check_py311(
+            "def f(*args: *((int, str) * 2)): ...\n",
+            "def f(*args: *(tuple[int, str, int, str])): ...\n",
         );
     }
 

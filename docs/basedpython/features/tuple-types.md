@@ -62,10 +62,52 @@ positions the form is written in — another `type` alias, or any annotation onc
 that unpacks an alias raises at import, exactly as the same annotation would in
 python. unpacking a tuple type or a `TypeVarTuple` directly has no such limit
 
+## repetition
+
+a tuple type multiplied by `int` is that tuple repeated any number of times,
+including none. its length is unknown, but its elements still come in order:
+
+```by
+def pairs(n: int) -> (int, str) * int:
+    return (1, "a") * n
+```
+
+multiplying a tuple value by an `int` whose value is unknown already has this
+type, so the element at each position stays known:
+
+```by
+def first_pair(n: int) -> (int, str)?:
+    items = (1, "a") * n
+    if not items:
+        return None
+    return items[0], items[1]
+```
+
+fixed elements before or after the repetitions unpack it into the outer tuple:
+
+```by
+framed: (bytes, *(int, str) * int, bytes)
+```
+
+a tuple is only assignable when it is a whole number of repetitions, so
+`(1, "a", 2)` is not a `(int, str) * int`, and unpacking one into three targets
+is always an `invalid-assignment`. the length of the repeated run is part of the
+type: every `(int, str, int, str) * int` is an `(int, str) * int`, but not the
+other way around. a run of one element is the tuple that repeats it, so
+`(int,) * int` is `(*: int)`
+
+python has no spelling for the repeated order, so the lowered annotation keeps
+only which types the elements can be:
+
+```python
+def pairs(n: int) -> tuple[int | str, ...]:
+    return (1, "a") * n
+```
+
 ## syntax
 
 ```text
-tuple_type ::= "(" element ("," element)* [","] ")"
+tuple_type ::= "(" element ("," element)* [","] ")" | tuple_type "*" "int"
 element    ::= type | "*" type
 ```
 

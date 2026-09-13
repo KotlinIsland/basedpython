@@ -189,6 +189,13 @@ impl TypePosWalker<'_> {
             // edit (leaving the narrow transform's `needs_import` flag set
             // even though the edit was dropped)
             Expr::Tuple(_) => {}
+            // basedpython: the annotation of a variadic parameter, `*args: *(int, str)`, and an
+            // unpacked element of a generic argument list, `tuple[*Ts]`. the star itself is
+            // lowered by `unpack`, whose edit covers the star alone, so the type inside it is a
+            // type position like any other
+            Expr::Starred(s) => {
+                self.visit_type_expr(&s.value, TypePos::Nested);
+            }
             // an inline protocol is hoisted to a synthesized class by
             // `protocol_type`, which renders every member type through its own
             // lowerer. descending would let sibling transforms emit narrow
