@@ -5941,6 +5941,9 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
             return;
         }
 
+        // basedpython: a length that is not a whole number of repetitions of
+        // `*args: *((int, str) * int)` has no per-argument expected types to hand out.
+        // `check_repeated_variadic_arguments` reports those arguments against the whole tuple.
         let Ok(expected) = tuple.resize(db, env, argument_length) else {
             return;
         };
@@ -6895,7 +6898,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         }
 
         let Some((actual, argument_indices)) =
-            self.collect_typevartuple_arguments(parameter_index, parameter, formal)
+            self.collect_variadic_argument_tuple(parameter_index, parameter, formal)
         else {
             return true;
         };
@@ -7009,7 +7012,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
     ///     tail(*values)  # collected `*args`: tuple[str, bytes]
     ///     prefixed(*numbers)  # collected `*args`: tuple[int, *tuple[int, ...]]
     /// ```
-    fn collect_typevartuple_arguments(
+    fn collect_variadic_argument_tuple(
         &self,
         parameter_index: usize,
         parameter: &Parameter<'db>,
@@ -7515,7 +7518,64 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                 })
     }
 
+    /// basedpython: checks the arguments matched to a variadic parameter that takes whole
+    /// repetitions, `*args: *((int, str) * int)`, against that tuple as a whole.
+    ///
+    /// Each argument is also checked against the element type at its position, but a splatted
+    /// argument of unknown length has no known position for any of its elements, and the number
+    /// of arguments is not a property of any one of them. Only what those per-argument checks
+    /// cannot see is reported here, so an argument of the wrong type at a known position is
+    /// still reported once, against that argument.
+    fn check_repeated_variadic_arguments(&mut self) {
+        let db = self.db;
+        let env = self.env;
+        let Some((parameter_index, parameter)) = self.signature.parameters().variadic() else {
+            return;
+        };
+        if !parameter.has_starred_annotation() {
+            return;
+        }
+        let formal = parameter.annotated_type();
+        let Some(formal_tuple) = formal.exact_tuple_instance_spec(db) else {
+            return;
+        };
+        let TupleSpec::Variable(variable) = formal_tuple.as_ref() else {
+            return;
+        };
+        if !matches!(variable.variable(), VariableSegment::Repeated(_)) {
+            return;
+        }
+        let parameter_context = ParameterContext::new(parameter, parameter_index, false);
+        let parameter = parameter.clone();
+        let formal_tuple = formal_tuple.into_owned();
+
+        let Some((actual, argument_indices)) =
+            self.collect_variadic_argument_tuple(parameter_index, &parameter, formal)
+        else {
+            return;
+        };
+        let Some(actual_tuple) = actual.exact_tuple_instance_spec(db) else {
+            return;
+        };
+        let as_type = |spec| Type::tuple(TupleType::new(db, env, &spec));
+        let shape_fits = as_type(actual_tuple.shape(db, env)).is_assignable_to(
+            db,
+            env,
+            as_type(formal_tuple.shape(db, env)),
+        );
+        if shape_fits && (!actual_tuple.is_variadic() || actual.is_assignable_to(db, env, formal)) {
+            return;
+        }
+        self.errors.push(BindingError::NotWholeRepetitions {
+            argument_index: argument_indices.map(|(first, _)| first),
+            parameter: parameter_context,
+            expected_ty: formal,
+            provided_ty: actual,
+        });
+    }
+
     fn check_argument_types(&mut self, constraints: &ConstraintSetBuilder<'db>) {
+        self.check_repeated_variadic_arguments();
         let db = self.db;
         let paramspec = self.signature.parameters().as_paramspec_with_prefix();
         let paramspec_component_start = paramspec.and_then(|(prefix, paramspec)| {
@@ -9962,6 +10022,14 @@ pub(crate) enum BindingError<'db> {
         expected_positional_count: usize,
         provided_positional_count: usize,
     },
+    /// basedpython: the arguments matched to a variadic parameter that takes whole repetitions,
+    /// `*args: *((int, str) * int)`, are not a whole number of them.
+    NotWholeRepetitions {
+        argument_index: Option<usize>,
+        parameter: ParameterContext,
+        expected_ty: Type<'db>,
+        provided_ty: Type<'db>,
+    },
     /// Multiple arguments were provided for a single parameter.
     ParameterAlreadyAssigned {
         argument_index: Option<usize>,
@@ -10090,6 +10158,7 @@ impl BindingError<'_> {
             }
 
             BindingError::InvalidKeyType { argument_index, .. }
+            | BindingError::NotWholeRepetitions { argument_index, .. }
             | BindingError::UnknownArgument { argument_index, .. }
             | BindingError::UnknownKeywordVariadicArgument { argument_index }
             | BindingError::PositionalOnlyParameterAsKwarg { argument_index, .. }
@@ -10193,6 +10262,7 @@ impl<'db> BindingError<'db> {
             | Self::UnknownKeywordVariadicArgument { .. }
             | Self::PositionalOnlyParameterAsKwarg { .. }
             | Self::TooManyPositionalArguments { .. }
+            | Self::NotWholeRepetitions { .. }
             | Self::ParameterAlreadyAssigned { .. }
             | Self::SpecializationError { .. }
             | Self::UnmatchedOverload => true,
@@ -10448,6 +10518,31 @@ impl<'db> BindingError<'db> {
 
                 if let Some(compound_diag) = compound_diag {
                     compound_diag.add_context(db, env, &mut diag);
+                }
+            }
+
+            Self::NotWholeRepetitions {
+                argument_index,
+                parameter,
+                expected_ty,
+                provided_ty,
+            } => {
+                let range = context.get_range(node, *argument_index);
+                if let Some(builder) = context.report_lint(&INVALID_ARGUMENT_TYPE, range) {
+                    let mut diag = builder.into_diagnostic(format_args!(
+                        "Arguments to {parameter}{} do not fill whole repetitions",
+                        callable_description
+                            .map(|description| format!(" of {description}"))
+                            .unwrap_or_default()
+                    ));
+                    diag.set_primary_annotation_message(format_args!(
+                        "Expected `{}`, found `{}`",
+                        expected_ty.display(db, env),
+                        provided_ty.display(db, env)
+                    ));
+                    if let Some(compound_diag) = compound_diag {
+                        compound_diag.add_context(db, env, &mut diag);
+                    }
                 }
             }
 

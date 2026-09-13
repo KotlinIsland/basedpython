@@ -221,6 +221,36 @@ impl<'db> Type<'db> {
         try_call_bin_op_result_impl(db, env.program(db), left_ty, op, right_ty, tcx).as_ref()
     }
 
+    /// basedpython: whether this operation resolves to the method named `method` bound to
+    /// `receiver`, which is one of the two operands
+    ///
+    /// a fold that knows more about an operation than its declared return type says, such as
+    /// `tuple.__mul__` repeating the tuple's elements, applies only when the operation resolves
+    /// to that method. this is ty's own dispatch, which asks the left operand first; cpython
+    /// instead offers a multiplication to both operands' number protocols before it repeats a
+    /// sequence, so an `int` subclass whose `__rmul__` answers something else wins there and not
+    /// here — the divergence every binary operation in ty already has
+    pub(crate) fn bin_op_calls_method_of(
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        left_ty: Type<'db>,
+        op: ast::Operator,
+        right_ty: Type<'db>,
+        receiver: Type<'db>,
+        method: &str,
+    ) -> bool {
+        Self::try_call_bin_op(db, env, left_ty, op, right_ty).is_ok_and(|bindings| {
+            bindings.single_element().is_some_and(|binding| {
+                matches!(
+                    binding.callable_type,
+                    Type::BoundMethod(bound)
+                        if bound.self_instance(db) == receiver
+                            && bound.function(db).name(db) == method
+                )
+            })
+        })
+    }
+
     pub(crate) fn try_call_bin_op(
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,

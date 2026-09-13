@@ -29,7 +29,9 @@ use ruff_python_parser::parse_expression;
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{AstPass, PassContext};
-use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
+use super::type_expr_walker::{
+    Recurse, TypeExprVisitor, TypePos, walk_one_type_expr, walk_type_positions,
+};
 use crate::type_info::TypeInfo;
 
 /// One resolved operation: the replacement node (spliced into the working AST)
@@ -140,6 +142,19 @@ impl TypeExprVisitor for FoldCollector<'_> {
             // type parameter's bound — python cannot express the dependency on `T`, and
             // the bound's member type is the guarantee every specialization satisfies
             Expr::Attribute(_) => self.types.is_attribute_type(expr),
+            // the shared walker stops at a tuple type, which `annotation` lowers as a
+            // whole, carrying the folds found inside it: `(str, *(int, str) * n)`
+            Expr::Tuple(tuple) if !tuple.is_anon_named_tuple => {
+                for element in &tuple.elts {
+                    let element = match element {
+                        Expr::Starred(starred) => starred.value.as_ref(),
+                        Expr::Named(named) => named.value.as_ref(),
+                        element => element,
+                    };
+                    walk_one_type_expr(element, self);
+                }
+                return Recurse::Stop;
+            }
             _ => false,
         };
         if !foldable {
@@ -498,6 +513,32 @@ mod tests {
             indoc! {"
                 from typing import Literal
                 x: list[Literal[2]]
+            "},
+        );
+    }
+
+    #[test]
+    fn tuple_repetition() {
+        // python has no spelling for a tuple whose elements repeat in order, so the
+        // annotation keeps only which types its elements can be
+        check("x: (int, str) * int\n", "x: tuple[int | str, ...]\n");
+    }
+
+    #[test]
+    fn tuple_repetition_nested_in_subscript() {
+        check(
+            "x: list[(int, str) * int]\ny: dict[str, (int, str) * 2]\n",
+            "x: list[tuple[int | str, ...]]\ny: dict[str, tuple[int, str, int, str]]\n",
+        );
+    }
+
+    #[test]
+    fn tuple_repetition_unpacked_in_tuple_type() {
+        check(
+            "x: (bytes, *(int, str) * int, bytes)\n",
+            indoc! {"
+                from typing_extensions import Unpack
+                x: tuple[bytes, Unpack[tuple[int | str, ...]], bytes]
             "},
         );
     }

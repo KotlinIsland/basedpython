@@ -211,6 +211,12 @@ pub(crate) enum ErrorContext<'db> {
         source_len: usize,
         target_len: TupleLength,
     },
+    /// basedpython: a tuple whose elements repeat in runs of `source_len` is compared with one
+    /// whose runs are `target_len` long, and no number of the first is a number of the second.
+    RepeatedTupleLengthMismatch {
+        source_len: usize,
+        target_len: usize,
+    },
     TupleElementNotCompatible {
         source: Type<'db>,
         target: Type<'db>,
@@ -614,6 +620,12 @@ impl<'db> ErrorContext<'db> {
                 "a tuple of length {source_len} is not {} a tuple of length {}",
                 relation.description(),
                 target_len.display_minimum(),
+            ),
+            Self::RepeatedTupleLengthMismatch {
+                source_len,
+                target_len,
+            } => format!(
+                "elements repeating in runs of {source_len} do not fill runs of {target_len}",
             ),
             Self::TupleElementNotCompatible {
                 source,

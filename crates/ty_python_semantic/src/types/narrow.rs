@@ -3380,7 +3380,7 @@ impl<'db> PatternSuccessAnalyzer<'db> {
         let unpacked = tuple
             .unpack(
                 target_len,
-                |segment| vec![segment.element_type(db)],
+                |segment| segment.unpacked_elements(db),
                 |elements| {
                     UnionType::from_elements_leave_aliases(db, &self.env, elements.iter().copied())
                 },

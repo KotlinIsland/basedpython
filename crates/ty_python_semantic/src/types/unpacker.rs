@@ -14,8 +14,8 @@ use crate::Db;
 use crate::types::infer::{ExpressionInference, FrozenMap};
 use crate::types::tuple::promotion::TupleSizePromotionConstraints;
 use crate::types::tuple::{
-    ResizeTupleError, Tuple, TupleBuilder, TupleElement, TupleLength, TupleSpec,
-    VariableLengthTuple,
+    ResizeTupleError, SegmentElements, SegmentMerge, Tuple, TupleBuilder, TupleElement,
+    TupleLength, TupleSpec, VariableLengthTuple,
 };
 use crate::types::{
     KnownClass, Type, TypeCheckDiagnostics, TypeContext, UnionBuilder, UnionType,
@@ -340,6 +340,15 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                                 "Not enough values to unpack",
                                 sequence.len().display_maximum(),
                             ),
+                            ResizeTupleError::NotWholeRepetitions { repeated_len } => (
+                                "Wrong number of values to unpack",
+                                match sequence.len().minimum() {
+                                    0 => format!("a multiple of {repeated_len}"),
+                                    minimum => {
+                                        format!("{minimum} plus a multiple of {repeated_len}")
+                                    }
+                                },
+                            ),
                         };
                         let mut diag = builder.into_diagnostic(message);
                         diag.set_primary_annotation_message(format_args!(
@@ -570,7 +579,7 @@ fn assignment_values_for_target<'ast>(
             if let Some(length) = known_length {
                 Tuple::heterogeneous(std::iter::repeat_n(None, length))
             } else {
-                VariableLengthTuple::mixed([], vec![None], [])
+                VariableLengthTuple::mixed([], SegmentElements::Unordered(vec![None]), [])
             }
         },
     )?;
@@ -632,14 +641,21 @@ impl<'db> UnpackElement<'db, '_> {
 fn sequence_from_type<'db, 'ast>(
     db: &'db dyn Db,
     tuple: &TupleSpec<'db>,
-) -> Tuple<UnpackElement<'db, 'ast>, Vec<UnpackElement<'db, 'ast>>> {
+) -> Tuple<UnpackElement<'db, 'ast>, SegmentElements<UnpackElement<'db, 'ast>>> {
     match tuple {
         Tuple::Fixed(values) => {
             Tuple::heterogeneous(values.iter_all_elements().map(UnpackElement::from_type))
         }
         Tuple::Variable(values) => VariableLengthTuple::mixed(
             values.iter_prefix_elements().map(UnpackElement::from_type),
-            vec![UnpackElement::from_type(values.variable().element_type(db))],
+            match values.variable().unpacked_elements(db) {
+                SegmentElements::Unordered(elements) => SegmentElements::Unordered(
+                    elements.into_iter().map(UnpackElement::from_type).collect(),
+                ),
+                SegmentElements::Repeated(elements) => SegmentElements::Repeated(
+                    elements.into_iter().map(UnpackElement::from_type).collect(),
+                ),
+            },
             values.iter_suffix_elements().map(UnpackElement::from_type),
         ),
     }
@@ -679,8 +695,8 @@ fn literal_sequence<'ast, T: Clone>(
     expression: &'ast ast::Expr,
     promote: bool,
     element: &impl Fn(&'ast ast::Expr, bool) -> T,
-    spread: &impl Fn(&'ast ast::Expr, bool, Option<usize>) -> Tuple<T, Vec<T>>,
-) -> Option<Tuple<T, Vec<T>>> {
+    spread: &impl Fn(&'ast ast::Expr, bool, Option<usize>) -> Tuple<T, SegmentElements<T>>,
+) -> Option<Tuple<T, SegmentElements<T>>> {
     let (values, promote) = literal_sequence_elements(expression, promote)?;
     Some(sequence_from_literal_elements(
         values,
@@ -691,7 +707,11 @@ fn literal_sequence<'ast, T: Clone>(
             builder.concat_with(unpacked, |suffix, left, right, prefix| {
                 // For `[*a, *b, *c, ...]`, retain the accumulated elements instead of copying
                 // them again for every expansion. Positions within this segment are unknown.
-                left.extend(suffix.iter().chain(prefix).chain(right).cloned());
+                let mut elements =
+                    std::mem::replace(left, SegmentElements::Unordered(Vec::new())).into_elements();
+                elements.extend(suffix.iter().chain(prefix).chain(right.elements()).cloned());
+                *left = SegmentElements::Unordered(elements);
+                SegmentMerge::Merged
             })
         },
     ))

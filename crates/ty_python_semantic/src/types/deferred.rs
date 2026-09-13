@@ -41,7 +41,8 @@ use ruff_python_ast::name::Name;
 use super::Type;
 use super::infer::builder::binary_expressions::BinaryInferenceState;
 use super::infer::{
-    deferred_comparison, fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
+    deferred_comparison, fold_tuple_concat, fold_tuple_multiplication, literal_binary_op,
+    literal_unary_op,
 };
 use super::visitor::{self, any_over_type};
 use crate::types::ProgramEnvironment;
@@ -231,7 +232,17 @@ impl<'db> DeferredType<'db> {
 
     /// basedpython: see [`DeferredOperation::is_checked`].
     pub(crate) fn is_checked(self, db: &'db dyn Db) -> bool {
-        self.operation(db).is_checked()
+        if !self.operation(db).is_checked() {
+            return false;
+        }
+        // A tuple repetition, `(T, U) * int`, folds to a tuple type that still holds its type
+        // parameters and names exactly the same values, so a body is checked against that fold.
+        // An arithmetic operation over integers has no such fold — it collapses to `int` — which
+        // is why it is checked against the operation itself.
+        !self
+            .operands(db)
+            .iter()
+            .any(|operand| operand.exact_tuple_instance_spec(db).is_some())
     }
 }
 
@@ -524,8 +535,7 @@ fn evaluate<'db>(
             // `(X,) * Dim` would re-evaluate through typeshed's `tuple.__mul__` and
             // widen to `tuple[X, ...]`, throwing away the length the fold just learned
             .or_else(|| match op {
-                ast::Operator::Mult => fold_tuple_repeat(db, env, *left, *right)
-                    .or_else(|| fold_tuple_repeat(db, env, *right, *left)),
+                ast::Operator::Mult => fold_tuple_multiplication(db, env, *left, *right),
                 ast::Operator::Add => fold_tuple_concat(db, env, *left, *right),
                 _ => None,
             })

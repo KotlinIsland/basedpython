@@ -4493,6 +4493,14 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             return Ok(());
         }
 
+        // basedpython: a formal written as an operation on a type parameter, `(T, U) * int`, is
+        // held symbolically so that it can be re-folded once the parameter is known. What it
+        // reads as everywhere else is the type it folds to, which is where its type parameters
+        // are found.
+        if let Type::Deferred(deferred) = formal {
+            return self.infer_map_impl(deferred.reduced(db, env), actual, polarity, seen);
+        }
+
         // Avoid infinite recursion while retaining comparisons under different polarities.
         if !seen.insert((formal, actual, polarity)) {
             return Ok(());
@@ -5219,6 +5227,47 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                     }
                     self.add_type_mapping(typevartuple, packed, variance);
                     return Ok(());
+                }
+
+                // basedpython: a formal that repeats a run of several types, `(T, U) * int`,
+                // is solved from the elements at the same positions in the actual's own run, or
+                // in a fixed-length actual that is a whole number of those runs. Resizing both
+                // to one variable-length segment, as the general case below does, would solve
+                // every type variable from the union of every element instead.
+                if let TupleSpec::Variable(formal_variable) = &*formal_tuple
+                    && let VariableSegment::Repeated(_) = formal_variable.variable()
+                    && formal_variable.prefix_elements().is_empty()
+                    && formal_variable.suffix_elements().is_empty()
+                {
+                    let formal_segment = formal_variable.variable();
+                    let unit_len = formal_segment.unit_len(db);
+                    let actual_elements: Option<Vec<Type<'db>>> = match &*actual_tuple {
+                        TupleSpec::Fixed(actual) => actual
+                            .len()
+                            .is_multiple_of(unit_len)
+                            .then(|| actual.iter_all_elements().collect()),
+                        TupleSpec::Variable(actual) => (actual.prefix_elements().is_empty()
+                            && actual.suffix_elements().is_empty()
+                            && actual.variable().typevartuple().is_none()
+                            && actual.variable().unit_len(db).is_multiple_of(unit_len))
+                        .then(|| {
+                            (0..actual.variable().unit_len(db))
+                                .map(|index| actual.variable().unit_element(db, index))
+                                .collect()
+                        }),
+                    };
+                    if let Some(actual_elements) = actual_elements {
+                        let variance = TypeVarVariance::Covariant.compose(polarity);
+                        for (index, actual_element) in actual_elements.into_iter().enumerate() {
+                            self.infer_map_impl(
+                                formal_segment.unit_element(db, index),
+                                actual_element,
+                                variance,
+                                seen,
+                            )?;
+                        }
+                        return Ok(());
+                    }
                 }
 
                 let Some(most_precise_length) = formal_tuple.len().most_precise(actual_tuple.len())
