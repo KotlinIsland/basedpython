@@ -214,6 +214,10 @@ pub enum LicenceKind {
     /// descriptor rather than calling a half, since calling one would run a body the
     /// program is already running
     Accessor,
+    /// a field read or written at its offset in the layout rather than through the
+    /// descriptor the class publishes for it. like a property, the descriptor is a data
+    /// descriptor, so the lookup is on the type alone
+    Field,
 }
 
 /// which error class a [`Op::RaiseStandard`] raises
@@ -434,6 +438,24 @@ pub enum Op {
     /// wanted where it is not the builtin. what it costs at runtime is in
     /// `By_BuiltinStands`
     BuiltinStands { dest: RegisterId, name: String },
+    /// whether a loop may be run as the copy of itself that asks none of its
+    /// [`Self::BuiltinStands`] questions about `builtins` and none of its
+    /// [`Self::ResolveFunction`] questions about `functions` again, and reads each register
+    /// of `exact` as the builtin its representation names
+    ///
+    /// asked once on the way into the loop. every one of `builtins` has to resolve to the
+    /// builtin, every one of `functions` has to still stand for its native entry, and every one of `exact` has to hold exactly an `int` where it is tagged, a
+    /// `str` where it is a `str` and a `list` where it is anything else, and not a subclass — neither of which anything but python code can undo, and the copy leaves
+    /// for the loop as written wherever it reaches an operation that can run python. so
+    /// the answer is a bit and never an error: a lookup that fails answers no, and the loop
+    /// as written asks it again where python would and raises what python raises. a build
+    /// on which another thread can write a namespace while this one runs answers no
+    LoopGuardsHold {
+        dest: RegisterId,
+        builtins: Vec<String>,
+        functions: Vec<String>,
+        exact: Vec<Value>,
+    },
     /// what a call to the module function `name` has to go through where its native
     /// entry may not stand in for the function object, read where python reads the name
     ///
@@ -445,6 +467,13 @@ pub enum Op {
     /// resolved as a global read is, which raises `NameError` for a name bound nowhere —
     /// see `By_ResolveFunction`
     ResolveFunction { dest: RegisterId, name: String },
+    /// what [`Self::ResolveFunction`] answers where `name` is known to still stand for its
+    /// native entry: nothing to call
+    ///
+    /// written where a loop or a function was entered through a test that the function
+    /// stands and nothing since can have run python — see `by_opt`'s `guard_loops`. every
+    /// read of the register afterwards is the read it would have been
+    FunctionStood { dest: RegisterId, name: String },
     /// whether the call [`Self::ResolveFunction`] read `src` for may go straight to the
     /// native entry: the read found nothing to call, and nothing the arguments did since
     /// has moved the function
@@ -1047,6 +1076,29 @@ pub enum Op {
         name: String,
         value: Value,
     },
+    /// `receiver.name` through the object protocol, narrowed to the representation `dest`
+    /// holds — the arm a licensed field or property read takes where the licence does not
+    /// stand
+    ///
+    /// the same as a [`Self::GetAttr`] of an object and a [`Self::Unbox`] of what it answered,
+    /// done as one call the C keeps out of line. the arm is the rare one of a test asked on
+    /// every trip, and as two operations it gave the function a register, a retain, a
+    /// release and two error tests of its own — enough that the C compiler stopped writing
+    /// an accessor out in place at all
+    ReadAttribute {
+        dest: RegisterId,
+        receiver: Value,
+        name: String,
+    },
+    /// `receiver.name = value` through the object protocol, with `value` boxed the way its
+    /// representation boxes — the write [`Self::ReadAttribute`] is the read of. `dest` is the
+    /// status bit, 2 on failure
+    WriteAttribute {
+        dest: RegisterId,
+        receiver: Value,
+        name: String,
+        value: Value,
+    },
     /// a list display, from already-boxed elements
     BuildList { dest: RegisterId, items: Vec<Value> },
     /// a set display
@@ -1349,7 +1401,9 @@ impl Op {
             | Self::MatchAttr { .. }
             | Self::MethodStands { .. }
             | Self::BuiltinStands { .. }
+            | Self::LoopGuardsHold { .. }
             | Self::ResolveFunction { .. }
+            | Self::FunctionStood { .. }
             | Self::FunctionStands { .. }
             | Self::FunctionCallee { .. }
             | Self::AccessorStands { .. }
@@ -1405,6 +1459,8 @@ impl Op {
             | Self::CallMethod { .. }
             | Self::GetAttr { .. }
             | Self::SetAttr { .. }
+            | Self::ReadAttribute { .. }
+            | Self::WriteAttribute { .. }
             | Self::BuildList { .. }
             | Self::BuildSet { .. }
             | Self::BuildTuple { .. }
@@ -1488,7 +1544,9 @@ impl Op {
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
             | Self::BuiltinStands { dest, .. }
+            | Self::LoopGuardsHold { dest, .. }
             | Self::ResolveFunction { dest, .. }
+            | Self::FunctionStood { dest, .. }
             | Self::FunctionStands { dest, .. }
             | Self::FunctionCallee { dest, .. }
             | Self::AccessorStands { dest, .. }
@@ -1544,6 +1602,8 @@ impl Op {
             | Self::FieldIsSet { dest, .. }
             | Self::GetAttr { dest, .. }
             | Self::SetAttr { dest, .. }
+            | Self::ReadAttribute { dest, .. }
+            | Self::WriteAttribute { dest, .. }
             | Self::BuildList { dest, .. }
             | Self::BuildSet { dest, .. }
             | Self::BuildTuple { dest, .. }
@@ -1611,7 +1671,9 @@ impl Op {
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
             | Self::BuiltinStands { dest, .. }
+            | Self::LoopGuardsHold { dest, .. }
             | Self::ResolveFunction { dest, .. }
+            | Self::FunctionStood { dest, .. }
             | Self::FunctionStands { dest, .. }
             | Self::FunctionCallee { dest, .. }
             | Self::AccessorStands { dest, .. }
@@ -1667,6 +1729,8 @@ impl Op {
             | Self::FieldIsSet { dest, .. }
             | Self::GetAttr { dest, .. }
             | Self::SetAttr { dest, .. }
+            | Self::ReadAttribute { dest, .. }
+            | Self::WriteAttribute { dest, .. }
             | Self::BuildList { dest, .. }
             | Self::BuildSet { dest, .. }
             | Self::BuildTuple { dest, .. }
@@ -1718,6 +1782,7 @@ impl Op {
     /// every operand this operation reads
     pub fn operands(&self) -> Vec<&Value> {
         match self {
+            Self::LoopGuardsHold { exact, .. } => exact.iter().collect(),
             Self::AsyncContext {
                 manager,
                 exit: Some(exit),
@@ -1821,6 +1886,7 @@ impl Op {
                 all
             }
             Self::GetAttr { receiver, .. }
+            | Self::ReadAttribute { receiver, .. }
             | Self::GetField { receiver, .. }
             | Self::RequireField { receiver, .. }
             | Self::FieldIsSet { receiver, .. } => vec![receiver],
@@ -1829,6 +1895,9 @@ impl Op {
                 receiver, value, ..
             } => vec![receiver, value],
             Self::SetAttr {
+                receiver, value, ..
+            }
+            | Self::WriteAttribute {
                 receiver, value, ..
             } => vec![receiver, value],
             Self::StoreGlobal { value, .. } => vec![value],
@@ -1866,6 +1935,7 @@ impl Op {
             | Self::LoadGlobal { .. }
             | Self::BuiltinStands { .. }
             | Self::ResolveFunction { .. }
+            | Self::FunctionStood { .. }
             | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }
@@ -1950,6 +2020,7 @@ impl Op {
     /// silently skipped
     pub fn operands_mut(&mut self) -> Vec<&mut Value> {
         match self {
+            Self::LoopGuardsHold { exact, .. } => exact.iter_mut().collect(),
             Self::AsyncContext {
                 manager,
                 exit: Some(exit),
@@ -2055,6 +2126,7 @@ impl Op {
                 all
             }
             Self::GetAttr { receiver, .. }
+            | Self::ReadAttribute { receiver, .. }
             | Self::GetField { receiver, .. }
             | Self::RequireField { receiver, .. }
             | Self::FieldIsSet { receiver, .. } => vec![receiver],
@@ -2063,6 +2135,9 @@ impl Op {
                 receiver, value, ..
             } => vec![receiver, value],
             Self::SetAttr {
+                receiver, value, ..
+            }
+            | Self::WriteAttribute {
                 receiver, value, ..
             } => vec![receiver, value],
             Self::StoreGlobal { value, .. } => vec![value],
@@ -2100,6 +2175,7 @@ impl Op {
             | Self::LoadGlobal { .. }
             | Self::BuiltinStands { .. }
             | Self::ResolveFunction { .. }
+            | Self::FunctionStood { .. }
             | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }

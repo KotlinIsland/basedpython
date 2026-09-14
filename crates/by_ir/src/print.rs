@@ -155,10 +155,26 @@ fn print_op(function: &Function, op: &Op) -> String {
             dest,
             name: builtin,
         } => format!("{} = builtin-stands {builtin}", name(*dest)),
+        Op::LoopGuardsHold {
+            dest,
+            builtins,
+            functions,
+            exact,
+        } => format!(
+            "{} = loop-guards-hold builtins [{}] functions [{}] exact [{}]",
+            name(*dest),
+            builtins.join(", "),
+            functions.join(", "),
+            exact.iter().map(value).collect::<Vec<_>>().join(", ")
+        ),
         Op::ResolveFunction {
             dest,
             name: function,
         } => format!("{} = resolve-function {function}", name(*dest)),
+        Op::FunctionStood {
+            dest,
+            name: function,
+        } => format!("{} = function-stood {function}", name(*dest)),
         Op::FunctionStands {
             dest,
             src,
@@ -216,6 +232,7 @@ fn print_op(function: &Function, op: &Op) -> String {
             let kind = match kind {
                 LicenceKind::Method => "method",
                 LicenceKind::Accessor => "accessor",
+                LicenceKind::Field => "field",
             };
             format!("licence-holds {kind} {} {class}.{member}", value(src))
         }
@@ -689,6 +706,22 @@ fn print_op(function: &Function, op: &Op) -> String {
             receiver,
             name: attr,
         } => format!("{} = {}.{attr}", name(*dest), value(receiver)),
+        Op::ReadAttribute {
+            dest,
+            receiver,
+            name: attr,
+        } => format!("{} = read {}.{attr}", name(*dest), value(receiver)),
+        Op::WriteAttribute {
+            dest,
+            receiver,
+            name: attr,
+            value: v,
+        } => format!(
+            "{} = write ({}.{attr} = {})",
+            name(*dest),
+            value(receiver),
+            value(v)
+        ),
         Op::SetAttr {
             dest,
             receiver,

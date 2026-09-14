@@ -217,6 +217,21 @@ fn rendered_registers(rendered: &str) -> Vec<usize> {
 ///
 /// exactly one pair qualifies: a `bit` is a `bool` whose error case has been ruled
 /// out, and both are the same 0-or-1 byte. anything wider needs a real `Box`
+/// whether [`Op::ReadAttribute`] narrows to, and [`Op::WriteAttribute`] boxes, this
+/// representation
+pub fn attribute_representation(ty: &RType) -> bool {
+    matches!(
+        ty,
+        RType::Primitive(
+            Primitive::Object
+                | Primitive::Int
+                | Primitive::Float
+                | Primitive::Bool
+                | Primitive::Str
+        )
+    )
+}
+
 fn free_widening(from: &RType, to: &RType) -> bool {
     match (from, to) {
         // a comparison result is already a valid bool byte
@@ -611,6 +626,16 @@ impl Verifier<'_> {
         }
     }
 
+    /// an attribute's receiver is an object, or an instance of an emitted class, which
+    /// reaches `PyObject *` by a cast
+    fn expect_attribute_receiver(&mut self, block: BlockId, receiver: &Value) {
+        if let Some(actual) = self.operand_type(block, receiver)
+            && !matches!(actual, RType::Instance { .. })
+        {
+            self.expect(block, receiver, &RType::OBJECT, "attribute access");
+        }
+    }
+
     fn expect_dest(&mut self, block: BlockId, dest: RegisterId, expected: &RType, what: &str) {
         match self.function.register(dest) {
             None => self.error(Some(block), format!("r{} is not declared", dest.0)),
@@ -745,7 +770,23 @@ impl Verifier<'_> {
             Op::BuiltinStands { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::BIT, "a builtin test");
             }
-            Op::ResolveFunction { dest, .. } => {
+            Op::LoopGuardsHold { dest, exact, .. } => {
+                for value in exact {
+                    if let Some(actual) = self.operand_type(block, value)
+                        && actual != RType::INT
+                        && actual != RType::STR
+                        && actual != RType::OBJECT
+                        && actual != RType::LIST
+                    {
+                        self.error(
+                            Some(block),
+                            format!("a loop's entry test asks whether an {actual} is exact"),
+                        );
+                    }
+                }
+                self.expect_dest(block, *dest, &RType::BIT, "a loop's entry test");
+            }
+            Op::ResolveFunction { dest, .. } | Op::FunctionStood { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "a function resolution");
             }
             Op::FunctionStands { dest, src, .. } => {
@@ -1465,6 +1506,31 @@ impl Verifier<'_> {
             Op::GetAttr { dest, receiver, .. } => {
                 self.expect(block, receiver, &RType::OBJECT, "attribute access");
                 self.expect_dest(block, *dest, &RType::OBJECT, "attribute access");
+            }
+            Op::ReadAttribute { dest, receiver, .. } => {
+                self.expect_attribute_receiver(block, receiver);
+                if let Some(decl) = self.function.register(*dest)
+                    && !attribute_representation(&decl.ty)
+                {
+                    self.error(
+                        Some(block),
+                        format!("an attribute read cannot narrow to {}", decl.ty),
+                    );
+                }
+            }
+            Op::WriteAttribute {
+                dest,
+                receiver,
+                value,
+                ..
+            } => {
+                self.expect_attribute_receiver(block, receiver);
+                if let Some(ty) = self.operand_type(block, value)
+                    && !attribute_representation(&ty)
+                {
+                    self.error(Some(block), format!("an attribute write cannot box {ty}"));
+                }
+                self.expect_dest(block, *dest, &RType::BIT, "attribute assignment");
             }
             Op::SetAttr {
                 dest,

@@ -2144,7 +2144,9 @@ fn prune_unbuildable(
                     {
                         return Some(weakly_referenced(callee));
                     }
-                    Op::CallMethod { name, .. } | Op::GetAttr { name, .. }
+                    Op::CallMethod { name, .. }
+                    | Op::GetAttr { name, .. }
+                    | Op::ReadAttribute { name, .. }
                         if blamed_methods.contains(name.as_str()) =>
                     {
                         return Some(format!(
@@ -9858,25 +9860,11 @@ impl Lowering<'_, '_> {
         let join = self.mutable.contains(class).then(|| {
             let (hit, miss, join) = self.field_guard(&receiver, class, &held.name);
             self.builder.switch_to(miss);
-            let object = self.widen_to_object(receiver.clone(), receiver_ty);
-            let answer = self.builder.temp(RType::OBJECT);
-            self.builder.push(Op::GetAttr {
-                dest: answer,
-                receiver: object,
-                name: held.name.clone(),
-            });
             // what the checker says the attribute is, asked of whatever answered for it
-            if field_ty == RType::OBJECT {
-                self.builder.assign(dest, Value::Register(answer));
-            } else {
-                self.builder.push(Op::Unbox {
-                    dest,
-                    src: Value::Register(answer),
-                    to: field_ty.clone(),
-                });
-            }
+            self.attribute_read(receiver.clone(), receiver_ty, &held.name, dest, &field_ty);
             self.builder.terminate(Terminator::Goto(join));
             self.builder.switch_to(hit);
+            self.licence_holds(&receiver, class, &held.name, LicenceKind::Field);
             join
         });
         self.require_field(&receiver, &owner, held);
@@ -9914,17 +9902,10 @@ impl Lowering<'_, '_> {
             self.builder.switch_to(miss);
             // the value as it was handed over: whatever answers for the name decides
             // what it accepts
-            let object = self.widen_to_object(receiver.clone(), receiver_ty);
-            let boxed = self.widen_to_object(value.clone(), ty);
-            let refused = self.builder.temp(RType::BIT);
-            self.builder.push(Op::SetAttr {
-                dest: refused,
-                receiver: object,
-                name: held.name.clone(),
-                value: boxed,
-            });
+            self.attribute_write(receiver.clone(), receiver_ty, &held.name, value.clone(), ty);
             self.builder.terminate(Terminator::Goto(join));
             self.builder.switch_to(hit);
+            self.licence_holds(receiver, class, &held.name, LicenceKind::Field);
             Some(join)
         } else {
             None
@@ -9943,6 +9924,79 @@ impl Lowering<'_, '_> {
             self.builder.switch_to(join);
         }
         Ok(())
+    }
+
+    /// `receiver.name` through the object protocol into `dest`, narrowed to `ty` — the arm
+    /// a licensed access takes where its licence does not stand
+    ///
+    /// one [`Op::ReadAttribute`] where it narrows to `ty`, which keeps the whole arm to one
+    /// call; a lookup and an unbox otherwise
+    fn attribute_read(
+        &mut self,
+        receiver: Value,
+        receiver_ty: &RType,
+        name: &str,
+        dest: RegisterId,
+        ty: &RType,
+    ) {
+        if by_ir::verify::attribute_representation(ty)
+            && (matches!(receiver_ty, RType::Instance { .. }) || *receiver_ty == RType::OBJECT)
+        {
+            self.builder.push(Op::ReadAttribute {
+                dest,
+                receiver,
+                name: name.to_string(),
+            });
+            return;
+        }
+        let object = self.widen_to_object(receiver, receiver_ty);
+        let answer = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::GetAttr {
+            dest: answer,
+            receiver: object,
+            name: name.to_string(),
+        });
+        if *ty == RType::OBJECT {
+            self.builder.assign(dest, Value::Register(answer));
+        } else {
+            self.builder.push(Op::Unbox {
+                dest,
+                src: Value::Register(answer),
+                to: ty.clone(),
+            });
+        }
+    }
+
+    /// `receiver.name = value` through the object protocol, `value` held as `ty` — the write
+    /// [`Self::attribute_read`] is the read of
+    fn attribute_write(
+        &mut self,
+        receiver: Value,
+        receiver_ty: &RType,
+        name: &str,
+        value: Value,
+        ty: &RType,
+    ) {
+        let refused = self.builder.temp(RType::BIT);
+        if by_ir::verify::attribute_representation(ty)
+            && (matches!(receiver_ty, RType::Instance { .. }) || *receiver_ty == RType::OBJECT)
+        {
+            self.builder.push(Op::WriteAttribute {
+                dest: refused,
+                receiver,
+                name: name.to_string(),
+                value,
+            });
+            return;
+        }
+        let object = self.widen_to_object(receiver, receiver_ty);
+        let boxed = self.widen_to_object(value, ty);
+        self.builder.push(Op::SetAttr {
+            dest: refused,
+            receiver: object,
+            name: name.to_string(),
+            value: boxed,
+        });
     }
 
     /// the test in front of a field access on a receiver typed `class`, answering with the
@@ -12965,29 +13019,12 @@ impl Lowering<'_, '_> {
         });
         self.builder.terminate(Terminator::Goto(join));
         self.builder.switch_to(miss);
-        // the reference the protocol call needs is taken here rather than before the
-        // test, so the arm that does not need one does not pay for it
-        let object = self.widen_to_object(receiver, receiver_ty);
-        let answer = self.builder.temp(RType::OBJECT);
-        self.builder.push(Op::GetAttr {
-            dest: answer,
-            receiver: object,
-            name: name.to_string(),
-        });
         // the protocol arm is where an override reached through a base-typed name
         // arrives, and it answers with an object. narrowing it to what the getter this
         // module compiled would have answered is the checked unbox every other call
         // result takes: the checker says the attribute is a `ret`, and a receiver that
         // makes that false is told so rather than read as one
-        if ret == RType::OBJECT {
-            self.builder.assign(dest, Value::Register(answer));
-        } else {
-            self.builder.push(Op::Unbox {
-                dest,
-                src: Value::Register(answer),
-                to: ret.clone(),
-            });
-        }
+        self.attribute_read(receiver, receiver_ty, name, dest, &ret);
         self.builder.terminate(Terminator::Goto(join));
         self.builder.switch_to(join);
         (Value::Register(dest), ret)
@@ -13036,16 +13073,7 @@ impl Lowering<'_, '_> {
         });
         self.builder.terminate(Terminator::Goto(join));
         self.builder.switch_to(miss);
-        // as the read does: the reference the protocol call needs is the slow arm's cost
-        let object = self.widen_to_object(receiver, receiver_ty);
-        let boxed = self.widen_to_object(value, param);
-        let refused = self.builder.temp(RType::BIT);
-        self.builder.push(Op::SetAttr {
-            dest: refused,
-            receiver: object,
-            name: name.to_string(),
-            value: boxed,
-        });
+        self.attribute_write(receiver, receiver_ty, name, value, param);
         self.builder.terminate(Terminator::Goto(join));
         self.builder.switch_to(join);
     }

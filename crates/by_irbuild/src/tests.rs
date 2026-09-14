@@ -9477,10 +9477,14 @@ def read(base: Base) -> int:
             )),
             "{text}"
         );
-        // both arms, and the protocol is the one nothing proved its way off
+        // both arms, and the protocol is the one nothing proved its way off — asked as one
+        // read the C keeps out of line
         assert!(text.contains("call Base.v$get"), "{text}");
         assert!(
-            has_op(read, |op| matches!(op, Op::GetAttr { .. })),
+            has_op(
+                read,
+                |op| matches!(op, Op::ReadAttribute { name, .. } if name == "v")
+            ),
             "{text}"
         );
     });

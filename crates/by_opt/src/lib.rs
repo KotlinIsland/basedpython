@@ -13,10 +13,12 @@ pub(crate) mod dead_registers;
 pub(crate) mod dict_find;
 mod field_proofs;
 pub(crate) mod fold;
+mod guard_loops;
 pub(crate) mod infallible;
 mod liveness;
 pub(crate) mod refcount;
 pub(crate) mod release_temporaries;
+mod runs_python;
 mod store_moves;
 pub(crate) mod str_append;
 mod str_concat_int;
@@ -119,6 +121,12 @@ const PASSES: &[Pass] = &[
     },
     // after dead-registers, so the body it copies is the final one, and before
     // infallible/borrow/refcount, which all read the block set
+    // after dead-registers, so the loop it copies is the final one, and before unswitch,
+    // which then finds the copy's bound as invariant as the original's
+    Pass {
+        name: "guard-loops",
+        run: guard_loops::run,
+    },
     Pass {
         name: "unswitch",
         run: unswitch::run,
