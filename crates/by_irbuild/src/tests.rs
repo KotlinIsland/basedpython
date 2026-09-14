@@ -1833,14 +1833,16 @@ class Tagged:
 }
 
 #[test]
-fn a_method_that_is_also_an_attribute_the_instance_is_given_declines() {
+fn an_attribute_sharing_a_method_name_is_kept_in_the_instance_dict() {
     // python answers an instance's own attribute before a function its class holds under
     // the same name, so `json.encoder.JSONEncoder` reads the `default` its constructor was
-    // handed where there was one and the method where there was not. a layout field and a
-    // method table cannot both stand under one name, and a method call reaches the method
-    // by the class alone — so either the call or the read would answer the other one
-    for source in [
-        "\
+    // handed where there was one and the method where there was not. a layout field would
+    // publish a descriptor under the method's name, so the attribute is kept in the
+    // instance's dict instead — which is where the lookup and a compiled call's shadow
+    // probe look first
+    for (source, class) in [
+        (
+            "\
 class Encoder:
     def __init__(self, default: object = None) -> None:
         if default is not None:
@@ -1849,7 +1851,10 @@ class Encoder:
     def default(self, o: object) -> object:
         return o
 ",
-        "\
+            "Encoder",
+        ),
+        (
+            "\
 class Base:
     def read(self) -> int:
         return 1
@@ -1859,25 +1864,52 @@ class Reader(Base):
     def __init__(self) -> None:
         self.read = len
 ",
-        "\
-class Base:
-    def __init__(self) -> None:
-        self.read = len
-
-
-class Reader(Base):
-    def read(self) -> int:
-        return 1
-",
+            "Reader",
+        ),
     ] {
-        let reasons = declines(source);
-        assert!(
-            reasons
+        assert_eq!(declines(source), Vec::new());
+        let fields = with_source(source, |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            module
+                .classes
                 .iter()
-                .any(|(_, reason)| reason.contains("is both a method and an attribute")),
-            "{reasons:?}"
-        );
+                .find(|lowered| lowered.name == class)
+                .map(|lowered| {
+                    lowered
+                        .fields
+                        .iter()
+                        .map(|field| field.name.clone())
+                        .collect::<Vec<_>>()
+                })
+        });
+        assert_eq!(fields, Some(Vec::new()), "{source}");
     }
+}
+
+#[test]
+fn a_method_over_an_attribute_a_base_lays_out_declines() {
+    // the base lays the attribute out as a field before the subclass's method is known, so
+    // the field's descriptor would stand in the base's dict behind the subclass's method —
+    // and python's lookup would reach the method first
+    let reasons = declines(
+        "\
+class Base:
+    def __init__(self) -> None:
+        self.read = len
+
+
+class Reader(Base):
+    def read(self) -> int:
+        return 1
+",
+    );
+    assert!(
+        reasons
+            .iter()
+            .any(|(_, reason)| reason.contains("is both a method and an attribute")),
+        "{reasons:?}"
+    );
 }
 
 #[test]
@@ -3501,15 +3533,45 @@ class Fine:
     );
 }
 
-/// a weak reference taken a whole function away from the instance it is of
+/// a weak reference of an instance of a class this module lays out is simply made
 ///
-/// the same fact the `__slots__` case above turns on — a type spec adds no `__weakref__`
-/// — and the frontend refuses `weakref.ref(self)` where it is written. but
-/// `logging.Handler.__init__` does not write one: it calls `_addHandlerRef(self)`, whose
-/// body takes the reference, and no predicate over `__init__`'s own body can see that.
-/// so the refusal is carried back to the caller that hands the instance over, and
-/// declining that caller is what keeps its class interpreted — which is a class a weak
-/// reference *can* be made of
+/// an emitted class keeps a weak-reference list on python's own terms, so `weakref.ref`,
+/// `WeakSet.add` and every other weak container reach its instances whether the call is
+/// written beside the instance or a whole function away from it
+#[test]
+fn a_weak_reference_of_an_instance_of_ours_is_made() {
+    let reasons = declines(
+        "\
+import weakref
+
+registry = []
+seen = weakref.WeakSet()
+
+
+def registers(thing):
+    registry.append(weakref.ref(thing))
+
+
+class Handler:
+    def __init__(self):
+        registers(self)
+        seen.add(self)
+
+    def own(self) -> None:
+        registry.append(weakref.ref(self))
+",
+    );
+    assert_eq!(reasons, Vec::new());
+}
+
+/// a weak reference taken a whole function away from an instance that cannot have one
+///
+/// a class whose layout is a base's from outside the module keeps no weak-reference list
+/// of its own, where python gives its class one. `logging.Handler.__init__` is the shape
+/// of the reach: it calls `_addHandlerRef(self)`, whose body takes the reference, and no
+/// predicate over `__init__`'s own body can see that. so the refusal is carried back to
+/// the caller that hands the instance over, and declining that caller is what keeps its
+/// class interpreted — which is a class a weak reference *can* be made of
 #[test]
 fn a_caller_that_hands_an_instance_to_a_weak_reference_is_declined() {
     let reasons = declines(
@@ -3523,7 +3585,7 @@ def registers(thing):
     registry.append(weakref.ref(thing))
 
 
-class Handler:
+class Handler(Exception):
     def __init__(self):
         registers(self)
 ",
@@ -3532,7 +3594,7 @@ class Handler:
         reasons,
         vec![(
             "Handler".to_string(),
-            "`registers` takes a weak reference of what it is handed, and an emitted instance is its layout — a type spec adds no `__weakref__`, so no weak reference of one can be made".to_string()
+            "`registers` takes a weak reference of what it is handed, and it is handed an instance whose emitted type keeps no weak-reference list: its layout is taken from a base outside the module".to_string()
         )]
     );
 }
@@ -3541,8 +3603,7 @@ class Handler:
 ///
 /// a frame between the receiver and the weak reference is one more function the answer
 /// has to travel through, which the pruner's own loop does. handing over something that
-/// is not an instance of ours costs nothing at all: an object from anywhere else carries
-/// a `__weakref__` of its own
+/// is not such an instance costs nothing at all
 #[test]
 fn only_a_caller_handing_over_an_instance_of_ours_is_declined() {
     let reasons = declines(
@@ -3560,7 +3621,12 @@ def forwards(thing):
     registers(thing)
 
 
-class Handler:
+class Handler(Exception):
+    def __init__(self):
+        forwards(self)
+
+
+class Plain:
     def __init__(self):
         forwards(self)
 
@@ -3602,7 +3668,7 @@ import weakref
 registry = []
 
 
-class Queue:
+class Queue(Exception):
     def __init__(self, thread: threading.Thread) -> None:
         self.thread = thread
 
@@ -3616,12 +3682,12 @@ class Queue:
     assert_eq!(reasons, Vec::new());
 }
 
-/// and where an instance of ours *can* be standing there, the refusal stays
+/// and where an instance that cannot have one *can* be standing there, the refusal stays
 ///
-/// `Holder.node` is declared as a class this module lays out, so the reference is of an
-/// emitted instance and raises. that is turned down where it is written rather than
-/// carried back to a caller: the frame that reads the field is the frame that raises,
-/// and no caller of it is handing the instance over
+/// `Holder.node` is declared as a class this module lays out over a base from outside, so
+/// the reference is of an instance with no weak-reference list and raises. that is turned
+/// down where it is written rather than carried back to a caller: the frame that reads
+/// the field is the frame that raises, and no caller of it is handing the instance over
 #[test]
 fn a_weak_reference_of_a_field_declared_as_one_of_ours_is_declined() {
     let reasons = declines(
@@ -3631,7 +3697,7 @@ import weakref
 registry = []
 
 
-class Node:
+class Node(Exception):
     def __init__(self) -> None:
         self.tag = 1
 
@@ -3648,17 +3714,17 @@ class Holder:
         reasons,
         vec![(
             "Holder".to_string(),
-            "an emitted instance is its layout and a type spec adds no `__weakref__`, so a weak reference to one cannot be made".to_string()
+            "a weak reference is taken of an instance of `Node`, whose emitted type keeps no weak-reference list: its layout is taken from a base outside the module".to_string()
         )]
     );
 }
 
 /// a field declared `object` is a place an instance of ours fits, so the frame stays
-/// marked and its callers are still turned down
+/// marked and its callers are still turned down where they hand one over
 ///
 /// this is what says the question asked is assignability and not a match on a class's
-/// name: nothing here writes `Node` anywhere near the weak reference, and `object` is a
-/// place every one of ours can stand in
+/// name: nothing here names a class anywhere near the weak reference, and `object` is a
+/// place every one of ours can stand in — the receiver itself among them
 #[test]
 fn a_weak_reference_of_a_field_declared_object_still_reaches_its_callers() {
     let reasons = declines(
@@ -3668,12 +3734,7 @@ import weakref
 registry = []
 
 
-class Node:
-    def __init__(self) -> None:
-        self.tag = 1
-
-
-class Holder:
+class Holder(Exception):
     def __init__(self, held: object) -> None:
         self.held = held
 

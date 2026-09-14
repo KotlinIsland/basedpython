@@ -10230,15 +10230,12 @@ def each(xs):
 }
 
 #[test]
-fn a_class_that_takes_a_weak_reference_to_itself_is_declined() {
-    // an emitted instance is its layout and a type spec adds no `__weakref__`, so
-    // `ref(self)` raises `TypeError` where python hands back a reference. the class is
-    // turned down and runs interpreted instead, which is what makes both legs agree.
-    //
-    // this is `_weakrefset.WeakSet`'s shape, snapshotting the reference into a nested
-    // function's default — the two constructions are together because the gate is about
-    // the weak reference and not about where it stands
-    agree_python_with_declines(
+fn a_class_that_takes_a_weak_reference_to_itself_agrees() {
+    // an emitted instance keeps a weak-reference list, so `ref(self)` hands back a
+    // reference as python's does. this is `_weakrefset.WeakSet`'s shape, snapshotting the
+    // reference into a nested function's default — the two constructions are together
+    // because the reference is about the instance and not about where it is taken
+    agree_python(
         "weakself",
         "\
 from weakref import ref
@@ -10258,7 +10255,10 @@ class Snapshots:
             return prefix + type(selfref()).__name__
         self.report = report
 ",
-        &["m.Holder().alive()", "m.Snapshots().report('is ')"],
+        &[
+            "m.Holder().alive()",
+            "(lambda s: s.report('is '))(m.Snapshots())",
+        ],
     );
 }
 
@@ -10943,8 +10943,10 @@ def guarded(words: list[str], index: int) -> str:
 fn an_attribute_the_instance_is_given_answers_before_a_method_of_the_same_name() {
     // python looks an instance's own attribute up before a function its class holds, so
     // an encoder handed a `default` calls that one and an encoder handed nothing calls the
-    // method — whether the name is called straight away or read first
-    agree_python_with_declines(
+    // method — whether the name is called straight away or read first, inside the class or
+    // from a module function. the attribute is kept in the instance's dict, which is where
+    // both the lookup and a compiled call look first, and `del` puts the method back
+    agree_python(
         "fieldshadowsmethod",
         "\
 from collections.abc import Callable
@@ -10963,6 +10965,19 @@ class Encoder:
 
     def read(self) -> object:
         return self.default
+
+    def forget(self) -> object:
+        del self.default
+        return self.default(3)
+
+
+def encode(e: Encoder) -> object:
+    return e.default(4)
+
+
+def given(e: Encoder) -> object:
+    e.default = repr
+    return e.default(5)
 
 
 class Base:
@@ -10985,6 +11000,13 @@ class Labelled(Base):
             "m.Encoder.default(m.Encoder(str), 2)",
             "m.Labelled(lambda: 'given').shown()",
             "m.Labelled(lambda: 'given').label()",
+            "m.encode(m.Encoder())",
+            "m.encode(m.Encoder(str))",
+            "m.given(m.Encoder())",
+            "m.Encoder(str).forget()",
+            "type(_capture(m.Encoder().forget)).__name__",
+            "sorted(vars(m.Encoder(str)))",
+            "type(vars(m.Encoder)['default']).__name__ in ('function', 'method_descriptor')",
         ],
     );
 }
@@ -12406,6 +12428,285 @@ def redelegated(v: object) -> object:
 /// nothing, a one-tuple collapses, and an exception instance is raised in place of
 /// the error asked for. a subclass carrying its own `value` is the other half, since
 /// what a delegation collects is the field rather than the attribute
+#[test]
+fn a_generator_lets_go_of_a_loop_iterator_when_the_loop_is_left() {
+    // python holds a `for` loop's iterator on the frame's stack and drops it the moment
+    // the loop is left, however it is left. a generator's frame parks it in a field, and
+    // that field used to hold it until the frame itself went — so an inner generator's
+    // `finally` ran after the code that follows a `break`, or after the handler of an
+    // exception that left the loop, rather than before
+    agree(
+        "loopiteratorlifetime",
+        "\
+def inner(log: list[str]) -> object:
+    try:
+        yield 1
+        yield 2
+    finally:
+        log.append('inner finally')
+
+
+def raises(log: list[str]) -> object:
+    try:
+        for v in inner(log):
+            raise KeyError('k')
+    except KeyError:
+        log.append('outer caught')
+    yield 5
+
+
+def breaks(log: list[str]) -> object:
+    for v in inner(log):
+        break
+    log.append('after break')
+    yield 5
+
+
+def returns(log: list[str]) -> object:
+    try:
+        for v in inner(log):
+            return
+    finally:
+        log.append('outer finally')
+    yield 5
+
+
+def continues(log: list[str]) -> object:
+    for v in inner(log):
+        log.append('body')
+        continue
+    else:
+        log.append('else')
+    yield 5
+
+
+def suspends(log: list[str]) -> object:
+    for v in inner(log):
+        yield v
+        break
+    log.append('after break')
+    yield 5
+
+
+def failing(log: list[str]) -> object:
+    try:
+        yield 1
+        raise ValueError('inner')
+    finally:
+        log.append('inner finally')
+
+
+def raised_by_the_step(log: list[str]) -> object:
+    try:
+        for v in failing(log):
+            log.append('body')
+    except ValueError:
+        log.append('outer caught')
+    yield 5
+",
+        &["[(lambda log: (list(f(log)), log))([]) for f in \
+              (m.raises, m.breaks, m.returns, m.continues, m.suspends, m.raised_by_the_step)]"],
+    );
+}
+
+#[test]
+fn a_drained_generator_expression_raises_its_first_iterable_where_it_is_written() {
+    // python evaluates a generator expression's first iterable, and takes its iterator,
+    // where the expression is written: the generator's frame does not exist yet. so what
+    // that raises leaves this frame with no `<genexpr>` entry in its traceback, and a
+    // `StopIteration` it raises stays one rather than becoming the `RuntimeError` a
+    // generator's frame makes of it. a builtin that drains the generator at once runs its
+    // loop in this frame, and it used to evaluate the iterable inside that loop's handling
+    agree_python(
+        "drainedfirstiterable",
+        "\
+def boom() -> list[int]:
+    raise KeyError('k')
+
+
+def stops() -> list[int]:
+    raise StopIteration
+
+
+def listed() -> list[int]:
+    return list(x for x in boom())
+
+
+def tupled() -> tuple[int, ...]:
+    return tuple(x for x in boom())
+
+
+def sorted_() -> list[int]:
+    return sorted(x for x in boom())
+
+
+def stopped() -> list[int]:
+    return list(x for x in stops())
+
+
+def counted(n: object) -> list[int]:
+    return list(x for x in range(n))  # type: ignore
+
+
+def inner_raises() -> list[int]:
+    return list(y for x in [1] for y in boom())
+",
+        &[
+            "[(lambda e: (type(e).__name__, _frames(e)))(_capture(f)) \
+              for f in (m.listed, m.tupled, m.sorted_, m.stopped, m.inner_raises)]",
+            "(lambda e: (type(e).__name__, _frames(e)))(_capture(m.counted, 'x'))",
+            "m.counted(3)",
+        ],
+    );
+}
+
+#[test]
+fn an_emitted_instance_can_be_weakly_referenced() {
+    // an emitted class keeps a weak-reference list on python's own terms, so every weak
+    // container reaches its instances the way it reaches the interpreted class's: a
+    // `WeakSet`, the two weak dictionaries, `finalize`, `proxy` and `ref` itself, with the
+    // reference dying when the instance does. a class declaring `__slots__` throughout
+    // asks for none, and python refuses it there too. the frontend used to decline a
+    // `weakref.ref` it could see and left `WeakSet.add` and the rest to raise
+    agree_python(
+        "weakreferences",
+        "\
+import gc
+import weakref
+
+
+class Node:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+class Leaf(Node):
+    pass
+
+
+class Tight:
+    __slots__ = ('v',)
+
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+def containers(n: Node) -> list[int]:
+    seen: weakref.WeakSet[Node] = weakref.WeakSet()
+    seen.add(n)
+    keyed: weakref.WeakKeyDictionary[Node, int] = weakref.WeakKeyDictionary()
+    keyed[n] = 1
+    valued: weakref.WeakValueDictionary[str, Node] = weakref.WeakValueDictionary()
+    valued['a'] = n
+    return [len(seen), len(keyed), len(valued), weakref.proxy(n).v]
+
+
+def dies(log: list[str]) -> list[object]:
+    n = Leaf(2)
+    r = weakref.ref(n)
+    weakref.finalize(n, log.append, 'finalized')
+    alive = r() is n
+    del n
+    gc.collect()
+    return [alive, r(), log]
+
+
+def refuses(t: Tight) -> object:
+    return weakref.ref(t)
+",
+        &[
+            "m.containers(m.Node(3))",
+            "m.containers(m.Leaf(4))",
+            "m.dies([])",
+            "type(_capture(m.refuses, m.Tight(1))).__name__",
+            "m.Node(1).__weakref__",
+            "'__weakref__' in vars(m.Node)",
+            "'__weakref__' in vars(m.Leaf)",
+            "hasattr(m.Tight, '__weakref__')",
+        ],
+    );
+}
+
+#[test]
+fn a_missing_key_is_the_one_argument_of_its_key_error() {
+    // python raises `KeyError(key)` with the key as its only argument. `PyErr_SetObject`
+    // takes a tuple value as the whole argument list and an exception instance as the
+    // exception to raise, so a missing `(1, 2)` raised `KeyError(1, 2)`, a missing `()`
+    // raised a bare `KeyError()`, and a missing `KeyError('x')` raised that key itself
+    agree_python(
+        "keyerrorargument",
+        "\
+class Point:
+    def __init__(self) -> None:
+        self.x = 1
+
+
+def get(d: dict[object, int], k: object) -> int:
+    return d[k]
+
+
+def get_tuple(d: dict[tuple[int, int], int], k: tuple[int, int]) -> int:
+    return d[k]
+",
+        &[
+            "[(lambda e: (type(e).__name__, e.args))(_capture(m.get, {}, k)) \
+              for k in ((1, 2), (), (1,), KeyError('x'), ValueError('v'), 3, 'k')]",
+            "(lambda e: (type(e).__name__, e.args))(_capture(m.get_tuple, {}, (1, 2)))",
+            "[(lambda e: (type(e).__name__, e.args))(_capture(m.Point().__dict__.pop, k)) \
+              for k in ((1, 2), KeyError('x'), 'y')]",
+        ],
+    );
+}
+
+#[test]
+fn a_delegation_starts_its_iterator_with_none_whatever_the_frame_was_last_sent() {
+    // a `yield from` sends `None` into the iterator on its first step, as python's does.
+    // the frame used to send whatever its last `send` handed it, so a `yield from`
+    // straight after a `yield` that was sent a value raised `can't send non-None value to
+    // a just-started generator` — and an iterator that accepts anything was handed a value
+    // meant for the frame
+    agree(
+        "delegationstartsnone",
+        "\
+def inner(log: list[object]) -> object:
+    got = yield 1
+    log.append(got)
+
+
+def outer(log: list[object]) -> object:
+    got = yield 0
+    log.append(got)
+    yield from inner(log)
+
+
+class Recording:
+    def __init__(self, log: list[object]) -> None:
+        self.log = log
+
+    def __iter__(self) -> object:
+        return self
+
+    def __next__(self) -> object:
+        self.log.append('next')
+        return 'n'
+
+    def send(self, value: object) -> object:
+        self.log.append(('send', value))
+        return 's'
+
+
+def through(log: list[object]) -> object:
+    got = yield 0
+    log.append(got)
+    yield from Recording(log)
+",
+        &[
+            "(lambda log: (_sent(m.outer(log), ('v', 'w')), log))([])",
+            "(lambda log: (_sent(m.through(log), ('v', 'w', 'x')), log))([])",
+        ],
+    );
+}
+
 #[test]
 fn a_return_agrees_between_the_raise_and_the_send_slot() {
     agree(
@@ -21411,6 +21712,140 @@ def install(cls: type) -> type:
 }
 
 #[test]
+fn an_interpreted_subclass_instance_no_init_ran_on_has_no_int_field() {
+    // an unset `int` field is told apart by a value an allocation does not leave, and the
+    // class's own allocator writes it. python gives a class made by `type(...)` the generic
+    // allocator rather than inheriting its base's, so a bare `S.__new__(S)` handed back a
+    // zeroed block — and a zeroed `int` field reads as `0` where python raises
+    // `AttributeError`
+    agree_python(
+        "subclassunsetint",
+        "\
+class Cell:
+    def __init__(self) -> None:
+        self._v = 0
+        self._w = 5
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    def width(self) -> int:
+        return self._w
+
+
+class Sized(Cell):
+    def extra(self) -> int:
+        return 1
+
+
+class Made:
+    def __new__(cls) -> 'Made':
+        return object.__new__(cls)
+
+    def __init__(self) -> None:
+        self._v = 1
+
+
+def read_v(cell: Cell) -> int:
+    return cell._v
+
+
+def made_bare(cls: type) -> object:
+    return cls.__new__(cls)
+",
+        &[
+            "str(_capture(lambda: m.made_bare(m.Cell)._v))",
+            "str(_capture(lambda: m.made_bare(type('S', (m.Cell,), {}))._v))",
+            "str(_capture(lambda: m.made_bare(type('S', (m.Cell,), {})).v))",
+            "str(_capture(lambda: m.read_v(m.made_bare(type('S', (m.Cell,), {})))))",
+            "str(_capture(lambda: m.made_bare(type('S', (m.Sized,), {})).width()))",
+            "str(_capture(lambda: (lambda S: S.__new__(S)._w)(type('S', (m.Cell,), {'__new__': lambda cls: super(cls, cls).__new__(cls)}))))",
+            "(lambda s: (setattr(s, '_v', 4), s._v)[1])(m.made_bare(type('S', (m.Cell,), {})))",
+            "type('S', (m.Cell,), {})()._v",
+            // a written `__new__` allocates through `object.__new__(cls)`, which reaches
+            // the subclass's allocator without passing the class's `tp_new`
+            "str(_capture(lambda: m.made_bare(type('S', (m.Made,), {}))._v))",
+            "type('S', (m.Made,), {})()._v",
+        ],
+    );
+}
+
+#[test]
+fn a_member_the_module_body_rewrites_after_the_class_statement_is_what_the_class_answers() {
+    // the module body runs against the interpreted definition, so a property, a method or a
+    // class constant replaced after the `class` statement is replaced on that definition
+    // alone. the emitted type holds every name its own body wrote, and it went on answering
+    // with the property the statement wrote — 7 where python gives 130 — and a direct read
+    // of the member trusted the licence it had been armed with. `del` is the same shape: the
+    // name has to go, so the lookup reaches the base's method
+    agree_python(
+        "rewrittenmembers",
+        "\
+class Replaced:
+    scale = 1
+
+    def __init__(self) -> None:
+        self._v = 3
+        self._w = 4
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    def width(self) -> int:
+        return self._w
+
+    def total(self) -> int:
+        return self.v + self.width() * self.scale
+
+
+class ReplacedSub(Replaced):
+    pass
+
+
+class Base:
+    def extra(self) -> str:
+        return 'base'
+
+
+class Trimmed(Base):
+    def extra(self) -> str:
+        return 'trimmed'
+
+
+Replaced.v = property(lambda self: self._v * 10)
+Replaced.width = lambda self: 100
+Replaced.scale = 2
+del Trimmed.extra
+
+
+def replaced(r: Replaced) -> int:
+    return r.v + r.width()
+
+
+def total(r: Replaced) -> int:
+    return r.total()
+
+
+def extra(t: Trimmed) -> str:
+    return t.extra()
+",
+        &[
+            "m.replaced(m.Replaced())",
+            "m.replaced(m.ReplacedSub())",
+            "m.total(m.Replaced())",
+            "m.Replaced().total()",
+            "m.Replaced().v",
+            "m.Replaced.scale",
+            "m.extra(m.Trimmed())",
+            "m.Trimmed().extra()",
+            "'extra' in vars(m.Trimmed)",
+        ],
+    );
+}
+
+#[test]
 fn a_class_keeps_what_a_factory_installed_on_it_after_the_class_statement() {
     // `multiprocessing.managers` is the case this is drawn from. it defines `SyncManager`
     // and then the module body makes sixteen `SyncManager.register(...)` calls, each of
@@ -28150,6 +28585,106 @@ def mutated(items: list[int], at: int, to: int) -> list[int]:
             // naming the method
             "type(_capture(lambda g: g.__delitem__(0), m.Grid([1]))).__name__",
             "(lambda e: (type(e).__name__, str(e)))(_capture(_delete_first, m.Grid([1])))",
+        ],
+    );
+}
+
+#[test]
+fn a_dunder_fills_every_slot_python_gives_its_name() {
+    // python fills both `sq_length` and `mp_length` from `__len__`, and `len` asks the
+    // sequence half first — so a `str` subclass that filled only the mapping half kept
+    // `str`'s own length. `__getitem__` fills `sq_item` the same way, which is what
+    // iteration, `in` and `reversed` fall back to on a class with no `__iter__`. and
+    // `__add__`, `__mul__`, `__rmul__`, `__iadd__` and `__imul__` *empty* the sequence
+    // slot of their name, so `operator.concat` reaches the method rather than the
+    // base's concatenation
+    agree_python(
+        "dunderslotfamily",
+        "\
+import operator
+
+
+class Text(str):
+    def __len__(self) -> int:
+        return 0
+
+
+class Seq:
+    def __len__(self) -> int:
+        return 3
+
+    def __getitem__(self, i: int) -> int:
+        if i >= 3:
+            raise IndexError(i)
+        return i * 10
+
+
+class Keyed:
+    def __getitem__(self, key: object) -> str:
+        return repr(key)
+
+    def __setitem__(self, key: object, value: object) -> None:
+        pass
+
+    def __delitem__(self, key: object) -> None:
+        pass
+
+
+class Bag(list):
+    def __len__(self) -> int:
+        return 42
+
+    def __add__(self, other: object) -> str:
+        return 'add'
+
+    def __iadd__(self, other: object) -> str:
+        return 'iadd'
+
+    def __mul__(self, other: object) -> str:
+        return 'mul'
+
+
+class Left:
+    def __radd__(self, other: object) -> str:
+        return 'radd'
+
+
+class Right(Left):
+    def __add__(self, other: object) -> str:
+        return 'add'
+
+
+def walk(s: Seq) -> list[int]:
+    return [x for x in s]
+
+
+def concat(b: Bag) -> object:
+    return operator.concat(b, [1])
+",
+        &[
+            "len(m.Text('abc'))",
+            "bool(m.Text('abc'))",
+            "list(m.Seq())",
+            "m.walk(m.Seq())",
+            "20 in m.Seq()",
+            "5 in m.Seq()",
+            "list(reversed(m.Seq()))",
+            "m.Seq()[-1]",
+            "m.Keyed()['k']",
+            "m.Keyed()[1:2]",
+            "m.Keyed.__getitem__(m.Keyed(), 'k')",
+            "m.Keyed.__setitem__(m.Keyed(), 'k', 1)",
+            "m.Keyed.__delitem__(m.Keyed(), 'k')",
+            "len(m.Bag([1]))",
+            "m.concat(m.Bag([1]))",
+            "type(_capture(m.operator.concat, m.Bag([1]), 5)).__name__",
+            "type(_capture(m.operator.iconcat, m.Bag([1]), 5)).__name__",
+            "m.Bag([1]) + [2]",
+            "m.Bag([1]) * 2",
+            "2 * m.Bag([1])",
+            "1 + m.Right()",
+            "m.Right() + 1",
+            "len(type('Sub', (m.Text,), {})('abc'))",
         ],
     );
 }
