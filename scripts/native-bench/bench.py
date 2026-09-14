@@ -448,18 +448,30 @@ def stage(
 
     `lowered` is the python this build's module name is given: the program
     itself for a `.py` benchmark, and the transpiler's output for a `.by` one.
-    every leg is staged the same way, including the two that go on to compile
-    the basedpython source instead — staging that differed per leg is how a
-    build ends up measuring something the others are not
+    every leg gets exactly one source under its module name — the one it builds
+    from, see `builds_from_by_source`
     """
     directory = root / program.name / leg
     (directory / "dist").mkdir(parents=True)
     module = f"{program.name}_{leg}"
-    shutil.copy(lowered, directory / f"{module}.py")
-    if program.language == "by":
+    if builds_from_by_source(program.language, leg):
         shutil.copy(program.source, directory / f"{module}.by")
+    else:
+        shutil.copy(lowered, directory / f"{module}.py")
     write_project(directory, python_version)
     return directory
+
+
+def builds_from_by_source(language: str, leg: str) -> bool:
+    """whether a leg compiles the basedpython source rather than the python it lowers to
+
+    the two `by compile` legs of a `.by` row take the source as written, and the
+    interpreted and mypyc legs run its lowering. a leg is staged with only its own
+    source: `by compile` refuses a directory holding both `<module>.by` and
+    `<module>.py`, since both would build to the same module, and that refusal took
+    every `.by` row out of the suite while each one was staged with both
+    """
+    return language == "by" and leg in ("by", "control")
 
 
 def build_by(
@@ -1199,6 +1211,20 @@ def self_check(by: Path, python: str, python_version: str) -> int:
         failures.append("a transpiled program left no python behind to be timed")
     else:
         print("  accepted a basedpython program and kept the python it lowered to")
+
+    # and a `.by` program staged for a compiled leg has to build. the lowering
+    # canaries above never reach `build_by`, which is how a staging that `by
+    # compile` refused went on taking every `.by` row out of the suite unnoticed
+    compiled = root / "compilable"
+    (compiled / "dist").mkdir(parents=True)
+    write_project(compiled, python_version)
+    staged = "canary_by.by" if builds_from_by_source("by", "by") else "canary_by.py"
+    (compiled / staged).write_text("def bench() -> int:\n    return 1\n")
+    built, refusal, _ = build_by(by, compiled, staged, python)
+    if not built:
+        failures.append(f"a basedpython program staged for a compiled leg: {refusal}")
+    else:
+        print("  compiled a basedpython program staged for a compiled leg")
 
     # one name cannot be two programs. the extension is what says how a
     # benchmark is built, so a name carrying both is the one thing it cannot

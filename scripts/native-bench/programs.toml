@@ -46,6 +46,11 @@ group = "int"
 measures = "tagged-integer arithmetic with no container, no call and no float"
 declines = 0
 
+[programs.loops_aug]
+group = "int"
+measures = "the `loops` arithmetic written with augmented assignment"
+declines = 0
+
 [programs.bigint]
 group = "int"
 measures = "integer arithmetic that leaves the machine word"
@@ -69,6 +74,12 @@ declines = 0
 [programs.inherit]
 group = "dispatch"
 measures = "an override reached through a base-typed local"
+declines = 0
+setup = true
+
+[programs.inherit_ov]
+group = "dispatch"
+measures = "the `inherit` override marked `@override`"
 declines = 0
 setup = true
 

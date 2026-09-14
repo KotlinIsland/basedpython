@@ -87,9 +87,10 @@ fi
 #
 # comparing the sorted rows themselves rather than a digest of each module's block: the
 # rows a rung writes for one module are already keyed by it in field one, so the lines
-# `comm` reports as unique to either side name their own modules
+# `comm` reports as unique to either side name their own modules. a `# ` line is a
+# summary rather than a row — see `sweep_summary` — and is left out with the rest of it
 drifted=$(LC_ALL=C comm -3 \
-  <(LC_ALL=C sort "$before") <(LC_ALL=C sort "$after") \
+  <(grep -v '^#' "$before" | LC_ALL=C sort) <(grep -v '^#' "$after" | LC_ALL=C sort) \
   | sed 's/^\t//' | cut -f1 | LC_ALL=C sort -u \
   | LC_ALL=C comm -23 - <(printf '%s' "$moved" | cut -f1 | LC_ALL=C sort -u))
 

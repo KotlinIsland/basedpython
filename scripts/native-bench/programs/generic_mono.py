@@ -7,12 +7,13 @@ says almost nothing
 
 
 def consume(xs: list[float], ys: list[float]) -> int:
-    n = 0
+    matched = 0
     i = 0
     while i < len(xs):
-        n = n + 1
+        if xs[i] == ys[i]:
+            matched = matched + 1
         i = i + 1
-    return n
+    return matched
 
 
 def bench() -> int:
@@ -24,7 +25,7 @@ def bench() -> int:
         i = 0
         while i < 2000:
             xs.append(i * 0.5)
-            ys.append(i * 0.25)
+            ys.append((i - i % 2) * 0.5)
             i = i + 1
         total = total + consume(xs, ys)
         r = r + 1

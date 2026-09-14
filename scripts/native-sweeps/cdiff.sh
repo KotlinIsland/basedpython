@@ -23,14 +23,19 @@
 # to walk". a module whose C is unchanged but which calls a helper whose definition
 # changed is reported as `header`, so the population to pair the behavioural rungs over is
 # `differs` plus `header`
+#
+# the summary is written into `OUT` behind a `# ` as well as to the terminal, so a waiter
+# watching the file for `walked:` sees the run end — see `sweep_summary`
 SP="$1"; BY_A="$2"; BY_B="$3"; PY="$4"; OUT="$5"; shift 5
 # shellcheck source=scripts/native-sweeps/sweeplib.sh
 . "$(dirname "$0")/sweeplib.sh"
 LIB=$(sweep_lib "$PY")
 # unknown until the first module compiles on both legs; then `same` or `differs`, and in
-# the `differs` case `header_scope` is an ERE alternation of the helpers that moved
+# the `differs` case `header_scope` is an ERE alternation of the names that moved, or empty
+# where the change could not be pinned to names
 header_state=unknown
 header_scope=""
+header_line="header: never compared"
 sweep_begin cdiff || exit 1
 for b in $(sweep_modules "$LIB" "$@"); do
   f="$LIB/$b"
@@ -52,19 +57,20 @@ for b in $(sweep_modules "$LIB" "$@"); do
     # module compiles first and not looked at again
     if [ -f "$out/by.h" ]; then cp "$out/by.h" "$SWEEP_ROOT/$leg.h"; fi
   done
-  # which helpers changed between the two runtimes, worked out once and then reused
+  # which names changed between the two runtimes, worked out once and then reused
   #
-  # the answer is `same` (nothing a module calls moved), `unscopable` (it moved in a way
-  # no line-level reading can attribute, so no module may be scoped out), or an ERE
-  # alternation of the helpers that changed
+  # the answer is `same` (nothing a module reaches moved), `unscopable` (it moved in a way
+  # that cannot be pinned to names, so no module may be scoped out), or the names that
+  # moved, joined by `|`
   if [ "$header_state" = unknown ] && [ -f "$SWEEP_ROOT/a.h" ] && [ -f "$SWEEP_ROOT/b.h" ]; then
-    header_scope=$(sweep_header_scope "$SWEEP_ROOT/a.h" "$SWEEP_ROOT/b.h" "$SWEEP_ROOT")
+    header_scope=$(sweep_header_scope "$SWEEP_ROOT/a.h" "$SWEEP_ROOT/b.h")
     case "$header_scope" in
-      same)       header_state=same;    header_scope="" ;;
-      unscopable) header_state=differs; header_scope="" ;;
-      *)          header_state=differs ;;
+      same)       header_state=same;    header_scope=""; header_line="header: same" ;;
+      unscopable) header_state=differs; header_scope=""; header_line="header: unscopable" ;;
+      *)          header_state=differs
+                  header_line="header: scoped to $(printf '%s' "$header_scope" | tr '|' '\n' | grep -c .) names: $header_scope" ;;
     esac
-    printf 'header: %s\n' "$header_state${header_scope:+ (scoped)}" >&2
+    printf '%s\n' "$header_line" >&2
   fi
   if [ -f "$SWEEP_ROOT/a.c" ] && [ -f "$SWEEP_ROOT/b.c" ]; then
     if cmp -s "$SWEEP_ROOT/a.c" "$SWEEP_ROOT/b.c"; then
@@ -72,7 +78,7 @@ for b in $(sweep_modules "$LIB" "$@"); do
       calls=""
       if [ "$header_state" = differs ]; then
         if [ -n "$header_scope" ]; then
-          calls=$(grep -oE "$header_scope" "$SWEEP_ROOT/a.c" | sort -u | paste -sd, -)
+          calls=$(grep -owE "$header_scope" "$SWEEP_ROOT/a.c" | sort -u | paste -sd, -)
         else
           calls="unscopable"
         fi
@@ -95,13 +101,11 @@ for b in $(sweep_modules "$LIB" "$@"); do
   fi
 done
 {
-  printf 'walked: %s\n' "$(cat "$OUT.walked" 2>/dev/null || echo '?')"
+  printf '%s\n' "$header_line"
   for kind in same differs header a-only b-only neither; do
     printf '%s: %s\n' "$kind" "$(grep -c "	$kind" "$OUT")"
   done
-}
-# the summary goes to stdout, not into `$OUT`: `sweep_end` counts distinct first columns
-# there against `$OUT.walked`, so six summary lines read as six extra modules and a
-# 550-module walk reported 556 — no `.complete` marker was ever written and the rung
-# always exited 1. every other rung echoes its summary for the same reason
+  # last, so that a waiter seeing it has the whole summary
+  printf 'walked: %s\n' "$(cat "$OUT.walked" 2>/dev/null || echo '?')"
+} | sweep_summary
 sweep_end || exit 1
