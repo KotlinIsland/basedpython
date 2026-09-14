@@ -1960,6 +1960,99 @@ def baz(x, y, z=None) -> bytes | list[str]:
 reveal_type(baz)
 ```
 
+### An overload set in a scope that never reaches its end
+
+An overload set is normally found by reading what its name holds once the scope has finished. A
+scope whose every path returns never gets there, so nothing is bound at that point and a set written
+inside it would go unchecked — and a function body ending in a `return` is the ordinary shape of
+that, not an exotic one.
+
+A call made inside the scope reaches the `def`s written above it whichever way the scope ends, so
+the set the call resolves to is checked on its own.
+
+```py
+from typing import overload
+
+def outer() -> int:
+    @overload
+    # error: [invalid-overload] "Overloaded function `g` requires at least two overloads"
+    # error: [invalid-overload] "Overloads for function `g` must be followed by a non-`@overload`-decorated implementation function"
+    def g(x: int) -> int: ...
+    return g(1)
+```
+
+A call written part-way down a set resolves to only the `def`s above it, which is a prefix of the
+set and not a set of its own. Here `g(1)` sees a lone overload, but the whole set is well formed, so
+nothing is reported.
+
+```py
+from typing import overload
+
+def outer() -> int:
+    @overload
+    def g(x: int) -> int: ...
+    first = g(1)
+    @overload
+    def g(x: str) -> str: ...
+    def g(x: int | str) -> int | str:
+        return x
+    return first
+```
+
+A set the scope never calls is checked too. Whether a `def` is malformed has nothing to do with
+whether the function around it happens to end in a `return`, and "attempting to call `g` will raise
+`TypeError`" is as true here as anywhere else. This is where we part from upstream, which checks
+nothing at all in a scope with no end to read.
+
+```py
+from typing import overload
+
+def outer() -> int:
+    @overload
+    # error: [invalid-overload] "Overloads for function `g` must be followed by a non-`@overload`-decorated implementation function"
+    def g(x: int) -> int: ...
+    @overload
+    def g(x: str) -> str: ...
+    return 1
+```
+
+The question the end-of-scope read was answering — which set the name holds, when the scope writes
+the name more than once — is still asked, and answered by the set itself: it is the one the place
+holds only if it accounts for every declaration of the name the scope reaches. A second set written
+under the same name leaves neither able to say that, so neither is reported against: which of them
+an author meant to keep is exactly what the end of the scope would have said.
+
+```py
+from typing import overload
+
+def outer() -> int:
+    @overload
+    def g(x: int) -> int: ...
+    def g(x: int) -> int:
+        return x
+
+    @overload
+    def g(x: str) -> str: ...
+    return 1
+```
+
+Redefining the name in a branch is the same thing: neither set accounts for the other's declaration,
+so neither is reported against.
+
+```py
+from typing import overload
+
+def outer(flag: bool) -> int:
+    if flag:
+        @overload
+        def g(x: int) -> int: ...
+
+    else:
+        @overload
+        def g(x: str) -> str: ...
+    return 1
+```
+
 ## Generic overloaded protocol members preserve receiver relationships
 
 An overloaded method used to satisfy a protocol receiver can relate a method-scoped type variable to

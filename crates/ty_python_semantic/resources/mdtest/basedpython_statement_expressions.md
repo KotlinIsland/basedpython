@@ -346,6 +346,97 @@ def f(c: bool):
     reveal_type(b)  # revealed: 1 | 2
 ```
 
+## declarations made inside a statement expression are visible after it
+
+A name a suite declares is declared in the scope the statement expression is written in, the same
+way a name it binds is bound there.
+
+```by
+def f(c: bool):
+    a = if c:
+        b: int = 1
+        b
+    else:
+        b: int = 2
+        b
+    reveal_type(a)  # revealed: 1 | 2
+    reveal_type(b)  # revealed: 1 | 2
+```
+
+## the checks a scope runs over its declarations reach one made inside a statement expression
+
+A statement expression is read as an expression, but what its suite declares is declared in the
+scope around it. So the checks that scope runs once its types are known — the ones that look at a
+declaration rather than at an expression — see those declarations too, and not only the ones written
+outside.
+
+```by
+from typing import Final, overload
+
+def f(c: int):
+    a = match c:
+        case _:
+            total: Final[int]  # error: [final-without-value]
+            @overload
+            # error: [invalid-overload] "Overloaded function `g` requires at least two overloads"
+            # error: [invalid-overload] "Overloads for function `g` must be followed by a non-`@overload`-decorated implementation function"
+            def g(x: int) -> int: ...
+            1
+    reveal_type(a)  # revealed: 1
+```
+
+## a returned statement expression may declare a name
+
+A `def` that writes no return type has one recovered from the expressions its body hands back, and
+each of those is read on its own so that what it narrows can be read off it too. A statement
+expression read that way is still a statement, so the names its suite declares are declared in the
+function around it rather than lost inside the read.
+
+```by
+def f(c: bool):
+    return if c:
+        a: int = 1
+        a
+    else:
+        0
+
+reveal_type(f(True))  # revealed: 1 | 0
+```
+
+A nested `def` declares its own name the same way.
+
+```by
+def g(c: bool):
+    return if c:
+        def h() -> int:
+            return 1
+        h()
+    else:
+        0
+
+reveal_type(g(True))  # revealed: int
+```
+
+## a statement expression assigned to an attribute may declare a name
+
+An assignment whose target is not a plain name reads its value on its own as well, so the same holds
+there.
+
+```by
+class C:
+    def m(self, c: bool) -> None:
+        self.x = match c:
+            case True:
+                y: int = 1
+                y
+            case _:
+                0
+
+c = C()
+c.m(True)
+reveal_type(c.x)  # revealed: int
+```
+
 ## a nested compound statement in tail position supplies the branch's value
 
 ```by
