@@ -2845,6 +2845,10 @@ impl<'db> Type<'db> {
     /// `socket.getsockname()` is a gradual type wearing a name — and a consumer that
     /// took the name for a proof gave `self._address = sock.getsockname()` the `None`
     /// representation, `None` being the first thing a gradual type is assignable to.
+    ///
+    /// basedpython: a class with a gradual base in its MRO is answered as gradual too, and so
+    /// is the class object of one. python's `class C(Any)` is assignable to every class that
+    /// is not final, so `C()` proves no more about its representation than `Unknown` does.
     pub fn has_gradual_member(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> bool {
         self.has_gradual_member_impl(db, env, true)
     }
@@ -2872,6 +2876,28 @@ impl<'db> Type<'db> {
                     bound.is_dynamic() || bound.has_gradual_member_impl(db, env, false)
                 }),
             Type::TypeAlias(alias) => gradual(alias.value_type(db)),
+            // basedpython: an instance of a class with a gradual base is assignable to every
+            // class that is not final, and the class object to whatever its unknown
+            // metaclass could be. `type(name, bases, namespace)` over bases the checker
+            // cannot see is the common way to meet one
+            Type::NominalInstance(instance) => {
+                inherits_gradually(instance.class(db, env).iter_mro(db))
+            }
+            Type::ClassLiteral(literal) => {
+                literal.metaclass(db).is_dynamic() || inherits_gradually(literal.iter_mro(db))
+            }
+            Type::GenericAlias(alias) => {
+                let class = ClassType::Generic(alias);
+                class.class_literal(db).metaclass(db).is_dynamic()
+                    || inherits_gradually(class.iter_mro(db))
+            }
+            Type::SubclassOf(subclass_of) => match subclass_of.subclass_of() {
+                SubclassOfInner::Class(class) => {
+                    class.class_literal(db).metaclass(db).is_dynamic()
+                        || inherits_gradually(class.iter_mro(db))
+                }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -13398,3 +13424,13 @@ static_assertions::assert_eq_size!(Type, [u8; 16]);
 #[cfg(not(debug_assertions))]
 #[cfg(target_pointer_width = "64")]
 static_assertions::assert_eq_size!(literal::LiteralValueType, [u8; 12]);
+
+/// whether an MRO passes through a gradual base — see [`Type::has_gradual_member`]
+fn inherits_gradually<'db>(mut mro: impl Iterator<Item = ClassBase<'db>>) -> bool {
+    mro.any(|base| {
+        matches!(
+            base,
+            ClassBase::Any | ClassBase::Dynamic(_) | ClassBase::Divergent(_)
+        )
+    })
+}

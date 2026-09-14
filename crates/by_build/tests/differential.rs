@@ -14810,6 +14810,36 @@ def raised_by_the_step(log: list[str]) -> object:
 }
 
 #[test]
+fn a_class_with_a_gradual_base_proves_no_representation() {
+    // a class the checker sees a gradual base in is assignable to every class that is not
+    // final, and its class object to anything its unknown metaclass could be. so neither
+    // proves a representation: `type(name, bases, namespace)` over bases the checker cannot
+    // see was taken for `None`, and the function refused its own answer with `expected
+    // None, got type` — and an instance of that class was taken for an `int`
+    agree_python(
+        "gradualbase",
+        "\
+def made(name: str, bases: tuple[type, ...], namespace: dict[str, object]) -> type:
+    return type(name, bases, namespace)
+
+
+def made_instance(name: str, bases: tuple[type, ...], namespace: dict[str, object]) -> object:
+    return type(name, bases, namespace)()
+
+
+def either(name: str, bases: tuple[type, ...], flag: bool) -> object:
+    return type(name, bases, {})() if flag else None
+",
+        &[
+            "m.made('A', (object,), {}).__name__",
+            "type(m.made_instance('B', (object,), {})).__name__",
+            "type(m.either('C', (object,), True)).__name__",
+            "m.either('C', (object,), False)",
+        ],
+    );
+}
+
+#[test]
 fn a_drained_generator_expression_raises_its_first_iterable_where_it_is_written() {
     // python evaluates a generator expression's first iterable, and takes its iterator,
     // where the expression is written: the generator's frame does not exist yet. so what

@@ -5774,11 +5774,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 self.visit_expr(&node.annotation);
                 if let Some(value) = &node.value {
                     self.visit_expr(value);
-                    // basedpython: a trailing lambda block defines a function,
-                    // which a standalone expression cannot own
-                    if self.is_method_or_eagerly_executed_in_method().is_some()
-                        && !is_trailing_lambda_value(value)
-                    {
+                    if self.is_method_or_eagerly_executed_in_method().is_some() {
                         // Record the right-hand side of the assignment as a standalone expression
                         // if we're inside a method. This allows type inference to infer the type
                         // of the value for annotated assignments like `self.CONSTANT: Final = 1`,
@@ -7614,19 +7610,6 @@ struct CurrentStatement<'ast, 'db> {
         TextRange,
         Box<[TextRange]>,
     )>,
-}
-
-/// basedpython: whether `value` is a [trailing lambda block] standing as a
-/// statement's value. Such a value may not be made a standalone expression: the
-/// block's suite defines a function, and an expression region cannot own a
-/// definition. The parser restricts the block to the assignment shapes whose
-/// value is inferred with the target's own definition instead.
-///
-/// [trailing lambda block]: ast::ExprStatement::trailing_lambda
-fn is_trailing_lambda_value(value: &ast::Expr) -> bool {
-    value
-        .as_statement_expr()
-        .is_some_and(ast::ExprStatement::is_trailing_lambda)
 }
 
 /// basedpython-ui: whether `func` is spelled like the callee of a call whose

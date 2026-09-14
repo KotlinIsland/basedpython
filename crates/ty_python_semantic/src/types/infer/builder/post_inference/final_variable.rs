@@ -2,7 +2,10 @@ use crate::{
     TypeQualifiers,
     place::place_from_declarations,
     reachability::binding_reachability,
-    types::{context::InferContext, diagnostic::FINAL_WITHOUT_VALUE},
+    types::{
+        context::InferContext, diagnostic::FINAL_WITHOUT_VALUE,
+        inferred_signature::can_implicitly_return_none,
+    },
 };
 use ty_python_core::SemanticIndex;
 
@@ -30,19 +33,19 @@ pub(crate) fn check_final_without_value<'db>(
     let place_table = index.place_table(file_scope_id);
     let env = context.program_environment();
 
-    for (symbol_id, declarations) in use_def.all_end_of_scope_symbol_declarations() {
+    let check = |symbol_id, declarations| {
         let result = place_from_declarations(db, env, declarations);
         let first_declaration = result.first_declaration;
         let (place_and_quals, _) = result.into_place_and_conflicting_declarations();
 
         if !place_and_quals.qualifiers.contains(TypeQualifiers::FINAL) {
-            continue;
+            return;
         }
 
         // Imports inherit the `Final` qualifier from the source module, but the
         // import itself provides the value.
         if first_declaration.is_some_and(|decl| decl.kind(db).is_import()) {
-            continue;
+            return;
         }
 
         // Whether the scope ever gives the symbol a value, which is not the same
@@ -62,7 +65,7 @@ pub(crate) fn check_final_without_value<'db>(
         });
 
         if is_assigned {
-            continue;
+            return;
         }
 
         let place = place_table.place(symbol_id);
@@ -75,6 +78,22 @@ pub(crate) fn check_final_without_value<'db>(
             builder.into_diagnostic(format_args!(
                 "read-only symbol `{place}` is not assigned a value"
             ));
+        }
+    };
+
+    // Which declarations a symbol has is normally read off the end of the scope, where what
+    // the scope wrote has settled. A scope whose every path returns never gets there and has
+    // nothing bound at that point, so nothing at all would be checked — and whether a `Final`
+    // was ever given a value has nothing to do with whether the function around it happens to
+    // end in a `return`. So a scope with no end to read is asked for every declaration it
+    // reaches instead. This is where we part from upstream, which checks nothing there.
+    if can_implicitly_return_none(db, use_def) {
+        for (symbol_id, declarations) in use_def.all_end_of_scope_symbol_declarations() {
+            check(symbol_id, declarations);
+        }
+    } else {
+        for (symbol_id, declarations, _) in use_def.all_reachable_symbols() {
+            check(symbol_id, declarations);
         }
     }
 }

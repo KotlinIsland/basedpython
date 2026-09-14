@@ -997,6 +997,31 @@ def f():
     x: Final[int]  # error: [final-without-value] "read-only symbol `x` is not assigned a value"
 ```
 
+### `Final` without value in a scope that never reaches its end
+
+Which declarations a symbol has is normally read off the end of the scope. A scope whose every path
+returns never gets there, so upstream checks nothing at all in one — and a function body ending in a
+`return` is the ordinary shape of that, not an exotic one. Whether a `Final` was ever given a value
+has nothing to do with whether the function around it happens to end in a `return`, so a scope with
+no end to read is asked for every declaration it reaches instead.
+
+```py
+from typing import Final
+
+def f() -> int:
+    x: Final[int]  # error: [final-without-value] "read-only symbol `x` is not assigned a value"
+    return 1
+
+def g() -> int:
+    y: Final[int] = 1
+    return y
+
+def loops_forever() -> None:
+    z: Final[int]  # error: [final-without-value] "read-only symbol `z` is not assigned a value"
+    while True:
+        pass
+```
+
 ### `typing_extensions.Final` without value
 
 ```py
