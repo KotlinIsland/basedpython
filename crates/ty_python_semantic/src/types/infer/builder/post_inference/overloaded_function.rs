@@ -18,17 +18,27 @@ use crate::{
     },
 };
 use ty_python_core::{
-    SemanticIndex, definition::Definition, place::ScopedPlaceId, scope::NodeWithScopeKind,
+    SemanticIndex,
+    definition::{Definition, DefinitionState},
+    place::ScopedPlaceId,
+    scope::{FileScopeId, NodeWithScopeKind},
 };
 
-/// Check the overloaded functions in this scope.
+/// Check the overloaded function this definition is part of, if it is the one this place holds
+/// in this scope.
 ///
-/// This only checks the overloaded functions that are:
-/// 1. Visible publicly at the end of this scope
-/// 2. Or, defined and called in this scope
+/// Which set a place holds is normally read off the end of the scope: the value that survives
+/// everything written above it is the one worth reporting against, and a set shadowed by another
+/// function of the same name is therefore left alone.
 ///
-/// For (1), this has the consequence of not checking an overloaded function that is being
-/// shadowed by another function with the same name in this scope.
+/// A scope whose end is unreachable — a function body whose every path returns — has no
+/// end-of-scope value at all, and upstream checks nothing there. basedpython does not follow
+/// that: whether a nested `def` is malformed has nothing to do with whether the function around
+/// it happens to end in `return`, and "attempting to call `g` will raise `TypeError`" is as true
+/// in one as in the other. So when the scope has no end to read, the set is taken to be the one
+/// this place holds if it accounts for every declaration of the name the scope reaches — which is
+/// the same question shadowing asked, answered without needing the scope to finish, and the same
+/// rule [`check_called_overloaded_function`] uses.
 pub(crate) fn check_overloaded_function<'db>(
     context: &InferContext<'db, '_>,
     ty: Type<'db>,
@@ -38,9 +48,6 @@ pub(crate) fn check_overloaded_function<'db>(
     seen_overloaded_places: &mut FxHashSet<ScopedPlaceId>,
     seen_public_functions: &mut FxHashSet<FunctionType<'db>>,
 ) {
-    // Collect all the unique overloaded function places in this scope. This requires a set
-    // because an overloaded function uses the same place for each of the overloads and the
-    // implementation.
     let Type::FunctionLiteral(function) = ty else {
         return;
     };
@@ -60,29 +67,142 @@ pub(crate) fn check_overloaded_function<'db>(
 
     let place = definition.place(db);
 
-    let use_def = index.use_def_map(context.scope().file_scope_id(db));
+    let scope_id = context.scope().file_scope_id(db);
+    let use_def = index.use_def_map(scope_id);
+    let symbol = place.as_symbol().unwrap();
 
-    let Place::Defined(DefinedPlace {
-        ty: Type::FunctionLiteral(function),
-        definedness: Definedness::AlwaysDefined,
-        ..
-    }) = place_from_bindings(
-        db,
-        env,
-        use_def.end_of_scope_symbol_bindings(place.as_symbol().unwrap()),
-    )
-    .place
-    else {
-        return;
-    };
+    let function =
+        match place_from_bindings(db, env, use_def.end_of_scope_symbol_bindings(symbol)).place {
+            Place::Defined(DefinedPlace {
+                ty: Type::FunctionLiteral(end_of_scope),
+                definedness: Definedness::AlwaysDefined,
+                ..
+            }) => {
+                if !end_of_scope.contains_definition(db, definition) {
+                    // The public end-of-scope binding for this place can be a different overloaded
+                    // function value assigned to the same name. In that case, the current local
+                    // overload definition is shadowed, and checking the public function here would
+                    // report against the wrong function.
+                    return;
+                }
+                end_of_scope
+            }
+            // Nothing survives to the end of the scope: a scope with no end to reach binds nothing
+            // there, and reads back `Never`. The declarations still ran, and the set is still the one
+            // the name holds wherever the scope was left — so it is checked, as long as no other
+            // declaration of the name competes with it.
+            Place::Undefined
+            | Place::Defined(DefinedPlace {
+                ty: Type::Never, ..
+            }) => {
+                if !accounts_for_every_declaration(db, index, scope_id, place, function) {
+                    return;
+                }
+                function
+            }
+            Place::Defined(_) => return,
+        };
 
-    if !function.contains_definition(db, definition) {
-        // The public end-of-scope binding for this place can be a different overloaded function
-        // value assigned to the same name. In that case, the current local overload definition is
-        // shadowed, and checking the public function here would report against the wrong function.
+    check_overload_set(
+        context,
+        function,
+        place,
+        scope,
+        index,
+        seen_overloaded_places,
+        seen_public_functions,
+    );
+}
+
+/// Check an overloaded function that this scope both defines and calls.
+///
+/// [`check_overloaded_function`] reads what the name holds once the scope has run, so it sees
+/// nothing at all when the end of the scope is unreachable — and a nested `def` inside a
+/// function whose every path returns is the ordinary shape of that, not an exotic one. The
+/// `def`s written above a call still run when the call does, so an overload set that is
+/// malformed there raises `TypeError` just the same.
+///
+/// The call may have resolved to only part of an overload set: a `g(1)` written between two
+/// `@overload def g`s sees the first of them and not the second. So the called value is checked
+/// only when its own overload set already accounts for every declaration written at that place
+/// in this scope, which is what makes it the whole set rather than a prefix of one.
+pub(crate) fn check_called_overloaded_function<'db>(
+    context: &InferContext<'db, '_>,
+    function: FunctionType<'db>,
+    scope: &NodeWithScopeKind,
+    index: &SemanticIndex<'db>,
+    seen_overloaded_places: &mut FxHashSet<ScopedPlaceId>,
+    seen_public_functions: &mut FxHashSet<FunctionType<'db>>,
+) {
+    let db = context.db();
+
+    if function.file(db) != context.file() {
         return;
     }
 
+    if !function.has_known_decorator(db, FunctionDecorators::OVERLOAD) {
+        return;
+    }
+
+    let place = function.definition(db).place(db);
+    let scope_id = context.scope().file_scope_id(db);
+
+    if !accounts_for_every_declaration(db, index, scope_id, place, function) {
+        return;
+    }
+
+    check_overload_set(
+        context,
+        function,
+        place,
+        scope,
+        index,
+        seen_overloaded_places,
+        seen_public_functions,
+    );
+}
+
+/// Whether `function`'s own overload set already covers every declaration of `symbol` this scope
+/// reaches.
+///
+/// This is what makes a value the whole overload set rather than a part of one. A declaration the
+/// set does not contain is either a competing definition of the name — the shadowing case — or a
+/// later `@overload` the value was built too early to have seen, which is what a call written
+/// part-way down a set resolves to.
+fn accounts_for_every_declaration<'db>(
+    db: &'db dyn crate::Db,
+    index: &SemanticIndex<'db>,
+    scope: FileScopeId,
+    place: ScopedPlaceId,
+    function: FunctionType<'db>,
+) -> bool {
+    let Some(symbol) = place.as_symbol() else {
+        return false;
+    };
+    index
+        .use_def_map(scope)
+        .reachable_symbol_declarations(symbol)
+        .all(|declaration| match declaration.declaration {
+            DefinitionState::Defined(declaration) => function.contains_definition(db, declaration),
+            DefinitionState::Undefined | DefinitionState::Deleted => true,
+        })
+}
+
+/// Report everything that is wrong with one complete overload set.
+fn check_overload_set<'db>(
+    context: &InferContext<'db, '_>,
+    function: FunctionType<'db>,
+    place: ScopedPlaceId,
+    scope: &NodeWithScopeKind,
+    index: &SemanticIndex<'db>,
+    seen_overloaded_places: &mut FxHashSet<ScopedPlaceId>,
+    seen_public_functions: &mut FxHashSet<FunctionType<'db>>,
+) {
+    let db = context.db();
+    let env = context.program_environment();
+
+    // An overloaded function uses the same place for each of the overloads and the
+    // implementation, so a place is only worth checking once.
     if !seen_overloaded_places.insert(place) {
         // We have already checked this overloaded function in this scope, so we can skip it.
         return;

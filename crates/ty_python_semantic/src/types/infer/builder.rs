@@ -461,7 +461,9 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// The scope this region is part of.
     scope: ScopeId<'db>,
 
-    // bindings, declarations, and deferred can only exist in definition, or scope contexts.
+    // bindings, declarations, and deferred exist in definition and scope contexts, and — for a
+    // basedpython statement expression, which puts a statement inside an expression — in an
+    // expression context too, which hands them back to the region that asked for it.
     /// The types of every binding in this region.
     ///
     /// The list should only contain one entry per binding at most.
@@ -901,6 +903,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn extend_expression_without_bindings(&mut self, inference: &ExpressionInference<'db>) {
         self.extend_expression_types(inference.expressions.iter().copied());
 
+        // basedpython: a statement expression puts a statement inside an expression region, so
+        // a region can hold definitions written in the scope around it. A declaration is never
+        // owned by the enclosing statement the way a binding is — the scope runs its
+        // post-inference checks over every declaration it sees, and resolves the deferred parts
+        self.declarations.extend(inference.declarations());
+        self.deferred.extend(inference.deferred());
+
         if let Some(extra) = &inference.extra {
             self.comparison_truthiness
                 .extend(extra.comparison_truthiness.iter().copied());
@@ -937,6 +946,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         assert_eq!(self.scope, inference.scope);
 
         self.extend_expression_types(inference.expressions.iter().map(|(key, ty)| (*key, *ty)));
+        self.declarations
+            .extend(inference.declarations.iter().map(|(key, ty)| (*key, *ty)));
+        self.deferred.extend(inference.deferred.iter().copied());
         self.comparison_truthiness.extend(
             inference
                 .comparison_truthiness
@@ -1495,10 +1507,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
 
             for function in &self.called_functions {
-                post_inference::overloaded_function::check_overloaded_function(
+                post_inference::overloaded_function::check_called_overloaded_function(
                     &self.context,
-                    Type::FunctionLiteral(*function),
-                    function.definition(self.db()),
+                    *function,
                     self.scope.scope(self.db()).node(),
                     self.index,
                     &mut seen_overloaded_places,
@@ -16712,15 +16723,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let diagnostics = context.finish_uncompacted();
         let _ = scope;
 
-        assert!(
-            declarations.is_empty(),
-            "Expression region can't have declarations"
-        );
-        assert!(
-            deferred.is_empty(),
-            "Expression region can't have deferred definitions"
-        );
-
         FullExpressionCacheEntry {
             expressions,
             comparison_truthiness,
@@ -16734,6 +16736,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             unsolved_typevar_calls,
             expected_types,
             bindings,
+            declarations,
+            deferred,
             diagnostics,
             called_functions,
             cycle_recovery,
@@ -17475,6 +17479,8 @@ struct FullExpressionCacheEntry<'db> {
     unsolved_typevar_calls: FxHashSet<ExpressionNodeKey>,
     expected_types: FxHashMap<ExpressionNodeKey, Type<'db>>,
     bindings: VecMap<Definition<'db>, Type<'db>>,
+    declarations: VecMap<Definition<'db>, TypeAndQualifiers<'db>>,
+    deferred: VecSet<Definition<'db>>,
     diagnostics: TypeCheckDiagnostics,
     called_functions: FxIndexSet<FunctionType<'db>>,
     cycle_recovery: Option<Type<'db>>,
@@ -17505,6 +17511,8 @@ impl<'db> FullExpressionCacheEntry<'db> {
             && self.unsolved_typevar_calls.is_empty()
             && self.expected_types.is_empty()
             && self.bindings.is_empty()
+            && self.declarations.is_empty()
+            && self.deferred.is_empty()
             && self.diagnostics.is_empty()
             && self.called_functions.is_empty()
             && self.cycle_recovery.is_none()
@@ -17526,6 +17534,8 @@ impl<'db> FullExpressionCacheEntry<'db> {
             || !self.expected_types.is_empty()
             || self.cycle_recovery.is_some()
             || !self.bindings.is_empty()
+            || !self.declarations.is_empty()
+            || !self.deferred.is_empty()
             || !self.called_functions.is_empty()
             || !self.diagnostics.is_empty())
         .then(|| {
@@ -17553,6 +17563,8 @@ impl<'db> FullExpressionCacheEntry<'db> {
                 expected_types: FrozenMap::from(self.expected_types),
                 type_expression_flags: FrozenMap::from(self.type_expression_flags),
                 bindings: self.bindings.into_boxed_slice(),
+                declarations: self.declarations.into_boxed_slice(),
+                deferred: self.deferred.into_iter().collect(),
                 diagnostics: self.diagnostics,
                 called_functions: self.called_functions.into_iter().collect(),
                 cycle_recovery: self.cycle_recovery,
@@ -18051,6 +18063,10 @@ impl<V> VecSet<V> {
     #[inline]
     fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    fn iter(&self) -> std::slice::Iter<'_, V> {
+        self.0.iter()
     }
 
     fn into_boxed_slice(self) -> Box<[V]> {

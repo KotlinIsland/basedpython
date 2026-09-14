@@ -834,6 +834,24 @@ def build() -> int:
         print(it)
 ```
 
+## a `return` in a function that writes no return type takes one too
+
+A `def` that leaves its return type out has one recovered from the expressions its body hands back,
+and each of those is read on its own. A block is a `def` written where a value goes, so the
+expression read there defines a function, which belongs to the scope the `return` is written in.
+
+```by
+def f(a: (int) -> None) -> str:
+    a(1)
+    return "done"
+
+def build():
+    return f:
+        print(it)
+
+reveal_type(build())  # revealed: str
+```
+
 ## the call is still checked as a call
 
 ```by

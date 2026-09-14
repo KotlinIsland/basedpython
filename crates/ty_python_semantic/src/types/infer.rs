@@ -2056,6 +2056,21 @@ struct ExpressionInferenceExtra<'db> {
     /// Only very few expression regions have bindings (around 0.1%).
     bindings: Box<[(Definition<'db>, Type<'db>)]>,
 
+    /// The types and type qualifiers of every declaration in this expression region.
+    ///
+    /// basedpython: an expression region holds a definition only when it is a
+    /// [statement expression](ruff_python_ast::ExprStatement) — `return match x: …`
+    /// stands for a `match` whose branches may declare a name. The definition belongs to
+    /// the scope the statement is written in, so what the region inferred for it is
+    /// carried back out to whoever asked for the region, exactly as a binding is.
+    declarations: Box<[(Definition<'db>, TypeAndQualifiers<'db>)]>,
+
+    /// The definitions in this expression region that have some deferred parts.
+    ///
+    /// Populated for the same reason as [`Self::declarations`], and handed back to the
+    /// scope region, which is where deferred parts are resolved.
+    deferred: Box<[Definition<'db>]>,
+
     /// The diagnostics for this region.
     diagnostics: TypeCheckDiagnostics,
 
@@ -2067,6 +2082,24 @@ struct ExpressionInferenceExtra<'db> {
 }
 
 impl<'db> ExpressionInference<'db> {
+    fn declarations(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (Definition<'db>, TypeAndQualifiers<'db>)> {
+        self.extra
+            .as_deref()
+            .map_or(&[][..], |extra| &extra.declarations)
+            .iter()
+            .copied()
+    }
+
+    fn deferred(&self) -> impl ExactSizeIterator<Item = Definition<'db>> {
+        self.extra
+            .as_deref()
+            .map_or(&[][..], |extra| &extra.deferred)
+            .iter()
+            .copied()
+    }
+
     fn cycle_initial(scope: ScopeId<'db>, cycle_recovery: Type<'db>) -> Self {
         let _ = scope;
         Self {
