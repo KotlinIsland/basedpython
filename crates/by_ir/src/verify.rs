@@ -2134,6 +2134,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             nested: None,
         }
     }
@@ -2326,6 +2327,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             nested: None,
         };
         let errors = verify(&f).unwrap_err();
@@ -2379,6 +2381,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             nested: None,
         };
         assert_eq!(verify(&f), Ok(()));
@@ -2433,6 +2436,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             nested: None,
         };
         let errors = verify(&f).unwrap_err();
@@ -2538,6 +2542,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             nested: None,
         };
         let errors = verify(&f).unwrap_err();

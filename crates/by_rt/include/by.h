@@ -2787,33 +2787,38 @@ static inline int By_SpecTakesBases(PyObject *bases) {
  * own struct, so the room is there and the offset naming that word is the answer that was
  * wanted. without this a decorated class silently kept its interpreted definition while
  * every compiled function went on reading that definition's instances as its own struct */
-static inline Py_ssize_t By_SpecDictOffset(PyType_Spec *spec) {
+static inline Py_ssize_t By_SpecMemberOffset(PyType_Spec *spec, const char *name) {
     PyType_Slot *slot;
     if (spec == NULL || spec->slots == NULL) return 0;
     for (slot = spec->slots; slot->slot != 0; slot++) {
         PyMemberDef *member;
         if (slot->slot != Py_tp_members || slot->pfunc == NULL) continue;
         for (member = (PyMemberDef *)slot->pfunc; member->name != NULL; member++) {
-            if (strcmp(member->name, "__dictoffset__") == 0) return member->offset;
+            if (strcmp(member->name, name) == 0) return member->offset;
         }
     }
     return 0;
 }
 
+/* the same exception holds for the weak-reference list, which a spec asks for on the same
+ * terms as the dict */
+static inline int By_OffsetHoldsUp(Py_ssize_t built, Py_ssize_t inherited, PyType_Spec *spec,
+                                   const char *name) {
+    Py_ssize_t asked;
+    if (built == inherited) return 1;
+    asked = By_SpecMemberOffset(spec, name);
+    return asked != 0 && built == asked;
+}
+
 static inline int By_OffsetsHoldUp(PyTypeObject *type, PyType_Spec *spec) {
     PyTypeObject *base = type->tp_base;
-    Py_ssize_t asked;
     if (base == NULL) {
         return 1;
     }
-    if (type->tp_weaklistoffset != base->tp_weaklistoffset) {
-        return 0;
-    }
-    if (type->tp_dictoffset == base->tp_dictoffset) {
-        return 1;
-    }
-    asked = By_SpecDictOffset(spec);
-    return asked != 0 && type->tp_dictoffset == asked;
+    return By_OffsetHoldsUp(type->tp_weaklistoffset, base->tp_weaklistoffset, spec,
+                            "__weaklistoffset__")
+           && By_OffsetHoldsUp(type->tp_dictoffset, base->tp_dictoffset, spec,
+                               "__dictoffset__");
 }
 
 /* the type for a class whose fields sit past a base's instance, or nothing at all
@@ -5386,6 +5391,102 @@ static inline int By_AdoptTwinAttributes(const By_Twins *twins) {
     return 0;
 }
 
+/* what the module body wrote over a member *after* the `class` statement, carried onto the
+ * type that took the class's place
+ *
+ * `By_AdoptTwinAttributes` leaves a name the type already holds alone, and a type holds
+ * every name its own body lowered — so a later `C.v = property(...)`, `C.width = f` or
+ * `del C.extra` landed on the twin and the emitted type went on answering with what the
+ * `class` statement wrote. `body` is the class's dict as `type.__new__` left it, before
+ * anything after the statement could reach it (see `By_CaptureClassBody`), which is what
+ * tells a rewrite from the definition itself: a name whose value on the twin is no longer
+ * the object the body put there was rewritten, and the type takes the twin's answer or
+ * loses the name with it.
+ *
+ * the licences a class hands out are armed after this and ask the type's dict, so a
+ * rewritten member refuses the licence it would have held and every compiled read of it
+ * takes the full lookup. a decorated class is left out: a decorator the source wrote is
+ * applied to the type again, and what it rewrote on the twin is what it rewrites there,
+ * while one the transpiler wrote — `@dataclass(slots=True)` — hands back another class,
+ * which `statement` tells apart. a dunder is left out for the reason
+ * `By_AdoptTwinAttributes` gives */
+static inline int By_CarryRewrittenMembers(PyObject *body, PyObject *statement,
+                                           const By_Twins *twins, Py_ssize_t index) {
+    PyObject *twin = twins->twins[index];
+    PyObject *type = twins->types[index];
+    PyObject *source, *target, *names;
+    Py_ssize_t at;
+    int rewrote = 0;
+    /* a twin that is not the class its statement built was replaced by a decorator, and
+     * everything it holds differs from the body for that reason alone */
+    if (body == NULL || twin == NULL || twin != statement || type == NULL || twin == type) {
+        return 0;
+    }
+    if (!PyDict_Check(body) || !PyType_Check(twin) || !PyType_Check(type)) return 0;
+    source = ((PyTypeObject *)twin)->tp_dict;
+    target = ((PyTypeObject *)type)->tp_dict;
+    if (source == NULL || target == NULL) return 0;
+    /* the keys first: a value is read back out one at a time, and carrying one can run
+     * python while a dict would otherwise still be walked */
+    names = PyDict_Keys(body);
+    if (names == NULL) return -1;
+    for (at = 0; at < PyList_GET_SIZE(names); at++) {
+        PyObject *key = PyList_GET_ITEM(names, at);
+        PyObject *written, *now, *held, *carried;
+        int failed;
+        if (!PyUnicode_Check(key) || By_IsDunder(key)) continue;
+        written = PyDict_GetItem(body, key);
+        now = PyDict_GetItem(source, key);
+        if (now == written) continue;
+        held = PyDict_GetItem(target, key);
+        if (held == NULL || held == now) continue;
+        rewrote = 1;
+        if (now == NULL) {
+            if (PyDict_DelItem(target, key) < 0) {
+                Py_DECREF(names);
+                return -1;
+            }
+            continue;
+        }
+        /* a value that refuses to settle is still the one the body chose, and the member
+         * the class statement wrote is the one answer known to be wrong */
+        carried = By_TwinReplacement(now, twins);
+        if (carried == NULL) {
+            if (PyErr_Occurred()) {
+                Py_DECREF(names);
+                return -1;
+            }
+            carried = Py_NewRef(now);
+        }
+        failed = PyDict_SetItem(target, key, carried) < 0;
+        Py_DECREF(carried);
+        if (failed) {
+            Py_DECREF(names);
+            return -1;
+        }
+    }
+    Py_DECREF(names);
+    if (rewrote) PyType_Modified((PyTypeObject *)type);
+    return 0;
+}
+
+/* whether `entry` under `name` is what `By_CarryRewrittenMembers` carried: the twin's own
+ * answer, NULL where the module body deleted the name, and not the one the body wrote */
+static inline int By_RewrittenMember(PyObject *body, PyObject *statement, PyObject *twin,
+                                     const char *name, PyObject *entry) {
+    PyObject *written, *now;
+    if (body == NULL || !PyDict_Check(body) || twin == NULL || twin != statement) return 0;
+    if (!PyType_Check(twin) || ((PyTypeObject *)twin)->tp_dict == NULL) return 0;
+    written = PyDict_GetItemString(body, name);
+    if (written == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    now = PyDict_GetItemString(((PyTypeObject *)twin)->tp_dict, name);
+    if (now == NULL) PyErr_Clear();
+    return entry == now && entry != written;
+}
+
 /* ── the members `@dataclass` generates ───────────────────────────────────────
  *
  * a `data class` is `@dataclass(slots=True)` on the twin, so python's own decorator gives
@@ -6089,12 +6190,15 @@ static int By_SettledMember(const char *const *settled, Py_ssize_t count, const 
  * `by_type` slots — so a family that stood down together is checked against its own
  * standing definitions rather than against types nothing can reach. `methods` is the
  * class's `tp_methods` table, which is exactly the set of names lowered into
- * descriptors, and `settled` names the entries a decorator has since replaced */
+ * descriptors, and `settled` names the entries a decorator has since replaced. `body` is the
+ * class's dict as its `class` statement left it and `statement` the class that statement
+ * built, each NULL where none was captured */
 static int By_VerifyClass(const char *module, PyObject *dict, const char *name,
                           PyObject *stands, PyObject *emitted, PyObject *twin,
                           PyObject *const *bases, Py_ssize_t base_count,
                           PyMethodDef *methods, const char *const *settled,
-                          Py_ssize_t settled_count, int decorated) {
+                          Py_ssize_t settled_count, int decorated, PyObject *body,
+                          PyObject *statement) {
     PyObject *published, *target, *source, *held;
     Py_ssize_t at;
     /* `emitted != twin` because a construction that could not be rebuilt hands the
@@ -6169,6 +6273,12 @@ static int By_VerifyClass(const char *module, PyObject *dict, const char *name,
         PyObject *entry;
         if (By_SettledMember(settled, settled_count, methods[at].ml_name)) continue;
         entry = target == NULL ? NULL : PyDict_GetItemString(target, methods[at].ml_name);
+        /* the module body rewrote or deleted it after the `class` statement, and the type
+         * took that answer on purpose */
+        if (By_RewrittenMember(body, statement, twin, methods[at].ml_name, entry)
+            && (entry == NULL || PyFunction_Check(entry))) {
+            continue;
+        }
         if (entry == NULL) {
             PyErr_Format(PyExc_ImportError,
                          "%s.%s was compiled but publishes nothing under %s, which it "
@@ -6189,14 +6299,17 @@ static int By_VerifyClass(const char *module, PyObject *dict, const char *name,
     return 0;
 }
 
-/* record one class body against its name, or -1 with an exception set */
-static int By_RecordClassBody(PyObject *state, PyObject *name, PyObject *body) {
+/* record one class body, and the class its statement built, against its name, or -1 with
+ * an exception set */
+static int By_RecordClassBody(PyObject *state, PyObject *name, PyObject *body, PyObject *cls) {
     PyObject *bodies = PyDict_GetItemString(state, "bodies");
-    if (bodies == NULL) {
+    PyObject *statements = PyDict_GetItemString(state, "statements");
+    if (bodies == NULL || statements == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "module body capture lost its record");
         return -1;
     }
-    return PyDict_SetItem(bodies, name, body);
+    if (PyDict_SetItem(bodies, name, body) < 0) return -1;
+    return PyDict_SetItem(statements, name, cls);
 }
 
 /* `__build_class__`, recording what each module-level `class` statement wrote
@@ -6252,7 +6365,7 @@ static PyObject *By_CaptureClassBody(PyObject *state, PyObject *args, PyObject *
     /* a body that cannot be recorded is raised out of the `class` statement rather than
      * passed over: what would follow is a type carrying no constants at all, and for a
      * decorated class that is the defect this capture exists to remove */
-    if (body == NULL || By_RecordClassBody(state, name, body) < 0) {
+    if (body == NULL || By_RecordClassBody(state, name, body, cls) < 0) {
         Py_XDECREF(body);
         Py_DECREF(cls);
         return NULL;
@@ -6443,15 +6556,24 @@ static inline PyObject *By_ExecModuleBody(const By_Fallback *fallback, PyObject 
  * delegation.
  *
  * hands back `{name: body}` for the classes the body wrote at module level, as a new
- * reference, or NULL with an exception set where the body raised */
-static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *dict) {
+ * reference, or NULL with an exception set where the body raised. `*statements` is given
+ * `{name: class}` alongside it, the class each of those statements built before any
+ * decorator was handed it, as a new reference or NULL */
+static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *dict,
+                                         PyObject **statements) {
     static PyMethodDef capture = {"__build_class__",
                                   (PyCFunction)(void (*)(void))By_CaptureClassBody,
                                   METH_VARARGS | METH_KEYWORDS, NULL};
     PyObject *bodies, *stood, *mapping, *displaced, *state, *wrapper, *result;
     int failed;
+    *statements = NULL;
     bodies = PyDict_New();
     if (bodies == NULL) return NULL;
+    *statements = PyDict_New();
+    if (*statements == NULL) {
+        Py_DECREF(bodies);
+        return NULL;
+    }
     /* an emitted module's dict has no `__builtins__` of its own, and python would then
      * give the body's frame the running interpreter's. naming it here is what makes the
      * functions the body defines take the same mapping rather than that fallback */
@@ -6464,6 +6586,7 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
     if (displaced == NULL) {
         Py_XDECREF(stood);
         Py_DECREF(bodies);
+        Py_CLEAR(*statements);
         if (!PyErr_Occurred()) {
             PyErr_SetString(PyExc_RuntimeError,
                             "no builtins `__build_class__` to run the module body against");
@@ -6474,6 +6597,7 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
     state = PyDict_New();
     failed = state == NULL || PyDict_SetItemString(state, "delegate", displaced) < 0
              || PyDict_SetItemString(state, "bodies", bodies) < 0
+             || PyDict_SetItemString(state, "statements", *statements) < 0
              || PyDict_SetItemString(state, "globals", dict) < 0;
     wrapper = failed ? NULL : PyCFunction_New(&capture, state);
     failed = failed || wrapper == NULL
@@ -6499,6 +6623,7 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
     Py_XDECREF(stood);
     if (failed || result == NULL) {
         Py_DECREF(bodies);
+        Py_CLEAR(*statements);
         return NULL;
     }
     return bodies;
@@ -7133,6 +7258,19 @@ static void By_RecheckField(PyObject *o, PyObject *type, const char *class_name,
 
 #endif /* BY_LICENCE_RECHECK */
 
+/* raise `KeyError(key)`, with the key as the one argument whatever it is
+ *
+ * `PyErr_SetObject` reads a tuple value as the whole argument list and an exception
+ * instance as the exception itself, so handing it the key raised `KeyError(1, 2)` for a
+ * missing `(1, 2)` and the key itself for a missing `KeyError('x')`. packing the key into
+ * a tuple of one is what cpython's own dict does for the same reason */
+static inline void By_RaiseKeyError(PyObject *key) {
+    PyObject *args = PyTuple_Pack(1, key);
+    if (args == NULL) return;
+    PyErr_SetObject(PyExc_KeyError, args);
+    Py_DECREF(args);
+}
+
 /* ── an emitted instance's `__dict__` ─────────────────────────────────────────
  *
  * an emitted instance keeps its attributes in two places. the ones the class itself
@@ -7380,7 +7518,7 @@ static int By_InstanceDict_assign(PyObject *selfobj, PyObject *key, PyObject *va
         int held = PyDict_Contains(selfobj, key);
         if (held < 0) return -1;
         if (held == 0) {
-            PyErr_SetObject(PyExc_KeyError, key);
+            By_RaiseKeyError(key);
             return -1;
         }
     }
@@ -7554,7 +7692,7 @@ static PyObject *By_InstanceDict_pop(PyObject *selfobj, PyObject *const *args,
     if (value == NULL) {
         if (PyErr_Occurred()) return NULL;
         if (nargs == 2) return By_NewRef(args[1]);
-        PyErr_SetObject(PyExc_KeyError, args[0]);
+        By_RaiseKeyError(args[0]);
         return NULL;
     }
     Py_INCREF(value);
@@ -7804,6 +7942,37 @@ static inline int By_PublishNew(PyObject *type, PyMethodDef *def) {
     int stored = PyObject_SetAttrString(type, "__new__", published);
     Py_DECREF(published);
     return stored;
+}
+
+/* `obj.__weakref__`: the head of the weak references made of the object, or `None`
+ *
+ * what python's own descriptor answers, reached through the offset the type was built
+ * with rather than a member of one struct, so every emitted class can publish the one
+ * getter */
+static PyObject *By_GetWeakrefList(PyObject *obj, void *closure) {
+    (void)closure;
+    Py_ssize_t offset = Py_TYPE(obj)->tp_weaklistoffset;
+    PyObject *head = offset > 0 ? *(PyObject **)((char *)obj + offset) : NULL;
+    return Py_NewRef(head != NULL ? head : Py_None);
+}
+
+/* hand an interpreted subclass the allocator of the emitted layout it extends
+ *
+ * an emitted class whose `int` fields start absent writes the absent value from its own
+ * `tp_alloc`, because a zeroed `int` field is the `int` zero. python does not let a
+ * subclass inherit that allocator: `type.__new__` gives every class it makes
+ * `PyType_GenericAlloc`, so `S.__new__(S)` handed back a block whose fields read as `0`
+ * where python raises `AttributeError`. the emitted allocator asks its base's for the block
+ * and only then writes the absent values, so for the subclass it is the generic allocation
+ * plus those writes.
+ *
+ * a class that wrote an allocator of its own is left with it, as is one that is not built
+ * on `owner` at all, which the call it arrived through is about to refuse */
+static inline void By_AdoptAllocator(PyTypeObject *type, PyObject *owner, allocfunc alloc) {
+    if (type->tp_alloc == PyType_GenericAlloc && type != (PyTypeObject *)owner
+        && PyType_IsSubtype(type, (PyTypeObject *)owner)) {
+        type->tp_alloc = alloc;
+    }
 }
 
 /* publish a `@property` as the object python builds out of its halves
@@ -8390,7 +8559,7 @@ static inline PyObject *By_GetItem(PyObject *container, PyObject *index) {
         if (PyErr_Occurred()) return NULL;
 #endif
         /* cpython raises the *key*, not a message */
-        PyErr_SetObject(PyExc_KeyError, index);
+        By_RaiseKeyError(index);
         return NULL;
     }
     return By_GetItemSlow(container, index);
@@ -8424,7 +8593,7 @@ BY_COLD PyObject *By_GetItemSlow(PyObject *container, PyObject *index) {
         if (value != NULL) return By_NewRef(value);
         if (PyErr_Occurred()) return NULL;
         /* cpython raises the *key*, not a message */
-        PyErr_SetObject(PyExc_KeyError, index);
+        By_RaiseKeyError(index);
         return NULL;
     }
     return PyObject_GetItem(container, index);
@@ -8808,11 +8977,7 @@ static int By_MergeKeyword(PyObject *keywords, PyObject *key, PyObject *value) {
     int present = PyDict_Contains(keywords, key);
     if (present < 0) return -1;
     if (present) {
-        PyObject *args = PyTuple_Pack(1, key);
-        if (args != NULL) {
-            PyErr_SetObject(PyExc_KeyError, args);
-            Py_DECREF(args);
-        }
+        By_RaiseKeyError(key);
         return -1;
     }
     return PyDict_SetItem(keywords, key, value);
@@ -11008,6 +11173,43 @@ static inline PyObject *By_LookupSpecial(PyObject *self, PyObject *name, int *pr
     PyObject *bound = get(found, self, (PyObject *)Py_TYPE(self));
     Py_DECREF(found);
     return bound;
+}
+
+/* the direction of a binary operator a class did not write, answered the way python's own
+ * number slot answers it: by looking the name up on the operand's type, which reaches
+ * whatever a base defines under it
+ *
+ * a `list` subclass writing only `__mul__` still answers `2 * bag` through `list.__rmul__`
+ * this way. `adapter` is the slot asking, and an entry wrapping that same slot is refused
+ * rather than called, since calling it would only ask this function again */
+static inline PyObject *By_InheritedBinary(PyObject *receiver, PyObject *other,
+                                           const char *name, void *adapter) {
+    PyObject *key = PyUnicode_InternFromString(name);
+    if (key == NULL) return NULL;
+    PyObject *found = _PyType_Lookup(Py_TYPE(receiver), key);
+    if (found == NULL
+        || (Py_IS_TYPE(found, &PyWrapperDescr_Type)
+            && ((PyWrapperDescrObject *)found)->d_wrapped == adapter)) {
+        Py_DECREF(key);
+        Py_RETURN_NOTIMPLEMENTED;
+    }
+    int prepend;
+    PyObject *method = By_LookupSpecial(receiver, key, &prepend);
+    Py_DECREF(key);
+    if (method == NULL) {
+        if (PyErr_Occurred()) return NULL;
+        Py_RETURN_NOTIMPLEMENTED;
+    }
+    PyObject *result;
+    if (prepend) {
+        PyObject *argv[] = { receiver, other };
+        result = PyObject_Vectorcall(method, argv, 2, NULL);
+    } else {
+        PyObject *argv[] = { other };
+        result = PyObject_Vectorcall(method, argv, 1, NULL);
+    }
+    Py_DECREF(method);
+    return result;
 }
 
 /* [`By_LookupSpecial`] through a memo of what it last answered */

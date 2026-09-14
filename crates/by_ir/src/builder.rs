@@ -46,6 +46,7 @@ pub struct FunctionBuilder {
     block_ranges: Vec<Option<(u32, u32)>>,
     doc: Option<String>,
     takes_a_weak_reference: bool,
+    weak_referents: Vec<String>,
     /// where the ops pushed from here on were written: the byte offset, and the line the
     /// frontend worked out for it
     location: Option<(u32, u32)>,
@@ -89,6 +90,7 @@ impl FunctionBuilder {
             block_ranges: vec![None],
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             location: None,
             generator_expression: false,
             block_positions: vec![None],
@@ -132,6 +134,15 @@ impl FunctionBuilder {
     /// see [`Function::takes_a_weak_reference`]
     pub fn takes_a_weak_reference(&mut self) -> &mut Self {
         self.takes_a_weak_reference = true;
+        self
+    }
+
+    /// record that the body takes a weak reference of an instance of `class` — see
+    /// [`Function::weak_referents`]
+    pub fn weakly_references(&mut self, class: &str) -> &mut Self {
+        if !self.weak_referents.iter().any(|held| held == class) {
+            self.weak_referents.push(class.to_string());
+        }
         self
     }
 
@@ -433,6 +444,7 @@ impl FunctionBuilder {
             coroutine_body: None,
             doc: self.doc,
             takes_a_weak_reference: self.takes_a_weak_reference,
+            weak_referents: self.weak_referents,
             nested: None,
         }
     }

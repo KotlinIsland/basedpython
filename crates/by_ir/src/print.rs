@@ -992,6 +992,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             nested: None,
         }
     }
@@ -1068,6 +1069,7 @@ b2:
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             nested: None,
         };
         assert!(print_function(&function).contains("return 1.0"));
