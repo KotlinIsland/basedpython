@@ -365,17 +365,22 @@ pub struct Function {
     pub doc: Option<String>,
     /// whether the body takes a weak reference of a value it cannot see the origin of
     ///
-    /// an emitted instance *is* its layout and a type spec adds no `__weakref__`, so a
-    /// weak reference of one raises `TypeError` where python hands back a reference. the
-    /// frontend refuses that outright wherever the argument is one this module lays out,
-    /// and sets this wherever it is not — `logging`'s `_addHandlerRef(handler)` is handed
-    /// its target by whoever called it, and the `weakref.ref` is a whole function away
-    /// from the `Handler.__init__` that would raise.
+    /// an instance of a class [`ModuleIr::keeps_weak_references`] turns away cannot be
+    /// weakly referenced, where python hands back a reference. `logging`'s
+    /// `_addHandlerRef(handler)` is handed its target by whoever called it, and the
+    /// `weakref.ref` is a whole function away from the `Handler.__init__` that would raise.
     ///
     /// so what one frame cannot settle is settled across the module's call graph
-    /// instead: a frame that hands one of these an instance of a class this module lays
-    /// out is the frame that declines, and declining it takes its class with it
+    /// instead: a frame that hands one of these an instance of such a class is the frame
+    /// that declines, and declining it takes its class with it
     pub takes_a_weak_reference: bool,
+    /// the classes this module lays out that the body takes a weak reference of an
+    /// instance of, where it can see the instance's class
+    ///
+    /// whether that raises is a question about the finished module — see
+    /// [`ModuleIr::keeps_weak_references`] — so the frontend records the class rather than
+    /// answering
+    pub weak_referents: Vec<String>,
     /// what python calls a *nested* function, which only a nested function has
     ///
     /// its receiver is the environment its captures live in, but python sees neither the
@@ -1259,6 +1264,65 @@ impl ModuleIr {
         classes.chain(functions)
     }
 
+    /// whether an instance of `class` can be the target of a weak reference
+    ///
+    /// python gives a class a `__weakref__` unless every class in its layout declared
+    /// `__slots__` without asking for one, and an emitted class keeps a weak-reference list
+    /// on the same terms — so `weakref.ref`, `WeakSet`, `WeakKeyDictionary`, `finalize` and
+    /// every other weak container reach one of its instances as they would the interpreted
+    /// one's. a `data class`'s twin is `@dataclass(slots=True)`, which asks for none.
+    ///
+    /// the layout has to be this module's all the way down to `object`: a class standing on
+    /// a base from outside takes that base's instance whole, and has no word of its own to
+    /// keep the list in
+    pub fn keeps_weak_references(&self, class: &ClassIr) -> bool {
+        if !class.exported || class.environment || class.resume.is_some() {
+            return false;
+        }
+        let mut current = class;
+        let mut unslotted = false;
+        // bounded by the class count: a base chain cannot visit one twice without being a
+        // cycle, and a cycle here would otherwise hang rather than answer
+        for _ in 0..=self.classes.len() {
+            if current.dataclass {
+                return false;
+            }
+            unslotted |= !current.declares_slots;
+            match &current.base {
+                None => return unslotted,
+                Some(ClassBase::External(_)) => return false,
+                Some(ClassBase::InModule(name)) => {
+                    match self.classes.iter().find(|other| other.name == *name) {
+                        Some(next) => current = next,
+                        None => return false,
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// whether `class` takes its instance layout from a base outside the module, which is
+    /// where [`Self::keeps_weak_references`] turns away a class python would give a
+    /// weak-reference list to
+    pub fn takes_layout_from_outside(&self, class: &ClassIr) -> bool {
+        let mut current = class;
+        // bounded by the class count, for the reason `keeps_weak_references` gives
+        for _ in 0..=self.classes.len() {
+            match &current.base {
+                None => return false,
+                Some(ClassBase::External(_)) => return true,
+                Some(ClassBase::InModule(name)) => {
+                    match self.classes.iter().find(|other| other.name == *name) {
+                        Some(next) => current = next,
+                        None => return true,
+                    }
+                }
+            }
+        }
+        true
+    }
+
     /// every compiled function, methods included
     ///
     /// a pass that iterates `functions` alone silently skips every method, which
@@ -1464,6 +1528,7 @@ mod tests {
             coroutine_body: None,
             doc: None,
             takes_a_weak_reference: false,
+            weak_referents: Vec::new(),
             nested: None,
         }
     }

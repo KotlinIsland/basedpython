@@ -881,6 +881,11 @@ fn emit_class_struct(module: &ModuleIr, class: &ClassIr) -> String {
     if reserves_dict_word(module, class) {
         let _ = writeln!(out, "    PyObject *{BY_DICT_MEMBER};");
     }
+    // the weak references to the instance, reserved down a chain on the same terms as the
+    // dict word — see [`reserves_weak_list_word`]
+    if reserves_weak_list_word(module, class) {
+        out.push_str("    PyObject *by_weakrefs;\n");
+    }
     // where a `return` puts its value. a resumable frame reports finishing by writing
     // here and handing back nothing, so that the slot python asks with — `am_send` —
     // can say what the frame returned without an exception ever being built. it is not
@@ -936,6 +941,64 @@ fn writes_absent_values(module: &ModuleIr, class: &ClassIr) -> bool {
     class.resume.is_none()
         && absent_by_value(class).next().is_some()
         && (external_storage(module, class) || !inherits_layout(module, class))
+}
+
+/// the class whose allocation writes the absent values into this class's layout, where
+/// one does: the class itself, or the in-module base whose layout it inherits
+fn absent_values_owner<'a>(module: &'a ModuleIr, class: &'a ClassIr) -> Option<&'a ClassIr> {
+    let mut current = class;
+    // bounded the way [`inherits_layout`] is
+    for _ in 0..=module.classes.len() {
+        if writes_absent_values(module, current) {
+            return Some(current);
+        }
+        current = class_named(module, current.base.as_ref()?.in_module()?)?;
+    }
+    None
+}
+
+/// the `tp_new` of a class whose layout starts with fields absent by value
+///
+/// the allocation writes those values, but only the allocation this module emits. python
+/// gives a class made by a `class` statement or `type(...)` the generic allocator rather
+/// than inheriting its base's, so an interpreted subclass's instance arrived zeroed — and a
+/// zeroed `int` field is the `int` zero. such an instance comes through the `tp_new` it
+/// inherits, so this is where its type is handed the allocator of the layout it extends —
+/// see `By_AdoptAllocator`
+fn emit_absent_values_new(module: &ModuleIr, class: &ClassIr) -> String {
+    let Some(owner) = absent_values_owner(module, class) else {
+        return String::new();
+    };
+    let type_name = class.type_name(module.name.dotted());
+    let owner_name = owner.type_name(module.name.dotted());
+    format!(
+        "static PyObject *{owner_name}_alloc(PyTypeObject *by_type, Py_ssize_t by_items);\n\
+         static PyObject *{type_name}_new(PyTypeObject *by_type, PyObject *by_args, PyObject *by_kwds) {{\n\
+         \x20   By_AdoptAllocator(by_type, {type_name}_OBJ, {owner_name}_alloc);\n\
+         \x20   return PyType_GenericNew(by_type, by_args, by_kwds);\n}}\n\n"
+    )
+}
+
+/// the entry a written `__new__` is published through, where its class's layout starts
+/// with fields absent by value
+///
+/// the body's `object.__new__(cls)` allocates through `cls`'s own allocator, which for an
+/// interpreted subclass is the generic one — so the class is handed this layout's before
+/// the body runs, for the reason [`emit_absent_values_new`] gives
+fn emit_absent_values_new_entry(module: &ModuleIr, class: &ClassIr, new: &Function) -> String {
+    let Some(owner) = absent_values_owner(module, class) else {
+        return String::new();
+    };
+    let type_name = class.type_name(module.name.dotted());
+    let owner_name = owner.type_name(module.name.dotted());
+    let wrapper = new.wrapper_symbol(module.name.dotted());
+    format!(
+        "static PyObject *{owner_name}_alloc(PyTypeObject *by_type, Py_ssize_t by_items);\n\
+         static PyObject *{type_name}_new_entry(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames) {{\n\
+         \x20   if (PyVectorcall_NARGS(nargs) > 0 && PyType_Check(args[0]))\n\
+         \x20       By_AdoptAllocator((PyTypeObject *)args[0], {type_name}_OBJ, {owner_name}_alloc);\n\
+         \x20   return {wrapper}(self, args, nargs, kwnames);\n}}\n\n"
+    )
 }
 
 /// the allocation of a class whose fields start absent by value, and what it writes
@@ -1191,6 +1254,13 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
         // the finalizer has said it is really going
         if class.resume.is_some() {
             out.push_str("    PyObject_GC_UnTrack(self);\n");
+        }
+        // after the finalizer and before anything the instance holds is released, as
+        // python's own dealloc for a class it gave a weak-reference list does
+        if reserves_weak_list_word(module, class) {
+            out.push_str(
+                "    if (self->by_weakrefs != NULL) PyObject_ClearWeakRefs((PyObject *)self);\n",
+            );
         }
         if keeps_a_dict {
             let _ = writeln!(out, "    By_ReleaseInstanceDict(&self->{BY_DICT_MEMBER});");
@@ -2032,6 +2102,18 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             );
         }
     }
+    // python publishes `__weakref__` on the class that gave an instance its list, and a
+    // subclass reads the base's
+    if module.keeps_weak_references(class)
+        && !class
+            .base
+            .as_ref()
+            .and_then(ClassBase::in_module)
+            .and_then(|name| class_named(module, name))
+            .is_some_and(|base| module.keeps_weak_references(base))
+    {
+        out.push_str("    {\"__weakref__\", By_GetWeakrefList, NULL, NULL, NULL},\n");
+    }
     out.push_str("    {NULL, NULL, NULL, NULL, NULL}\n};\n\n");
 
     out.push_str(&emit_dataclass_members(class, &type_name));
@@ -2039,12 +2121,22 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // `__dictoffset__` is not an attribute the table binds: `PyType_FromSpec` lifts it
     // out and writes it into `tp_dictoffset`, which is the only way a type built from a
     // spec can say where its instances keep a dict
+    // `__weaklistoffset__` is lifted out the same way, into `tp_weaklistoffset`
     if instance_dict(module, class) {
+        let weak_list = if module.keeps_weak_references(class) {
+            format!(
+                "\x20   {{\"__weaklistoffset__\", BY_DICT_OFFSET_MEMBER,\n\
+                 \x20    offsetof({struct_name}, by_weakrefs), BY_DICT_OFFSET_FLAGS}},\n"
+            )
+        } else {
+            String::new()
+        };
         let _ = write!(
             out,
             "static PyMemberDef {type_name}_members[] = {{\n\
              \x20   {{\"__dictoffset__\", BY_DICT_OFFSET_MEMBER,\n\
              \x20    offsetof({struct_name}, {BY_DICT_MEMBER}), BY_DICT_OFFSET_FLAGS}},\n\
+             {weak_list}\
              \x20   {{NULL, 0, 0, 0}}\n}};\n\n"
         );
     }
@@ -2248,11 +2340,17 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // module init binds onto the finished type — see `By_PublishNew` for why the slot
     // cannot come from the spec
     if let Some(new) = publishes_new(class) {
+        let entry = emit_absent_values_new_entry(module, class, new);
+        let symbol = if entry.is_empty() {
+            new.wrapper_symbol(module.name.dotted())
+        } else {
+            format!("{type_name}_new_entry")
+        };
+        out.push_str(&entry);
         let _ = writeln!(
             out,
             "static PyMethodDef {type_name}_new_def =\n\
-             \x20   {{\"__new__\", (PyCFunction)(void(*)(void)){}, METH_FASTCALL | METH_KEYWORDS, NULL}};\n",
-            new.wrapper_symbol(module.name.dotted())
+             \x20   {{\"__new__\", (PyCFunction)(void(*)(void)){symbol}, METH_FASTCALL | METH_KEYWORDS, NULL}};\n"
         );
     }
 
@@ -2673,7 +2771,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                 ),
             )
         };
-        let weakrefs = if class.resume.is_some() {
+        let weakrefs = if class.resume.is_some() || module.keeps_weak_references(class) {
             format!("             .tp_weaklistoffset = offsetof({struct_name}, by_weakrefs),\n")
         } else {
             String::new()
@@ -2793,6 +2891,9 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         // same reason it does there: the class overrode the allocator
         let construction = if init.is_empty() || constructs_through_a_written_new(module, class) {
             init
+        } else if absent_values_owner(module, class).is_some() {
+            out.push_str(&emit_absent_values_new(module, class));
+            format!("{init}\x20   {{Py_tp_new, (void *){type_name}_new}},\n")
         } else {
             format!("{init}\x20   {{Py_tp_new, (void *)PyType_GenericNew}},\n")
         };
@@ -3012,6 +3113,18 @@ fn instance_layout_symbol(module: &ModuleIr, class: &ClassIr) -> Option<String> 
 fn reserves_dict_word(module: &ModuleIr, class: &ClassIr) -> bool {
     module.classes.iter().any(|other| {
         instance_dict(module, other)
+            && (other.name == class.name || descends_from(module, other, &class.name))
+    })
+}
+
+/// whether this class's struct carries the weak-reference list, whether or not its own
+/// instances can be weakly referenced
+///
+/// for the reason [`reserves_dict_word`] gives: `__slots__` decides per rung whether a
+/// weak reference can be made, and every rung has to agree on where the fields start
+fn reserves_weak_list_word(module: &ModuleIr, class: &ClassIr) -> bool {
+    module.classes.iter().any(|other| {
+        module.keeps_weak_references(other)
             && (other.name == class.name || descends_from(module, other, &class.name))
     })
 }
@@ -4249,6 +4362,40 @@ const DUNDER_SLOTS: &[(&str, &str, &str, SlotShape)] = &[
     ),
 ];
 
+/// the sequence slots python fills from a dunder that [`DUNDER_SLOTS`] already gives a
+/// mapping slot, as `(dunder, slot id, sub-table member, adapter suffix)`
+///
+/// python's slot table names `__len__` for both `mp_length` and `sq_length`, and the
+/// same for item access and assignment. the two halves are not interchangeable: `len`
+/// and truth ask `sq_length` first, and iteration, `in` and `reversed` on a class with
+/// no `__iter__` go through `sq_item`. a class that filled only the mapping half kept
+/// whatever sequence half its base had, `str`'s own length included
+const SEQUENCE_HALVES: &[(&str, &str, &str, &str)] = &[
+    ("__len__", "Py_sq_length", "sq_length", "len"),
+    ("__getitem__", "Py_sq_item", "sq_item", "sq_item"),
+    (
+        "__setitem__",
+        "Py_sq_ass_item",
+        "sq_ass_item",
+        "sq_ass_item",
+    ),
+];
+
+/// the sequence slots a dunder *empties*, as `(dunder, sub-table member)`
+///
+/// python's slot table gives each of these names a sequence slot with no function of its
+/// own, so a class writing the method leaves that slot NULL rather than inheriting its
+/// base's. `operator.concat` on a `list` subclass with its own `__add__` then falls
+/// through to `nb_add` and reaches the method, where the inherited slot would have
+/// concatenated
+const EMPTIED_SEQUENCE_SLOTS: &[(&str, &str)] = &[
+    ("__add__", "sq_concat"),
+    ("__mul__", "sq_repeat"),
+    ("__rmul__", "sq_repeat"),
+    ("__iadd__", "sq_inplace_concat"),
+    ("__imul__", "sq_inplace_repeat"),
+];
+
 /// the arithmetic dunders, each with the reflected method that answers when it
 /// was the *other* operand's type python asked
 ///
@@ -4317,6 +4464,22 @@ fn on_our_operand(
     )
 }
 
+/// the half of a binary adapter for the direction the class did not write, which python
+/// answers by looking the name up on the operand's type — see `By_InheritedBinary`
+fn inherited_direction(
+    type_name: &str,
+    name: &str,
+    receiver: &str,
+    other: &str,
+    adapter: &str,
+) -> String {
+    format!(
+        "    if (PyObject_TypeCheck({receiver}, (PyTypeObject *){type_name}_OBJ))\n\
+         \x20       return By_InheritedBinary({receiver}, {other}, {}, (void *){adapter});\n",
+        c_string(name)
+    )
+}
+
 /// `nb_power`, which `__pow__` and `__rpow__` share with the three-argument `pow`
 fn emit_power_adapter(module: &ModuleIr, class: &ClassIr, type_name: &str) -> String {
     let (name, reflected, _, field) = POWER;
@@ -4326,18 +4489,20 @@ fn emit_power_adapter(module: &ModuleIr, class: &ClassIr, type_name: &str) -> St
         return String::new();
     }
     let mut binary = String::new();
-    for (filler, receiver, other) in [
-        (forward.as_ref(), "by_a", "by_b"),
-        (backward.as_ref(), "by_b", "by_a"),
+    for (filler, written, receiver, other) in [
+        (forward.as_ref(), name, "by_a", "by_b"),
+        (backward.as_ref(), reflected, "by_b", "by_a"),
     ] {
-        let Some(filler) = filler else { continue };
-        binary.push_str(&on_our_operand(
-            module,
-            type_name,
-            filler,
-            receiver,
-            &[other],
-        ));
+        binary.push_str(&match filler {
+            Some(filler) => on_our_operand(module, type_name, filler, receiver, &[other]),
+            None => inherited_direction(
+                type_name,
+                written,
+                receiver,
+                other,
+                &format!("{type_name}_{field}"),
+            ),
+        });
     }
     // a modulus reaches only the left operand's `__pow__`, and a class that wrote a
     // two-parameter one raises there — which is what python raises too
@@ -4809,21 +4974,51 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
             out,
             "static PyObject *{type_name}_{field}(PyObject *by_a, PyObject *by_b) {{"
         );
-        for (filler, receiver, other) in [(forward, "by_a", "by_b"), (backward, "by_b", "by_a")] {
-            let Some(filler) = filler else { continue };
-            out.push_str(&on_our_operand(
-                module,
-                type_name,
-                &filler,
-                receiver,
-                &[other],
-            ));
+        for (filler, written, receiver, other) in [
+            (forward, name, "by_a", "by_b"),
+            (backward, reflected, "by_b", "by_a"),
+        ] {
+            out.push_str(&match filler {
+                Some(filler) => on_our_operand(module, type_name, &filler, receiver, &[other]),
+                None => inherited_direction(
+                    type_name,
+                    written,
+                    receiver,
+                    other,
+                    &format!("{type_name}_{field}"),
+                ),
+            });
         }
         // neither side is ours, or ours has no method for this direction — and
         // then `NotImplemented` is what lets python try the other operand
         out.push_str("    Py_RETURN_NOTIMPLEMENTED;\n}\n");
     }
     out.push_str(&emit_power_adapter(module, class, type_name));
+
+    // python's own `sq_item` and `sq_ass_item` box the index and look the method up, so
+    // these hand the boxed index to the mapping adapter the method already has
+    if answers_slot(class, "__getitem__") {
+        let _ = writeln!(
+            out,
+            "static PyObject *{type_name}_sq_item(PyObject *self, Py_ssize_t by_index) {{\n\
+             \x20   PyObject *by_key = PyLong_FromSsize_t(by_index);\n\
+             \x20   if (by_key == NULL) return NULL;\n\
+             \x20   PyObject *by_r = {type_name}_getitem(self, by_key);\n\
+             \x20   Py_DECREF(by_key);\n\
+             \x20   return by_r;\n}}"
+        );
+    }
+    if fills_slot(class, "__setitem__") {
+        let _ = writeln!(
+            out,
+            "static int {type_name}_sq_ass_item(PyObject *self, Py_ssize_t by_index, PyObject *by_value) {{\n\
+             \x20   PyObject *by_key = PyLong_FromSsize_t(by_index);\n\
+             \x20   if (by_key == NULL) return -1;\n\
+             \x20   int by_r = {type_name}_setitem(self, by_key, by_value);\n\
+             \x20   Py_DECREF(by_key);\n\
+             \x20   return by_r;\n}}"
+        );
+    }
 
     // a static type reaches `nb_bool` and `mp_length` through a sub-table, which
     // has to exist before the type that points at it
@@ -4843,11 +5038,11 @@ fn emit_dunder_adapters(module: &ModuleIr, class: &ClassIr, type_name: &str) -> 
             "static PyMappingMethods {type_name}_mapping = {{\n{mapping}}};"
         );
     }
-    if answers_slot(class, "__contains__") {
+    let sequence = sequence_fields(class, type_name);
+    if !sequence.is_empty() {
         let _ = writeln!(
             out,
-            "static PySequenceMethods {type_name}_sequence = {{\n\
-             \x20   .sq_contains = {type_name}_contains,\n}};"
+            "static PySequenceMethods {type_name}_sequence = {{\n{sequence}}};"
         );
     }
     // `am_aiter`, `am_anext` and `am_await` share one async sub-table
@@ -4887,6 +5082,36 @@ fn sub_table_fields(class: &ClassIr, type_name: &str, table: &str) -> String {
         }
     }
     out
+}
+
+/// the sequence halves [`SEQUENCE_HALVES`] this class fills
+fn sequence_halves(
+    class: &ClassIr,
+) -> impl Iterator<Item = (&'static str, &'static str, &'static str)> {
+    SEQUENCE_HALVES
+        .iter()
+        .filter(|(name, _, _, _)| fills_slot(class, name))
+        .map(|(_, slot, member, suffix)| (*slot, *member, *suffix))
+}
+
+/// the initializers for the sequence sub-table a static type points at
+fn sequence_fields(class: &ClassIr, type_name: &str) -> String {
+    let mut out = sub_table_fields(class, type_name, "tp_as_sequence");
+    for (_, member, suffix) in sequence_halves(class) {
+        let _ = writeln!(out, "    .{member} = {type_name}_{suffix},");
+    }
+    out
+}
+
+/// the sequence slots this class writes a method emptying, each named once
+fn emptied_sequence_slots(class: &ClassIr) -> Vec<&'static str> {
+    let mut members: Vec<&'static str> = Vec::new();
+    for (name, member) in EMPTIED_SEQUENCE_SLOTS {
+        if answers_slot(class, name) && !members.contains(member) {
+            members.push(member);
+        }
+    }
+    members
 }
 
 /// the initializers for the number sub-table a static type points at
@@ -4945,6 +5170,9 @@ fn dunder_slots(class: &ClassIr, type_name: &str) -> Vec<(String, String)> {
             )
         })
         .collect();
+    for (slot, _, suffix) in sequence_halves(class) {
+        slots.push((slot.to_string(), format!("{type_name}_{suffix}")));
+    }
     if COMPARISONS
         .iter()
         .any(|(name, _)| answers_slot(class, name))
@@ -4998,6 +5226,11 @@ fn dunder_initializers(class: &ClassIr, type_name: &str) -> String {
     }
     for (field, value) in dataclass_slots(class, type_name) {
         let _ = writeln!(out, "             .{field} = {value},");
+    }
+    // `__contains__` names the sequence table already; the halves of the mapping dunders
+    // still need it pointed at without one
+    if !answers_slot(class, "__contains__") && sequence_halves(class).next().is_some() {
+        let _ = writeln!(out, "             .tp_as_sequence = &{type_name}_sequence,");
     }
     // `__bool__` names the number table already; an arithmetic method without one
     // still needs it pointed at
@@ -9738,7 +9971,8 @@ fn emit_install_verification(module: &ModuleIr) -> String {
          \x20* alive at the one moment this can be asked, and `by_type` is what each class's\n\
          \x20* name ends up meaning */\n\
          static int by_verify_install(PyObject *dict, PyObject *const *by_twin,\n\
-         \x20                            PyObject *const *by_type) {\n",
+         \x20                            PyObject *const *by_type, PyObject *const *by_body,\n\
+         \x20                            PyObject *const *by_statement) {\n",
     );
     for (slot, class) in published_classes(module).iter().enumerate() {
         let type_name = class.type_name(module.name.dotted());
@@ -9784,7 +10018,7 @@ fn emit_install_verification(module: &ModuleIr) -> String {
              \x20       if (By_VerifyClass({}, dict, {}, by_type[{slot}], {type_name}_OBJ,\n\
              \x20                          by_twin[{slot}], {base_argument}, {},\n\
              \x20                          {type_name}_methods,\n\
-             \x20                          {settled_argument}, {}, {}) < 0) return -1;\n\
+             \x20                          {settled_argument}, {}, {}, by_body[{slot}], by_statement[{slot}]) < 0) return -1;\n\
              \x20   }}\n",
             c_string(module.name.dotted()),
             c_string(&class.name),
@@ -9964,12 +10198,9 @@ fn emit_module_init(module: &ModuleIr) -> String {
     // body too — the body is where the decorator's single application landed — and so is
     // a `@property`, which is one object the body folded its halves into. all three are
     // named by the one list, so this asks that rather than repeating it
-    let captures_bodies = module
-        .classes
-        .iter()
-        .any(|class| class.exported && !carried_off_the_body(class).0.is_empty());
+    let captures_bodies = module.classes.iter().any(|class| class.exported);
     let release_bodies = if captures_bodies {
-        "    Py_XDECREF(by_bodies);\n"
+        "    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n"
     } else {
         ""
     };
@@ -10126,17 +10357,20 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // now, and `By_RunModuleBody` says what that costs. borrowed from `by_bodies`,
         // which is held for the whole of this function
         // a decorated method and a `@property` take their values from here too, so the
-        // bodies are asked for through the one list that names all three
-        if twins
-            .iter()
-            .any(|class| !carried_off_the_body(class).0.is_empty())
-        {
-            let _ = writeln!(twin_init, "    PyObject *by_body[{classes}];");
+        // bodies are asked for through the one list that names all three. every class has
+        // one, because a body is also what tells a member the module rewrote after the
+        // statement from the one the statement wrote — see `By_CarryRewrittenMembers`
+        if !twins.is_empty() {
+            let _ = writeln!(
+                twin_init,
+                "    PyObject *by_body[{classes}];\n    PyObject *by_statement[{classes}];"
+            );
             for (slot, class) in twins.iter().enumerate() {
                 let _ = writeln!(
                     twin_init,
-                    "    by_body[{slot}] = By_ClassBody(by_bodies, {});",
-                    c_string(&class.name)
+                    "    by_body[{slot}] = By_ClassBody(by_bodies, {name});\n\
+                     \x20   by_statement[{slot}] = By_ClassBody(by_statements, {name});",
+                    name = c_string(&class.name)
                 );
             }
         }
@@ -10175,6 +10409,14 @@ fn emit_module_init(module: &ModuleIr) -> String {
             adopt_init,
             "    if (By_AdoptTwinAttributes(&by_twins) < 0) return -1;"
         );
+        for (slot, class) in twins.iter().enumerate() {
+            if class.decorators.is_empty() {
+                let _ = writeln!(
+                    adopt_init,
+                    "    if (By_CarryRewrittenMembers(by_body[{slot}], by_statement[{slot}], &by_twins, {slot}) < 0) return -1;"
+                );
+            }
+        }
         // the dataclass bookkeeping the adoption above leaves behind because it is spelled
         // as a dunder. it has no slot, so nothing about it can disagree with one — and it
         // is a `dataclasses.Field` dict rather than code, which is why it is carried
@@ -10246,7 +10488,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // is *inside* the block because the interpreted definitions are released on the
         // next line, and comparing against one is half of what it does
         let verify = if verifies_install(module) {
-            "\x20     if (by_remapped >= 0) by_remapped = by_verify_install(dict, by_twin, by_type);\n"
+            "\x20     if (by_remapped >= 0) by_remapped = by_verify_install(dict, by_twin, by_type, by_body, by_statement);\n"
         } else {
             ""
         };
@@ -10413,6 +10655,21 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 installed,
                 "    {{ static const char *const by_unpublished[] = {{{listed}, NULL}};\n\
                  \x20     if (By_UnpublishSlotNames({type_name}_OBJ, by_unpublished) < 0) return -1; }}"
+            );
+        }
+        // a spec cannot say a slot is empty, so the ones python empties are taken off the
+        // finished type before anything inherits them
+        let emptied = emptied_sequence_slots(class);
+        if !emptied.is_empty() && heap_type(module, class) {
+            let mut clears = String::new();
+            for member in emptied {
+                let _ = write!(clears, " by_sequence->{member} = NULL;");
+            }
+            let _ = writeln!(
+                installed,
+                "    {{ PySequenceMethods *by_sequence = ((PyTypeObject *){type_name}_OBJ)->tp_as_sequence;\n\
+                 \x20     if (by_sequence != NULL) {{{clears} }}\n\
+                 \x20     PyType_Modified((PyTypeObject *){type_name}_OBJ); }}"
             );
         }
         // the slot alone leaves `C.__hash__` to whatever `PyType_Ready` inferred from it
@@ -10666,8 +10923,9 @@ fn emit_module_init(module: &ModuleIr) -> String {
     // statement wrote *before* its own decorators, which only the capturing run keeps
     let run_body = if captures_bodies {
         "\x20   PyObject *by_bodies = NULL;\n\
+         \x20   PyObject *by_statements = NULL;\n\
          \x20   if (by_fallback_source[0] != '\\0') {\n\
-         \x20       by_bodies = By_RunModuleBody(&by_fallback, dict);\n\
+         \x20       by_bodies = By_RunModuleBody(&by_fallback, dict, &by_statements);\n\
          \x20       if (by_bodies == NULL) return -1;\n\
          \x20   }\n"
             .to_string()
@@ -12204,7 +12462,9 @@ mod tests {
     /// census would read as a build with no check in it — and then init returns having
     /// installed nothing
     fn refuses_whole_module(type_name: &str) -> String {
-        format!("if ({type_name} == NULL) {{\n    by_record_interpreted();\n    return 0;\n    }}")
+        format!(
+            "if ({type_name} == NULL) {{\n    by_record_interpreted();\n    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n    return 0;\n    }}"
+        )
     }
 
     fn appending_class() -> ClassIr {

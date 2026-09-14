@@ -950,6 +950,39 @@ except ValueError as e:
     traceback.print_exception(e)  # python underlines the failing call; compiled does not
 ```
 
+### an interpreted subclass that allocates its first instance itself
+
+a compiled class keeps an `int` field unboxed, and a field no `__init__` has set holds a
+value no `int` can have. the class's allocator writes that value, and a class made by a
+`class` statement or `type(...)` is given python's generic allocator instead of its
+base's, so the first instance the subclass builds through the compiled class — its
+inherited `__new__`, or a written `__new__` the compiled class publishes — hands the
+subclass that allocator. a subclass whose own `__new__` calls `object.__new__(cls)`
+directly, over a compiled base that wrote a `__new__` of its own, reaches the generic
+allocator without passing the compiled class, and until an instance has come through the
+compiled class an unset `int` field on what it built reads as `0`:
+
+```python
+class Made:
+    def __new__(cls) -> "Made":
+        return object.__new__(cls)
+
+    def __init__(self) -> None:
+        self.count = 1
+
+
+# from another module
+class Own(mod.Made):
+    def __new__(cls):
+        return object.__new__(cls)
+
+
+Own.__new__(Own).count  # python: AttributeError; compiled: 0
+```
+
+a subclass is not reached by anything the compiled class can run when it is made, so
+closing this would mean a test on every read of such a field
+
 ## debugging and inspection
 
 - **`#line` directives** in the generated C point at `.by` source. gdb, lldb,

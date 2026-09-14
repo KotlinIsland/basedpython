@@ -560,6 +560,17 @@ pub fn build_module(
         .collect();
 
     let properties = published_properties(db, model, suite, &layouts);
+    let method_names: HashMap<String, HashSet<String>> = suite
+        .iter()
+        .filter_map(|statement| match statement {
+            Stmt::ClassDef(class)
+                if layouts.contains_key(class.name.as_str()) && declared_slots(class).is_none() =>
+            {
+                Some((class.name.to_string(), class_method_names(class)))
+            }
+            _ => None,
+        })
+        .collect();
 
     // read off the source rather than off the lowered methods: a `__new__` python never
     // reaches the method table for — one carrying a decorator, one whose class declined —
@@ -588,6 +599,7 @@ pub fn build_module(
         constructs: &constructs,
         bases: &bases,
         properties: &properties,
+        method_names: &method_names,
         accessors: &accessors,
         language,
         recheck_licences,
@@ -1718,6 +1730,7 @@ fn lower_resume(
         constructs: unit.constructs,
         bases: unit.bases,
         properties: unit.properties,
+        method_names: unit.method_names,
         accessors: unit.accessors,
         db,
         model,
@@ -1775,6 +1788,7 @@ fn lower_resume(
         delegations: 0,
         contexts: 0,
         cleanups: Vec::new(),
+        drained_prelude: None,
     };
     lowering.block(&function.body)?;
 
@@ -2067,6 +2081,17 @@ fn prune_unbuildable(
         };
         let (weak_referencing, weak_referencing_methods) =
             weak_referencing_closure(module, &named_receivers);
+        // a class that keeps no list where python's keeps none either — `__slots__`
+        // declared throughout, a `data class` — raises the same `TypeError` on both sides,
+        // so only a layout taken from outside the module is a difference to decline for
+        let weakless: HashSet<String> = module
+            .classes
+            .iter()
+            .filter(|class| {
+                !module.keeps_weak_references(class) && module.takes_layout_from_outside(class)
+            })
+            .map(|class| class.name.clone())
+            .collect();
         let anchors = storage_anchors(module);
 
         let unbuildable = |function: &Function| -> Option<String> {
@@ -2074,7 +2099,7 @@ fn prune_unbuildable(
             // something in this module takes a weak reference at all — which most do not
             let takes_one = !weak_referencing.is_empty();
             let ours = if takes_one {
-                instance_registers(function)
+                instance_registers(function, &weakless)
             } else {
                 HashSet::new()
             };
@@ -2114,6 +2139,15 @@ fn prune_unbuildable(
                 if !classes.contains(class) {
                     return Some(format!("`{class}` declined, so it has no layout"));
                 }
+            }
+            if let Some(class) = function
+                .weak_referents
+                .iter()
+                .find(|class| weakless.contains(class.as_str()))
+            {
+                return Some(format!(
+                    "a weak reference is taken of an instance of `{class}`, {WEAKLESS}"
+                ));
             }
             for op in function.blocks.iter().flat_map(|block| &block.ops) {
                 match op {
@@ -2314,15 +2348,16 @@ fn prune_unbuildable(
 /// by qualified name and — for the ones emitted as methods — by the bare name a call
 /// through the object protocol writes
 ///
-/// an emitted instance cannot be the target of a weak reference, and the frontend refuses
-/// `weakref.ref(self)` where it is written. `logging.Handler.__init__` writes none: it
+/// an instance of a class [`ModuleIr::keeps_weak_references`] turns away cannot be the
+/// target of a weak reference, and a frame writing `weakref.ref(self)` over one records the
+/// class it can see. `logging.Handler.__init__` writes none: it
 /// calls `_addHandlerRef(self)`, whose body takes the reference, so nothing about
 /// `__init__`'s own body says it raises. the frontend marks the frame that writes the
 /// call, and this closes those marks over the module's calls — a frame that hands a value
 /// on to a marked one is one more function standing between an instance and the
 /// reference, so it is marked too. `prune_unbuildable` then declines whoever hands one of
-/// these an instance of ours, which is what keeps that instance's class interpreted, and
-/// an interpreted class is one a weak reference *can* be made of.
+/// these an instance of such a class, which is what keeps that instance's class
+/// interpreted, and an interpreted class is one a weak reference *can* be made of.
 ///
 /// what is out of reach stays out of reach: a caller in another module, and one that
 /// reaches a frame through a value rather than by a name. a call whose arguments are all
@@ -2497,10 +2532,13 @@ impl NamedReceivers<'_> {
     }
 }
 
+/// what an instance of a class [`ModuleIr::keeps_weak_references`] turns away is missing
+const WEAKLESS: &str = "whose emitted type keeps no weak-reference list: its layout is taken from a base outside the module";
+
 /// why a frame that hands an instance of ours to `target` cannot be built
 fn weakly_referenced(target: &str) -> String {
     format!(
-        "`{target}` takes a weak reference of what it is handed, and an emitted instance is its layout — a type spec adds no `__weakref__`, so no weak reference of one can be made"
+        "`{target}` takes a weak reference of what it is handed, and it is handed an instance {WEAKLESS}"
     )
 }
 
@@ -2513,12 +2551,18 @@ fn weakly_referenced(target: &str) -> String {
 /// instance, and that widening stands between `Handler.__init__`'s receiver and the
 /// `_addHandlerRef(self)` that would raise over it. so the two ops that only move a
 /// value along carry the answer with them
-fn instance_registers(function: &Function) -> HashSet<RegisterId> {
+fn instance_registers(function: &Function, weakless: &HashSet<String>) -> HashSet<RegisterId> {
     let mut ours: HashSet<RegisterId> = function
         .registers
         .iter()
         .enumerate()
-        .filter(|(_, register)| !register.ty.instance_classes().is_empty())
+        .filter(|(_, register)| {
+            register
+                .ty
+                .instance_classes()
+                .into_iter()
+                .any(|class| weakless.contains(class))
+        })
         .map(|(index, _)| RegisterId(index))
         .collect();
     // a move may stand anywhere among the blocks, including before the one that wrote
@@ -3539,6 +3583,10 @@ fn attribute_outgrows(
 /// every write reaches here, whatever statement made it, because the layout is the only
 /// place an attribute can go: one it never heard about is lowered as the dynamic form and
 /// lands nowhere at all
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site, and each set is a separate reason a write is not a field"
+)]
 fn init_fields(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
@@ -3546,6 +3594,7 @@ fn init_fields(
     class: &ast::StmtClassDef,
     layouts: &Layouts,
     defaults: &HashSet<String>,
+    shadowing: &HashSet<String>,
     mut fields: Vec<by_ir::function::FieldDecl>,
 ) -> Lowered<Vec<by_ir::function::FieldDecl>> {
     let methods = instance_methods(class);
@@ -3572,7 +3621,7 @@ fn init_fields(
     for (method, receiver) in &methods {
         for statement in walk(&method.body) {
             for (name, target) in receiver_writes(statement, receiver, Some(&class.name))? {
-                if properties.contains(&name) {
+                if properties.contains(&name) || shadowing.contains(&name) {
                     continue;
                 }
                 let ty = target
@@ -3634,7 +3683,10 @@ fn init_fields(
     let definite = definitely_assigned_attributes(&init.body, receiver, Some(&class.name));
     for statement in &init.body {
         for (name, _) in certain_writes(statement, receiver, Some(&class.name))? {
-            if properties.contains(&name) || fields.iter().any(|field| field.name == name) {
+            if properties.contains(&name)
+                || shadowing.contains(&name)
+                || fields.iter().any(|field| field.name == name)
+            {
                 continue;
             }
             let ty = widths
@@ -5742,9 +5794,18 @@ fn class_fields(
         // a plain class *is* its `__init__`: the fields are the attributes it gives
         // the instance, in the order it gives them, and a `__slots__` declares the
         // ones no assignment reached
+        // a class declaring `__slots__` has no dict to keep a shadowing attribute in, and
+        // python refuses a slot named for a method outright
+        let shadowing = if declared_slots(class).is_none() {
+            methods_through_bases(db, env, model, suite, class, layouts)?
+        } else {
+            HashSet::new()
+        };
         slot_fields(
             class,
-            init_fields(db, env, model, class, layouts, &defaults, inherited)?,
+            init_fields(
+                db, env, model, class, layouts, &defaults, &shadowing, inherited,
+            )?,
         )?
     };
     // a name the body binds *and* `__init__` assigns is a field whose class-level value
@@ -5921,6 +5982,61 @@ fn no_field_shadows_a_method(
         };
     }
     Ok(())
+}
+
+/// the names this class body binds with a `def` that is not part of a `property`
+///
+/// each is a non-data descriptor on the class, so an instance's own attribute of the same
+/// name answers before it — see [`methods_through_bases`]
+fn class_method_names(class: &ast::StmtClassDef) -> HashSet<String> {
+    class
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Stmt::FunctionDef(method)
+                if !method
+                    .decorator_list
+                    .iter()
+                    .any(|decorator| is_property_decorator(&decorator.expression)) =>
+            {
+                Some(mangled(Some(&class.name), method.name.as_str()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// the method names of `class` and of every base of it this module lays out
+///
+/// an instance attribute under one of these names is kept in the instance's dict rather
+/// than in a field. python answers an instance's own attribute before a function its class
+/// holds, and the dict is where both the lookup and a compiled call's shadow probe look for
+/// it first — a field's descriptor would stand in the class's dict under the method's name
+fn methods_through_bases(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    suite: &[Stmt],
+    class: &ast::StmtClassDef,
+    layouts: &Layouts,
+) -> Lowered<HashSet<String>> {
+    let mut names = HashSet::new();
+    let mut current = Some(class);
+    // a chain of classes is finite, and a cycle among them is not a program python runs
+    let mut visited: HashSet<&str> = HashSet::new();
+    while let Some(owner) = current
+        && visited.insert(owner.name.as_str())
+    {
+        names.extend(class_method_names(owner));
+        current = match base_class(db, env, model, suite, owner, layouts)? {
+            Some(ClassBase::InModule(name)) => suite.iter().find_map(|statement| match statement {
+                Stmt::ClassDef(candidate) if candidate.name.as_str() == name => Some(candidate),
+                _ => None,
+            }),
+            _ => None,
+        };
+    }
+    Ok(names)
 }
 
 /// whether a decorator makes a `property`, or one of the halves added to one
@@ -7678,6 +7794,7 @@ fn lower_function_with_receiver(
         constructs: unit.constructs,
         bases: unit.bases,
         properties: unit.properties,
+        method_names: unit.method_names,
         accessors: unit.accessors,
         db,
         model,
@@ -7705,6 +7822,7 @@ fn lower_function_with_receiver(
         delegations: 0,
         contexts: 0,
         cleanups: Vec::new(),
+        drained_prelude: None,
         captures: own_captures,
         owned_cells,
         environment: environment.as_ref().map(|environment| Closures {
@@ -7927,6 +8045,9 @@ struct Unit<'a> {
     /// the attributes each emitted class publishes as a `property` — see
     /// [`published_properties`]
     properties: &'a HashMap<String, HashSet<String>>,
+    /// the method names each emitted class with an instance dict binds, which an attribute
+    /// written on an instance is kept in that dict for — see [`methods_through_bases`]
+    method_names: &'a HashMap<String, HashSet<String>>,
     /// the class whose body the frame being lowered is written in, which is what
     /// decides how python mangles a private name — see [`mangled`]. a nested frame
     /// inherits it, because the mangling follows the source and not the receiver
@@ -8105,6 +8226,8 @@ enum Cleanup {
         previous: RegisterId,
         exception: RegisterId,
     },
+    /// a generator's parked loop iterator, let go of on the way out of the loop
+    Iterator(Place),
 }
 
 /// an assignment target with its location parts already evaluated
@@ -9688,6 +9811,9 @@ struct Lowering<'a, 'db> {
     /// the attributes each emitted class publishes as a `property` — see
     /// [`published_properties`]
     properties: &'a HashMap<String, HashSet<String>>,
+    /// the method names an instance attribute is kept in the dict for — see
+    /// [`Unit::method_names`]
+    method_names: &'a HashMap<String, HashSet<String>>,
     /// the `@property` halves each emitted class lowers a body for — see [`Accessors`]
     accessors: &'a Accessors,
     /// the closure environment this frame allocates, when it makes closures
@@ -9706,6 +9832,10 @@ struct Lowering<'a, 'db> {
     /// before it leaves — python does, and skipping it is a silent wrong answer rather
     /// than a missing optimization
     cleanups: Vec<Cleanup>,
+    /// the error target and generator-expression flag the *caller* of a drained generator
+    /// expression runs under, handed to the first clause of its comprehension — see
+    /// [`Lowering::drained_generator_expression`]
+    drained_prelude: Option<(Option<BlockId>, bool)>,
     /// the captures this frame reads through its receiver, when it *is* a closure
     captures: Option<Captured>,
     /// the shared cells this frame *owns*, in the environment it allocated itself
@@ -10067,6 +10197,12 @@ impl Lowering<'_, '_> {
                     .properties
                     .get(candidate)
                     .is_some_and(|published| published.contains(name))
+                // a name a method is bound under is kept in the instance dict, where the
+                // write lands the way python's does
+                || self
+                    .method_names
+                    .get(candidate)
+                    .is_some_and(|bound| bound.contains(name))
         };
         let mut current = class;
         // bounded by the class count, the way every base walk here is: a chain that
@@ -11408,6 +11544,7 @@ impl Lowering<'_, '_> {
             Cleanup::Handled { previous, .. } => self.builder.push(Op::PopHandled {
                 value: Value::Register(previous),
             }),
+            Cleanup::Iterator(parked) => self.clear_parked(&parked),
             Cleanup::Context {
                 manager,
                 is_async,
@@ -12586,6 +12723,7 @@ impl Lowering<'_, '_> {
         let natural_exit = self.builder.new_block();
         let after = self.builder.new_block();
         self.builder.terminate(Terminator::Goto(header));
+        let released = self.release_iterator_on_exit(&parked);
 
         self.builder.switch_to(header);
         let (live, _) = self.read_place(&parked)?;
@@ -12626,6 +12764,7 @@ impl Lowering<'_, '_> {
         self.loops.pop();
         result?;
         self.builder.terminate(Terminator::Goto(header));
+        self.end_iterator_release(released, &parked);
 
         // the end of the iteration is an exception, and only `StopAsyncIteration`
         // is one: anything else the step raised goes on out
@@ -12651,16 +12790,19 @@ impl Lowering<'_, '_> {
         });
 
         self.builder.switch_to(propagate);
+        self.clear_parked(&parked);
         self.builder.push(Op::Reraise {
             value: Value::Register(exception),
         });
         self.builder.terminate(Terminator::Unreachable);
 
         self.builder.switch_to(natural_exit);
+        self.clear_parked(&parked);
         let orelse = self.block(&node.orelse);
         orelse?;
         self.builder.terminate(Terminator::Goto(after));
         self.builder.switch_to(after);
+        self.clear_parked(&parked);
         Ok(())
     }
 
@@ -12734,6 +12876,7 @@ impl Lowering<'_, '_> {
         let natural_exit = self.builder.new_block();
         let after = self.builder.new_block();
         self.builder.terminate(Terminator::Goto(header));
+        let released = self.release_iterator_on_exit(&parked);
 
         self.builder.switch_to(header);
         // read the iterator back from wherever it was parked, every trip
@@ -12780,12 +12923,15 @@ impl Lowering<'_, '_> {
         self.loops.pop();
         result?;
         self.builder.terminate(Terminator::Goto(header));
+        self.end_iterator_release(released, &parked);
 
         self.builder.switch_to(natural_exit);
+        self.clear_parked(&parked);
         self.block(&node.orelse)?;
         self.builder.terminate(Terminator::Goto(after));
 
         self.builder.switch_to(after);
+        self.clear_parked(&parked);
         Ok(())
     }
 
@@ -13978,6 +14124,7 @@ impl Lowering<'_, '_> {
         let parked = self.park_iterator(iterator)?;
 
         let header = self.builder.new_block();
+        let resumed = self.builder.new_block();
         let forward = self.builder.new_block();
         let returned = self.builder.new_block();
         let finished = self.builder.new_block();
@@ -13985,25 +14132,32 @@ impl Lowering<'_, '_> {
         let result = self
             .builder
             .local(format!("$delegated{}", self.delegations), RType::OBJECT);
+        let sending = self
+            .builder
+            .local(format!("$delegatesend{}", self.delegations), RType::OBJECT);
         self.delegations += 1;
+        // the first trip sends `None`, as python's does: what `$sent` holds before the
+        // delegation has suspended answered an earlier suspension of this frame, and an
+        // iterator nothing has started yet refuses anything else
+        let nothing = self.widen_to_object(Value::None, &RType::NONE);
+        self.builder.assign(sending, nothing);
         self.builder.terminate(Terminator::Goto(header));
         // python drops the inner iterator the moment the delegation ends, whichever way it
         // ends, so one abandoned by an exception is finalized before any handler of this
         // frame runs rather than whenever the frame itself goes
         let enclosing = self.builder.set_error_target(Some(unwind));
 
-        // each trip: read the inner iterator back, send in whatever `send` gave us,
-        // and either forward a value or take the result
+        // each trip: read the inner iterator back, send in what is to be sent, and either
+        // forward a value or take the result
         self.builder.switch_to(header);
         let (inner, _) = self.read_place(&parked)?;
-        let sent = self.read_sent()?;
         let outcome = self
             .builder
             .temp(RType::Tuple(Box::from([RType::OBJECT, RType::BIT])));
         self.builder.push(Op::DelegateStep {
             dest: outcome,
             inner,
-            sent,
+            sent: Value::Register(sending),
         });
         let step = self.builder.temp(RType::OBJECT);
         self.builder.push(Op::TupleGet {
@@ -14033,6 +14187,12 @@ impl Lowering<'_, '_> {
                 iterator: &parked,
             }),
         )?;
+        self.builder.terminate(Terminator::Goto(resumed));
+
+        // after every later suspension, whatever `send` handed the frame goes on in
+        self.builder.switch_to(resumed);
+        let sent = self.read_sent()?;
+        self.builder.assign(sending, sent);
         self.builder.terminate(Terminator::Goto(header));
 
         self.builder.switch_to(returned);
@@ -14052,6 +14212,50 @@ impl Lowering<'_, '_> {
         self.builder.switch_to(finished);
         self.clear_parked(&parked);
         Ok((Value::Register(result), RType::OBJECT))
+    }
+
+    /// let go of a generator's parked loop iterator on every way out of the loop body
+    ///
+    /// python holds a loop's iterator on the frame's stack and drops it the moment the loop
+    /// is left, so an inner generator's `finally` runs before whatever follows a `break`, a
+    /// `return` or an exception's handler. an exception leaving the loop goes through a
+    /// block that lets go and raises on, and `return` meets the cleanup this pushes. the
+    /// two exits into the code after the loop let go where they land. a register-held
+    /// iterator needs none of it: it is released at its last use
+    ///
+    /// hands back the error target to restore and the unwinding block, which
+    /// [`Self::end_iterator_release`] takes once the body is lowered
+    fn release_iterator_on_exit(&mut self, parked: &Place) -> Option<(Option<BlockId>, BlockId)> {
+        if !matches!(parked, Place::Field { .. }) {
+            return None;
+        }
+        let unwind = self.builder.new_block();
+        let enclosing = self.builder.set_error_target(Some(unwind));
+        self.cleanups.push(Cleanup::Iterator(parked.clone()));
+        Some((enclosing, unwind))
+    }
+
+    /// close what [`Self::release_iterator_on_exit`] opened
+    fn end_iterator_release(
+        &mut self,
+        released: Option<(Option<BlockId>, BlockId)>,
+        parked: &Place,
+    ) {
+        let Some((enclosing, unwind)) = released else {
+            return;
+        };
+        self.cleanups.pop();
+        self.builder.set_error_target(enclosing);
+        let current = self.builder.current_block();
+        self.builder.switch_to(unwind);
+        let pending = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::FetchException { dest: pending });
+        self.clear_parked(parked);
+        self.builder.push(Op::Reraise {
+            value: Value::Register(pending),
+        });
+        self.builder.terminate(Terminator::Unreachable);
+        self.builder.switch_to(current);
     }
 
     /// let go of what a parked field holds, by writing `None` over it
@@ -16354,10 +16558,23 @@ impl Lowering<'_, '_> {
         accumulator: RegisterId,
         accumulator_ty: &RType,
     ) -> Lowered<()> {
+        let prelude = self.drained_prelude.take();
         let Some((generator, rest)) = generators.split_first() else {
             return self.comprehension_emit(kind, accumulator, accumulator_ty);
         };
+        // the caller's context for everything up to the first trip round the loop, and
+        // the generator expression's own from there — see `drained_prelude`
+        let restore = prelude.map(|(target, inside)| {
+            (
+                self.builder.set_error_target(target),
+                self.builder.in_generator_expression(inside),
+            )
+        });
         if generator.is_async {
+            if let Some((target, inside)) = restore {
+                self.builder.set_error_target(target);
+                self.builder.in_generator_expression(inside);
+            }
             return self.comprehension_loop_async(
                 generator,
                 rest,
@@ -16382,6 +16599,7 @@ impl Lowering<'_, '_> {
                 kind,
                 accumulator,
                 accumulator_ty,
+                restore,
             );
         }
 
@@ -16412,6 +16630,10 @@ impl Lowering<'_, '_> {
         let body = self.builder.new_block();
         let exit = self.builder.new_block();
         self.builder.terminate(Terminator::Goto(header));
+        if let Some((target, inside)) = restore {
+            self.builder.set_error_target(target);
+            self.builder.in_generator_expression(inside);
+        }
 
         self.builder.switch_to(header);
         self.builder.push(Op::IterNext {
@@ -16518,6 +16740,7 @@ impl Lowering<'_, '_> {
         kind: &Comprehension<'_>,
         accumulator: RegisterId,
         accumulator_ty: &RType,
+        restore: Option<(Option<BlockId>, bool)>,
     ) -> Lowered<()> {
         let CountedRange {
             callee,
@@ -16582,6 +16805,10 @@ impl Lowering<'_, '_> {
             cursor: None,
         });
         self.builder.terminate(Terminator::Goto(next));
+        if let Some((target, inside)) = restore {
+            self.builder.set_error_target(target);
+            self.builder.in_generator_expression(inside);
+        }
 
         self.builder.switch_to(header);
         let more = self.builder.temp(RType::BIT);
@@ -17409,31 +17636,25 @@ impl Lowering<'_, '_> {
         self.a_warning(node).map(Some)
     }
 
-    /// turn down a weak reference taken of an instance this module lays out
+    /// record a weak reference taken of what may be an instance this module lays out
     ///
-    /// an emitted instance *is* its layout, and a type spec adds no `__weakref__` — the
-    /// same fact that turns down a `__slots__` asking for one, and a body writing the
-    /// attribute. so `weakref.ref(self)` raises `TypeError` where python hands back a
-    /// reference, which is a wrong answer rather than a slower one. `_weakrefset.WeakSet`
-    /// is the shape: its `__init__` writes
-    ///
-    /// ```python
-    /// def _remove(item, selfref=ref(self)):
-    ///     ...
-    /// ```
-    ///
-    /// which snapshots a weak reference to the receiver where the `def` stands.
+    /// most emitted classes keep a weak-reference list, as python's do, and a weak
+    /// reference of one of their instances is simply made. the ones that cannot where python
+    /// can — a layout standing on a base from outside the module, see
+    /// [`ModuleIr::keeps_weak_references`] — raise `TypeError` where python hands back a
+    /// reference, and which classes those are is only settled once the module is built. so
+    /// this answers nothing: it records what [`prune_unbuildable`] asks.
     ///
     /// an argument this frame can already see as an emitted instance — an
     /// `RType::Instance` is exactly that, because a class from outside the module maps
-    /// to a plain object — is refused here and now.
+    /// to a plain object — is recorded by its class.
     ///
     /// where it cannot see one, the value still reached this frame from somewhere, and
     /// the frame that sent it is where the answer is. `logging` is the shape:
     /// `Handler.__init__` calls `_addHandlerRef(self)`, whose body writes the
     /// `weakref.ref` a whole function away from the receiver it would raise over. so the
     /// frame is marked instead, and [`prune_unbuildable`] carries the refusal back to
-    /// every caller in this module that hands it one of ours.
+    /// every caller in this module that hands it an instance of such a class.
     ///
     /// a caller in *another* module is out of that reach, and so is one that reaches
     /// this frame through a value rather than by its name
@@ -17442,16 +17663,16 @@ impl Lowering<'_, '_> {
     /// it, there is nothing for a caller to be blamed for and the frame is left alone.
     /// `multiprocessing.queues` is the shape: `Queue._start_thread` writes
     /// `weakref.ref(self._thread)`, and a `threading.Thread` is not a `Queue`
-    fn a_weak_reference(&mut self, node: &ast::ExprCall) -> Lowered<()> {
+    fn a_weak_reference(&mut self, node: &ast::ExprCall) {
         let written = match node.func.as_ref() {
             Expr::Attribute(attribute) => attribute.attr.as_str(),
             Expr::Name(name) => name.id.as_str(),
-            _ => return Ok(()),
+            _ => return,
         };
         // a syntactic filter first, for the reason [`Self::a_frame_walk`] gives: the
         // namespace lookup below parses the module it answers out of
         if !matches!(written, "ref" | "proxy") {
-            return Ok(());
+            return;
         }
         // and identity, not spelling: `ref` is a name a great many modules bind to
         // something of their own
@@ -17459,26 +17680,33 @@ impl Lowering<'_, '_> {
         if node.func.inferred_type(self.model)
             != ty_python_semantic::basedpython_weakref_symbol(self.db, env, written)
         {
-            return Ok(());
+            return;
         }
         let Some(referent) = node.arguments.args.first() else {
-            return Ok(());
+            return;
         };
-        let emitted = matches!(referent, Expr::Name(name) if matches!(
-            self.place(name.id.as_str()),
-            Some(Place::Register(id))
-                if matches!(self.register_type(id), Ok(RType::Instance { .. }))
-        )) || matches!(self.peek_type(referent), Ok(RType::Instance { .. }));
-        if emitted {
-            return Err(Decline::new(
-                "an emitted instance is its layout and a type spec adds no `__weakref__`, so a weak reference to one cannot be made",
-            ));
+        let held = match referent {
+            Expr::Name(name) => match self.place(name.id.as_str()) {
+                Some(Place::Register(id)) => self.register_type(id).ok(),
+                _ => None,
+            },
+            _ => None,
+        };
+        let emitted = match held {
+            Some(RType::Instance { class, .. }) => Some(class),
+            _ => match self.peek_type(referent) {
+                Ok(RType::Instance { class, .. }) => Some(class),
+                _ => None,
+            },
+        };
+        if let Some(class) = emitted {
+            self.builder.weakly_references(&class);
+            return;
         }
         if !self.could_be_one_of_ours(referent) {
-            return Ok(());
+            return;
         }
         self.builder.takes_a_weak_reference();
-        Ok(())
     }
 
     /// whether an instance of a class this module lays out could be standing where
@@ -17671,7 +17899,7 @@ impl Lowering<'_, '_> {
         if let Some(handled) = self.a_frame_walk(node)? {
             return Ok(handled);
         }
-        self.a_weak_reference(node)?;
+        self.a_weak_reference(node);
         // a `*` or a `**` in the arguments means the binding happens at runtime, so
         // the arguments become a tuple and a dict and python does the binding
         if node.arguments.args.iter().any(Expr::is_starred_expr)
@@ -17866,7 +18094,13 @@ impl Lowering<'_, '_> {
         let drained = self.builder.new_block();
         let previous = self.builder.set_error_target(Some(leaving));
         let around = self.builder.in_generator_expression(true);
+        // python evaluates the first iterable and takes its iterator where the generator
+        // expression is written, before the generator's frame exists, so what that raises
+        // is raised in this frame: no `<genexpr>` entry in its traceback, and a
+        // `StopIteration` not made into a `RuntimeError`
+        self.drained_prelude = Some((previous, around));
         let built = self.comprehension(&generator.generators, &Comprehension::List(&generator.elt));
+        self.drained_prelude = None;
         if built.is_ok() {
             self.builder.terminate(Terminator::Goto(drained));
         }
