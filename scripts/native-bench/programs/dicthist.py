@@ -18,7 +18,9 @@ def counted(words: list[str]) -> int:
             seen[word] = seen[word] + 1
         else:
             seen[word] = 1
-    return len(seen)
+    # the first word's count is read back so that a store dropped on the hit path
+    # changes the answer, which the number of distinct words alone would not
+    return len(seen) + seen[words[0]]
 
 
 def repeated(words: list[str], passes: int) -> int:
