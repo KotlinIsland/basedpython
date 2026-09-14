@@ -488,14 +488,6 @@ reason = "the public semantic model exposes its file identity and source locatio
 
 [[override]]
 lint = "hawk::dead_public"
-crate = "ty_python_semantic"
-item = "semantic_model::SemanticModel::<'db>::line_index"
-kind = "inherent_method"
-level = "expect"
-reason = "the public semantic model exposes its file identity and source locations"
-
-[[override]]
-lint = "hawk::dead_public"
 crate = "ruff_formatter"
 item = "formatter::Formatter::<'_, Context>::state_snapshot"
 kind = "inherent_method"

@@ -553,6 +553,9 @@ pub enum Op {
     AsyncContext {
         dest: RegisterId,
         manager: Value,
+        /// the `__aexit__` [`Self::BindExit`] looked up where the block was entered,
+        /// present exactly when `exception` is
+        exit: Option<Value>,
         exception: Option<Value>,
     },
     /// `__aiter__` on `src`, or `__anext__` when `next`
@@ -727,6 +730,15 @@ pub enum Op {
     },
     /// `with EXPR`: the manager's `__enter__`
     Enter { dest: RegisterId, manager: Value },
+    /// the `__exit__` — or with `is_async`, the `__aexit__` — a `with` calls on its way
+    /// out, looked up as the block is entered and before `__enter__` runs, which is where
+    /// python binds it: a class rebinding the method while the block runs does not
+    /// change which one the block calls
+    BindExit {
+        dest: RegisterId,
+        manager: Value,
+        is_async: bool,
+    },
     /// `__exit__`, on the normal path or with a live exception.
     ///
     /// `dest` is a bit: set when the exception was *suppressed*, so the caller
@@ -734,6 +746,8 @@ pub enum Op {
     ExitContext {
         dest: RegisterId,
         manager: Value,
+        /// what [`Self::BindExit`] looked up where the block was entered
+        exit: Value,
         /// the live exception, or `None` on the normal path
         exception: Value,
     },
@@ -1127,6 +1141,13 @@ pub enum Op {
     },
     /// put a fetched exception back, for an unmatched handler or a bare re-raise
     Reraise { value: Value },
+    /// put a fetched exception back as it leaves a generator's frame, which is a
+    /// re-raise that pep 479 has something to say about: a `StopIteration` becomes the
+    /// `RuntimeError` python makes of one, with the original as its cause.
+    ///
+    /// only a generator expression built at once needs it, where the loop the
+    /// generator's frame would have run stands in the frame around it instead
+    LeaveGenerator { value: Value },
     /// `iter(o)`
     ///
     /// `cursor` names a machine-integer register the loop keeps its position in, and
@@ -1158,6 +1179,20 @@ pub enum Op {
     /// whether an object register is null, as a bit. this is how an exhausted
     /// iterator is tested, so it must not itself be treated as an error
     IsNull { dest: RegisterId, src: Value },
+    /// the value an exception carries when it is a `StopIteration`, and null when `src` is
+    /// anything else. it asks and raises nothing: a delegation reads an exception thrown
+    /// in at its suspension through this, to tell the inner iterator finishing from an
+    /// error
+    StopIterationValue { dest: RegisterId, src: Value },
+    /// the ops that follow were written at `position`, until the next of these
+    ///
+    /// python names the line of the instruction that raised in a traceback, and one
+    /// statement can span several lines. so rather than a span per op, which every pass
+    /// would have to carry, a block records where its first op was written, and the
+    /// frontend writes one of these wherever the line changes after that. it does nothing,
+    /// reads nothing and cannot fail — codegen reads it back to say which line a failing
+    /// op's traceback entry names
+    Line { position: Position },
     /// the length of a sized object, as a tagged int
     Len { dest: RegisterId, src: Value },
     /// concatenate two strings
@@ -1308,6 +1343,7 @@ impl Op {
             | Self::ImportModule { .. }
             | Self::ImportFrom { .. }
             | Self::Enter { .. }
+            | Self::BindExit { .. }
             | Self::ExitContext { .. }
             | Self::DelegateIter { .. }
             | Self::DelegateStep { .. }
@@ -1343,9 +1379,12 @@ impl Op {
             | Self::Move { .. }
             | Self::RaiseObject { .. }
             | Self::Reraise { .. }
+            | Self::LeaveGenerator { .. }
             | Self::GetIter { .. }
             | Self::IterNext { .. }
             | Self::IsNull { .. }
+            | Self::StopIterationValue { .. }
+            | Self::Line { .. }
             | Self::Len { .. }
             | Self::StrConcat { .. }
             | Self::StrOfInt { .. }
@@ -1447,6 +1486,7 @@ impl Op {
             | Self::NewInstance { dest, .. }
             | Self::GetCell { dest, .. }
             | Self::Enter { dest, .. }
+            | Self::BindExit { dest, .. }
             | Self::ExitContext { dest, .. }
             | Self::DelegateIter { dest, .. }
             | Self::DelegateStep { dest, .. }
@@ -1471,6 +1511,7 @@ impl Op {
             | Self::GetIter { dest, .. }
             | Self::IterNext { dest, .. }
             | Self::IsNull { dest, .. }
+            | Self::StopIterationValue { dest, .. }
             | Self::StrConcat { dest, .. }
             | Self::TupleGet { dest, .. }
             | Self::Unpack { dest, .. }
@@ -1495,8 +1536,10 @@ impl Op {
             | Self::PopHandled { .. }
             | Self::Release { .. }
             | Self::Reraise { .. }
+            | Self::LeaveGenerator { .. }
             | Self::LicenceHolds { .. }
             | Self::RequireField { .. }
+            | Self::Line { .. }
             | Self::SetField { .. } => None,
         }
     }
@@ -1562,6 +1605,7 @@ impl Op {
             | Self::NewInstance { dest, .. }
             | Self::GetCell { dest, .. }
             | Self::Enter { dest, .. }
+            | Self::BindExit { dest, .. }
             | Self::ExitContext { dest, .. }
             | Self::DelegateIter { dest, .. }
             | Self::DelegateStep { dest, .. }
@@ -1586,6 +1630,7 @@ impl Op {
             | Self::GetIter { dest, .. }
             | Self::IterNext { dest, .. }
             | Self::IsNull { dest, .. }
+            | Self::StopIterationValue { dest, .. }
             | Self::StrConcat { dest, .. }
             | Self::TupleGet { dest, .. }
             | Self::Unpack { dest, .. }
@@ -1610,8 +1655,10 @@ impl Op {
             | Self::PopHandled { .. }
             | Self::Release { .. }
             | Self::Reraise { .. }
+            | Self::LeaveGenerator { .. }
             | Self::LicenceHolds { .. }
             | Self::RequireField { .. }
+            | Self::Line { .. }
             | Self::SetField { .. } => None,
         }
     }
@@ -1621,9 +1668,10 @@ impl Op {
         match self {
             Self::AsyncContext {
                 manager,
+                exit: Some(exit),
                 exception: Some(exception),
                 ..
-            } => vec![manager, exception],
+            } => vec![manager, exit, exception],
             Self::Assign { src, .. }
             | Self::Move { src, .. }
             | Self::Box { src, .. }
@@ -1640,6 +1688,12 @@ impl Op {
                 exception: None,
                 ..
             }
+            | Self::AsyncContext {
+                manager: src,
+                exit: None,
+                ..
+            }
+            | Self::BindExit { manager: src, .. }
             | Self::MatchAttr {
                 subject: src,
                 class: None,
@@ -1654,6 +1708,7 @@ impl Op {
             | Self::StrOfInt { value: src, .. }
             | Self::GetIter { src, .. }
             | Self::IsNull { src, .. }
+            | Self::StopIterationValue { src, .. }
             | Self::TupleGet { src, .. }
             | Self::Unpack { src, .. }
             | Self::ToTuple { src, .. } => vec![src],
@@ -1761,7 +1816,8 @@ impl Op {
             | Self::DeleteGlobal { .. }
             | Self::DeleteLocal { .. }
             | Self::LoadClass { .. }
-            | Self::ImportModule { .. } => Vec::new(),
+            | Self::ImportModule { .. }
+            | Self::Line { .. } => Vec::new(),
             Self::Warn {
                 message, category, ..
             } => match category {
@@ -1770,8 +1826,11 @@ impl Op {
             },
             Self::Enter { manager, .. } => vec![manager],
             Self::ExitContext {
-                manager, exception, ..
-            } => vec![manager, exception],
+                manager,
+                exit,
+                exception,
+                ..
+            } => vec![manager, exit, exception],
             Self::DelegateIter { src, .. } => vec![src],
             Self::DelegateStep { inner, sent, .. } => vec![inner, sent],
             Self::ArrayNew { items, .. } => items.iter().collect(),
@@ -1820,6 +1879,7 @@ impl Op {
                 None => vec![exception],
             },
             Self::Reraise { value }
+            | Self::LeaveGenerator { value }
             | Self::PushHandled { value, .. }
             | Self::PopHandled { value }
             | Self::Release { value, .. }
@@ -1837,9 +1897,10 @@ impl Op {
         match self {
             Self::AsyncContext {
                 manager,
+                exit: Some(exit),
                 exception: Some(exception),
                 ..
-            } => vec![manager, exception],
+            } => vec![manager, exit, exception],
             Self::Assign { src, .. }
             | Self::Move { src, .. }
             | Self::Box { src, .. }
@@ -1856,6 +1917,12 @@ impl Op {
                 exception: None,
                 ..
             }
+            | Self::AsyncContext {
+                manager: src,
+                exit: None,
+                ..
+            }
+            | Self::BindExit { manager: src, .. }
             | Self::MatchAttr {
                 subject: src,
                 class: None,
@@ -1870,6 +1937,7 @@ impl Op {
             | Self::StrOfInt { value: src, .. }
             | Self::GetIter { src, .. }
             | Self::IsNull { src, .. }
+            | Self::StopIterationValue { src, .. }
             | Self::TupleGet { src, .. }
             | Self::Unpack { src, .. }
             | Self::ToTuple { src, .. } => vec![src],
@@ -1979,7 +2047,8 @@ impl Op {
             | Self::DeleteGlobal { .. }
             | Self::DeleteLocal { .. }
             | Self::LoadClass { .. }
-            | Self::ImportModule { .. } => Vec::new(),
+            | Self::ImportModule { .. }
+            | Self::Line { .. } => Vec::new(),
             Self::Warn {
                 message, category, ..
             } => match category {
@@ -1988,8 +2057,11 @@ impl Op {
             },
             Self::Enter { manager, .. } => vec![manager],
             Self::ExitContext {
-                manager, exception, ..
-            } => vec![manager, exception],
+                manager,
+                exit,
+                exception,
+                ..
+            } => vec![manager, exit, exception],
             Self::DelegateIter { src, .. } => vec![src],
             Self::DelegateStep { inner, sent, .. } => vec![inner, sent],
             Self::ArrayNew { items, .. } => items.iter_mut().collect(),
@@ -2038,6 +2110,7 @@ impl Op {
                 None => vec![exception],
             },
             Self::Reraise { value }
+            | Self::LeaveGenerator { value }
             | Self::PushHandled { value, .. }
             | Self::PopHandled { value }
             | Self::Release { value, .. }
@@ -2045,6 +2118,17 @@ impl Op {
             | Self::RaiseWith { value, .. } => vec![value],
         }
     }
+}
+
+/// where lowered code was written — see [`Op::Line`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    /// the byte offset in the source
+    pub offset: u32,
+    /// whether the code runs as the body of a generator expression drained where it
+    /// stands, in the frame around it. python runs that body in a frame of its own, named
+    /// `<genexpr>`, and its traceback entry comes before the frame's
+    pub generator_expression: bool,
 }
 
 /// how a block ends. a block has exactly one, so control flow is total

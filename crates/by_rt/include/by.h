@@ -29,6 +29,9 @@
 /* `PyMarshal_ReadObjectFromString`, which reads the interpreted twin's code object
  * back. `Python.h` does not pull this one in */
 #include <marshal.h>
+/* `PyFrame_New`, which a traceback entry for a compiled frame is hung off. `Python.h`
+ * does not pull this one in either */
+#include <frameobject.h>
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
@@ -1317,7 +1320,17 @@ static PyObject *By_CreateModule(PyObject *spec, PyModuleDef *def) {
         return NULL;
     }
     found = By_RecordedModule(def);
-    if (found != NULL) return By_NewRef(found);
+    if (found != NULL) {
+        /* python forgets the state pointer of whatever module a create slot hands back —
+         * `PyModule_FromDefAndSpec2` writes NULL over it the moment this returns, 3.11
+         * through 3.15 — and the exec slot then allocates a fresh one. the state the module
+         * was given at its first import would be left behind at every import after it, so
+         * it is let go of here, just before python forgets it. this definition asks for no
+         * state, so nothing reads it in between */
+        void *state = PyModule_GetState(found);
+        if (state != NULL) PyMem_Free(state);
+        return By_NewRef(found);
+    }
     if (PyErr_Occurred()) return NULL;
     name = PyObject_GetAttrString(spec, "name");
     if (name == NULL) return NULL;
@@ -7739,6 +7752,36 @@ static inline PyObject *By_Format(PyObject *value, PyObject *spec, int conversio
  * state, a test of whether it matches, and a way to put it back when it does not
  */
 
+/* one place in a compiled function a traceback entry names: the file, the function and
+ * the line, and the code object built for them the first time an exception passed */
+typedef struct {
+    PyCodeObject *code;
+    const char *file;
+    const char *name;
+    int line;
+} ByTracebackSite;
+
+/* add the traceback entry python adds for a frame an exception is raised in or passes
+ * through
+ *
+ * a compiled function has no frame, so it hangs the entry off one made for the purpose: an
+ * empty code object naming the file, the function and the line, built once for the site
+ * and kept, and a new frame over it in the module's namespace. python's own entry is made
+ * the same way, from the frame it already has. a failure to build either leaves the
+ * exception as it was, one entry short */
+BY_COLD void By_TracebackHere(ByTracebackSite *site, PyObject *globals) {
+    PyObject *type, *value, *traceback;
+    PyErr_Fetch(&type, &value, &traceback);
+    if (site->code == NULL) site->code = PyCode_NewEmpty(site->file, site->name, site->line);
+    PyFrameObject *frame = site->code == NULL || globals == NULL
+                               ? NULL
+                               : PyFrame_New(PyThreadState_Get(), site->code, globals, NULL);
+    PyErr_Restore(type, value, traceback);
+    if (frame == NULL) return;
+    PyTraceBack_Here(frame);
+    Py_DECREF(frame);
+}
+
 /* take the pending exception. returns the value, or NULL when nothing is set */
 static inline PyObject *By_FetchException(void) {
     PyObject *type = NULL, *value = NULL, *traceback = NULL;
@@ -8523,9 +8566,10 @@ static inline PyObject *By_BuildForwarders(PyObject *module, PyObject *dict, PyM
     {
         /* the namespace is handed in rather than taken with `globals()`, because a
          * module that defines a function called `globals` would have made that name
-         * a local of the installer before the installer ever ran */
-        PyObject *args[2] = {natives, staging};
-        result = PyObject_Vectorcall(install, args, 2, NULL);
+         * a local of the installer before the installer ever ran. `BaseException` is
+         * handed in for the same reason: a forwarder catches it by that name */
+        PyObject *args[3] = {natives, staging, PyExc_BaseException};
+        result = PyObject_Vectorcall(install, args, 3, NULL);
     }
     Py_DECREF(install);
     Py_DECREF(natives);
@@ -9022,11 +9066,27 @@ static inline PyObject *By_TakeReturn(PyObject **returned) {
 #define BY_FRAME_COROUTINE 1
 #define BY_FRAME_ASYNC_GENERATOR 2
 
+/* what `$state` holds while the frame runs: its resume writes this before anything else,
+ * and a suspension or a finish writes over it. the frontend's `RUNNING_STATE` */
+#define BY_FRAME_RUNNING -2
+
+/* whether a frame's resume is on the stack right now */
+static inline int By_FrameRunning(ByTagged state) {
+    return state == By_ShortFrom(BY_FRAME_RUNNING);
+}
+
 /* what python calls this surface in a message it writes about one */
 static inline const char *By_FrameNoun(int frame) {
     return frame == BY_FRAME_COROUTINE         ? "coroutine"
            : frame == BY_FRAME_ASYNC_GENERATOR ? "async generator"
                                                : "generator";
+}
+
+/* refuse to resume a frame whose resume is on the stack, which is its own body asking */
+static inline int By_RefuseRunning(ByTagged state, int frame) {
+    if (BY_LIKELY(!By_FrameRunning(state))) return 0;
+    PyErr_Format(PyExc_ValueError, "%s already executing", By_FrameNoun(frame));
+    return -1;
 }
 
 /* refuse a resumption python itself would not have performed
@@ -9046,11 +9106,15 @@ static inline const char *By_FrameNoun(int frame) {
  * closing a spent coroutine is how a caller says it is done with it, and `throw` into
  * an *unstarted* coroutine is exempt too — the thrown exception simply propagates.
  *
+ * and a frame that is *running* can take nothing at all: its body is what is asking.
+ * every surface refuses that, before either of the two above.
+ *
  * `state` is 0 before the frame first runs and -1 once it has left for good, so
  * anything above 0 is a real suspension point with a `yield` to resume. `arg` is NULL
  * where the caller carries no sent value at all, as a `throw` does */
 static inline int By_RefuseResumption(ByTagged state, int frame, PyObject *arg) {
     if (!By_IsShort(state)) return 0;
+    if (By_RefuseRunning(state, frame) < 0) return -1;
     Py_ssize_t at = (Py_ssize_t)By_ShortValue(state);
     if (at == 0 && arg != NULL && arg != Py_None) {
         PyErr_Format(PyExc_TypeError, "can't send non-None value to a just-started %s",
@@ -9156,42 +9220,254 @@ static inline PyObject *By_StepGenerator(PyObject *self, PyObject **sent, PyObje
     return By_TakeReturn(returned);
 }
 
-/* `throw(exc)`: raise it *at the suspension point*.
+/* the argument count `throw` and `athrow` take, in the words python uses for both
  *
- * the exception goes into the state object's `$thrown` field, and the resumption
- * point raises it — which is what lets a `yield` inside `try` enter its own handler
- * rather than the exception appearing at the generator's entry.
+ * `throw` asks at the call. `athrow` asks when the awaitable it hands back is first
+ * stepped, because it keeps its arguments whole until then */
+static inline int By_CountThrowArguments(const char *method, Py_ssize_t nargs) {
+    if (nargs < 1) {
+        PyErr_Format(PyExc_TypeError, "%s expected at least 1 argument, got %zd", method, nargs);
+        return -1;
+    }
+    if (nargs > 3) {
+        PyErr_Format(PyExc_TypeError, "%s expected at most 3 arguments, got %zd", method, nargs);
+        return -1;
+    }
+    return 0;
+}
+
+/* the warning the `(type, value, traceback)` form carries, deprecated since 3.12 and
+ * given at the call on every surface */
+static inline int By_WarnThrowSignature(const char *method, Py_ssize_t nargs) {
+#if PY_VERSION_HEX >= 0x030C0000
+    if (nargs > 1
+        && PyErr_WarnFormat(PyExc_DeprecationWarning, 1,
+                            "the (type, exc, tb) signature of %s() is deprecated, use the "
+                            "single-arg signature instead.",
+                            method) < 0) {
+        return -1;
+    }
+#else
+    (void)method;
+    (void)nargs;
+#endif
+    return 0;
+}
+
+/* the exception `throw(type, value, traceback)` raises, built as python builds it
  *
- * rejecting the argument never reaches the frame at all, and python leaves a
- * generator resumable after a `throw` it refused to make sense of. a machine with no
- * suspension point does not reach the frame either, but a throw does finish it — see
- * below. otherwise it is the resumption that decides, and a body that catches what
- * was thrown leaves the machine usable.
+ * a class is instantiated from the value the way a `raise` of the pair would be: an
+ * instance of it is kept, a tuple is the argument list, anything else is the one
+ * argument. an instance takes no value of its own. a traceback given is the one the
+ * exception carries when it is raised at the suspension.
  *
- * the resumption raises instead of producing a value, so nothing rides in on `$sent`
- * — it is parked as `None` all the same, because leaving the last `send`'s value
- * standing is what would let a later `yield` read it again */
-static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject **thrown,
-                                   PyObject **returned, ByTagged *state, int frame,
-                                   PyObject *exception,
-                                   PyObject *(*resume)(PyObject *)) {
-    if (thrown == NULL) return NULL;
-    /* a spent coroutine refuses a throw for the same reason it refuses a send, and
-     * before the argument is examined: python answers the reuse rather than whatever
-     * was being thrown. no sent value rides in on a throw, so the just-started half
-     * cannot fire here */
-    if (By_RefuseResumption(*state, frame, NULL) < 0) return NULL;
-    PyObject *instance = NULL;
-    if (PyExceptionInstance_Check(exception)) {
-        instance = By_NewRef(exception);
-    } else if (PyExceptionClass_Check(exception)) {
-        instance = PyObject_CallNoArgs(exception);
-        if (instance == NULL) return NULL;
+ * the answer is a new reference to an exception instance, or NULL with the refusal set */
+static inline PyObject *By_ThrownException(PyObject *const *args, Py_ssize_t nargs) {
+    PyObject *type = args[0];
+    PyObject *value = nargs > 1 ? args[1] : NULL;
+    PyObject *traceback = nargs > 2 ? args[2] : NULL;
+    if (traceback == Py_None) {
+        traceback = NULL;
+    } else if (traceback != NULL && !PyTraceBack_Check(traceback)) {
+        PyErr_SetString(PyExc_TypeError, "throw() third argument must be a traceback object");
+        return NULL;
+    }
+    PyObject *instance;
+    if (PyExceptionClass_Check(type)) {
+        PyObject *built_type = By_NewRef(type);
+        PyObject *built = value == NULL ? NULL : By_NewRef(value);
+        PyObject *built_tb = traceback == NULL ? NULL : By_NewRef(traceback);
+        /* a constructor that raises leaves *its* exception in the triple, and that is
+         * what python throws in instead */
+        PyErr_NormalizeException(&built_type, &built, &built_tb);
+        Py_XDECREF(built_type);
+        Py_XDECREF(built_tb);
+        if (built == NULL || !PyExceptionInstance_Check(built)) {
+            Py_XDECREF(built);
+            if (!PyErr_Occurred()) PyErr_BadInternalCall();
+            return NULL;
+        }
+        instance = built;
+    } else if (PyExceptionInstance_Check(type)) {
+        if (value != NULL && value != Py_None) {
+            PyErr_SetString(PyExc_TypeError, "instance exception may not have a separate value");
+            return NULL;
+        }
+        instance = By_NewRef(type);
     } else {
         /* `throw` words this differently from `raise`, and names what it was given */
         PyErr_Format(PyExc_TypeError,
                      "exceptions must be classes or instances deriving from BaseException, not %s",
-                     Py_TYPE(exception)->tp_name);
+                     Py_TYPE(type)->tp_name);
+        return NULL;
+    }
+    if (traceback != NULL && PyException_SetTraceback(instance, traceback) < 0) {
+        Py_DECREF(instance);
+        return NULL;
+    }
+    return instance;
+}
+
+/* raise `instance` *at* a suspended frame's suspension point, taking the reference
+ *
+ * the exception goes into the state object's `$thrown` field, and the resumption point
+ * raises it — which is what lets a `yield` inside `try` enter its own handler rather than
+ * the exception appearing at the generator's entry.
+ *
+ * the resumption raises instead of producing a value, so nothing rides in on `$sent` — it
+ * is parked as `None` all the same, because leaving the last `send`'s value standing is
+ * what would let a later `yield` read it again */
+static inline PyObject *By_ResumeRaising(PyObject *self, PyObject **sent, PyObject **thrown,
+                                         PyObject **returned, ByTagged *state, int frame,
+                                         PyObject *instance, PyObject *(*resume)(PyObject *)) {
+    PyObject *old = *thrown;
+    *thrown = instance;
+    Py_XDECREF(old);
+    return By_StepGenerator(self, sent, returned, state, frame, Py_None, resume);
+}
+
+/* the attribute `name` of `o`, or NULL with nothing raised where it has none */
+static inline int By_OptionalAttr(PyObject *o, PyObject *name, PyObject **found) {
+#if PY_VERSION_HEX >= 0x030D0000
+    return PyObject_GetOptionalAttr(o, name, found);
+#else
+    return _PyObject_LookupAttr(o, name, found);
+#endif
+}
+
+/* python's `gen_close_iter`: close the iterator a frame is delegating to, before the frame
+ * itself is unwound. an iterator with no `close` has nothing to close, and one whose
+ * `close` cannot even be looked up is reported and passed over */
+static inline int By_CloseDelegate(PyObject *delegate) {
+    static PyObject *by_close = NULL;
+    PyObject *name = By_FixedName(&by_close, "close", 5);
+    if (name == NULL) return -1;
+    PyObject *close;
+    if (By_OptionalAttr(delegate, name, &close) < 0) {
+#if PY_VERSION_HEX >= 0x030E0000
+        PyErr_FormatUnraisable("Exception ignored while closing generator %R", delegate);
+#else
+        PyErr_WriteUnraisable(delegate);
+#endif
+        close = NULL;
+    }
+    if (close == NULL) return 0;
+    PyObject *result = PyObject_CallNoArgs(close);
+    Py_DECREF(close);
+    if (result == NULL) return -1;
+    Py_DECREF(result);
+    return 0;
+}
+
+/* `throw` into a frame suspended in `yield from` or `await`, which python hands to the
+ * iterator the frame is delegating to rather than to the frame. the answer is NULL with
+ * `*forwarded` 0 where the delegation has nothing to do with the throw and it is raised at
+ * the suspension as an ordinary one would be.
+ *
+ * `GeneratorExit` closes the inner iterator instead — except in an async generator, whose
+ * `aclose` has to let what it awaits work through the exit — and anything else goes to
+ * the inner iterator's own `throw`, with the arguments exactly as they came: the frame
+ * never makes an exception of them. an inner iterator with no `throw` leaves the throw to
+ * the frame. what the inner iterator yields back is what this `throw` answers, and the
+ * frame stays suspended where it was; what it raises back is raised at the suspension.
+ *
+ * the frame counts as running for as long as the inner iterator has it, so a body that
+ * reaches back into the frame is refused as python refuses it */
+static inline PyObject *By_ThrowIntoDelegate(PyObject *self, PyObject **sent, PyObject **thrown,
+                                             PyObject **returned, ByTagged *state, int frame,
+                                             PyObject *const *args, Py_ssize_t nargs,
+                                             PyObject *delegate,
+                                             PyObject *(*resume)(PyObject *), int *forwarded) {
+    static PyObject *by_throw = NULL;
+    ByTagged suspended = *state;
+    *forwarded = 1;
+    Py_INCREF(delegate);
+    if (frame != BY_FRAME_ASYNC_GENERATOR
+        && PyErr_GivenExceptionMatches(args[0], PyExc_GeneratorExit)) {
+        *state = By_ShortFrom(BY_FRAME_RUNNING);
+        int closed = By_CloseDelegate(delegate);
+        *state = suspended;
+        Py_DECREF(delegate);
+        if (closed == 0) {
+            *forwarded = 0;
+            return NULL;
+        }
+    } else {
+        PyObject *name = By_FixedName(&by_throw, "throw", 5);
+        PyObject *method = NULL;
+        if (name == NULL || By_OptionalAttr(delegate, name, &method) < 0) {
+            Py_DECREF(delegate);
+            return NULL;
+        }
+        if (method == NULL) {
+            Py_DECREF(delegate);
+            *forwarded = 0;
+            return NULL;
+        }
+        /* python hands a generator or coroutine of its own the three arguments without
+         * going through `throw`, so the deprecated form warns once, at the outermost
+         * frame, however deep the delegation. asking the method would warn again: that
+         * generator is handed the exception it would have built out of them instead */
+        PyObject *answer;
+        if (nargs > 1 && (PyGen_CheckExact(delegate) || PyCoro_CheckExact(delegate))) {
+            PyObject *instance = By_ThrownException(args, nargs);
+            if (instance == NULL) {
+                answer = NULL;
+            } else {
+                *state = By_ShortFrom(BY_FRAME_RUNNING);
+                answer = PyObject_CallOneArg(method, instance);
+                *state = suspended;
+                Py_DECREF(instance);
+            }
+        } else {
+            *state = By_ShortFrom(BY_FRAME_RUNNING);
+            answer = PyObject_Vectorcall(method, args, (size_t)nargs, NULL);
+            *state = suspended;
+        }
+        Py_DECREF(method);
+        Py_DECREF(delegate);
+        if (answer != NULL) return answer;
+    }
+    PyObject *raised = By_FetchException();
+    if (raised == NULL) return NULL;
+    return By_ResumeRaising(self, sent, thrown, returned, state, frame, raised, resume);
+}
+
+/* `throw(...)`: raise it *at the suspension point*.
+ *
+ * the arguments are `throw`'s own, already counted. a frame suspended in a delegation
+ * hands them to the iterator it delegates to — see `By_ThrowIntoDelegate` — and
+ * `delegate` is what says which iterator that is, where there is one: it answers NULL
+ * for a suspension at a `yield`, and is NULL itself for a frame with no delegations.
+ *
+ * otherwise python builds the exception out of the arguments before it asks anything of
+ * the frame, so a refusal of the arguments comes first, and it never reaches the frame at
+ * all: python leaves a generator resumable after a `throw` it refused to make sense of. a
+ * machine with no suspension point does not reach the frame either, but a throw does
+ * finish it — see below. otherwise it is the resumption that decides, and a body that
+ * catches what was thrown leaves the machine usable */
+static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject **thrown,
+                                   PyObject **returned, ByTagged *state, int frame,
+                                   PyObject *const *args, Py_ssize_t nargs,
+                                   PyObject *(*delegate)(PyObject *),
+                                   PyObject *(*resume)(PyObject *)) {
+    if (thrown == NULL) return NULL;
+    PyObject *inner = delegate != NULL && By_IsShort(*state) && By_ShortValue(*state) > 0
+                          ? delegate(self)
+                          : NULL;
+    if (inner != NULL) {
+        int forwarded;
+        PyObject *answer = By_ThrowIntoDelegate(self, sent, thrown, returned, state, frame,
+                                                args, nargs, inner, resume, &forwarded);
+        if (forwarded) return answer;
+    }
+    PyObject *instance = By_ThrownException(args, nargs);
+    if (instance == NULL) return NULL;
+    /* a spent coroutine refuses a throw for the same reason it refuses a send: python
+     * answers the reuse rather than whatever was being thrown. no sent value rides in on
+     * a throw, so the just-started half cannot fire here */
+    if (By_RefuseResumption(*state, frame, NULL) < 0) {
+        Py_DECREF(instance);
         return NULL;
     }
     /* a machine with no suspension point has nowhere to raise *at*: one that never
@@ -9215,23 +9491,83 @@ static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject *
         Py_DECREF(instance);
         return NULL;
     }
-    PyObject *old = *thrown;
-    *thrown = instance;
-    Py_XDECREF(old);
-    return By_StepGenerator(self, sent, returned, state, frame, Py_None, resume);
+    return By_ResumeRaising(self, sent, thrown, returned, state, frame, instance, resume);
 }
 
-/* `close()`: throw `GeneratorExit` in and accept the three legal outcomes.
+/* the value a `StopIteration` carries, or NULL where `exception` is not one
+ *
+ * a `StopIteration` raised at a frame's delegation is the delegation *finishing*: python
+ * takes its value as what `yield from` or `await` evaluates to, which is how an inner
+ * iterator's `throw` that ends it hands back a result */
+static inline PyObject *By_StopIterationValue(PyObject *exception) {
+    if (exception == NULL || !PyExceptionInstance_Check(exception)
+        || !PyErr_GivenExceptionMatches(exception, PyExc_StopIteration)) {
+        return NULL;
+    }
+    return By_NewRef(((PyStopIterationObject *)exception)->value);
+}
+
+/* report a close that failed while finalizing a frame, which has nowhere to raise
+ *
+ * 3.14 says what it was doing when it reports one; earlier versions give the object and
+ * nothing more */
+static inline void By_CloseUnraisable(PyObject *self) {
+#if PY_VERSION_HEX >= 0x030E0000
+    PyErr_FormatUnraisable("Exception ignored while closing generator %R", self);
+#else
+    PyErr_WriteUnraisable(self);
+#endif
+}
+
+/* python's `RuntimeWarning` for a coroutine dropped before it ever ran
+ *
+ * issued through `warnings.warn` rather than a C warning, because python's own hands the
+ * coroutine over as the warning's `source` — which is what `tracemalloc` hangs the
+ * allocation traceback off. the stack level is the frame the coroutine was dropped in,
+ * the same one python's `stacklevel=2` reaches from the helper it warns through. a failure
+ * to warn has nowhere to go and is reported as unraisable, as python reports it */
+static inline void By_WarnUnawaitedCoroutine(PyObject *coroutine, const char *qualname) {
+    PyObject *warnings = PyImport_ImportModule("warnings");
+    PyObject *warn = warnings == NULL ? NULL : PyObject_GetAttrString(warnings, "warn");
+    Py_XDECREF(warnings);
+    PyObject *message =
+        warn == NULL ? NULL : PyUnicode_FromFormat("coroutine '%s' was never awaited", qualname);
+    PyObject *level = message == NULL ? NULL : PyLong_FromLong(1);
+    PyObject *result = NULL;
+    if (level != NULL) {
+        PyObject *args[] = {message, PyExc_RuntimeWarning, level, coroutine};
+        result = PyObject_Vectorcall(warn, args, 4, NULL);
+    }
+    Py_XDECREF(level);
+    Py_XDECREF(message);
+    Py_XDECREF(warn);
+    if (result == NULL) {
+        PyErr_WriteUnraisable(coroutine);
+        return;
+    }
+    Py_DECREF(result);
+}
+
+/* `close()`: throw `GeneratorExit` in and accept the three legal outcomes, answering
+ * what `close()` returns.
  *
  * exhausting, re-raising `GeneratorExit`, or being already finished are all a clean
- * close. *yielding* is not — cpython calls that a `RuntimeError`.
+ * close. *yielding* is not — cpython calls that a `RuntimeError`, and the frame stays
+ * suspended where it yielded, so a later step resumes it and finalizing it closes it again.
  *
- * the `StopIteration` accepted below is the frame's own *end*, which is the only kind
- * that can still be standing here: one the body raised has already become a
- * `RuntimeError` on its way out, and comes back as the failure it is */
-static inline int By_CloseGenerator(PyObject *self, PyObject **sent, PyObject **thrown,
-                                   PyObject **returned, ByTagged *state, int frame,
-                                   PyObject *(*resume)(PyObject *)) {
+ * since 3.13 a frame that *returns* while it unwinds hands that value back as `close()`'s
+ * answer, and every other clean close answers `None`. the `StopIteration` the value rides
+ * on is the frame's own *end*, which is the only kind that can still be standing here: one
+ * the body raised has already become a `RuntimeError` on its way out, and comes back as the
+ * failure it is.
+ *
+ * the throw is python's own `GeneratorExit`, so a frame suspended in a delegation closes
+ * the iterator it delegates to first — see `By_ThrowIntoDelegate` */
+static inline PyObject *By_CloseGenerator(PyObject *self, PyObject **sent, PyObject **thrown,
+                                         PyObject **returned, ByTagged *state, int frame,
+                                         PyObject *(*delegate)(PyObject *),
+                                         PyObject *(*resume)(PyObject *)) {
+    if (By_RefuseRunning(*state, frame) < 0) return NULL;
     /* a machine with no suspension point has nothing to unwind, and closing one runs
      * no body at all — not even a `finally` the body has not reached yet. asking
      * `By_ThrowInto` would give the right answer for a finished frame and the wrong
@@ -9239,22 +9575,33 @@ static inline int By_CloseGenerator(PyObject *self, PyObject **sent, PyObject **
      * `GeneratorExit` it had no way to see */
     if (By_ShortValue(*state) <= 0) {
         By_FinishGenerator(state);
-        return 0;
+        Py_RETURN_NONE;
     }
-    PyObject *exit = PyObject_CallNoArgs(PyExc_GeneratorExit);
-    if (exit == NULL) return -1;
-    PyObject *result = By_ThrowInto(self, sent, thrown, returned, state, frame, exit, resume);
-    Py_DECREF(exit);
+    PyObject *exit = PyExc_GeneratorExit;
+    PyObject *result = By_ThrowInto(self, sent, thrown, returned, state, frame, &exit, 1,
+                                    delegate, resume);
     if (result != NULL) {
         Py_DECREF(result);
-        PyErr_SetString(PyExc_RuntimeError, "generator ignored GeneratorExit");
-        return -1;
+        PyErr_Format(PyExc_RuntimeError, "%s ignored GeneratorExit", By_FrameNoun(frame));
+        return NULL;
     }
-    if (PyErr_ExceptionMatches(PyExc_StopIteration) || PyErr_ExceptionMatches(PyExc_GeneratorExit)) {
+    if (PyErr_ExceptionMatches(PyExc_GeneratorExit)) {
         PyErr_Clear();
-        return 0;
+        Py_RETURN_NONE;
     }
-    return -1;
+    if (PyErr_ExceptionMatches(PyExc_StopIteration)) {
+#if PY_VERSION_HEX >= 0x030D0000
+        PyObject *ended = By_FetchException();
+        if (ended == NULL) return NULL;
+        PyObject *value = By_StopIterationValue(ended);
+        Py_DECREF(ended);
+        return value;
+#else
+        PyErr_Clear();
+        Py_RETURN_NONE;
+#endif
+    }
+    return NULL;
 }
 
 /* the parameter a keyword names, or -1 when none does.
@@ -9984,37 +10331,64 @@ static inline PyObject *By_AsyncEnter(ByProtocolSite *site, PyObject *manager) {
     return result;
 }
 
-static inline PyObject *By_AsyncExit(ByProtocolSite *site, PyObject *manager,
-                                     PyObject *exception) {
+/* the half of the protocol a `with` calls on its way out — `__exit__`, or `__aexit__`
+ * for `async with` — looked up as the block is entered, which is where python binds it
+ *
+ * the answer is what [`By_CallExit`] calls with. a plain function is kept as it is and
+ * called with the manager in front, as the lookup does for every call it makes; anything
+ * a descriptor handed back is already bound, and is kept in a one-element tuple so the
+ * exit knows not to add the manager. a function is never a tuple, so the two cannot be
+ * taken for each other */
+static inline PyObject *By_BindExit(ByProtocolSite *site, PyObject *manager, int is_async) {
+    static PyObject *by_exit = NULL;
     static PyObject *by_aexit = NULL;
-    PyObject *name;
+    static PyObject *by_enter = NULL;
+    static PyObject *by_aenter = NULL;
     if (manager == NULL) return NULL;
-    name = By_FixedName(&by_aexit, "__aexit__", 9);
+    PyObject *name = is_async ? By_FixedName(&by_aexit, "__aexit__", 9)
+                              : By_FixedName(&by_exit, "__exit__", 8);
     if (name == NULL) return NULL;
     int prepend;
     PyObject *method = By_ProtocolMethod(site, manager, name, &prepend);
     if (method == NULL) {
         if (PyErr_Occurred()) return NULL;
-        PyErr_Format(PyExc_TypeError,
-                     "'%s' object does not support the asynchronous context manager protocol "
-                     "(missed __aexit__ method)",
-                     Py_TYPE(manager)->tp_name);
+        PyObject *enter = is_async ? By_FixedName(&by_aenter, "__aenter__", 10)
+                                   : By_FixedName(&by_enter, "__enter__", 9);
+        if (enter == NULL) return NULL;
+        By_ManagerMissingExit(manager, is_async ? "asynchronous context manager" : "context manager",
+                              is_async ? "__aexit__" : "__exit__",
+                              _PyType_Lookup(Py_TYPE(manager), enter) != NULL);
         return NULL;
     }
+    if (prepend) return method;
+    PyObject *bound = PyTuple_Pack(1, method);
+    Py_DECREF(method);
+    return bound;
+}
+
+/* call what [`By_BindExit`] bound, with `args` holding the manager in its first slot */
+static inline PyObject *By_CallExit(PyObject *exit, PyObject **args, Py_ssize_t nargs) {
+    if (PyTuple_CheckExact(exit)) return By_CallProtocol(PyTuple_GET_ITEM(exit, 0), 0, args, nargs);
+    return By_CallProtocol(exit, 1, args, nargs);
+}
+
+/* the arguments an exit is called with: the exception's type, value and traceback, or three
+ * `None`s on the normal path. the traceback is a new reference where there is one */
+static inline void By_ExitArguments(PyObject *exception, PyObject **args) {
     int raising = exception != NULL && exception != Py_None
                   && PyExceptionInstance_Check(exception);
-    PyObject *type = raising ? (PyObject *)Py_TYPE(exception) : Py_None;
-    PyObject *value = raising ? exception : Py_None;
-    PyObject *traceback = Py_None;
-    PyObject *found = NULL;
-    if (raising) {
-        found = PyException_GetTraceback(exception);
-        if (found != NULL) traceback = found;
-    }
-    PyObject *args[4] = {manager, type, value, traceback};
-    PyObject *result = By_CallProtocol(method, prepend, args, 4);
-    Py_DECREF(method);
-    Py_XDECREF(found);
+    args[0] = raising ? (PyObject *)Py_TYPE(exception) : Py_None;
+    args[1] = raising ? exception : Py_None;
+    PyObject *found = raising ? PyException_GetTraceback(exception) : NULL;
+    args[2] = found != NULL ? found : Py_None;
+}
+
+static inline PyObject *By_AsyncExit(PyObject *manager, PyObject *exit, PyObject *exception) {
+    if (manager == NULL || exit == NULL) return NULL;
+    PyObject *args[4] = {manager};
+    By_ExitArguments(exception, args + 1);
+    PyObject *result = By_CallExit(exit, args, 4);
+    if (args[3] != Py_None) Py_DECREF(args[3]);
     return result;
 }
 
@@ -10037,39 +10411,16 @@ static inline PyObject *By_Enter(ByProtocolSite *site, PyObject *manager) {
  * returns 1 when the exception was *suppressed*, 0 when it was not, and -1 when
  * `__exit__` itself raised. the caller re-raises on 0, which is what makes
  * `with` transparent to an exception it does not swallow */
-static inline int By_ExitContext(ByProtocolSite *site, PyObject *manager,
-                                 PyObject *exception) {
-    static PyObject *by_exit = NULL;
-    PyObject *name;
-    if (manager == NULL) return -1;
-    name = By_FixedName(&by_exit, "__exit__", 8);
-    if (name == NULL) return -1;
-    int prepend;
-    PyObject *method = By_ProtocolMethod(site, manager, name, &prepend);
-    if (method == NULL) {
-        if (!PyErr_Occurred()) {
-            PyErr_Format(PyExc_TypeError,
-                         "'%s' object does not support the context manager protocol "
-                         "(missed __exit__ method)",
-                         Py_TYPE(manager)->tp_name);
-        }
-        return -1;
-    }
+static inline int By_ExitContext(PyObject *manager, PyObject *exit, PyObject *exception) {
+    if (manager == NULL || exit == NULL) return -1;
     /* `None` is the normal path just as NULL is: the frontend hands over a boxed
        `None`, and reading a traceback off it would be a wild pointer */
     int raising = exception != NULL && exception != Py_None
                   && PyExceptionInstance_Check(exception);
-    PyObject *type = raising ? (PyObject *)Py_TYPE(exception) : Py_None;
-    PyObject *value = raising ? exception : Py_None;
-    PyObject *traceback = Py_None;
-    if (raising) {
-        PyObject *found = PyException_GetTraceback(exception);
-        if (found != NULL) traceback = found;
-    }
-    PyObject *args[4] = {manager, type, value, traceback};
-    PyObject *result = By_CallProtocol(method, prepend, args, 4);
-    Py_DECREF(method);
-    if (traceback != Py_None) Py_DECREF(traceback);
+    PyObject *args[4] = {manager};
+    By_ExitArguments(exception, args + 1);
+    PyObject *result = By_CallExit(exit, args, 4);
+    if (args[3] != Py_None) Py_DECREF(args[3]);
     if (result == NULL) return -1;
     int suppressed = PyObject_IsTrue(result);
     Py_DECREF(result);
@@ -10139,6 +10490,115 @@ static int By_GeneratorIsCoroutine(PyObject *generator) {
     return (flags & CO_ITERABLE_COROUTINE) != 0;
 }
 
+/* the iterator `__await__` hands back for a compiled coroutine: python's
+ * `coroutine_wrapper`
+ *
+ * a coroutine is awaitable and is not an iterator — `next(coro)` is a `TypeError` — but
+ * pep 492 says `__await__` owes an iterator, so it hands back this object wrapped
+ * around the coroutine. every step forwards: the coroutine's send slot for `__next__`
+ * and for a caller that sends, and its own `send`, `throw` and `close` methods by name.
+ *
+ * an `await` compiled here never builds one — see `By_AwaitIter` — and neither does
+ * python's own for its own coroutines. it exists for the other callers of `__await__`:
+ * an interpreted `await`, and anything that asks for the method directly */
+typedef struct {
+    PyObject_HEAD
+    PyObject *coroutine;
+} ByCoroutineWrapper;
+
+static void By_CoroutineWrapper_dealloc(PyObject *self) {
+    PyObject_GC_UnTrack(self);
+    Py_XDECREF(((ByCoroutineWrapper *)self)->coroutine);
+    Py_TYPE(self)->tp_free(self);
+}
+
+static int By_CoroutineWrapper_traverse(PyObject *self, visitproc visit, void *arg) {
+    Py_VISIT(((ByCoroutineWrapper *)self)->coroutine);
+    return 0;
+}
+
+static PySendResult By_CoroutineWrapper_send_slot(PyObject *self, PyObject *arg,
+                                                  PyObject **result) {
+    PyObject *coroutine = ((ByCoroutineWrapper *)self)->coroutine;
+    return Py_TYPE(coroutine)->tp_as_async->am_send(coroutine, arg, result);
+}
+
+/* python's `gen_iternext`: a return of `None` ends the iteration with no exception at all,
+ * and any other return value rides out on the `StopIteration` */
+static PyObject *By_CoroutineWrapper_next(PyObject *self) {
+    PyObject *result = NULL;
+    PySendResult outcome = By_CoroutineWrapper_send_slot(self, Py_None, &result);
+    if (outcome != PYGEN_RETURN) return result;
+    if (result != Py_None) By_RaiseWith(PyExc_StopIteration, result);
+    Py_DECREF(result);
+    return NULL;
+}
+
+static PyObject *By_CoroutineWrapper_send(PyObject *self, PyObject *arg) {
+    PyObject *name = PyUnicode_InternFromString("send");
+    if (name == NULL) return NULL;
+    PyObject *result = PyObject_CallMethodOneArg(((ByCoroutineWrapper *)self)->coroutine, name, arg);
+    Py_DECREF(name);
+    return result;
+}
+
+static PyObject *By_CoroutineWrapper_throw(PyObject *self, PyObject *const *args,
+                                           Py_ssize_t nargs) {
+    if (By_CountThrowArguments("throw", nargs) < 0) return NULL;
+    PyObject *name = PyUnicode_InternFromString("throw");
+    if (name == NULL) return NULL;
+    PyObject *forwarded[4] = {((ByCoroutineWrapper *)self)->coroutine};
+    for (Py_ssize_t i = 0; i < nargs; i++) forwarded[i + 1] = args[i];
+    PyObject *result = PyObject_VectorcallMethod(name, forwarded, (size_t)nargs + 1, NULL);
+    Py_DECREF(name);
+    return result;
+}
+
+static PyObject *By_CoroutineWrapper_close(PyObject *self, PyObject *unused) {
+    (void)unused;
+    PyObject *name = PyUnicode_InternFromString("close");
+    if (name == NULL) return NULL;
+    PyObject *result = PyObject_CallMethodNoArgs(((ByCoroutineWrapper *)self)->coroutine, name);
+    Py_DECREF(name);
+    return result;
+}
+
+static PyMethodDef By_CoroutineWrapper_methods[] = {
+    {"send", By_CoroutineWrapper_send, METH_O, NULL},
+    {"throw", (PyCFunction)(void (*)(void))By_CoroutineWrapper_throw, METH_FASTCALL, NULL},
+    {"close", By_CoroutineWrapper_close, METH_NOARGS, NULL},
+    {NULL, NULL, 0, NULL},
+};
+
+static PyAsyncMethods By_CoroutineWrapper_async = {
+    .am_send = By_CoroutineWrapper_send_slot,
+};
+
+static PyTypeObject By_CoroutineWrapperType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "by.coroutine_wrapper",
+    .tp_basicsize = sizeof(ByCoroutineWrapper),
+    .tp_itemsize = 0,
+    .tp_dealloc = By_CoroutineWrapper_dealloc,
+    .tp_as_async = &By_CoroutineWrapper_async,
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_DISALLOW_INSTANTIATION,
+    .tp_traverse = By_CoroutineWrapper_traverse,
+    .tp_iter = PyObject_SelfIter,
+    .tp_iternext = By_CoroutineWrapper_next,
+    .tp_methods = By_CoroutineWrapper_methods,
+};
+
+/* `__await__` of every compiled coroutine, one function for all of them so that an await
+ * can recognise one by its slot */
+static PyObject *By_CoroutineAwait(PyObject *coroutine) {
+    if (PyType_Ready(&By_CoroutineWrapperType) < 0) return NULL;
+    ByCoroutineWrapper *wrapper = PyObject_GC_New(ByCoroutineWrapper, &By_CoroutineWrapperType);
+    if (wrapper == NULL) return NULL;
+    wrapper->coroutine = By_NewRef(coroutine);
+    PyObject_GC_Track(wrapper);
+    return (PyObject *)wrapper;
+}
+
 /* the iterator a delegation drives: `iter(x)` for `yield from`, `x.__await__()` for
  * `await`. keeping them apart matters — awaiting an ordinary iterable is an error
  *
@@ -10164,6 +10624,9 @@ static inline PyObject *By_AwaitIter(PyObject *awaitable) {
     }
     type = Py_TYPE(awaitable);
     getter = type->tp_as_async == NULL ? NULL : type->tp_as_async->am_await;
+    /* a compiled coroutine is driven through its own send slot, as python drives its own
+     * coroutines, rather than through the wrapper `__await__` would build around it */
+    if (getter == By_CoroutineAwait) return By_NewRef(awaitable);
     if (getter == NULL) {
         /* `_PyCoro_GetAwaitableIter` raises this, and it is core-only — so the wording
          * is carried, and 3.14 rewrote it */

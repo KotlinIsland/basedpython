@@ -171,6 +171,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::GetCell { .. }
         | Op::RaiseWith { .. }
         | Op::Enter { .. }
+        | Op::BindExit { .. }
         | Op::ExitContext { .. }
         | Op::DelegateIter { .. }
         | Op::DelegateStep { .. }
@@ -191,10 +192,13 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::SetItem { .. }
         | Op::Format { .. } => true,
 
-        // a null test reads a pointer, and taking or matching a pending exception
+        // a null test reads a pointer, a `StopIteration`'s value is a field of it, a
+        // position is not an operation at all, and taking or matching a pending exception
         // touches only the thread state — none of them can fail
         // a field read or write is a struct access at a known offset
         Op::IsNull { .. }
+        | Op::StopIterationValue { .. }
+        | Op::Line { .. }
         | Op::FetchException { .. }
         | Op::ExceptionMatches { .. }
         | Op::GetField { .. }
@@ -238,7 +242,10 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         // a raise always leaves through the error path, and so does a finish — it
         // hands back nothing, so it takes the same exit even though no exception
         // is set
-        Op::Reraise { .. } | Op::RaiseObject { .. } | Op::FinishFrame { .. } => true,
+        Op::Reraise { .. }
+        | Op::LeaveGenerator { .. }
+        | Op::RaiseObject { .. }
+        | Op::FinishFrame { .. } => true,
 
         // the container protocol reaches `__contains__`, or iterates
         Op::Contains { .. } => true,

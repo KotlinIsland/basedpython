@@ -704,11 +704,21 @@ impl Verifier<'_> {
             Op::AsyncContext {
                 dest,
                 manager,
+                exit,
                 exception,
             } => {
                 self.expect(block, manager, &RType::OBJECT, "an async context manager");
                 if let Some(exception) = exception {
                     self.expect(block, exception, &RType::OBJECT, "an async context manager");
+                }
+                if let Some(exit) = exit {
+                    self.expect(block, exit, &RType::OBJECT, "an async context manager");
+                }
+                if exit.is_some() != exception.is_some() {
+                    self.error(
+                        Some(block),
+                        "an `__aexit__` call names an exit and an exception together or neither",
+                    );
                 }
                 self.expect_dest(block, *dest, &RType::OBJECT, "an async context manager");
             }
@@ -1641,7 +1651,7 @@ impl Verifier<'_> {
                     self.expect(block, cause, &RType::OBJECT, "a raise cause");
                 }
             }
-            Op::Reraise { value } => {
+            Op::Reraise { value } | Op::LeaveGenerator { value } => {
                 self.expect(block, value, &RType::OBJECT, "a re-raise");
             }
             Op::GetIter { dest, src, cursor } => {
@@ -1661,6 +1671,12 @@ impl Verifier<'_> {
             Op::IsNull { dest, src } => {
                 self.expect(block, src, &RType::OBJECT, "a null test");
                 self.expect_dest(block, *dest, &RType::BIT, "a null test");
+            }
+            // a position reads and writes nothing, so there is nothing to check
+            Op::Line { .. } => {}
+            Op::StopIterationValue { dest, src } => {
+                self.expect(block, src, &RType::OBJECT, "a `StopIteration`'s value");
+                self.expect_dest(block, *dest, &RType::OBJECT, "a `StopIteration`'s value");
             }
             Op::Len { dest, src } => {
                 // a length is defined on anything with `__len__`, so the operand
@@ -1740,12 +1756,18 @@ impl Verifier<'_> {
                 self.expect(block, manager, &RType::OBJECT, "a context manager");
                 self.expect_dest(block, *dest, &RType::OBJECT, "`__enter__`");
             }
+            Op::BindExit { dest, manager, .. } => {
+                self.expect(block, manager, &RType::OBJECT, "a context manager");
+                self.expect_dest(block, *dest, &RType::OBJECT, "a context exit");
+            }
             Op::ExitContext {
                 dest,
                 manager,
+                exit,
                 exception,
             } => {
                 self.expect(block, manager, &RType::OBJECT, "a context manager");
+                self.expect(block, exit, &RType::OBJECT, "a context exit");
                 self.expect(block, exception, &RType::OBJECT, "a context exit");
                 self.expect_dest(block, *dest, &RType::BIT, "`__exit__`");
             }
@@ -2001,6 +2023,7 @@ mod tests {
             kwarg: false,
             range: None,
             name: "add".to_string(),
+            frame_name: "add".to_string(),
             param_count: 2,
             ret: RType::INT,
             convention: CallConvention::NativeInfallible,
@@ -2192,6 +2215,7 @@ mod tests {
             kwarg: false,
             range: None,
             name: "cond".to_string(),
+            frame_name: "cond".to_string(),
             param_count: 2,
             ret: RType::INT,
             convention: CallConvention::NativeInfallible,
@@ -2244,6 +2268,7 @@ mod tests {
             kwarg: false,
             range: None,
             name: "cond".to_string(),
+            frame_name: "cond".to_string(),
             param_count: 2,
             ret: RType::INT,
             convention: CallConvention::NativeInfallible,
@@ -2292,6 +2317,7 @@ mod tests {
             kwarg: false,
             range: None,
             name: "loop".to_string(),
+            frame_name: "loop".to_string(),
             param_count: 2,
             ret: RType::INT,
             convention: CallConvention::NativeInfallible,
@@ -2396,6 +2422,7 @@ mod tests {
             kwarg: false,
             range: None,
             name: "pick".to_string(),
+            frame_name: "pick".to_string(),
             param_count: 2,
             ret: RType::INT,
             convention: CallConvention::NativeInfallible,

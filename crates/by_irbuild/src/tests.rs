@@ -974,6 +974,52 @@ def f(rows: list[list[int]]) -> object:
 }
 
 #[test]
+fn a_generator_expression_is_built_at_once_only_for_a_draining_builtin() {
+    // `list` runs the generator to its end before it answers, so while the name is the
+    // builtin the loop runs in this frame — with a `StopIteration` leaving it converted as
+    // it would leave the generator's frame. `sum` is handed the generator itself
+    with_source(
+        "\
+def drained(xs: list[int]) -> list[int]:
+    return list(x * 2 for x in xs)
+
+def summed(xs: list[int]) -> int:
+    return sum(x * 2 for x in xs)
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let function = |name: &str| {
+                module
+                    .all_functions()
+                    .find(|function| function.name == name)
+                    .expect("the function is compiled")
+            };
+            let makes_the_generator = |op: &Op| {
+                matches!(op, Op::CallNative { callee, .. }
+                    if callee.starts_with(crate::closures::GENERATOR_EXPRESSION))
+            };
+            let drained = function("drained");
+            assert!(
+                has_op(drained, |op| matches!(op, Op::BuildList { .. }))
+                    && has_op(drained, |op| matches!(op, Op::LeaveGenerator { .. }))
+                    && has_op(drained, makes_the_generator),
+                "{}",
+                print_function(drained)
+            );
+            let summed = function("summed");
+            assert!(
+                !has_op(summed, |op| matches!(op, Op::BuildList { .. }))
+                    && has_op(summed, makes_the_generator),
+                "{}",
+                print_function(summed)
+            );
+        },
+    );
+}
+
+#[test]
 fn a_comprehension_clause_reading_a_variable_before_it_is_bound_declines() {
     // `y` in the first clause's own iterable is the enclosing frame's, and in the second
     // clause's iterable it is the comprehension's, which nothing has bound yet: python
@@ -1784,6 +1830,54 @@ class Tagged:
             && reason.contains("both a class-level constant and a field")),
         "{reasons:?}"
     );
+}
+
+#[test]
+fn a_method_that_is_also_an_attribute_the_instance_is_given_declines() {
+    // python answers an instance's own attribute before a function its class holds under
+    // the same name, so `json.encoder.JSONEncoder` reads the `default` its constructor was
+    // handed where there was one and the method where there was not. a layout field and a
+    // method table cannot both stand under one name, and a method call reaches the method
+    // by the class alone — so either the call or the read would answer the other one
+    for source in [
+        "\
+class Encoder:
+    def __init__(self, default: object = None) -> None:
+        if default is not None:
+            self.default = default
+
+    def default(self, o: object) -> object:
+        return o
+",
+        "\
+class Base:
+    def read(self) -> int:
+        return 1
+
+
+class Reader(Base):
+    def __init__(self) -> None:
+        self.read = len
+",
+        "\
+class Base:
+    def __init__(self) -> None:
+        self.read = len
+
+
+class Reader(Base):
+    def read(self) -> int:
+        return 1
+",
+    ] {
+        let reasons = declines(source);
+        assert!(
+            reasons
+                .iter()
+                .any(|(_, reason)| reason.contains("is both a method and an attribute")),
+            "{reasons:?}"
+        );
+    }
 }
 
 #[test]

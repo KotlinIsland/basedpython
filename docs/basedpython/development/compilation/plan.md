@@ -22,7 +22,7 @@ short for that reason:
 | stack depth on deep recursion                   | python's limit                       | the C stack's                      | native frames are not python frames                                                   |
 | `f.__code__` for a compiled function            | the definition's                     | the forwarder's                    | the module publishes a `function` that forwards to the native, and that is its code   |
 | `f.__wrapped__` for a compiled function         | absent                               | the interpreted definition         | which is where `inspect` reads the signature, the source and the file from            |
-| a traceback through a compiled function         | the module's file and the line       | `<by native forwarder>`            | the frame that exists is the forwarder's; the native has none                         |
+| a traceback through a compiled function         | the module's file and the line       | the same, with no column positions | each entry hangs off a frame made for it, with no bytecode behind it                  |
 | `is` against a compiled function's own name     | identity                             | `False` where the body captured it | the module body runs before the compiled name replaces it, and what it captured stays |
 | a `data class` constructor's argument types     | unchecked (unless `--soundness all`) | checked                            | a compiled field is unboxed, so the check is mandatory                                |
 | assigning a method onto a class from outside it | works                                | `TypeError` at the assignment      | an emitted class is sealed unless the source decorates it                             |
@@ -49,8 +49,10 @@ answered quietly rather than raising. cpython offers no way to make a `PyCFuncti
 bind, so a module publishes a real `function` that forwards to the native instead.
 it answers for the definition about everything it is asked — its name, docstring,
 module, defaults, annotations, and, through `__wrapped__`, its signature, source and
-file — and what is left over is the three rows above: its own code object, the
-`__wrapped__` that carries the rest, and the frame a traceback finds
+file — and what is left over is the two rows above: its own code object, and the
+`__wrapped__` that carries the rest. the forwarder's frame is still a python frame,
+and it takes its own entry back off an exception passing out through it, so a
+traceback names the compiled function and never the forwarder
 
 the sealed-class row is where `functools.total_ordering(SomeClass)` from another
 module lands. it fills in the comparisons a class is missing by assigning them, and an

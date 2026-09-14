@@ -155,7 +155,7 @@ pub fn shims(module: &ModuleIr, twin: &str) -> Option<Shims> {
     // a forwarder is bound under a number here and takes the definition's name only
     // once it is on its way into the namespace
     let prefix = format!("{installer}_");
-    let mut source = format!("\n\ndef {installer}({prefix}natives, {prefix}g):\n");
+    let mut source = format!("\n\ndef {installer}({prefix}natives, {prefix}g, {prefix}caught):\n");
     // the forwarder is a different object from the definition python would have
     // built, so everything that definition would have been asked about is carried
     // onto it — and the definition itself is left reachable through `__wrapped__`,
@@ -207,12 +207,23 @@ pub fn shims(module: &ModuleIr, twin: &str) -> Option<Shims> {
         };
         // a cell of its own per forwarder. one shared name would be a single cell
         // every one of them closed over, so they would all end up calling whichever
-        // native was assigned last
+        // native was assigned last.
+        //
+        // an exception leaving the native has an entry for every compiled frame it passed
+        // through, the function's own among them, and then gains one more for the
+        // forwarder's frame — which python's program never had. the forwarder takes that
+        // one back off and re-raises, which adds nothing: the entry at the head is always
+        // its own, because it is the last frame the exception passed. `try` costs nothing
+        // on the way through, and it is written on the `def`'s next line with its body so
+        // no instruction is spent marking a line of its own
         let _ = write!(
             source,
             "    {prefix}n{slot} = {prefix}natives[{slot}]\n\
              \x20   def {prefix}f{slot}({params}):\n\
-             \x20       return {prefix}n{slot}({arguments})\n\
+             \x20       try: return {prefix}n{slot}({arguments})\n\
+             \x20       except {prefix}caught as {prefix}e:\n\
+             \x20           {prefix}e.__traceback__ = {prefix}e.__traceback__.tb_next\n\
+             \x20           raise\n\
              \x20   {prefix}adopt({prefix}f{slot}, {:?})\n",
             function.name
         );

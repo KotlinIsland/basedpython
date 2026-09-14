@@ -35,6 +35,7 @@ use std::collections::{HashMap, HashSet};
 
 use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{self as ast, Expr, Stmt};
+use ruff_text_size::Ranged;
 
 use crate::mapper::{Decline, Lowered};
 
@@ -54,6 +55,8 @@ pub(crate) struct Nested {
     pub(crate) def: ast::StmtFunctionDef,
     /// the lambda this was synthesized from, by source range
     pub(crate) lambda: Option<ruff_text_size::TextRange>,
+    /// the generator expression this was synthesized from, by source range
+    pub(crate) generator_expression: Option<ruff_text_size::TextRange>,
     /// the enclosing names the body reads, in a stable order
     pub(crate) captures: Vec<String>,
     /// the captures that either frame *writes*, so both must see one cell
@@ -74,11 +77,10 @@ pub(crate) fn nested_functions(
     let mut out = Vec::new();
     // anywhere in the body, not only at the top level: a `def` inside a loop is the
     // case the shared-cell rule exists for
-    let mut definitions: Vec<(ast::StmtFunctionDef, Option<ruff_text_size::TextRange>)> =
-        Vec::new();
+    let mut definitions: Vec<(ast::StmtFunctionDef, Synthesized)> = Vec::new();
     for stmt in crate::walk(body) {
         if let Stmt::FunctionDef(def) = stmt {
-            definitions.push((def.clone(), None));
+            definitions.push((def.clone(), Synthesized::Written));
         }
         // a lambda in any expression position is a nested function with a generated
         // name, so the whole closure machinery applies to it unchanged
@@ -86,9 +88,18 @@ pub(crate) fn nested_functions(
             visit_expressions(expr, &mut |child| {
                 if let Expr::Lambda(lambda) = child {
                     let name = format!("$lambda{}", definitions.len());
-                    definitions.push((synthesize(lambda, &name), Some(lambda.range)));
+                    definitions
+                        .push((synthesize(lambda, &name), Synthesized::Lambda(lambda.range)));
                 }
             });
+        }
+        // and so is a generator expression, which python compiles to exactly that
+        for generator in generator_expressions(stmt) {
+            let name = format!("{GENERATOR_EXPRESSION}{}", definitions.len());
+            definitions.push((
+                synthesize_generator(generator, &name),
+                Synthesized::GeneratorExpression(generator.range),
+            ));
         }
     }
 
@@ -106,7 +117,7 @@ pub(crate) fn nested_functions(
         }
     }
 
-    for (def, lambda) in definitions {
+    for (def, synthesized) in definitions {
         let def = &def;
         let own = own_names(def);
         let mut captures: Vec<String> = Vec::new();
@@ -129,8 +140,14 @@ pub(crate) fn nested_functions(
             .filter(|name| !per_iteration.contains(name.as_str()))
             .cloned()
             .collect();
-        // and a nested `nonlocal` write makes it shared even if it is never read
-        for name in nonlocal_names(def) {
+        // and a nested `nonlocal` write makes it shared even if it is never read. so does
+        // a walrus inside a generator expression, which python binds in the frame the
+        // expression stands in rather than in the generator's own
+        let walrus = match synthesized {
+            Synthesized::GeneratorExpression(_) => walrus_targets(&def.body),
+            _ => Vec::new(),
+        };
+        for name in nonlocal_names(def).into_iter().chain(walrus) {
             if bound.contains(name) {
                 if !captures.iter().any(|capture| capture == name) {
                     captures.push(name.to_string());
@@ -142,7 +159,14 @@ pub(crate) fn nested_functions(
         }
         out.push(Nested {
             def: def.clone(),
-            lambda,
+            lambda: match synthesized {
+                Synthesized::Lambda(range) => Some(range),
+                _ => None,
+            },
+            generator_expression: match synthesized {
+                Synthesized::GeneratorExpression(range) => Some(range),
+                _ => None,
+            },
             captures,
             shared,
         });
@@ -260,6 +284,175 @@ pub(crate) fn bound_only_by_their_def(body: &[Stmt]) -> HashSet<String> {
         .collect()
 }
 
+/// what a nested function was written as
+#[derive(Clone, Copy)]
+enum Synthesized {
+    Written,
+    Lambda(ruff_text_size::TextRange),
+    GeneratorExpression(ruff_text_size::TextRange),
+}
+
+/// the prefix of the name a generator expression's function is lowered under
+pub(crate) const GENERATOR_EXPRESSION: &str = "$genexpr";
+
+/// the parameter a generator expression's function takes its first iterator in
+///
+/// python evaluates the first clause's iterable, and calls `iter` on it, where the
+/// expression stands — so `(x for x in 5)` raises there, and a later rebinding of the
+/// name the iterable was read from changes nothing. what the frame receives is the
+/// iterator, as python's own `.0` parameter. it is not a python identifier, so nothing
+/// the source wrote can name it
+pub(crate) const GENERATOR_ITERATOR: &str = "$iter";
+
+/// the generator expressions a statement makes where it stands
+///
+/// every expression the statement itself holds, an `elif`'s test and a `match`'s guard
+/// included, and none of the statements nested in its body — each of those is a
+/// statement of its own. not one inside another generator expression, or inside a
+/// lambda's body: each of those belongs to the frame it is written in. the first
+/// clause's iterable of one is read here, so a generator expression in there is this
+/// frame's too
+///
+/// nor an asynchronous one, which python makes an async generator of. that is left for
+/// the expression itself to decline
+fn generator_expressions(stmt: &Stmt) -> Vec<&ast::ExprGenerator> {
+    struct Find<'a> {
+        found: Vec<&'a ast::ExprGenerator>,
+    }
+    impl<'a> Visitor<'a> for Find<'a> {
+        fn visit_body(&mut self, _body: &'a [Stmt]) {}
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            match expr {
+                Expr::Generator(node) => {
+                    if lowers_as_a_generator(node) {
+                        self.found.push(node);
+                    }
+                    if let Some(first) = node.generators.first() {
+                        self.visit_expr(&first.iter);
+                    }
+                }
+                Expr::Lambda(node) => {
+                    for default in node
+                        .parameters
+                        .iter()
+                        .flat_map(|parameters| parameters.iter())
+                        .filter_map(ast::AnyParameterRef::default)
+                    {
+                        self.visit_expr(default);
+                    }
+                }
+                _ => visitor::walk_expr(self, expr),
+            }
+        }
+    }
+    let mut find = Find { found: Vec::new() };
+    visitor::walk_stmt(&mut find, stmt);
+    find.found
+}
+
+/// the names a walrus anywhere in `body` binds
+fn walrus_targets(body: &[Stmt]) -> Vec<&str> {
+    let mut out = Vec::new();
+    for stmt in crate::walk(body) {
+        for expr in statement_expressions(stmt) {
+            visit_expressions(expr, &mut |child| {
+                if let Expr::Named(node) = child
+                    && let Expr::Name(name) = node.target.as_ref()
+                {
+                    out.push(name.id.as_str());
+                }
+            });
+        }
+    }
+    out
+}
+
+/// whether a generator expression is one python makes an ordinary generator of
+pub(crate) fn lowers_as_a_generator(node: &ast::ExprGenerator) -> bool {
+    let mut plain = node.generators.iter().all(|clause| !clause.is_async);
+    let mut look = |child: &Expr| {
+        if matches!(child, Expr::Await(_) | Expr::Yield(_) | Expr::YieldFrom(_)) {
+            plain = false;
+        }
+    };
+    visit_expressions(&node.elt, &mut look);
+    for (index, clause) in node.generators.iter().enumerate() {
+        if index > 0 {
+            visit_expressions(&clause.iter, &mut look);
+        }
+        for condition in &clause.ifs {
+            visit_expressions(condition, &mut look);
+        }
+    }
+    plain
+}
+
+/// the generator function python compiles a generator expression into
+///
+/// one `for` per clause, each clause's `if`s nested inside its `for`, and a `yield` of
+/// the element innermost. the first `for` iterates [`GENERATOR_ITERATOR`], which the
+/// function takes rather than declares: see there. every node the source wrote is
+/// cloned, which keeps its identity, so the semantic model still answers for each
+fn synthesize_generator(node: &ast::ExprGenerator, name: &str) -> ast::StmtFunctionDef {
+    let range = node.range;
+    let mut body = Stmt::Expr(ast::StmtExpr {
+        node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        range,
+        value: Box::new(Expr::Yield(ast::ExprYield {
+            node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+            range,
+            value: Some(node.elt.clone()),
+        })),
+    });
+    for (index, clause) in node.generators.iter().enumerate().rev() {
+        for condition in clause.ifs.iter().rev() {
+            body = Stmt::If(ast::StmtIf {
+                node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+                range,
+                pattern: None,
+                test: Box::new(condition.clone()),
+                body: thin_vec::thin_vec![body],
+                elif_else_clauses: Vec::new(),
+            });
+        }
+        let iter = if index == 0 {
+            Expr::Name(ast::ExprName {
+                node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+                range: clause.iter.range(),
+                id: ruff_python_ast::name::Name::new_static(GENERATOR_ITERATOR),
+                ctx: ast::ExprContext::Load,
+            })
+        } else {
+            clause.iter.clone()
+        };
+        body = Stmt::For(ast::StmtFor {
+            node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+            range,
+            is_async: false,
+            target: Box::new(clause.target.clone()),
+            pattern: None,
+            iter: Box::new(iter),
+            body: thin_vec::thin_vec![body],
+            orelse: thin_vec::ThinVec::new(),
+        });
+    }
+    ast::StmtFunctionDef {
+        node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        range,
+        is_async: false,
+        decorator_list: thin_vec::ThinVec::new(),
+        name: ast::Identifier::new(name, range),
+        type_params: None,
+        parameters: Box::new(ast::Parameters::default()),
+        returns: None,
+        raises: None,
+        is_asserts_return: false,
+        body: thin_vec::thin_vec![body],
+        is_trailing_lambda: false,
+    }
+}
+
 /// a `StmtFunctionDef` equivalent to a lambda: its parameters, and its body as a
 /// single `return`
 fn synthesize(lambda: &ast::ExprLambda, name: &str) -> ast::StmtFunctionDef {
@@ -299,6 +492,8 @@ fn own_names(def: &ast::StmtFunctionDef) -> HashSet<&str> {
     if let Some(kwarg) = &def.parameters.kwarg {
         out.insert(kwarg.name.as_str());
     }
+    // a generator expression's first iterator is a parameter no source wrote
+    out.insert(GENERATOR_ITERATOR);
     out.extend(written_names(&def.body));
     // a name declared `global` here resolves in the module namespace whether this body
     // writes it or only reads it, so an enclosing local of the same name must never be
@@ -381,11 +576,15 @@ pub(crate) fn written_names(body: &[Stmt]) -> Vec<&str> {
                     out.push(name.id.as_str());
                 }
             }
-            Stmt::For(node) => {
-                if let Expr::Name(name) = node.target.as_ref() {
+            // every name the target binds, an unpacking's included: `for a, b in pairs`
+            // binds `a` and `b` as surely as `for a in xs` binds `a`
+            Stmt::For(node) => visit_expressions(&node.target, &mut |child| {
+                if let Expr::Name(name) = child
+                    && name.ctx == ast::ExprContext::Store
+                {
                     out.push(name.id.as_str());
                 }
-            }
+            }),
             Stmt::FunctionDef(node) => out.push(node.name.as_str()),
             // a `case` pattern binds in the frame the `match` stands in, and it binds
             // without being an assignment — so none of the arms above reaches it
@@ -461,7 +660,20 @@ fn read_names(body: &[Stmt]) -> Vec<&str> {
     out
 }
 
-/// the expressions a statement evaluates, excluding assignment *targets*
+/// the expressions a statement evaluates in the frame it stands in, excluding assignment
+/// *targets*
+///
+/// every position python evaluates, because every consumer asks a question that has to be
+/// answered for all of them: which names a nested function captures, which lambdas the
+/// frame makes, which names a walrus binds, whether a buffer escapes, how many delegations
+/// a generator suspends in. a test left out here was once the `elif` test, and a nested
+/// function reading a name only there resolved it as a global and raised `NameError`.
+///
+/// the bodies of compound statements are not expressions of this one — [`crate::walk`]
+/// reaches their statements — and neither is what a nested `def` or `class` runs in a frame
+/// of its own. what such a statement evaluates where it stands is: its decorators, a
+/// `def`'s defaults and a `class`'s bases. an annotation is not, because nothing the
+/// frame runs evaluates one
 pub(crate) fn statement_expressions(stmt: &Stmt) -> Vec<&Expr> {
     match stmt {
         Stmt::Return(node) => node.value.iter().map(AsRef::as_ref).collect(),
@@ -469,9 +681,42 @@ pub(crate) fn statement_expressions(stmt: &Stmt) -> Vec<&Expr> {
         Stmt::Assign(node) => vec![node.value.as_ref()],
         Stmt::AnnAssign(node) => node.value.iter().map(AsRef::as_ref).collect(),
         Stmt::AugAssign(node) => vec![node.target.as_ref(), node.value.as_ref()],
-        Stmt::If(node) => vec![node.test.as_ref()],
+        Stmt::If(node) => std::iter::once(node.test.as_ref())
+            .chain(
+                node.elif_else_clauses
+                    .iter()
+                    .filter_map(|clause| clause.test.as_ref()),
+            )
+            .collect(),
         Stmt::While(node) => vec![node.test.as_ref()],
-        Stmt::For(node) => vec![node.iter.as_ref()],
+        Stmt::For(node) => {
+            let mut all = vec![node.iter.as_ref()];
+            if let Some(pattern) = &node.pattern {
+                all.extend(pattern_expressions(pattern));
+            }
+            all
+        }
+        Stmt::Let(node) => {
+            let mut all = vec![node.value.as_ref()];
+            all.extend(pattern_expressions(&node.pattern));
+            all
+        }
+        Stmt::Match(node) => {
+            let mut all = vec![node.subject.as_ref()];
+            for case in &node.cases {
+                all.extend(pattern_expressions(&case.pattern));
+                all.extend(case.guard.as_deref());
+            }
+            all
+        }
+        Stmt::Try(node) => node
+            .handlers
+            .iter()
+            .filter_map(|handler| {
+                let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                handler.type_.as_deref()
+            })
+            .collect(),
         Stmt::Raise(node) => node
             .exc
             .iter()
@@ -484,8 +729,55 @@ pub(crate) fn statement_expressions(stmt: &Stmt) -> Vec<&Expr> {
             all
         }
         Stmt::With(node) => node.items.iter().map(|item| &item.context_expr).collect(),
-        _ => Vec::new(),
+        Stmt::FunctionDef(node) => node
+            .decorator_list
+            .iter()
+            .map(|decorator| &decorator.expression)
+            .chain(
+                node.parameters
+                    .iter()
+                    .filter_map(ast::AnyParameterRef::default),
+            )
+            .collect(),
+        Stmt::ClassDef(node) => node
+            .decorator_list
+            .iter()
+            .map(|decorator| &decorator.expression)
+            .chain(
+                node.arguments
+                    .iter()
+                    .flat_map(|arguments| arguments.iter_source_order())
+                    .map(|argument| match argument {
+                        ast::ArgOrKeyword::Arg(expr) => expr,
+                        ast::ArgOrKeyword::Keyword(keyword) => &keyword.value,
+                    }),
+            )
+            .collect(),
+        Stmt::Delete(_)
+        | Stmt::TypeAlias(_)
+        | Stmt::Import(_)
+        | Stmt::ImportFrom(_)
+        | Stmt::Global(_)
+        | Stmt::Nonlocal(_)
+        | Stmt::Pass(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::IpyEscapeCommand(_) => Vec::new(),
     }
+}
+
+/// the expressions a pattern evaluates as it matches: a value pattern's value, a mapping
+/// pattern's keys, and the class a class pattern names
+fn pattern_expressions(pattern: &ast::Pattern) -> Vec<&Expr> {
+    struct Collect<'a>(Vec<&'a Expr>);
+    impl<'a> Visitor<'a> for Collect<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            self.0.push(expr);
+        }
+    }
+    let mut collect = Collect(Vec::new());
+    collect.visit_pattern(pattern);
+    collect.0
 }
 
 /// the expressions a statement's assignment *targets* evaluate

@@ -92,6 +92,9 @@ pub struct BasicBlock {
     /// their meaning, and a copied block reports the source it was copied from,
     /// which is the source it still is
     pub range: Option<(u32, u32)>,
+    /// where the block's first op was written, which a failing op names in its traceback
+    /// entry until an [`Op::Line`] in the block says otherwise
+    pub position: Option<crate::ops::Position>,
     /// where a *failing* operation in this block jumps.
     ///
     /// `None` is the function's own error exit. inside a `try` it is the handler,
@@ -122,6 +125,7 @@ impl BasicBlock {
             owned_at_exit: None,
             error_target: None,
             range: None,
+            position: None,
         }
     }
 }
@@ -249,6 +253,12 @@ impl Binding {
 pub struct Function {
     /// the name as written in source, used for the python-visible surface
     pub name: String,
+    /// the name python gives the frame this body runs in, which a traceback entry names
+    ///
+    /// the definition's own name, which [`Self::name`] stops being once a lowering
+    /// renames the body — an accessor's `$get`, a generator's `$resume`, a private
+    /// method's mangling — and `<lambda>` or `<genexpr>` for a body python gives no name
+    pub frame_name: String,
     /// the number of leading registers that are parameters
     pub param_count: usize,
     pub ret: RType,
@@ -645,6 +655,22 @@ pub struct Resumption {
     pub method: String,
     /// which surface the state object presents to python
     pub surface: Surface,
+    /// the `__qualname__` of the function whose frame this is, which python names the
+    /// frame by when it reports one — a coroutine dropped without being awaited, say
+    pub qualname: String,
+    /// the suspensions made inside a `yield from` or an `await`, each with the field the
+    /// iterator it delegates to is kept in. python's `throw` and `close` reach that
+    /// iterator before the frame itself
+    pub delegations: Vec<Delegation>,
+}
+
+/// one suspension of a resumable frame that waits on an inner iterator
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delegation {
+    /// the value `$state` holds while the frame is suspended there
+    pub state: i64,
+    /// the field of the state object holding the inner iterator
+    pub field: String,
 }
 
 /// what a resumable frame looks like from python
@@ -892,16 +918,26 @@ impl ClassIr {
     /// descriptor under the same name, filled before the assignment and dropped by it
     ///
     /// a nested function is left out too: its environment is its receiver, but python
-    /// never sees it as a method of one — see [`Function::nested`]
+    /// never sees it as a method of one — see [`Function::nested`]. and so is the method
+    /// a generator or coroutine resumes through, which only its own slots may call: from
+    /// python it would run the frame with none of the bookkeeping a step does
     pub fn table_methods(&self) -> impl Iterator<Item = &Function> {
         self.methods.iter().filter(|method| {
             method.name != "__new__"
                 && method.nested.is_none()
+                && !self.resumes_through(method)
                 && !self
                     .properties
                     .iter()
                     .any(|property| property.holds(&method.name))
         })
+    }
+
+    /// whether `method` is the one this class's resumable frame steps through
+    pub fn resumes_through(&self, method: &Function) -> bool {
+        self.resume
+            .as_ref()
+            .is_some_and(|resume| resume.method == method.name)
     }
 
     /// the C identifier for the instance struct
@@ -1390,6 +1426,7 @@ mod tests {
             kwarg: false,
             range: None,
             name: "add".to_string(),
+            frame_name: "add".to_string(),
             param_count: 2,
             ret: RType::INT,
             convention: CallConvention::NativeInfallible,

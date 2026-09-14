@@ -6,7 +6,7 @@
 //! otherwise account for most verifier failures.
 
 use crate::function::{BasicBlock, CallConvention, Decorator, Function, RegisterDecl};
-use crate::ops::{BlockId, Op, RegisterId, Terminator, Value};
+use crate::ops::{BlockId, Op, Position, RegisterId, Terminator, Value};
 use crate::rtype::RType;
 
 /// builds one function
@@ -17,6 +17,7 @@ use crate::rtype::RType;
 )]
 pub struct FunctionBuilder {
     name: String,
+    frame_name: String,
     param_count: usize,
     ret: RType,
     convention: CallConvention,
@@ -45,13 +46,26 @@ pub struct FunctionBuilder {
     block_ranges: Vec<Option<(u32, u32)>>,
     doc: Option<String>,
     takes_a_weak_reference: bool,
+    /// where the ops pushed from here on were written: the byte offset, and the line the
+    /// frontend worked out for it
+    location: Option<(u32, u32)>,
+    /// whether the ops pushed from here on run as a drained generator expression's body —
+    /// see [`Op::Line`]
+    generator_expression: bool,
+    /// per block, where its first op was written
+    block_positions: Vec<Option<Position>>,
+    /// per block, the line of the last position recorded in it, and whether that was in
+    /// a generator expression
+    block_lines: Vec<Option<(u32, bool)>>,
 }
 
 impl FunctionBuilder {
     /// start a function. the entry block is created and made current
     pub fn new(name: impl Into<String>, ret: RType) -> Self {
+        let name = name.into();
         Self {
-            name: name.into(),
+            frame_name: name.clone(),
+            name,
             param_count: 0,
             ret,
             convention: CallConvention::Native,
@@ -75,7 +89,43 @@ impl FunctionBuilder {
             block_ranges: vec![None],
             doc: None,
             takes_a_weak_reference: false,
+            location: None,
+            generator_expression: false,
+            block_positions: vec![None],
+            block_lines: vec![None],
         }
+    }
+
+    /// the name python gives the frame the body runs in — see [`Function::frame_name`]
+    pub fn frame_name(&mut self, name: impl Into<String>) {
+        self.frame_name = name.into();
+    }
+
+    /// say that the ops pushed from here on were written at `offset`, on `line`, and
+    /// hand back the location this replaces so the caller can put it back
+    ///
+    /// the first op pushed into a block records it as the block's position, and an
+    /// [`Op::Line`] is written ahead of a later op wherever that op's line differs from
+    /// the last one its block recorded, so a run of ops from one line carries nothing
+    /// however many expressions it was lowered from
+    pub fn locate(&mut self, offset: u32, line: u32) -> Option<(u32, u32)> {
+        self.location.replace((offset, line))
+    }
+
+    /// where the ops pushed from here on were written, as [`Self::locate`] last said
+    pub fn location(&self) -> Option<(u32, u32)> {
+        self.location
+    }
+
+    /// say whether the ops pushed from here on run as the body of a generator expression
+    /// drained in this frame, handing back what this replaces
+    pub fn in_generator_expression(&mut self, inside: bool) -> bool {
+        std::mem::replace(&mut self.generator_expression, inside)
+    }
+
+    /// put back a location [`Self::locate`] handed out
+    pub fn relocate(&mut self, location: Option<(u32, u32)>) {
+        self.location = location;
     }
 
     /// record that the body takes a weak reference of a value it did not make itself —
@@ -153,6 +203,8 @@ impl FunctionBuilder {
         self.blocks.push(None);
         self.pending.push(Vec::new());
         self.block_ranges.push(None);
+        self.block_positions.push(None);
+        self.block_lines.push(None);
         id
     }
 
@@ -232,6 +284,34 @@ impl FunctionBuilder {
         if self.is_sealed(self.current) {
             return;
         }
+        // a copy of a temporary or of an immediate cannot fail — only a named local can be
+        // read unbound — and it is where a value computed on one line is stored by a
+        // statement written on another. it takes no position of its own, so the value and
+        // the store stay next to each other for the passes that fold the two into one
+        let cannot_fail = matches!(
+            &op,
+            Op::Assign { src, .. }
+                if !matches!(src, Value::Register(id)
+                    if self.registers.get(id.index()).is_none_or(|decl| decl.name.is_some()))
+        );
+        if !cannot_fail
+            && let Some((offset, line)) = self.location
+            && let Some(last) = self.block_lines.get_mut(self.current.index())
+            && *last != Some((line, self.generator_expression))
+        {
+            let position = Position {
+                offset,
+                generator_expression: self.generator_expression,
+            };
+            if last.is_none() {
+                if let Some(slot) = self.block_positions.get_mut(self.current.index()) {
+                    *slot = Some(position);
+                }
+            } else if let Some(ops) = self.pending.get_mut(self.current.index()) {
+                ops.push(Op::Line { position });
+            }
+            *last = Some((line, self.generator_expression));
+        }
         if let Some(ops) = self.pending.get_mut(self.current.index()) {
             ops.push(op);
         }
@@ -285,6 +365,7 @@ impl FunctionBuilder {
         if let Some(slot) = self.blocks.get_mut(self.current.index()) {
             *slot = Some(BasicBlock {
                 range: None,
+                position: None,
                 ops,
                 terminator,
                 owned_at_exit: None,
@@ -313,15 +394,18 @@ impl FunctionBuilder {
             .into_iter()
             .zip(self.pending)
             .zip(self.block_ranges)
-            .map(|((block, ops), range)| {
+            .zip(self.block_positions)
+            .map(|(((block, ops), range), position)| {
                 let mut block = block.unwrap_or(BasicBlock {
                     ops,
                     terminator: Terminator::Unreachable,
                     owned_at_exit: None,
                     error_target: None,
                     range: None,
+                    position: None,
                 });
                 block.range = range;
+                block.position = position;
                 block
             })
             .collect();
@@ -329,6 +413,7 @@ impl FunctionBuilder {
             posonly: self.posonly,
             kwonly: self.kwonly,
             name: self.name,
+            frame_name: self.frame_name,
             param_count: self.param_count,
             ret: self.ret,
             convention: self.convention,
