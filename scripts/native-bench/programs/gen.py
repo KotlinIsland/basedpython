@@ -6,8 +6,10 @@ resume method. `coro` covers the await half of that; this is the yield half, and
 it is also the half real code writes far more often
 """
 
+from collections.abc import Iterator
 
-def steps(n: int):
+
+def steps(n: int) -> Iterator[int]:
     i = 0
     while i < n:
         yield (i * 7) % 13

@@ -10,7 +10,7 @@ to be that subclass, and the work `run` does is `props`'s exactly
 
 
 class Cell:
-    def __init__(self):
+    def __init__(self) -> None:
         self._v = 0
 
     @property
@@ -18,7 +18,7 @@ class Cell:
         return self._v
 
     @v.setter
-    def v(self, given: int):
+    def v(self, given: int) -> None:
         self._v = given
 
 

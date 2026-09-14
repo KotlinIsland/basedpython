@@ -9,7 +9,7 @@ read reached directly, so the three rows say what each layer costs
 
 
 class Cell:
-    def __init__(self):
+    def __init__(self) -> None:
         self._v = 1
 
     @property
