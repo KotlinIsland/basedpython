@@ -1114,6 +1114,88 @@ explicitly to ship fewer.
 
 ---
 
+## `compile`
+
+### `bind-functions-early`
+
+Whether a compiled call to a function defined in the same module goes straight to
+the function the module was compiled with.
+
+Python calls whatever the name holds when the call is made, so by default a compiled
+module asks, on each such call, whether the name still holds the function it
+published and whether that function's `__code__`, `__defaults__` and
+`__kwdefaults__` are still the ones it was published with. A function rebound,
+deleted or patched from outside the module — `mock.patch("app.helper")` included —
+then reaches the module's own compiled code, as it reaches python's.
+
+Turning this on skips the question, which is worth the most on code that makes many
+small calls. A compiled caller then goes on calling the function the module was
+compiled with whatever the name holds, so a program that rebinds, deletes or patches
+one of the module's functions, or reassigns its `__code__` or defaults, can tell the
+difference. Calls made from python still reach whatever the name holds.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.compile]
+    bind-functions-early = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [compile]
+    bind-functions-early = true
+    ```
+
+---
+
+### `follow-recursion-limit`
+
+Whether a compiled recursion counts its calls against python's recursion limit.
+
+A compiled call pushes no python frame, so the build counts one wherever the
+interpreter would have: on a call that goes round a cycle of compiled calls, on a
+compiled method or dunder the interpreter calls, and on each step of a compiled
+generator. With the count on, `sys.setrecursionlimit` reaches compiled code and a
+recursion raises `RecursionError` at the depth python raises it.
+
+Turning it off saves the count on each of those calls, which is most of what a
+deep recursion costs, and a compiled recursion then runs until the stack is close
+to running out instead. A program that lowers the recursion limit, or catches
+`RecursionError` at a particular depth, can tell the difference.
+
+Either way the stack itself is watched, and a recursion too deep for it raises
+`RecursionError` rather than crashing.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.compile]
+    follow-recursion-limit = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [compile]
+    follow-recursion-limit = false
+    ```
+
+---
+
 ## `editor`
 
 ### `common-aliases`

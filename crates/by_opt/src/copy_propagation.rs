@@ -273,6 +273,9 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::IsMissing { dest, .. }
         | Op::MethodStands { dest, .. }
         | Op::BuiltinStands { dest, .. }
+        | Op::FunctionStands { dest, .. }
+        | Op::ResolveFunction { dest, .. }
+        | Op::FunctionCallee { dest, .. }
         | Op::AccessorStands { dest, .. }
         | Op::FieldStands { dest, .. }
         | Op::DictShadows { dest, .. }
@@ -288,6 +291,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::StrOfInt { dest, .. }
         | Op::CallPython { dest, .. }
         | Op::CallValue { dest, .. }
+        | Op::CallThrough { dest, .. }
         | Op::LoadGlobal { dest, .. }
         | Op::MakeSlice { dest, .. }
         | Op::LoadEllipsis { dest }
@@ -390,6 +394,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         }
     }
 

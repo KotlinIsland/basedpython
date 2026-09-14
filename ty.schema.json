@@ -24,6 +24,17 @@
         }
       ]
     },
+    "compile": {
+      "description": "Configures what the native modules `by compile` builds may assume about the\nprogram that runs them.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CompileOptions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "editor": {
       "description": "Configures the parts of the editor experience that type checking does not decide.",
       "anyOf": [
@@ -365,6 +376,26 @@
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "CompileOptions": {
+      "type": "object",
+      "properties": {
+        "bind-functions-early": {
+          "description": "Whether a compiled call to a function defined in the same module goes straight to\nthe function the module was compiled with.\n\nPython calls whatever the name holds when the call is made, so by default a compiled\nmodule asks, on each such call, whether the name still holds the function it\npublished and whether that function's `__code__`, `__defaults__` and\n`__kwdefaults__` are still the ones it was published with. A function rebound,\ndeleted or patched from outside the module — `mock.patch(\"app.helper\")` included —\nthen reaches the module's own compiled code, as it reaches python's.\n\nTurning this on skips the question, which is worth the most on code that makes many\nsmall calls. A compiled caller then goes on calling the function the module was\ncompiled with whatever the name holds, so a program that rebinds, deletes or patches\none of the module's functions, or reassigns its `__code__` or defaults, can tell the\ndifference. Calls made from python still reach whatever the name holds.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "follow-recursion-limit": {
+          "description": "Whether a compiled recursion counts its calls against python's recursion limit.\n\nA compiled call pushes no python frame, so the build counts one wherever the\ninterpreter would have: on a call that goes round a cycle of compiled calls, on a\ncompiled method or dunder the interpreter calls, and on each step of a compiled\ngenerator. With the count on, `sys.setrecursionlimit` reaches compiled code and a\nrecursion raises `RecursionError` at the depth python raises it.\n\nTurning it off saves the count on each of those calls, which is most of what a\ndeep recursion costs, and a compiled recursion then runs until the stack is close\nto running out instead. A program that lowers the recursion limit, or catches\n`RecursionError` at a particular depth, can tell the difference.\n\nEither way the stack itself is watched, and a recursion too deep for it raises\n`RecursionError` rather than crashing.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "EditorOptions": {
       "type": "object",

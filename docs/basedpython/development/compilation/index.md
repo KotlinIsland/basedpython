@@ -166,7 +166,10 @@ and each assumption is one the user opts into explicitly:
 | 3    | sealed unit  | `api.lock` is the complete public surface          | cross-module inlining, monomorphization, dead-code elimination, LTO |
 
 tier 2 is the default for a project, tier 1 for a single module compiled out of
-a larger interpreted program. tier 3 requires a current
+a larger interpreted program. the one tier-2 assumption the build makes today is opt-in
+on its own: a call to one of a module's own functions is late-bound unless the project
+sets `bind-functions-early` in its `[tool.ty.compile]` table — see
+[runtime](runtime.md#a-module-function-rebound-from-outside). tier 3 requires a current
 [api lockfile](../../features/api-lock.md) — the lockfile stops being only a
 review artifact and becomes the ABI contract. see
 [optimizations](optimizations.md#the-lockfile-as-a-closed-world-boundary)

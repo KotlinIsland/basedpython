@@ -163,7 +163,12 @@ pub fn emit_module(module: &ModuleIr) -> String {
     if rechecks_licences(module) {
         out.push_str("#define BY_LICENCE_RECHECK 1\n");
     }
+    if !module.follow_recursion_limit {
+        out.push_str("#define BY_RECURSION_STACK_ONLY 1\n");
+    }
     out.push_str("#include \"by.h\"\n\n");
+    let recursive = by_ir::call_graph::recursive_functions(module);
+    RECURSIVE.with_borrow_mut(|slot| slot.clone_from(&recursive));
     // a native function resolves an unowned name through this, the way
     // `LOAD_GLOBAL` does. declared here because the bodies below read it; set
     // once, from the exec slot
@@ -311,6 +316,16 @@ pub fn emit_module(module: &ModuleIr) -> String {
 
     for function in module.all_functions() {
         let _ = writeln!(out, "{};", signature(module, function));
+        if is_recursive(function) {
+            let _ = writeln!(out, "{};", counted_signature(module, function));
+        }
+    }
+    for name in published_functions(module) {
+        let _ = writeln!(
+            out,
+            "static ByFunctionSite {} = BY_FUNCTION_SITE_INIT;",
+            function_site(name)
+        );
     }
     // the wrappers are declared before the method tables that name them, and the
     // tables before the bodies — because a `MakeClosure` in a body names a nested
@@ -5195,7 +5210,35 @@ fn undefined(module: &ModuleIr, ty: &RType) -> String {
     }
 }
 
+/// the signature the body is emitted under
+///
+/// a function on a cycle of native calls is handed the depth its caller counted as its
+/// first argument, under a symbol of its own — see [`counted_signature`] for the entry
+/// every other caller keeps
 fn signature(module: &ModuleIr, function: &Function) -> String {
+    let mut params: Vec<String> = function
+        .params()
+        .iter()
+        .enumerate()
+        .map(|(index, decl)| format!("{} {}", ctype(module, &decl.ty), local(RegisterId(index))))
+        .collect();
+    let symbol = if is_recursive(function) {
+        params.insert(0, "ByDepth by_depth".to_string());
+        depth_symbol(module, function)
+    } else {
+        function.native_symbol(module.name.dotted())
+    };
+    let params = if params.is_empty() {
+        "void".to_string()
+    } else {
+        params.join(", ")
+    };
+    format!("static {} {symbol}({params})", ctype(module, &function.ret))
+}
+
+/// the entry a function on a cycle keeps under its ordinary symbol, for every caller
+/// that is not itself on a cycle: it looks the depth up and counts the call
+fn counted_signature(module: &ModuleIr, function: &Function) -> String {
     let params = if function.param_count == 0 {
         "void".to_string()
     } else {
@@ -5210,11 +5253,78 @@ fn signature(module: &ModuleIr, function: &Function) -> String {
             .join(", ")
     };
     format!(
-        "static {} {}({})",
+        "static inline {} {}({params})",
         ctype(module, &function.ret),
         function.native_symbol(module.name.dotted()),
-        params
     )
+}
+
+/// the module functions published under their own names through a forwarder, each of
+/// which a compiled caller reaches directly while [`Op::FunctionStands`] says it may
+fn published_functions(module: &ModuleIr) -> Vec<&str> {
+    module
+        .shims
+        .as_ref()
+        .map(|shims| shims.functions.iter().map(String::as_str).collect())
+        .unwrap_or_default()
+}
+
+/// whether any compiled call asks whether the function published under `name` still
+/// stands, which is what the namespace has to be watched for
+fn asks_whether_it_stands(module: &ModuleIr, name: &str) -> bool {
+    module
+        .all_functions()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.ops)
+        .any(|op| matches!(op, Op::ResolveFunction { name: asked, .. } if asked == name))
+}
+
+/// the static a published function's [`Op::FunctionStands`] reads
+fn function_site(name: &str) -> String {
+    format!("by_fs_{}", mangle(name))
+}
+
+/// the symbol a function on a cycle's body is emitted under
+fn depth_symbol(module: &ModuleIr, function: &Function) -> String {
+    format!(
+        "byd{}",
+        function
+            .native_symbol(module.name.dotted())
+            .trim_start_matches("by")
+    )
+}
+
+/// the counted entry itself: take a frame from the depth, run the body, give it back
+fn emit_counted_entry(module: &ModuleIr, function: &Function) -> String {
+    let arguments = std::iter::once("by_depth".to_string())
+        .chain((0..function.param_count).map(|index| local(RegisterId(index))))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{signature} {{
+             ByDepth by_depth = By_DepthHere();
+             if (BY_UNLIKELY(By_DepthEnter(by_depth))) return {undefined};
+             {ret} by_result = {body}({arguments});
+             By_DepthLeave(by_depth);
+             return by_result;
+         }}
+",
+        signature = counted_signature(module, function),
+        undefined = undefined(module, &function.ret),
+        ret = ctype(module, &function.ret),
+        body = depth_symbol(module, function),
+    )
+}
+
+thread_local! {
+    /// the qualified names of the module's functions on a cycle of native calls, for the
+    /// duration of one emission
+    static RECURSIVE: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
+}
+
+fn is_recursive(function: &Function) -> bool {
+    RECURSIVE.with_borrow(|recursive| recursive.contains(&function.qualified_name()))
 }
 
 fn local(id: RegisterId) -> String {
@@ -5391,6 +5501,9 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
     }
 
     out.push_str("}\n");
+    if is_recursive(function) {
+        out.push_str(&emit_counted_entry(module, function));
+    }
     out
 }
 
@@ -6320,6 +6433,59 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 local(*dest),
             )
         }
+        // a name this module publishes no forwarder for is never reached directly: its
+        // resolution is always the object under the name, and its test always says no
+        Op::ResolveFunction { dest, name } => {
+            let Some(decl) = function.register(*dest) else {
+                return String::new();
+            };
+            let target = local(*dest);
+            let release = dec_ref(&decl.ty, &target).unwrap_or_default();
+            let label = error_label(error_target);
+            if published_functions(module).contains(&name.as_str()) {
+                // NULL is the answer that says the native entry stands, so a failure is
+                // told apart by an address no object can have
+                format!(
+                    "    {{ PyObject *by_t = By_ResolveFunction(&{site}, by_module_dict, {name});\n      \
+                     if (BY_UNLIKELY(by_t == BY_RESOLVE_FAILED)) goto {label};\n      \
+                     {release} {target} = by_t; }}\n",
+                    site = function_site(name),
+                    name = c_string(name),
+                )
+            } else {
+                format!(
+                    "    {{ static PyObject *by_rf = NULL;\n      \
+                     if (by_rf == NULL) by_rf = By_InternedStr({}, {});\n      \
+                     if (by_rf == NULL) goto {label};\n      \
+                     PyObject *by_t = By_LookupGlobal(by_module_dict, by_rf);\n      \
+                     if (by_t == NULL) goto {label};\n      \
+                     {release} {target} = by_t; }}\n",
+                    c_string(name),
+                    name.len(),
+                )
+            }
+        }
+        Op::FunctionStands { dest, src, name } => {
+            if published_functions(module).contains(&name.as_str()) {
+                format!(
+                    "    {} = (char)BY_LIKELY({} == NULL && By_FunctionStands(&{}));\n",
+                    local(*dest),
+                    value_expr(src),
+                    function_site(name)
+                )
+            } else {
+                format!("    {} = 0;\n", local(*dest))
+            }
+        }
+        Op::FunctionCallee { dest, src, name } => {
+            let forwarder = if published_functions(module).contains(&name.as_str()) {
+                format!("{}.forwarder", function_site(name))
+            } else {
+                "NULL".to_string()
+            };
+            let expr = format!("By_FunctionCallee({}, {forwarder})", value_expr(src));
+            assign_checked(module, function, *dest, &expr, error_target)
+        }
         Op::MethodStands {
             dest,
             src,
@@ -6773,19 +6939,47 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
+            // a call from one function on a cycle to another hands on the depth it was
+            // given and counts itself around the call, which is the whole of what makes
+            // a recursion stop where python's does. every other caller takes the counted
+            // entry, which looks the depth up for itself
+            let counted = is_recursive(function) && target.is_some_and(is_recursive);
             let symbol = match target {
+                Some(target) if counted => depth_symbol(module, target),
                 Some(target) => target.native_symbol(module.name.dotted()),
                 None => format!("by_{}_{}", mangle(module.name.dotted()), mangle(callee)),
             };
-            let call = format!("{symbol}({args})");
+            let call = match (counted, target) {
+                (true, Some(target)) => {
+                    let args = if args.is_empty() {
+                        "by_depth".to_string()
+                    } else {
+                        format!("by_depth, {args}")
+                    };
+                    format!(
+                        "({{ {ret} by_called = {symbol}({args}); By_DepthLeave(by_depth); by_called; }})",
+                        ret = ctype(module, &target.ret)
+                    )
+                }
+                _ => format!("{symbol}({args})"),
+            };
+            let enter = if counted {
+                format!(
+                    "    if (BY_UNLIKELY(By_DepthEnter(by_depth))) goto {};\n",
+                    error_label(error_target)
+                )
+            } else {
+                String::new()
+            };
             let fallible = target.is_none_or(|target| target.convention.can_fail());
-            match dest {
+            let body = match dest {
                 Some(dest) if fallible => {
                     assign_checked(module, function, *dest, &call, error_target)
                 }
                 Some(dest) => assign_owned(module, function, *dest, &call),
                 None => format!("    (void){call};\n"),
-            }
+            };
+            enter + &body
         }
         Op::IntToFloat { dest, src } => {
             let expr = format!("By_TaggedToDouble({})", value_expr(src));
@@ -7571,6 +7765,46 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             );
             assign_checked(module, function, *dest, &call, error_target)
         }
+        Op::CallThrough {
+            dest,
+            callee,
+            args,
+            keywords,
+        } => {
+            // the arguments go through a variadic helper rather than an array in this
+            // frame: an array is what gives a function a stack protector, and this is
+            // the rare arm of a call whose common arm should not pay for one
+            let mut out = String::new();
+            let names = if keywords.is_empty() {
+                "NULL".to_string()
+            } else {
+                let _ = writeln!(
+                    out,
+                    "    {{ static PyObject *by_kwnames = NULL;\n      \
+                     if (by_kwnames == NULL) by_kwnames = By_KeywordNames({}, {});\n      \
+                     if (by_kwnames == NULL) goto {};",
+                    keywords.len(),
+                    keywords
+                        .iter()
+                        .map(|keyword| c_string(keyword))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    error_label(error_target),
+                );
+                "by_kwnames".to_string()
+            };
+            if keywords.is_empty() {
+                out.push_str("    {\n");
+            }
+            let arguments = std::iter::once(value_expr(callee))
+                .chain([names, (args.len() - keywords.len()).to_string()])
+                .chain(args.iter().map(value_expr))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "      PyObject *by_t = By_CallThrough({arguments});");
+            out.push_str(&commit_checked(function, *dest, error_target));
+            out
+        }
         Op::CallValue { dest, callee, args } => {
             let argv = args.iter().map(value_expr).collect::<Vec<_>>().join(", ");
             let mut out = String::new();
@@ -8107,6 +8341,22 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             for index in path {
                 let _ = write!(target, ".f{index}");
             }
+            // what a function's resolution holds is NULL wherever the native entry stood
+            // in, which is the path that matters, and saying so outright keeps that path
+            // free of a call to a release clang has outlined from a body grown large with
+            // the call made in the entry's place
+            let resolution = path.is_empty()
+                && function
+                    .blocks
+                    .iter()
+                    .flat_map(|block| &block.ops)
+                    .any(|op| matches!(op, Op::ResolveFunction { dest, .. } if dest == id));
+            if resolution {
+                return format!(
+                    "    {{ PyObject *by_old = {target}; {target} = NULL; \
+                     if (by_old != NULL) Py_DECREF(by_old); }}\n"
+                );
+            }
             dec_ref(ty, "by_old").map_or_else(String::new, |release| {
                 format!(
                     "    {{ {} by_old = {target}; {target} = {}; {release} }}\n",
@@ -8527,6 +8777,19 @@ fn emit_wrapper(module: &ModuleIr, function: &Function, is_method: bool) -> Stri
     if !is_method {
         out.push_str("    (void)self;\n");
     }
+    // the defaults written into this wrapper are the ones the function was compiled
+    // with, and once the published function's own have been reassigned they are not
+    // the ones python would bind — see `By_CallMoved`
+    if function.owner.is_none()
+        && function.nested.is_none()
+        && published_functions(module).contains(&function.name.as_str())
+    {
+        let _ = writeln!(
+            out,
+            "    if (BY_UNLIKELY({site}.flags.moved)) return By_CallMoved(&{site}, args, nargs, kwnames);",
+            site = function_site(&function.name)
+        );
+    }
     // python counts a method's `self` in an arity error, and a nested function has no
     // receiver it can see
     let counted = i32::from(is_method && function.nested.is_none());
@@ -8668,16 +8931,46 @@ fn emit_wrapper(module: &ModuleIr, function: &Function, is_method: bool) -> Stri
         );
     }
 
-    let args = (0..function.param_count)
+    let mut args: Vec<String> = (0..function.param_count)
         .map(|index| format!("a{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+    // the interpreter pushes no frame for a call into this wrapper, and python would have
+    // pushed one for the body: a method called from python, a dunder a slot reaches, a
+    // nested function called as a value. so the call is counted here, as the frame python
+    // would have counted — and without it a recursion that goes round through the object
+    // protocol, `self[k - 1]` inside `__getitem__`, ran off the stack. a module-level
+    // function is the exception: the forwarder the module publishes is a python frame,
+    // already counted, and counting again raised `RecursionError` a frame early. its body
+    // is still handed the depth where it is on a cycle, so the calls round the cycle count
+    let counts_the_call = function.owner.is_some() || function.nested.is_some();
+    let body = if is_recursive(function) {
+        depth_symbol(module, function)
+    } else {
+        function.native_symbol(module.name.dotted())
+    };
+    if is_recursive(function) {
+        let depth = if counts_the_call {
+            "by_depth"
+        } else {
+            "By_DepthHere()"
+        };
+        args.insert(0, depth.to_string());
+    }
+    let arguments = args.join(", ");
+    if counts_the_call {
+        out.push_str(
+            "    ByDepth by_depth = By_DepthHere();\n\
+             \x20   if (BY_UNLIKELY(By_DepthEnter(by_depth))) goto by_wrap_error;\n",
+        );
+    }
     let _ = writeln!(
         out,
-        "    {} by_result = {}({args});",
+        "    {} by_result = {body}({arguments});",
         ctype(module, &function.ret),
-        function.native_symbol(module.name.dotted())
     );
+    if counts_the_call {
+        out.push_str("    By_DepthLeave(by_depth);\n");
+    }
     // a resume hands back nothing both when the frame returned and when it raised, and
     // the second is the only one a python caller can be given. anything reaching the
     // step through this wrapper rather than through the iterator protocol still gets
@@ -10095,9 +10388,22 @@ fn emit_module_init(module: &ModuleIr) -> String {
             format!(
                 "    {{ int by_installed = By_InstallForwarders(dict, by_built, by_forwarded, {}, {});\n\
                  \x20     Py_DECREF(by_built);\n\
-                 \x20     if (by_installed < 0) return -1; }}\n",
+                 \x20     if (by_installed < 0) return -1; }}\n{}",
                 shims.functions.len(),
-                c_string(&shims.installer)
+                c_string(&shims.installer),
+                shims
+                    .functions
+                    .iter()
+                    .fold(String::new(), |mut arms, name| {
+                        let _ = writeln!(
+                            arms,
+                            "    if (By_ArmFunctionSite(&{}, dict, {}, {}) < 0) return -1;",
+                            function_site(name),
+                            c_string(name),
+                            i32::from(asks_whether_it_stands(module, name))
+                        );
+                        arms
+                    })
             ),
         ),
         None => (String::new(), String::new()),
@@ -10211,6 +10517,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         }
     }
 
@@ -11479,6 +11786,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         };
         let c = emit_module(&module);
         // the forward declaration precedes the body, so take the last split
@@ -11843,6 +12151,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         };
         let c = emit_module(&module);
         assert!(c.contains("PyMODINIT_FUNC PyInit_app(void)"));

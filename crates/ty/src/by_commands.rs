@@ -286,11 +286,12 @@ pub(crate) fn cmd_run(
         // the entry module is the exception, and it has to be: `runpy` needs a
         // code object to run something as `__main__`, and an extension has none.
         // so the entry stays interpreted and everything it imports is native
-        let options = by_build::Options {
+        let mut options = by_build::Options {
             fallback: Some(config),
             language: by_irbuild::Language::default(),
             ..by_build::Options::default()
         };
+        project.apply_compile_options(&mut options);
         // no added context: every way `probe` fails already names the interpreter and says
         // what about it was refused, and a blanket "could not read its build configuration"
         // on top of them told a user to go and install headers when the real answer was that
@@ -760,6 +761,26 @@ impl ResolvedProject {
         }
     }
 
+    /// What the project's `compile` options ask of a native build.
+    ///
+    /// Destructured, so an option added to the group and never carried across is a
+    /// compile error here rather than a setting that silently does nothing.
+    fn apply_compile_options(&self, options: &mut by_build::Options) {
+        let Some(ty_project::metadata::options::CompileOptions {
+            follow_recursion_limit,
+            bind_functions_early,
+        }) = self.metadata.options().compile.as_ref()
+        else {
+            return;
+        };
+        if let Some(follow) = follow_recursion_limit {
+            options.follow_recursion_limit = *follow;
+        }
+        if let Some(early) = bind_functions_early {
+            options.bind_functions_early = *early;
+        }
+    }
+
     /// The environment the project configures, as an absolute path.
     fn configured_environment(&self) -> Option<PathBuf> {
         let sys_root = SystemPath::from_std_path(&self.root)?;
@@ -1137,6 +1158,7 @@ pub(crate) fn cmd_compile(
     // built against one abi is unimportable by another, and `by run --compiled`
     // imports what this wrote
     let project = ResolvedProject::discover(&cwd)?;
+    project.apply_compile_options(&mut options);
     let python = discover_interpreter(None, &project)?.path;
     // see the note on the other `probe` call: its own errors are self-describing, and the
     // context that used to sit here misreported a version refusal as a missing header
