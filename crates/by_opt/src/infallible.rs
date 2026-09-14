@@ -186,6 +186,8 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::CallMethod { .. }
         | Op::GetAttr { .. }
         | Op::SetAttr { .. }
+        | Op::ReadAttribute { .. }
+        | Op::WriteAttribute { .. }
         | Op::BuildList { .. }
         | Op::BuildSet { .. }
         | Op::BuildTuple { .. }
@@ -269,8 +271,10 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::FieldIsSet { .. } => false,
         // the name is resolved, and one bound nowhere is a `NameError`
         Op::BuiltinStands { .. } => true,
+        // a lookup that fails answers no, and the loop as written asks again
+        Op::LoopGuardsHold { .. } => false,
         // the flag is read, and nothing is looked up
-        Op::FunctionStands { .. } => false,
+        Op::FunctionStands { .. } | Op::FunctionStood { .. } => false,
         // a name bound nowhere is a `NameError`
         Op::ResolveFunction { .. } | Op::FunctionCallee { .. } => true,
         // an attribute lookup reaches `__getattr__`, and `__match_args__` with it

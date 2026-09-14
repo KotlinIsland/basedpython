@@ -273,8 +273,10 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::IsMissing { dest, .. }
         | Op::MethodStands { dest, .. }
         | Op::BuiltinStands { dest, .. }
+        | Op::LoopGuardsHold { dest, .. }
         | Op::FunctionStands { dest, .. }
         | Op::ResolveFunction { dest, .. }
+        | Op::FunctionStood { dest, .. }
         | Op::FunctionCallee { dest, .. }
         | Op::AccessorStands { dest, .. }
         | Op::FieldStands { dest, .. }
@@ -316,6 +318,8 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::StopIterationValue { dest, .. }
         | Op::CallMethod { dest, .. }
         | Op::GetAttr { dest, .. }
+        | Op::ReadAttribute { dest, .. }
+        | Op::WriteAttribute { dest, .. }
         | Op::GetField { dest, .. }
         | Op::SetAttr { dest, .. }
         | Op::BuildList { dest, .. }

@@ -921,6 +921,14 @@ def _capture(fn, *args):
         return e
     return None
 
+# a subclass of `base` whose `name` rebinds `len` in `module` to answer `n`, then answers
+# as `answer` would
+def _sub(module, base, name, n, answer):
+    def method(self, *args):
+        module.__dict__['len'] = lambda o: n
+        return answer(self, *args)
+    return type(base.__name__ + 'Sub', (base,), {name: method})
+
 # the deepest argument `fn` still answers for under a recursion limit of `limit`.
 # every frame between here and `fn` is the same in both legs, so the number is the
 # count of frames `fn` itself spends
@@ -2180,6 +2188,84 @@ fn a_rebound_module_function_reaches_compiled_callers() {
             "(setattr(m, 'scaled', lambda a, by: a * 100 + by), m.call_scaled(5))",
             // a write to any other name leaves the direct call standing
             "(setattr(m, 'unrelated', 5), m.__dict__.pop('unrelated'), m.run(3))",
+        ],
+    );
+}
+
+#[test]
+fn a_function_rebound_while_a_loop_or_a_recursion_runs_is_called_from_the_next_call_on() {
+    // a loop or a function may ask whether a module function still stands once on the way
+    // in, because only python code can rebind it or swap its code. these are the ways python
+    // code runs while one does: a call in the body, an `int` subclass whose own arithmetic or
+    // comparison the body reaches, and a callback at some depth of a recursion. each rebinds
+    // or swaps the function partway, and python calls what the name holds from the next call
+    agree_python(
+        "reboundwhile",
+        "\
+import sys
+from collections.abc import Callable
+
+namespace = sys.modules[__name__].__dict__
+
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+
+def run(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = add(total, i)
+        i = i + 1
+    return total
+
+
+def run_with(n: int, hook: Callable[[int], None]) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        if i % 2 == 1:
+            hook(i)
+        total = add(total, i)
+        i = i + 1
+    return total
+
+
+def depth(n: int) -> int:
+    if n < 1:
+        return 0
+    return depth(n - 1) + 1
+
+
+def depth_with(n: int, hook: Callable[[int], None]) -> int:
+    if n < 1:
+        return 0
+    hook(n)
+    return depth_with(n - 1, hook) + 1
+
+
+def restored(name: str, call: Callable[[], object]) -> object:
+    saved = namespace[name]
+    try:
+        return call()
+    except Exception as error:
+        return repr(error)
+    finally:
+        namespace[name] = saved
+",
+        &[
+            "[m.run(5), m.depth(5), m.run_with(6, lambda i: None), m.depth_with(4, lambda n: None)]",
+            "m.restored('add', lambda: m.run_with(6, lambda i: m.namespace.__setitem__('add', lambda a, b: a * 100) if i == 3 else None))",
+            "m.restored('add', lambda: m.run_with(6, lambda i: m.namespace.pop('add') if i == 3 else None))",
+            "m.restored('add', lambda: m.run_with(6, lambda i: setattr(m.add, '__code__', _code_answering(m.add, 7)) if i == 3 else None))",
+            "m.restored('depth_with', lambda: m.depth_with(6, lambda n: m.namespace.__setitem__('depth_with', lambda k, h: 1000) if n == 3 else None))",
+            // an `int` subclass runs python in the comparison and the subtraction the body
+            // reaches before each call
+            "m.restored('depth', lambda: m.depth(type('I', (int,), {'__lt__': lambda s, o: (m.namespace.__setitem__('depth', lambda k: 500), False)[1], '__sub__': lambda s, o: 2})(2 ** 70)))",
+            "m.restored('depth', lambda: m.depth(type('I', (int,), {'__sub__': lambda s, o: (m.namespace.__setitem__('depth', lambda k: 50), 2)[1]})(2 ** 70)))",
+            // a recursion limit lowered from a callback partway through
+            "(lambda saved: (sys := __import__('sys'), [type(_capture(m.depth_with, 400, lambda n: sys.setrecursionlimit(120) if n == 390 else None)).__name__, sys.setrecursionlimit(saved)][0])[1])(__import__('sys').getrecursionlimit())",
         ],
     );
 }
@@ -15030,6 +15116,66 @@ fn a_field_of_a_class_something_extends_is_read_by_name_where_the_name_is_taken_
     ];
     let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
     agree_python("extfield", EXTENDED_FIELD, &calls);
+}
+
+#[test]
+fn a_property_and_a_field_of_an_extended_class_agree_whatever_changes_under_the_loop() {
+    // an accessor and a field of a class something extends are reached directly only while
+    // the receiver is exactly the class and the class is as it was compiled — every other
+    // receiver, and the class after anything is written to it, goes through the protocol.
+    // what changes is asked from inside the loop too: a getter that replaces the property
+    // partway, a field the class takes over with a property, an interpreted subclass whose
+    // reads go the long way round, and an instance whose field was never set
+    agree_python(
+        "extloop",
+        "\
+class Cell:
+    def __init__(self) -> None:
+        self._v = 0
+        self._w = 5
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    @v.setter
+    def v(self, given: int) -> None:
+        self._v = given
+
+    def width(self) -> int:
+        return self._w
+
+
+class Sized(Cell):
+    def extra(self) -> int:
+        return 1
+
+
+def run(cell: Cell, n: int) -> int:
+    i = 0
+    while i < n:
+        cell.v = cell.v + 1
+        i = i + 1
+    return cell.v + cell.width()
+
+
+class Swapping(Cell):
+    def __init__(self) -> None:
+        self._v = 0
+        self._w = 5
+        self.count = 0
+",
+        &[
+            "[m.run(m.Cell(), 10), m.run(m.Sized(), 10)]",
+            // a getter that replaces the property on the class after a few reads
+            "(lambda c: (setattr(m.Cell, 'v', property(lambda s: (s._v, setattr(m.Cell, 'v', property(lambda t: 10000, lambda t, x: setattr(t, '_v', x))) if s._v == 3 else None)[0], lambda s, x: setattr(s, '_v', x))), m.run(c, 10))[-1])(m.Swapping())",
+            // the field taken over by a property once the loop has run
+            "(lambda c: (m.run(c, 3), setattr(m.Cell, '_w', property(lambda s: 42)), m.run(c, 3))[1:])(m.Cell.__new__(m.Cell).__class__())",
+            // an interpreted subclass, whose reads go by name
+            "m.run(type('S', (m.Cell,), {})(), 2)",
+            "[repr(_capture(m.run, m.Cell.__new__(m.Cell), 2)), _frames(_capture(m.run, m.Cell.__new__(m.Cell), 2))]",
+        ],
+    );
 }
 
 #[test]
@@ -36093,6 +36239,118 @@ def patched(name: str, value: object, call: Callable[[], object]) -> object:
 }
 
 #[test]
+fn a_builtin_rebound_while_a_loop_runs_is_called_from_the_next_call_on() {
+    // a loop may ask whether `len` is still the builtin once on the way in, because only
+    // python code can rebind it. these are the ways python code runs while a loop does: a
+    // call in the body, on every trip or only some; a `str`, `list` or `int` subclass whose
+    // `__len__`, `__getitem__` or comparison the loop reaches; and a rebinding in `builtins`
+    // rather than in the module. each rebinds `len` partway through, and python calls the
+    // new one from the next call on — in the same trip where the call comes after
+    agree_python(
+        "rebuiltinloop",
+        "\
+import builtins
+import sys
+from collections.abc import Callable
+
+namespace = sys.modules[__name__].__dict__
+
+
+def rebind_at(trip: int, where: object = None) -> Callable[[int], None]:
+    def hook(i: int) -> None:
+        if i == trip:
+            target = namespace if where is None else builtins.__dict__
+            target['len'] = lambda o: 2
+    return hook
+
+
+def restored(call: Callable[[], object]) -> object:
+    original = builtins.len
+    try:
+        return call()
+    except Exception as error:
+        return repr(error)
+    finally:
+        namespace.pop('len', None)
+        builtins.len = original
+
+
+def every_trip(s: str, hook: Callable[[int], None]) -> list[int]:
+    seen = []
+    i = 0
+    while i < len(s):
+        hook(i)
+        seen.append(len(s))
+        i = i + 1
+    return seen
+
+
+def some_trips(s: str, hook: Callable[[int], None]) -> int:
+    total = 0
+    i = 0
+    while i < len(s):
+        if i % 2 == 1:
+            hook(i)
+        total = total + len(s)
+        i = i + 1
+    return total
+
+
+def scan(line: str) -> int:
+    best = 0
+    run = 0
+    i = 0
+    while i < len(line):
+        if line[i] == ' ':
+            if run > best:
+                best = run
+            run = 0
+        else:
+            run = run + 1
+        i = i + 1
+    return best
+
+
+def measured(xs: list[float], ys: list[float]) -> float:
+    out = 0.0
+    i = 0
+    while i < len(xs):
+        out = out + xs[i] * ys[i]
+        i = i + 1
+    return out
+
+
+def bounded(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = total + len('abc')
+        i = i + 1
+    return total
+",
+        &[
+            // `_sub(m, base, name, n, answer)` is a subclass the interpreter builds, whose `name`
+            // rebinds `len` to answer `n` and then answers as `answer` would
+            "m.restored(lambda: m.every_trip('abcde', m.rebind_at(1)))",
+            "m.restored(lambda: m.every_trip('abcde', m.rebind_at(1, 'builtins')))",
+            "m.restored(lambda: m.some_trips('abcdefgh', m.rebind_at(3)))",
+            "m.restored(lambda: m.every_trip('abc', m.rebind_at(9)))",
+            "m.restored(lambda: m.scan('ab cde f'))",
+            "m.restored(lambda: m.scan(_sub(m, str, '__len__', 4, str.__len__)('ab cde f')))",
+            "m.restored(lambda: m.scan(_sub(m, str, '__getitem__', 3, str.__getitem__)('ab cde fghij')))",
+            "m.restored(lambda: m.measured([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]))",
+            "m.restored(lambda: m.measured(_sub(m, list, '__getitem__', 1, list.__getitem__)([1.0, 2.0, 3.0]), [4.0, 5.0, 6.0]))",
+            "m.restored(lambda: m.measured([1.0, 2.0, 3.0], _sub(m, list, '__getitem__', 1, list.__getitem__)([4.0, 5.0, 6.0])))",
+            "m.restored(lambda: m.bounded(3))",
+            "m.restored(lambda: m.bounded(_sub(m, int, '__gt__', 7, lambda self, other: other < 3)(2 ** 70)))",
+            "m.restored(lambda: m.scan(''))",
+            // a name bound nowhere is python's `NameError` at the first call, not before it
+            "m.restored(lambda: (builtins.__dict__.pop('len'), m.scan('ab c')))",
+        ],
+    );
+}
+
+#[test]
 fn a_special_method_a_descriptor_builds_is_looked_up_as_python_looks_it_up() {
     // a `with` statement and a method call each remember what the name resolved to on
     // the receiver's type. what is on the type is not always what reading it answers: a
@@ -36259,6 +36517,98 @@ def nonempty(xs: object) -> bool:
         &[
             "[m.length(range(2**62)), m.length(range(2**63 - 1)), m.length(range(2**62 - 1))]",
             "[m.nonempty(range(2**62)), m.length([1, 2, 3]), m.length('abc')]",
+        ],
+    );
+}
+
+#[test]
+fn an_unset_int_field_read_where_it_is_consumed_raises_where_python_does() {
+    // an `int` field `__init__` always assigns is still absent on an instance `__new__`
+    // made, and a read of it raises `AttributeError` — from the frame and the line the read
+    // is written in, before anything after it runs. the read is asked in several shapes:
+    // one that keeps its own reference, one whose value goes straight into arithmetic, one
+    // inside an accessor, a `with` block's `__enter__` and `__exit__`, and a value too big
+    // to be a short, which a read keeps a reference to
+    agree_python(
+        "unsetconsumed",
+        "\
+class State:
+    def __init__(self) -> None:
+        self.a = 0
+        self.b = 1
+        self.c = 2
+
+
+def step(state: State, n: int) -> int:
+    i = 0
+    while i < n:
+        state.a = state.b + state.c
+        state.b = state.a - state.c
+        state.c = state.c + 1
+        i = i + 1
+    return state.a + state.b + state.c
+
+
+class Cell:
+    def __init__(self) -> None:
+        self._v = 0
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+    @v.setter
+    def v(self, given: int) -> None:
+        self._v = given
+
+
+def bump(cell: Cell, n: int) -> int:
+    i = 0
+    while i < n:
+        cell.v = cell.v + 1
+        i = i + 1
+    return cell.v
+
+
+class Guard:
+    depth: int
+
+    def __init__(self) -> None:
+        self.depth = 0
+
+    def __enter__(self) -> 'Guard':
+        self.depth = self.depth + 1
+        return self
+
+    def __exit__(self, kind: object, value: object, trace: object) -> None:
+        self.depth = self.depth - 1
+
+
+def guarded(guard: Guard, n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        with guard:
+            total = total + guard.depth
+        i = i + 1
+    return total
+",
+        &[
+            "[m.step(m.State(), 3), m.bump(m.Cell(), 3), m.guarded(m.Guard(), 3)]",
+            "_frames(_capture(m.step, m.State.__new__(m.State), 3))",
+            "repr(_capture(m.step, m.State.__new__(m.State), 3))",
+            // each field set in turn, so each read in the body is the first to find one missing
+            "[repr(_capture(m.step, s, 2)) for s in [(lambda s: (setattr(s, 'b', 1), s)[1])(m.State.__new__(m.State)), (lambda s: (setattr(s, 'c', 1), s)[1])(m.State.__new__(m.State))]]",
+            "[_frames(_capture(m.step, s, 2)) for s in [(lambda s: (setattr(s, 'b', 1), s)[1])(m.State.__new__(m.State)), (lambda s: (setattr(s, 'c', 1), s)[1])(m.State.__new__(m.State))]]",
+            "(lambda s: (setattr(s, 'b', 2 ** 70), setattr(s, 'c', 2 ** 70), m.step(s, 3))[-1])(m.State.__new__(m.State))",
+            "_frames(_capture(m.bump, m.Cell.__new__(m.Cell), 3))",
+            "repr(_capture(lambda: m.Cell.__new__(m.Cell).v))",
+            "(lambda c: (setattr(c, 'v', 2 ** 70), m.bump(c, 3))[-1])(m.Cell.__new__(m.Cell))",
+            "_frames(_capture(m.guarded, m.Guard.__new__(m.Guard), 3))",
+            "(lambda g: (setattr(g, 'depth', 2 ** 70), m.guarded(g, 3))[-1])(m.Guard.__new__(m.Guard))",
+            // the field is missing only after `__enter__` found it: a `__exit__` reached on
+            // an instance whose field was never there
+            "_frames(_capture(lambda: m.Guard.__exit__(m.Guard.__new__(m.Guard), None, None, None)))",
         ],
     );
 }
@@ -37721,6 +38071,9 @@ fn a_licensed_call_re_asks_its_lookup_under_the_mode() {
         "{checked}"
     );
     assert!(checked.contains("By_RecheckAccessor("), "{checked}");
+    // `Money` is extended, so its getter reads `_amount` under a licence of its own kind
+    assert!(checked.contains("By_RecheckField("), "{checked}");
+    assert!(checked.contains("\"_amount\""), "{checked}");
     assert!(
         checked.contains("By_RecheckMethod((PyObject *)"),
         "{checked}"
