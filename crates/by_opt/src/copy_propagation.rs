@@ -301,6 +301,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::NewInstance { dest, .. }
         | Op::GetCell { dest, .. }
         | Op::Enter { dest, .. }
+        | Op::BindExit { dest, .. }
         | Op::ExitContext { dest, .. }
         | Op::DelegateIter { dest, .. }
         | Op::DelegateStep { dest, .. }
@@ -308,6 +309,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::GetIter { dest, .. }
         | Op::IterNext { dest, .. }
         | Op::IsNull { dest, .. }
+        | Op::StopIterationValue { dest, .. }
         | Op::CallMethod { dest, .. }
         | Op::GetAttr { dest, .. }
         | Op::GetField { dest, .. }
@@ -358,8 +360,10 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::PopHandled { .. }
         | Op::Release { .. }
         | Op::Reraise { .. }
+        | Op::LeaveGenerator { .. }
         | Op::LicenceHolds { .. }
         | Op::RequireField { .. }
+        | Op::Line { .. }
         | Op::SetField { .. } => {}
     }
 }

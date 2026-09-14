@@ -114,6 +114,16 @@ fn frame_kind(surface: Surface) -> &'static str {
     }
 }
 
+/// the accessor a resumable frame's `throw` and `close` ask for the iterator a suspension
+/// delegates to, or `NULL` for a frame with no delegation to ask about
+fn delegate_accessor(resume: &by_ir::function::Resumption, type_name: &str) -> String {
+    if resume.delegations.is_empty() {
+        "NULL".to_string()
+    } else {
+        format!("{type_name}_delegate")
+    }
+}
+
 fn mangle_member(name: &str) -> String {
     by_ir::function::FieldDecl {
         cell: false,
@@ -307,7 +317,11 @@ pub fn emit_module(module: &ModuleIr) -> String {
     // function's spec, and the spec names its wrapper. interleaving per class made that
     // a forward reference
     for class in &module.classes {
-        for method in &class.methods {
+        for method in class
+            .methods
+            .iter()
+            .filter(|method| !class.resumes_through(method))
+        {
             let _ = writeln!(
                 out,
                 "static PyObject *{}({});",
@@ -339,6 +353,9 @@ pub fn emit_module(module: &ModuleIr) -> String {
         for method in &class.methods {
             out.push_str(&emit_function(module, method));
             out.push('\n');
+            if class.resumes_through(method) {
+                continue;
+            }
             // a method's wrapper takes the receiver from the `self` slot rather
             // than from the argument vector, which is how `METH_FASTCALL` on a
             // type presents it. a `staticmethod` has nothing there and binds every
@@ -572,39 +589,133 @@ fn emit_collected_instance(module: &ModuleIr, class: &ClassIr) -> String {
     )
 }
 
-/// `tp_traverse` and `tp_clear` for a closure environment
+/// a place in a frame's state that may hold an object reference
+struct HeldReference {
+    /// the C lvalue holding it
+    slot: String,
+    /// whether the slot is a tagged `int`, which is only a reference while it is not short
+    tagged: bool,
+}
+
+/// every place a value of `ty` at `expr` may hold an object reference
 ///
-/// a nested function that reads its own name holds the environment it reads it out of,
-/// and the environment holds the function, so counting alone never frees either — the
-/// collector has to be able to walk the cycle, and clearing the environment's fields is
-/// what breaks it. the type is static, so there is no reference to it to report
-fn emit_collected_environment(module: &ModuleIr, class: &ClassIr) -> String {
+/// a frame's state is whatever its registers held, so a field can be any representation a
+/// register has: a fixed-length tuple holds its elements inline, and a tagged `int` holds a
+/// real `int` once it leaves the short range. an unboxed buffer is left out, because what
+/// it holds is unboxed values rather than objects
+fn held_references(ty: &RType, expr: &str) -> Vec<HeldReference> {
+    match ty {
+        RType::Primitive(Primitive::Int) => vec![HeldReference {
+            slot: expr.to_string(),
+            tagged: true,
+        }],
+        RType::Tuple(items) => items
+            .iter()
+            .enumerate()
+            .flat_map(|(index, item)| held_references(item, &format!("{expr}.f{index}")))
+            .collect(),
+        RType::Array(_) => Vec::new(),
+        _ if ty.is_refcounted() => vec![HeldReference {
+            slot: expr.to_string(),
+            tagged: false,
+        }],
+        _ => Vec::new(),
+    }
+}
+
+/// `tp_traverse` for a frame's state — a closure environment or a generator's state
+/// object — over every reference its fields hold
+///
+/// the type is static, so there is no reference to it to report
+fn emit_frame_traverse(module: &ModuleIr, class: &ClassIr) -> String {
     let struct_name = class.struct_name(module.name.dotted());
     let type_name = class.type_name(module.name.dotted());
     let mut visits = String::new();
-    let mut clears = String::new();
-    for field in class.fields.iter().filter(|field| collectable(field)) {
-        let _ = writeln!(
-            out_slot(&mut visits),
-            "    Py_VISIT(self->{});",
-            field.member()
-        );
-        let _ = writeln!(
-            out_slot(&mut clears),
-            "    Py_CLEAR(self->{});",
-            field.member()
-        );
+    if class.resume.is_some() {
+        visits.push_str("    Py_VISIT(self->by_returned);\n");
+    }
+    for field in &class.fields {
+        for held in held_references(&field.ty, &format!("self->{}", field.member())) {
+            let slot = held.slot;
+            if held.tagged {
+                let _ = writeln!(
+                    visits,
+                    "    if (!By_IsShort({slot})) Py_VISIT(By_LongOf({slot}));"
+                );
+            } else {
+                let _ = writeln!(visits, "    Py_VISIT({slot});");
+            }
+        }
     }
     format!(
         "static int {type_name}_traverse({struct_name} *self, visitproc visit, void *arg) {{\n\
          \x20   (void)self; (void)visit; (void)arg;\n\
          {visits}\
-         \x20   return 0;\n}}\n\n\
-         static int {type_name}_clear({struct_name} *self) {{\n\
-         \x20   (void)self;\n\
-         {clears}\
          \x20   return 0;\n}}\n\n"
     )
+}
+
+/// `tp_traverse` and `tp_clear` for a closure environment
+///
+/// a nested function that reads its own name holds the environment it reads it out of,
+/// and the environment holds the function, so counting alone never frees either — the
+/// collector has to be able to walk the cycle, and clearing the environment's fields is
+/// what breaks it
+fn emit_collected_environment(module: &ModuleIr, class: &ClassIr) -> String {
+    let struct_name = class.struct_name(module.name.dotted());
+    let type_name = class.type_name(module.name.dotted());
+    format!(
+        "{}static int {type_name}_clear({struct_name} *self) {{\n\
+         \x20   (void)self;\n\
+         {}\
+         \x20   return 0;\n}}\n\n",
+        emit_frame_traverse(module, class),
+        emit_frame_clears(class)
+    )
+}
+
+/// `tp_traverse` and `tp_clear` for a generator's, coroutine's or async generator's
+/// state object
+///
+/// a suspended frame is as able to sit in a cycle as any other object — a generator that
+/// holds a list the generator is in, say — and python frees that cycle by finalizing the
+/// generator, which closes it and runs the `finally` it is suspended in. a type the
+/// collector cannot walk keeps the cycle, and every object in it, for good.
+///
+/// the clear runs after the finalizer has closed the frame, and it leaves the frame
+/// finished: the fields it releases are the ones a resumption would read, and a finished
+/// frame reads none of them
+fn emit_collected_generator(module: &ModuleIr, class: &ClassIr) -> String {
+    let struct_name = class.struct_name(module.name.dotted());
+    let type_name = class.type_name(module.name.dotted());
+    format!(
+        "{}static int {type_name}_clear({struct_name} *self) {{\n\
+         \x20   By_FinishGenerator(&self->{state});\n\
+         \x20   Py_CLEAR(self->by_returned);\n\
+         {}\
+         \x20   return 0;\n}}\n\n",
+        emit_frame_traverse(module, class),
+        emit_frame_clears(class),
+        state = mangle_member(GENERATOR_STATE)
+    )
+}
+
+/// the releases a frame's `tp_clear` makes, one for each object reference a traverse
+/// reports
+///
+/// a tagged `int` is left alone: the `int` it may hold cannot be part of a cycle, so
+/// releasing it breaks nothing, and a field still holding a valid representation is one
+/// less state to reason about
+fn emit_frame_clears(class: &ClassIr) -> String {
+    let mut clears = String::new();
+    for field in &class.fields {
+        for held in held_references(&field.ty, &format!("self->{}", field.member())) {
+            if !held.tagged {
+                let _ = writeln!(clears, "    Py_CLEAR({});", held.slot);
+            }
+        }
+    }
+    clears
 }
 
 /// `tp_dealloc`, `tp_traverse` and `tp_clear` for a class whose fields sit past a
@@ -764,6 +875,23 @@ fn emit_class_struct(module: &ModuleIr, class: &ClassIr) -> String {
     // parks across a suspension in it: it is written once, on the way out
     if class.resume.is_some() {
         out.push_str("    PyObject *by_returned;\n");
+        // the weak references to the frame: python's generators, coroutines and async
+        // generators all take them
+        out.push_str("    PyObject *by_weakrefs;\n");
+    }
+    // python's `ag_closed`: an async generator that has been asked to `aclose()` once
+    // answers every later `aclose()` and `athrow()` as already ended, whether or not the
+    // first close finished its frame
+    if class
+        .resume
+        .as_ref()
+        .is_some_and(|resume| resume.surface == Surface::AsyncGenerator)
+    {
+        out.push_str("    char by_closed;\n");
+        // python's `ag_running_async`: an awaitable of this generator is stepping it, and
+        // stays stepping while the frame is suspended at an `await` — so no other
+        // awaitable may start until that one has finished
+        out.push_str("    char by_running_async;\n");
     }
     for field in own_fields(module, class) {
         let _ = writeln!(out, "    {} {};", ctype(module, &field.ty), field.member());
@@ -1010,6 +1138,8 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
             out.push_str(&emit_collected_instance(module, class));
         } else if class.environment {
             out.push_str(&emit_collected_environment(module, class));
+        } else if class.resume.is_some() {
+            out.push_str(&emit_collected_generator(module, class));
         }
         // dealloc releases each refcounted field, then the object
         let _ = writeln!(
@@ -1031,10 +1161,23 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
         // a subclass writes a dealloc of its own, so it has to make the call for the
         // finalizer it inherited — which is why this asks the whole chain rather than
         // only this class
+        // before the finalizer, as python's own generators do: a weak reference's callback
+        // runs while the object is still whole, and it sees a reference that is already dead
+        if class.resume.is_some() {
+            out.push_str(
+                "    if (self->by_weakrefs != NULL) PyObject_ClearWeakRefs((PyObject *)self);\n",
+            );
+        }
         if class.resume.is_some() || finalizes(module, class) {
             out.push_str(
                 "    if (PyObject_CallFinalizerFromDealloc((PyObject *)self) < 0) return;\n",
             );
+        }
+        // a frame's finalizer closes it, and a close that resurrects the object has to
+        // leave it tracked — so a generator comes off the collector's list only once
+        // the finalizer has said it is really going
+        if class.resume.is_some() {
+            out.push_str("    PyObject_GC_UnTrack(self);\n");
         }
         if keeps_a_dict {
             let _ = writeln!(out, "    By_ReleaseInstanceDict(&self->{BY_DICT_MEMBER});");
@@ -1059,7 +1202,7 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
 
     // a class with nothing to initialize publishes no `__init__` at all, so that
     // `object.__init__` is what a construction reaches — exactly as in the source
-    if !initializes(module, class) {
+    if !initializes(module, class) || made_only_by_its_frame(module, class) {
         out.push_str(&emit_class_members(module, class));
         return out;
     }
@@ -1924,6 +2067,38 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             .find(|method| method.name == resume.method)
             .map(|method| method.native_symbol(module.name.dotted()))
             .unwrap_or_default();
+        // the iterator a suspension inside `yield from` or `await` waits on, which `throw`
+        // and `close` reach before the frame. a frame that never delegates has none to
+        // name, and says so with a null accessor rather than one that always answers NULL
+        let delegate = delegate_accessor(resume, &type_name);
+        if !resume.delegations.is_empty() {
+            let mut cases = String::new();
+            for delegation in &resume.delegations {
+                let Some(field) = class
+                    .fields
+                    .iter()
+                    .find(|field| field.name == delegation.field)
+                else {
+                    continue;
+                };
+                let _ = writeln!(
+                    cases,
+                    "\x20   case {}: return (PyObject *)self->{};",
+                    delegation.state,
+                    field.member()
+                );
+            }
+            let _ = writeln!(
+                out,
+                "static PyObject *{type_name}_delegate(PyObject *selfobj) {{\n\
+                 \x20   {struct_name} *self = ({struct_name} *)selfobj;\n\
+                 \x20   switch (By_ShortValue(self->{state})) {{\n\
+                 {cases}\
+                 \x20   default: return NULL;\n\
+                 \x20   }}\n}}",
+                state = mangle_member(crate::GENERATOR_STATE)
+            );
+        }
         let _ = writeln!(
             out,
             "static PyObject *{type_name}_send(PyObject *selfobj, PyObject *const *args, Py_ssize_t nargs) {{\n\
@@ -1938,19 +2113,17 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             sent = mangle_member(crate::GENERATOR_SENT),
             state = mangle_member(crate::GENERATOR_STATE)
         );
-        // `close` throws `GeneratorExit` in, which runs every enclosing `finally`, then
-        // marks the machine exhausted whatever came back
+        // `close` throws `GeneratorExit` in, which runs every enclosing `finally`. the
+        // frame finishes itself on the way out, and one that suspends again instead is
+        // still suspended — python refuses that close and a later step resumes it
         let _ = writeln!(
             out,
             "static PyObject *{type_name}_close(PyObject *selfobj, PyObject *const *args, Py_ssize_t nargs) {{\n\
              \x20   (void)args; (void)nargs;\n\
              \x20   {struct_name} *self = ({struct_name} *)selfobj;\n\
-             \x20   int by_r = By_CloseGenerator(selfobj, &self->{sent}, &self->{thrown},\n\
-             \x20                                &self->by_returned, &self->{state}, {frame},\n\
-             \x20                                (PyObject *(*)(PyObject *)){symbol});\n\
-             \x20   By_FinishGenerator(&self->{state});\n\
-             \x20   if (by_r < 0) return NULL;\n\
-             \x20   Py_RETURN_NONE;\n}}",
+             \x20   return By_CloseGenerator(selfobj, &self->{sent}, &self->{thrown},\n\
+             \x20                            &self->by_returned, &self->{state}, {frame},\n\
+             \x20                            {delegate}, (PyObject *(*)(PyObject *)){symbol});\n}}",
             sent = mangle_member(crate::GENERATOR_SENT),
             thrown = mangle_member(crate::GENERATOR_THROWN),
             state = mangle_member(crate::GENERATOR_STATE)
@@ -1960,15 +2133,13 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         let _ = writeln!(
             out,
             "static PyObject *{type_name}_throw(PyObject *selfobj, PyObject *const *args, Py_ssize_t nargs) {{\n\
-             \x20   if (nargs < 1) {{\n\
-             \x20       PyErr_SetString(PyExc_TypeError, \"throw() takes at least one argument\");\n\
-             \x20       return NULL;\n\
-             \x20   }}\n\
+             \x20   if (By_CountThrowArguments(\"throw\", nargs) < 0\n\
+             \x20       || By_WarnThrowSignature(\"throw\", nargs) < 0) return NULL;\n\
              \x20   return By_ThrowInto(selfobj, &(({struct_name} *)selfobj)->{sent},\n\
              \x20                       &(({struct_name} *)selfobj)->{thrown},\n\
              \x20                       &(({struct_name} *)selfobj)->by_returned,\n\
-             \x20                       &(({struct_name} *)selfobj)->{state}, {frame}, args[0],\n\
-             \x20                       (PyObject *(*)(PyObject *)){symbol});\n}}",
+             \x20                       &(({struct_name} *)selfobj)->{state}, {frame}, args, nargs,\n\
+             \x20                       {delegate}, (PyObject *(*)(PyObject *)){symbol});\n}}",
             sent = mangle_member(crate::GENERATOR_SENT),
             thrown = mangle_member(crate::GENERATOR_THROWN),
             state = mangle_member(crate::GENERATOR_STATE)
@@ -1980,10 +2151,28 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // by closing it, which resumes the frame *by raising* at the suspension and so
     // runs every `finally` and every `__exit__` the body was inside. without this a
     // context manager the frame never left would simply never be exited
-    if class.resume.is_some() {
+    if let Some(resume) = &class.resume {
+        // a coroutine that never ran is not unwound, it is reported: python takes one
+        // dropped before its first step for a missing `await`
+        let unawaited = if resume.surface == Surface::Coroutine {
+            format!(
+                "\x20   if ((({struct_name} *)selfobj)->{state} == By_ShortFrom(0)) {{\n\
+                 \x20       PyObject *by_type, *by_value, *by_tb;\n\
+                 \x20       PyErr_Fetch(&by_type, &by_value, &by_tb);\n\
+                 \x20       By_WarnUnawaitedCoroutine(selfobj, {qualname});\n\
+                 \x20       PyErr_Restore(by_type, by_value, by_tb);\n\
+                 \x20       return;\n\
+                 \x20   }}\n",
+                state = mangle_member(crate::GENERATOR_STATE),
+                qualname = c_string(&resume.qualname)
+            )
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             out,
             "static void {type_name}_finalize(PyObject *selfobj) {{\n\
+             {unawaited}\
              \x20   /* only a *suspended* frame has anything to unwind: state 0 never\n\
              \x20    * started and -1 already finished, and resuming either would run\n\
              \x20    * the body a second time */\n\
@@ -1991,7 +2180,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20   PyObject *by_type, *by_value, *by_tb;\n\
              \x20   PyErr_Fetch(&by_type, &by_value, &by_tb);\n\
              \x20   PyObject *by_r = {type_name}_close(selfobj, NULL, 0);\n\
-             \x20   if (by_r == NULL) PyErr_WriteUnraisable(selfobj);\n\
+             \x20   if (by_r == NULL) By_CloseUnraisable(selfobj);\n\
              \x20   else Py_DECREF(by_r);\n\
              \x20   PyErr_Restore(by_type, by_value, by_tb);\n}}",
             state = mangle_member(crate::GENERATOR_STATE)
@@ -2066,16 +2255,20 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                 .find(|method| method.name == resume.method)
                 .map(|method| method.native_symbol(module.name.dotted()))
                 .unwrap_or_default();
-            let _ = writeln!(
-                out,
-                "static PyObject *{type_name}_iternext(PyObject *self) {{\n\
+            // only a generator is an iterator: a coroutine is driven through its send
+            // slot, and an async generator through the awaitable `__anext__` hands back
+            if resume.surface == Surface::Generator {
+                let _ = writeln!(
+                    out,
+                    "static PyObject *{type_name}_iternext(PyObject *self) {{\n\
                  \x20   return By_StepGenerator(self, &(({struct_name} *)self)->{sent},\n\
                  \x20                           &(({struct_name} *)self)->by_returned,\n\
                  \x20                           &(({struct_name} *)self)->{state}, {frame}, Py_None,\n\
                  \x20                           (PyObject *(*)(PyObject *)){symbol});\n}}",
-                sent = mangle_member(crate::GENERATOR_SENT),
-                state = mangle_member(crate::GENERATOR_STATE)
-            );
+                    sent = mangle_member(crate::GENERATOR_SENT),
+                    state = mangle_member(crate::GENERATOR_STATE)
+                );
+            }
             // the slot `PyIter_Send` prefers, and the reason a `return` is reported by
             // writing it down rather than by raising: an `await` that completes gets its
             // answer without an exception being built and immediately unpacked again.
@@ -2105,6 +2298,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                 .map(by_ir::FieldDecl::member)
                 .unwrap_or_default();
             let dotted = module.name.dotted();
+            let delegate = delegate_accessor(resume, &type_name);
             if resume.surface == Surface::AsyncGenerator {
                 // `__anext__` hands back an awaitable rather than an item, because the
                 // body may `await` before it reaches its next `yield`. one `resume`
@@ -2114,144 +2308,324 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                     "typedef struct {{\n\
                      \x20   PyObject_HEAD\n\
                      \x20   {struct_name} *by_gen;\n\
-                     \x20   /* 0 anext, 1 aclose, 2 asend, 3 athrow. the value is what the\n\
-                     \x20    * last two carry, consumed on the first step so a resumption\n\
-                     \x20    * after it behaves like a plain one */\n\
+                     \x20   /* 0 anext, 1 aclose, 2 asend, 3 athrow. what the last two carry: the value `asend`\n\
+                     \x20    * sends in on its first step, and the arguments `athrow` builds its exception from */\n\
                      \x20   char by_mode;\n\
-                     \x20   PyObject *by_value;\n}} {type_name}_asend;\n\
+                     \x20   /* python's awaitable states: 0 not yet stepped, 1 being stepped, 2 finished */\n\
+                     \x20   char by_state;\n\
+                     \x20   PyObject *by_value;\n\
+                     }} {type_name}_asend;\n\
                      static PyTypeObject {type_name}_asend_type;\n\
                      static void {type_name}_asend_dealloc(PyObject *self) {{\n\
+                     \x20   PyObject_GC_UnTrack(self);\n\
                      \x20   Py_XDECREF((PyObject *)(({type_name}_asend *)self)->by_gen);\n\
                      \x20   Py_XDECREF((({type_name}_asend *)self)->by_value);\n\
-                     \x20   Py_TYPE(self)->tp_free(self);\n}}\n\
+                     \x20   Py_TYPE(self)->tp_free(self);\n\
+                     }}\n\
+                     static int {type_name}_asend_traverse(PyObject *self, visitproc visit, void *arg) {{\n\
+                     \x20   Py_VISIT((PyObject *)(({type_name}_asend *)self)->by_gen);\n\
+                     \x20   Py_VISIT((({type_name}_asend *)self)->by_value);\n\
+                     \x20   return 0;\n\
+                     }}\n\
                      static PyObject *{type_name}_asend_await(PyObject *self) {{\n\
-                     \x20   return By_NewRef(self);\n}}\n\
-                     static PyObject *{type_name}_asend_next(PyObject *self) {{\n\
+                     \x20   return By_NewRef(self);\n\
+                     }}\n\
+                     /* what a step of the frame hands the awaitable: a yield finishes the awaitable with its\n\
+                     \x20* item, an await is passed on to whatever drives it, and the frame leaving ends the\n\
+                     \x20* iteration. either of the last two leaves the generator free for another awaitable */\n\
+                     static PyObject *{type_name}_unwrap({struct_name} *by_gen, PyObject *by_step) {{\n\
+                     \x20   if (by_step == NULL) {{\n\
+                     \x20       if (!PyErr_Occurred()) PyErr_SetNone(PyExc_StopAsyncIteration);\n\
+                     \x20       By_EndAsyncIteration();\n\
+                     \x20       if (PyErr_ExceptionMatches(PyExc_StopAsyncIteration)\n\
+                     \x20           || PyErr_ExceptionMatches(PyExc_GeneratorExit)) {{\n\
+                     \x20           by_gen->by_closed = 1;\n\
+                     \x20       }}\n\
+                     \x20       by_gen->by_running_async = 0;\n\
+                     \x20       return NULL;\n\
+                     \x20   }}\n\
+                     \x20   if (by_gen->{kind} != By_ShortFrom(1)) return by_step;\n\
+                     \x20   By_RaiseWith(PyExc_StopIteration, by_step);\n\
+                     \x20   Py_DECREF(by_step);\n\
+                     \x20   by_gen->by_running_async = 0;\n\
+                     \x20   return NULL;\n\
+                     }}\n\
+                     /* the message a second awaitable is refused with while one is stepping the generator */\n\
+                     static void {type_name}_refuse_running({type_name}_asend *by_self) {{\n\
+                     \x20   by_self->by_state = 2;\n\
+                     \x20   PyErr_Format(PyExc_RuntimeError, \"%s(): asynchronous generator is already running\",\n\
+                     \x20                by_self->by_mode == 1 ? \"aclose\" : by_self->by_mode == 3 ? \"athrow\" : \"anext\");\n\
+                     }}\n\
+                     static void {type_name}_refuse_reuse({type_name}_asend *by_self) {{\n\
+                     \x20   PyErr_SetString(PyExc_RuntimeError, by_self->by_mode == 1 || by_self->by_mode == 3\n\
+                     \x20                                           ? \"cannot reuse already awaited aclose()/athrow()\"\n\
+                     \x20                                           : \"cannot reuse already awaited __anext__()/asend()\");\n\
+                     }}\n\
+                     /* python's `throw` of the generator itself, which an awaitable's `throw` is */\n\
+                     static PyObject *{type_name}_gen_throw({struct_name} *by_gen, PyObject *const *args,\n\
+                     \x20                                  Py_ssize_t nargs) {{\n\
+                     \x20   if (By_CountThrowArguments(\"throw\", nargs) < 0 || By_WarnThrowSignature(\"throw\", nargs) < 0)\n\
+                     \x20       return NULL;\n\
+                     \x20   return By_ThrowInto((PyObject *)by_gen, &by_gen->{sent}, &by_gen->{thrown},\n\
+                     \x20                       &by_gen->by_returned, &by_gen->{state}, {frame}, args, nargs,\n\
+                     \x20                       {delegate}, (PyObject *(*)(PyObject *)){symbol});\n\
+                     }}\n\
+                     static PyObject *{type_name}_asend_send(PyObject *self, PyObject *by_arg) {{\n\
                      \x20   {type_name}_asend *by_self = ({type_name}_asend *)self;\n\
                      \x20   {struct_name} *by_gen = by_self->by_gen;\n\
-                     \x20   if (by_self->by_mode == 1) {{\n\
-                     \x20       PyObject *by_done = {type_name}_close((PyObject *)by_gen, NULL, 0);\n\
-                     \x20       if (by_done == NULL) return NULL;\n\
-                     \x20       PyErr_SetObject(PyExc_StopIteration, by_done);\n\
-                     \x20       Py_DECREF(by_done);\n\
+                     \x20   if (by_self->by_mode == 1 || by_self->by_mode == 3) {{\n\
+                     \x20       /* `aclose()` and `athrow()` */\n\
+                     \x20       int by_closing = by_self->by_mode == 1;\n\
+                     \x20       PyObject *by_step;\n\
+                     \x20       if (by_self->by_state == 2) {{\n\
+                     \x20           {type_name}_refuse_reuse(by_self);\n\
+                     \x20           return NULL;\n\
+                     \x20       }}\n\
+                     \x20       if (By_ShortValue(by_gen->{state}) == -1) {{\n\
+                     \x20           by_self->by_state = 2;\n\
+                     \x20           PyErr_SetNone(PyExc_StopIteration);\n\
+                     \x20           return NULL;\n\
+                     \x20       }}\n\
+                     \x20       if (by_arg == NULL) by_arg = Py_None;\n\
+                     \x20       if (by_self->by_state == 0) {{\n\
+                     \x20           if (by_gen->by_running_async) {{\n\
+                     \x20               {type_name}_refuse_running(by_self);\n\
+                     \x20               return NULL;\n\
+                     \x20           }}\n\
+                     \x20           if (by_gen->by_closed) {{\n\
+                     \x20               by_self->by_state = 2;\n\
+                     \x20               PyErr_SetNone(PyExc_StopAsyncIteration);\n\
+                     \x20               return NULL;\n\
+                     \x20           }}\n\
+                     \x20           if (by_arg != Py_None) {{\n\
+                     \x20               PyErr_SetString(PyExc_RuntimeError,\n\
+                     \x20                               \"can't send non-None value to a just-started coroutine\");\n\
+                     \x20               return NULL;\n\
+                     \x20           }}\n\
+                     \x20           by_self->by_state = 1;\n\
+                     \x20           by_gen->by_running_async = 1;\n\
+                     \x20           if (by_closing) {{\n\
+                     \x20               by_gen->by_closed = 1;\n\
+                     \x20               PyObject *by_exit = PyExc_GeneratorExit;\n\
+                     \x20               by_step = By_ThrowInto((PyObject *)by_gen, &by_gen->{sent}, &by_gen->{thrown},\n\
+                     \x20                                      &by_gen->by_returned, &by_gen->{state}, {frame},\n\
+                     \x20                                      &by_exit, 1, {delegate},\n\
+                     \x20                                      (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20           }} else {{\n\
+                     \x20               /* what `athrow` was called with, kept whole: python builds the exception\n\
+                     \x20                * out of it at this step rather than at the call */\n\
+                     \x20               PyObject *by_carried = by_self->by_value;\n\
+                     \x20               if (By_CountThrowArguments(\"athrow\", PyTuple_GET_SIZE(by_carried)) < 0) return NULL;\n\
+                     \x20               by_step = By_ThrowInto((PyObject *)by_gen, &by_gen->{sent}, &by_gen->{thrown},\n\
+                     \x20                                      &by_gen->by_returned, &by_gen->{state}, {frame},\n\
+                     \x20                                      &PyTuple_GET_ITEM(by_carried, 0),\n\
+                     \x20                                      PyTuple_GET_SIZE(by_carried), {delegate},\n\
+                     \x20                                      (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20               by_step = {type_name}_unwrap(by_gen, by_step);\n\
+                     \x20               if (by_step != NULL) return by_step;\n\
+                     \x20               by_gen->by_running_async = 0;\n\
+                     \x20               by_self->by_state = 2;\n\
+                     \x20               return NULL;\n\
+                     \x20           }}\n\
+                     \x20       }} else {{\n\
+                     \x20           by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->{sent}, &by_gen->by_returned,\n\
+                     \x20                                      &by_gen->{state}, {frame}, by_arg,\n\
+                     \x20                                      (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20           if (!by_closing) return {type_name}_unwrap(by_gen, by_step);\n\
+                     \x20       }}\n\
+                     \x20       /* `aclose()` from here on: a yield is the frame refusing to close, and the frame\n\
+                     \x20        * leaving is the close finishing */\n\
+                     \x20       if (by_step != NULL && by_gen->{kind} != By_ShortFrom(1)) return by_step;\n\
+                     \x20       by_gen->by_running_async = 0;\n\
+                     \x20       by_self->by_state = 2;\n\
+                     \x20       if (by_step != NULL) {{\n\
+                     \x20           Py_DECREF(by_step);\n\
+                     \x20           PyErr_SetString(PyExc_RuntimeError, \"async generator ignored GeneratorExit\");\n\
+                     \x20           return NULL;\n\
+                     \x20       }}\n\
+                     \x20       By_EndAsyncIteration();\n\
+                     \x20       if (PyErr_ExceptionMatches(PyExc_StopAsyncIteration)\n\
+                     \x20           || PyErr_ExceptionMatches(PyExc_GeneratorExit)) {{\n\
+                     \x20           PyErr_Clear();\n\
+                     \x20           PyErr_SetNone(PyExc_StopIteration);\n\
+                     \x20       }}\n\
                      \x20       return NULL;\n\
                      \x20   }}\n\
-                     \x20   PyObject *by_carried = by_self->by_value;\n\
-                     \x20   by_self->by_value = NULL;\n\
-                     \x20   PyObject *by_step;\n\
-                     \x20   /* an `athrow` into a frame that has already finished neither\n\
-                     \x20    * resumes it nor re-raises: python ends the await with `None`.\n\
-                     \x20    * one that never *started* is the other case, and raises at the\n\
-                     \x20    * call site — which is what `By_ThrowInto` does with it */\n\
-                     \x20   if (by_carried != NULL && by_self->by_mode == 3\n\
-                     \x20       && By_ShortValue(by_gen->{state}) < 0) {{\n\
-                     \x20       Py_DECREF(by_carried);\n\
+                     \x20   /* `__anext__()` and `asend()` */\n\
+                     \x20   if (by_self->by_state == 2) {{\n\
+                     \x20       {type_name}_refuse_reuse(by_self);\n\
+                     \x20       return NULL;\n\
+                     \x20   }}\n\
+                     \x20   if (by_self->by_state == 0) {{\n\
+                     \x20       if (by_gen->by_running_async) {{\n\
+                     \x20           {type_name}_refuse_running(by_self);\n\
+                     \x20           return NULL;\n\
+                     \x20       }}\n\
+                     \x20       if (by_arg == NULL || by_arg == Py_None) by_arg = by_self->by_value;\n\
+                     \x20       by_self->by_state = 1;\n\
+                     \x20   }}\n\
+                     \x20   by_gen->by_running_async = 1;\n\
+                     \x20   PyObject *by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->{sent}, &by_gen->by_returned,\n\
+                     \x20                                        &by_gen->{state}, {frame},\n\
+                     \x20                                        by_arg != NULL ? by_arg : Py_None,\n\
+                     \x20                                        (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20   by_step = {type_name}_unwrap(by_gen, by_step);\n\
+                     \x20   if (by_step == NULL) by_self->by_state = 2;\n\
+                     \x20   return by_step;\n\
+                     }}\n\
+                     static PyObject *{type_name}_asend_next(PyObject *self) {{\n\
+                     \x20   return {type_name}_asend_send(self, NULL);\n\
+                     }}\n\
+                     static PyObject *{type_name}_asend_throw(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {{\n\
+                     \x20   {type_name}_asend *by_self = ({type_name}_asend *)self;\n\
+                     \x20   {struct_name} *by_gen = by_self->by_gen;\n\
+                     \x20   int by_closing = by_self->by_mode == 1;\n\
+                     \x20   if (by_self->by_state == 2) {{\n\
+                     \x20       {type_name}_refuse_reuse(by_self);\n\
+                     \x20       return NULL;\n\
+                     \x20   }}\n\
+                     \x20   if (by_self->by_state == 0) {{\n\
+                     \x20       if (by_gen->by_running_async) {{\n\
+                     \x20           {type_name}_refuse_running(by_self);\n\
+                     \x20           return NULL;\n\
+                     \x20       }}\n\
+                     \x20       by_self->by_state = 1;\n\
+                     \x20       by_gen->by_running_async = 1;\n\
+                     \x20   }}\n\
+                     \x20   PyObject *by_step = {type_name}_gen_throw(by_gen, args, nargs);\n\
+                     \x20   if (!by_closing) {{\n\
+                     \x20       by_step = {type_name}_unwrap(by_gen, by_step);\n\
+                     \x20       if (by_step == NULL) {{\n\
+                     \x20           by_gen->by_running_async = 0;\n\
+                     \x20           by_self->by_state = 2;\n\
+                     \x20       }}\n\
+                     \x20       return by_step;\n\
+                     \x20   }}\n\
+                     \x20   if (by_step != NULL && by_gen->{kind} == By_ShortFrom(1)) {{\n\
+                     \x20       by_gen->by_running_async = 0;\n\
+                     \x20       by_self->by_state = 2;\n\
+                     \x20       Py_DECREF(by_step);\n\
+                     \x20       PyErr_SetString(PyExc_RuntimeError, \"async generator ignored GeneratorExit\");\n\
+                     \x20       return NULL;\n\
+                     \x20   }}\n\
+                     \x20   if (by_step != NULL) return by_step;\n\
+                     \x20   by_gen->by_running_async = 0;\n\
+                     \x20   by_self->by_state = 2;\n\
+                     \x20   By_EndAsyncIteration();\n\
+                     \x20   if (PyErr_ExceptionMatches(PyExc_StopAsyncIteration)\n\
+                     \x20       || PyErr_ExceptionMatches(PyExc_GeneratorExit)) {{\n\
+                     \x20       PyErr_Clear();\n\
                      \x20       PyErr_SetNone(PyExc_StopIteration);\n\
+                     \x20   }}\n\
+                     \x20   return NULL;\n\
+                     }}\n\
+                     static PyObject *{type_name}_asend_close(PyObject *self, PyObject *by_unused) {{\n\
+                     \x20   (void)by_unused;\n\
+                     \x20   if ((({type_name}_asend *)self)->by_state == 2) Py_RETURN_NONE;\n\
+                     \x20   PyObject *by_exit = PyExc_GeneratorExit;\n\
+                     \x20   PyObject *by_step = {type_name}_asend_throw(self, &by_exit, 1);\n\
+                     \x20   if (by_step != NULL) {{\n\
+                     \x20       Py_DECREF(by_step);\n\
+                     \x20       PyErr_SetString(PyExc_RuntimeError, \"coroutine ignored GeneratorExit\");\n\
                      \x20       return NULL;\n\
                      \x20   }}\n\
-                     \x20   if (by_carried != NULL && by_self->by_mode == 3) {{\n\
-                     \x20       by_step = By_ThrowInto((PyObject *)by_gen, &by_gen->{sent},\n\
-                     \x20                              &by_gen->{thrown}, &by_gen->by_returned,\n\
-                     \x20                              &by_gen->{state}, {frame}, by_carried,\n\
-                     \x20                              (PyObject *(*)(PyObject *)){symbol});\n\
-                     \x20       Py_DECREF(by_carried);\n\
-                     \x20   }} else {{\n\
-                     \x20       /* `__anext__` carries nothing, which is `None` and not\n\
-                     \x20        * whatever the last `asend` left standing */\n\
-                     \x20       by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->{sent},\n\
-                     \x20                                  &by_gen->by_returned, &by_gen->{state},\n\
-                     \x20                                  {frame},\n\
-                     \x20                                  by_carried != NULL ? by_carried : Py_None,\n\
-                     \x20                                  (PyObject *(*)(PyObject *)){symbol});\n\
-                     \x20       Py_XDECREF(by_carried);\n\
+                     \x20   if (PyErr_ExceptionMatches(PyExc_StopIteration)\n\
+                     \x20       || PyErr_ExceptionMatches(PyExc_StopAsyncIteration)\n\
+                     \x20       || PyErr_ExceptionMatches(PyExc_GeneratorExit)) {{\n\
+                     \x20       PyErr_Clear();\n\
+                     \x20       Py_RETURN_NONE;\n\
                      \x20   }}\n\
-                     \x20   if (by_step == NULL) return By_EndAsyncIteration();\n\
-                     \x20   if (by_gen->{kind} != By_ShortFrom(1)) return by_step;\n\
-                     \x20   /* a yield finishes *this* await, carrying the item */\n\
-                     \x20   PyErr_SetObject(PyExc_StopIteration, by_step);\n\
-                     \x20   Py_DECREF(by_step);\n\
-                     \x20   return NULL;\n}}\n\
+                     \x20   return NULL;\n\
+                     }}\n\
+                     static PyMethodDef {type_name}_asend_methods[] = {{\n\
+                     \x20   {{\"send\", (PyCFunction){type_name}_asend_send, METH_O, NULL}},\n\
+                     \x20   {{\"throw\", (PyCFunction)(void(*)(void)){type_name}_asend_throw, METH_FASTCALL, NULL}},\n\
+                     \x20   {{\"close\", (PyCFunction){type_name}_asend_close, METH_NOARGS, NULL}},\n\
+                     \x20   {{NULL, NULL, 0, NULL}}\n\
+                     }};\n\
                      static PyAsyncMethods {type_name}_asend_async = {{\n\
-                     \x20   .am_await = {type_name}_asend_await,\n}};\n\
+                     \x20   .am_await = {type_name}_asend_await,\n\
+                     }};\n\
                      static PyTypeObject {type_name}_asend_type = {{\n\
                      \x20   PyVarObject_HEAD_INIT(NULL, 0)\n\
-                     \x20   .tp_name = \"{dotted}.{}.ascend\",\n\
+                     \x20   .tp_name = \"{dotted}.{0}.ascend\",\n\
                      \x20   .tp_basicsize = sizeof({type_name}_asend),\n\
                      \x20   .tp_dealloc = (destructor){type_name}_asend_dealloc,\n\
-                     \x20   .tp_flags = Py_TPFLAGS_DEFAULT,\n\
+                     \x20   .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC\n\
+                     \x20               | Py_TPFLAGS_DISALLOW_INSTANTIATION,\n\
+                     \x20   .tp_traverse = {type_name}_asend_traverse,\n\
                      \x20   .tp_as_async = &{type_name}_asend_async,\n\
+                     \x20   .tp_iter = PyObject_SelfIter,\n\
                      \x20   .tp_iternext = {type_name}_asend_next,\n\
-                     \x20   .tp_new = PyType_GenericNew,\n}};\n\
+                     \x20   .tp_methods = {type_name}_asend_methods,\n\
+                     }};\n\
                      static PyObject *{type_name}_aiter(PyObject *self) {{\n\
-                     \x20   return By_NewRef(self);\n}}\n\
-                     static PyObject *{type_name}_anext(PyObject *self) {{\n\
+                     \x20   return By_NewRef(self);\n\
+                     }}\n\
+                     static PyObject *{type_name}_await_step(PyObject *self, char by_mode, PyObject *by_value) {{\n\
                      \x20   {type_name}_asend *by_send =\n\
-                     \x20       PyObject_New({type_name}_asend, &{type_name}_asend_type);\n\
-                     \x20   if (by_send == NULL) return NULL;\n\
-                     \x20   by_send->by_gen = ({struct_name} *)By_NewRef(self);\n\
-                     \x20   by_send->by_mode = 0;\n\
-                     \x20   by_send->by_value = NULL;\n\
-                     \x20   return (PyObject *)by_send;\n}}\n\
-                     static PyObject *{type_name}_await_step(PyObject *self, char by_mode,\n\
-                     \x20                                   PyObject *by_value) {{\n\
-                     \x20   {type_name}_asend *by_send =\n\
-                     \x20       PyObject_New({type_name}_asend, &{type_name}_asend_type);\n\
+                     \x20       PyObject_GC_New({type_name}_asend, &{type_name}_asend_type);\n\
                      \x20   if (by_send == NULL) return NULL;\n\
                      \x20   by_send->by_gen = ({struct_name} *)By_NewRef(self);\n\
                      \x20   by_send->by_mode = by_mode;\n\
-                     \x20   by_send->by_value = By_NewRef(by_value);\n\
-                     \x20   return (PyObject *)by_send;\n}}\n\
+                     \x20   by_send->by_state = 0;\n\
+                     \x20   by_send->by_value = by_value == NULL ? NULL : By_NewRef(by_value);\n\
+                     \x20   PyObject_GC_Track(by_send);\n\
+                     \x20   return (PyObject *)by_send;\n\
+                     }}\n\
+                     static PyObject *{type_name}_anext(PyObject *self) {{\n\
+                     \x20   return {type_name}_await_step(self, 0, NULL);\n\
+                     }}\n\
                      static PyObject *{type_name}_do_asend(PyObject *self, PyObject *const *args,\n\
-                     \x20                              Py_ssize_t nargs) {{\n\
+                     \x20                                  Py_ssize_t nargs) {{\n\
                      \x20   if (nargs != 1) {{\n\
                      \x20       PyErr_SetString(PyExc_TypeError, \"asend() takes exactly one argument\");\n\
                      \x20       return NULL;\n\
                      \x20   }}\n\
-                     \x20   /* `asend(None)` *is* `__anext__`: nothing to carry in */\n\
-                     \x20   if (args[0] == Py_None) return {type_name}_anext(self);\n\
-                     \x20   return {type_name}_await_step(self, 2, args[0]);\n}}\n\
+                     \x20   return {type_name}_await_step(self, 2, args[0]);\n\
+                     }}\n\
                      static PyObject *{type_name}_do_athrow(PyObject *self, PyObject *const *args,\n\
-                     \x20                               Py_ssize_t nargs) {{\n\
-                     \x20   if (nargs < 1) {{\n\
-                     \x20       PyErr_SetString(PyExc_TypeError, \"athrow() takes at least one argument\");\n\
-                     \x20       return NULL;\n\
-                     \x20   }}\n\
-                     \x20   return {type_name}_await_step(self, 3, args[0]);\n}}\n\
+                     \x20                                   Py_ssize_t nargs) {{\n\
+                     \x20   if (By_WarnThrowSignature(\"athrow\", nargs) < 0) return NULL;\n\
+                     \x20   PyObject *by_args = PyTuple_New(nargs);\n\
+                     \x20   if (by_args == NULL) return NULL;\n\
+                     \x20   for (Py_ssize_t by_i = 0; by_i < nargs; by_i++)\n\
+                     \x20       PyTuple_SET_ITEM(by_args, by_i, By_NewRef(args[by_i]));\n\
+                     \x20   PyObject *by_step = {type_name}_await_step(self, 3, by_args);\n\
+                     \x20   Py_DECREF(by_args);\n\
+                     \x20   return by_step;\n\
+                     }}\n\
                      static PyObject *{type_name}_aclose(PyObject *self, PyObject *const *args,\n\
-                     \x20                               Py_ssize_t nargs) {{\n\
+                     \x20                                  Py_ssize_t nargs) {{\n\
                      \x20   (void)args; (void)nargs;\n\
-                     \x20   {type_name}_asend *by_send =\n\
-                     \x20       PyObject_New({type_name}_asend, &{type_name}_asend_type);\n\
-                     \x20   if (by_send == NULL) return NULL;\n\
-                     \x20   by_send->by_gen = ({struct_name} *)By_NewRef(self);\n\
-                     \x20   by_send->by_mode = 1;\n\
-                     \x20   by_send->by_value = NULL;\n\
-                     \x20   return (PyObject *)by_send;\n}}\n\
+                     \x20   return {type_name}_await_step(self, 1, NULL);\n\
+                     }}\n\
                      static PyAsyncMethods {type_name}_async = {{\n\
                      \x20   .am_aiter = {type_name}_aiter,\n\
-                     \x20   .am_anext = {type_name}_anext,\n}};",
+                     \x20   .am_anext = {type_name}_anext,\n\
+                     }};",
                     class.name,
                     kind = kind_member,
                     sent = mangle_member(crate::GENERATOR_SENT),
                     thrown = mangle_member(crate::GENERATOR_THROWN),
                     state = mangle_member(crate::GENERATOR_STATE),
+                    dotted = dotted,
                 );
                 format!(
                     "             .tp_as_async = &{type_name}_async,\n             .tp_finalize = {type_name}_finalize,\n"
                 )
             } else if resume.surface == Surface::Coroutine {
-                // a coroutine is awaitable, not iterable: `__await__` hands back an
-                // iterator, and `for x in coro()` has to stay a `TypeError`
+                // a coroutine is awaitable and is not an iterator: `__await__` hands back
+                // one wrapped around it, `next(coro)` is a `TypeError`, and so is
+                // `for x in coro()`. an await drives it through the send slot
                 let _ = writeln!(
                     out,
-                    "static PyObject *{type_name}_await(PyObject *self) {{\n\
-                     \x20   return By_NewRef(self);\n}}\n\
-                     static PyAsyncMethods {type_name}_async = {{\n\
-                     \x20   .am_await = {type_name}_await,\n\
+                    "static PyAsyncMethods {type_name}_async = {{\n\
+                     \x20   .am_await = By_CoroutineAwait,\n\
                      \x20   .am_send = {type_name}_send_slot,\n}};"
                 );
                 format!(
-                    "             .tp_as_async = &{type_name}_async,\n             .tp_iternext = {type_name}_iternext,\n             .tp_finalize = {type_name}_finalize,\n"
+                    "             .tp_as_async = &{type_name}_async,\n             .tp_finalize = {type_name}_finalize,\n"
                 )
             } else {
                 // a generator answers the send slot too — a `yield from` reaches it the
@@ -2276,16 +2650,31 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // a static struct is what a class no name reaches gets: a generator's state or a
     // closure's environment, neither of which anything can ask about
     if !heap_type(module, class) {
-        let flags = if class.environment {
+        let (refused, construction) = if made_only_by_its_frame(module, class) {
+            (" | Py_TPFLAGS_DISALLOW_INSTANTIATION", String::new())
+        } else {
+            (
+                "",
+                format!(
+                    "             .tp_init = {type_name}_init,\n             .tp_new = PyType_GenericNew,\n"
+                ),
+            )
+        };
+        let weakrefs = if class.resume.is_some() {
+            format!("             .tp_weaklistoffset = offsetof({struct_name}, by_weakrefs),\n")
+        } else {
+            String::new()
+        };
+        let flags = if class.environment || class.resume.is_some() {
             format!(
-                "             .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,\n             .tp_traverse = (traverseproc){type_name}_traverse,\n             .tp_clear = (inquiry){type_name}_clear,\n"
+                "             .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC{refused},\n             .tp_traverse = (traverseproc){type_name}_traverse,\n             .tp_clear = (inquiry){type_name}_clear,\n"
             )
         } else {
-            "             .tp_flags = Py_TPFLAGS_DEFAULT,\n".to_string()
+            format!("             .tp_flags = Py_TPFLAGS_DEFAULT{refused},\n")
         };
         let _ = write!(
             out,
-            "static PyTypeObject {type_name} = {{\n             PyVarObject_HEAD_INIT(NULL, 0)\n             .tp_name = \"{dotted}.{}\",\n             .tp_basicsize = sizeof({struct_name}),\n             .tp_itemsize = 0,\n             .tp_dealloc = (destructor){type_name}_dealloc,\n{flags}{iterator}{dunders}             .tp_methods = {type_name}_methods,\n             .tp_getset = {type_name}_getset,\n             .tp_init = {type_name}_init,\n             .tp_new = PyType_GenericNew,\n         }};\n\
+            "static PyTypeObject {type_name} = {{\n             PyVarObject_HEAD_INIT(NULL, 0)\n             .tp_name = \"{dotted}.{}\",\n             .tp_basicsize = sizeof({struct_name}),\n             .tp_itemsize = 0,\n             .tp_dealloc = (destructor){type_name}_dealloc,\n{flags}{weakrefs}{iterator}{dunders}             .tp_methods = {type_name}_methods,\n             .tp_getset = {type_name}_getset,\n{construction}         }};\n\
 ",
             class.name
         );
@@ -2733,6 +3122,26 @@ fn finalizes(module: &ModuleIr, class: &ClassIr) -> bool {
 /// sealed type answers the question the same way its static edition did
 fn initializes(module: &ModuleIr, class: &ClassIr) -> bool {
     !mutable_type(module, class) || !class.inherited_init
+}
+
+/// whether an instance of this class may only come from the compiled frame that owns it
+///
+/// a generator's state object and a closure's environment are allocated by that frame
+/// and filled field by field, with no constructor in between. python has no name for
+/// either type but can still reach one — `type(gen)`, or `gc.get_referents` of a
+/// closure — and an instance it allocated, or re-initialised under a suspended frame,
+/// would reach the body with fields the frame never wrote:
+///
+/// ```python
+/// g = counted(3)
+/// kind = type(g)
+/// next(kind.__new__(kind))    # an iterator field that was never filled
+/// ```
+///
+/// so the type refuses instantiation the way python's own `generator` does, and has no
+/// `__init__` for a second call to reach
+fn made_only_by_its_frame(module: &ModuleIr, class: &ClassIr) -> bool {
+    !class.exported && !heap_type(module, class)
 }
 
 /// whether this class keeps its fields *after* a base's instance rather than inside one
@@ -4583,27 +4992,25 @@ fn dunder_initializers(class: &ClassIr, type_name: &str) -> String {
 }
 
 fn iterator_slots(class: &ClassIr, type_name: &str) -> Vec<(String, String)> {
-    if class.resume.is_none() {
+    let Some(resume) = &class.resume else {
         return Vec::new();
-    }
-    let mut slots = vec![
-        (
-            "Py_tp_iternext".to_string(),
-            format!("{type_name}_iternext"),
-        ),
-        (
-            "Py_tp_finalize".to_string(),
-            format!("{type_name}_finalize"),
-        ),
-    ];
-    if class
-        .resume
-        .as_ref()
-        .is_some_and(|resume| resume.surface == Surface::Coroutine)
-    {
-        slots.push(("Py_am_await".to_string(), format!("{type_name}_await")));
-    } else {
-        slots.push(("Py_tp_iter".to_string(), "PyObject_SelfIter".to_string()));
+    };
+    let mut slots = vec![(
+        "Py_tp_finalize".to_string(),
+        format!("{type_name}_finalize"),
+    )];
+    match resume.surface {
+        Surface::Generator => {
+            slots.push((
+                "Py_tp_iternext".to_string(),
+                format!("{type_name}_iternext"),
+            ));
+            slots.push(("Py_tp_iter".to_string(), "PyObject_SelfIter".to_string()));
+        }
+        Surface::Coroutine => {
+            slots.push(("Py_am_await".to_string(), "By_CoroutineAwait".to_string()));
+        }
+        Surface::AsyncGenerator => {}
     }
     slots
 }
@@ -4892,6 +5299,7 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
     // not run, which leaves the emitter its conservative answer
     let mut at_error: Option<HashSet<RegisterId>> = entered.as_ref().map(|_| HashSet::new());
 
+    let mut sites = TracebackSites::default();
     for (index, block) in function.blocks.iter().enumerate() {
         // a label immediately before a declaration is invalid in C89 and merely
         // ugly later; the empty statement keeps it valid everywhere
@@ -4901,11 +5309,38 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
             .as_ref()
             .and_then(|sets| sets.get(index).cloned())
             .unwrap_or_default();
+        // until the block says otherwise, its ops came from where the block starts
+        let mut line = block
+            .position
+            .map(|position| position.offset)
+            .or_else(|| block.range.or(function.range).map(|(start, _)| start));
+        let mut in_generator_expression = block
+            .position
+            .is_some_and(|position| position.generator_expression);
         for op in &block.ops {
-            let mut fragment = guard_unassigned(function, &op.operands(), block.error_target);
-            fragment.push_str(&emit_op(module, function, op, block.error_target));
-            if let Some(at_error) = at_error.as_mut() {
-                note_shared_error_jump(&fragment, &written, op.dest(), at_error);
+            if let Op::Line { position } = op {
+                line = Some(position.offset);
+                in_generator_expression = position.generator_expression;
+                continue;
+            }
+            let edge = if adds_a_traceback_entry(op) {
+                sites.edge(module, line, in_generator_expression, block.error_target)
+            } else {
+                ErrorEdge::straight(block.error_target)
+            };
+            let mut fragment = guard_unassigned(function, &op.operands(), edge);
+            fragment.push_str(&emit_op(module, function, op, edge));
+            sites.note(&fragment, edge);
+            if let Some(at_error) = at_error.as_mut()
+                && edge.target.is_none()
+            {
+                note_shared_error_jump(
+                    &fragment,
+                    &error_label(edge),
+                    &written,
+                    op.dest(),
+                    at_error,
+                );
             }
             out.push_str(&fragment);
             out.push_str(&mark_assigned(function, op));
@@ -4913,19 +5348,23 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
                 written.insert(dest);
             }
         }
-        let mut fragment =
-            guard_unassigned(function, &block.terminator.operands(), block.error_target);
+        let edge = sites.edge(module, line, in_generator_expression, block.error_target);
+        let mut fragment = guard_unassigned(function, &block.terminator.operands(), edge);
         fragment.push_str(&emit_terminator(
             module,
             function,
             &block.terminator,
             block.owned_at_exit.as_deref(),
         ));
-        if let Some(at_error) = at_error.as_mut() {
-            note_shared_error_jump(&fragment, &written, None, at_error);
+        sites.note(&fragment, edge);
+        if let Some(at_error) = at_error.as_mut()
+            && edge.target.is_none()
+        {
+            note_shared_error_jump(&fragment, &error_label(edge), &written, None, at_error);
         }
         out.push_str(&fragment);
     }
+    out.push_str(&sites.emit(module, function));
 
     if function.convention.can_fail() {
         let at_error = at_error.map(|set| {
@@ -5002,11 +5441,12 @@ fn written_on_entry(function: &Function) -> Option<Vec<HashSet<RegisterId>>> {
 /// plain counts as written, which releases more rather than less
 fn note_shared_error_jump(
     fragment: &str,
+    label: &str,
     written: &HashSet<RegisterId>,
     dest: Option<RegisterId>,
     at_error: &mut HashSet<RegisterId>,
 ) {
-    let Some(jump) = fragment.rfind(&format!("goto {};", error_label(None))) else {
+    let Some(jump) = fragment.rfind(&format!("goto {label};")) else {
         return;
     };
     at_error.extend(written.iter().copied());
@@ -5016,6 +5456,105 @@ fn note_shared_error_jump(
             .is_none_or(|store| store < jump)
     {
         at_error.insert(dest);
+    }
+}
+
+/// whether python adds a traceback entry for the frame where `op` fails
+///
+/// every exception raised in a frame or passing through one gets an entry naming the frame
+/// and the line, including one a `throw` raises at a suspension. what does not is putting
+/// back an exception the frame already holds — a bare `raise`, or a handler that did not
+/// match — which python re-raises with the traceback it already has. and a finish is not a
+/// failure at all, only a way out.
+///
+/// an exception leaving a generator expression drained in this frame is the one exception
+/// to the first rule: it left the generator's frame, and python adds this frame's entry as
+/// it passes out of the call that drained it
+fn adds_a_traceback_entry(op: &Op) -> bool {
+    !matches!(op, Op::Reraise { .. } | Op::FinishFrame { .. })
+}
+
+/// the traceback entries one function's error edges pass through
+///
+/// a compiled frame is not a python frame, so nothing adds an entry for it as an exception
+/// leaves it. each failing operation instead jumps first to a stub that adds one — naming
+/// the function and the line the operation was lowered from — and then on to where it was
+/// going. the stubs sit after the body, one for each line and target that some operation
+/// really jumps to, so the path that does not fail is the one it always was. each keeps its
+/// code object once it has built one; the frame is new every time, as python's is
+#[derive(Default)]
+struct TracebackSites {
+    /// the line, the frame and the target of each stub, in the order the stubs were first
+    /// used. the frame is `true` for a generator expression drained in this one
+    used: Vec<(usize, bool, Option<BlockId>)>,
+    /// the stub the last edge named, until it is used
+    offered: Option<(usize, bool, Option<BlockId>)>,
+}
+
+impl TracebackSites {
+    /// the edge an operation lowered from `offset` takes to `target`
+    ///
+    /// a module with no line table has nothing to name, and its edges go straight on
+    fn edge(
+        &mut self,
+        module: &ModuleIr,
+        offset: Option<u32>,
+        generator_expression: bool,
+        target: Option<BlockId>,
+    ) -> ErrorEdge {
+        let (Some(lines), Some(offset)) = (&module.lines, offset) else {
+            return ErrorEdge::straight(target);
+        };
+        let key = (lines.line(offset), generator_expression, target);
+        let site = self
+            .used
+            .iter()
+            .position(|used| *used == key)
+            .unwrap_or(self.used.len());
+        self.offered = Some(key);
+        ErrorEdge {
+            target,
+            site: Some(site),
+        }
+    }
+
+    /// keep the stub `edge` names when `fragment` really jumps to it
+    fn note(&mut self, fragment: &str, edge: ErrorEdge) {
+        if let Some(site) = edge.site
+            && site == self.used.len()
+            && let Some(key) = self.offered
+            && fragment.contains(&format!("goto {};", error_label(edge)))
+        {
+            self.used.push(key);
+        }
+    }
+
+    /// the stubs, written after the body
+    fn emit(&self, module: &ModuleIr, function: &Function) -> String {
+        let path = module
+            .lines
+            .as_ref()
+            .map(|lines| lines.path.as_str())
+            .unwrap_or_default();
+        let mut out = String::new();
+        for (site, (line, generator_expression, target)) in self.used.iter().enumerate() {
+            let name = if *generator_expression {
+                "<genexpr>"
+            } else {
+                function.frame_name.as_str()
+            };
+            let _ = writeln!(
+                out,
+                "by_tb{site}: {{\n\
+                 \x20   static ByTracebackSite by_site = {{NULL, {}, {}, {line}}};\n\
+                 \x20   By_TracebackHere(&by_site, by_module_dict);\n\
+                 \x20   goto {};\n}}",
+                c_string(path),
+                c_string(name),
+                error_label(ErrorEdge::straight(*target))
+            );
+        }
+        out
     }
 }
 
@@ -5265,14 +5804,11 @@ fn object_expr(function: &Function, value: &Value) -> String {
 
 /// the fields a class publishes as attributes
 ///
-/// a closure environment publishes none. python has no name for it, and a cell's unset
-/// value is not one a getter could hand out
+/// a class python has no name for publishes none: a closure environment's cells and a
+/// generator's parked locals are the frame's own, and a cell's unset value is not one a
+/// getter could hand out
 fn published_fields(class: &ClassIr) -> &[by_ir::function::FieldDecl] {
-    if class.environment {
-        &[]
-    } else {
-        &class.fields
-    }
+    if !class.exported { &[] } else { &class.fields }
 }
 
 /// the entries the emitted method table carries *before* the class's own methods
@@ -5428,7 +5964,7 @@ fn assign_checked(
     function: &Function,
     dest: RegisterId,
     expr: &str,
-    error_target: Option<BlockId>,
+    error_target: ErrorEdge,
 ) -> String {
     let Some(decl) = function.register(dest) else {
         return String::new();
@@ -5456,7 +5992,7 @@ fn protocol_site(body: &str) -> String {
 ///
 /// the operations that build an argument vector emit their own block, so they reach
 /// this point rather than going through [`assign_checked`]. the rule is the same one
-fn commit_checked(function: &Function, dest: RegisterId, error_target: Option<BlockId>) -> String {
+fn commit_checked(function: &Function, dest: RegisterId, error_target: ErrorEdge) -> String {
     let Some(decl) = function.register(dest) else {
         return String::new();
     };
@@ -5476,7 +6012,7 @@ fn commit_checked(function: &Function, dest: RegisterId, error_target: Option<Bl
 /// as no namespace has been written to. what the operations that use it differ in is
 /// only what they then do with the answer — the caller closes the block itself, and
 /// owes `by_fn` a release
-fn resolve_str(error_target: Option<BlockId>) -> String {
+fn resolve_str(error_target: ErrorEdge) -> String {
     let label = error_label(error_target);
     format!(
         "    {{ static PyObject *by_g_str = NULL; PyObject *by_fn = NULL;\n      \
@@ -5499,7 +6035,7 @@ fn global_namespace_op(
     dest: RegisterId,
     name: &str,
     call: &dyn Fn(&str) -> String,
-    error_target: Option<BlockId>,
+    error_target: ErrorEdge,
 ) -> String {
     let slot = format!("by_g_{}", mangle(name));
     let mut out = format!("    {{ static PyObject *{slot} = NULL;\n");
@@ -5529,11 +6065,7 @@ fn global_namespace_op(
 /// every read of a flagged register is guarded, not only the ones the analysis found
 /// reachable while unwritten: a read after a write finds the byte set, so guarding it
 /// costs a predicted branch and asks nothing of the emitter about control flow
-fn guard_unassigned(
-    function: &Function,
-    values: &[&Value],
-    error_target: Option<BlockId>,
-) -> String {
+fn guard_unassigned(function: &Function, values: &[&Value], error_target: ErrorEdge) -> String {
     let registers: Vec<RegisterId> = values
         .iter()
         .filter_map(|value| match value {
@@ -5549,7 +6081,7 @@ fn guard_unassigned(
 fn guard_unassigned_registers(
     function: &Function,
     registers: &[RegisterId],
-    error_target: Option<BlockId>,
+    error_target: ErrorEdge,
 ) -> String {
     let mut out = String::new();
     for id in registers {
@@ -5590,12 +6122,7 @@ fn mark_assigned(function: &Function, op: &Op) -> String {
     )
 }
 
-fn emit_op(
-    module: &ModuleIr,
-    function: &Function,
-    op: &Op,
-    error_target: Option<BlockId>,
-) -> String {
+fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorEdge) -> String {
     match op {
         Op::Assign { dest, src } => {
             let Some(decl) = function.register(*dest) else {
@@ -5725,24 +6252,29 @@ fn emit_op(
         Op::AsyncContext {
             dest,
             manager,
+            exit,
             exception,
-        } => {
-            let expr = match exception {
-                Some(exception) => format!(
-                    "By_AsyncExit(&by_ps, {}, {})",
+        } => match exit.as_ref().zip(exception.as_ref()) {
+            Some((exit, exception)) => {
+                let expr = format!(
+                    "By_AsyncExit({}, {}, {})",
                     value_expr(manager),
+                    value_expr(exit),
                     value_expr(exception)
-                ),
-                None => format!("By_AsyncEnter(&by_ps, {})", value_expr(manager)),
-            };
-            protocol_site(&assign_checked(
-                module,
-                function,
-                *dest,
-                &expr,
-                error_target,
-            ))
-        }
+                );
+                assign_checked(module, function, *dest, &expr, error_target)
+            }
+            None => {
+                let expr = format!("By_AsyncEnter(&by_ps, {})", value_expr(manager));
+                protocol_site(&assign_checked(
+                    module,
+                    function,
+                    *dest,
+                    &expr,
+                    error_target,
+                ))
+            }
+        },
         Op::AsyncIter { dest, src, next } => {
             let expr = format!("By_AsyncIter({}, {})", value_expr(src), i32::from(*next));
             assign_checked(module, function, *dest, &expr, error_target)
@@ -6696,16 +7228,36 @@ fn emit_op(
                 error_target,
             ))
         }
+        Op::BindExit {
+            dest,
+            manager,
+            is_async,
+        } => {
+            let call = format!(
+                "By_BindExit(&by_ps, {}, {})",
+                value_expr(manager),
+                i32::from(*is_async)
+            );
+            protocol_site(&assign_checked(
+                module,
+                function,
+                *dest,
+                &call,
+                error_target,
+            ))
+        }
         Op::ExitContext {
             dest,
             manager,
+            exit,
             exception,
         } => {
             // -1 means `__exit__` itself raised, which is the error path. 0 and 1 are
             // "re-raise" and "suppressed", and both are ordinary control flow
             let mut out = format!(
-                "    {{ int by_r = By_ExitContext(&by_ps, {}, {});\n",
+                "    {{ int by_r = By_ExitContext({}, {}, {});\n",
                 value_expr(manager),
+                value_expr(exit),
                 value_expr(exception)
             );
             let _ = writeln!(
@@ -6714,7 +7266,7 @@ fn emit_op(
                 error_label(error_target)
             );
             let _ = writeln!(out, "      {} = (char)by_r; }}", local(*dest));
-            protocol_site(&out)
+            out
         }
         Op::DelegateIter {
             dest,
@@ -6768,7 +7320,7 @@ fn emit_op(
                 function.name
             );
             debug_assert!(
-                error_target.is_none(),
+                error_target.target.is_none(),
                 "a finish in `{}` still stands under a handler, which would catch it",
                 function.name
             );
@@ -6779,7 +7331,7 @@ fn emit_op(
                  \x20     {receiver}->by_returned = by_t; }}\n\
                  \x20   goto {};\n",
                 value_expr(value),
-                error_label(None)
+                error_label(ErrorEdge::straight(None))
             )
         }
         Op::GetCell {
@@ -7589,6 +8141,11 @@ fn emit_op(
             value_expr(value),
             error_label(error_target)
         ),
+        Op::LeaveGenerator { value } => format!(
+            "    By_Reraise({});\n    By_ConvertStopIteration(BY_FRAME_GENERATOR);\n    goto {};\n",
+            value_expr(value),
+            error_label(error_target)
+        ),
         Op::GetIter { dest, src, cursor } => {
             let mut out = match cursor {
                 Some(_) => {
@@ -7626,6 +8183,12 @@ fn emit_op(
         }
         Op::IsNull { dest, src } => {
             let expr = format!("(char)({} == NULL)", value_expr(src));
+            assign_owned(module, function, *dest, &expr)
+        }
+        // read back by the function's emitter, which names the line in a traceback entry
+        Op::Line { .. } => String::new(),
+        Op::StopIterationValue { dest, src } => {
+            let expr = format!("By_StopIterationValue({})", value_expr(src));
             assign_owned(module, function, *dest, &expr)
         }
         Op::Len { dest, src } => {
@@ -7750,7 +8313,7 @@ fn emit_container(
     items: &[Value],
     builder: &str,
     count: usize,
-    error_target: Option<BlockId>,
+    error_target: ErrorEdge,
 ) -> String {
     let mut out = String::new();
     let argv = if items.is_empty() {
@@ -7775,10 +8338,36 @@ fn emit_container(
 
 /// the label a failing operation jumps to: a handler block, or the function's
 /// own error exit
-fn error_label(error_target: Option<BlockId>) -> String {
+/// where a failing operation goes: the block's error target, by way of the traceback
+/// entry python adds for this frame where the failure is a new one
+#[derive(Clone, Copy)]
+struct ErrorEdge {
+    /// the handler, or the function's own exit where `None`
+    target: Option<BlockId>,
+    /// the traceback entry the edge passes through first — see [`TracebackSites`]
+    site: Option<usize>,
+}
+
+impl ErrorEdge {
+    /// an edge that goes straight to `target`, adding no entry
+    fn straight(target: Option<BlockId>) -> Self {
+        Self { target, site: None }
+    }
+}
+
+fn error_label(error_target: ErrorEdge) -> String {
     match error_target {
-        Some(block) => format!("b{}", block.0),
-        None => "by_error".to_string(),
+        ErrorEdge {
+            site: Some(site), ..
+        } => format!("by_tb{site}"),
+        ErrorEdge {
+            target: Some(block),
+            site: None,
+        } => format!("b{}", block.0),
+        ErrorEdge {
+            target: None,
+            site: None,
+        } => "by_error".to_string(),
     }
 }
 

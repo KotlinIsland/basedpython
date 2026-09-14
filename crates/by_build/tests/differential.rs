@@ -508,6 +508,33 @@ def _after_raising(gen):
     gc.collect()
     return out
 
+# a `throw` or a `close` landing on a frame after `steps` resumptions, what it answered,
+# what one more resumption answers, and what the frames logged. `send(None)` rather
+# than `next`, so a coroutine is driven the same way a generator is
+def _thrown_at(make, steps, *args):
+    log = []
+    gen = make(log)
+    out = [gen.send(None) for _ in range(steps)]
+    try:
+        out.append(('answered', gen.throw(*args)))
+    except BaseException as e:
+        out.append((type(e).__name__, str(e)))
+    try:
+        out.append(('then', gen.send(None)))
+    except BaseException as e:
+        out.append((type(e).__name__, str(e)))
+    return (out, log)
+
+def _closed_at(make, steps):
+    log = []
+    gen = make(log)
+    out = [gen.send(None) for _ in range(steps)]
+    try:
+        out.append(('closed', gen.close()))
+    except BaseException as e:
+        out.append((type(e).__name__, str(e)))
+    return (out, log)
+
 import asyncio
 
 def _run(coro):
@@ -533,6 +560,266 @@ def _drained(gen):
     for _ in gen:
         pass
     return gen
+
+# every way python has of making or re-making an object only a frame may make: a
+# generator, a coroutine, and the awaitable an async generator hands back. each has
+# to be refused, and re-running `__init__` has to be `object`'s, which does nothing.
+# the type's own name is masked because a compiled one is named after its function and
+# spelled with its module
+def _forged(obj):
+    kind = type(obj)
+    out = []
+    for attempt in (lambda: kind.__new__(kind), kind, lambda: object.__new__(kind),
+                    lambda: __import__('copy').copy(obj),
+                    lambda: __import__('pickle').dumps(obj)):
+        try:
+            attempt()
+            out.append('made')
+        except TypeError as e:
+            out.append(str(e).replace(kind.__module__ + '.', '').replace(kind.__name__, 'T'))
+    out.append(obj.__init__())
+    out.append([hasattr(obj, name) for name in ('$state', '$sent', '$resume', 'i', 'n')])
+    return out
+
+# a suspended generator held only through a cycle of its own: the collector is the one
+# thing that can free it, and freeing it closes it
+def _cycled(make):
+    log = []
+    box = [None]
+    gen = make(box, log)
+    box[0] = gen
+    next(gen)
+    del gen, box
+    gc.collect()
+    return log
+
+# how many references to `payload` a hundred abandoned cycles through a generator leave
+def _cycle_references(make):
+    import sys
+    payload = object()
+    gc.collect()
+    before = sys.getrefcount(payload)
+    for _ in range(100):
+        box = [None]
+        gen = make(payload, box)
+        box[0] = gen
+        next(gen)
+        del gen, box
+    gc.collect()
+    return sys.getrefcount(payload) - before
+
+# a frame handed probes that each try to resume the frame running them, by every entry
+# point its surface has. `make` builds the frame over the probes, and the frame is
+# reachable through `box` by the time any probe runs
+def _reentry_probes(box, surface):
+    name = surface[0]
+    if surface == 'async':
+        return [lambda: next(box[name].__anext__()),
+                lambda: next(box[name].asend(None)),
+                lambda: next(box[name].athrow(ValueError('x'))),
+                lambda: next(box[name].aclose())]
+    return [lambda: box[name].send(None),
+            lambda: box[name].send(1),
+            lambda: box[name].throw(ValueError('x')),
+            lambda: box[name].close()] + ([lambda: next(box[name])] if surface == 'gen' else [])
+
+def _reentered(make, surface):
+    box = {}
+    frame = make(_reentry_probes(box, surface))
+    box[surface[0]] = frame
+    if surface == 'gen':
+        return list(frame)
+    if surface == 'async':
+        return _run(_drain(frame))
+    return _sent_once(frame)
+
+# a frame re-entered from inside itself by iterating it, the way a generator reached through
+# a list it holds is. the box is `[the generator, whether to re-enter]`
+def _iterated_from_inside(make):
+    box = [None, True]
+    gen = make(box)
+    box[0] = gen
+    out = []
+    try:
+        for value in gen:
+            out.append(value)
+    except BaseException as e:
+        out.append((type(e).__name__, str(e)))
+    return out
+
+# every argument shape `throw` takes, each into a fresh frame suspended inside a handler
+# that reports what it caught. the three-argument form is deprecated, and the warning is
+# part of the answer. `start` resumes the frame to its first suspension, and `step` is how
+# a throw is made — the method itself, or an async generator's `athrow` driven by hand
+def _throw_shapes(make, start, step):
+    import types
+    tb = None
+    try:
+        raise KeyError('with a traceback')
+    except KeyError as e:
+        tb = e.__traceback__
+    out = []
+    for args in [(ValueError, ValueError('old'), None), (ValueError, 'text'),
+                 (ValueError, ('a', 'b')), (ValueError, KeyError('k')), (ValueError, None),
+                 (ValueError('i'), None), (ValueError('i'), 'v'), (ValueError, None, 5),
+                 (ValueError, None, tb), (ValueError('i'), None, tb), (), (1, 2, 3, 4), (5,),
+                 (int,)]:
+        frame = make()
+        start(frame)
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter('always')
+            try:
+                answer = step(frame, args)
+            except BaseException as e:
+                answer = (type(e).__name__, str(e))
+        out.append((answer, [(str(w.message), w.category.__name__) for w in seen]))
+    return out
+
+# an awaitable that suspends exactly once, so a coroutine awaiting it has a suspension
+# to be thrown into
+@_types.coroutine
+def _suspends_once():
+    yield 'suspended'
+
+# one step of an awaitable driven by hand, with no event loop to install hooks on an
+# async generator: what a `yield` finished it with, or the exception it raised
+def _stepped_by_hand(awaitable):
+    try:
+        next(awaitable)
+    except StopIteration as e:
+        return e.value
+    return 'suspended'
+
+# each step in turn, and what it answered or raised. a `StopIteration` is an answer: it is
+# how an awaitable hands back what it finished with
+def _steps(*steps):
+    out = []
+    for step in steps:
+        try:
+            out.append(('answered', step()))
+        except StopIteration as e:
+            out.append(('finished', e.value))
+        except BaseException as e:
+            out.append((type(e).__name__, str(e)))
+    return out
+
+# a manager class whose `__exit__` a block can rebind on the class while it runs, and the
+# method to rebind it to. `__aexit__` too, for an `async with`
+def _rebindable_manager():
+    class Manager:
+        def __init__(self, log):
+            self.log = log
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.log.append('bound at entry')
+            return False
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            self.log.append('bound at entry')
+            return False
+    def later(self, *args):
+        self.log.append('rebound')
+        return True
+    async def later_async(self, *args):
+        self.log.append('rebound')
+        return True
+    return Manager, later, later_async
+
+# a frame made over a log, and the steps `script` answers for it, run in turn
+def _against(make, script):
+    log = []
+    frame = make(log)
+    return (_steps(*script(frame)), log)
+
+# what python says of a coroutine asked to be an iterator, with the type's own name
+# masked, and closed afterwards so it leaves no warning behind
+def _as_iterator(coro):
+    kind = type(coro)
+    out = []
+    for attempt in (lambda: next(coro), lambda: iter(coro), lambda: coro.__next__()):
+        try:
+            attempt()
+            out.append('iterated')
+        except (TypeError, AttributeError) as e:
+            out.append((type(e).__name__,
+                        str(e).replace(kind.__module__ + '.', '').replace(kind.__name__, 'T')))
+    out.append(isinstance(coro, __import__('collections.abc').abc.Iterator))
+    coro.close()
+    return out
+
+# the iterator `__await__` hands back, driven through every method it has
+def _await_wrapper(coro):
+    wrapper = coro.__await__()
+    out = [type(wrapper).__name__, iter(wrapper) is wrapper, _stepped_by_hand(wrapper)]
+    for attempt in (lambda: wrapper.send(None), lambda: wrapper.throw(ValueError('w')),
+                    lambda: wrapper.close()):
+        try:
+            out.append(attempt())
+        except BaseException as e:
+            out.append((type(e).__name__, str(e)))
+    return out
+
+# a frame that ignores `GeneratorExit` and suspends again instead: closing it is refused
+# and leaves it suspended, a later step resumes it, and dropping it closes it once more —
+# which fails again, reported through the unraisable hook. `close` and `step` are how
+# this surface is closed and resumed
+def _ignored_close(make, start, close, step):
+    import sys
+    seen = []
+    log = []
+    hook = sys.unraisablehook
+    sys.unraisablehook = lambda u: seen.append(
+        (type(u.exc_value).__name__, str(u.exc_value), u.err_msg and u.err_msg.split(' <')[0]))
+    try:
+        frame = make(log)
+        start(frame)
+        out = []
+        for attempt in (close, step, close):
+            try:
+                out.append(attempt(frame))
+            except BaseException as e:
+                out.append((type(e).__name__, str(e)))
+        del frame
+        gc.collect()
+        return (out, log, seen)
+    finally:
+        sys.unraisablehook = hook
+
+# every warning a frame `make` builds and drops leaves behind, down to the line blamed.
+# the source is asked only whether there is one, since its repr names an address
+def _dropped_frame_warnings(make):
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter('always')
+        make()
+        gc.collect()
+    return [(str(w.message), w.category.__name__, _os.path.basename(w.filename), w.lineno,
+             w.source is not None) for w in seen]
+
+# a weak reference to a frame `make` builds: it reaches the frame while the frame lives,
+# and once `finish` has run and the frame is dropped it is dead and its callback has run
+def _weakly(make, finish):
+    import weakref
+    called = []
+    frame = make()
+    ref = weakref.ref(frame, lambda r: called.append('callback'))
+    alive = ref() is frame
+    finish(frame)
+    del frame
+    gc.collect()
+    return (alive, ref() is None, called)
+
+# a call with one of the module's names rebound for its duration, answering what came
+# back or what it raised
+def _with_module_name(module, name, value, fn, *args):
+    module.__dict__[name] = value
+    try:
+        return fn(*args)
+    except BaseException as e:
+        return (type(e).__name__, str(e))
+    finally:
+        module.__dict__.pop(name, None)
 
 # await something that is not a coroutine — an `asend` awaitable, say — so a driver
 # that insists on one can still reach it
@@ -802,6 +1089,15 @@ def _rebound(m):
         Other.__enter__ = (lambda n: lambda self: 'late %d' % n)(i)
         out.append(m.held(mgr))
     return out
+
+# the traceback entries an exception carries, for the frames written in the module: the
+# function each names and its line. only the base name of the file, for the reason
+# `_warned_into` gives, and the harness's own frames left out, since the snippet runs
+# from a string
+def _frames(e):
+    import traceback
+    return [(f.filename.replace('\\\\', '/').rsplit('/', 1)[-1], f.name, f.lineno)
+            for f in traceback.extract_tb(e.__traceback__) if f.filename != '<string>']
 
 def _chain(e):
     out = []
@@ -6865,6 +7161,51 @@ def drop() -> None:
 }
 
 #[test]
+fn importing_a_compiled_module_again_allocates_nothing_that_stays() {
+    // python forgets the state pointer of the module a create slot hands back and has the
+    // exec slot allocate a fresh one, even for a module asking for no state at all. handing
+    // the one module back import after import used to leave an allocation behind each time
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_reimportleak");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+def total(n: int) -> int:
+    return n + 1
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(source, "by_diff_reimportleak", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import gc, sys\n\
+         import by_diff_reimportleak as first\n\
+         assert first.__file__.endswith('.so'), first.__file__\n\
+         def again():\n\
+         \x20   del sys.modules['by_diff_reimportleak']\n\
+         \x20   import by_diff_reimportleak\n\
+         for _ in range(100):\n\
+         \x20   again()\n\
+         gc.collect()\n\
+         before = sys.getallocatedblocks()\n\
+         for _ in range(2000):\n\
+         \x20   again()\n\
+         gc.collect()\n\
+         grown = sys.getallocatedblocks() - before\n\
+         print('stable' if grown < 200 else f'grew by {grown}')\n\
+         print(sys.modules['by_diff_reimportleak'] is first, first.total(2))\n",
+    );
+    assert_eq!(out, "stable\nTrue 3");
+}
+
+#[test]
 fn a_native_class_has_a_fixed_layout() {
     let Some((python, toolchain)) = environment() else {
         return;
@@ -9973,6 +10314,56 @@ def guarded(words: list[str], index: int) -> str:
 }
 
 #[test]
+fn an_attribute_the_instance_is_given_answers_before_a_method_of_the_same_name() {
+    // python looks an instance's own attribute up before a function its class holds, so
+    // an encoder handed a `default` calls that one and an encoder handed nothing calls the
+    // method — whether the name is called straight away or read first
+    agree_python_with_declines(
+        "fieldshadowsmethod",
+        "\
+from collections.abc import Callable
+
+
+class Encoder:
+    def __init__(self, default: Callable[[object], object] | None = None) -> None:
+        if default is not None:
+            self.default = default
+
+    def default(self, o: object) -> object:
+        return 'method'
+
+    def called(self) -> object:
+        return self.default(1)
+
+    def read(self) -> object:
+        return self.default
+
+
+class Base:
+    def label(self) -> str:
+        return 'base method'
+
+
+class Labelled(Base):
+    def __init__(self, label: Callable[[], str]) -> None:
+        self.label = label
+
+    def shown(self) -> str:
+        return self.label()
+",
+        &[
+            "m.Encoder().called()",
+            "m.Encoder(str).called()",
+            "m.Encoder().read().__name__",
+            "m.Encoder(str).read()",
+            "m.Encoder.default(m.Encoder(str), 2)",
+            "m.Labelled(lambda: 'given').shown()",
+            "m.Labelled(lambda: 'given').label()",
+        ],
+    );
+}
+
+#[test]
 fn a_mutable_capture_agrees() {
     // python closes over the *variable*, so all of these depend on both frames seeing
     // one cell — a copy at `def` time would give different answers for every one
@@ -10031,6 +10422,159 @@ def accumulate(values: list[int]) -> int:
             "[(p := m.shared_pair(5), p[0](), p[1](9), p[0]())[1:]]",
             "m.accumulate([1, 2, 3])",
             "[m.accumulate([a, a]) for a in (0, -4, 10 ** 20)]",
+        ],
+    );
+}
+
+#[test]
+fn a_capture_read_in_any_evaluated_position_reaches_the_closure() {
+    // a nested function captures every enclosing name it reads, wherever in a statement
+    // the read stands: an `elif` test, a `match` subject, a guard or a value pattern, an
+    // `except` clause's class, and a default a `def` nested one level further evaluates
+    // in the frame around it. a read left out of the analysis was looked up in the
+    // module namespace instead, and raised `NameError`
+    agree_python(
+        "capturepositions",
+        "\
+from collections.abc import Callable
+
+
+def elif_test(x: int) -> Callable[[int], int]:
+    def inner(y: int) -> int:
+        if y:
+            return 1
+        elif x:
+            return 2
+        else:
+            return 3
+    return inner
+
+
+def elif_lambda(x: int) -> Callable[[int], Callable[[], int]]:
+    def inner(y: int) -> Callable[[], int]:
+        if y:
+            return lambda: 1
+        elif (f := lambda: x) and y == 0:
+            return f
+        return lambda: 3
+    return inner
+
+
+def match_subject(x: int) -> Callable[[], int]:
+    def inner() -> int:
+        match x:
+            case 1:
+                return 10
+            case _:
+                return 0
+    return inner
+
+
+def match_guard(x: int) -> Callable[[int], int]:
+    def inner(y: int) -> int:
+        match y:
+            case 1 if x:
+                return 10
+            case _:
+                return 0
+    return inner
+
+
+class Box:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+def match_value(box: Box) -> Callable[[int], int]:
+    def inner(y: int) -> int:
+        match y:
+            case box.v:
+                return 10
+            case _:
+                return 0
+    return inner
+
+
+def match_class(kind: type[Box]) -> Callable[[object], int]:
+    def inner(y: object) -> int:
+        match y:
+            case kind(v=v):
+                return v
+            case _:
+                return 0
+    return inner
+
+
+def except_class(kind: type[Exception]) -> Callable[[], str]:
+    def inner() -> str:
+        try:
+            raise KeyError('k')
+        except kind:
+            return 'caught'
+        except Exception:
+            return 'other'
+    return inner
+
+
+def default_two_deep(x: int) -> Callable[[], Callable[[], int]]:
+    def middle() -> Callable[[], int]:
+        def inner(y: int = x) -> int:
+            return y
+        return inner
+    return middle
+
+
+def elif_walrus(x: int) -> int:
+    if x == 0:
+        return 0
+    elif (y := x + 1) > 0:
+        f = lambda: y
+        return f()
+    return -1
+",
+        &[
+            "[m.elif_test(x)(y) for x in (0, 1) for y in (0, 1)]",
+            "[m.elif_lambda(x)(y)() for x in (0, 5) for y in (0, 1)]",
+            "[m.match_subject(x)() for x in (0, 1)]",
+            "[m.match_guard(x)(y) for x in (0, 1) for y in (0, 1)]",
+            "[m.match_value(m.Box(4))(y) for y in (3, 4)]",
+            "[m.match_class(m.Box)(y) for y in (m.Box(6), 6)]",
+            "[m.except_class(kind)() for kind in (KeyError, ValueError)]",
+            "m.default_two_deep(7)()()",
+            "[m.elif_walrus(x) for x in (0, 3)]",
+        ],
+    );
+}
+
+#[test]
+fn a_capture_read_only_by_a_destructuring_statement_reaches_the_closure() {
+    // the value a `let` destructures is read in the frame the statement stands in, and
+    // so is the class its pattern names
+    agree(
+        "letcapturevalue",
+        &format!(
+            "{A_MATCHABLE_RECT}\
+def area(p: object) -> (() -> object):
+    def inner() -> object:
+        let (w, h) := p
+        return w * h
+
+    return inner
+
+
+def width(kind: type[Rect], r: object) -> (() -> object):
+    def inner() -> object:
+        let kind(w=w) := r else:
+            return 'no'
+        return w
+
+    return inner
+"
+        ),
+        &[
+            "m.area((3, 4))()",
+            "m.width(m.Rect, m.Rect(5, 6))()",
+            "m.width(m.Rect, (5, 6))()",
         ],
     );
 }
@@ -10650,6 +11194,222 @@ def nested(n: int) -> object:
             "sum(m.outer(4))",
             // and the inner generator's own `StopIteration` value reaches the consumer
             "[(g := m.inner(1), next(g), _capture(next, g).value)[2:]]",
+        ],
+    );
+}
+
+#[test]
+fn close_answers_what_the_frame_returned() {
+    // since 3.13 `close()` hands back the value a frame returns while it unwinds from
+    // the `GeneratorExit`, and `None` for every other way a close can end
+    agree_python(
+        "closevalue",
+        "\
+from collections.abc import Iterator
+
+
+def returning(log: list[str]) -> Iterator[int]:
+    try:
+        yield 1
+    except GeneratorExit:
+        log.append('returning')
+        return 5
+    yield 2
+
+
+def returning_none(log: list[str]) -> Iterator[int]:
+    try:
+        yield 1
+    except GeneratorExit:
+        return None
+
+
+def returning_a_tuple(log: list[str]) -> Iterator[int]:
+    try:
+        yield 1
+    finally:
+        return (6, 7)
+
+
+def plain(log: list[str]) -> Iterator[int]:
+    yield 1
+    yield 2
+
+
+async def coroutine_returning(log: list[str]) -> int:
+    try:
+        await Suspend()
+    except GeneratorExit:
+        return 8
+    return 0
+
+
+class Suspend:
+    def __await__(self) -> Iterator[None]:
+        yield None
+",
+        &[
+            "_closed_at(m.returning, 1)",
+            "_closed_at(m.returning, 0)",
+            "_closed_at(m.returning_none, 1)",
+            "_closed_at(m.returning_a_tuple, 1)",
+            "_closed_at(m.plain, 1)",
+            "_closed_at(m.plain, 2)",
+            "_closed_at(m.coroutine_returning, 1)",
+            "[(g := m.returning([]), next(g), g.close(), g.close())[2:]]",
+        ],
+    );
+}
+
+#[test]
+fn a_throw_or_close_reaches_the_frame_a_delegation_is_waiting_on() {
+    // a frame suspended in `yield from` or `await` is suspended *inside* the iterator it
+    // delegates to, so `throw` goes to that iterator's own `throw` first and `close`
+    // closes it before the delegating frame is unwound. only what the inner iterator
+    // raises back reaches the delegating frame, at the suspension — and a
+    // `StopIteration` among those is the delegation finishing with its value
+    agree_python(
+        "delegatethrow",
+        "\
+from collections.abc import Generator, Iterator
+
+
+def inner(log: list[str]) -> Iterator[int]:
+    try:
+        yield 1
+    except ValueError as e:
+        log.append('inner caught ' + repr(e))
+        yield 2
+    finally:
+        log.append('inner finally')
+
+
+def outer(log: list[str]) -> Iterator[int]:
+    try:
+        yield from inner(log)
+        log.append('delegation ended')
+    except TypeError as e:
+        log.append('outer caught ' + str(e))
+        yield 3
+    finally:
+        log.append('outer finally')
+    yield 4
+
+
+def returning(log: list[str]) -> Iterator[int]:
+    try:
+        yield 1
+    except ValueError:
+        return 7
+    return 0
+
+
+def takes_the_return(log: list[str]) -> Iterator[object]:
+    got = yield from returning(log)
+    log.append('got ' + repr(got))
+    yield got
+
+
+def over_a_list(log: list[str]) -> Iterator[object]:
+    try:
+        got = yield from [1, 2]
+        log.append('got ' + repr(got))
+    except ValueError as e:
+        log.append('outer caught ' + repr(e))
+    yield 5
+
+
+class Answering:
+    def __init__(self, log: list[str]) -> None:
+        self.log = log
+
+    def __iter__(self) -> 'Answering':
+        return self
+
+    def __next__(self) -> int:
+        return 1
+
+    def throw(self, kind: object, value: object = None, traceback: object = None) -> int:
+        self.log.append('throw got ' + repr(kind))
+        if isinstance(kind, KeyError):
+            raise StopIteration('stopped')
+        return 9
+
+    def close(self) -> None:
+        self.log.append('closed')
+
+
+def over_answering(log: list[str]) -> Iterator[object]:
+    got = yield from Answering(log)
+    log.append('got ' + repr(got))
+    yield got
+
+
+class Pending:
+    def __init__(self, log: list[str]) -> None:
+        self.log = log
+
+    def __await__(self) -> Generator[str, None, str]:
+        try:
+            yield 'suspended'
+        except ValueError as e:
+            self.log.append('pending caught ' + str(e))
+            return 'handled'
+        finally:
+            self.log.append('pending finally')
+        return 'done'
+
+
+async def waiting(log: list[str]) -> str:
+    got = await Pending(log)
+    log.append('awaited ' + got)
+    return got
+
+
+async def waits_on(log: list[str]) -> str:
+    try:
+        return await waiting(log)
+    finally:
+        log.append('outer finally')
+
+
+def reentered(box: list[Iterator[object]]) -> Iterator[object]:
+    try:
+        yield 1
+    except ValueError:
+        try:
+            next(box[0])
+        except ValueError as e:
+            yield str(e)
+
+
+def reenters(box: list[Iterator[object]]) -> Iterator[object]:
+    yield from reentered(box)
+",
+        &[
+            // the inner frame's handler catches it and yields on, and the outer frame
+            // stays suspended in the delegation
+            "_thrown_at(m.outer, 1, ValueError('v'))",
+            // what the inner frame cannot make an exception of, it raises back, and the
+            // outer frame's handler is the one that sees it
+            "_thrown_at(m.outer, 1, 5)",
+            "_thrown_at(m.outer, 1, ValueError, None, 5)",
+            "_thrown_at(m.outer, 1, KeyError('k'))",
+            "_thrown_at(m.outer, 2, ValueError('after'))",
+            "_closed_at(m.outer, 1)",
+            "_closed_at(m.outer, 2)",
+            "_thrown_at(m.takes_the_return, 1, ValueError('r'))",
+            "_thrown_at(m.over_a_list, 1, ValueError('l'))",
+            "_thrown_at(m.over_a_list, 1, StopIteration('l'))",
+            "_closed_at(m.over_a_list, 1)",
+            "_thrown_at(m.over_answering, 1, ValueError('a'))",
+            "_thrown_at(m.over_answering, 1, KeyError('a'))",
+            "_closed_at(m.over_answering, 1)",
+            "_thrown_at(m.waits_on, 1, ValueError('c'))",
+            "_thrown_at(m.waits_on, 1, KeyError('c'))",
+            "_closed_at(m.waits_on, 1)",
+            // the outer frame counts as running while the inner one handles the throw
+            "[(box := [], g := m.reenters(box), box.append(g), next(g), g.throw(ValueError('x')))[4]]",
         ],
     );
 }
@@ -11517,30 +12277,43 @@ async def streamed() -> Any:
     }
     let emitted = std::fs::read_to_string(dir.join("by_diff_framekind_pin.c"))
         .expect("the generated C is written beside the extension");
-    // each surface names itself, and none of them names another
+    // each surface names itself, and none of them names another. `send` is the one entry
+    // every surface has
     for (function, kind) in [
         ("plain", "BY_FRAME_GENERATOR"),
         ("awaited", "BY_FRAME_COROUTINE"),
         ("streamed", "BY_FRAME_ASYNC_GENERATOR"),
     ] {
-        let symbol = format!("By_by_diff_framekind_pin_{function}_gen_Type_iternext");
-        let iternext = emitted_function(&emitted, &symbol);
-        assert!(iternext.contains(kind), "{function}: {iternext}");
+        let symbol = format!("By_by_diff_framekind_pin_{function}_gen_Type_send");
+        let send = emitted_function(&emitted, &symbol);
+        assert!(send.contains(kind), "{function}: {send}");
         for other in [
             "BY_FRAME_GENERATOR",
             "BY_FRAME_COROUTINE",
             "BY_FRAME_ASYNC_GENERATOR",
         ] {
             assert_eq!(
-                iternext.contains(other),
+                send.contains(other),
                 other == kind,
-                "{function} named {other}: {iternext}"
+                "{function} named {other}: {send}"
             );
         }
-        // and it carries `None` in, because a resumption through this slot carries
-        // nothing — the store cannot be skipped or the last `send` survives it
-        assert!(iternext.contains("Py_None"), "{function}: {iternext}");
     }
+    // and a step that carries nothing carries `None` in, because the store cannot be
+    // skipped or the last `send` survives it: a generator's `__next__`, and the step of
+    // the awaitable an async generator's `__anext__` hands back — which is its `send`
+    // with nothing sent. a coroutine has no such step of its own — it is not an iterator
+    for symbol in [
+        "By_by_diff_framekind_pin_plain_gen_Type_iternext",
+        "By_by_diff_framekind_pin_streamed_gen_Type_asend_send",
+    ] {
+        let step = emitted_function(&emitted, symbol);
+        assert!(step.contains("Py_None"), "{symbol}: {step}");
+    }
+    assert!(
+        !emitted.contains("By_by_diff_framekind_pin_awaited_gen_Type_iternext"),
+        "{emitted}"
+    );
 }
 
 /// one emitted C function's body, from its definition to the closing brace
@@ -12098,6 +12871,63 @@ def entered(mgr: object) -> object:
             "[type(e).__name__ for e in [_capture(m.propagating, _Pass())]]",
             "m.entered(_Value(7))",
             "_run_nested(m)",
+        ],
+    );
+}
+
+#[test]
+fn a_with_block_calls_the_exit_bound_as_it_was_entered() {
+    // python looks `__exit__` up as the block is entered, before `__enter__` runs, and the
+    // block calls that one however the class is changed while it runs — on the normal
+    // path, the raising one, and leaving early
+    agree_python(
+        "withexitbound",
+        "\
+from collections.abc import AsyncIterator, Callable, Iterator
+
+
+def normal(make: Callable[[list[str]], object], later: object, log: list[str]) -> list[str]:
+    with make(log) as manager:  # type: ignore
+        type(manager).__exit__ = later
+    return log
+
+
+def raising(make: Callable[[list[str]], object], later: object, log: list[str]) -> list[str]:
+    try:
+        with make(log) as manager:  # type: ignore
+            type(manager).__exit__ = later
+            raise KeyError('k')
+    except KeyError:
+        log.append('not suppressed')
+    return log
+
+
+def leaving(make: Callable[[list[str]], object], later: object, log: list[str]) -> list[str]:
+    for _ in range(2):
+        with make(log) as manager:  # type: ignore
+            type(manager).__exit__ = later
+            return log
+    return log
+
+
+def suspended(make: Callable[[list[str]], object], later: object, log: list[str]) -> Iterator[int]:
+    with make(log) as manager:  # type: ignore
+        yield 1
+        type(manager).__exit__ = later
+        yield 2
+
+
+async def awaited(make: Callable[[list[str]], object], later: object, log: list[str]) -> list[str]:
+    async with make(log) as manager:  # type: ignore
+        type(manager).__aexit__ = later
+    return log
+",
+        &[
+            "(lambda M, later, _: m.normal(M, later, []))(*_rebindable_manager())",
+            "(lambda M, later, _: m.raising(M, later, []))(*_rebindable_manager())",
+            "(lambda M, later, _: m.leaving(M, later, []))(*_rebindable_manager())",
+            "(lambda M, later, _: (lambda log: (list(m.suspended(M, later, log)), log))([]))(*_rebindable_manager())",
+            "(lambda M, _, later: _run(m.awaited(M, later, [])))(*_rebindable_manager())",
         ],
     );
 }
@@ -12806,6 +13636,46 @@ def raised(fn: object) -> str:
 /// keep giving: the setter's body runs rather than a store landing beside it, the getter's
 /// body runs rather than the field it reads being taken directly, and a property with no
 /// setter still refuses the write in python's own wording
+#[test]
+fn a_property_whose_halves_make_closures_agrees() {
+    // a getter reading a generator expression over its own tokens, as `email`'s token
+    // lists do, and a setter and deleter that make closures of their own. every half is
+    // written `def value`, and each gets an environment of its own
+    agree_python(
+        "propclosures",
+        "\
+class Tokens:
+    def __init__(self, parts: list[str]) -> None:
+        self.parts = parts
+        self.log: list[str] = []
+
+    @property
+    def joined(self) -> str:
+        return ''.join(part.upper() for part in self.parts)
+
+    @property
+    def value(self) -> int:
+        return sum(len(part) for part in self.parts if part)
+
+    @value.setter
+    def value(self, n: int) -> None:
+        make = lambda i: 'x' * (i + n)
+        self.parts = [make(i) for i in range(2)]
+
+    @value.deleter
+    def value(self) -> None:
+        self.log.append(','.join(part for part in self.parts))
+        self.parts = []
+",
+        &[
+            "m.Tokens(['a', 'bc']).joined",
+            "m.Tokens(['a', '', 'bc']).value",
+            "(lambda t: (setattr(t, 'value', 1), t.parts, t.value))(m.Tokens([]))",
+            "(lambda t: (delattr(t, 'value'), t.parts, t.log))(m.Tokens(['p', 'q']))",
+        ],
+    );
+}
+
 #[test]
 fn a_property_reached_from_compiled_code_agrees() {
     agree_python(
@@ -21688,9 +22558,11 @@ class Listc(A):
                 "Lam",
                 "a `super()` with no arguments reads the nested function's own slot zero, not the method's receiver"
             ),
+            // a generator expression is a generator function of its own, and no python
+            // folds one into the method around it
             (
                 "Genex",
-                "a `super()` in a comprehension reads that comprehension's own frame, which only python 3.12 and later fold into the method's"
+                "a `super()` with no arguments reads slot zero, which a generator's resume frame fills with its state"
             ),
             (
                 "Gen",
@@ -22954,20 +23826,23 @@ def make_stream(step: int) -> Any:
     );
 }
 
+/// a generator that shares a cell with the frame around it reads and writes that one cell
+///
+/// python closes over the variable, not the value, so a write on either side after the
+/// generator was made is seen on the other — and in python every trip round a loop
+/// rebinds one variable, so a generator made in a loop reads the loop's latest value
 #[test]
-fn a_generator_sharing_a_cell_is_declined_and_still_runs() {
-    // a *shared* capture is a cell both frames write, which a copy cannot be — so
-    // this one stays interpreted rather than being quietly given a stale value
-    agree_with_declines(
+fn a_generator_sharing_a_cell_with_its_frame_agrees() {
+    agree_python(
         "sharedcell",
         "\
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 
 
-def counter(n: int) -> Any:
+def counter(n: int) -> tuple[Callable[[], Iterator[int]], Callable[[], int]]:
     seen = 0
 
-    def gen() -> Any:
+    def gen() -> Iterator[int]:
         nonlocal seen
         i = 0
         while i < n:
@@ -22979,8 +23854,137 @@ def counter(n: int) -> Any:
         return seen
 
     return (gen, read)
+
+
+def late_binding(xs: list[int], k: int) -> list[int]:
+    def g() -> Iterator[int]:
+        for x in xs:
+            yield x * k
+
+    it = g()
+    k = 100
+    return list(it)
+
+
+def late_mid(xs: list[int], k: int) -> list[int]:
+    def g() -> Iterator[int]:
+        for x in xs:
+            yield x * k
+
+    it = g()
+    out = [next(it)]
+    k = 100
+    out.append(next(it))
+    return out
+
+
+def writes_back(n: int) -> list[int]:
+    total = 0
+
+    def g() -> Iterator[int]:
+        nonlocal total
+        for i in range(n):
+            total = total + i
+            yield i
+
+    out = []
+    for _ in g():
+        out.append(total)
+    return out
+
+
+def in_loop(xs: list[int], ks: list[int]) -> int:
+    t = 0
+    for k in ks:
+        def g() -> Iterator[int]:
+            for x in xs:
+                yield x * k
+
+        t = t + sum(g())
+    return t
+
+
+def made_in_loop(ks: list[int]) -> list[int]:
+    gens = []
+    for k in ks:
+        def g() -> Iterator[int]:
+            yield k
+
+        gens.append(g())
+    return [next(it) for it in gens]
+
+
+def two_deep(n: int) -> list[int]:
+    acc = 0
+
+    def middle() -> list[int]:
+        def inner() -> Iterator[int]:
+            nonlocal acc
+            for i in range(n):
+                acc = acc + i
+                yield acc
+
+        return list(inner())
+
+    out = middle()
+    out.append(acc)
+    return out
+
+
+def unbound() -> str:
+    def g() -> Iterator[int]:
+        yield v
+
+    it = g()
+    try:
+        next(it)
+    except NameError as e:
+        return str(e)
+    v = 1
+    return 'bound'
+
+
+def summed() -> tuple[Callable[[int], Awaitable[int]], Callable[[], int]]:
+    total = 0
+
+    async def add(i: int) -> int:
+        nonlocal total
+        total = total + i
+        return total
+
+    def read() -> int:
+        return total
+
+    return (add, read)
+
+
+def streaming(n: int) -> tuple[Callable[[], AsyncIterator[int]], Callable[[], int]]:
+    step = 1
+
+    async def doubled() -> AsyncIterator[int]:
+        nonlocal step
+        for i in range(n):
+            step = step * 2
+            yield step
+
+    def read() -> int:
+        return step
+
+    return (doubled, read)
 ",
-        &["_counted(m.counter(3))", "_counted(m.counter(0))"],
+        &[
+            "_counted(m.counter(3))",
+            "_counted(m.counter(0))",
+            "m.late_binding([1, 2], 3)",
+            "m.late_mid([1, 2], 3)",
+            "m.writes_back(4)",
+            "m.in_loop([1, 2, 3], [10, 20])",
+            "m.made_in_loop([1, 2, 3])",
+            "m.two_deep(4)",
+            "m.unbound()",
+            "(lambda pair: (_run(pair[0](3)), _run(pair[0](4)), pair[1]()))(m.summed())",
+            "(lambda pair: (_run(_drain(pair[0]())), pair[1]()))(m.streaming(3))",
+        ],
     );
 }
 
@@ -23048,6 +24052,45 @@ async def echoed(n: int) -> Any:
 }
 
 #[test]
+fn an_async_generator_delivers_a_tuple_or_an_exception_whole() {
+    // an item reaches the awaiting frame as the value of a `StopIteration`, and python
+    // builds that exception around the item rather than handing the item to its
+    // constructor — so a tuple is not spread into the exception's arguments and an
+    // exception instance is not taken for the exception being raised
+    agree_python(
+        "asyncgenwhole",
+        "\
+from typing import Any
+
+
+async def pairs() -> Any:
+    yield (1, 2)
+    yield ()
+    yield (3,)
+    yield ValueError('an item')
+    yield StopIteration(4)
+
+
+async def answered() -> Any:
+    got = yield 0
+    yield (got, got)
+    try:
+        yield 1
+    except KeyError:
+        yield ('caught', 'it')
+",
+        &[
+            "_run(_drain(m.pairs()))",
+            "_run(_comprehended(m.pairs()))",
+            "[repr(v) for v in _run(_drain(m.pairs()))]",
+            "_run(_stepped(m.pairs()))",
+            "_run(_reasend(m.answered(), (5, 6), 0))",
+            "_run(_athrown(m.answered(), KeyError, 3))",
+        ],
+    );
+}
+
+#[test]
 fn a_generator_or_coroutine_may_be_a_method() {
     // the state object holds `self` like any other parameter, so the body reads
     // fields through it exactly as a plain method does. the state *class* is
@@ -23094,6 +24137,75 @@ class Other:
             "[list(a) for a in [m.Counter(2).values(), m.Other('y').values()]]",
             "[next(m.Counter(3).values())]",
             "[list(c.values()) for c in [m.Counter(1), m.Counter(2)]]",
+        ],
+    );
+}
+
+#[test]
+fn an_async_generator_s_awaitables_are_coroutines_of_their_own() {
+    // `__anext__`, `asend`, `athrow` and `aclose` each hand back an awaitable with the
+    // coroutine methods: `send`, `throw` and `close`. while one of them is suspended at an
+    // `await` inside the generator, the generator is running, and no other awaitable may
+    // start stepping it; and an awaitable that has finished refuses to be stepped again
+    agree_python(
+        "agenawaitables",
+        "\
+from collections.abc import AsyncGenerator, AsyncIterator
+
+
+class Suspend:
+    def __await__(self):  # type: ignore
+        yield 'waiting'
+
+
+async def counted(log: list[str]) -> AsyncIterator[int]:
+    try:
+        await Suspend()
+        yield 1
+        await Suspend()
+        yield 2
+    except ValueError as e:
+        log.append('caught ' + str(e))
+        yield 3
+    finally:
+        log.append('finally')
+
+
+async def echoed() -> AsyncGenerator[object, object]:
+    got = yield 0
+    yield got
+    await Suspend()
+    yield 'after'
+",
+        &[
+            // a step that reaches an `await` is suspended there, and a second awaitable is
+            // refused while it is
+            "_against(m.counted, lambda g: [lambda: g.__anext__().send(None), \
+             lambda: g.__anext__().send(None), lambda: next(g.asend(None)), \
+             lambda: next(g.athrow(ValueError('x'))), lambda: next(g.aclose())])",
+            // the awaitable's own `send`, `throw` and `close`
+            "_against(m.counted, lambda g: (lambda a: [lambda: a.send(None), lambda: a.send(None), \
+             lambda: a.send(None), lambda: a.send(None)])(g.__anext__()))",
+            "_against(m.counted, lambda g: (lambda a: [lambda: a.send(None), \
+             lambda: a.throw(ValueError('t')), lambda: a.send(None)])(g.__anext__()))",
+            "_against(m.counted, lambda g: (lambda a: [lambda: a.send(None), lambda: a.close(), \
+             lambda: a.send(None), lambda: a.close()])(g.__anext__()))",
+            "_against(m.counted, lambda g: [lambda: next(g.__anext__()), lambda: next(g.__anext__()), \
+             lambda: (lambda a: (a.send(None), a.close()))(g.__anext__()), \
+             lambda: next(g.__anext__())])",
+            // `asend`'s value rides in on the first step whatever that step sends
+            "_against(lambda log: m.echoed(), lambda g: [lambda: next(g.__anext__()), \
+             lambda: g.asend('v').send(None), lambda: next(g.__anext__()), \
+             lambda: next(g.__anext__())])",
+            // `athrow` refuses a first step that carries a value, and `aclose` is spent once
+            // it is done
+            "_against(lambda log: m.echoed(), lambda g: [lambda: next(g.__anext__()), \
+             lambda: g.athrow(ValueError('e')).send(1), \
+             lambda: g.athrow(KeyError('k')).send(None)])",
+            "_against(lambda log: m.echoed(), lambda g: (lambda t: [lambda: t.send(None), \
+             lambda: t.send(None), lambda: next(g.aclose())])(g.aclose()))",
+            "_against(m.counted, lambda g: (lambda t: [lambda: next(g.__anext__()), \
+             lambda: t.throw(KeyError('k')), lambda: t.send(None)])(g.athrow(ValueError('v'))))",
         ],
     );
 }
@@ -23614,6 +24726,650 @@ def held(manager: object, n: int) -> object:
             // finished too, and closing or dropping one runs nothing more
             "(lambda log: (list(m.guarded(log, 3)), log))([])",
         ],
+    );
+}
+
+/// a resumable frame's state object is made by calling its function and by nothing else
+///
+/// one python allocates for itself holds no iterator and no parameters, and one whose
+/// `__init__` runs a second time has its fields replaced under a suspended frame — both
+/// reach the frame's body with fields it never wrote
+#[test]
+fn python_cannot_make_or_remake_a_resumable_frame() {
+    agree_python(
+        "genforged",
+        "\
+from collections.abc import AsyncIterator, Iterator
+
+
+def counted(n: int) -> Iterator[int]:
+    i = 0
+    while i < n:
+        yield i
+        i = i + 1
+
+
+async def plus(n: int) -> int:
+    return n + 1
+
+
+async def stream(n: int) -> AsyncIterator[int]:
+    i = 0
+    while i < n:
+        yield i
+        i = i + 1
+",
+        &[
+            "(lambda g: (_forged(g), list(g)))(m.counted(3))",
+            "(lambda g: (next(g), _forged(g), list(g)))(m.counted(3))",
+            "(lambda c: (_forged(c), _sent_once(c)))(m.plus(4))",
+            "(lambda a: (_forged(a), _forged(a.__anext__()), _run(_drain(a))))(m.stream(2))",
+        ],
+    );
+}
+
+/// a generator the collector cannot walk keeps every cycle through it alive: the cycle is
+/// never freed, and a generator suspended inside `try` never runs its `finally`
+#[test]
+fn a_generator_in_a_reference_cycle_is_collected() {
+    agree_python(
+        "gencycle",
+        "\
+from collections.abc import AsyncIterator, Iterator
+
+
+def holds(box: list[object], log: list[str]) -> Iterator[int]:
+    try:
+        yield len(box)
+        yield 2
+    finally:
+        log.append('finally')
+
+
+def keeps(payload: object, box: list[object]) -> Iterator[object]:
+    held = [payload, box]
+    yield held
+    yield len(held)
+
+
+async def plus(n: int) -> int:
+    return n + 1
+
+
+async def stream(n: int) -> AsyncIterator[int]:
+    yield n
+",
+        &[
+            "_cycled(lambda box, log: m.holds(box, log))",
+            "gc.is_tracked(m.holds([], []))",
+            "(lambda c: (gc.is_tracked(c), c.close()))(m.plus(1))",
+            "(lambda a: (gc.is_tracked(a), gc.is_tracked(a.__anext__())))(m.stream(1))",
+            "_cycle_references(lambda payload, box: m.keeps(payload, box))",
+        ],
+    );
+}
+
+/// a frame that is running cannot be resumed a second time from inside itself
+///
+/// python refuses every entry point while the frame executes, so the resumption in the
+/// middle of a body never happens: re-entered, a frame would start again from its own
+/// suspension point while its registers are still in use
+#[test]
+fn a_running_frame_refuses_to_be_resumed() {
+    agree_python(
+        "genrunning",
+        "\
+from collections.abc import AsyncIterator, Callable, Iterator
+
+
+def probed(probes: list[Callable[[], object]]) -> Iterator[object]:
+    for probe in probes:
+        try:
+            yield probe()
+        except ValueError as e:
+            yield ('ValueError', str(e))
+
+
+async def awaited(probes: list[Callable[[], object]]) -> list[object]:
+    out: list[object] = []
+    for probe in probes:
+        try:
+            out.append(probe())
+        except ValueError as e:
+            out.append(('ValueError', str(e)))
+    return out
+
+
+async def streamed(probes: list[Callable[[], object]]) -> AsyncIterator[object]:
+    for probe in probes:
+        try:
+            yield probe()
+        except RuntimeError as e:
+            yield 'RuntimeError: ' + str(e)
+
+
+def loopy(box: list[object], xs: list[int]) -> Iterator[int]:
+    for x in xs:
+        if box[1]:
+            box[1] = False
+            for _ in box[0]:  # type: ignore
+                pass
+        yield x
+
+
+def holder(box: list[object]) -> Iterator[str]:
+    s = 'abc' * (len(box) + 1)
+    yield s
+    if box[1]:
+        box[1] = False
+        for _ in box[0]:  # type: ignore
+            pass
+    yield s + '!'
+    s = 'zz'
+    yield s
+
+
+def drain(box: list[object]) -> str:
+    if box[1]:
+        box[1] = False
+        for _ in box[0]:  # type: ignore
+            pass
+    return '!'
+
+
+def borrow_list(box: list[object], n: int) -> Iterator[int]:
+    xs = [n, n + 1, n + 2]
+    yield 0
+    yield len(xs) + len(drain(box)) + xs[0]
+    xs = [n * 100]
+    yield xs[0]
+",
+        &[
+            "_reentered(m.probed, 'gen')",
+            "_reentered(m.awaited, 'coro')",
+            "_reentered(m.streamed, 'async')",
+            "_iterated_from_inside(lambda box: m.loopy(box, [1, 2, 3, 4]))",
+            "_iterated_from_inside(m.holder)",
+            "_iterated_from_inside(lambda box: m.borrow_list(box, 7))",
+        ],
+    );
+}
+
+/// `throw` takes python's whole argument list: an exception, or a type with a value to
+/// build it from and a traceback to hang on it
+///
+/// the value is not a detail. `throw(ValueError, ValueError("old"))` raises that instance,
+/// and one built from nothing in its place is a handler seeing a different exception
+#[test]
+fn throw_takes_a_value_and_a_traceback() {
+    agree_python(
+        "genthrowargs",
+        "\
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+
+
+def caught() -> Iterator[str]:
+    try:
+        yield 'start'
+    except ValueError as e:
+        yield repr(e) + ' ' + repr(e.args)
+
+
+async def awaited(step: Callable[[], Awaitable[object]]) -> str:
+    try:
+        await step()
+    except ValueError as e:
+        return repr(e) + ' ' + repr(e.args)
+    return 'nothing'
+
+
+async def streamed() -> AsyncIterator[str]:
+    try:
+        yield 'start'
+    except ValueError as e:
+        yield repr(e) + ' ' + repr(e.args)
+",
+        &[
+            "_throw_shapes(m.caught, next, lambda g, args: g.throw(*args))",
+            "_throw_shapes(lambda: m.awaited(_suspends_once), lambda c: c.send(None), \
+             lambda c, args: c.throw(*args))",
+            "_throw_shapes(lambda: _spend(m.awaited(lambda: _Ready(0))), lambda c: None, \
+             lambda c, args: c.throw(*args))",
+            "_throw_shapes(m.streamed, lambda a: _stepped_by_hand(a.__anext__()), \
+             lambda a, args: _stepped_by_hand(a.athrow(*args)))",
+        ],
+    );
+}
+
+/// a coroutine is awaitable and nothing else: `next()` of one is a `TypeError`, and the
+/// iterator an `await` drives is the separate object `__await__` hands back
+#[test]
+fn a_coroutine_is_not_an_iterator() {
+    agree_python(
+        "coronext",
+        "\
+from collections.abc import Awaitable, Callable
+
+
+async def plus(n: int) -> int:
+    return n + 1
+
+
+async def awaited(step: Callable[[], Awaitable[object]]) -> str:
+    try:
+        await step()
+        await step()
+    except ValueError as e:
+        return 'caught ' + repr(e)
+    return 'nothing'
+
+
+async def chained(step: Callable[[], Awaitable[object]], n: int) -> str:
+    first = awaited(step)
+    second = plus(n)
+    return await first + str(await second)
+",
+        &[
+            "_as_iterator(m.plus(1))",
+            "_await_wrapper(m.plus(1))",
+            "_await_wrapper(m.awaited(_suspends_once))",
+            "_run(_awaits(m.plus(4)))",
+            "_run(_awaits(m.awaited(lambda: _Suspends(3))))",
+            "_run(m.chained(lambda: _Suspends(3), 2))",
+        ],
+    );
+}
+
+/// a frame that suspends again after `close()` threw `GeneratorExit` into it is still
+/// suspended: the close is refused, the frame can be resumed, and finalizing it tries
+/// the close a second time
+#[test]
+fn a_frame_that_ignores_generator_exit_stays_suspended() {
+    agree_python(
+        "genignoredexit",
+        "\
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+
+
+def stubborn(log: list[str]) -> Iterator[int]:
+    while True:
+        try:
+            yield 1
+        except GeneratorExit:
+            log.append('ignored')
+
+
+async def stubborn_coroutine(log: list[str], step: Callable[[], Awaitable[object]]) -> None:
+    while True:
+        try:
+            await step()
+        except GeneratorExit:
+            log.append('ignored')
+
+
+async def stubborn_stream(log: list[str]) -> AsyncIterator[int]:
+    while True:
+        try:
+            yield 1
+        except GeneratorExit:
+            log.append('ignored')
+
+
+async def once() -> AsyncIterator[int]:
+    yield 1
+",
+        &[
+            "_ignored_close(m.stubborn, next, lambda g: g.close(), next)",
+            "_ignored_close(lambda log: m.stubborn_coroutine(log, _suspends_once), \
+             lambda c: c.send(None), lambda c: c.close(), lambda c: c.send(None))",
+            "_ignored_close(m.stubborn_stream, lambda a: _stepped_by_hand(a.__anext__()), \
+             lambda a: _stepped_by_hand(a.aclose()), lambda a: _stepped_by_hand(a.__anext__()))",
+            // a close that finished the frame leaves nothing for a second one to refuse
+            "(lambda a: [_stepped_by_hand(a.__anext__()), _stepped_by_hand(a.aclose()), \
+             _stepped_by_hand(a.aclose()), _stepped_by_hand(a.athrow(ValueError('v')))])(m.once())",
+        ],
+    );
+}
+
+/// a coroutine dropped without ever being awaited is almost always a missing `await`,
+/// and python says so with a `RuntimeWarning` naming the coroutine
+#[test]
+fn a_coroutine_never_awaited_warns() {
+    agree_python(
+        "coronever",
+        "\
+async def plus(n: int) -> int:
+    return n + 1
+
+
+class Holder:
+    async def method(self) -> int:
+        return 1
+",
+        &[
+            "_dropped_frame_warnings(lambda: m.plus(1))",
+            "_dropped_frame_warnings(lambda: m.Holder().method())",
+            // one that was awaited, or closed, or started, has nothing to warn about
+            "_dropped_frame_warnings(lambda: _sent_once(m.plus(1)))",
+            "_dropped_frame_warnings(lambda: m.plus(1).close())",
+            "_dropped_frame_warnings(lambda: _run(m.plus(1)))",
+        ],
+    );
+}
+
+/// a generator, a coroutine and an async generator can each be referred to weakly
+#[test]
+fn a_resumable_frame_takes_a_weak_reference() {
+    agree_python(
+        "genweak",
+        "\
+from collections.abc import AsyncIterator, Iterator
+
+
+def counted(n: int) -> Iterator[int]:
+    i = 0
+    while i < n:
+        yield i
+        i = i + 1
+
+
+async def plus(n: int) -> int:
+    return n + 1
+
+
+async def stream(n: int) -> AsyncIterator[int]:
+    yield n
+",
+        &[
+            "_weakly(lambda: m.counted(3), list)",
+            "_weakly(lambda: m.counted(3), next)",
+            "_weakly(lambda: m.plus(1), _sent_once)",
+            "_weakly(lambda: m.stream(1), lambda a: _stepped_by_hand(a.__anext__()))",
+        ],
+    );
+}
+
+#[test]
+fn a_generator_expression_or_lambda_inside_a_generator_or_coroutine_agrees() {
+    // the frame a generator expression is made in may itself be suspended, and what the
+    // expression reads out of it is read when the expression runs, not when it is made —
+    // so a local the frame writes afterwards is seen at its new value
+    agree_python(
+        "genexpingen",
+        "\
+from collections.abc import AsyncIterator, Callable, Iterator
+
+
+def grouped(groups: list[list[str]]) -> Iterator[str]:
+    for group in groups:
+        if any(tag in {'replace', 'delete'} for tag in group):
+            yield 'changed'
+        yield ','.join(tag.upper() for tag in group)
+
+
+def parameter(xs: list[int], k: int) -> Iterator[int]:
+    yield sum(x * k for x in xs)
+    yield max(x + k for x in xs)
+
+
+def late(xs: list[int]) -> Iterator[object]:
+    k = 1
+    g = (x * k for x in xs)
+    yield 'made'
+    k = 10
+    yield list(g)
+
+
+def suspended_between(xs: list[int]) -> Iterator[object]:
+    total = 0
+    g = (x + total for x in xs)
+    yield next(g)
+    total = 100
+    yield next(g)
+
+
+def lambdas(xs: list[int]) -> Iterator[object]:
+    scale = 2
+    f: Callable[[int], int] = lambda x: x * scale
+    yield f(3)
+    scale = 5
+    yield [f(x) for x in xs]
+
+
+async def awaited(xs: list[int]) -> int:
+    return sum(x for x in xs if x > 1)
+
+
+async def streamed(xs: list[int]) -> AsyncIterator[str]:
+    for x in xs:
+        yield '-'.join(str(y) for y in range(x))
+
+
+def unset_first(xs: list[int]) -> Iterator[object]:
+    g = (x + later for x in xs)
+    yield 'made'
+    try:
+        yield next(g)
+    except NameError as e:
+        yield type(e).__name__
+    later = 7
+    yield list(g)
+
+
+def nested_expressions(rows: list[list[int]]) -> Iterator[int]:
+    bias = 1
+    yield sum(sum(y + bias for y in row) for row in rows)
+
+
+def enclosing(k: int) -> Callable[[list[int]], Iterator[int]]:
+    def inner(xs: list[int]) -> Iterator[int]:
+        yield sum(x * k for x in xs)
+    return inner
+",
+        &[
+            "list(m.unset_first([1, 2]))",
+            "list(m.nested_expressions([[1, 2], [3]]))",
+            "list(m.enclosing(3)([1, 2]))",
+            "list(m.grouped([['keep'], ['replace', 'x'], []]))",
+            "list(m.parameter([1, 2, 3], 4))",
+            "list(m.late([1, 2]))",
+            "list(m.suspended_between([1, 2]))",
+            "list(m.lambdas([1, 2]))",
+            "_run(m.awaited([1, 2, 3]))",
+            "_run(_drain(m.streamed([1, 3])))",
+        ],
+    );
+}
+
+/// a generator expression is a generator: nothing in it runs until it is asked for a
+/// value, it runs only as far as it is asked, and it is an iterator of its own
+///
+/// the one place it is built at once is as the sole argument of `list`, `tuple`, `set`,
+/// `frozenset`, `sorted` or `dict` while the name is still the builtin, which drains it
+/// straight away — and a `StopIteration` escaping it there still becomes the
+/// `RuntimeError` a generator's frame makes of one
+#[test]
+fn a_generator_expression_is_lazy() {
+    agree_python(
+        "genexplazy",
+        "\
+from collections.abc import Iterator
+
+
+def deferred(xs: list[int]) -> tuple[int, list[int]]:
+    log: list[int] = []
+    g = (log.append(x) for x in xs)
+    log.append(-1)
+    next(g)
+    return (len(log), log)
+
+
+def short_circuits() -> bool:
+    return any(1.0 / x > 0.0 for x in [1.0, 0.0])
+
+
+def stepped(xs: list[int]) -> list[object]:
+    g = (x * 2 for x in xs)
+    first = next(g)
+    return [first, next(g), list(g), isinstance(g, Iterator), iter(g) is g]
+
+
+def stored(xs: list[int]) -> Iterator[int]:
+    return (x + 1 for x in xs if x % 2 == 0)
+
+
+def late(xs: list[int]) -> list[int]:
+    k = 1
+    g = (x * k for x in xs)
+    k = 10
+    return list(g)
+
+
+def first_iterable_now(xs: object) -> str:
+    try:
+        (x for x in xs)  # type: ignore
+    except TypeError as e:
+        return str(e)
+    return 'made'
+
+
+def membership(ks: list[int], xs: list[int]) -> list[bool]:
+    out = []
+    for k in ks:
+        out.append(any(x == k for x in xs))
+    return out
+
+
+def totals(xs: list[int]) -> list[object]:
+    return [sum(x * 2 for x in xs), min(x for x in xs), max(-x for x in xs),
+            all(x > 0 for x in xs), list(zip((x for x in xs), (x * x for x in xs)))]
+
+
+def drained(xs: list[int]) -> list[object]:
+    return [list(x * 2 for x in xs), tuple(x for x in xs), sorted(-x for x in xs),
+            set(x % 2 for x in xs), frozenset(x % 3 for x in xs),
+            dict((x, x * x) for x in xs)]
+
+
+def nested_clauses(xss: list[list[int]]) -> list[int]:
+    return list(y for xs in xss if xs for y in xs if y != 2)
+
+
+def stops(xs: list[int]) -> object:
+    it = iter(xs)
+    return list(next(it) for _ in range(len(xs) + 1))
+
+
+def stops_lazily(xs: list[int]) -> object:
+    it = iter(xs)
+    return sum(next(it) for _ in range(len(xs) + 1))
+
+
+def walrus(xs: list[int]) -> tuple[int, int, int]:
+    d = 0
+    g = ((d := x * 2) + d for x in xs)
+    before = d
+    first = next(g)
+    seen = d
+    return (before + first, seen, sum(g) + d)
+
+
+def walrus_drained(xs: list[float]) -> tuple[list[float], float]:
+    out = list((d := x - 1.0) * d for x in xs)
+    return (out, d)
+
+
+def in_elif(xs: list[int], k: int) -> str:
+    if k < 0:
+        return 'negative'
+    elif any(x == k for x in xs):
+        return 'found'
+    return 'missing'
+
+
+def in_rows(rows: list[list[int]]) -> list[int]:
+    return [sum(y * 2 for y in row) for row in rows]
+",
+        &[
+            "m.deferred([1, 2, 3])",
+            "m.short_circuits()",
+            "m.stepped([1, 2, 3, 4])",
+            "(lambda g: (next(g), list(g)))(m.stored([1, 2, 3, 4, 6]))",
+            "m.late([1, 2])",
+            "m.first_iterable_now(5)",
+            "m.membership([1, 5, 3], [3, 4, 1])",
+            "m.totals([3, 1, 2])",
+            "m.drained([3, 1, 2])",
+            "m.nested_clauses([[1, 2], [], [2, 3]])",
+            "_escaped(m.stops, [1, 2])",
+            "_escaped(m.stops_lazily, [1, 2])",
+            // a walrus inside binds in the function the expression stands in
+            "m.walrus([1, 2, 3])",
+            "m.walrus_drained([1.5, 3.0])",
+            // wherever the statement holds it, and inside a comprehension's element
+            "[m.in_elif([1, 2], k) for k in (-1, 2, 5)]",
+            "m.in_rows([[1, 2], [], [3]])",
+            "_with_module_name(m, 'list', lambda g: (next(g), next(g)), m.walrus_drained, [2.0, 4.0])",
+            // a name that no longer holds the builtin is handed the generator itself
+            "[_with_module_name(m, name, lambda g: (name, next(g), next(g)), m.drained, [5, 6]) \
+              for name in ('list', 'tuple', 'sorted', 'set', 'frozenset', 'dict')]",
+            "_with_module_name(m, 'any', lambda g: next(g), m.membership, [1], [2])",
+        ],
+    );
+}
+
+/// a closure environment is reachable from python through the collector, and has to be
+/// no more constructible than a generator's state object
+#[test]
+fn python_cannot_make_or_remake_a_closure_environment() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_envforged");
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = "\
+from collections.abc import Callable
+
+
+def counter() -> Callable[[], int]:
+    seen = 0
+
+    def step() -> int:
+        nonlocal seen
+        seen = seen + 1
+        return seen
+
+    return step
+";
+    let options = Options {
+        language: by_irbuild::Language::Python,
+        require_native: true,
+        ..Options::default()
+    };
+    if build_source(source, "by_diff_envforged", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let out = run(
+        &python,
+        &dir,
+        "import gc, by_diff_envforged as m\n\
+         step = m.counter()\n\
+         step()\n\
+         env = [o for o in gc.get_referents(step) if type(o).__name__.endswith('$env')]\n\
+         print(len(env))\n\
+         kind = type(env[0])\n\
+         for attempt in (lambda: kind.__new__(kind), kind, lambda: object.__new__(kind)):\n\
+         \x20   try:\n\
+         \x20       attempt()\n\
+         \x20       print('made')\n\
+         \x20   except TypeError as e:\n\
+         \x20       print(str(e).replace(kind.__module__ + '.', '').replace(kind.__name__, 'T'))\n\
+         print(env[0].__init__(), step())\n",
+    );
+    assert_eq!(
+        out,
+        "1\ncannot create 'T' instances\ncannot create 'T' instances\ncannot create 'T' instances\nNone 2"
     );
 }
 
@@ -29161,6 +30917,288 @@ def restored_after(log: list[str]) -> str:
              repr(e.__context__)))(_capture(m.missing_second)))[1]",
             "m.asked_while_handling()",
             "(lambda log: (m.restored_after(log), log))([])",
+        ],
+    );
+}
+
+#[test]
+fn a_finally_on_the_exception_path_sees_the_exception_it_unwinds() {
+    // python runs a `finally` that an exception is passing through as though the
+    // exception were being handled, so `sys.exception()` in the body answers that
+    // exception — not the one an enclosing handler holds, and not `None` — and an
+    // exception raised there chains onto it. the normal path sees what it saw before
+    agree_python(
+        "finallyhandled",
+        "\
+import sys
+from collections.abc import Iterator
+
+
+class Refused(Exception):
+    pass
+
+
+def unmatched_inside(log: list[str]) -> int:
+    try:
+        raise KeyError('outer')
+    except KeyError:
+        try:
+            raise Refused('empty')
+        except ValueError:
+            return 1
+        finally:
+            log.append(repr(sys.exception()))
+    return 0
+
+
+def plain_finally(log: list[str]) -> int:
+    try:
+        raise Refused('x')
+    finally:
+        log.append(repr(sys.exception()))
+
+
+def normal_path(log: list[str]) -> int:
+    try:
+        raise KeyError('outer')
+    except KeyError:
+        try:
+            log.append('body')
+        finally:
+            log.append(repr(sys.exception()))
+    log.append(repr(sys.exception()))
+    return 0
+
+
+def nested_finally(log: list[str]) -> int:
+    try:
+        try:
+            raise Refused('inner')
+        finally:
+            log.append(repr(sys.exception()))
+    finally:
+        log.append(repr(sys.exception()))
+
+
+def raised_in_finally(log: list[str]) -> int:
+    try:
+        raise Refused('first')
+    finally:
+        raise KeyError('second')
+
+
+def after_the_finally(log: list[str]) -> int:
+    try:
+        try:
+            raise Refused('gone')
+        finally:
+            log.append(repr(sys.exception()))
+    except Refused:
+        pass
+    log.append(repr(sys.exception()))
+    return 0
+
+
+def returning_from_finally(log: list[str]) -> int:
+    try:
+        raise Refused('swallowed')
+    finally:
+        log.append(repr(sys.exception()))
+        return 2
+
+
+def yields_in_finally(log: list[str]) -> Iterator[str]:
+    try:
+        raise Refused('suspended')
+    finally:
+        yield repr(sys.exception())
+        log.append(repr(sys.exception()))
+",
+        &[
+            "(lambda log: (repr(_capture(m.unmatched_inside, log)), log))([])",
+            "(lambda log: (repr(_capture(m.plain_finally, log)), log))([])",
+            "(lambda log: (m.normal_path(log), log))([])",
+            "(lambda log: (repr(_capture(m.nested_finally, log)), log))([])",
+            "_chain(_capture(m.raised_in_finally, []))",
+            "(lambda log: (m.after_the_finally(log), log))([])",
+            "(lambda log: (m.returning_from_finally(log), log, repr(sys.exception())))([])",
+            // a frame suspended in the `finally` hands the exception back to its caller
+            // while it is away, and takes it again when it resumes
+            "(lambda log: (g := m.yields_in_finally(log), next(g), repr(sys.exception()), \
+             repr(_capture(next, g)), log)[1:])([])",
+        ],
+    );
+}
+
+#[test]
+fn an_exception_s_traceback_names_every_compiled_frame_it_passed() {
+    // python adds a traceback entry for each frame an exception is raised in or passes
+    // through, naming the function and the line of the instruction that raised. a caught
+    // exception carries the entries from the raise to the handler; one that leaves the
+    // module carries the whole way out, with no entry for anything python did not run —
+    // the forwarder a module function is published through included. putting back an
+    // exception the frame already holds adds nothing
+    agree_python(
+        "tbentries",
+        "\
+import asyncio
+from collections.abc import Callable, Iterator
+
+
+class Refused(Exception):
+    pass
+
+
+def parse(text: str) -> int:
+    n = len(text)
+    if n == 0:
+        raise Refused('empty')
+    return n
+
+
+def caught(text: str) -> object:
+    try:
+        parse(text)
+    except Refused as e:
+        return _names(e)
+    return None
+
+
+def _names(e: BaseException) -> list[tuple[str, int]]:
+    out = []
+    tb = e.__traceback__
+    while tb is not None:
+        out.append((tb.tb_frame.f_code.co_name, tb.tb_lineno))
+        tb = tb.tb_next
+    return out
+
+
+def propagates(text: str) -> int:
+    total = 0
+    total = total + parse(text)
+    return total
+
+
+def spread(xs: list[int], at: int) -> int:
+    first = 1
+    got = xs[
+        at
+    ] + first
+    return got
+
+
+def recursed(n: int) -> int:
+    if n == 0:
+        return parse('')
+    return recursed(n - 1)
+
+
+def re_raised(text: str) -> int:
+    try:
+        parse(text)
+    except Refused:
+        raise
+    return 0
+
+
+def raised_again(text: str) -> int:
+    try:
+        parse(text)
+    except Refused as e:
+        raise e
+    return 0
+
+
+def through_finally(text: str) -> int:
+    try:
+        return parse(text)
+    finally:
+        text = text + '!'
+
+
+def while_handling(text: str) -> int:
+    try:
+        parse(text)
+    except Refused:
+        return int('x')
+    return 0
+
+
+def generated(text: str) -> Iterator[int]:
+    yield 1
+    yield parse(text)
+
+
+def suspended() -> Iterator[int]:
+    yield 1
+    yield 2
+
+
+def lambda_of() -> Callable[[str], int]:
+    return lambda t: parse(t)
+
+
+def nested_of() -> Callable[[str], int]:
+    def inner(t: str) -> int:
+        return parse(t)
+    return inner
+
+
+def expressed(texts: list[str]) -> list[int]:
+    return list(parse(t) for t in texts)
+
+
+def variadic(*texts: str) -> int:
+    return parse(texts[0])
+
+
+class Box:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def measured(self) -> int:
+        return parse(self.text)
+
+    @property
+    def size(self) -> int:
+        return parse(self.text)
+
+    def __hidden(self) -> int:
+        return parse(self.text)
+
+    def hidden(self) -> int:
+        return self.__hidden()
+
+
+async def awaited(text: str) -> int:
+    await asyncio.sleep(0)
+    return parse(text)
+",
+        &[
+            "m.caught('')",
+            "m.caught('abc')",
+            "_frames(_capture(m.parse, ''))",
+            "_frames(_capture(m.propagates, ''))",
+            "_frames(_capture(m.spread, [1], 1))",
+            "_frames(_capture(m.recursed, 3))",
+            "_frames(_capture(m.re_raised, ''))",
+            "_frames(_capture(m.raised_again, ''))",
+            "_frames(_capture(m.through_finally, ''))",
+            "(lambda e: (_frames(e), _frames(e.__context__)))(_capture(m.while_handling, ''))",
+            "_frames(_capture(list, m.generated('')))",
+            // a `throw` raises at the suspension, which is where the frame's entry points
+            "(lambda g: (next(g), _frames(_capture(g.throw, ValueError('t')))))(m.suspended())",
+            "_frames(_capture(m.lambda_of(), ''))",
+            "_frames(_capture(m.nested_of(), ''))",
+            "_frames(_capture(m.expressed, ['a', '']))",
+            "_frames(_capture(m.variadic, ''))",
+            "_frames(_capture(m.Box('').measured))",
+            "_frames(_capture(getattr, m.Box(''), 'size'))",
+            "_frames(_capture(m.Box('').hidden))",
+            "_frames(_capture(asyncio.run, m.awaited('')))",
+            // what python raises binding a call has no frame of the callee's in it
+            "_frames(_capture(m.parse))",
+            "_frames(_capture(m.variadic))",
         ],
     );
 }

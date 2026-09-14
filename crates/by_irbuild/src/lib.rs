@@ -599,6 +599,7 @@ pub fn build_module(
         // a module-level frame is in no class body, so nothing it names is mangled
         owner: None,
         frame: None,
+        environment_suffix: None,
     };
 
     // pass one and a half: the direct editions, before any caller, because an `await`
@@ -1184,6 +1185,16 @@ fn span(range: ruff_text_size::TextRange) -> (u32, u32) {
     (range.start().to_u32(), range.end().to_u32())
 }
 
+/// the name python gives the frame `function` runs in: `<lambda>` and `<genexpr>` for the
+/// bodies python names that way, and the definition's own name for everything else
+fn frame_name(function: &ast::StmtFunctionDef, captures: Option<&closures::Nested>) -> String {
+    match captures {
+        Some(entry) if entry.lambda.is_some() => "<lambda>".to_string(),
+        Some(entry) if entry.generator_expression.is_some() => "<genexpr>".to_string(),
+        _ => function.name.to_string(),
+    }
+}
+
 /// lower a generator: a constructor, and a state class whose `$resume` method is
 /// the body as a state machine
 fn lower_generator(
@@ -1192,6 +1203,7 @@ fn lower_generator(
     decorators: Vec<Decorator>,
     receiver: Option<Receiver<'_>>,
     captures: Option<&closures::Nested>,
+    qualname: &str,
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
     let Unit {
         env,
@@ -1225,17 +1237,44 @@ fn lower_generator(
         unit.arrays,
     );
     representations.retain(|(name, _)| !declared_global.contains(name));
+    // a capture is copied into the state object where the environment holds it as a
+    // value neither frame writes. every other one — a cell some frame writes, or a name
+    // an environment further up holds — is reached through the environment itself, which
+    // the state object keeps in `$outer`: the frame outlives the call that made it, and a
+    // copy of a cell is a second cell the two frames stop agreeing about
+    let environment_class = match receiver {
+        Some(Receiver::Implicit(RType::Instance { class, .. })) if captures.is_some() => {
+            Some(class.clone())
+        }
+        _ => None,
+    };
+    let (captured, chained): (Vec<String>, Vec<String>) = captures
+        .map(|nested| nested.captures.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .partition(|name| {
+            !captures.is_some_and(|nested| nested.shared.contains(name))
+                && environment_class
+                    .as_ref()
+                    .and_then(|class| layouts.get(class))
+                    .is_some_and(|fields| {
+                        fields
+                            .iter()
+                            .any(|field| field.name == *name && !field.cell)
+                    })
+        });
+    // a name the generator writes `nonlocal` is not one of its own locals
+    representations.retain(|(name, _)| !chained.contains(name));
     let locals: Vec<String> = representations
         .iter()
         .map(|(name, _)| name.clone())
         .collect();
-    let captured: Vec<String> = captures
-        .map(|nested| nested.captures.clone())
-        .unwrap_or_default();
     // the constructor seeds every one of them, so they are as assigned as a parameter
     let mut assigned = generators::definitely_assigned(function);
     assigned.extend(captured.iter().cloned());
-    let parameters = signature(db, env, model, function, layouts, receiver, &[])?.params;
+    let mut signed = signature(db, env, model, function, layouts, receiver, &[])?;
+    takes_the_first_iterator(captures, &mut signed);
+    let parameters = signed.params;
     let representation = |name: &str| {
         parameters
             .iter()
@@ -1245,6 +1284,10 @@ fn lower_generator(
     };
     let names = {
         let mut names = generators::state_names(function, &locals);
+        if captures.is_some_and(|nested| nested.generator_expression.is_some()) {
+            assigned.insert(closures::GENERATOR_ITERATOR.to_string());
+            names.push(closures::GENERATOR_ITERATOR.to_string());
+        }
         let extra: Vec<String> = captured
             .iter()
             .filter(|name| !names.contains(name))
@@ -1253,7 +1296,7 @@ fn lower_generator(
         names.extend(extra);
         names
     };
-    let fields: Vec<by_ir::function::FieldDecl> = names
+    let mut fields: Vec<by_ir::function::FieldDecl> = names
         .into_iter()
         .map(|name| by_ir::function::FieldDecl {
             cell: false,
@@ -1272,24 +1315,135 @@ fn lower_generator(
             default: None,
         })
         .collect();
+    // the field a name reached through the environment walks from, named as an
+    // environment's own link to the one enclosing it so that the walk is the same one
+    if let Some(environment) = environment_class.as_ref().filter(|_| !chained.is_empty()) {
+        assigned.insert(closures::OUTER_FIELD.to_string());
+        fields.push(by_ir::function::FieldDecl {
+            cell: false,
+            optional: false,
+            defaulted_by: None,
+            name: closures::OUTER_FIELD.to_string(),
+            ty: RType::Instance {
+                class: environment.clone(),
+                exact: false,
+            },
+            default: None,
+        });
+    }
 
+    // the closures the frame makes — a generator expression, a lambda — are methods of the
+    // state object, which holds every local as a field already. a closure reads a local
+    // there when it runs rather than when it was made, which is python's answer for a name
+    // the frame goes on writing after it made the closure; a name nothing writes is copied
+    let state = RType::Instance {
+        class: class.clone(),
+        exact: false,
+    };
+    let written: HashSet<String> = representations
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect();
+    let bound: HashSet<String> = parameters
+        .iter()
+        .map(|(name, _)| name.clone())
+        .chain(written.iter().cloned())
+        .chain(
+            captures
+                .into_iter()
+                .flat_map(|nested| nested.captures.iter().cloned()),
+        )
+        .collect();
+    let never_written: HashSet<String> = bound.difference(&written).cloned().collect();
+    let per_iteration = if unit.language.unique_loop_bindings() {
+        closures::loop_targets(&function.body)
+    } else {
+        HashSet::new()
+    };
+    let nested =
+        closures::nested_functions(&function.body, &bound, &never_written, &per_iteration)?;
+    for entry in &nested {
+        // a loop binding is frozen per closure, which takes an environment allocated at
+        // each one — and the state object is allocated once
+        if entry
+            .captures
+            .iter()
+            .any(|name| per_iteration.contains(name))
+        {
+            return Err(Decline::new(
+                "a closure inside a generator over a loop binding is not lowered yet",
+            ));
+        }
+        // a name the closure shares with the frame is read as a cell, which needs a
+        // representation with an unset value
+        if let Some(name) = entry.shared.iter().find(|name| {
+            fields
+                .iter()
+                .any(|field| field.name == **name && !has_an_unset_value(&field.ty))
+        }) {
+            return Err(Decline::new(format!(
+                "a closure inside a generator shares `{name}`, whose representation has no unset value to read a cell with"
+            )));
+        }
+    }
     let mut layouts_with_state = layouts.clone();
     layouts_with_state.insert(class.clone(), fields.clone());
-    let (resume, parked) = lower_resume(
+    let mut methods_with_state = unit.methods.clone();
+    if !nested.is_empty() {
+        let table = nested
+            .iter()
+            .filter_map(|entry| {
+                let mut signature = signature(
+                    db,
+                    env,
+                    model,
+                    &entry.def,
+                    &layouts_with_state,
+                    Some(Receiver::Implicit(&state)),
+                    &[],
+                )
+                .ok()?;
+                resumable_return(&entry.def, &mut signature);
+                takes_the_first_iterator(Some(entry), &mut signature);
+                Some((entry.def.name.to_string(), signature))
+            })
+            .collect();
+        methods_with_state.insert(class.clone(), table);
+    }
+    let environment = (!nested.is_empty()).then(|| Closures {
+        class: class.clone(),
+        register: RegisterId(0),
+        lambdas: nested
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .lambda
+                    .or(entry.generator_expression)
+                    .map(|range| (span(range), entry.def.name.to_string()))
+            })
+            .collect(),
+        ready: HashSet::new(),
+        settled: closures::bound_only_by_their_def(&function.body),
+        outer: None,
+        per_closure: None,
+    });
+    let (resume, parked, delegations) = lower_resume(
         Unit {
             layouts: &layouts_with_state,
+            methods: &methods_with_state,
             ..unit
         },
         function,
+        &frame_name(function, captures),
         &class,
         &fields,
         &assigned,
+        environment,
     )?;
 
     // which registers had to be parked is only known once the body is lowered, so the
     // slots they took join the layout here — before the constructor, which seeds one
     // value per field and would otherwise leave the last of them off
-    let mut fields = fields;
     fields.extend(parked);
     layouts_with_state.insert(class.clone(), fields.clone());
     let constructor = lower_generator_constructor(
@@ -1303,7 +1457,32 @@ fn lower_generator(
         decorators,
         receiver,
         &captured,
+        captures,
     )?;
+
+    // the closures' own bodies, with the state object as their receiver
+    let mut methods = vec![resume];
+    let mut classes = Vec::new();
+    for entry in &nested {
+        let (mut method, inner) = lower_function_with_receiver(
+            Unit {
+                layouts: &layouts_with_state,
+                methods: &methods_with_state,
+                frame: Some(qualname),
+                environment_suffix: None,
+                ..unit
+            },
+            &entry.def,
+            Some(Receiver::Implicit(&state)),
+            Some(entry),
+            &[],
+            Frame::AsWritten,
+        )?;
+        method.owner = Some(class.clone());
+        method.exported = false;
+        methods.push(method);
+        classes.extend(inner);
+    }
 
     Ok((
         constructor,
@@ -1320,6 +1499,8 @@ fn lower_generator(
                     (true, false) => by_ir::function::Surface::Coroutine,
                     _ => by_ir::function::Surface::Generator,
                 },
+                qualname: qualname.to_string(),
+                delegations,
             }),
             fields,
             decorators: Vec::new(),
@@ -1327,7 +1508,7 @@ fn lower_generator(
             slot_aliases: Vec::new(),
             generic: false,
             properties: Vec::new(),
-            methods: vec![resume],
+            methods,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,
@@ -1335,11 +1516,18 @@ fn lower_generator(
             immutable: false,
             environment: false,
             keywords: Vec::new(),
-        }],
+        }]
+        .into_iter()
+        .chain(classes)
+        .collect(),
     ))
 }
 
 /// the function the *call* runs: allocate the state object, seed the parameters
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site, and every argument is part of what the state object is seeded from"
+)]
 fn lower_generator_constructor(
     unit: Unit<'_>,
     function: &ast::StmtFunctionDef,
@@ -1348,6 +1536,7 @@ fn lower_generator_constructor(
     decorators: Vec<Decorator>,
     receiver: Option<Receiver<'_>>,
     captured: &[String],
+    nested: Option<&closures::Nested>,
 ) -> Lowered<Function> {
     let Unit {
         env,
@@ -1356,6 +1545,8 @@ fn lower_generator_constructor(
         layouts,
         ..
     } = unit;
+    let mut signed = signature(db, env, model, function, layouts, receiver, &[])?;
+    takes_the_first_iterator(nested, &mut signed);
     let Signature {
         params,
         defaults,
@@ -1366,9 +1557,10 @@ fn lower_generator_constructor(
         deferring,
         computed_defaults,
         ..
-    } = signature(db, env, model, function, layouts, receiver, &[])?;
+    } = signed;
 
     let mut builder = FunctionBuilder::new(function.name.to_string(), RType::OBJECT);
+    builder.frame_name(frame_name(function, nested));
     builder.at(span(function.range));
     builder.decorators(decorators);
     // this is the function the name holds, so it is the one `__doc__` is asked of —
@@ -1399,6 +1591,9 @@ fn lower_generator_constructor(
         _ => String::new(),
     };
     let mut seeded: HashMap<String, RegisterId> = HashMap::new();
+    if let Some(env) = environment {
+        seeded.insert(closures::OUTER_FIELD.to_string(), env);
+    }
     for name in captured {
         let Some(env) = environment else { continue };
         let ty = layouts
@@ -1463,10 +1658,16 @@ fn lower_generator_constructor(
 fn lower_resume(
     unit: Unit<'_>,
     function: &ast::StmtFunctionDef,
+    python_name: &str,
     class: &str,
     fields: &[by_ir::function::FieldDecl],
     assigned: &HashSet<String>,
-) -> Lowered<(Function, Vec<by_ir::function::FieldDecl>)> {
+    environment: Option<Closures>,
+) -> Lowered<(
+    Function,
+    Vec<by_ir::function::FieldDecl>,
+    Vec<by_ir::function::Delegation>,
+)> {
     let Unit {
         db,
         model,
@@ -1478,6 +1679,7 @@ fn lower_resume(
     } = unit;
 
     let mut builder = FunctionBuilder::new(generators::RESUME_METHOD.to_string(), RType::OBJECT);
+    builder.frame_name(python_name);
     builder.at(span(function.range));
     let receiver = builder.param(
         "$gen".to_string(),
@@ -1495,6 +1697,7 @@ fn lower_resume(
     builder.switch_to(entry);
 
     let mut lowering = Lowering {
+        lines: model.line_index(),
         arrays: unit.arrays,
         directs: unit.directs,
         in_range: Vec::new(),
@@ -1528,7 +1731,7 @@ fn lower_resume(
         unnarrowed: None,
         language: unit.language,
         recheck_licences: unit.recheck_licences,
-        environment: None,
+        environment,
         captures: Some(Captured {
             class: class.to_string(),
             receiver,
@@ -1547,13 +1750,15 @@ fn lower_resume(
             // a generator's state field is the frame's *own* local, parked
             free: false,
         }),
-        // a generator that shares a cell with the frame around it is turned down above,
-        // and its own state fields are reached as ordinary captures
+        // a cell the generator shares with the frame around it lives in that frame's
+        // environment, reached through `$outer`, and its own state fields are reached as
+        // ordinary captures
         owned_cells: None,
         generator: Some(Generator {
             class: class.to_string(),
             resumptions: Vec::new(),
             iterators: 0,
+            delegations: Vec::new(),
         }),
         delegations: 0,
         contexts: 0,
@@ -1566,10 +1771,10 @@ fn lower_resume(
         lowering.builder.terminate(Terminator::Goto(exhausted));
     }
 
-    let resumptions = lowering
+    let (resumptions, delegations) = lowering
         .generator
         .take()
-        .map(|generator| generator.resumptions)
+        .map(|generator| (generator.resumptions, generator.delegations))
         .unwrap_or_default();
 
     // the property a *direct* edition rests on, checked against the machine that was
@@ -1594,6 +1799,16 @@ fn lower_resume(
         receiver: Value::Register(receiver),
         class: class.to_string(),
         field: generators::STATE_FIELD.to_string(),
+    });
+    // from here until the frame suspends or finishes it is running, and every way of
+    // resuming it refuses — see `generators::RUNNING_STATE`
+    lowering.builder.push(Op::SetField {
+        receiver: Value::Register(receiver),
+        class: class.to_string(),
+        field: generators::STATE_FIELD.to_string(),
+        value: Value::Int(generators::RUNNING_STATE),
+        moves: false,
+        present: false,
     });
     let mut targets = vec![(0i64, entry)];
     targets.extend(resumptions.iter().map(|point| (point.state, point.resume)));
@@ -1647,7 +1862,7 @@ fn lower_resume(
     let parked = generators::park_live_registers(&mut lowered, class, &resumptions)?;
     lowered.owner = Some(class.to_string());
     lowered.exported = false;
-    Ok((lowered, parked))
+    Ok((lowered, parked, delegations))
 }
 
 /// a lowering that does not verify is a *decline*, not a build failure
@@ -2479,6 +2694,14 @@ fn lower_class<'a>(
             deleted,
         },
     )?;
+    // a class that adds no storage of its own keeps its base's fields in the base's layout
+    let inherited = base
+        .as_ref()
+        .and_then(ClassBase::in_module)
+        .and_then(|base| layouts.get(base))
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    no_field_shadows_a_method(db, env, model, suite, class, layouts, &fields, inherited)?;
     // the `@property` groups, worked out before any method is lowered: the two halves of
     // a pair are both written `def value`, so a pass that took them one at a time would
     // see a name defined twice rather than the single attribute python builds out of them.
@@ -4410,6 +4633,13 @@ fn lower_accessor<'a>(
     class: &str,
     half: Half,
 ) -> Lowered<(Function, Vec<by_ir::function::ClassIr>)> {
+    // an environment is named after the `def` it belongs to, and every half of a
+    // property is written `def value` — so each half's is named after the half as well,
+    // or two halves that both make closures would ask for one class between them
+    let unit = Unit {
+        environment_suffix: Some(half.suffix()),
+        ..unit
+    };
     let (mut method, produced) = lower_method(unit, accessor, class)?;
     method.decorators.clear();
     // a boundary that hands the call on takes the twin off the interpreted class by
@@ -4418,13 +4648,6 @@ fn lower_accessor<'a>(
     if method.defers() {
         return Err(Decline::new(format!(
             "a property `{}` whose boundary can hand the call on would reach the `property` object rather than the half it wants",
-            half.written_as()
-        )));
-    }
-    // an environment class is named after the `def`, which both halves share
-    if !produced.is_empty() {
-        return Err(Decline::new(format!(
-            "a property `{}` that makes closures is not lowered yet",
             half.written_as()
         )));
     }
@@ -5609,6 +5832,94 @@ fn class_fields(
     Ok(fields)
 }
 
+/// refuse a class where a field and a method of the class, or of a base of ours, share a
+/// name
+///
+/// python answers an attribute the instance holds before a function its class holds
+/// under the same name, and the function where the instance holds none:
+///
+/// ```python
+/// class Encoder:
+///     def __init__(self, default=None):
+///         if default is not None:
+///             self.default = default
+///
+///     def default(self, o): ...
+///
+///     def encode(self, o):
+///         return self.default(o)   # the one it was handed, or the method
+/// ```
+///
+/// a layout field's descriptor and the method table's entry would both be published under
+/// the name, and a method call reaches the method by its class alone — so the call would
+/// answer the method for an encoder handed a `default`, and a read the field's absence for
+/// one handed nothing. a `property` is not among these: an assignment to one runs its
+/// setter, and a field beside one is refused where properties are gathered
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site, and the base chain is resolved the way the layout resolves it"
+)]
+fn no_field_shadows_a_method(
+    db: &dyn ty_python_semantic::Db,
+    env: &ProgramEnvironment<'_>,
+    model: &SemanticModel<'_>,
+    suite: &[Stmt],
+    class: &ast::StmtClassDef,
+    layouts: &Layouts,
+    fields: &[by_ir::function::FieldDecl],
+    inherited: &[by_ir::function::FieldDecl],
+) -> Lowered<()> {
+    let mut current = Some(class);
+    // a chain of classes is finite, and a cycle among them is not a program python runs
+    let mut visited: HashSet<&str> = HashSet::new();
+    while let Some(owner) = current
+        && visited.insert(owner.name.as_str())
+    {
+        for statement in &owner.body {
+            let Stmt::FunctionDef(method) = statement else {
+                continue;
+            };
+            if method
+                .decorator_list
+                .iter()
+                .any(|decorator| is_property_decorator(&decorator.expression))
+            {
+                continue;
+            }
+            let name = mangled(Some(&owner.name), method.name.as_str());
+            if fields
+                .iter()
+                .chain(inherited)
+                .any(|field| field.name == name)
+            {
+                return Err(Decline::new(format!(
+                    "`{}` is both a method and an attribute the instance is given, and python answers the attribute where the instance holds one",
+                    method.name
+                )));
+            }
+        }
+        current = match base_class(db, env, model, suite, owner, layouts)? {
+            Some(ClassBase::InModule(name)) => suite.iter().find_map(|statement| match statement {
+                Stmt::ClassDef(candidate) if candidate.name.as_str() == name => Some(candidate),
+                _ => None,
+            }),
+            _ => None,
+        };
+    }
+    Ok(())
+}
+
+/// whether a decorator makes a `property`, or one of the halves added to one
+fn is_property_decorator(expression: &Expr) -> bool {
+    match expression {
+        Expr::Name(name) => name.id.as_str() == "property",
+        Expr::Attribute(attribute) => {
+            matches!(attribute.attr.as_str(), "setter" | "getter" | "deleter")
+        }
+        _ => false,
+    }
+}
+
 /// whether a `__del__` this class writes is one the deallocation would ever reach
 ///
 /// `tp_finalize` is reached from `tp_dealloc`, and the dealloc that would reach it
@@ -6291,6 +6602,19 @@ fn resumable_return(function: &ast::StmtFunctionDef, signature: &mut Signature) 
     }
 }
 
+/// the parameter a generator expression's function takes its first iterator in, which
+/// no source wrote and so no signature read off the ast has
+///
+/// see [`closures::GENERATOR_ITERATOR`]
+fn takes_the_first_iterator(nested: Option<&closures::Nested>, signature: &mut Signature) {
+    if nested.is_some_and(|nested| nested.generator_expression.is_some()) {
+        signature
+            .params
+            .push((closures::GENERATOR_ITERATOR.to_string(), RType::OBJECT));
+        signature.defaults.push(None);
+    }
+}
+
 /// the `(index, array)` a `while` loop counts over, when it counts over one
 ///
 /// the guard has to be exactly `i < len(A)`, `i` has to be a counter the body only
@@ -6805,10 +7129,7 @@ fn lower_function_with_receiver(
     let nested = matches!(receiver, Some(Receiver::Implicit(_)));
     // what python calls this frame: a nested function after the frames it is written
     // in, and anything else after its class and its own name
-    let python_name = match captures {
-        Some(entry) if entry.lambda.is_some() => "<lambda>".to_string(),
-        _ => function.name.to_string(),
-    };
+    let python_name = frame_name(function, captures);
     let qualname = match (unit.frame, unit.owner) {
         (Some(enclosing), _) if nested => format!("{enclosing}.<locals>.{python_name}"),
         (_, Some(class)) => format!("{class}.{python_name}"),
@@ -6862,19 +7183,8 @@ fn lower_function_with_receiver(
     // state object and hand it back. the body becomes a method of that object
     if frame == Frame::AsWritten && (generators::is_generator(&function.body) || function.is_async)
     {
-        // a nested one keeps its captures in the *state* object rather than reaching
-        // back through the environment: the frame outlives the call that made it, and
-        // a copy is what a capture already is. a *shared* one is a cell both frames
-        // write, which a copy cannot be
-        if let Some(captured) = captures
-            && !captured.shared.is_empty()
-        {
-            return Err(Decline::new(
-                "a generator that shares a cell with the frame around it is not lowered yet",
-            ));
-        }
         let (mut constructor, classes) =
-            lower_generator(unit, function, decorators, receiver, captures)?;
+            lower_generator(unit, function, decorators, receiver, captures, &qualname)?;
         if named_by_its_frame {
             constructor.nested = Some(by_ir::function::NestedName {
                 name: python_name,
@@ -6997,7 +7307,11 @@ fn lower_function_with_receiver(
     // neither of these has one
     let frame_name = closures::environment_name(
         enclosing.or_else(|| unit.owner.filter(|_| binding != Binding::Instance)),
-        &function.name,
+        &format!(
+            "{}{}",
+            function.name,
+            unit.environment_suffix.unwrap_or_default()
+        ),
     );
     let frame_owned: HashSet<String> = if split {
         owned.difference(&bindings_here).cloned().collect()
@@ -7100,6 +7414,7 @@ fn lower_function_with_receiver(
                 )
                 .ok()?;
                 resumable_return(&entry.def, &mut signature);
+                takes_the_first_iterator(Some(entry), &mut signature);
                 Some((entry.def.name.to_string(), signature))
             })
             .collect();
@@ -7109,6 +7424,7 @@ fn lower_function_with_receiver(
     let methods = &methods_with_env;
 
     let mut builder = FunctionBuilder::new(function.name.to_string(), ret.clone());
+    builder.frame_name(python_name.clone());
     builder.at(span(function.range));
     builder.decorators(decorators);
     builder.doc(docstring(&function.body)?);
@@ -7338,6 +7654,7 @@ fn lower_function_with_receiver(
     let zero_super = zero_argument_super(function, declared_receiver);
 
     let mut lowering = Lowering {
+        lines: model.line_index(),
         arrays: unit.arrays,
         directs: unit.directs,
         in_range: Vec::new(),
@@ -7383,6 +7700,7 @@ fn lower_function_with_receiver(
                 .filter_map(|entry| {
                     entry
                         .lambda
+                        .or(entry.generator_expression)
                         .map(|range| (span(range), entry.def.name.to_string()))
                 })
                 .collect(),
@@ -7431,6 +7749,7 @@ fn lower_function_with_receiver(
                 layouts,
                 methods,
                 frame: Some(&qualname),
+                environment_suffix: None,
                 ..unit
             };
             let mut lowered_methods = Vec::with_capacity(nested.len());
@@ -7599,6 +7918,11 @@ struct Unit<'a> {
     /// nested one — see [`by_ir::function::Function::nested`]. only a nested frame has
     /// one: anything else is named by its class and its own name
     frame: Option<&'a str>,
+    /// what the environment of the frame being lowered is named after beyond its `def`,
+    /// where the `def`'s name is not enough to tell it apart — see [`lower_accessor`]. a
+    /// frame nested inside takes its name from this one's environment, so it is never
+    /// handed down
+    environment_suffix: Option<&'a str>,
 }
 
 /// what a nested function reads through its environment
@@ -7711,6 +8035,34 @@ enum Suspension {
     Yielded = 1,
 }
 
+/// the delegation a suspension waits inside
+///
+/// python raises an exception thrown into a frame suspended in `yield from` or `await` at
+/// the delegation, where a `StopIteration` is not an error at all: it is the inner
+/// iterator finishing, and its value is what the expression evaluates to. that is how an
+/// inner iterator's `throw` that ends it hands back a result
+#[derive(Clone, Copy)]
+struct Delegated<'a> {
+    /// the register the expression's value is left in
+    result: RegisterId,
+    /// where the lowering continues once the delegation has finished
+    finished: BlockId,
+    /// where the inner iterator is kept across the suspension
+    iterator: &'a Place,
+}
+
+/// how a `with` block reaches the half of the protocol it calls on its way out
+#[derive(Clone)]
+enum ContextExit {
+    /// straight to the `__exit__` of the class the manager is known to be, which the
+    /// compiler emitted as an immutable type — see [`Lowering::protocol_owner`]. nothing
+    /// can rebind the method, so where it is reached from does not matter
+    Direct(String),
+    /// through the `__exit__` or `__aexit__` [`Op::BindExit`] looked up as the block was
+    /// entered, kept where it survives the body
+    Bound(Place),
+}
+
 /// something an early exit has to run before it transfers control
 #[derive(Clone)]
 enum Cleanup {
@@ -7725,9 +8077,7 @@ enum Cleanup {
     Context {
         manager: Place,
         is_async: bool,
-        /// the class whose `__exit__` this reaches, where the block's manager was
-        /// known to be one the compiler emitted — see [`Lowering::protocol_owner`]
-        direct: Option<String>,
+        exit: ContextExit,
     },
     /// an `except` block's handled exception, put back on the way out
     ///
@@ -7798,6 +8148,8 @@ struct Generator {
     resumptions: Vec<generators::Resumption>,
     /// how many `for` loops have taken an iterator field
     iterators: usize,
+    /// the suspensions lowered so far that wait inside a delegation
+    delegations: Vec<by_ir::function::Delegation>,
 }
 
 /// the closure environment a frame allocates
@@ -7805,8 +8157,8 @@ struct Closures {
     class: String,
     /// the register holding the instance
     register: RegisterId,
-    /// `lambda range -> generated method name`, so the *expression* can find the
-    /// method the closure analysis made for it
+    /// `lambda or generator expression range -> generated method name`, so the
+    /// *expression* can find the method the closure analysis made for it
     lambdas: HashMap<(u32, u32), String>,
     /// the nested functions whose `def` has been lowered, so the environment is
     /// live and a call to one can go straight to its native entry point
@@ -9287,6 +9639,8 @@ fn named_parameters(
 struct Lowering<'a, 'db> {
     db: &'db dyn ty_python_semantic::Db,
     model: &'a SemanticModel<'db>,
+    /// the source's lines, which say what line each op was lowered from
+    lines: ruff_source_file::LineIndex,
     builder: FunctionBuilder,
     locals: HashMap<String, RegisterId>,
     /// the names this frame declares `global`, which live in the module namespace
@@ -9382,6 +9736,11 @@ struct Lowering<'a, 'db> {
     /// range, which no expression inside it shares
     unnarrowed: Option<TextRange>,
 }
+
+/// the builtins that run whatever they are handed to its end before they answer, so a
+/// generator expression handed to one alone can be built at once — see
+/// [`Lowering::drained_generator_expression`]
+const DRAINING_BUILTINS: &[&str] = &["list", "tuple", "set", "frozenset", "sorted", "dict"];
 
 /// where [`Lowering::resolve_builtin`] reads the object a builtin's name resolves to
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -9662,15 +10021,27 @@ impl Lowering<'_, '_> {
     }
 
     fn block(&mut self, body: &[Stmt]) -> Lowered<()> {
-        for stmt in body {
-            self.statement(stmt)?;
-        }
-        Ok(())
+        // what the statement around a body goes on to do once the body has run — a
+        // `with`'s exit, a loop's next step — was written on that statement's own line
+        let around = self.builder.location();
+        let lowered = body.iter().try_for_each(|stmt| self.statement(stmt));
+        self.builder.relocate(around);
+        lowered
+    }
+
+    /// say that what is lowered from here on was written where `node` starts
+    fn locate(&mut self, node: ruff_text_size::TextRange) -> Option<(u32, u32)> {
+        let line = self.lines.line_index(node.start()).get();
+        self.builder.locate(
+            node.start().to_u32(),
+            u32::try_from(line).unwrap_or(u32::MAX),
+        )
     }
 
     fn statement(&mut self, stmt: &Stmt) -> Lowered<()> {
         // the first statement lowered into a block decides that block's `#line`
         self.builder.block_at(span(stmt.range()));
+        self.locate(stmt.range());
         match stmt {
             Stmt::Pass(_) => Ok(()),
             // a declaration, not an action: the capture analysis already read it, and
@@ -10959,15 +11330,15 @@ impl Lowering<'_, '_> {
             Cleanup::Context {
                 manager,
                 is_async,
-                direct,
+                exit,
             } => {
                 let (manager, _) = self.read_place(&manager)?;
                 let ignored = self.builder.temp(RType::BIT);
                 if is_async {
                     let none = self.widen_to_object(Value::None, &RType::NONE);
-                    self.await_exit(manager, none, ignored)?;
+                    self.await_exit(manager, &exit, none, ignored)?;
                 } else {
-                    self.leave_context(manager, ignored, direct.as_deref());
+                    self.leave_context(manager, ignored, &exit)?;
                 }
             }
         }
@@ -11094,27 +11465,30 @@ impl Lowering<'_, '_> {
     /// `__exit__` suppress an exception that is *there*, so on this path a truthy
     /// answer suppresses nothing, and `dest` is the "not suppressed" bit either way.
     /// that is what [`by_rt`]'s `By_ExitContext` does with it too
-    fn leave_context(&mut self, manager: Value, dest: RegisterId, direct: Option<&str>) {
-        let owner = direct.and_then(|class| {
-            self.protocol_owner(
-                &RType::Instance {
-                    class: class.to_string(),
-                    exact: false,
-                },
-                "__exit__",
-                4,
-            )
-        });
-        let (Some(class), Some(owner)) = (direct, owner) else {
-            let manager = self.manager_object(manager);
-            let no_exception = self.widen_to_object(Value::None, &RType::NONE);
-            self.builder.push(Op::ExitContext {
-                dest,
-                manager,
-                exception: no_exception,
-            });
-            return;
+    fn leave_context(
+        &mut self,
+        manager: Value,
+        dest: RegisterId,
+        exit: &ContextExit,
+    ) -> Lowered<()> {
+        let direct = match exit {
+            ContextExit::Direct(class) => self
+                .protocol_owner(
+                    &RType::Instance {
+                        class: class.clone(),
+                        exact: false,
+                    },
+                    "__exit__",
+                    4,
+                )
+                .map(|owner| (class.clone(), owner)),
+            ContextExit::Bound(_) => None,
         };
+        let Some((class, owner)) = direct else {
+            let no_exception = self.widen_to_object(Value::None, &RType::NONE);
+            return self.exit_through_protocol(manager, dest, exit, no_exception);
+        };
+        let class = class.as_str();
         let ret = self
             .methods
             .get(&owner)
@@ -11133,6 +11507,40 @@ impl Lowering<'_, '_> {
             args,
         });
         self.builder.assign(dest, Value::Bit(false));
+        Ok(())
+    }
+
+    /// `__exit__` called through the object protocol with `exception`, or `None` on the
+    /// normal path, answering in `dest` whether it suppressed the exception
+    fn exit_through_protocol(
+        &mut self,
+        manager: Value,
+        dest: RegisterId,
+        exit: &ContextExit,
+        exception: Value,
+    ) -> Lowered<()> {
+        let manager = self.manager_object(manager);
+        let bound = match exit {
+            ContextExit::Bound(place) => self.read_place(place)?.0,
+            // an immutable class, so the method bound here is the one binding it at the
+            // entry would have found
+            ContextExit::Direct(_) => {
+                let bound = self.builder.temp(RType::OBJECT);
+                self.builder.push(Op::BindExit {
+                    dest: bound,
+                    manager: manager.clone(),
+                    is_async: false,
+                });
+                Value::Register(bound)
+            }
+        };
+        self.builder.push(Op::ExitContext {
+            dest,
+            manager,
+            exit: bound,
+            exception,
+        });
+        Ok(())
     }
 
     /// `with EXPR as VAR: BLOCK`
@@ -11180,6 +11588,22 @@ impl Lowering<'_, '_> {
         // inside a generator the manager outlives the frame: the body suspends and
         // `__exit__` still has to run, whether the resumption returns or raises
         let held = self.park_iterator(held)?;
+        // python binds the exit as the block is entered, before `__enter__` runs, so a
+        // class rebinding it while the block runs does not change which one is called
+        let exit = match &direct {
+            Some(class) => ContextExit::Direct(class.clone()),
+            None => {
+                let (live, _) = self.read_place(&held)?;
+                let manager = self.manager_object(live);
+                let bound = self.builder.temp(RType::OBJECT);
+                self.builder.push(Op::BindExit {
+                    dest: bound,
+                    manager,
+                    is_async: node.is_async,
+                });
+                ContextExit::Bound(self.park_iterator(bound)?)
+            }
+        };
 
         let entered = self.builder.temp(RType::OBJECT);
         let (live, _) = self.read_place(&held)?;
@@ -11190,6 +11614,7 @@ impl Lowering<'_, '_> {
             self.builder.push(Op::AsyncContext {
                 dest: awaitable,
                 manager: live,
+                exit: None,
                 exception: None,
             });
             let (value, ty) = self.delegate_value(Value::Register(awaitable), true)?;
@@ -11221,7 +11646,7 @@ impl Lowering<'_, '_> {
         self.cleanups.push(Cleanup::Context {
             manager: held.clone(),
             is_async: node.is_async,
-            direct: direct.clone(),
+            exit: exit.clone(),
         });
         let body_result = if rest.is_empty() {
             self.block(&node.body)
@@ -11247,9 +11672,9 @@ impl Lowering<'_, '_> {
         let (live, _) = self.read_place(&held)?;
         if node.is_async {
             let no_exception = self.widen_to_object(Value::None, &RType::NONE);
-            self.await_exit(live, no_exception, ignored)?;
+            self.await_exit(live, &exit, no_exception, ignored)?;
         } else {
-            self.leave_context(live, ignored, direct.as_deref());
+            self.leave_context(live, ignored, &exit)?;
         }
         self.builder.terminate(Terminator::Goto(after));
 
@@ -11288,14 +11713,9 @@ impl Lowering<'_, '_> {
             exception,
         });
         let decided = if node.is_async {
-            self.await_exit(raising, Value::Register(exception), suppressed)
+            self.await_exit(raising, &exit, Value::Register(exception), suppressed)
         } else {
-            self.builder.push(Op::ExitContext {
-                dest: suppressed,
-                manager: raising,
-                exception: Value::Register(exception),
-            });
-            Ok(())
+            self.exit_through_protocol(raising, suppressed, &exit, Value::Register(exception))
         };
         self.cleanups.pop();
         decided?;
@@ -11514,7 +11934,7 @@ impl Lowering<'_, '_> {
             self.builder.push(Op::PopHandled {
                 value: Value::Register(handled),
             });
-            self.block(&node.finalbody)?;
+            self.finally_while_raising(&node.finalbody, pending)?;
             self.builder.push(Op::Reraise {
                 value: Value::Register(pending),
             });
@@ -11528,7 +11948,7 @@ impl Lowering<'_, '_> {
         self.builder.push(Op::PopHandled {
             value: Value::Register(handled),
         });
-        self.block(&node.finalbody)?;
+        self.finally_while_raising(&node.finalbody, exception)?;
         self.builder.push(Op::Reraise {
             value: Value::Register(exception),
         });
@@ -11541,7 +11961,7 @@ impl Lowering<'_, '_> {
             self.builder.push(Op::PopHandled {
                 value: Value::Register(handled),
             });
-            self.block(&node.finalbody)?;
+            self.finally_while_raising(&node.finalbody, pending)?;
             self.builder.push(Op::Reraise {
                 value: Value::Register(pending),
             });
@@ -11550,6 +11970,65 @@ impl Lowering<'_, '_> {
 
         self.builder.switch_to(after);
         if !after_reached {
+            self.builder.terminate(Terminator::Unreachable);
+        }
+        Ok(())
+    }
+
+    /// a `finally` body on the path of an exception that is still propagating
+    ///
+    /// python runs it with that exception as the one being handled: `sys.exception()`
+    /// answers it, a bare `raise` re-raises it, and anything raised in the body chains
+    /// onto it. the handled exception is put back on every way out — falling off the end,
+    /// an early exit through the cleanups, and a raise, which gets a block of its own for
+    /// that. a body that falls off the end leaves the caller in a block that can still
+    /// re-raise `pending`
+    fn finally_while_raising(&mut self, finalbody: &[Stmt], pending: RegisterId) -> Lowered<()> {
+        if finalbody.is_empty() {
+            return Ok(());
+        }
+        let previous = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::PushHandled {
+            dest: previous,
+            value: Value::Register(pending),
+        });
+        let body = self.builder.new_block();
+        let raised = self.builder.new_block();
+        self.builder.terminate(Terminator::Goto(body));
+        self.builder.switch_to(body);
+        let enclosing = self.builder.set_error_target(Some(raised));
+        self.cleanups.push(Cleanup::Handled {
+            previous,
+            exception: pending,
+        });
+        self.handling.push(pending);
+        let ran = self.block(finalbody);
+        self.handling.pop();
+        self.cleanups.pop();
+        let fell_through = ran.is_ok() && !self.builder.is_sealed(self.builder.current_block());
+        let after = self.builder.new_block();
+        if fell_through {
+            self.builder.push(Op::PopHandled {
+                value: Value::Register(previous),
+            });
+            self.builder.terminate(Terminator::Goto(after));
+        }
+        self.builder.set_error_target(enclosing);
+        ran?;
+
+        self.builder.switch_to(raised);
+        let replaced = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::FetchException { dest: replaced });
+        self.builder.push(Op::PopHandled {
+            value: Value::Register(previous),
+        });
+        self.builder.push(Op::Reraise {
+            value: Value::Register(replaced),
+        });
+        self.builder.terminate(Terminator::Unreachable);
+
+        self.builder.switch_to(after);
+        if !fell_through {
             self.builder.terminate(Terminator::Unreachable);
         }
         Ok(())
@@ -13350,13 +13829,21 @@ impl Lowering<'_, '_> {
     fn await_exit(
         &mut self,
         manager: Value,
+        exit: &ContextExit,
         exception: Value,
         suppressed: RegisterId,
     ) -> Lowered<()> {
+        let ContextExit::Bound(bound) = exit else {
+            return Err(Decline::new(
+                "an `async with` whose `__aexit__` was not bound as the block was entered",
+            ));
+        };
+        let (bound, _) = self.read_place(bound)?;
         let awaitable = self.builder.temp(RType::OBJECT);
         self.builder.push(Op::AsyncContext {
             dest: awaitable,
             manager,
+            exit: Some(bound),
             exception: Some(exception),
         });
         let (answer, ty) = self.delegate_value(Value::Register(awaitable), true)?;
@@ -13437,12 +13924,18 @@ impl Lowering<'_, '_> {
 
         let header = self.builder.new_block();
         let forward = self.builder.new_block();
+        let returned = self.builder.new_block();
         let finished = self.builder.new_block();
+        let unwind = self.builder.new_block();
         let result = self
             .builder
             .local(format!("$delegated{}", self.delegations), RType::OBJECT);
         self.delegations += 1;
         self.builder.terminate(Terminator::Goto(header));
+        // python drops the inner iterator the moment the delegation ends, whichever way it
+        // ends, so one abandoned by an exception is finalized before any handler of this
+        // frame runs rather than whenever the frame itself goes
+        let enclosing = self.builder.set_error_target(Some(unwind));
 
         // each trip: read the inner iterator back, send in whatever `send` gave us,
         // and either forward a value or take the result
@@ -13471,17 +13964,60 @@ impl Lowering<'_, '_> {
         });
         self.builder.terminate(Terminator::Branch {
             cond: Value::Register(done),
-            then_block: finished,
+            then_block: returned,
             else_block: forward,
         });
 
         self.builder.switch_to(forward);
-        self.suspend(Value::Register(step), Suspension::Awaited)?;
+        self.suspend(
+            Value::Register(step),
+            Suspension::Awaited,
+            Some(Delegated {
+                result,
+                finished,
+                iterator: &parked,
+            }),
+        )?;
         self.builder.terminate(Terminator::Goto(header));
 
-        self.builder.switch_to(finished);
+        self.builder.switch_to(returned);
         self.builder.assign(result, Value::Register(step));
+        self.builder.terminate(Terminator::Goto(finished));
+        self.builder.set_error_target(enclosing);
+
+        self.builder.switch_to(unwind);
+        let pending = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::FetchException { dest: pending });
+        self.clear_parked(&parked);
+        self.builder.push(Op::Reraise {
+            value: Value::Register(pending),
+        });
+        self.builder.terminate(Terminator::Unreachable);
+
+        self.builder.switch_to(finished);
+        self.clear_parked(&parked);
         Ok((Value::Register(result), RType::OBJECT))
+    }
+
+    /// let go of what a parked field holds, by writing `None` over it
+    fn clear_parked(&mut self, parked: &Place) {
+        if let Place::Field {
+            receiver,
+            class,
+            name,
+            ..
+        } = parked
+        {
+            let cleared = self.widen_to_object(Value::None, &RType::NONE);
+            self.builder.push(Op::SetField {
+                receiver: Value::Register(*receiver),
+                class: class.clone(),
+                field: name.clone(),
+                value: cleared,
+                moves: false,
+                present: false,
+            });
+        }
     }
 
     /// what `send` last passed in
@@ -13501,7 +14037,16 @@ impl Lowering<'_, '_> {
     }
 
     /// suspend with `value`, and continue in a fresh resumption block
-    fn suspend(&mut self, value: Value, kind: Suspension) -> Lowered<()> {
+    ///
+    /// `delegated` is the delegation a `yield from` or an `await` suspends inside, which
+    /// changes what an exception thrown in at the suspension means — see
+    /// [`Delegated`]
+    fn suspend(
+        &mut self,
+        value: Value,
+        kind: Suspension,
+        delegated: Option<Delegated<'_>>,
+    ) -> Lowered<()> {
         let Some(generator) = &self.generator else {
             return Err(Decline::new("a suspension outside a generator"));
         };
@@ -13572,6 +14117,12 @@ impl Lowering<'_, '_> {
                 suspend: suspend_at,
                 resume: resume_at,
             });
+            if let Some(Place::Field { name, .. }) = delegated.as_ref().map(|d| d.iterator) {
+                generator.delegations.push(by_ir::function::Delegation {
+                    state,
+                    field: name.clone(),
+                });
+            }
         }
 
         // `throw` and `close` resume *by raising*, and the raise has to happen here —
@@ -13626,6 +14177,32 @@ impl Lowering<'_, '_> {
             moves: false,
             present: false,
         });
+        if let Some(Delegated {
+            result, finished, ..
+        }) = delegated
+        {
+            let value = self.builder.temp(RType::OBJECT);
+            self.builder.push(Op::StopIterationValue {
+                dest: value,
+                src: Value::Register(thrown),
+            });
+            let other = self.builder.temp(RType::BIT);
+            self.builder.push(Op::IsNull {
+                dest: other,
+                src: Value::Register(value),
+            });
+            let ended = self.builder.new_block();
+            let raised = self.builder.new_block();
+            self.builder.terminate(Terminator::Branch {
+                cond: Value::Register(other),
+                then_block: raised,
+                else_block: ended,
+            });
+            self.builder.switch_to(ended);
+            self.builder.assign(result, Value::Register(value));
+            self.builder.terminate(Terminator::Goto(finished));
+            self.builder.switch_to(raised);
+        }
         // the block's error target is the enclosing handler, which is exactly where a
         // `throw` at a suspension has to land. it is *raised* rather than put back:
         // python chains an exception thrown into a frame onto what that frame is
@@ -13694,11 +14271,59 @@ impl Lowering<'_, '_> {
                 self.widen_to_object(value, &ty)
             }
         };
-        self.suspend(value, Suspension::Yielded)?;
+        self.suspend(value, Suspension::Yielded, None)?;
         // the expression's own value is what `send` passed in, or `None` for plain
         // iteration
         let sent = self.read_sent()?;
         Ok((sent, RType::OBJECT))
+    }
+
+    /// a generator expression: the generator its function makes, handed the iterator of
+    /// its first clause's iterable, which is evaluated here
+    ///
+    /// nothing else runs until the generator is asked for a value — not the element, not
+    /// a condition, not a later clause's iterable — and the generator runs only as far as
+    /// it is asked. building the values at once instead is a different program wherever
+    /// the consumer stops early, as `any` does, or wherever the generator is kept and
+    /// resumed later
+    fn generator_expression(&mut self, node: &ast::ExprGenerator) -> Lowered<(Value, RType)> {
+        if !closures::lowers_as_a_generator(node) {
+            return Err(Decline::new(
+                "an asynchronous generator expression is not lowered yet",
+            ));
+        }
+        self.refresh_environment()?;
+        let Some(environment) = &self.environment else {
+            return Err(Decline::new(
+                "a generator expression is not lowered where the frame has no environment \
+                 to make its generator over",
+            ));
+        };
+        let Some(method) = environment.lambdas.get(&span(node.range)).cloned() else {
+            return Err(Decline::new(
+                "a generator expression with no generated function",
+            ));
+        };
+        let (class, register) = (environment.class.clone(), environment.register);
+        let Some(first) = node.generators.first() else {
+            return Err(Decline::new("a generator expression with no clause"));
+        };
+        let (iterable, iterable_ty) = self.expression(&first.iter)?;
+        let iterable = self.widen_to_object(iterable, &iterable_ty);
+        let iterator = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::GetIter {
+            dest: iterator,
+            src: iterable,
+            cursor: None,
+        });
+        let dest = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::CallNative {
+            dest: Some(dest),
+            owner: Some(class),
+            callee: method,
+            args: vec![Value::Register(register), Value::Register(iterator)],
+        });
+        Ok((Value::Register(dest), RType::OBJECT))
     }
 
     /// a lambda: the closure over this frame's environment, by the generated name
@@ -14166,7 +14791,20 @@ impl Lowering<'_, '_> {
     }
 
     /// lower an expression, returning its operand and representation
+    /// lower `expr`, marking what it lowers to with the line it was written on
+    ///
+    /// the line is put back afterwards, so what the enclosing expression goes on to do
+    /// with the value is marked with the enclosing expression's own line — python names
+    /// the line of the instruction that raised, and a call spread over several lines
+    /// raises on the line the call starts on, not the line its last argument was on
     fn expression(&mut self, expr: &Expr) -> Lowered<(Value, RType)> {
+        let enclosing = self.locate(expr.range());
+        let lowered = self.expression_here(expr);
+        self.builder.relocate(enclosing);
+        lowered
+    }
+
+    fn expression_here(&mut self, expr: &Expr) -> Lowered<(Value, RType)> {
         match expr {
             Expr::NumberLiteral(node) => match &node.value {
                 ast::Number::Int(value) => {
@@ -14330,15 +14968,7 @@ impl Lowering<'_, '_> {
             Expr::ListComp(node) => {
                 self.comprehension(&node.generators, &Comprehension::List(&node.elt))
             }
-            // a generator expression is lazy, and the consumers that matter — `sum`,
-            // `any`, `max` — drain it immediately. building the list is the same
-            // answer for those, so it is only a decline where the laziness is
-            // observable: an infinite one, or a side effect ordered against the
-            // consumer. neither is expressible without a `yield`, which a genexp has
-            // no way to write
-            Expr::Generator(node) => {
-                self.comprehension(&node.generators, &Comprehension::List(&node.elt))
-            }
+            Expr::Generator(node) => self.generator_expression(node),
             Expr::SetComp(node) => {
                 self.comprehension(&node.generators, &Comprehension::Set(&node.elt))
             }
@@ -17033,6 +17663,16 @@ impl Lowering<'_, '_> {
             return self.len_call(node);
         }
 
+        if DRAINING_BUILTINS.contains(&name)
+            && !self.native_callees.contains(name)
+            && !self.binds(name)
+            && node.arguments.keywords.is_empty()
+            && let [Expr::Generator(generator)] = node.arguments.args.as_ref()
+            && closures::lowers_as_a_generator(generator)
+        {
+            return self.drained_generator_expression(node, name, generator);
+        }
+
         // a closure this frame made itself is called at its native entry point: the
         // environment is in a register right here, so there is nothing to look up
         // and nothing to box
@@ -17130,6 +17770,85 @@ impl Lowering<'_, '_> {
         }
 
         self.native_call(node, name)
+    }
+
+    /// `list(x for x in xs)`, or the same handed to one of the other builtins that drain
+    /// what they are given before they answer
+    ///
+    /// while the name is the builtin the generator would be run to its end at once, so
+    /// the loop its frame would run is run here instead and the builtin is handed the
+    /// list — which for `list` is the answer itself. two things keep that the same
+    /// program: the name is read before anything else, as python reads it, and a
+    /// `StopIteration` leaving the loop becomes the `RuntimeError` a generator's frame
+    /// makes of one. where the name holds anything else it is handed the generator
+    fn drained_generator_expression(
+        &mut self,
+        node: &ast::ExprCall,
+        name: &str,
+        generator: &ast::ExprGenerator,
+    ) -> Lowered<(Value, RType)> {
+        let builds_the_answer = name == "list";
+        let (callee, genuine) = self.resolve_builtin(
+            name,
+            if builds_the_answer {
+                Wanted::WhereRebound
+            } else {
+                Wanted::Always
+            },
+        );
+        let dest = self.builder.temp(RType::OBJECT);
+        let at_once = self.builder.new_block();
+        let handed_over = self.builder.new_block();
+        let join = self.builder.new_block();
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(genuine),
+            then_block: at_once,
+            else_block: handed_over,
+        });
+
+        self.builder.switch_to(at_once);
+        let leaving = self.builder.new_block();
+        let drained = self.builder.new_block();
+        let previous = self.builder.set_error_target(Some(leaving));
+        let around = self.builder.in_generator_expression(true);
+        let built = self.comprehension(&generator.generators, &Comprehension::List(&generator.elt));
+        if built.is_ok() {
+            self.builder.terminate(Terminator::Goto(drained));
+        }
+        self.builder.in_generator_expression(around);
+        self.builder.set_error_target(previous);
+        let (list, list_ty) = built?;
+        self.builder.switch_to(leaving);
+        let exception = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::FetchException { dest: exception });
+        self.builder.push(Op::LeaveGenerator {
+            value: Value::Register(exception),
+        });
+        self.builder.terminate(Terminator::Unreachable);
+        self.builder.switch_to(drained);
+        let list = self.widen_to_object(list, &list_ty);
+        if builds_the_answer {
+            self.builder.assign(dest, list);
+        } else {
+            self.builder.push(Op::CallValue {
+                dest,
+                callee: callee.clone(),
+                args: vec![list],
+            });
+        }
+        self.builder.terminate(Terminator::Goto(join));
+
+        self.builder.switch_to(handed_over);
+        let (made, _) = self.generator_expression(generator)?;
+        self.builder.push(Op::CallValue {
+            dest,
+            callee,
+            args: vec![made],
+        });
+        self.builder.terminate(Terminator::Goto(join));
+
+        self.builder.switch_to(join);
+        self.narrow_call_result(dest, &Expr::Call(node.clone()))
     }
 
     /// whether `name` still resolves to the interpreter's own builtin, and what it

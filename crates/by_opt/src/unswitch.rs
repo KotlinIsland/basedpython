@@ -92,6 +92,7 @@ fn unswitch_one(function: &mut Function) -> bool {
         },
         owned_at_exit: None,
         range: function.blocks[header.index()].range,
+        position: function.blocks[header.index()].position,
         error_target: None,
     });
     // the preheader is excluded along with the loop: its own `otherwise` edge *is* an

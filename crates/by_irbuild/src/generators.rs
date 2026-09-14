@@ -37,9 +37,25 @@
 //! each of those gets a field written at the suspension and read back at the
 //! resumption — see [`park_live_registers`]
 //!
+//! ## a generator that is also a closure
+//!
+//! a nested generator copies a capture into its state object where the environment
+//! holds it as a value no frame writes. a *cell* — a name some frame writes — is not
+//! copied, because a copy is a second cell the two frames stop agreeing about: the state
+//! object keeps the environment itself in `$outer`, and the body reads and writes the
+//! cell there, walking the same chain a nested function walks
+//!
+//! ## a closure inside a generator
+//!
+//! the other way round needs no environment of its own: the state object already holds
+//! every local as a field, so a generator expression or a lambda the body makes is a
+//! method of the state object, and reads a local there when it runs
+//!
 //! ## what is declined, and why it would be wrong rather than slow
 //!
-//! - a generator that is also a closure — one object cannot be two environments
+//! - a `def` nested inside a generator: the environment it would close over is a
+//!   register of the frame that makes it, and a generator's registers do not survive a
+//!   suspension — see [`check`]
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -51,6 +67,15 @@ use crate::mapper::{Decline, Lowered};
 
 /// the field holding which resumption point to enter at
 pub(crate) const STATE_FIELD: &str = "$state";
+/// what `$state` holds while the frame is running
+///
+/// the dispatch writes it as the first thing a resumption does, and every way the frame
+/// leaves writes over it: a suspension its resumption point, a finish `-1`. python
+/// refuses to resume a frame that is running — a generator whose body iterates the
+/// generator itself raises `ValueError: generator already executing` — and resuming it
+/// here would start the body again from its last suspension while the registers of the
+/// run in progress are still in use. the runtime reads it as `BY_FRAME_RUNNING`
+pub(crate) const RUNNING_STATE: i64 = -2;
 /// the field holding the value passed to `send`, which is what `yield` evaluates to
 pub(crate) const SENT_FIELD: &str = "$sent";
 /// the field holding an exception `throw` or `close` wants raised *at* the suspension
@@ -268,11 +293,12 @@ fn for_loops(body: &[Stmt]) -> usize {
         .into_iter()
         .map(|stmt| match stmt {
             Stmt::For(node) => 1 + usize::from(node.is_async),
-            // each context manager is parked too: the body suspends and `__exit__`
-            // still has to run, whether the resumption returns or raises
-            // an `async with` item also awaits `__aenter__` and `__aexit__`, and
-            // the exit is awaited on both the normal and the raising path
-            Stmt::With(node) => node.items.len() * if node.is_async { 5 } else { 1 },
+            // each context manager is parked too, and so is the exit bound as its block
+            // was entered: the body suspends and `__exit__` still has to run, whether the
+            // resumption returns or raises. an `async with` item also awaits
+            // `__aenter__` and `__aexit__`, and the exit is awaited on both the normal
+            // and the raising path
+            Stmt::With(node) => node.items.len() * if node.is_async { 6 } else { 2 },
             _ => 0,
         })
         .sum();
@@ -413,6 +439,7 @@ pub(crate) fn park_live_registers(
                 terminator: std::mem::replace(&mut block.terminator, Terminator::Goto(moved)),
                 owned_at_exit: None,
                 range: block.range,
+                position: block.position.take(),
                 error_target: block.error_target.take(),
             };
             function.blocks.push(rest);
