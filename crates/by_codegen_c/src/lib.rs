@@ -296,18 +296,16 @@ pub fn emit_module(module: &ModuleIr) -> String {
             dispatch_licence(module, &class, &method)
         );
     }
-    for (class, name) in accessor_licences(module) {
+    let licensed: BTreeSet<String> = accessor_licences(module)
+        .into_iter()
+        .chain(field_licences(module))
+        .map(|(class, _)| class)
+        .collect();
+    for class in licensed {
         let _ = writeln!(
             out,
             "static ByAccessorLicence {} = BY_ACCESSOR_LICENCE_INIT;",
-            accessor_licence(module, &class, &name)
-        );
-    }
-    for (class, field) in field_licences(module) {
-        let _ = writeln!(
-            out,
-            "static ByAccessorLicence {} = BY_ACCESSOR_LICENCE_INIT;",
-            field_licence(module, &class, &field)
+            class_licence(module, &class)
         );
     }
     if !module.classes.is_empty() {
@@ -3574,8 +3572,12 @@ fn answers_for_its_classes(module: &ModuleIr) -> bool {
                     }
                     // any write of a name the class does not hold, and the one read that
                     // is never a method or a class-level constant somewhere else
-                    Op::SetAttr { receiver, name, .. } | Op::GetAttr { receiver, name, .. }
-                        if matches!(op, Op::SetAttr { .. }) || name == "__dict__" =>
+                    Op::SetAttr { receiver, name, .. }
+                    | Op::WriteAttribute { receiver, name, .. }
+                    | Op::GetAttr { receiver, name, .. }
+                    | Op::ReadAttribute { receiver, name, .. }
+                        if matches!(op, Op::SetAttr { .. } | Op::WriteAttribute { .. })
+                            || name == "__dict__" =>
                     {
                         if let Some(class) = instance_held(&boxed, receiver)
                             && let Some(owner) = class_named(module, class)
@@ -3823,25 +3825,24 @@ fn dispatch_licences(module: &ModuleIr) -> BTreeSet<(String, String)> {
     wanted
 }
 
-/// the static holding one site's licence to reach a compiled property half without the
-/// descriptor protocol — see `By_ArmAccessor`
-fn accessor_licence(module: &ModuleIr, class: &str, name: &str) -> String {
+/// the one licence every property half and field of `class` is reached under
+///
+/// each member's own licence is the same two facts — the receiver is exactly `class`, and
+/// `class` still has the version it had when the member was found as compiled — so every
+/// member armed without a write to the class in between records the same version. one
+/// licence stands for all of them, and stands only where every one was found as compiled:
+/// a member that was not refuses the class's licence, which sends each access of the class
+/// through the protocol, and that is slower and the same program.
+///
+/// the reason to share is what the C compiler can do with it. a getter that reads a field
+/// asks the property's licence at the call and the field's inside the body; with one
+/// licence the second test is the first test again, and once the body is written in place
+/// it goes
+fn class_licence(module: &ModuleIr, class: &str) -> String {
     format!(
-        "by_prop_stands_{}_{}_{}",
+        "by_class_stands_{}_{}",
         mangle(module.name.dotted()),
-        mangle(class),
-        mangle(name)
-    )
-}
-
-/// the static holding the licence to read and write `class`'s `field` at its offset — see
-/// `By_ArmField`
-fn field_licence(module: &ModuleIr, class: &str, field: &str) -> String {
-    format!(
-        "by_field_stands_{}_{}_{}",
-        mangle(module.name.dotted()),
-        mangle(class),
-        mangle(field)
+        mangle(class)
     )
 }
 
@@ -5233,7 +5234,95 @@ fn signature(module: &ModuleIr, function: &Function) -> String {
     } else {
         params.join(", ")
     };
-    format!("static {} {symbol}({params})", ctype(module, &function.ret))
+    let linkage = match in_place(function) {
+        InPlace::Always => "__attribute__((always_inline)) static inline",
+        InPlace::Offered => "static inline",
+        InPlace::Left => "static",
+    };
+    format!(
+        "{linkage} {} {symbol}({params})",
+        ctype(module, &function.ret)
+    )
+}
+
+/// what a body's callers are told about writing it out in place
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InPlace {
+    /// written out wherever it is called
+    Always,
+    /// offered, for the C compiler to weigh
+    Offered,
+    /// left to the C compiler's own judgement
+    Left,
+}
+
+/// the most operations a body may have and still be offered to its callers to write out
+/// in place
+const OFFERED_OPERATIONS: usize = 16;
+
+/// the most operations a body may have and still be written out wherever it is called
+const ALWAYS_OPERATIONS: usize = 6;
+
+/// how a body is offered to its callers to write out in place: not at all where it loops or
+/// is on a cycle of calls, always where it is a few operations, and as a hint up to a handful
+///
+/// the C compiler weighs a body against every caller, and a loop the optimizer has
+/// duplicated calls each body twice. an accessor or a `with` block's `__exit__` that one
+/// caller inlined stopped being inlined once a test on its cold path made it a little
+/// larger, and the loop around the call paid for the call on every trip. a body of a few
+/// operations is what an accessor, an `__exit__` or a one-line method is, and writing it out
+/// costs no more than the call it replaces — and it is what lets the test a getter asks be
+/// seen to be the test its caller asked a moment before
+fn in_place(function: &Function) -> InPlace {
+    if is_recursive(function) || has_a_back_edge(function) {
+        return InPlace::Left;
+    }
+    let operations = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| !matches!(op, Op::Line { .. }))
+        .count();
+    if operations <= ALWAYS_OPERATIONS {
+        InPlace::Always
+    } else if operations <= OFFERED_OPERATIONS {
+        InPlace::Offered
+    } else {
+        InPlace::Left
+    }
+}
+
+/// whether some block can reach itself
+fn has_a_back_edge(function: &Function) -> bool {
+    // blocks finished without meeting one still on the path
+    let count = function.blocks.len();
+    let mut done = vec![false; count];
+    let mut on_path = vec![false; count];
+    for start in 0..count {
+        if done[start] {
+            continue;
+        }
+        let mut path: Vec<(usize, Vec<BlockId>)> =
+            vec![(start, function.blocks[start].successors())];
+        on_path[start] = true;
+        while let Some((id, pending)) = path.last_mut() {
+            match pending.pop() {
+                Some(next) if on_path.get(next.index()).copied().unwrap_or(false) => return true,
+                Some(next) if !done.get(next.index()).copied().unwrap_or(true) => {
+                    on_path[next.index()] = true;
+                    let successors = function.blocks[next.index()].successors();
+                    path.push((next.index(), successors));
+                }
+                Some(_) => {}
+                None => {
+                    done[*id] = true;
+                    on_path[*id] = false;
+                    path.pop();
+                }
+            }
+        }
+    }
+    false
 }
 
 /// the entry a function on a cycle keeps under its ordinary symbol, for every caller
@@ -5427,19 +5516,73 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
         let mut in_generator_expression = block
             .position
             .is_some_and(|position| position.generator_expression);
-        for op in &block.ops {
+        // a test for a field that is read straight after it, which the read asks in its
+        // own place instead, or which the arithmetic straight after that asks on its slow
+        // path — see [`tested_read`] and [`unset_test`]
+        let mut tested_by_read: Option<ErrorEdge> = None;
+        let mut tested_by_arithmetic: Vec<String> = Vec::new();
+        for (at, op) in block.ops.iter().enumerate() {
             if let Op::Line { position } = op {
                 line = Some(position.offset);
                 in_generator_expression = position.generator_expression;
                 continue;
             }
-            let edge = if adds_a_traceback_entry(op) {
-                sites.edge(module, line, in_generator_expression, block.error_target)
-            } else {
-                ErrorEdge::straight(block.error_target)
+            let edge = match tested_by_read.take() {
+                Some(edge) => edge,
+                None if adds_a_traceback_entry(op) => {
+                    sites.edge(module, line, in_generator_expression, block.error_target)
+                }
+                None => ErrorEdge::straight(block.error_target),
             };
+            if matches!(op, Op::RequireField { .. })
+                && block
+                    .ops
+                    .get(at + 1)
+                    .and_then(|read| tested_read(module, function, op, read, edge))
+                    .is_some()
+            {
+                tested_by_read = Some(edge);
+                continue;
+            }
+            if let (Some(read), Some(arithmetic)) = (block.ops.get(at + 1), block.ops.get(at + 2))
+                && let Some(test) = unset_test(module, function, op, read, arithmetic)
+            {
+                tested_by_arithmetic.push(test);
+                continue;
+            }
             let mut fragment = guard_unassigned(function, &op.operands(), edge);
-            fragment.push_str(&emit_op(module, function, op, edge));
+            // the read in between leaves the tests waiting for the arithmetic after it
+            let unset = if matches!(op, Op::GetField { .. }) {
+                String::new()
+            } else {
+                std::mem::take(&mut tested_by_arithmetic).concat()
+            };
+            match at
+                .checked_sub(1)
+                .and_then(|before| block.ops.get(before))
+                .and_then(|require| tested_read(module, function, require, op, edge))
+            {
+                Some(read) => fragment.push_str(&read),
+                None if !unset.is_empty() && matches!(op, Op::IntBinary { .. }) => {
+                    fragment.push_str(
+                        &split_int_binary_c(
+                            function,
+                            op,
+                            edge,
+                            &unset.replace("{label}", &error_label(edge)),
+                        )
+                        .unwrap_or_default(),
+                    );
+                }
+                None => {
+                    // a test waiting for arithmetic that is not this op is asked here after
+                    // all, rather than lost
+                    if !unset.is_empty() {
+                        fragment.push_str(&unset.replace("{label}", &error_label(edge)));
+                    }
+                    fragment.push_str(&emit_op(module, function, op, edge));
+                }
+            }
             sites.note(&fragment, edge);
             if let Some(at_error) = at_error.as_mut()
                 && edge.target.is_none()
@@ -5585,6 +5728,150 @@ fn note_shared_error_jump(
 /// it passes out of the call that drained it
 fn adds_a_traceback_entry(op: &Op) -> bool {
     !matches!(op, Op::Reraise { .. } | Op::FinishFrame { .. })
+}
+
+/// a read of a tagged `int` field that asks, in its own place, the question the
+/// [`Op::RequireField`] in front of it would have asked
+///
+/// an unset field holds `BY_INT_ERROR`, which is odd, so it is never a short. a read that
+/// retains what it loads already tests whether the value is a short, to know whether there
+/// is an object to retain — and the unset test can go inside that arm, where a loop over
+/// short values never reaches it. nothing happens between the two that anything could
+/// observe, so the `AttributeError` is raised at the point python raises it
+fn tested_read(
+    module: &ModuleIr,
+    function: &Function,
+    require: &Op,
+    read: &Op,
+    edge: ErrorEdge,
+) -> Option<String> {
+    let (
+        Op::RequireField {
+            receiver,
+            class,
+            field,
+        },
+        Op::GetField {
+            dest,
+            receiver: read_from,
+            class: read_class,
+            field: read_field,
+        },
+    ) = (require, read)
+    else {
+        return None;
+    };
+    if receiver != read_from || class != read_class || field != read_field {
+        return None;
+    }
+    let decl = field_decl(module, class, field)?;
+    let target = function.register(*dest)?;
+    if decl.optional
+        || decl.has_presence_byte()
+        || !decl.tracks_absence()
+        || decl.ty != RType::INT
+        || target.ty != RType::INT
+        || target.borrowed
+    {
+        return None;
+    }
+    let owner = class_named(module, class)?;
+    let fields = receiver_fields(module, class, field, receiver);
+    Some(format!(
+        "    {{ ByTagged by_t = {fields}->{member};
+      \
+         if (BY_UNLIKELY(!By_IsShort(by_t))) {{
+          \
+         if (BY_UNLIKELY(by_t == BY_INT_ERROR)) {{ {missing} goto {label}; }}
+          \
+         By_XIncRef(By_LongOf(by_t));
+      \
+         }}
+      \
+         By_DecRefTagged({target}); {target} = by_t; }}
+",
+        member = mangle_member(field),
+        missing = missing_attribute(
+            module,
+            owner,
+            &format!("(PyObject *){}", value_expr(receiver)),
+            field
+        ),
+        label = error_label(edge),
+        target = local(*dest),
+    ))
+}
+
+/// the test an [`Op::RequireField`] asks, written for the slow path of the arithmetic that
+/// consumes the read straight after it — with `{label}` where the jump goes
+///
+/// a read that retains nothing loads the field and tests nothing, and the next thing to look
+/// at the value is the arithmetic's own test that both operands are shorts. an unset field
+/// holds `BY_INT_ERROR`, which is odd, so that test already sends it to the slow path, and
+/// the unset test belongs there. nothing happens between the read and the arithmetic, so
+/// the `AttributeError` is still raised before anything python could observe
+fn unset_test(
+    module: &ModuleIr,
+    function: &Function,
+    require: &Op,
+    read: &Op,
+    arithmetic: &Op,
+) -> Option<String> {
+    let (
+        Op::RequireField {
+            receiver,
+            class,
+            field,
+        },
+        Op::GetField {
+            dest,
+            receiver: read_from,
+            class: read_class,
+            field: read_field,
+        },
+        Op::IntBinary {
+            op,
+            lhs,
+            rhs,
+            dest: result,
+        },
+    ) = (require, read, arithmetic)
+    else {
+        return None;
+    };
+    if receiver != read_from || class != read_class || field != read_field {
+        return None;
+    }
+    let operand = Value::Register(*dest);
+    if (*lhs != operand && *rhs != operand)
+        || *result == *dest
+        || function.value_type(&Value::Register(*result)) != Some(RType::INT)
+        || split_int_binary(*op, lhs, rhs).is_none()
+    {
+        return None;
+    }
+    let decl = field_decl(module, class, field)?;
+    let target = function.register(*dest)?;
+    if decl.optional
+        || decl.has_presence_byte()
+        || !decl.tracks_absence()
+        || decl.ty != RType::INT
+        || target.ty != RType::INT
+        || !target.borrowed
+    {
+        return None;
+    }
+    let owner = class_named(module, class)?;
+    Some(format!(
+        "\x20         if (BY_UNLIKELY({} == BY_INT_ERROR)) {{ {} goto {{label}}; }}\n",
+        local(*dest),
+        missing_attribute(
+            module,
+            owner,
+            &format!("(PyObject *){}", value_expr(receiver)),
+            field
+        ),
+    ))
 }
 
 /// the traceback entries one function's error edges pass through
@@ -6313,21 +6600,18 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             }
             // an operation whose fast path cannot fail is written out with its two paths
             // apart, so the error test sits on the slow one alone — see `By_IntAddShort`
-            if function.value_type(&Value::Register(*dest)) == Some(RType::INT)
-                && let Some((fast, slow)) = split_int_binary(*op, lhs, rhs)
-            {
-                let target = local(*dest);
-                return format!(
-                    "    {{ ByTagged by_t;\n\
-                     \x20     if (BY_UNLIKELY(!{fast}({}, {}, &by_t))) {{\n\
-                     \x20         by_t = {slow};\n\
-                     \x20         if (BY_UNLIKELY(by_t == BY_INT_ERROR)) goto {};\n\
-                     \x20     }}\n\
-                     \x20     By_DecRefTagged({target}); {target} = by_t; }}\n",
-                    value_expr(lhs),
-                    value_expr(rhs),
-                    error_label(error_target)
-                );
+            if let Some(split) = split_int_binary_c(
+                function,
+                &Op::IntBinary {
+                    dest: *dest,
+                    op: *op,
+                    lhs: lhs.clone(),
+                    rhs: rhs.clone(),
+                },
+                error_target,
+                "",
+            ) {
+                return split;
             }
             let call = match op {
                 BinOp::Add => "By_IntAdd",
@@ -6433,6 +6717,47 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 local(*dest),
             )
         }
+        // the type tests first: they cost a load and a compare, where a cold site looks a
+        // name up
+        Op::LoopGuardsHold {
+            dest,
+            builtins,
+            functions,
+            exact,
+        } => {
+            let mut out = String::from("    { char by_t = 1;\n");
+            for value in exact {
+                let test = match function.value_type(value) {
+                    Some(ty) if ty == RType::INT => format!("By_IsExactInt({})", value_expr(value)),
+                    Some(ty) if ty == RType::STR => {
+                        format!("PyUnicode_CheckExact({})", value_expr(value))
+                    }
+                    _ => format!("PyList_CheckExact({})", value_expr(value)),
+                };
+                let _ = writeln!(out, "      by_t = by_t && {test};");
+            }
+            for name in builtins {
+                let site = format!("by_ls_{}", mangle(name));
+                let _ = writeln!(
+                    out,
+                    "      static ByBuiltinSite {site} = BY_BUILTIN_SITE_INIT;\n      \
+                     by_t = by_t && By_BuiltinStandsOnEntry(&{site}, by_module_dict, {});",
+                    c_string(name)
+                );
+            }
+            // a function this module publishes no forwarder for never stands, as its own
+            // question never does
+            for name in functions {
+                let stands = if published_functions(module).contains(&name.as_str()) {
+                    format!("By_FunctionStands(&{})", function_site(name))
+                } else {
+                    "0".to_string()
+                };
+                let _ = writeln!(out, "      by_t = by_t && {stands};");
+            }
+            let _ = writeln!(out, "      {} = by_t; }}", local(*dest));
+            out
+        }
         // a name this module publishes no forwarder for is never reached directly: its
         // resolution is always the object under the name, and its test always says no
         Op::ResolveFunction { dest, name } => {
@@ -6465,6 +6790,10 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 )
             }
         }
+        Op::FunctionStood { dest, .. } => format!(
+            "    {{ PyObject *by_old = {target}; {target} = NULL; Py_XDECREF(by_old); }}\n",
+            target = local(*dest)
+        ),
         Op::FunctionStands { dest, src, name } => {
             if published_functions(module).contains(&name.as_str()) {
                 format!(
@@ -6503,28 +6832,13 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 dispatch_licence(module, class, method),
             )
         }
+        // a property half and a field are asked about under the one licence their class
+        // holds — see [`class_licence`]
         Op::AccessorStands {
-            dest,
-            src,
-            class,
-            name,
-        } => {
-            let Some(owner) = class_named(module, class) else {
-                return format!("    {} = 0;\n", local(*dest));
-            };
-            format!(
-                "    {} = By_AccessorStands((PyObject *){}, {}_OBJ, &{});\n",
-                local(*dest),
-                value_expr(src),
-                owner.type_name(module.name.dotted()),
-                accessor_licence(module, class, name),
-            )
+            dest, src, class, ..
         }
-        Op::FieldStands {
-            dest,
-            src,
-            class,
-            field,
+        | Op::FieldStands {
+            dest, src, class, ..
         } => {
             let Some(owner) = class_named(module, class) else {
                 return format!("    {} = 0;\n", local(*dest));
@@ -6534,7 +6848,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 local(*dest),
                 value_expr(src),
                 owner.type_name(module.name.dotted()),
-                field_licence(module, class, field),
+                class_licence(module, class),
             )
         }
         Op::LicenceHolds {
@@ -6599,6 +6913,20 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                         value_expr(src),
                         c_string(class),
                         c_string(member),
+                    )
+                }
+                LicenceKind::Field => {
+                    // the getter the field's descriptor carries, which is what arming the
+                    // licence found under the name
+                    let Some(publisher) = publishing_class(module, owner, member) else {
+                        return refuse("no class in the chain publishes the field");
+                    };
+                    format!(
+                        "    By_RecheckField((PyObject *){}, {type_name}_OBJ, {}, {}, {}_get_{member});\n",
+                        value_expr(src),
+                        c_string(class),
+                        c_string(member),
+                        publisher.type_name(module.name.dotted()),
                     )
                 }
             }
@@ -8127,6 +8455,66 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             out.push_str(&commit_checked(function, *dest, error_target));
             out
         }
+        Op::ReadAttribute {
+            dest,
+            receiver,
+            name,
+        } => {
+            let Some(decl) = function.register(*dest) else {
+                return String::new();
+            };
+            let reader = match &decl.ty {
+                RType::Primitive(Primitive::Int) => "By_ReadAttrInt",
+                RType::Primitive(Primitive::Float) => "By_ReadAttrFloat",
+                RType::Primitive(Primitive::Bool) => "By_ReadAttrBool",
+                RType::Primitive(Primitive::Str) => "By_ReadAttrStr",
+                _ => "By_ReadAttrObject",
+            };
+            let slot = format!("by_a_{}", mangle(name));
+            format!(
+                "    {{ static PyObject *{slot} = NULL;\n{}    }}\n",
+                assign_checked(
+                    module,
+                    function,
+                    *dest,
+                    &format!(
+                        "{reader}((PyObject *){}, &{slot}, {})",
+                        value_expr(receiver),
+                        c_string_sized(name)
+                    ),
+                    error_target
+                )
+            )
+        }
+        Op::WriteAttribute {
+            dest,
+            receiver,
+            name,
+            value,
+        } => {
+            let writer = match function.value_type(value) {
+                Some(RType::Primitive(Primitive::Int)) => "By_WriteAttrInt",
+                Some(RType::Primitive(Primitive::Float)) => "By_WriteAttrFloat",
+                Some(RType::Primitive(Primitive::Bool)) => "By_WriteAttrBool",
+                _ => "By_WriteAttrObject",
+            };
+            let slot = format!("by_a_{}", mangle(name));
+            format!(
+                "    {{ static PyObject *{slot} = NULL;\n{}    }}\n",
+                assign_checked(
+                    module,
+                    function,
+                    *dest,
+                    &format!(
+                        "{writer}((PyObject *){}, &{slot}, {}, {})",
+                        value_expr(receiver),
+                        c_string_sized(name),
+                        value_expr(value)
+                    ),
+                    error_target
+                )
+            )
+        }
         Op::SetAttr {
             dest,
             receiver,
@@ -8717,6 +9105,36 @@ fn defer_tests(function: &Function, receiver: bool) -> Vec<String> {
 /// is one too — so the fast path never produces the error value, and only the slow call,
 /// which is the one that reaches cpython, needs testing for it. `//` and `%` are not here:
 /// a zero divisor fails on the fast path
+/// a tagged `IntBinary` whose fast path cannot fail, written with its two paths apart, or
+/// `None` where it has no such form. `unset` is C the slow path runs first
+fn split_int_binary_c(
+    function: &Function,
+    op: &Op,
+    error_target: ErrorEdge,
+    unset: &str,
+) -> Option<String> {
+    let Op::IntBinary { dest, op, lhs, rhs } = op else {
+        return None;
+    };
+    if function.value_type(&Value::Register(*dest)) != Some(RType::INT) {
+        return None;
+    }
+    let (fast, slow) = split_int_binary(*op, lhs, rhs)?;
+    let target = local(*dest);
+    Some(format!(
+        "    {{ ByTagged by_t;\n\
+         \x20     if (BY_UNLIKELY(!{fast}({}, {}, &by_t))) {{\n\
+         {unset}\
+         \x20         by_t = {slow};\n\
+         \x20         if (BY_UNLIKELY(by_t == BY_INT_ERROR)) goto {};\n\
+         \x20     }}\n\
+         \x20     By_DecRefTagged({target}); {target} = by_t; }}\n",
+        value_expr(lhs),
+        value_expr(rhs),
+        error_label(error_target)
+    ))
+}
+
 fn split_int_binary(op: BinOp, lhs: &Value, rhs: &Value) -> Option<(&'static str, String)> {
     let (l, r) = (value_expr(lhs), value_expr(rhs));
     Some(match op {
@@ -10283,17 +10701,17 @@ fn emit_module_init(module: &ModuleIr) -> String {
         .collect();
     // for the reason the dispatch licences are armed here, and one more: the property is
     // put into the type's dict by `class_init`, so nothing can be asked about it before
-    // that has run
-    let arm_accessors: String = accessor_licences(module)
-        .iter()
-        .filter_map(|(class, name)| {
-            let owner = class_named(module, class)?;
+    // that has run. every member a class licenses is armed into one scratch licence and
+    // joined into the class's — see [`class_licence`]
+    let mut arm_members: BTreeMap<&str, String> = BTreeMap::new();
+    for (class, name) in accessor_licences(module) {
+        let arm = class_named(module, &class).and_then(|owner| {
             let property = owner
                 .properties
                 .iter()
-                .find(|property| property.name == *name)?;
+                .find(|property| property.name == name)?;
             let type_name = owner.type_name(module.name.dotted());
-            let symbol = property_symbol(&type_name, name);
+            let symbol = property_symbol(&type_name, &name);
             // the two halves as `By_PublishProperty` was handed them, so that the licence
             // asks about the very descriptors the type was given
             let mut halves = property_halves(owner, property).map(|(half, body)| match body {
@@ -10303,27 +10721,62 @@ fn emit_module_init(module: &ModuleIr) -> String {
             let get = halves.next()?;
             let set = halves.next()?;
             Some(format!(
-                "    By_ArmAccessor(&{}, {type_name}_OBJ, {}, {get}, {set});\n",
-                accessor_licence(module, class, name),
-                c_string(name),
+                "      By_ArmAccessor(&by_member, {type_name}_OBJ, {}, {get}, {set});\n",
+                c_string(&name),
             ))
-        })
-        .collect();
+        });
+        let Some(owner) = class_named(module, &class) else {
+            continue;
+        };
+        let _ = writeln!(
+            arm_members.entry(owner.name.as_str()).or_default(),
+            "{}      By_JoinLicence(&by_version, &by_first, {});",
+            arm.as_deref().unwrap_or(""),
+            if arm.is_some() {
+                "by_member.version"
+            } else {
+                "0u"
+            },
+        );
+    }
     // the field's getter is what the descriptor standing under the name has to carry,
     // whichever of the two descriptors a field is published through
-    let arm_fields: String = field_licences(module)
-        .iter()
-        .filter_map(|(class, field)| {
-            let owner = class_named(module, class)?;
-            let type_name = owner.type_name(module.name.dotted());
-            let publisher = publishing_class(module, owner, field)?.type_name(module.name.dotted());
-            Some(format!(
-                "    By_ArmField(&{}, {type_name}_OBJ, {}, {publisher}_get_{field});\n",
-                field_licence(module, class, field),
-                c_string(field),
-            ))
-        })
-        .collect();
+    for (class, field) in field_licences(module) {
+        let Some(owner) = class_named(module, &class) else {
+            continue;
+        };
+        let type_name = owner.type_name(module.name.dotted());
+        let arm = publishing_class(module, owner, &field).map(|publisher| {
+            format!(
+                "      By_ArmField(&by_member, {type_name}_OBJ, {}, {}_get_{field});\n",
+                c_string(&field),
+                publisher.type_name(module.name.dotted()),
+            )
+        });
+        let _ = writeln!(
+            arm_members.entry(owner.name.as_str()).or_default(),
+            "{}      By_JoinLicence(&by_version, &by_first, {});",
+            arm.as_deref().unwrap_or(""),
+            if arm.is_some() {
+                "by_member.version"
+            } else {
+                "0u"
+            },
+        );
+    }
+    let mut arm_accessors = String::new();
+    for (class, members) in &arm_members {
+        let _ = writeln!(
+            arm_accessors,
+            "    {{ ByAccessorLicence by_member = BY_ACCESSOR_LICENCE_INIT;\n      \
+             unsigned int by_version = 0u;\n      \
+             int by_first = 1;\n\
+             {members}      \
+             {}.version = by_version; }}",
+            class_licence(module, class)
+        );
+    }
+    let arm_fields = String::new();
     // a class holding instance memory back holds it for as long as it might be asked
     // for another instance, which is as long as the module stands. handing it back when
     // the module goes is what keeps the whole scheme from being a leak
@@ -10608,7 +11061,135 @@ mod tests {
     fn a_native_signature_uses_the_mangled_symbol() {
         let module = module_with(add());
         let c = emit_module(&module);
-        assert!(c.contains("static ByTagged by_app_add(ByTagged r0, ByTagged r1)"));
+        assert!(c.contains("ByTagged by_app_add(ByTagged r0, ByTagged r1)"));
+    }
+
+    /// `class Cell: v: int` with the field always assigned, and one method of it
+    fn cell(method: Function) -> ModuleIr {
+        let mut module = module_with(add());
+        module.classes.push(ClassIr {
+            name: "Cell".to_string(),
+            immutable: true,
+            environment: false,
+            exported: true,
+            base: None,
+            inherited_init: false,
+            fields_are_parameters: true,
+            dataclass: false,
+            generic: false,
+            declares_slots: false,
+            constants: Vec::new(),
+            properties: Vec::new(),
+            slot_aliases: Vec::new(),
+            fields: vec![by_ir::function::FieldDecl {
+                cell: false,
+                name: "v".to_string(),
+                ty: RType::INT,
+                default: None,
+                optional: false,
+                defaulted_by: None,
+            }],
+            decorators: Vec::new(),
+            methods: vec![method],
+            resume: None,
+            keywords: Vec::new(),
+        });
+        module
+    }
+
+    /// `return self.v + 1`, with the field read into a register the borrow pass lends
+    /// where `borrowed`
+    fn reads_v_plus_one(borrowed: bool) -> Function {
+        let mut builder = FunctionBuilder::new("next", RType::INT);
+        let receiver = builder.param(
+            "self",
+            RType::Instance {
+                class: "Cell".to_string(),
+                exact: true,
+            },
+        );
+        let read = builder.temp(RType::INT);
+        let sum = builder.temp(RType::INT);
+        builder.push(Op::RequireField {
+            receiver: Value::Register(receiver),
+            class: "Cell".to_string(),
+            field: "v".to_string(),
+        });
+        builder.push(Op::GetField {
+            dest: read,
+            receiver: Value::Register(receiver),
+            class: "Cell".to_string(),
+            field: "v".to_string(),
+        });
+        builder.push(Op::IntBinary {
+            dest: sum,
+            op: BinOp::Add,
+            lhs: Value::Register(read),
+            rhs: Value::Int(1),
+        });
+        builder.terminate(Terminator::Return(Value::Register(sum)));
+        let mut function = builder.finish();
+        function.owner = Some("Cell".to_string());
+        function.registers[read.index()].borrowed = borrowed;
+        function
+    }
+
+    #[test]
+    fn an_unset_field_read_that_retains_asks_inside_the_arm_that_retains() {
+        // the value is only ever an unset field's error word when it is not a short, and
+        // a read that keeps a reference already asks that
+        let c = emit_module(&cell(reads_v_plus_one(false)));
+        let body = body_of(&c, "by_app_Cell_next(By_app_Cell * r0) {");
+        let short = body
+            .find("if (BY_UNLIKELY(!By_IsShort(by_t))) {")
+            .unwrap_or_else(|| panic!("the read asks whether it has a short: {body}"));
+        let unset = body
+            .find("if (BY_UNLIKELY(by_t == BY_INT_ERROR)) { By_FieldMissing(")
+            .unwrap_or_else(|| panic!("the read asks whether the field is set: {body}"));
+        assert!(short < unset, "{body}");
+        assert_eq!(body.matches("By_FieldMissing").count(), 1, "{body}");
+    }
+
+    #[test]
+    fn an_unset_field_read_into_arithmetic_asks_on_the_slow_path() {
+        // a read that keeps nothing leaves the value to the addition, whose test that both
+        // operands are shorts already sends an unset field's odd error word the slow way
+        let c = emit_module(&cell(reads_v_plus_one(true)));
+        let body = body_of(&c, "by_app_Cell_next(By_app_Cell * r0) {");
+        let fast = body
+            .find("if (BY_UNLIKELY(!By_IntAddShort(")
+            .unwrap_or_else(|| panic!("the addition has a fast path: {body}"));
+        let unset = body
+            .find("if (BY_UNLIKELY(r1 == BY_INT_ERROR)) { By_FieldMissing(")
+            .unwrap_or_else(|| panic!("the slow path asks whether the field is set: {body}"));
+        let slow = body
+            .find("By_IntSlowBinary(")
+            .unwrap_or_else(|| panic!("the addition has a slow path: {body}"));
+        assert!(fast < unset && unset < slow, "{body}");
+        assert_eq!(body.matches("By_FieldMissing").count(), 1, "{body}");
+    }
+
+    #[test]
+    fn a_small_body_with_no_loop_is_offered_to_be_written_in_place() {
+        let c = emit_module(&module_with(add()));
+        assert!(
+            c.contains("static inline ByTagged by_app_add(ByTagged r0, ByTagged r1)"),
+            "{c}"
+        );
+
+        // the same body going round a loop is not
+        let mut looping = add();
+        let back = looping.blocks.len();
+        let mut again = looping.blocks[0].clone();
+        again.ops.clear();
+        again.terminator = Terminator::Goto(BlockId(0));
+        looping.blocks[0].terminator = Terminator::Goto(BlockId(back));
+        looping.blocks.push(again);
+        let c = emit_module(&module_with(looping));
+        assert!(
+            c.contains("static ByTagged by_app_add(ByTagged r0, ByTagged r1)"),
+            "{c}"
+        );
     }
 
     #[test]
@@ -11791,7 +12372,7 @@ mod tests {
         let c = emit_module(&module);
         // the forward declaration precedes the body, so take the last split
         let use_body = c
-            .rsplit("static ByTagged by_app_use")
+            .rsplit("static inline ByTagged by_app_use")
             .next()
             .expect("the caller is emitted");
         assert!(use_body.contains("by_app_pure()"), "{use_body}");
@@ -11805,7 +12386,7 @@ mod tests {
         // releasing them here *and* in the wrapper was a double-decref that only
         // survived because small ints are unrefcounted
         let body = c
-            .split("static ByTagged by_app_add(ByTagged r0, ByTagged r1) {")
+            .split("static inline ByTagged by_app_add(ByTagged r0, ByTagged r1) {")
             .nth(1)
             .and_then(|rest| rest.split("static PyObject").next())
             .expect("the body is emitted");
@@ -11874,7 +12455,7 @@ mod tests {
         builder.terminate(Terminator::Return(Value::Register(a)));
         let c = emit_module(&module_with(builder.finish()));
         let body = c
-            .split("static PyObject * by_app_first(PyObject * r0) {")
+            .split("static inline PyObject * by_app_first(PyObject * r0) {")
             .nth(1)
             .and_then(|rest| rest.split("static PyObject *byw").next())
             .expect("the body is emitted");
@@ -11909,7 +12490,7 @@ mod tests {
         builder.terminate(Terminator::Return(Value::Register(n)));
         let c = emit_module(&module_with(builder.finish()));
         let body = c
-            .split("static ByTagged by_app_halve(ByTagged r0) {")
+            .split("static inline ByTagged by_app_halve(ByTagged r0) {")
             .nth(1)
             .and_then(|rest| rest.split("static PyObject").next())
             .expect("the body is emitted");
@@ -12130,7 +12711,7 @@ mod tests {
         function.exported = false;
         let c = emit_module(&module_with(function));
         assert!(!c.contains("byw_app_add"));
-        assert!(c.contains("static ByTagged by_app_add"));
+        assert!(c.contains("static inline ByTagged by_app_add"));
     }
 
     #[test]

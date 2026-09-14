@@ -3848,6 +3848,17 @@ static inline void By_ArmAccessor(ByAccessorLicence *licence, PyObject *type, co
     licence->version = owner->tp_version_tag;
 }
 
+/* one member's licence joined into its class's: the class's stands only where every member
+ * was found as compiled, all under the one version */
+static inline void By_JoinLicence(unsigned int *version, int *first, unsigned int member) {
+    if (*first) {
+        *version = member;
+        *first = 0;
+    } else if (*version != member) {
+        *version = 0u;
+    }
+}
+
 /* whether `o` is exactly `type` and `type` still answers as [`By_ArmAccessor`] found */
 static inline char By_AccessorStands(PyObject *o, PyObject *type,
                                      const ByAccessorLicence *licence) {
@@ -7094,6 +7105,55 @@ static inline void By_ArmField(ByAccessorLicence *licence, PyObject *type, const
     licence->version = owner->tp_version_tag;
 }
 
+#ifdef BY_LICENCE_RECHECK
+
+/* re-ask the lookup a field read or written at its offset skipped: that the receiver is
+ * exactly the class, the class answers reads and writes the generic way, and the name still
+ * resolves on the class to the descriptor this module published for the field
+ *
+ * the descriptor is found without being run, as [`By_ArmField`] finds it */
+static void By_RecheckField(PyObject *o, PyObject *type, const char *class_name,
+                            const char *name, getter get) {
+    if (o == NULL) {
+        By_LicenceFailed(class_name, name, "the receiver is NULL", NULL);
+        return;
+    }
+    if ((PyObject *)Py_TYPE(o) != type) {
+        By_LicenceFailed(class_name, name, "the receiver is not this class",
+                         Py_TYPE(o)->tp_name);
+        return;
+    }
+    PyTypeObject *owner = (PyTypeObject *)type;
+    if (owner->tp_getattro != PyObject_GenericGetAttr
+        || owner->tp_setattro != PyObject_GenericSetAttr) {
+        By_LicenceFailed(class_name, name,
+                         "the class answers reads or writes with a hook of its own", NULL);
+        return;
+    }
+    PyObject *key = PyUnicode_InternFromString(name);
+    if (key == NULL) {
+        PyErr_Clear();
+        By_LicenceFailed(class_name, name, "the name could not be interned", NULL);
+        return;
+    }
+    PyObject *found = _PyType_Lookup(owner, key);
+    Py_DECREF(key);
+    if (found == NULL) {
+        By_LicenceFailed(class_name, name, "the name no longer resolves on the class", NULL);
+        return;
+    }
+    int published = (Py_IS_TYPE(found, &PyGetSetDescr_Type)
+                     && ((PyGetSetDescrObject *)found)->d_getset->get == get)
+                    || (Py_IS_TYPE(found, &By_FieldDefaultType)
+                        && ((By_FieldDefaultObject *)found)->by_get == get);
+    if (!published) {
+        By_LicenceFailed(class_name, name,
+                         "the class no longer publishes the compiled field", Py_TYPE(found)->tp_name);
+    }
+}
+
+#endif /* BY_LICENCE_RECHECK */
+
 /* ── an emitted instance's `__dict__` ─────────────────────────────────────────
  *
  * an emitted instance keeps its attributes in two places. the ones the class itself
@@ -8005,6 +8065,91 @@ static inline PyObject *By_GetAttr(PyObject *o, PyObject *name) {
 static inline char By_SetAttr(PyObject *o, PyObject *name, PyObject *value) {
     if (o == NULL || name == NULL) return 2;
     return PyObject_SetAttr(o, name, value) < 0 ? 2 : 0;
+}
+
+/* the arm a licensed field or property access takes where its licence does not stand: the
+ * attribute through the object protocol, narrowed to the representation the compiled
+ * access holds or boxed from it
+ *
+ * one call kept out of line, because it is the rare arm of a test the hot path asks every
+ * time. written as a lookup and a narrowing apiece, the arm gave its function a register, a
+ * retain, a release and two error tests, and the C compiler stopped writing a two-line
+ * accessor out in place. the name is interned into `*slot` the first time */
+static inline PyObject *By_UnboxStr(PyObject *o);
+
+BY_COLD PyObject *By_ReadAttrObject(PyObject *o, PyObject **slot, const char *text,
+                                    Py_ssize_t length) {
+    if (*slot == NULL) *slot = By_InternedStr(text, length);
+    if (*slot == NULL) return NULL;
+    return By_GetAttr(o, *slot);
+}
+
+BY_COLD ByTagged By_ReadAttrInt(PyObject *o, PyObject **slot, const char *text,
+                                Py_ssize_t length) {
+    PyObject *found = By_ReadAttrObject(o, slot, text, length);
+    if (found == NULL) return BY_INT_ERROR;
+    ByTagged narrowed = By_UnboxInt(found);
+    Py_DECREF(found);
+    return narrowed;
+}
+
+BY_COLD double By_ReadAttrFloat(PyObject *o, PyObject **slot, const char *text,
+                                Py_ssize_t length) {
+    PyObject *found = By_ReadAttrObject(o, slot, text, length);
+    if (found == NULL) return BY_FLOAT_ERROR;
+    double narrowed = By_UnboxFloat(found);
+    Py_DECREF(found);
+    return narrowed;
+}
+
+BY_COLD char By_ReadAttrBool(PyObject *o, PyObject **slot, const char *text,
+                             Py_ssize_t length) {
+    PyObject *found = By_ReadAttrObject(o, slot, text, length);
+    if (found == NULL) return 2;
+    char narrowed = By_UnboxBool(found);
+    Py_DECREF(found);
+    return narrowed;
+}
+
+BY_COLD PyObject *By_ReadAttrStr(PyObject *o, PyObject **slot, const char *text,
+                                 Py_ssize_t length) {
+    PyObject *found = By_ReadAttrObject(o, slot, text, length);
+    if (found == NULL) return NULL;
+    PyObject *narrowed = By_UnboxStr(found);
+    Py_DECREF(found);
+    return narrowed;
+}
+
+BY_COLD char By_WriteAttrObject(PyObject *o, PyObject **slot, const char *text,
+                                Py_ssize_t length, PyObject *value) {
+    if (*slot == NULL) *slot = By_InternedStr(text, length);
+    if (*slot == NULL) return 2;
+    return By_SetAttr(o, *slot, value);
+}
+
+/* a value boxed, handed to the protocol and let go of again, as the boxing and the store
+ * would have been */
+BY_COLD char By_WriteAttrBoxed(PyObject *o, PyObject **slot, const char *text,
+                               Py_ssize_t length, PyObject *boxed) {
+    if (boxed == NULL) return 2;
+    char refused = By_WriteAttrObject(o, slot, text, length, boxed);
+    Py_DECREF(boxed);
+    return refused;
+}
+
+BY_COLD char By_WriteAttrInt(PyObject *o, PyObject **slot, const char *text,
+                             Py_ssize_t length, ByTagged value) {
+    return By_WriteAttrBoxed(o, slot, text, length, By_BoxInt(value));
+}
+
+BY_COLD char By_WriteAttrFloat(PyObject *o, PyObject **slot, const char *text,
+                               Py_ssize_t length, double value) {
+    return By_WriteAttrBoxed(o, slot, text, length, By_BoxFloat(value));
+}
+
+BY_COLD char By_WriteAttrBool(PyObject *o, PyObject **slot, const char *text,
+                              Py_ssize_t length, char value) {
+    return By_WriteAttrBoxed(o, slot, text, length, By_BoxBool(value));
 }
 
 /* build a list from `nargs` owned references, stealing each */
@@ -9478,6 +9623,36 @@ static inline char By_BuiltinStands(ByBuiltinSite *site, PyObject *dict, const c
     }
 #endif
     return By_ArmBuiltinSite(site, dict, builtin);
+}
+
+/* whether `builtin` resolves to the builtin, asked on the way into a loop that asks
+ * nothing again until it reaches code that can run python
+ *
+ * only python code can write a namespace, so while this thread runs no python the answer
+ * stands — but only while no other thread can run either. a build without the GIL answers
+ * no. a failed lookup answers no too, and leaves no error behind: the loop as written asks
+ * the question again where python would, and raises what python raises */
+static inline char By_BuiltinStandsOnEntry(ByBuiltinSite *site, PyObject *dict,
+                                           const char *builtin) {
+#ifdef Py_GIL_DISABLED
+    (void)site;
+    (void)dict;
+    (void)builtin;
+    return 0;
+#else
+    char answer = By_BuiltinStands(site, dict, builtin);
+    if (BY_UNLIKELY(answer == 2)) {
+        PyErr_Clear();
+        return 0;
+    }
+    return answer;
+#endif
+}
+
+/* whether a tagged integer holds exactly an `int` rather than a subclass: a short always
+ * does, and a pointer is asked its type */
+static inline char By_IsExactInt(ByTagged x) {
+    return (char)(By_IsShort(x) || PyLong_CheckExact(By_LongOf(x)));
 }
 
 /* `str(n)` for a tagged integer, given whatever the name `str` resolved to
@@ -11812,8 +11987,20 @@ static inline char By_StrItemCompareChar(PyObject *s, ByTagged index, Py_UCS4 co
  * everything the fast path does not answer is handed to the tagged form, so a
  * subclass, an out-of-range index and an index that has to become an object are
  * all still answered in exactly one place */
-static inline char By_StrItemCompareCharI64(PyObject *s, int64_t index, Py_UCS4 codepoint,
-                                            int op) {
+/* the rest of [`By_StrItemCompareCharI64`]: a subclass, or an index out of range */
+BY_COLD char By_StrItemCompareCharI64Slow(PyObject *s, int64_t index, Py_UCS4 codepoint,
+                                          int op) {
+    ByTagged tagged = By_IntFromI64(index);
+    char answer;
+    if (BY_UNLIKELY(tagged == BY_INT_ERROR)) return 2;
+    answer = By_StrItemCompareChar(s, tagged, codepoint, op);
+    By_DecRefTagged(tagged);
+    return answer;
+}
+
+/* inlined, with the slow half kept out of line: a loop the compiler has duplicated reads a
+ * character in both copies, and the compiler weighs inlining the whole helper twice */
+BY_HOT char By_StrItemCompareCharI64(PyObject *s, int64_t index, Py_UCS4 codepoint, int op) {
     if (BY_LIKELY(s != NULL && PyUnicode_CheckExact(s))) {
         int64_t length = (int64_t) PyUnicode_GET_LENGTH(s);
         int64_t at = index < 0 ? index + length : index;
@@ -11829,14 +12016,7 @@ static inline char By_StrItemCompareCharI64(PyObject *s, int64_t index, Py_UCS4 
             }
         }
     }
-    {
-        ByTagged tagged = By_IntFromI64(index);
-        char answer;
-        if (BY_UNLIKELY(tagged == BY_INT_ERROR)) return 2;
-        answer = By_StrItemCompareChar(s, tagged, codepoint, op);
-        By_DecRefTagged(tagged);
-        return answer;
-    }
+    return By_StrItemCompareCharI64Slow(s, index, codepoint, op);
 }
 
 #endif /* BY_RT_H */
