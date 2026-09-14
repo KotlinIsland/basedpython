@@ -1047,6 +1047,12 @@ pub struct ModuleIr {
     /// else here can see one — see `By_VerifyClass` in the runtime header for the four
     /// questions it asks and why each of them is a wrong answer already shipped
     pub verify_install: bool,
+    /// whether a call inside a cycle of native calls counts against python's recursion
+    /// limit as well as against the stack.
+    ///
+    /// the stack is watched either way, so no setting lets a recursion run off the end of
+    /// it — see `by_build::Options::follow_recursion_limit`
+    pub follow_recursion_limit: bool,
 }
 
 /// what the artefact has to do to publish a module's forwarders
@@ -1284,6 +1290,7 @@ impl ModuleIr {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         }
     }
 

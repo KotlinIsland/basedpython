@@ -7754,7 +7754,15 @@ async def chained(n: int) -> int:
 ",
     );
     assert!(text.contains("call step$direct(r"), "{text}");
-    assert!(!text.contains("awaititer"), "{text}");
+    // the object is built only in the arm a moved or rebound `step` sends the call
+    // through, where the function under the name is called and what it hands back
+    // awaited — the arm the direct call stands in for
+    let (direct, turned_away) = text
+        .split_once("callthrough")
+        .expect("a call the direct entry is turned away from goes through the name");
+    assert!(direct.contains("function-stands step"), "{text}");
+    assert!(!direct.contains("awaititer"), "{text}");
+    assert!(turned_away.contains("awaititer"), "{text}");
     assert!(
         emitted.iter().any(|name| name == "step$direct"),
         "{emitted:?}"
@@ -11391,6 +11399,7 @@ fn lowered_with_recheck(source: &str, recheck_licences: bool) -> by_ir::function
             crate::LowerOptions {
                 language: crate::Language::BasedPython,
                 recheck_licences,
+                bind_functions_early: false,
             },
         )
     })

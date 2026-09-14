@@ -219,6 +219,22 @@ pub struct Options {
     /// figure becomes an upper bound without anyone noticing. the check runs once per
     /// module at import rather than per call
     pub verify_install: bool,
+    /// count compiled calls against python's recursion limit, as well as against the
+    /// stack.
+    ///
+    /// on by default, so a compiled recursion raises `RecursionError` at the depth the
+    /// interpreted one does. off, a recursion is stopped only where the stack would run
+    /// out, which saves the count on every call inside a cycle of compiled calls and
+    /// leaves `sys.setrecursionlimit` unobserved by them. neither setting can crash
+    pub follow_recursion_limit: bool,
+    /// have a compiled call to a function the module defines go straight to its native
+    /// entry, without asking whether the name still holds that function.
+    ///
+    /// off by default, so a module function rebound, deleted or patched from outside —
+    /// `mock.patch("mod.fn")` — or given another `__code__` or other defaults reaches the
+    /// module's own compiled callers as it reaches python's. on, they go on calling the
+    /// function the module was compiled with, which saves the question on every such call
+    pub bind_functions_early: bool,
 }
 
 impl Default for Options {
@@ -231,6 +247,8 @@ impl Default for Options {
             fallback: None,
             recheck_licences: false,
             verify_install: true,
+            follow_recursion_limit: true,
+            bind_functions_early: false,
         }
     }
 }
@@ -241,6 +259,7 @@ impl Options {
         by_irbuild::LowerOptions {
             language: self.language,
             recheck_licences: self.recheck_licences,
+            bind_functions_early: self.bind_functions_early,
         }
     }
 }
@@ -308,6 +327,7 @@ fn finish(
     }
 
     module.verify_install = options.verify_install;
+    module.follow_recursion_limit = options.follow_recursion_limit;
 
     if options.require_native && !module.declined.is_empty() {
         bail!(
@@ -590,6 +610,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         };
         let dir = std::env::temp_dir().join("by_build_refuses_test");
         let _ = fs::remove_dir_all(&dir);

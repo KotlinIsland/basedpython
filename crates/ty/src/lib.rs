@@ -200,6 +200,8 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                     fallback: None,
                     language: by_irbuild::Language::default(),
                     verify_install: !no_verify_install,
+                    follow_recursion_limit: true,
+                    bind_functions_early: false,
                 },
             },
         ),

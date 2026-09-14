@@ -434,6 +434,33 @@ pub enum Op {
     /// wanted where it is not the builtin. what it costs at runtime is in
     /// `By_BuiltinStands`
     BuiltinStands { dest: RegisterId, name: String },
+    /// what a call to the module function `name` has to go through where its native
+    /// entry may not stand in for the function object, read where python reads the name
+    ///
+    /// python calls whatever function object the name holds when the call is made, and
+    /// binds a missing argument from the defaults that object holds then, so the native
+    /// entry with its compiled defaults is only the same call while the object is the
+    /// one this module published and nothing about it has been reassigned. while that
+    /// holds this is NULL and costs one load; otherwise it is the object under the name,
+    /// resolved as a global read is, which raises `NameError` for a name bound nowhere —
+    /// see `By_ResolveFunction`
+    ResolveFunction { dest: RegisterId, name: String },
+    /// whether the call [`Self::ResolveFunction`] read `src` for may go straight to the
+    /// native entry: the read found nothing to call, and nothing the arguments did since
+    /// has moved the function
+    FunctionStands {
+        dest: RegisterId,
+        src: Value,
+        name: String,
+    },
+    /// the object a call [`Self::FunctionStands`] turned away goes through: the one
+    /// [`Self::ResolveFunction`] read, or the function this module published under the
+    /// name where the read found it still standing
+    FunctionCallee {
+        dest: RegisterId,
+        src: Value,
+        name: String,
+    },
     /// whether a read or a write of `name` on `src` may go straight to the property
     /// half this module emitted for `class`, rather than round the descriptor protocol
     ///
@@ -939,6 +966,19 @@ pub enum Op {
         callee: Value,
         args: Vec<Value>,
     },
+    /// a call through the function object a direct call to a module function was
+    /// turned away from — see [`Self::FunctionStands`]
+    ///
+    /// the same call as [`Self::CallValue`], with keywords: the last `keywords.len()`
+    /// arguments are passed under those names. it is the rare arm of a hot call, so it
+    /// is written to cost that call nothing, where a call through a value is written
+    /// to be fast itself
+    CallThrough {
+        dest: RegisterId,
+        callee: Value,
+        args: Vec<Value>,
+        keywords: Vec<String>,
+    },
     /// `receiver.name(args)` through the object protocol
     CallMethod {
         dest: RegisterId,
@@ -1309,6 +1349,9 @@ impl Op {
             | Self::MatchAttr { .. }
             | Self::MethodStands { .. }
             | Self::BuiltinStands { .. }
+            | Self::ResolveFunction { .. }
+            | Self::FunctionStands { .. }
+            | Self::FunctionCallee { .. }
             | Self::AccessorStands { .. }
             | Self::FieldStands { .. }
             | Self::DictShadows { .. }
@@ -1358,6 +1401,7 @@ impl Op {
             | Self::DeleteGlobal { .. }
             | Self::DeleteLocal { .. }
             | Self::CallValue { .. }
+            | Self::CallThrough { .. }
             | Self::CallMethod { .. }
             | Self::GetAttr { .. }
             | Self::SetAttr { .. }
@@ -1444,6 +1488,9 @@ impl Op {
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
             | Self::BuiltinStands { dest, .. }
+            | Self::ResolveFunction { dest, .. }
+            | Self::FunctionStands { dest, .. }
+            | Self::FunctionCallee { dest, .. }
             | Self::AccessorStands { dest, .. }
             | Self::FieldStands { dest, .. }
             | Self::DictShadows { dest, .. }
@@ -1474,6 +1521,7 @@ impl Op {
             | Self::ImportModule { dest, .. }
             | Self::ImportFrom { dest, .. }
             | Self::CallValue { dest, .. }
+            | Self::CallThrough { dest, .. }
             | Self::LoadGlobal { dest, .. }
             | Self::MakeSlice { dest, .. }
             | Self::LoadEllipsis { dest }
@@ -1563,6 +1611,9 @@ impl Op {
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
             | Self::BuiltinStands { dest, .. }
+            | Self::ResolveFunction { dest, .. }
+            | Self::FunctionStands { dest, .. }
+            | Self::FunctionCallee { dest, .. }
             | Self::AccessorStands { dest, .. }
             | Self::FieldStands { dest, .. }
             | Self::DictShadows { dest, .. }
@@ -1593,6 +1644,7 @@ impl Op {
             | Self::ImportModule { dest, .. }
             | Self::ImportFrom { dest, .. }
             | Self::CallValue { dest, .. }
+            | Self::CallThrough { dest, .. }
             | Self::LoadGlobal { dest, .. }
             | Self::MakeSlice { dest, .. }
             | Self::LoadEllipsis { dest }
@@ -1676,6 +1728,8 @@ impl Op {
             | Self::Move { src, .. }
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
+            | Self::FunctionStands { src, .. }
+            | Self::FunctionCallee { src, .. }
             | Self::AccessorStands { src, .. }
             | Self::FieldStands { src, .. }
             | Self::LicenceHolds { src, .. }
@@ -1752,7 +1806,7 @@ impl Op {
             | Self::FloatCompare { lhs, rhs, .. } => vec![lhs, rhs],
             Self::Unary { operand, .. } => vec![operand],
             Self::CallNative { args, .. } | Self::CallPython { args, .. } => args.iter().collect(),
-            Self::CallValue { callee, args, .. } => {
+            Self::CallValue { callee, args, .. } | Self::CallThrough { callee, args, .. } => {
                 let mut all = vec![callee];
                 all.extend(args.iter());
                 all
@@ -1811,6 +1865,7 @@ impl Op {
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
             | Self::BuiltinStands { .. }
+            | Self::ResolveFunction { .. }
             | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }
@@ -1905,6 +1960,8 @@ impl Op {
             | Self::Move { src, .. }
             | Self::Box { src, .. }
             | Self::MethodStands { src, .. }
+            | Self::FunctionStands { src, .. }
+            | Self::FunctionCallee { src, .. }
             | Self::AccessorStands { src, .. }
             | Self::FieldStands { src, .. }
             | Self::LicenceHolds { src, .. }
@@ -1983,7 +2040,7 @@ impl Op {
             Self::CallNative { args, .. } | Self::CallPython { args, .. } => {
                 args.iter_mut().collect()
             }
-            Self::CallValue { callee, args, .. } => {
+            Self::CallValue { callee, args, .. } | Self::CallThrough { callee, args, .. } => {
                 let mut all = vec![callee];
                 all.extend(args.iter_mut());
                 all
@@ -2042,6 +2099,7 @@ impl Op {
             | Self::FetchException { .. }
             | Self::LoadGlobal { .. }
             | Self::BuiltinStands { .. }
+            | Self::ResolveFunction { .. }
             | Self::LoadEllipsis { .. }
             | Self::ModuleDict { .. }
             | Self::DeleteGlobal { .. }

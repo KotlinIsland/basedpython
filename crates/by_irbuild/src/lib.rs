@@ -44,6 +44,14 @@ pub struct LowerOptions {
     /// off by default, because the lookup it re-asks is the whole cost a licence
     /// exists to avoid
     pub recheck_licences: bool,
+    /// have a call to a function this module defines go straight to its native entry
+    /// without asking whether the name still holds that function — see
+    /// [`by_ir::ops::Op::FunctionStands`]
+    ///
+    /// off by default: a module whose function is rebound, patched or deleted from
+    /// outside, or given another `__code__` or other defaults, is then no longer obeyed
+    /// by its own compiled callers
+    pub bind_functions_early: bool,
 }
 
 impl From<Language> for LowerOptions {
@@ -51,6 +59,7 @@ impl From<Language> for LowerOptions {
         Self {
             language,
             recheck_licences: false,
+            bind_functions_early: false,
         }
     }
 }
@@ -136,6 +145,7 @@ pub fn build_module(
     let LowerOptions {
         language,
         recheck_licences,
+        bind_functions_early,
     } = options.into();
     let mut module = ModuleIr::new(module_name);
 
@@ -581,6 +591,7 @@ pub fn build_module(
         accessors: &accessors,
         language,
         recheck_licences,
+        bind_functions_early,
         db,
         env,
         model,
@@ -1731,6 +1742,7 @@ fn lower_resume(
         unnarrowed: None,
         language: unit.language,
         recheck_licences: unit.recheck_licences,
+        bind_functions_early: unit.bind_functions_early,
         environment,
         captures: Some(Captured {
             class: class.to_string(),
@@ -7683,6 +7695,7 @@ fn lower_function_with_receiver(
         zero_super,
         language: unit.language,
         recheck_licences: unit.recheck_licences,
+        bind_functions_early: unit.bind_functions_early,
         unwound: Vec::new(),
         comprehensions: 0,
         unnarrowed: None,
@@ -7862,6 +7875,8 @@ struct Unit<'a> {
     /// whether each licensed direct call re-asks the lookup it skips — see
     /// [`LowerOptions::recheck_licences`]
     recheck_licences: bool,
+    /// see [`LowerOptions::bind_functions_early`]
+    bind_functions_early: bool,
     db: &'a dyn ty_python_semantic::Db,
     model: &'a SemanticModel<'a>,
     native_callees: &'a HashSet<String>,
@@ -9701,6 +9716,8 @@ struct Lowering<'a, 'db> {
     /// whether each licensed direct call re-asks the lookup it skips — see
     /// [`LowerOptions::recheck_licences`]
     recheck_licences: bool,
+    /// see [`LowerOptions::bind_functions_early`]
+    bind_functions_early: bool,
     ret: RType,
     /// `(continue target, break target, cleanup depth)` for each enclosing loop,
     /// innermost last. the depth is what `break` unwinds to
@@ -9741,6 +9758,16 @@ struct Lowering<'a, 'db> {
 /// generator expression handed to one alone can be built at once — see
 /// [`Lowering::drained_generator_expression`]
 const DRAINING_BUILTINS: &[&str] = &["list", "tuple", "set", "frozenset", "sorted", "dict"];
+
+/// what a call reaching a native entry is for, which decides what the call made in its
+/// place does with the function object's answer
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Delivery {
+    /// the call's own result
+    Called,
+    /// the value a coroutine's body returns, awaited in the same expression
+    Awaited,
+}
 
 /// where [`Lowering::resolve_builtin`] reads the object a builtin's name resolves to
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -13898,7 +13925,7 @@ impl Lowering<'_, '_> {
             return Ok(None);
         }
         let direct = generators::direct_name(name);
-        self.native_call(call, &direct).map(Some)
+        self.native_call(call, &direct, Delivery::Awaited).map(Some)
     }
 
     fn delegate(&mut self, source: &Expr, awaitable: bool) -> Lowered<(Value, RType)> {
@@ -17769,7 +17796,7 @@ impl Lowering<'_, '_> {
             return self.narrow_call_result(dest, &Expr::Call(node.clone()));
         }
 
-        self.native_call(node, name)
+        self.native_call(node, name, Delivery::Called)
     }
 
     /// `list(x for x in xs)`, or the same handed to one of the other builtins that drain
@@ -18004,7 +18031,12 @@ impl Lowering<'_, '_> {
     /// an [unboxed edition](lower_array_edition) and the [direct edition](
     /// lower_direct_edition) of a coroutine are both other spellings of the same
     /// definition
-    fn native_call(&mut self, node: &ast::ExprCall, name: &str) -> Lowered<(Value, RType)> {
+    fn native_call(
+        &mut self,
+        node: &ast::ExprCall,
+        name: &str,
+        delivery: Delivery,
+    ) -> Lowered<(Value, RType)> {
         let env = &self.model.program_environment();
         // a caller already holding buffers reaches the callee's unboxed edition, which
         // takes them as they are. anything else — a list from python, a name that is
@@ -18111,39 +18143,238 @@ impl Lowering<'_, '_> {
             return Ok((Value::Register(dest), result_ty));
         }
 
-        let mut slots: Vec<Option<Value>> = vec![None; params.len().max(names.len())];
-        let mut extra_positional: Vec<Value> = Vec::new();
-        let mut extra_keywords: Vec<Value> = Vec::new();
-        for (index, arg) in node.arguments.args.iter().enumerate() {
-            if index >= positional_limit {
-                if !vararg {
-                    return Err(Decline::new("too many arguments for the callee"));
-                }
-                let (value, ty) = self.expression(arg)?;
-                extra_positional.push(self.widen_to_object(value, &ty));
-                continue;
+        // python reads the name before it evaluates anything the call is handed, and
+        // calls what it read even where an argument rebinds the name. so the question of
+        // whether the native entry may stand in for the function object comes first, and
+        // the object itself is read only where it may not — see [`Op::FunctionStands`]
+        let guarded = match node.func.as_ref() {
+            Expr::Name(written)
+                if !self.bind_functions_early
+                    && self.native_callees.contains(written.id.as_str()) =>
+            {
+                let resolved = self.builder.temp(RType::OBJECT);
+                self.builder.push(Op::ResolveFunction {
+                    dest: resolved,
+                    name: written.id.to_string(),
+                });
+                Some((resolved, written.id.to_string()))
             }
-            let (value, ty) = self.expression(arg)?;
-            let value = match params.get(index) {
-                Some(param) => self.coerce(value, &ty, param)?,
-                None => value,
-            };
-            match slots.get_mut(index) {
-                Some(slot) => *slot = Some(value),
-                None => return Err(Decline::new("too many arguments for the callee")),
-            }
+            _ => None,
+        };
+
+        // every argument once, in the order python evaluates them, before either arm
+        // decides what to make of it
+        let mut positional: Vec<(Value, RType)> = Vec::with_capacity(node.arguments.args.len());
+        for arg in &node.arguments.args {
+            positional.push(self.expression(arg)?);
         }
+        let mut keyworded: Vec<(String, Value, RType)> = Vec::new();
         for keyword in &node.arguments.keywords {
             // a `**` keyword never reaches here: the whole call goes through
             // [`Self::call_unpacked`] instead
             let Some(keyword_name) = &keyword.arg else {
                 continue;
             };
+            let (value, ty) = self.expression(&keyword.value)?;
+            keyworded.push((keyword_name.to_string(), value, ty));
+        }
+
+        let dest = self.builder.temp(result_ty.clone());
+        let Some((resolved, written)) = guarded else {
+            let args = self.bind_native_arguments(
+                name,
+                &params,
+                &names,
+                &defaults,
+                (vararg, kwarg),
+                (posonly, positional_limit),
+                &positional,
+                &keyworded,
+            )?;
+            self.builder.push(Op::CallNative {
+                dest: Some(dest),
+                owner: None,
+                callee: name.to_string(),
+                args,
+            });
+            return Ok((Value::Register(dest), result_ty));
+        };
+
+        let stands = self.builder.temp(RType::BIT);
+        self.builder.push(Op::FunctionStands {
+            dest: stands,
+            src: Value::Register(resolved),
+            name: written.clone(),
+        });
+        let native = self.builder.new_block();
+        let called = self.builder.new_block();
+        let join = self.builder.new_block();
+        self.builder.terminate(Terminator::Branch {
+            cond: Value::Register(stands),
+            then_block: native,
+            else_block: called,
+        });
+
+        self.builder.switch_to(native);
+        let args = self.bind_native_arguments(
+            name,
+            &params,
+            &names,
+            &defaults,
+            (vararg, kwarg),
+            (posonly, positional_limit),
+            &positional,
+            &keyworded,
+        )?;
+        let answer = self.builder.temp(result_ty.clone());
+        self.builder.push(Op::CallNative {
+            dest: Some(answer),
+            owner: None,
+            callee: name.to_string(),
+            args,
+        });
+        self.builder.assign(dest, Value::Register(answer));
+        self.builder.terminate(Terminator::Goto(join));
+
+        self.builder.switch_to(called);
+        // a list held as a buffer has no list object to hand over, and building one
+        // would be a copy the function under the name could tell apart from the list
+        // python would have passed — so this refuses, loudly, as a rebound `len` does
+        if positional
+            .iter()
+            .map(|(_, ty)| ty)
+            .chain(keyworded.iter().map(|(_, _, ty)| ty))
+            .any(|ty| matches!(ty, RType::Array(_)))
+        {
+            self.builder.push(Op::RaiseStandard {
+                error: StandardError::RuntimeError,
+                message: format!(
+                    "`{written}` no longer names the function this module compiled, and this \
+                     compiled function holds a list it passes as an unboxed buffer it \
+                     cannot hand to anything else"
+                ),
+            });
+            self.builder.terminate(Terminator::Unreachable);
+            self.builder.switch_to(join);
+            return Ok((Value::Register(dest), result_ty));
+        }
+        let callee = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::FunctionCallee {
+            dest: callee,
+            src: Value::Register(resolved),
+            name: written,
+        });
+        let mut boxed: Vec<Value> = positional
+            .iter()
+            .map(|(value, ty)| self.widen_to_object(value.clone(), ty))
+            .collect();
+        let mut keywords = Vec::with_capacity(keyworded.len());
+        for (keyword_name, value, ty) in &keyworded {
+            keywords.push(keyword_name.clone());
+            boxed.push(self.widen_to_object(value.clone(), ty));
+        }
+        let result = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::CallThrough {
+            dest: result,
+            callee: Value::Register(callee),
+            args: boxed,
+            keywords,
+        });
+        // the entry a direct `await` reaches runs the coroutine's body to its end, so
+        // what the function under the name hands back has to be awaited in its place
+        let (answer, answer_ty) = match delivery {
+            Delivery::Called => (Value::Register(result), RType::OBJECT),
+            Delivery::Awaited => self.delegate_value(Value::Register(result), true)?,
+        };
+        let answer = self.widen_to_object(answer, &answer_ty);
+        let answer = self.narrow_answer(answer, &result_ty)?;
+        self.builder.assign(dest, answer);
+        self.builder.terminate(Terminator::Goto(join));
+
+        self.builder.switch_to(join);
+        Ok((Value::Register(dest), result_ty))
+    }
+
+    /// what a function object answered, in the representation its native entry would
+    /// have answered in
+    ///
+    /// the checked narrowing a call's result gets anywhere else, and for a tuple held in
+    /// registers the unpacking an assignment to a target list makes, each slot narrowed
+    /// the same way
+    fn narrow_answer(&mut self, answer: Value, to: &RType) -> Lowered<Value> {
+        let RType::Tuple(slots) = to else {
+            return self.coerce(answer, &RType::OBJECT, to);
+        };
+        let objects: Box<[RType]> = vec![RType::OBJECT; slots.len()].into();
+        let unpacked = self.builder.temp(RType::Tuple(objects));
+        self.builder.push(Op::Unpack {
+            dest: unpacked,
+            src: answer,
+            starred: None,
+        });
+        let mut items = Vec::with_capacity(slots.len());
+        for (index, slot) in slots.iter().enumerate() {
+            let item = self.builder.temp(RType::OBJECT);
+            self.builder.push(Op::TupleGet {
+                dest: item,
+                src: Value::Register(unpacked),
+                index,
+            });
+            items.push(self.narrow_answer(Value::Register(item), slot)?);
+        }
+        let built = self.builder.temp(to.clone());
+        self.builder.push(Op::TupleBuild { dest: built, items });
+        Ok(Value::Register(built))
+    }
+
+    /// the argument list a native entry takes, from arguments already evaluated
+    ///
+    /// a keyword goes to the position its name has in the callee's signature, an
+    /// unsupplied parameter takes its default, and whatever a variadic callee takes as
+    /// extra is packed into the tuple and the dict its body expects
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the halves of one signature, taken apart once by the caller"
+    )]
+    fn bind_native_arguments(
+        &mut self,
+        name: &str,
+        params: &[RType],
+        names: &[String],
+        defaults: &[Option<Value>],
+        (vararg, kwarg): (bool, bool),
+        (posonly, positional_limit): (usize, usize),
+        positional: &[(Value, RType)],
+        keyworded: &[(String, Value, RType)],
+    ) -> Lowered<Vec<Value>> {
+        let packed_count = usize::from(vararg) + usize::from(kwarg);
+        let named = names.len().saturating_sub(packed_count);
+        let mut slots: Vec<Option<Value>> = vec![None; params.len().max(names.len())];
+        let mut extra_positional: Vec<Value> = Vec::new();
+        let mut extra_keywords: Vec<Value> = Vec::new();
+        for (index, (value, ty)) in positional.iter().enumerate() {
+            if index >= positional_limit {
+                if !vararg {
+                    return Err(Decline::new("too many arguments for the callee"));
+                }
+                extra_positional.push(self.widen_to_object(value.clone(), ty));
+                continue;
+            }
+            let value = match params.get(index) {
+                Some(param) => self.coerce(value.clone(), ty, param)?,
+                None => value.clone(),
+            };
+            match slots.get_mut(index) {
+                Some(slot) => *slot = Some(value),
+                None => return Err(Decline::new("too many arguments for the callee")),
+            }
+        }
+        for (keyword_name, value, ty) in keyworded {
             // a positional-only parameter is not reachable by name
             let position = names
                 .iter()
                 .take(named)
-                .position(|param| param == keyword_name.as_str())
+                .position(|param| param == keyword_name)
                 .filter(|index| *index >= posonly);
             let Some(index) = position else {
                 // a `**kwargs` parameter takes it; without one it is an error
@@ -18152,13 +18383,12 @@ impl Lowering<'_, '_> {
                         "`{name}` has no parameter `{keyword_name}`"
                     )));
                 }
-                let (value, ty) = self.expression(&keyword.value)?;
-                let value = self.widen_to_object(value, &ty);
+                let value = self.widen_to_object(value.clone(), ty);
                 // the name goes into the dict as the literal it is. a register
                 // holding it would be filled from the module's interned string on
                 // every call, so a keyword passed in a loop retained and released
                 // one object per trip for the sake of a name that never changes
-                extra_keywords.push(Value::Str(keyword_name.to_string()));
+                extra_keywords.push(Value::Str(keyword_name.clone()));
                 extra_keywords.push(value);
                 continue;
             };
@@ -18167,10 +18397,9 @@ impl Lowering<'_, '_> {
                     "`{name}` got two values for `{keyword_name}`"
                 )));
             }
-            let (value, ty) = self.expression(&keyword.value)?;
             let value = match params.get(index) {
-                Some(param) => self.coerce(value, &ty, param)?,
-                None => value,
+                Some(param) => self.coerce(value.clone(), ty, param)?,
+                None => value.clone(),
             };
             slots[index] = Some(value);
         }
@@ -18217,15 +18446,7 @@ impl Lowering<'_, '_> {
             });
             args.push(Value::Register(dest));
         }
-
-        let dest = self.builder.temp(result_ty.clone());
-        self.builder.push(Op::CallNative {
-            dest: Some(dest),
-            owner: None,
-            callee: name.to_string(),
-            args,
-        });
-        Ok((Value::Register(dest), result_ty))
+        Ok(args)
     }
 }
 

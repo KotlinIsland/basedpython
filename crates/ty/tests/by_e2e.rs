@@ -733,6 +733,114 @@ async def total(s: str, n: int) -> int:
 }
 
 #[test]
+fn compile_reads_whether_to_follow_the_recursion_limit_from_the_project() {
+    // the option is only worth anything if the command a project actually runs reads
+    // it: a module compiled with the count left out says so to the header it includes
+    let emitted = |name: &str, table: &str| -> Option<String> {
+        let dir = cli_root().join(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("pyproject.toml"),
+            format!("[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n{table}"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("deep.py"),
+            "def depth(n: int) -> int:\n    if n == 0:\n        return 0\n    return depth(n - 1) + 1\n",
+        )
+        .unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+            .args(["compile", "--emit-c-only", "deep.py"])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn by");
+        if refused_for_python_version(&result) {
+            return None;
+        }
+        assert!(
+            result.status.success(),
+            "by exited with error:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        Some(fs::read_to_string(dir.join("build").join("deep.c")).expect("the C is readable"))
+    };
+    let Some(counted) = emitted("by_cli_recursion_default", "") else {
+        return;
+    };
+    assert!(
+        counted.contains("By_DepthEnter"),
+        "the recursion is guarded"
+    );
+    assert!(!counted.contains("BY_RECURSION_STACK_ONLY"));
+    let Some(stack_only) = emitted(
+        "by_cli_recursion_stack_only",
+        "\n[tool.ty.compile]\nfollow-recursion-limit = false\n",
+    ) else {
+        return;
+    };
+    assert!(stack_only.contains("#define BY_RECURSION_STACK_ONLY 1"));
+    assert!(
+        stack_only.contains("By_DepthEnter"),
+        "the stack is still watched"
+    );
+}
+
+#[test]
+fn compile_reads_whether_to_bind_functions_early_from_the_project() {
+    // a compiled call asks whether the name still holds the function unless the project
+    // says the module's functions are never rebound, and then it asks nothing
+    let emitted = |name: &str, table: &str| -> Option<String> {
+        let dir = cli_root().join(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("pyproject.toml"),
+            format!("[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n{table}"),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("calls.py"),
+            "def add(a: int, b: int) -> int:\n    return a + b\n\n\ndef twice(a: int) -> int:\n    return add(a, a)\n",
+        )
+        .unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+            .args(["compile", "--emit-c-only", "calls.py"])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn by");
+        if refused_for_python_version(&result) {
+            return None;
+        }
+        assert!(
+            result.status.success(),
+            "by exited with error:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        Some(fs::read_to_string(dir.join("build").join("calls.c")).expect("the C is readable"))
+    };
+    let Some(asked) = emitted("by_cli_binding_default", "") else {
+        return;
+    };
+    assert!(
+        asked.contains("By_ResolveFunction(&by_fs_add"),
+        "the call asks"
+    );
+    let Some(early) = emitted(
+        "by_cli_binding_early",
+        "\n[tool.ty.compile]\nbind-functions-early = true\n",
+    ) else {
+        return;
+    };
+    assert!(
+        !early.contains("By_ResolveFunction"),
+        "the call asks nothing"
+    );
+}
+
+#[test]
 fn run_executes_module() {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(dir.path().join("main.by"), "print('hello from by run')\n").unwrap();

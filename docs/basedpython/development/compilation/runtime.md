@@ -506,7 +506,9 @@ are early-bound: a reference from a compiled function reads a static slot rather
 than doing a namespace lookup
 
 a non-`let` module global keeps late binding, and a builtin is late-bound too — a
-module that rebinds `str` is obeyed. each call site remembers what its name last
+module that rebinds `str` is obeyed. so is a call to one of the module's own functions,
+which goes straight to its native entry only while the name still holds the function the
+module published, and while nothing about that function has been reassigned. each call site remembers what its name last
 resolved to, and re-derives it whenever any namespace has been written to since,
 which a dict watcher on those namespaces is what says. so the binding is still
 looked up rather than assumed, and looking it up again is what a rebinding costs
@@ -638,6 +640,78 @@ the same reason mypyc does — the fixed layout must be initialized. a
 each of these is a tradeoff made on purpose, and each names the shape of program
 that can tell the two builds apart
 
+### a module function rebound from outside
+
+a compiled call to a function the same module defines goes straight to its native entry
+while the name holds the function the module published, and through whatever the name
+holds once it does not, so a function rebound, deleted or patched from another module
+reaches the module's own compiled callers:
+
+```python
+def add(a: int, b: int) -> int:
+    return a + b
+
+
+def run(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = add(total, i)
+        i = i + 1
+    return total
+
+
+# from another module
+from unittest import mock
+
+with mock.patch.object(mod, "add", lambda a, b: 7):
+    mod.run(3)  # 7 on both
+```
+
+the question costs a load and a test on each such call, which is most of what a call
+with a one-line body costs — `calls` takes 43% more instructions than a build that does
+not ask — and a write to any name in the module costs a few dozen instructions more,
+where the module is told which name it was. `bind-functions-early = true` in the
+project's `[tool.ty.compile]` table makes the closed-world assumption instead: a compiled
+caller goes on calling the function the module was compiled with, so a program that
+rebinds, deletes or patches one of the module's functions, or reassigns its `__code__` or
+its defaults, can tell. a call made from python still reaches whatever the name holds, and
+the function's own python entry still binds from the defaults it holds:
+
+```python
+# built with `bind-functions-early = true`
+mod.add = lambda a, b: 100
+mod.add(1, 2)  # 100 on both
+mod.run(3)  # python: 100; compiled: 3
+
+del mod.add
+mod.run(3)  # python: NameError; compiled: 3
+```
+
+a call that hands over a list the caller holds as a buffer cannot be made through a
+replacement, for the reason a rebound `len` cannot be handed one, and raises
+`RuntimeError` the same way:
+
+```python
+def total(xs: list[float]) -> float:
+    out = 0.0
+    i = 0
+    while i < len(xs):
+        out = out + xs[i]
+        i = i + 1
+    return out
+
+
+def built(n: int) -> float:
+    xs = [i * 0.5 for i in range(n)]
+    return total(xs)
+
+
+# from another module
+mod.total = lambda xs: len(xs)
+mod.built(3)  # python: 3; compiled: RuntimeError
+```
+
 ### a rebound `len` and a list held as a buffer
 
 a list of unboxed values that never leaves its function is held as a buffer
@@ -663,6 +737,95 @@ def total(n: int) -> float:
 mod.len = lambda xs: 1
 mod.total(3)  # python: 0.0; compiled: RuntimeError
 ```
+
+### how deep a recursion goes
+
+a compiled call pushes a C frame rather than a python one, so a compiled module counts
+the frames python would have pushed itself, against the interpreter's own recursion
+limit: on a call that goes round a cycle of compiled calls, on a compiled method, dunder
+or nested function the interpreter calls, and on each step of a compiled generator or
+coroutine. a recursion raises `RecursionError` at the depth python raises it, and
+`sys.setrecursionlimit` reaches it.
+
+a C frame lives on the thread's stack, where a python frame lives on the heap, so the
+stack is watched as well, and a compiled recursion raises `RecursionError` once three
+quarters of the stack is used, whatever the limit says. a program that raises the
+limit far enough can tell:
+
+```python
+def depth(n: int) -> int:
+    if n == 0:
+        return 0
+    return depth(n - 1) + 1
+
+
+# from another module
+import sys
+
+sys.setrecursionlimit(10**7)
+mod.depth(500_000)  # python: 500000; compiled: RecursionError
+```
+
+a compiled call that goes round no cycle of compiled calls is not counted: it can only
+be as deep as the module is long, and counting every call would put a cost on every
+call. so a recursion reached through one reaches the limit one frame later for each
+such call in front of it:
+
+```python
+def nested_depth(n: int) -> int:
+    def inner(k: int) -> int:
+        if k == 0:
+            return 0
+        return inner(k - 1) + 1
+
+    return inner(n)  # this call is not counted
+
+
+# from another module
+sys.setrecursionlimit(100)
+mod.nested_depth(98)  # python: RecursionError; compiled: 98
+```
+
+counting costs most on a body that does little but recurse — half again the
+instructions of a plain `fib` — so `follow-recursion-limit = false` in the project's
+`[tool.ty.compile]` table leaves the count out and watches the stack alone. a compiled
+recursion then runs until the stack is close to running out, and a program that lowers
+the limit, or catches `RecursionError` at a depth it expects, can tell:
+
+```python
+sys.setrecursionlimit(100)
+mod.depth(200)  # python: RecursionError; compiled with the count off: 200
+```
+
+neither setting lets a recursion crash the process
+
+### a function's defaults edited in place
+
+python binds a missing argument from the function object's `__defaults__` and
+`__kwdefaults__` as each call is made. a compiled module function is told when either is
+reassigned, or its `__code__` is, and from then on every call to it — from python or from
+compiled code — goes through the function object and the interpreted definition, given
+the defaults the function holds then. an edit made *inside* the `__kwdefaults__` dict is
+not a reassignment and nothing reports it, so until the function has been told of one the
+defaults it was compiled with go on standing in:
+
+```python
+def scaled(a: int, *, scale: int = 1) -> int:
+    return a * scale
+
+
+# from another module
+mod.scaled.__kwdefaults__["scale"] = 10
+mod.scaled(2)  # python: 20; compiled: 2
+
+mod.scaled.__kwdefaults__ = {"scale": 10}
+mod.scaled(2)  # 20 on both, and every edit to that dict is seen from here on
+```
+
+watching the dict itself would put a test on every call for a program that almost never
+edits it. a function compiled from a module is also published as a closure over its
+native entry, so a `__code__` it is given has to close over as many names:
+`mod.scaled.__code__ = (lambda a: a).__code__` raises `ValueError` where python takes it
 
 ### one module object for the whole process
 
