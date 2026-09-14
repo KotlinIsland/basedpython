@@ -745,6 +745,17 @@ impl Verifier<'_> {
             Op::BuiltinStands { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::BIT, "a builtin test");
             }
+            Op::ResolveFunction { dest, .. } => {
+                self.expect_dest(block, *dest, &RType::OBJECT, "a function resolution");
+            }
+            Op::FunctionStands { dest, src, .. } => {
+                self.expect(block, src, &RType::OBJECT, "a function test");
+                self.expect_dest(block, *dest, &RType::BIT, "a function test");
+            }
+            Op::FunctionCallee { dest, src, .. } => {
+                self.expect(block, src, &RType::OBJECT, "a function callee");
+                self.expect_dest(block, *dest, &RType::OBJECT, "a function callee");
+            }
             Op::MethodStands { dest, src, .. } => {
                 self.expect(block, src, &RType::OBJECT, "a dispatch test");
                 self.expect_dest(block, *dest, &RType::BIT, "a dispatch test");
@@ -1326,6 +1337,24 @@ impl Verifier<'_> {
             Op::ImportFrom { dest, module, .. } => {
                 self.expect(block, module, &RType::OBJECT, "an import");
                 self.expect_dest(block, *dest, &RType::OBJECT, "an import");
+            }
+            Op::CallThrough {
+                dest,
+                callee,
+                args,
+                keywords,
+            } => {
+                self.expect(block, callee, &RType::OBJECT, "a call through a function");
+                for arg in args {
+                    self.expect(block, arg, &RType::OBJECT, "a call argument");
+                }
+                if keywords.len() > args.len() {
+                    self.error(
+                        Some(block),
+                        "a call names more keywords than it passes arguments",
+                    );
+                }
+                self.expect_dest(block, *dest, &RType::OBJECT, "a call through a function");
             }
             Op::CallValue { dest, callee, args } => {
                 self.expect(block, callee, &RType::OBJECT, "a call through a value");
@@ -2466,6 +2495,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         };
         let errors = verify_module(&module).unwrap_err();
         assert_eq!(errors.len(), 1);
@@ -2504,6 +2534,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         };
         let errors = verify_module(&module).unwrap_err();
         assert!(
@@ -2800,6 +2831,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         };
         assert_eq!(verify_module(&module), Ok(()));
 

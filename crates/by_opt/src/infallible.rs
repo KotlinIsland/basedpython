@@ -27,23 +27,27 @@ use by_ir::rtype::{Primitive, RType};
 /// mark every function that provably cannot fail
 ///
 /// this is a fixed point over the call graph: a function is infallible when
-/// every one of its own operations is, *and* every function it calls is. so a
-/// pair of mutually recursive float functions converges to infallible, and one
-/// division anywhere in a cycle makes the whole cycle fallible.
+/// every one of its own operations is, *and* every function it calls is. a function
+/// on a cycle of calls never is: the call that goes round the cycle counts the
+/// recursion depth, and can raise when the count runs out
 pub(crate) fn run(module: &mut ModuleIr) {
     let names: Vec<String> = module
         .all_functions()
         .map(Function::qualified_name)
         .collect();
 
-    // start optimistic and remove: the greatest fixed point is what makes a
-    // recursive function infallible rather than assuming the worst about itself
+    // start optimistic and remove
     let mut infallible: HashSet<&str> = names.iter().map(String::as_str).collect();
+
+    // a call around a cycle of native calls is where the depth is counted, and a count
+    // that runs out raises `RecursionError` — so no function on a cycle is infallible,
+    // however little its own operations can do
+    let recursive = by_ir::call_graph::recursive_functions(module);
 
     let mut own_ops_can_fail: HashMap<String, bool> = HashMap::new();
     let mut callees: HashMap<String, Vec<String>> = HashMap::new();
     for function in module.all_functions() {
-        let mut can_fail = false;
+        let mut can_fail = recursive.contains(&function.qualified_name());
         let mut called = Vec::new();
         for block in &function.blocks {
             for op in &block.ops {
@@ -157,6 +161,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::StrConcatInt { .. }
         | Op::CallPython { .. }
         | Op::CallValue { .. }
+        | Op::CallThrough { .. }
         | Op::LoadGlobal { .. }
         // building a slice allocates, and allocation raises
         | Op::MakeSlice { .. }
@@ -264,6 +269,10 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::FieldIsSet { .. } => false,
         // the name is resolved, and one bound nowhere is a `NameError`
         Op::BuiltinStands { .. } => true,
+        // the flag is read, and nothing is looked up
+        Op::FunctionStands { .. } => false,
+        // a name bound nowhere is a `NameError`
+        Op::ResolveFunction { .. } | Op::FunctionCallee { .. } => true,
         // an attribute lookup reaches `__getattr__`, and `__match_args__` with it
         Op::MatchAttr { .. } => true,
         // a pointer comparison against a singleton
@@ -328,6 +337,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         }
     }
 
@@ -460,9 +470,9 @@ mod tests {
     }
 
     #[test]
-    fn mutual_recursion_converges_to_infallible() {
-        // the greatest fixed point is the point of starting optimistic: a
-        // least-fixed-point pass would call each of these fallible forever
+    fn a_cycle_of_calls_is_fallible_however_little_its_bodies_can_do() {
+        // nothing in either body can raise, but a call around the cycle is where the
+        // recursion depth is counted, and running out of it raises `RecursionError`
         let build = |name: &str, other: &str| {
             let mut builder = FunctionBuilder::new(name, RType::FLOAT);
             let x = builder.param("x", RType::FLOAT);
@@ -476,10 +486,15 @@ mod tests {
             builder.terminate(Terminator::Return(Value::Register(out)));
             builder.finish()
         };
-        let mut m = module(vec![build("ping", "pong"), build("pong", "ping")]);
+        let mut m = module(vec![
+            build("ping", "pong"),
+            build("pong", "ping"),
+            build("entry", "ping"),
+        ]);
         run(&mut m);
-        assert_eq!(convention(&m, "ping"), CallConvention::NativeInfallible);
-        assert_eq!(convention(&m, "pong"), CallConvention::NativeInfallible);
+        assert_eq!(convention(&m, "ping"), CallConvention::Native);
+        assert_eq!(convention(&m, "pong"), CallConvention::Native);
+        assert_eq!(convention(&m, "entry"), CallConvention::Native);
     }
 
     #[test]

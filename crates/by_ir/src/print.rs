@@ -155,6 +155,28 @@ fn print_op(function: &Function, op: &Op) -> String {
             dest,
             name: builtin,
         } => format!("{} = builtin-stands {builtin}", name(*dest)),
+        Op::ResolveFunction {
+            dest,
+            name: function,
+        } => format!("{} = resolve-function {function}", name(*dest)),
+        Op::FunctionStands {
+            dest,
+            src,
+            name: function,
+        } => format!(
+            "{} = function-stands {function} {}",
+            name(*dest),
+            value(src)
+        ),
+        Op::FunctionCallee {
+            dest,
+            src,
+            name: function,
+        } => format!(
+            "{} = function-callee {function} {}",
+            name(*dest),
+            value(src)
+        ),
         Op::MethodStands {
             dest,
             src,
@@ -604,6 +626,21 @@ fn print_op(function: &Function, op: &Op) -> String {
             let args = args.iter().map(value).collect::<Vec<_>>().join(", ");
             format!("{} = pycall {}({})", name(*dest), callee, args)
         }
+        Op::CallThrough {
+            dest,
+            callee,
+            args,
+            keywords,
+        } => {
+            let args = args.iter().map(value).collect::<Vec<_>>().join(", ");
+            format!(
+                "{} = callthrough {}({}) keywords {}",
+                name(*dest),
+                value(callee),
+                args,
+                keywords.join(", ")
+            )
+        }
         Op::CallMethod {
             dest,
             receiver,
@@ -963,6 +1000,7 @@ b2:
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         };
         let text = print_module(&module);
         assert!(text.starts_with("module app\n"));

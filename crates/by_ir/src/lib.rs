@@ -8,6 +8,7 @@
 //! recorded here rather than re-derived by reaching back into ty.
 
 pub mod builder;
+pub mod call_graph;
 pub mod function;
 pub mod ops;
 pub mod print;

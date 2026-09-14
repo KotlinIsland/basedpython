@@ -326,6 +326,7 @@ mod tests {
             fallback_code: None,
             shims: None,
             verify_install: true,
+            follow_recursion_limit: true,
         }
     }
 

@@ -921,6 +921,57 @@ def _capture(fn, *args):
         return e
     return None
 
+# the deepest argument `fn` still answers for under a recursion limit of `limit`.
+# every frame between here and `fn` is the same in both legs, so the number is the
+# count of frames `fn` itself spends
+def _deepest(fn, limit):
+    import sys
+    saved = sys.getrecursionlimit()
+    sys.setrecursionlimit(limit)
+    try:
+        n = 0
+        while True:
+            try:
+                fn(n)
+            except RecursionError:
+                return n - 1
+            n += 1
+    finally:
+        sys.setrecursionlimit(saved)
+
+# a code object `fn.__code__` can be swapped for, answering `value` however it is called.
+# python refuses a code object whose free variables do not match the function's, and a
+# compiled function is published as a forwarder closing over its native entry — so the
+# replacement closes over as many names as `fn` does, which is none for the interpreted leg
+def _code_answering(fn, value):
+    names = fn.__code__.co_freevars
+    lines = ['def outer():']
+    lines += ['    %s = None' % name for name in names]
+    lines += ['    def inner(*args, **kwargs):']
+    lines += ['        %s' % name for name in names]
+    lines += ['        return %r' % (value,)]
+    lines += ['    return inner']
+    scope = {}
+    exec('\\n'.join(lines), scope)
+    return scope['outer']().__code__
+
+# what `fn` answers while `target.name` is patched to `value`, and after the patch is
+# taken back, which is the everyday shape of rebinding a module's function from outside
+def _patched(target, name, value, fn, *args):
+    from unittest import mock
+    with mock.patch.object(target, name, value):
+        inside = fn(*args)
+    return (inside, fn(*args))
+
+# what `fn` answers when it runs on a thread of its own, with the stack a thread is given
+def _on_a_thread(fn):
+    import threading
+    out = []
+    thread = threading.Thread(target=lambda: out.append(fn()))
+    thread.start()
+    thread.join()
+    return out[0] if out else 'the thread died'
+
 # call `fn` from a frame standing in a builtins namespace of its own: the real one
 # with `overrides` applied over it. what a *callee* resolves must not move, because
 # python binds a function's builtins to the module that defined it — so this changes
@@ -1242,6 +1293,56 @@ fn agree_inner(tag: &str, source: &str, calls: &[&str], allow_declines: bool) {
         allow_declines,
         by_irbuild::Language::BasedPython,
     );
+}
+
+/// build `source` under `options` and hand back what each of `calls` printed from the
+/// compiled leg alone
+///
+/// for the tradeoffs the build makes on purpose, where the interpreted leg is not the
+/// expected value. `None` where there is no toolchain to build with
+fn compiled_answers(
+    tag: &str,
+    source: &str,
+    options: Options,
+    calls: &[&str],
+) -> Option<Vec<String>> {
+    let (python, toolchain) = environment()?;
+    let dir = diff_root().join(format!("by_diff_{tag}_c"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let module = format!("by_diff_{tag}");
+    let options = Options {
+        recheck_licences: recheck_licences(),
+        ..options
+    };
+    let built = match build_source(source, module.as_str(), &toolchain, &dir, &options) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(
+                missing_toolchain(&error),
+                "{tag} failed to build: {error:#}"
+            );
+            eprintln!("skipping {tag}: no working C toolchain ({error})");
+            return None;
+        }
+    };
+    assert!(
+        built.declined.is_empty(),
+        "{tag} declined functions the test expects to be compiled: {:?}",
+        built.declined
+    );
+    Some(
+        calls
+            .iter()
+            .map(|call| {
+                let body = format!(
+                    "import {module} as m\n\
+                     assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+                     {CAPTURE_HELPER}print(repr({call}))\n"
+                );
+                run(&python, &dir, &body)
+            })
+            .collect(),
+    )
 }
 
 /// whether this run has every licensed call re-ask the lookup it skipped
@@ -1723,6 +1824,429 @@ def sum_squares(n: int) -> int:
             "m.sum_squares(300)",
         ],
     );
+}
+
+/// every shape of recursion a compiled module can make: a function calling itself, two
+/// calling each other, a method, a float body that nothing in it can make fail, a
+/// nested function, a generator delegating to itself through `yield from` and through
+/// a `for` loop, a recursion entered from another compiled function, and dunders that
+/// reach themselves again through the object protocol
+const RECURSIONS: &str = "\
+from collections.abc import Callable, Iterator
+
+
+def depth(n: int) -> int:
+    if n == 0:
+        return 0
+    return depth(n - 1) + 1
+
+
+def ping(n: int) -> int:
+    if n == 0:
+        return 0
+    return pong(n - 1) + 1
+
+
+def pong(n: int) -> int:
+    if n == 0:
+        return 0
+    return ping(n - 1) + 1
+
+
+class Deep:
+    def down(self, n: int) -> int:
+        if n == 0:
+            return 0
+        return self.down(n - 1) + 1
+
+
+def method_depth(n: int) -> int:
+    return Deep().down(n)
+
+
+def float_depth(n: float) -> float:
+    if n <= 0.0:
+        return 0.0
+    return float_depth(n - 1.0) + 1.0
+
+
+def nested_depth(n: int) -> int:
+    def inner(k: int) -> int:
+        if k == 0:
+            return 0
+        return inner(k - 1) + 1
+
+    return inner(n)
+
+
+def delegated(n: int) -> Iterator[int]:
+    if n == 0:
+        yield 0
+        return
+    yield from delegated(n - 1)
+
+
+def looped(n: int) -> Iterator[int]:
+    if n == 0:
+        yield 0
+        return
+    for value in looped(n - 1):
+        yield value
+
+
+def entered(n: int) -> int:
+    return depth(n)
+
+
+def through(n: int, f: Callable[[int], int]) -> int:
+    if n == 0:
+        return 0
+    return f(n - 1) + 1
+
+
+class Chain:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __getitem__(self, k: int) -> int:
+        if k == 0:
+            return 0
+        return self[k - 1] + 1
+
+    def __len__(self) -> int:
+        if self.n == 0:
+            return 0
+        self.n = self.n - 1
+        return len(self) + 1
+";
+
+#[test]
+fn a_native_recursion_past_the_stack_raises_rather_than_crashing() {
+    // a compiled frame is a C frame, and nothing counted them: each of these ran off
+    // the end of the stack and the process died with a segfault where python raises
+    // `RecursionError`. a crash is the one answer no build may give
+    agree_python(
+        "recdeep",
+        RECURSIONS,
+        &[
+            "_capture(m.depth, 10**6)",
+            "_capture(m.ping, 10**6)",
+            "_capture(m.method_depth, 10**6)",
+            "_capture(m.float_depth, 10.0**6)",
+            "_capture(m.nested_depth, 10**6)",
+            "_capture(m.entered, 10**6)",
+            "_capture(lambda: sum(m.delegated(10**5)))",
+            "_capture(lambda: sum(m.looped(10**5)))",
+            "_capture(lambda: m.Chain(1)[10**5])",
+            "_capture(lambda: len(m.Chain(10**5)))",
+            // the exception leaves the recursion as an ordinary one: a handler further
+            // out catches it and the module goes on answering
+            "(_capture(m.depth, 10**6).__class__.__name__, m.depth(10))",
+        ],
+    );
+}
+
+#[test]
+fn a_native_recursion_follows_the_recursion_limit() {
+    // python raises at the frame the limit allows and not one later, and a compiled
+    // recursion counts its calls against the same limit. a published function is still
+    // entered through a python frame, which the interpreter counts, so the native call
+    // behind it counts nothing more — counting it as well raised one frame early.
+    //
+    // `nested_depth` is left out on purpose: its first call to `inner` is a native call
+    // that goes round no cycle of native calls, and such a call is not counted, so the
+    // compiled leg reaches one frame deeper. runtime.md lists that difference
+    agree_python(
+        "reclimit",
+        RECURSIONS,
+        &[
+            "_deepest(m.depth, 100)",
+            "_deepest(m.ping, 100)",
+            "_deepest(m.method_depth, 100)",
+            "_deepest(lambda n: m.float_depth(float(n)), 100)",
+            "_deepest(m.entered, 100)",
+            "_deepest(lambda n: sum(m.delegated(n)), 100)",
+            "_deepest(lambda n: sum(m.looped(n)), 100)",
+            "_deepest(lambda n: m.through(n, m.depth), 100)",
+            "_deepest(m.Deep().down, 100)",
+            // not `Chain.__getitem__`: 3.14 lets a python `__getitem__` it has
+            // specialised the subscript for go thirty frames past the limit, so the
+            // interpreter answers differently from itself on 3.13
+            "_deepest(lambda n: len(m.Chain(n)), 100)",
+        ],
+    );
+}
+
+#[test]
+fn a_raised_recursion_limit_still_stops_at_the_stack() {
+    // python frames live on the heap, so python answers these where a native frame
+    // cannot: the limit allows it and the C stack does not. the compiled leg raises
+    // instead, and the same holds on a thread whose stack is smaller than the main one
+    let Some(answers) = compiled_answers(
+        "recstack",
+        RECURSIONS,
+        Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+        &[
+            "(__import__('sys').setrecursionlimit(10**7), type(_capture(m.depth, 10**6)).__name__)[1]",
+            "(__import__('sys').setrecursionlimit(10**7), type(_capture(m.ping, 10**6)).__name__)[1]",
+            "(__import__('sys').setrecursionlimit(10**7), type(_capture(lambda: sum(m.looped(10**6)))).__name__)[1]",
+            "_on_a_thread(lambda: type(_capture(m.depth, 10**6)).__name__)",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(
+        answers,
+        [
+            "'RecursionError'",
+            "'RecursionError'",
+            "'RecursionError'",
+            "'RecursionError'"
+        ]
+    );
+}
+
+#[test]
+fn a_build_not_following_the_recursion_limit_still_stops_at_the_stack() {
+    // the configuration that counts no frames against the limit leaves a lowered limit
+    // unobserved, which is the tradeoff it makes, and still never crashes
+    let Some(answers) = compiled_answers(
+        "recstackonly",
+        RECURSIONS,
+        Options {
+            language: by_irbuild::Language::Python,
+            follow_recursion_limit: false,
+            ..Options::default()
+        },
+        &[
+            "(__import__('sys').setrecursionlimit(100), m.depth(200))[1]",
+            "(__import__('sys').setrecursionlimit(100), m.method_depth(200))[1]",
+            "(__import__('sys').setrecursionlimit(100), sum(m.looped(200)))[1]",
+            "type(_capture(m.depth, 10**6)).__name__",
+            "type(_capture(m.ping, 10**6)).__name__",
+            "type(_capture(lambda: sum(m.delegated(10**6)))).__name__",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(
+        answers,
+        [
+            "200",
+            "200",
+            "0",
+            "'RecursionError'",
+            "'RecursionError'",
+            "'RecursionError'"
+        ]
+    );
+}
+
+/// module functions whose defaults and code a program reaches in and replaces
+const REASSIGNED: &str = "\
+def scaled(a: int, *, scale: int = 1) -> int:
+    return a * scale
+
+
+def shifted(a: int, b: int = 1) -> int:
+    return a + b
+
+
+def summed(a: int, b: int) -> int:
+    return a + b
+
+
+def call_scaled() -> int:
+    return scaled(2)
+
+
+def call_shifted() -> int:
+    return shifted(2)
+
+
+def call_summed(a: int) -> int:
+    return summed(a, 3)
+
+
+def loop_shifted(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = total + shifted(i)
+        i = i + 1
+    return total
+
+
+async def added(a: int, b: int = 1) -> int:
+    return a + b
+
+
+async def await_added() -> int:
+    return await added(2)
+";
+
+#[test]
+fn a_reassigned_default_reaches_python_and_compiled_callers() {
+    // python binds a missing argument from the function object's `__defaults__` and
+    // `__kwdefaults__` as the call is made, so assigning either changes every later
+    // call. the published function forwards to a wrapper with the defaults compiled
+    // in, and a compiled caller filled them in itself — both kept answering with the
+    // old ones
+    agree_python(
+        "defaults",
+        REASSIGNED,
+        &[
+            "(setattr(m.scaled, '__kwdefaults__', {'scale': 10}), m.scaled(2), m.call_scaled())",
+            "(setattr(m.shifted, '__defaults__', (100,)), m.shifted(2), m.call_shifted())",
+            "(m.loop_shifted(3), setattr(m.shifted, '__defaults__', (100,)), m.loop_shifted(3))",
+            // a function that had none takes the ones it is given
+            "(setattr(m.summed, '__defaults__', (5,)), m.summed(1), m.call_summed(1))",
+            // and one whose defaults are taken away refuses the call that needed them
+            "(setattr(m.shifted, '__defaults__', None), repr(_capture(m.shifted, 2)), repr(_capture(m.call_shifted)))",
+            "(setattr(m.scaled, '__kwdefaults__', None), repr(_capture(m.scaled, 2)), repr(_capture(m.call_scaled)))",
+            // a coroutine a compiled caller awaits in the same expression runs its body
+            // directly, and awaits what the function object hands back instead
+            "(asyncio.run(m.await_added()), setattr(m.added, '__defaults__', (100,)), asyncio.run(m.await_added()))",
+        ],
+    );
+}
+
+#[test]
+fn a_swapped_code_object_reaches_compiled_callers() {
+    // the published function runs whatever code it holds, so a python caller already
+    // saw a swapped `__code__` — a compiled caller went straight to the native entry
+    // and never looked
+    agree_python(
+        "codeswap",
+        REASSIGNED,
+        &[
+            "(m.call_summed(1), setattr(m.summed, '__code__', _code_answering(m.summed, 100)), m.summed(1, 2), m.call_summed(1))",
+            "(m.loop_shifted(3), setattr(m.shifted, '__code__', _code_answering(m.shifted, 7)), m.loop_shifted(3))",
+        ],
+    );
+}
+
+/// module functions a program rebinds, deletes and patches from outside
+const REBOUND: &str = "\
+def add(a: int, b: int) -> int:
+    return a + b
+
+
+def run(n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = add(total, i)
+        i = i + 1
+    return total
+
+
+def depth(n: int) -> int:
+    if n == 0:
+        return 0
+    return depth(n - 1) + 1
+
+
+def scaled(a: int, *, by: int = 2) -> int:
+    return a * by
+
+
+def call_scaled(n: int) -> int:
+    return scaled(n, by=3)
+";
+
+#[test]
+fn a_rebound_module_function_reaches_compiled_callers() {
+    // python calls whatever the name holds when the call is made. a compiled caller
+    // went straight to the native entry, so a function replaced from outside — by an
+    // assignment, through the namespace, or by `mock.patch` — went on answering as
+    // the original, and a deleted one answered where python raises `NameError`
+    agree_python(
+        "rebound",
+        REBOUND,
+        &[
+            "(m.run(3), setattr(m, 'add', lambda a, b: 100), m.run(3))",
+            "(m.run(3), m.__dict__.__setitem__('add', lambda a, b: a - b), m.run(3))",
+            "(m.run(3), delattr(m, 'add'), repr(_capture(m.run, 3)))",
+            "_patched(m, 'add', lambda a, b: 7, m.run, 3)",
+            // putting the function back makes the direct call right again
+            "(lambda saved: (setattr(m, 'add', lambda a, b: 100), m.run(2), setattr(m, 'add', saved), m.run(3)))(m.add)",
+            // a recursion calls the function its name holds on each call it makes
+            "(lambda held: (setattr(m, 'depth', lambda n: 1000), held(3)))(m.depth)[1]",
+            // keywords reach the replacement by name
+            "(setattr(m, 'scaled', lambda a, by: a * 100 + by), m.call_scaled(5))",
+            // a write to any other name leaves the direct call standing
+            "(setattr(m, 'unrelated', 5), m.__dict__.pop('unrelated'), m.run(3))",
+        ],
+    );
+}
+
+#[test]
+fn a_build_binding_functions_early_goes_on_calling_what_it_compiled() {
+    // the configuration that assumes the module's functions are never rebound asks
+    // nothing at the call, which is the tradeoff it makes: a replacement reaches a call
+    // made from python and not one the module's own compiled code makes
+    let Some(answers) = compiled_answers(
+        "reboundearly",
+        REBOUND,
+        Options {
+            language: by_irbuild::Language::Python,
+            bind_functions_early: true,
+            ..Options::default()
+        },
+        &[
+            "(setattr(m, 'add', lambda a, b: 100), m.add(1, 2), m.run(3))",
+            "(delattr(m, 'add'), m.run(3))",
+            "(setattr(m.add, '__code__', _code_answering(m.add, 7)), m.run(3))",
+            // the function's own python entry still binds from the defaults it holds
+            "(setattr(m.scaled, '__kwdefaults__', {'by': 10}), m.scaled(1))",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(
+        answers,
+        ["(None, 100, 3)", "(None, 3)", "(None, 3)", "(None, 10)"]
+    );
+}
+
+#[test]
+fn a_rebound_function_handed_an_unboxed_buffer_is_refused_loudly() {
+    // a list the caller holds as a buffer has no list object to hand a replacement, and
+    // a copy would be a different list — so the call raises, as a rebound `len` on a
+    // buffer does, rather than calling the replacement with a copy
+    let Some(answers) = compiled_answers(
+        "reboundbuffer",
+        "\
+def total(xs: list[float]) -> float:
+    out = 0.0
+    i = 0
+    while i < len(xs):
+        out = out + xs[i]
+        i = i + 1
+    return out
+
+
+def built(n: int) -> float:
+    xs = [0.0]
+    i = 0
+    while i < n:
+        xs.append(i * 0.5)
+        i = i + 1
+    return total(xs)
+",
+        Options::default(),
+        &[
+            "m.built(3)",
+            "(setattr(m, 'total', lambda xs: len(xs)), type(_capture(m.built, 3)).__name__)[1]",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(answers, ["1.5", "'RuntimeError'"]);
 }
 
 #[test]

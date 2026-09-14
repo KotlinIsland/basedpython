@@ -153,6 +153,7 @@ fn arith_module() -> ModuleIr {
         fallback_code: None,
         shims: None,
         verify_install: true,
+        follow_recursion_limit: true,
     }
 }
 
@@ -220,6 +221,7 @@ fn fib_module() -> ModuleIr {
         fallback_code: None,
         shims: None,
         verify_install: true,
+        follow_recursion_limit: true,
     }
 }
 
@@ -371,6 +373,7 @@ fn division_floors_like_python_and_raises_on_zero() {
         fallback_code: None,
         shims: None,
         verify_install: true,
+        follow_recursion_limit: true,
     };
     let Some(dir) = built(&module, &toolchain, "divzero") else {
         return;
@@ -430,6 +433,7 @@ fn floats_are_unboxed_and_exclude_int() {
         fallback_code: None,
         shims: None,
         verify_install: true,
+        follow_recursion_limit: true,
     };
     let Some(dir) = built(&module, &toolchain, "float") else {
         return;
@@ -504,6 +508,7 @@ fn calls_between_compiled_functions_stay_native() {
         fallback_code: None,
         shims: None,
         verify_install: true,
+        follow_recursion_limit: true,
     };
     let Some(dir) = built(&module, &toolchain, "call") else {
         return;

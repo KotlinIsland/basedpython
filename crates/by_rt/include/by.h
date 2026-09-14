@@ -36,6 +36,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdarg.h>
 
 /* the floor, restated for the compiler
  *
@@ -1888,6 +1889,213 @@ static inline PyObject *By_Warn(PyObject *message, PyObject *category,
     return Py_NewRef(Py_None);
 }
 
+/* ── recursion depth ──────────────────────────────────────────────────────────
+ *
+ * a compiled call pushes a C frame and no python frame, so nothing the interpreter
+ * counts stands between a compiled recursion and the end of the stack: `depth(10**6)`
+ * segfaulted where python raises `RecursionError`. two things are watched instead, at
+ * every call that can go round a cycle of compiled calls and at every resumption of a
+ * compiled generator or coroutine.
+ *
+ * the stack itself, always. python frames live on the heap, and a program that raises
+ * the recursion limit is allowed as deep as its memory goes, where a C frame cannot go
+ * past the stack its thread was given. so the stack is a limit of its own, and the
+ * thing that turns running out of it into `RecursionError` rather than a crash.
+ *
+ * python's recursion limit, unless the build was told not to follow it. the count is
+ * the interpreter's own `py_recursion_remaining`, taken and given back exactly as a
+ * python frame takes and gives it back, so `sys.setrecursionlimit` reaches a compiled
+ * recursion and python frames and compiled ones share one budget. a build that defines
+ * `BY_RECURSION_STACK_ONLY` counts nothing and watches the stack alone.
+ *
+ * `ByDepth` is what a function on a cycle is handed by its caller, so a call round the
+ * cycle reads nothing the callee could not have been given: the thread state and the
+ * stack limit are looked up once, where the cycle is entered */
+
+/* the lowest address a compiled frame may start below the top of, per thread
+ *
+ * zero until the thread first asks. a quarter of the thread's stack is left under it,
+ * which is the room whatever runs past the last check — an acyclic chain of compiled
+ * calls, the interpreter raising the error and building its traceback, a C api the
+ * last frame called — has to finish in */
+#if defined(_MSC_VER) && !defined(__clang__)
+static __declspec(thread) uintptr_t by_stack_limit = 0;
+#else
+static _Thread_local uintptr_t by_stack_limit = 0;
+#endif
+
+#if defined(__APPLE__)
+#include <pthread.h>
+#elif defined(__FreeBSD__)
+#include <pthread.h>
+#include <pthread_np.h>
+#elif defined(__linux__) && (defined(__GLIBC__) || defined(__BIONIC__))
+#include <pthread.h>
+#elif defined(_WIN32)
+/* declared rather than taken from `windows.h`, whose macros collide with names in
+ * this header. it is `kernel32`'s, which every windows process links */
+__declspec(dllimport) void __stdcall GetCurrentThreadStackLimits(uintptr_t *low, uintptr_t *high);
+#endif
+
+/* where this frame is on the stack. every platform a python wheel is built for grows
+ * its stack downwards, which is what every comparison below assumes */
+BY_HOT uintptr_t By_StackHere(void) {
+#if defined(__GNUC__) || defined(__clang__)
+    return (uintptr_t)__builtin_frame_address(0);
+#else
+    char here = 0;
+    return (uintptr_t)&here;
+#endif
+}
+
+/* ask the platform how big this thread's stack is, once
+ *
+ * musl is left to the estimate: its answer for the main thread is the part of the stack
+ * already mapped rather than the part the thread may grow into, which cpython found
+ * imposes a limit far below the real one. an estimate is also what a platform with no
+ * way to ask gets — the stack a thread is typically given, measured down from the
+ * frame that asked first, which is not far below the top of the stack */
+BY_COLD uintptr_t By_ReadStackLimit(void) {
+    uintptr_t low = 0;
+    uintptr_t size = 0;
+#if defined(__APPLE__)
+    pthread_t self = pthread_self();
+    size = (uintptr_t)pthread_get_stacksize_np(self);
+    low = (uintptr_t)pthread_get_stackaddr_np(self) - size;
+#elif defined(__FreeBSD__) || (defined(__linux__) && (defined(__GLIBC__) || defined(__BIONIC__)))
+    pthread_attr_t attr;
+    void *address = NULL;
+    size_t length = 0;
+    size_t guard = 0;
+    int failed;
+#if defined(__FreeBSD__)
+    failed = pthread_attr_init(&attr);
+    if (failed == 0) failed = pthread_attr_get_np(pthread_self(), &attr);
+#else
+    failed = pthread_getattr_np(pthread_self(), &attr);
+#endif
+    if (failed == 0) {
+        failed = pthread_attr_getstack(&attr, &address, &length);
+        if (failed == 0 && pthread_attr_getguardsize(&attr, &guard) != 0) guard = 0;
+        pthread_attr_destroy(&attr);
+    }
+    if (failed == 0 && length > guard) {
+        low = (uintptr_t)address + guard;
+        size = (uintptr_t)(length - guard);
+    }
+#elif defined(_WIN32)
+    uintptr_t high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    size = high - low;
+#endif
+    if (size == 0) {
+        size = (uintptr_t)1 << 20;
+        low = By_StackHere() - size;
+    }
+    by_stack_limit = low + size / 4;
+    return by_stack_limit;
+}
+
+static inline uintptr_t By_StackLimit(void) {
+    uintptr_t limit = by_stack_limit;
+    if (BY_UNLIKELY(limit == 0)) limit = By_ReadStackLimit();
+    return limit;
+}
+
+/* the thread's own count of the frames it may still push, which 3.12 split out of the
+ * count it had shared with C calls */
+#if PY_VERSION_HEX >= 0x030C0000
+#define BY_PY_RECURSION_REMAINING py_recursion_remaining
+#else
+#define BY_PY_RECURSION_REMAINING recursion_remaining
+#endif
+
+BY_COLD char By_StackExhausted(void) {
+    PyErr_SetString(PyExc_RecursionError, "maximum recursion depth exceeded");
+    return 1;
+}
+
+#ifdef BY_RECURSION_STACK_ONLY
+
+typedef uintptr_t ByDepth;
+
+static inline ByDepth By_DepthHere(void) { return By_StackLimit(); }
+
+/* nonzero, with `RecursionError` set, where the frame about to be pushed would start
+ * too near the end of the stack */
+BY_HOT char By_DepthEnter(ByDepth depth) {
+    if (BY_UNLIKELY(By_StackHere() < depth)) return By_StackExhausted();
+    return 0;
+}
+
+BY_HOT void By_DepthLeave(ByDepth depth) { (void)depth; }
+
+#else
+
+typedef struct {
+    PyThreadState *thread;
+    uintptr_t stack_limit;
+} ByDepth;
+
+static inline ByDepth By_DepthHere(void) {
+    ByDepth depth;
+#if PY_VERSION_HEX >= 0x030D0000
+    depth.thread = PyThreadState_GetUnchecked();
+#else
+    depth.thread = _PyThreadState_UncheckedGet();
+#endif
+    depth.stack_limit = By_StackLimit();
+    return depth;
+}
+
+/* the count ran out: the interpreter's `_Py_CheckRecursiveCallPy`, on a frame whose
+ * count has already been taken
+ *
+ * while the thread is already raising one of these it is allowed fifty frames more, as
+ * python allows them. python aborts the process past those; this raises again instead,
+ * which is the one place it parts from the interpreter, and a crash is not an answer.
+ * a refusal gives the count back, because the frame it was taken for is never pushed */
+BY_COLD char By_RecursionLimitReached(PyThreadState *thread) {
+    if (thread->recursion_headroom && thread->BY_PY_RECURSION_REMAINING >= -50) return 0;
+    thread->BY_PY_RECURSION_REMAINING++;
+    thread->recursion_headroom++;
+    PyErr_SetString(PyExc_RecursionError, "maximum recursion depth exceeded");
+    thread->recursion_headroom--;
+    return 1;
+}
+
+/* take one frame from the count and check the stack, as python does on pushing a frame.
+ * nonzero, with `RecursionError` set and nothing taken, where either has run out */
+BY_HOT char By_DepthEnter(ByDepth depth) {
+    if (BY_UNLIKELY(By_StackHere() < depth.stack_limit)) return By_StackExhausted();
+    if (BY_UNLIKELY(--depth.thread->BY_PY_RECURSION_REMAINING < 0)) {
+        return By_RecursionLimitReached(depth.thread);
+    }
+    return 0;
+}
+
+/* give back the frame an `By_DepthEnter` that succeeded took */
+BY_HOT void By_DepthLeave(ByDepth depth) { depth.thread->BY_PY_RECURSION_REMAINING++; }
+
+#endif /* BY_RECURSION_STACK_ONLY */
+
+/* resume a compiled generator or coroutine's frame, counted as python counts pushing
+ * the frame it would have resumed
+ *
+ * this is a cycle the call graph cannot see: `yield from f(n - 1)` makes the next
+ * generator with a native call and then steps it through the iterator protocol, and the
+ * interpreter counts none of that — so a generator delegating to itself ran off the
+ * stack. NULL with `RecursionError` set where the frame could not be pushed, which the
+ * caller finishes the generator on, as python closes one whose frame could not be */
+static inline PyObject *By_ResumeCounted(PyObject *self, PyObject *(*resume)(PyObject *)) {
+    ByDepth depth = By_DepthHere();
+    PyObject *result;
+    if (BY_UNLIKELY(By_DepthEnter(depth))) return NULL;
+    result = resume(self);
+    By_DepthLeave(depth);
+    return result;
+}
+
 /* a global read that remembers what the name resolved to last time
  *
  * `By_LookupGlobal` is two dict probes on every trip, and for a name that resolves to
@@ -2109,6 +2317,434 @@ static inline PyObject *By_LookupGlobalSite(ByGlobalSite *site, PyObject *dict,
     (void)site;
     return By_LookupGlobal(dict, name);
 #endif
+}
+
+/* ── a module function a compiled caller reaches directly ─────────────────────
+ *
+ * a compiled call to a function the module defines goes straight to its native entry,
+ * with the defaults it was compiled with filled in. python instead calls whatever the
+ * function object under that name is when the call is made, running the code it holds
+ * and binding a missing argument from the defaults it holds, so the direct call is only
+ * the same program while the published function is still the one the module installed
+ * and still holds what it was installed with.
+ *
+ * `ByFunctionSite` is that question, asked once per function rather than per call. two
+ * watchers keep its answer. a dict watcher is told of every write to the namespace, and
+ * one to the function's name takes the answer back until a call finds the published
+ * function under the name again. a function watcher is told when the function object's
+ * code, defaults or keyword defaults are reassigned, and from then on `moved` is set for
+ * good: the compiled callers call the function object, and the function's own python
+ * entry hands the call to the interpreted definition, given the defaults the published
+ * function holds now. an edit made *inside* the `__kwdefaults__` dict is not a
+ * reassignment and nothing reports it, so that one is not seen */
+
+/* what a watcher registered by any compiled module writes. its layout is fixed, because
+ * the watcher is registered once per interpreter by whichever module gets there first,
+ * and that module may have been built by another version of this header */
+typedef struct {
+    /* a compiled caller may go straight to the native entry */
+    char stands;
+    /* the published function's code or defaults were reassigned */
+    char moved;
+} ByFunctionFlags;
+
+/* one name a dict watcher answers for: the namespace it is a name in, and the flags a
+ * write to it takes back. the namespace is borrowed, and a compiled module's lives as long
+ * as the process does. fixed for the same reason the flags are */
+typedef struct {
+    PyObject *dict;
+    ByFunctionFlags *flags;
+} ByFunctionName;
+
+typedef struct {
+    ByFunctionFlags flags;
+    /* the function this module published under the name, and the interpreted
+     * definition it forwards for. both strong, and both for the life of the process:
+     * the module stands behind one module object and no more */
+    PyObject *forwarder;
+    PyObject *twin;
+    /* the name, interned when the site is armed */
+    PyObject *name;
+    /* what the dict watcher holds for this site */
+    ByFunctionName entry;
+    /* both watchers answer for this site, so a call that finds the published function
+     * under its name again may go straight to the native entry again */
+    char watched;
+} ByFunctionSite;
+
+#define BY_FUNCTION_SITE_INIT { { 0, 0 }, NULL, NULL, NULL, { NULL, NULL }, 0 }
+
+#if !defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030C0000
+#define BY_FUNCTION_SITES 1
+#endif
+
+#ifdef BY_FUNCTION_SITES
+
+/* the interpreter's one function watcher and one namespace watcher for every compiled
+ * module, and what they answer for.
+ *
+ * `published` is a dict from the function to a capsule holding its flags. the key is the
+ * function object itself, which the dict keeps alive, so a function that dies can never
+ * be mistaken for one born at its address. `names` is a dict from a name to a list of
+ * capsules, one per namespace publishing a function under that name */
+typedef struct {
+    int watcher;
+    int dict_watcher;
+    PyObject *published;
+    PyObject *names;
+    /* one bit per name `names` holds, at its hash modulo 64. a write under a name whose
+     * bit is clear cannot be one of them, which is nearly every write, and is passed over
+     * without looking anything up */
+    uint64_t hashes;
+} ByFunctionWatch;
+
+#define BY_FUNCTION_WATCH_KEY "_by_function_watch_v1"
+#define BY_FUNCTION_FLAGS_CAPSULE "by.function_flags"
+#define BY_FUNCTION_NAME_CAPSULE "by.function_name"
+
+static ByFunctionWatch *by_function_watch = NULL;
+/* the registration this module's callback reads — see `by_globals_watched` for why it is
+ * not the same variable as the one this module's sites read */
+static ByFunctionWatch *by_function_watch_registered = NULL;
+
+/* a function python tells every watcher about. creation and destruction happen to every
+ * function in the process and say nothing about a published one, so they are passed over
+ * before anything is looked up */
+static int By_FunctionChanged(PyFunction_WatchEvent event, PyFunctionObject *func,
+                              PyObject *new_value) {
+    (void)new_value;
+    if (event != PyFunction_EVENT_MODIFY_CODE && event != PyFunction_EVENT_MODIFY_DEFAULTS
+        && event != PyFunction_EVENT_MODIFY_KWDEFAULTS) {
+        return 0;
+    }
+    ByFunctionWatch *watch = by_function_watch_registered;
+    if (watch == NULL) return 0;
+    /* a function hashes by identity, so looking it up runs no python and cannot fail
+     * for a reason of its own; an exception already standing is left as it was */
+    PyObject *type, *value, *traceback;
+    PyErr_Fetch(&type, &value, &traceback);
+    PyObject *found = PyDict_GetItemWithError(watch->published, (PyObject *)func);
+    if (found != NULL) {
+        ByFunctionFlags *flags = (ByFunctionFlags *)PyCapsule_GetPointer(found, BY_FUNCTION_FLAGS_CAPSULE);
+        if (flags != NULL) {
+            flags->moved = 1;
+            flags->stands = 0;
+        }
+    }
+    PyErr_Clear();
+    PyErr_Restore(type, value, traceback);
+    return 0;
+}
+
+/* take back the answer of every site `names` holds for a function published in `dict`
+ * under `key`, or under any name at all where `key` is NULL */
+static void By_TakeBackNames(PyObject *names, PyObject *dict, PyObject *key) {
+    PyObject *lists = NULL;
+    Py_ssize_t cursor = 0;
+    if (key != NULL) {
+        PyObject *list = PyDict_GetItemWithError(names, key);
+        if (list == NULL || !PyList_Check(list)) return;
+        for (Py_ssize_t at = 0; at < PyList_GET_SIZE(list); at++) {
+            ByFunctionName *name = (ByFunctionName *)PyCapsule_GetPointer(
+                PyList_GET_ITEM(list, at), BY_FUNCTION_NAME_CAPSULE);
+            if (name != NULL && name->dict == dict) name->flags->stands = 0;
+        }
+        return;
+    }
+    while (PyDict_Next(names, &cursor, NULL, &lists)) {
+        if (!PyList_Check(lists)) continue;
+        for (Py_ssize_t at = 0; at < PyList_GET_SIZE(lists); at++) {
+            ByFunctionName *name = (ByFunctionName *)PyCapsule_GetPointer(
+                PyList_GET_ITEM(lists, at), BY_FUNCTION_NAME_CAPSULE);
+            if (name != NULL && name->dict == dict) name->flags->stands = 0;
+        }
+    }
+}
+
+/* a write to a namespace some compiled module publishes functions in
+ *
+ * every write to a watched namespace comes through here, so the common one — a name no
+ * function is published under — is one lookup of an exact `str` that misses. a key that
+ * is not an exact `str` can still stand for a name, through a hash and an equality of its
+ * own, so a write under one takes back every answer the namespace gave. a write that
+ * empties the namespace, or throws it away, does the same. the lookups here run no python
+ * and cannot fail, so an exception already standing is left alone */
+static int By_FunctionNameWritten(PyDict_WatchEvent event, PyObject *dict, PyObject *key,
+                                  PyObject *new_value) {
+    (void)event;
+    (void)new_value;
+    ByFunctionWatch *watch = by_function_watch_registered;
+    if (watch == NULL) return 0;
+    if (key != NULL && PyUnicode_CheckExact(key)) {
+        /* a key already in a dict has its hash cached, and an exact `str` has no hash of
+         * its own to run for one that does not, so this cannot fail */
+        Py_hash_t hash = ((PyASCIIObject *)key)->hash;
+        if (hash == -1) hash = PyObject_Hash(key);
+        if (!(watch->hashes & ((uint64_t)1 << ((uint64_t)hash & 63u)))) return 0;
+        By_TakeBackNames(watch->names, dict, key);
+        return 0;
+    }
+    By_TakeBackNames(watch->names, dict, NULL);
+    return 0;
+}
+
+/* find this interpreter's watchers, registering them the first time. like the dict
+ * watcher's counter they are never freed: a site in any module may still be armed by them */
+static void By_FindFunctionWatch(void) {
+    PyInterpreterState *interpreter;
+    PyObject *state;
+    PyObject *capsule;
+    ByFunctionWatch *shared;
+    if (by_function_watch != NULL) return;
+    interpreter = PyInterpreterState_Get();
+    if (interpreter == NULL) return;
+    state = PyInterpreterState_GetDict(interpreter);
+    if (state == NULL) return;
+    capsule = PyDict_GetItemString(state, BY_FUNCTION_WATCH_KEY);
+    if (capsule != NULL) {
+        by_function_watch = (ByFunctionWatch *)PyCapsule_GetPointer(capsule, BY_FUNCTION_WATCH_KEY);
+        if (by_function_watch == NULL) PyErr_Clear();
+        return;
+    }
+    PyErr_Clear();
+    shared = (ByFunctionWatch *)PyMem_RawMalloc(sizeof(ByFunctionWatch));
+    if (shared == NULL) return;
+    shared->hashes = 0u;
+    shared->published = PyDict_New();
+    shared->names = PyDict_New();
+    if (shared->published == NULL || shared->names == NULL) {
+        PyErr_Clear();
+        Py_XDECREF(shared->published);
+        Py_XDECREF(shared->names);
+        PyMem_RawFree(shared);
+        return;
+    }
+    shared->watcher = PyFunction_AddWatcher(By_FunctionChanged);
+    if (shared->watcher < 0) {
+        PyErr_Clear();
+        Py_DECREF(shared->published);
+        Py_DECREF(shared->names);
+        PyMem_RawFree(shared);
+        return;
+    }
+    shared->dict_watcher = PyDict_AddWatcher(By_FunctionNameWritten);
+    if (shared->dict_watcher < 0) {
+        PyErr_Clear();
+        (void)PyFunction_ClearWatcher(shared->watcher);
+        PyErr_Clear();
+        Py_DECREF(shared->published);
+        Py_DECREF(shared->names);
+        PyMem_RawFree(shared);
+        return;
+    }
+    by_function_watch_registered = shared;
+    capsule = PyCapsule_New(shared, BY_FUNCTION_WATCH_KEY, NULL);
+    if (capsule == NULL) {
+        PyErr_Clear();
+        by_function_watch = shared;
+        return;
+    }
+    if (PyDict_SetItemString(state, BY_FUNCTION_WATCH_KEY, capsule) < 0) PyErr_Clear();
+    Py_DECREF(capsule);
+    by_function_watch = shared;
+}
+
+#endif /* BY_FUNCTION_SITES */
+
+/* take the function this module has just published under `name` in hand, and start
+ * being told about it
+ *
+ * a site that cannot be watched is left not standing, which sends every compiled call
+ * through the function object: slower, and the same program. a build with no function
+ * watchers — before 3.12, or free-threaded — is always in that state. `called` says
+ * whether any compiled call asks the site: one nobody asks needs no word of writes to its
+ * name, only of what happens to the function its own python entry stands for */
+static int By_ArmFunctionSite(ByFunctionSite *site, PyObject *dict, const char *name, int called) {
+    if (site->name == NULL) site->name = By_InternedStr(name, (Py_ssize_t)strlen(name));
+    if (site->name == NULL) return -1;
+    PyObject *forwarder = PyDict_GetItemWithError(dict, site->name);
+    if (forwarder == NULL) {
+        if (!PyErr_Occurred()) {
+            PyErr_Format(PyExc_ImportError, "this module published nothing under '%s'", name);
+        }
+        return -1;
+    }
+    site->forwarder = Py_NewRef(forwarder);
+    if (PyFunction_Check(forwarder)) {
+        PyObject *twin = PyObject_GetAttrString(forwarder, "__wrapped__");
+        if (twin == NULL) {
+            PyErr_Clear();
+        } else if (PyFunction_Check(twin)) {
+            site->twin = twin;
+        } else {
+            Py_DECREF(twin);
+        }
+    }
+#ifdef BY_FUNCTION_SITES
+    By_FindFunctionWatch();
+    if (by_function_watch != NULL && site->twin != NULL) {
+        ByFunctionWatch *watch = by_function_watch;
+        PyObject *flags = PyCapsule_New(&site->flags, BY_FUNCTION_FLAGS_CAPSULE, NULL);
+        if (flags == NULL) return -1;
+        int failed = PyDict_SetItem(watch->published, forwarder, flags) < 0;
+        Py_DECREF(flags);
+        if (failed) return -1;
+        if (!called) return 0;
+        if (PyDict_Watch(watch->dict_watcher, dict) < 0) {
+            /* a namespace that will not be watched is one whose writes no site hears
+             * about, so nothing is answered for it */
+            PyErr_Clear();
+            return 0;
+        }
+        site->entry.dict = dict;
+        site->entry.flags = &site->flags;
+        PyObject *entry = PyCapsule_New(&site->entry, BY_FUNCTION_NAME_CAPSULE, NULL);
+        if (entry == NULL) return -1;
+        PyObject *list = PyDict_GetItemWithError(watch->names, site->name);
+        if (list == NULL) {
+            if (PyErr_Occurred()) {
+                Py_DECREF(entry);
+                return -1;
+            }
+            list = PyList_New(0);
+            if (list == NULL || PyDict_SetItem(watch->names, site->name, list) < 0) {
+                Py_XDECREF(list);
+                Py_DECREF(entry);
+                return -1;
+            }
+            Py_DECREF(list);
+        }
+        failed = PyList_Append(list, entry) < 0;
+        Py_DECREF(entry);
+        if (failed) return -1;
+        watch->hashes |= (uint64_t)1 << ((uint64_t)PyObject_Hash(site->name) & 63u);
+        site->watched = 1;
+        site->flags.stands = 1;
+    }
+#endif
+    return 0;
+}
+
+/* what `By_ResolveFunction` answers where the read failed. an address nothing can be, so
+ * NULL is left free to say the native entry stands */
+static const char by_resolve_failed = 0;
+#define BY_RESOLVE_FAILED ((PyObject *)(void *)&by_resolve_failed)
+
+/* the object under a published function's name, read the way a global read is */
+BY_COLD PyObject *By_ResolveFunctionSlow(ByFunctionSite *site, PyObject *dict, const char *name) {
+    PyObject *found;
+    /* a call made while the module is still being imported reaches a site that is not
+     * armed yet, and the name is whatever the body has left there so far */
+    if (site->name == NULL) {
+        site->name = By_InternedStr(name, (Py_ssize_t)strlen(name));
+        if (site->name == NULL) return BY_RESOLVE_FAILED;
+    }
+    /* the name holds the function this module published, and nothing since has moved it:
+     * both watchers are listening again from here, so the direct call stands again */
+    if (site->watched && !site->flags.moved) {
+        PyObject *held = PyDict_GetItemWithError(dict, site->name);
+        if (held == site->forwarder) {
+            site->flags.stands = 1;
+            return NULL;
+        }
+        if (held == NULL && PyErr_Occurred()) return BY_RESOLVE_FAILED;
+    }
+    found = By_LookupGlobal(dict, site->name);
+    return found != NULL ? found : BY_RESOLVE_FAILED;
+}
+
+/* NULL where the native entry may stand in for the function object, the object under the
+ * name as a new reference where it may not, or `BY_RESOLVE_FAILED` with the error set */
+static inline PyObject *By_ResolveFunction(ByFunctionSite *site, PyObject *dict, const char *name) {
+    if (BY_LIKELY(site->flags.stands)) return NULL;
+    return By_ResolveFunctionSlow(site, dict, name);
+}
+
+/* whether a compiled call may go straight to the native entry: nothing can fail, and a
+ * call that may not goes through the function object, which raises what python raises */
+static inline char By_FunctionStands(ByFunctionSite *site) {
+    return site->flags.stands;
+}
+
+/* the object a call the native entry was turned away from goes through, as a new
+ * reference: what the name was read as, or where the read found the published function
+ * still standing, that function — whose code or defaults the arguments may since have
+ * moved, which python would then run */
+static inline PyObject *By_FunctionCallee(PyObject *resolved, PyObject *published) {
+    PyObject *callee = resolved != NULL ? resolved : published;
+    if (callee == NULL) {
+        PyErr_SetString(PyExc_SystemError, "a compiled call has no function to go through");
+        return NULL;
+    }
+    return Py_NewRef(callee);
+}
+
+/* a tuple of interned keyword names, built once per call site that passes them */
+BY_COLD PyObject *By_KeywordNames(Py_ssize_t count, ...) {
+    PyObject *names = PyTuple_New(count);
+    va_list given;
+    if (names == NULL) return NULL;
+    va_start(given, count);
+    for (Py_ssize_t at = 0; at < count; at++) {
+        const char *name = va_arg(given, const char *);
+        PyObject *interned = By_InternedStr(name, (Py_ssize_t)strlen(name));
+        if (interned == NULL) {
+            va_end(given);
+            Py_DECREF(names);
+            return NULL;
+        }
+        PyTuple_SET_ITEM(names, at, interned);
+    }
+    va_end(given);
+    return names;
+}
+
+/* `callee(*positional, **keywords)` with the arguments handed over one at a time: the
+ * `nargs` positional ones, then one per name in `kwnames` */
+BY_COLD PyObject *By_CallThrough(PyObject *callee, PyObject *kwnames, Py_ssize_t nargs, ...) {
+    PyObject *small[8];
+    PyObject **argv = small;
+    Py_ssize_t total = nargs + (kwnames != NULL ? PyTuple_GET_SIZE(kwnames) : 0);
+    va_list given;
+    PyObject *result;
+    if (total > (Py_ssize_t)(sizeof(small) / sizeof(small[0]))) {
+        argv = (PyObject **)PyMem_Malloc((size_t)total * sizeof(PyObject *));
+        if (argv == NULL) return PyErr_NoMemory();
+    }
+    va_start(given, nargs);
+    for (Py_ssize_t at = 0; at < total; at++) argv[at] = va_arg(given, PyObject *);
+    va_end(given);
+    result = PyObject_Vectorcall(callee, argv, (size_t)nargs, kwnames);
+    if (argv != small) PyMem_Free(argv);
+    return result;
+}
+
+/* the published function's own python entry, once its code or defaults have moved
+ *
+ * the compiled wrapper has the defaults it was compiled with written into it, so the call
+ * goes to the interpreted definition instead, carrying the defaults and keyword defaults
+ * the published function holds now — which is exactly what binding against the published
+ * function would have used */
+BY_COLD PyObject *By_CallMoved(ByFunctionSite *site, PyObject *const *args, Py_ssize_t nargs,
+                               PyObject *kwnames) {
+    PyObject *twin = site->twin;
+    PyObject *forwarder = site->forwarder;
+    if (twin == NULL || forwarder == NULL || !PyFunction_Check(forwarder)) {
+        PyErr_SetString(PyExc_SystemError,
+                        "a compiled function whose defaults moved has no interpreted definition");
+        return NULL;
+    }
+    PyObject *defaults = PyFunction_GetDefaults(forwarder);
+    if (defaults != PyFunction_GetDefaults(twin)
+        && PyFunction_SetDefaults(twin, defaults ? defaults : Py_None) < 0) {
+        return NULL;
+    }
+    PyObject *keywords = PyFunction_GetKwDefaults(forwarder);
+    if (keywords != PyFunction_GetKwDefaults(twin)
+        && PyFunction_SetKwDefaults(twin, keywords ? keywords : Py_None) < 0) {
+        return NULL;
+    }
+    return PyObject_Vectorcall(twin, args, (size_t)nargs, kwnames);
 }
 
 /* whether a type spec can be built on this tuple of bases
@@ -9211,7 +9847,7 @@ static inline PyObject *By_StepGenerator(PyObject *self, PyObject **sent, PyObje
                                          PyObject *(*resume)(PyObject *)) {
     if (By_RefuseResumption(*state, frame, arg) < 0) return NULL;
     By_ParkSent(sent, arg);
-    PyObject *result = resume(self);
+    PyObject *result = By_ResumeCounted(self, resume);
     if (result != NULL) return result;
     By_FinishGenerator(state);
     /* an empty `$returned` is what says the frame left by *raising* rather than by
@@ -10731,7 +11367,7 @@ static inline PySendResult By_SendGenerator(PyObject *self, PyObject **sent,
     PyObject *step;
     if (By_RefuseResumption(*state, frame, arg) < 0) return PYGEN_ERROR;
     By_ParkSent(sent, arg);
-    step = resume(self);
+    step = By_ResumeCounted(self, resume);
     if (step != NULL) {
         *result = step;
         return PYGEN_NEXT;
