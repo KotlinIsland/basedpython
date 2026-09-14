@@ -120,6 +120,7 @@ fn print_op(function: &Function, op: &Op) -> String {
             dest,
             manager,
             exception,
+            ..
         } => format!(
             "{} = {} {}",
             name(*dest),
@@ -495,14 +496,26 @@ fn print_op(function: &Function, op: &Op) -> String {
         Op::Enter { dest, manager } => {
             format!("{} = enter {}", name(*dest), value(manager))
         }
+        Op::BindExit {
+            dest,
+            manager,
+            is_async,
+        } => format!(
+            "{} = bind {} {}",
+            name(*dest),
+            if *is_async { "aexit" } else { "exit" },
+            value(manager)
+        ),
         Op::ExitContext {
             dest,
             manager,
+            exit,
             exception,
         } => format!(
-            "{} = exit {} with {}",
+            "{} = exit {} through {} with {}",
             name(*dest),
             value(manager),
+            value(exit),
             value(exception)
         ),
         Op::DelegateIter {
@@ -756,6 +769,7 @@ fn print_op(function: &Function, op: &Op) -> String {
             None => format!("raise {}", value(exception)),
         },
         Op::Reraise { value: v } => format!("reraise {}", value(v)),
+        Op::LeaveGenerator { value: v } => format!("leave generator {}", value(v)),
         Op::GetIter { dest, src, cursor } => match cursor {
             Some(cursor) => format!("{} = iter {} @{}", name(*dest), value(src), name(*cursor)),
             None => format!("{} = iter {}", name(*dest), value(src)),
@@ -765,6 +779,16 @@ fn print_op(function: &Function, op: &Op) -> String {
             None => format!("{} = next {}", name(*dest), value(iter)),
         },
         Op::IsNull { dest, src } => format!("{} = {} is null", name(*dest), value(src)),
+        Op::Line { position } => {
+            if position.generator_expression {
+                format!("line @{} in a generator expression", position.offset)
+            } else {
+                format!("line @{}", position.offset)
+            }
+        }
+        Op::StopIterationValue { dest, src } => {
+            format!("{} = stop_iteration_value {}", name(*dest), value(src))
+        }
         Op::StrConcat {
             dest,
             lhs,
@@ -857,6 +881,7 @@ mod tests {
             kwarg: false,
             range: None,
             name: "abs".to_string(),
+            frame_name: "abs".to_string(),
             param_count: 1,
             ret: RType::INT,
             convention: CallConvention::NativeInfallible,
@@ -956,6 +981,7 @@ b2:
             kwarg: false,
             range: None,
             name: "f".to_string(),
+            frame_name: "f".to_string(),
             param_count: 0,
             ret: RType::FLOAT,
             convention: CallConvention::NativeInfallible,

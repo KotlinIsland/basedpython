@@ -479,9 +479,13 @@ path without the exceptional one weighing on it
 ### tracebacks
 
 a compiled frame is not a python frame, so a naive traceback would skip it.
-compiled functions push a lightweight entry recording the function and the
-current `.by` line, so a traceback through compiled code shows the same file and
-line numbers the interpreted build would
+python adds an entry for each frame an exception is raised in or passes through, and
+a compiled function adds the same entry on the path its failure takes: the file, the
+function and the line the failing operation was written on. the entry is cold — the
+code object behind it is built the first time an exception passes that point and
+kept, and only the frame it hangs off is made each time — so a function that does not
+raise pays nothing for it. putting back an exception the frame already holds, as a
+bare `raise` does, adds no entry, as in python
 
 `by run` already rewrites tracebacks from transpiled `.py` lines back to `.by`
 lines. compiled frames carry `.by` lines directly, so the same rendering path
@@ -688,6 +692,99 @@ import mod
 
 sub = _interpreters.create("legacy")
 _interpreters.exec(sub, "import mod")  # python: imports; compiled: ImportError
+```
+
+### a generator is not python's `generator`
+
+a compiled generator, coroutine or async generator is an object of a type of its
+own, named after the function it belongs to, rather than an instance of python's
+`generator`, `coroutine` or `async_generator`. it answers every step python's does —
+`next`, `send`, `throw`, `close`, `await`, `async for`, running `finally` blocks when
+it is closed, collected or dropped — but it carries none of the introspection a
+frame object gives python's:
+
+```python
+import inspect
+from collections.abc import Iterator
+
+
+def counted(n: int) -> Iterator[int]:
+    yield n
+
+
+g = counted(1)
+type(g).__name__  # python: 'generator'; compiled: 'counted$gen'
+inspect.isgenerator(g)  # python: True; compiled: False
+g.gi_frame  # python: a frame; compiled: AttributeError
+```
+
+the same holds for `gi_running`, `gi_code`, `gi_yieldfrom`, `cr_frame`, `cr_await`,
+`ag_frame`, and the object's own `__name__` and `__qualname__`. a message python words
+after the type's name names the compiled type instead, so
+`type(g)()` refuses with `cannot create 'mod.counted$gen' instances` where python
+says `cannot create 'generator' instances`
+
+### the three-argument `throw` through an interpreted generator
+
+a compiled frame suspended in `yield from` or `await` hands a `throw` on to the
+iterator it is waiting on, as python does. python hands a generator or coroutine of
+its own the arguments of the deprecated `throw(type, value, traceback)` form without
+calling its `throw` method, which would warn about the deprecated form a second
+time. a compiled frame cannot reach that generator any other way, so it builds the
+exception out of the three arguments and hands the generator that one exception.
+the generator builds the same exception itself when it is the frame that takes the
+throw, so the two builds differ only where it is waiting on something in turn — an
+iterator with a `throw` of its own is then handed one argument rather than three:
+
+```python
+# an interpreted module
+class Inner:
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return 1
+
+    def throw(self, *args):
+        return len(args)
+
+
+def middle():
+    yield from Inner()
+
+
+# the compiled module
+def outer(make: Callable[[], Iterator[object]]) -> Iterator[object]:
+    yield from make()
+
+
+g = outer(middle)
+next(g)
+g.throw(ValueError, ValueError("x"), None)  # python: 3; compiled: 1
+```
+
+for the same reason, arguments the exception cannot be built from — a traceback
+argument that is not a traceback, say — are refused at the compiled frame, where
+python hands them on unchecked to whatever the interpreted generator is waiting on
+
+### a traceback entry's frame
+
+a traceback through compiled code names the same files, functions and lines python's
+does, but the frame each compiled entry hangs off was made for the entry rather than
+being the frame the function ran in. its code object has no bytecode, so it carries no
+column positions and a formatted traceback prints no `~~^^` markers under the line;
+the frame holds no locals; and its code object's `co_firstlineno` is the entry's own
+line and `co_qualname` its bare name:
+
+```python
+import traceback
+
+try:
+    mod.parse("")
+except ValueError as e:
+    tb = e.__traceback__.tb_next
+    tb.tb_frame.f_locals  # python: {'text': '', ...}; compiled: {}
+    traceback.print_exception(e)  # python underlines the failing call; compiled does not
 ```
 
 ## debugging and inspection
