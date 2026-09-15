@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use crate::function::{Function, ModuleIr};
-use crate::ops::{BlockId, Op, RegisterId, Terminator, UnaryOp, Value};
+use crate::ops::{BinOp, BlockId, Op, RegisterId, Terminator, UnaryOp, Value};
 use crate::rtype::{IntWidth, Primitive, RType};
 
 /// something wrong with a function's BIR
@@ -628,6 +628,17 @@ impl Verifier<'_> {
 
     /// an attribute's receiver is an object, or an instance of an emitted class, which
     /// reaches `PyObject *` by a cast
+    /// a checked index into a packed buffer: a tagged `int`, or a machine integer a
+    /// counter holds
+    fn expect_index(&mut self, block: BlockId, index: &Value) {
+        if !matches!(
+            self.operand_type(block, index),
+            Some(RType::Primitive(Primitive::Fixed(_)))
+        ) {
+            self.expect(block, index, &RType::INT, "an array index");
+        }
+    }
+
     fn expect_attribute_receiver(&mut self, block: BlockId, receiver: &Value) {
         if let Some(actual) = self.operand_type(block, receiver)
             && !matches!(actual, RType::Instance { .. })
@@ -1016,6 +1027,7 @@ impl Verifier<'_> {
             Op::IntToFloat { dest, src } => {
                 if let Some(src_ty) = self.operand_type(block, src)
                     && src_ty != RType::INT
+                    && !matches!(src_ty, RType::Primitive(Primitive::Fixed(_)))
                 {
                     self.error(
                         Some(block),
@@ -1023,6 +1035,15 @@ impl Verifier<'_> {
                     );
                 }
                 self.expect_dest(block, *dest, &RType::FLOAT, "int-to-float");
+            }
+            Op::TagShort { dest, src } => {
+                if !matches!(
+                    self.operand_type(block, src),
+                    Some(RType::Primitive(Primitive::Fixed(_)))
+                ) {
+                    self.error(Some(block), "tag short tags a machine integer");
+                }
+                self.expect_dest(block, *dest, &RType::INT, "tag short");
             }
             Op::Box { dest, src } => {
                 // box *widens to* `object`, from either an unboxed value or a
@@ -1048,11 +1069,20 @@ impl Verifier<'_> {
                 // that is the one an `int` has everywhere else in the IR, and going
                 // straight to a `PyObject` would give the counter a representation no
                 // consumer of an `int` accepts
-                let widened = match self.operand_type(block, src) {
-                    Some(RType::Primitive(Primitive::Fixed(_))) => RType::INT,
-                    _ => RType::OBJECT,
-                };
-                self.expect_dest(block, *dest, &widened, "box");
+                //
+                // a counter whose boxed value only ever becomes an object is built as one
+                // directly, so that is the other destination a machine integer may have
+                match self.operand_type(block, src) {
+                    Some(RType::Primitive(Primitive::Fixed(_)))
+                        if self
+                            .function
+                            .register(*dest)
+                            .is_some_and(|decl| decl.ty == RType::OBJECT) => {}
+                    Some(RType::Primitive(Primitive::Fixed(_))) => {
+                        self.expect_dest(block, *dest, &RType::INT, "box");
+                    }
+                    _ => self.expect_dest(block, *dest, &RType::OBJECT, "box"),
+                }
             }
             Op::Unbox { dest, src, to } => {
                 // unbox *narrows from* `object` — to an unboxed representation, or
@@ -1067,7 +1097,29 @@ impl Verifier<'_> {
                 }
                 self.expect_dest(block, *dest, to, "unbox");
             }
-            Op::TupleBuild { dest, items } => {
+            Op::TupleBuild { dest, items, moves } => {
+                for index in moves {
+                    // the same rule `Op::Move` follows: only a temporary the frame owns
+                    // has a reference of its own to hand to the slot
+                    let hands_over = matches!(
+                        items.get(*index),
+                        Some(Value::Register(id))
+                            if id.index() >= self.function.param_count
+                                && self.function.register(*id).is_some_and(|decl| {
+                                    !decl.borrowed
+                                        && decl.name.is_none()
+                                        && decl.ty.owns_one_reference()
+                                })
+                    );
+                    if !hands_over {
+                        self.error(
+                            Some(block),
+                            format!(
+                                "a tuple build moving item {index}, which owns no reference to hand over"
+                            ),
+                        );
+                    }
+                }
                 let declared = self
                     .function
                     .register(*dest)
@@ -1151,7 +1203,7 @@ impl Verifier<'_> {
                 let Some(element) = self.array_element(block, array) else {
                     return;
                 };
-                self.expect(block, index, &RType::INT, "an array index");
+                self.expect_index(block, index);
                 self.expect_dest(block, *dest, &element, "an array read");
             }
             Op::ArraySet {
@@ -1163,7 +1215,7 @@ impl Verifier<'_> {
                 let Some(element) = self.array_element(block, array) else {
                     return;
                 };
-                self.expect(block, index, &RType::INT, "an array index");
+                self.expect_index(block, index);
                 self.expect(block, value, &element, "an array write");
                 self.expect_dest(block, *dest, &RType::BIT, "an array write");
             }
@@ -1208,12 +1260,34 @@ impl Verifier<'_> {
                 }
                 self.expect_dest(block, *dest, &element, "an unchecked array read");
             }
-            Op::ArrayPush { dest, array, value } => {
+            Op::ArrayPush {
+                dest,
+                array,
+                value,
+                length,
+            } => {
+                if let Some(length) = length {
+                    self.expect(
+                        block,
+                        length,
+                        &RType::fixed(IntWidth::I64),
+                        "an array append",
+                    );
+                }
                 let Some(element) = self.array_element(block, array) else {
                     return;
                 };
                 self.expect(block, value, &element, "an array append");
                 self.expect_dest(block, *dest, &RType::BIT, "an array append");
+            }
+            Op::ArrayStoreLength { array, length } => {
+                self.expect(
+                    block,
+                    length,
+                    &RType::fixed(IntWidth::I64),
+                    "an array's length",
+                );
+                self.array_element(block, array);
             }
             Op::ToTuple { dest, src } => {
                 self.expect(block, src, &RType::OBJECT, "tuple");
@@ -1479,7 +1553,7 @@ impl Verifier<'_> {
                                 && self.function.register(*id).is_some_and(|decl| {
                                     !decl.borrowed
                                         && decl.name.is_none()
-                                        && (decl.ty == RType::INT || decl.ty.is_object_reference())
+                                        && decl.ty.owns_one_reference()
                                 })
                         }
                         _ => false,
@@ -1686,10 +1760,7 @@ impl Verifier<'_> {
                 let owns = match value {
                     Value::Register(id) => self.function.register(*id).is_some_and(|decl| {
                         !decl.borrowed
-                            && decl
-                                .ty
-                                .element(path)
-                                .is_some_and(RType::is_object_reference)
+                            && decl.ty.element(path).is_some_and(RType::owns_one_reference)
                     }),
                     _ => false,
                 };
@@ -1712,7 +1783,7 @@ impl Verifier<'_> {
                         .register(*id)
                         .filter(|decl| !decl.borrowed && decl.name.is_none())
                         .and_then(|decl| decl.ty.element(path))
-                        .filter(|ty| **ty == RType::INT || ty.is_object_reference())
+                        .filter(|ty| ty.owns_one_reference())
                         .cloned(),
                     _ => None,
                 };
@@ -1920,6 +1991,20 @@ impl Verifier<'_> {
                     );
                 }
             }
+            Terminator::MachineStep {
+                dest, op, lhs, rhs, ..
+            } => {
+                let fixed = RType::fixed(IntWidth::I64);
+                if !matches!(op, BinOp::Add | BinOp::Sub) {
+                    self.error(
+                        Some(block),
+                        format!("a machine step cannot `{}`", op.symbol()),
+                    );
+                }
+                self.expect(block, lhs, &fixed, "a machine step");
+                self.expect(block, rhs, &fixed, "a machine step");
+                self.expect_dest(block, *dest, &fixed, "a machine step");
+            }
             Terminator::Goto(_) | Terminator::Unreachable => {}
         }
     }
@@ -1948,10 +2033,12 @@ impl Verifier<'_> {
                 continue;
             };
             for op in &block.ops {
-                if let Some(dest) = op.dest()
-                    && dest.index() < state.len()
-                {
-                    state[dest.index()] = true;
+                // a loop's cursor is written in place rather than as a destination: taking
+                // the iterator starts it, and a generator parks it across a suspension
+                for dest in op.dest().into_iter().chain(op.loop_cursor()) {
+                    if let Some(slot) = state.get_mut(dest.index()) {
+                        *slot = true;
+                    }
                 }
             }
             // a handler is entered from *before* any of this block's writes, because
@@ -1960,10 +2047,7 @@ impl Verifier<'_> {
             // a narrowing terminator writes its destination on one edge only: the
             // other is the path where the value did not fit and there is nothing to
             // have written
-            let narrowed = match &block.terminator {
-                Terminator::NarrowShort { dest, fits, .. } => Some((*dest, *fits)),
-                _ => None,
-            };
+            let narrowed = block.terminator.written_on_edge();
             let edges = block
                 .terminator
                 .successors()
@@ -2022,10 +2106,10 @@ impl Verifier<'_> {
                         self.check_read(id, operand, &state);
                     }
                 }
-                if let Some(dest) = op.dest()
-                    && dest.index() < state.len()
-                {
-                    state[dest.index()] = true;
+                for dest in op.dest().into_iter().chain(op.loop_cursor()) {
+                    if let Some(slot) = state.get_mut(dest.index()) {
+                        *slot = true;
+                    }
                 }
             }
             for operand in block.terminator.operands() {
@@ -2082,6 +2166,7 @@ mod tests {
     use crate::builder::FunctionBuilder;
     use crate::function::{BasicBlock, CallConvention, RegisterDecl};
     use crate::ops::{BinOp, CmpOp, Concatenation, Mutation};
+    use std::collections::BTreeSet;
 
     fn reg(name: &str, ty: RType) -> RegisterDecl {
         RegisterDecl {
@@ -2507,6 +2592,7 @@ mod tests {
                 Value::Register(RegisterId(0)),
                 Value::Register(RegisterId(1)),
             ],
+            moves: BTreeSet::new(),
         });
         entry.ops.push(Op::TupleGet {
             dest: RegisterId(3),

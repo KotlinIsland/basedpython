@@ -147,8 +147,25 @@ fn borrow(function: &mut Function) {
     // the constants settle first, so that a copy — whose borrow rests on its source
     // still owning — can see that a register holding one owns nothing to lend
     mark(function, constants(function));
-    // and the field reads before the copies, for the same reason
-    mark(function, field_reads(function));
+    // and the field reads before the copies, for the same reason. a field read that
+    // borrows no longer releases what its register held before, which can make it the
+    // inert op another read's window needed — `i < n` over two fields reads `n` inside
+    // the window of `i` — so they go round until a round borrows nothing new. borrowing
+    // only ever takes a release away, so a window found safe stays safe
+    loop {
+        let reads: Vec<RegisterId> = field_reads(function)
+            .into_iter()
+            .filter(|register| {
+                function
+                    .register(*register)
+                    .is_some_and(|decl| !decl.borrowed)
+            })
+            .collect();
+        if reads.is_empty() {
+            break;
+        }
+        mark(function, reads);
+    }
 
     // the copies, the element reads and the narrowing checks all rest on their source
     // still holding the value, so they are settled together against one another
@@ -576,7 +593,12 @@ fn borrow_is_safe(
                 // it releases again on the way back, though, and that release can
                 // be the last one. so unlike a field read this has to be the value's
                 // final use: a second one would read what the first let go of
-                Op::IntBinary { lhs, rhs, .. }
+                //
+                // a comparison is the same family on the same terms: `By_IntCompareSlow`
+                // either reads the sign off an exact `int` it asks nothing, or boxes both
+                // operands — retaining one behind a pointer — before it compares them. that
+                // is `i < n` over two fields, the loop test of a counting generator
+                Op::IntBinary { lhs, rhs, .. } | Op::IntCompare { lhs, rhs, .. }
                     if Some(index) == last_read
                         && is_tagged_int(function, lhs)
                         && is_tagged_int(function, rhs) => {}
@@ -791,6 +813,43 @@ mod tests {
         );
         // what the arithmetic produced is this frame's own, and leaves it
         assert!(!function.registers[3].borrowed);
+        assert_eq!(verify(function), Ok(()));
+    }
+
+    /// `self.i < self.n`, the loop test of a counting generator over two of its fields
+    fn field_compare() -> Function {
+        let mut builder = FunctionBuilder::new("test", RType::BIT);
+        let receiver = builder.param("self", nested());
+        let i = builder.temp(RType::INT);
+        let n = builder.temp(RType::INT);
+        let below = builder.temp(RType::BIT);
+        for (dest, field) in [(i, "i"), (n, "n")] {
+            builder.push(Op::GetField {
+                dest,
+                receiver: Value::Register(receiver),
+                class: "Holder".to_string(),
+                field: field.to_string(),
+            });
+        }
+        builder.push(Op::IntCompare {
+            dest: below,
+            op: by_ir::ops::CmpOp::Lt,
+            lhs: Value::Register(i),
+            rhs: Value::Register(n),
+        });
+        builder.terminate(Terminator::Return(Value::Register(below)));
+        builder.finish()
+    }
+
+    #[test]
+    fn two_field_reads_consumed_by_a_tagged_comparison_borrow() {
+        // `By_IntCompareSlow` boxes, and so retains, both operands before it can run a
+        // comparison of a subclass — or reads the sign of an exact `int` and asks nothing
+        let mut m = module(field_compare());
+        run(&mut m);
+        let function = &m.functions[0];
+        assert!(function.registers[1].borrowed);
+        assert!(function.registers[2].borrowed);
         assert_eq!(verify(function), Ok(()));
     }
 

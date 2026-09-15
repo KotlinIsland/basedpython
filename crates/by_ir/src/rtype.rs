@@ -254,6 +254,13 @@ impl RType {
         )
     }
 
+    /// whether a value of this type is one reference the ownership passes may hand over
+    /// or let go of on its own: a single object reference, or a tagged `int`, whose
+    /// short case owns nothing and whose overflow case owns exactly one `PyLongObject`
+    pub fn owns_one_reference(&self) -> bool {
+        self.is_object_reference() || *self == Self::INT
+    }
+
     /// whether a value of this type is, or holds as an element, a reference to an
     /// object — something that may have a finalizer, or hold one that does
     pub fn holds_object_reference(&self) -> bool {
@@ -307,6 +314,28 @@ impl RType {
             ),
             Self::Tuple(_) => "{0}".to_string(),
             Self::Instance { .. } => "NULL".to_string(),
+        }
+    }
+
+    /// the value a register holds once the reference it held has been let go of
+    ///
+    /// this is [`Self::undefined`] everywhere a representation's unset value costs
+    /// nothing to release again. a tagged `int`'s does not: `BY_INT_ERROR` is odd, so
+    /// every later release of the emptied register takes the branch meant for a real
+    /// `PyLongObject` and calls out of line to drop a `NULL`. a short zero is the same
+    /// "holds nothing" and its release is the test the straight line already passes
+    pub fn emptied(&self) -> String {
+        match self {
+            Self::Primitive(Primitive::Int) => "BY_INT_EMPTY".to_string(),
+            Self::Tuple(items) if !items.is_empty() => format!(
+                "{{ {} }}",
+                items
+                    .iter()
+                    .map(Self::emptied)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            other => other.undefined(),
         }
     }
 

@@ -34,6 +34,7 @@ use by_ir::ops::{BlockId, Op, RegisterId, Terminator, Value};
 use by_ir::rtype::RType;
 
 use crate::runs_python::{Effects, Guard, Held, Kind, answer_yes};
+use crate::unbox_counters::{bounds, counters, enter, unbox};
 
 /// how many loops in one function may be duplicated
 ///
@@ -167,6 +168,18 @@ fn version(effects: &Effects, function: &mut Function, candidate: Candidate) -> 
         region,
     } = candidate;
 
+    // the loop's counters are asked about before anything is copied or split, while the
+    // body is still the whole of the loop
+    let (counters, bounds) = match region {
+        Region::Loop => {
+            let counters = counters(function, &body);
+            let bounds = bounds(function, &body, &counters);
+            (counters, bounds)
+        }
+        // a function with no loop in it has no counter worth a machine integer
+        Region::Entry => (Vec::new(), Vec::new()),
+    };
+
     // the copies land at the end, so every existing block keeps its id
     let first_copy = function.blocks.len();
     let copies: BTreeMap<BlockId, BlockId> = body
@@ -272,6 +285,21 @@ fn version(effects: &Effects, function: &mut Function, candidate: Candidate) -> 
         }
     }
 
+    let narrowings = unbox(function, header, &copies, &counters, &bounds);
+    // once the test has said yes, each counter and bound is narrowed, and one that does not
+    // fit runs the loop as written
+    let entries: Vec<BlockId> = (0..first_copy)
+        .map(BlockId)
+        .filter(|id| {
+            !body.contains(id)
+                && function.blocks[id.index()]
+                    .terminator
+                    .successors()
+                    .contains(&header)
+        })
+        .collect();
+    let entered = enter(function, header, &entries, &narrowings, fast_header);
+
     let answer = RegisterId(function.registers.len());
     function.registers.push(RegisterDecl {
         name: None,
@@ -292,7 +320,7 @@ fn version(effects: &Effects, function: &mut Function, candidate: Candidate) -> 
         }],
         terminator: Terminator::Branch {
             cond: Value::Register(answer),
-            then_block: fast_header,
+            then_block: entered,
             else_block: header,
         },
         owned_at_exit: None,
@@ -301,17 +329,12 @@ fn version(effects: &Effects, function: &mut Function, candidate: Candidate) -> 
         error_target: None,
     });
 
-    // every edge that entered the loop from outside now enters through the test. the loop,
-    // its copy, the blocks split off it and the test itself are all inside
-    let inside: HashSet<BlockId> = body
-        .iter()
-        .copied()
-        .chain(copy_ids)
-        .chain(tails.values().copied())
-        .chain([preheader])
-        .collect();
+    // every edge that entered the loop from outside now enters through the test. the loop
+    // and every block added for it are inside: its copy, the blocks split off it, the
+    // narrowings, whose `otherwise` edges *are* edges to the header, and the test itself
+    let inside: HashSet<BlockId> = body.iter().copied().collect();
     for id in 0..function.blocks.len() {
-        if inside.contains(&BlockId(id)) {
+        if id >= first_copy || inside.contains(&BlockId(id)) {
             continue;
         }
         map_edges(&mut function.blocks[id], false, |target| {
@@ -520,7 +543,7 @@ fn unwritten_parameters(function: &Function) -> HashSet<RegisterId> {
 
 /// move everything from `at` on in `id` into a block of its own, which `id` then falls
 /// into, and name the new block
-fn split(function: &mut Function, id: BlockId, at: usize) -> BlockId {
+pub(crate) fn split(function: &mut Function, id: BlockId, at: usize) -> BlockId {
     let tail = BlockId(function.blocks.len());
     let block = &mut function.blocks[id.index()];
     let rest = block.ops.split_off(at);
@@ -555,24 +578,9 @@ fn enters_by_test(block: &BasicBlock, header: BlockId) -> bool {
 }
 
 /// point every edge of `block` somewhere else, the error edge too where `errors`
-fn map_edges(block: &mut BasicBlock, errors: bool, map: impl Fn(BlockId) -> BlockId) {
-    match &mut block.terminator {
-        Terminator::Goto(target) => *target = map(*target),
-        Terminator::Branch {
-            then_block,
-            else_block,
-            ..
-        } => {
-            *then_block = map(*then_block);
-            *else_block = map(*else_block);
-        }
-        Terminator::NarrowShort {
-            fits, otherwise, ..
-        } => {
-            *fits = map(*fits);
-            *otherwise = map(*otherwise);
-        }
-        Terminator::Return(_) | Terminator::Unreachable => {}
+pub(crate) fn map_edges(block: &mut BasicBlock, errors: bool, map: impl Fn(BlockId) -> BlockId) {
+    for target in block.terminator.successors_mut() {
+        *target = map(*target);
     }
     if errors && let Some(target) = &mut block.error_target {
         *target = map(*target);
@@ -626,7 +634,7 @@ fn successors_within(function: &Function, id: BlockId, inside: &HashSet<BlockId>
 /// a back edge is one into `header` from a block every path from the entry reaches through
 /// `header`. an edge from anywhere else enters the loop, so a loop inside another is its
 /// own loop, entered from the outer one's blocks, rather than the whole of the outer one
-fn natural_loop(function: &Function, header: BlockId) -> Vec<BlockId> {
+pub(crate) fn natural_loop(function: &Function, header: BlockId) -> Vec<BlockId> {
     let everywhere = reachable_avoiding(function, Function::entry(), None);
     let around = reachable_avoiding(function, Function::entry(), Some(header));
     let latches: Vec<BlockId> = everywhere

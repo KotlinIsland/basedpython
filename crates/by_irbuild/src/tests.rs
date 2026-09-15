@@ -7461,11 +7461,17 @@ def counted(n: int) -> object:
             );
 
             // the state number and the two protocol fields have fixed roles; a local
-            // takes its own representation where it is definitely assigned
+            // takes its own representation where it is definitely assigned. the state
+            // number is a machine integer, never a python value
             let field = |name: &str| state.fields.iter().find(|f| f.name == name);
-            assert_eq!(field("$state").map(|f| f.ty.clone()), Some(RType::INT));
+            assert_eq!(
+                field("$state").map(|f| f.ty.clone()),
+                Some(RType::fixed(by_ir::rtype::IntWidth::I64))
+            );
             assert_eq!(field("$sent").map(|f| f.ty.clone()), Some(RType::OBJECT));
             assert_eq!(field("$thrown").map(|f| f.ty.clone()), Some(RType::OBJECT));
+            // only an async generator's driver asks which kind of suspension was made
+            assert_eq!(field("$kind"), None);
             assert_eq!(field("n").map(|f| f.ty.clone()), Some(RType::INT));
             assert_eq!(field("i").map(|f| f.ty.clone()), Some(RType::INT));
 
@@ -7517,6 +7523,7 @@ fn a_value_that_has_to_survive_a_suspension_takes_a_field() {
             state: 1,
             suspend: suspend_at,
             resume: resume_at,
+            raising: None,
         }],
     )
     .expect("a live register takes a field");
@@ -7582,6 +7589,7 @@ fn a_parked_value_that_may_be_unassigned_declines() {
             state: 1,
             suspend: suspend_at,
             resume: resume_at,
+            raising: None,
         }],
     )
     .expect_err("a maybe-unassigned local must be declined");
@@ -7934,7 +7942,7 @@ async def chained(awaitable: object) -> object:
 fn an_async_generator_presents_the_async_iteration_surface() {
     // `__aiter__`/`__anext__` rather than `__await__`: one resume method drives all
     // three surfaces, and which one a state class presents is the only difference
-    let surface = with_source(
+    let (surface, kinds) = with_source(
         "\
 async def both(n: int) -> object:
     yield n
@@ -7942,15 +7950,19 @@ async def both(n: int) -> object:
         |db, env, model, suite| {
             let module =
                 crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
-            module
-                .classes
-                .iter()
-                .find(|class| class.name == "both$gen")
-                .and_then(|class| class.resume.as_ref())
-                .map(|resume| resume.surface)
+            let class = module.classes.iter().find(|class| class.name == "both$gen");
+            (
+                class
+                    .and_then(|class| class.resume.as_ref())
+                    .map(|resume| resume.surface),
+                // and its driver tells a `yield` from an `await` by the kind each
+                // suspension writes
+                class.is_some_and(|class| class.fields.iter().any(|field| field.name == "$kind")),
+            )
         },
     );
     assert_eq!(surface, Some(by_ir::function::Surface::AsyncGenerator));
+    assert!(kinds);
 }
 
 #[test]
@@ -8166,6 +8178,56 @@ def counted(n: int) -> object:
 }
 
 #[test]
+fn a_suspension_no_handler_encloses_closes_quietly() {
+    // a `yield` inside nothing but loops is closed by letting the loops' iterators go, and
+    // one a `try` encloses is closed by running the frame
+    with_source(
+        "\
+def quiet(rows: list[list[int]]) -> object:
+    for row in rows:
+        for x in row:
+            yield x
+    yield 0
+
+def handled(rows: list[int]) -> object:
+    for x in rows:
+        try:
+            yield x
+        except ValueError:
+            pass
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let closes = |name: &str| {
+                module
+                    .classes
+                    .iter()
+                    .find(|class| class.name == name)
+                    .and_then(|class| class.resume.as_ref())
+                    .map(|resume| resume.quiet_closes.clone())
+                    .unwrap_or_default()
+            };
+            assert_eq!(
+                closes("quiet$gen"),
+                vec![
+                    by_ir::function::QuietClose {
+                        state: 1,
+                        clears: vec!["$iter1".to_string(), "$iter0".to_string()],
+                    },
+                    by_ir::function::QuietClose {
+                        state: 2,
+                        clears: Vec::new(),
+                    },
+                ]
+            );
+            assert_eq!(closes("handled$gen"), Vec::new());
+        },
+    );
+}
+
+#[test]
 fn a_generator_local_that_may_be_unset_stays_a_cell() {
     // each of these would read a *zero* instead of raising if it were unboxed
     for (source, name) in [
@@ -8192,7 +8254,11 @@ fn a_generator_local_that_may_be_unset_stays_a_cell() {
                 .iter()
                 .find(|field| field.name == name)
                 .unwrap_or_else(|| panic!("`{name}` is a state field"));
-            assert_eq!(field.ty, RType::OBJECT, "`{name}` must stay a cell");
+            assert!(field.cell, "`{name}` must stay a cell");
+            assert!(
+                crate::has_an_unset_value(&field.ty),
+                "`{name}` is held where unset is a value of its own"
+            );
             assert!(
                 has_op(&state.methods[0], |op| matches!(op, Op::GetCell { .. })),
                 "`{name}` must be read with the unset check"

@@ -305,6 +305,24 @@ class _Both:
         self.log.append(('exit' + self.tag, kind))
         return False
 
+# an iterable handing out an iterator that logs being let go of, and on the way asks the
+# first generator in `box` for its next value
+class _LoggedIterator:
+    def __init__(self, log, name, box):
+        self.log, self.name, self.box = log, name, box
+    def __next__(self):
+        return self.name
+    def __del__(self):
+        self.log.append('del ' + self.name)
+        if self.box:
+            self.log.append(type(_capture(next, self.box[0])).__name__)
+
+class _LoggedSource:
+    def __init__(self, log, name, box=None):
+        self.log, self.name, self.box = log, name, box if box is not None else []
+    def __iter__(self):
+        return _LoggedIterator(self.log, self.name, self.box)
+
 def _logged(fn):
     log = []
     try:
@@ -920,6 +938,13 @@ def _capture(fn, *args):
     except BaseException as e:
         return e
     return None
+
+# the answer, or the exception raised in its place
+def _outcome(fn, *args):
+    try:
+        return fn(*args)
+    except BaseException as e:
+        return e
 
 # a subclass of `base` whose `name` rebinds `len` in `module` to answer `n`, then answers
 # as `answer` would
@@ -1629,6 +1654,285 @@ def stepped(n: int) -> list[int]:
 }
 
 #[test]
+fn a_loop_counter_counts_past_the_machine_integer_as_python_does() {
+    // a counter a loop steps is held as a machine integer while the loop runs, but it is
+    // still an `int`: a step that leaves the machine word carries on as python's does. the
+    // counter is taken past the word at its top and at its bottom, by a step of one and by
+    // a step of a quarter of the word, with the trip's other work done before the step
+    // and not done again, and inside a nest where the inner counter overflows on a later
+    // trip of the outer loop. one also crosses the top of the tagged short range on the
+    // way, and one is read by a handler the loop raises to
+    agree(
+        "counteredge",
+        "\
+from typing import Callable
+
+
+def near_top(n: int) -> int:
+    i = 9223372036854775806
+    total = 0
+    while i < n:
+        total = total + 1
+        i = i + 1
+    return total
+
+
+def stepped_big(n: int) -> int:
+    i = 0
+    k = 0
+    while i < n:
+        i = i + 4611686018427387904
+        k = k + 1
+    return k
+
+
+def falling(n: int) -> list[int]:
+    seen: list[int] = []
+    i = 0
+    while i > n:
+        seen.append(i)
+        i = i - 4611686018427387904
+    seen.append(i)
+    return seen
+
+
+def nested(n: int) -> int:
+    total = 0
+    outer = 0
+    while outer < 3:
+        j = 9223372036854775805
+        while j < n:
+            total = total + j - 9223372036854775000
+            j = j + 1
+        outer = outer + 1
+    return total + outer
+
+
+def crossing(n: int) -> int:
+    i = 4611686018427387900
+    total = 0
+    while i < n:
+        total = total + i
+        i = i + 2305843009213693953
+    return total + i
+
+
+def top_bound(n: int) -> int:
+    i = 9223372036854775800
+    k = 0
+    while i < n:
+        i = i + 1
+        k = k + 1
+    return i - k
+
+
+def caught(n: int) -> int:
+    i = 0
+    try:
+        while True:
+            i = i + 4611686018427387904
+            if i > n:
+                raise ValueError(i)
+    except ValueError:
+        return i
+
+
+def climbing(n: int) -> int:
+    i = 0
+    k = 0
+    while k < n:
+        i = i + 2305843009213693953
+        k = k + 1
+    return i
+
+
+def measured(s: str, n: int) -> int:
+    i = 0
+    k = 0
+    while i < n:
+        if len(s) > 0:
+            i = i + 4611686018427387904
+        k = k + 1
+    return k
+
+
+def called(f: Callable[[int], None], n: int) -> int:
+    i = 0
+    k = 0
+    while i < n:
+        f(k)
+        i = i + 4611686018427387904
+        k = k + 1
+    return k
+",
+        &[
+            "m.near_top(2**63 + 3)",
+            "m.near_top(2**63 - 1)",
+            "m.near_top(0)",
+            "m.stepped_big(2**64)",
+            "m.stepped_big(2**63)",
+            "m.falling(-(2**64))",
+            "m.falling(-(2**63) - 1)",
+            "m.nested(2**63 + 2)",
+            "m.nested(2**63 - 2)",
+            "m.crossing(2**62 + 5)",
+            "m.crossing(2**63 + 10)",
+            "m.top_bound(2**63 - 1)",
+            "m.top_bound(2**63 + 1)",
+            "m.caught(2**64)",
+            "[m.climbing(n) for n in (0, 1, 2, 3, 4, 5)]",
+            "m.measured('ab', 2**64)",
+            "(lambda seen: (m.called(seen.append, 2**64), seen))([])",
+        ],
+    );
+}
+
+#[test]
+fn a_loop_counter_stepped_by_other_counters_counts_past_the_machine_integer() {
+    // a counter whose steps are sums of other counters, or of a bound nothing in the loop
+    // writes, is as much a machine integer inside the loop as one stepped by a literal, and
+    // leaves the machine word as python's does: past the top by doubling, past the bottom
+    // by a negative step, by a step too large to narrow, and from a sum whose two operands
+    // are both counters that change on every trip
+    agree(
+        "countersums",
+        "\
+def sieve_count(limit: int) -> int:
+    flags = []
+    i = 0
+    while i < limit:
+        flags.append(True)
+        i = i + 1
+    count = 0
+    n = 2
+    while n < limit:
+        if flags[n]:
+            count = count + 1
+            m = n + n
+            while m < limit:
+                flags[m] = False
+                m = m + n
+        n = n + 1
+    return count
+
+
+def doubling(n: int) -> int:
+    x = 1
+    k = 0
+    while x < n:
+        x = x + x
+        k = k + 1
+    return k + x
+
+
+def stepped_by(step: int, n: int) -> int:
+    i = 0
+    k = 0
+    while i < n:
+        i = i + step
+        k = k + 1
+    return k
+
+
+def falling_by(step: int, n: int) -> int:
+    i = 0
+    k = 0
+    while i > n:
+        i = i - step
+        k = k + 1
+    return i
+
+
+def fibonacci(n: int) -> list[int]:
+    a = 0
+    b = 1
+    k = 0
+    while k < n:
+        a = a + b
+        b = a - b
+        k = k + 1
+    return [a, b]
+
+
+def offset(start: int, n: int) -> int:
+    total = 0
+    k = 0
+    while k < n:
+        j = start
+        j = j + k
+        total = total + j
+        k = k + 1
+    return total
+",
+        &[
+            "[m.sieve_count(n) for n in (0, 2, 3, 100, 1000)]",
+            "[m.doubling(n) for n in (0, 1, 2, 10**6, 2**62, 2**63, 10**30)]",
+            "[m.stepped_by(s, n) for s, n in ((3, 100), (2**61, 2**64), (2**62, 2**64), (2**64, 2**66), (1, 0))]",
+            "[m.falling_by(s, n) for s, n in ((3, -100), (2**61, -(2**64)), (2**62, -(2**64)), (2**64, -(2**66)))]",
+            "[m.fibonacci(n) for n in (0, 1, 10, 91, 92, 93, 200)]",
+            "[m.offset(s, n) for s, n in ((0, 10), (2**62 - 3, 10), (2**63 - 5, 10), (-(2**63), 10), (10**20, 3))]",
+        ],
+    );
+}
+
+#[test]
+fn a_loop_counter_started_from_a_negative_literal_counts_as_python_does() {
+    // a negative literal is a literal, so a counter that starts at one counts as a machine
+    // integer where it can, and as python's `int` where it cannot: from `-1`, from `~3`,
+    // from the bottom of the machine word, and at both edges of the short range
+    agree(
+        "counternegative",
+        "\
+def from_minus_one(n: int) -> int:
+    i = -1
+    total = 0
+    while i < n:
+        total = total + i
+        i = i + 1
+    return total
+
+
+def inverted(n: int) -> int:
+    i = ~3
+    k = 0
+    while i < n:
+        i = i + 1
+        k = k + 1
+    return k
+
+
+def bottom(n: int) -> int:
+    i = -9223372036854775807 - 1
+    k = 0
+    while i > n:
+        i = i - 1
+        k = k + 1
+    return k
+
+
+def below_short(n: int) -> int:
+    i = -4611686018427387905
+    k = 0
+    while i < n:
+        i = i + 1
+        k = k + 1
+    return k
+
+
+def edges() -> list[int]:
+    return [-4611686018427387904, -4611686018427387905, -9223372036854775807, ~4611686018427387903, ~-4611686018427387905, -0, ~0]
+",
+        &[
+            "[m.from_minus_one(n) for n in (-5, -1, 0, 10)]",
+            "[m.inverted(n) for n in (-10, 0, 10)]",
+            "[m.bottom(n) for n in (-(2**63) - 3, -(2**63), 0)]",
+            "[m.below_short(n) for n in (-(2**62) - 2, -(2**62) + 2)]",
+            "m.edges()",
+        ],
+    );
+}
+
+#[test]
 fn an_operation_that_keeps_leaving_the_short_range_does_not_leak() {
     // each trip round this loop boxes both operands, calls cpython, and tags the
     // result. a reference dropped or kept anywhere along that path shows up as growth
@@ -1772,6 +2076,355 @@ def float_tdiv(a: float, b: float) -> float:
             "[(type(e).__name__, str(e)) for e in [_capture(m.float_mod, 1.0, 0.0)]]",
             "[(type(e).__name__, str(e)) for e in [_capture(m.float_tdiv, 1.0, 0.0)]]",
         ],
+    );
+}
+
+/// the doubles a float operation can meet at its edges: a nan, both infinities, both
+/// zeros, and the error value the runtime once used to signal a failure, which is a legal
+/// double a program is free to compute
+const FLOAT_EDGES: &str = "[float('nan'), float('inf'), float('-inf'), 0.0, -0.0, 1.5, -113.0]";
+
+#[test]
+fn float_operations_agree_at_every_edge() {
+    // a division tests its divisor and jumps to its error, an unbox tests its operand's
+    // type, and an `int` widened to a double tests its shortness — none of them hands an
+    // answer back that has to be told apart from an error by asking the thread. what
+    // has to survive that is every double the operations can legitimately answer,
+    // `-113.0` among them, and every failure raised as python raises it
+    let divisions = [
+        format!(
+            "[repr(m.div(a, b)) if b != 0.0 else repr(_capture(m.div, a, b)) for a in {FLOAT_EDGES} for b in {FLOAT_EDGES}]"
+        ),
+        format!(
+            "[repr(m.fdiv(a, b)) if b != 0.0 else repr(_capture(m.fdiv, a, b)) for a in {FLOAT_EDGES} for b in {FLOAT_EDGES}]"
+        ),
+        format!(
+            "[repr(m.mod(a, b)) if b != 0.0 else repr(_capture(m.mod, a, b)) for a in {FLOAT_EDGES} for b in {FLOAT_EDGES}]"
+        ),
+        format!("[repr(m.walk([a, b])) for a in {FLOAT_EDGES} for b in {FLOAT_EDGES}]"),
+        format!("[repr(m.dot([a], [b])) for a in {FLOAT_EDGES} for b in {FLOAT_EDGES}]"),
+        format!("[repr(m.element({FLOAT_EDGES}, i)) for i in range(-7, 7)]"),
+    ];
+    let mut calls: Vec<&str> = divisions.iter().map(String::as_str).collect();
+    calls.extend([
+        "m.div(-113.0, 1.0)",
+        "m.chain(-113.0)",
+        "repr(_capture(m.chain, 0.0))",
+        "[m.scaled(n, 3) for n in (0, 1, -1, 2**53 + 1, -(2**53) - 1, 2**62 - 1, 2**62, -(2**62), -(2**62) - 1, 2**63 - 1, 2**63, 10**300)]",
+        "repr(_capture(m.scaled, 10**400, 3))",
+        "repr(_capture(m.scaled, -(10**400), 3))",
+        "repr(_capture(m.scaled, 1, 0))",
+        "m.scaled(True, 2)",
+        // a `float` parameter handed an `int`, a `bool` or a subclass reaches the
+        // interpreted definition, whose answer is python's
+        "repr(m.div(1, 2))",
+        "repr(m.div(True, 2.0))",
+        "repr(_capture(m.div, 1, 0))",
+        "repr(m.div(type('Plain', (float,), {})(3.0), 2.0))",
+        // a subclass element with nothing of its own is its value
+        "repr(m.walk([type('Plain', (float,), {})(2.5), -0.0]))",
+        "repr(m.dot([type('Plain', (float,), {})(2.5)], [-113.0]))",
+        "repr(m.element([type('Plain', (float,), {})(2.5)], 0))",
+        "repr(_capture(m.element, [1.0], 1))",
+    ]);
+    agree(
+        "floatedges",
+        "\
+def div(a: float, b: float) -> float:
+    return a / b
+
+
+def fdiv(a: float, b: float) -> float:
+    return a // b
+
+
+def mod(a: float, b: float) -> float:
+    return a % b
+
+
+def chain(a: float) -> float:
+    return (a / 1.0) / (a / -113.0)
+
+
+def scaled(n: int, d: int) -> float:
+    return 3.0 * n / d
+
+
+def walk(xs: list[float]) -> float:
+    total = 0.0
+    for x in xs:
+        total = total * 0.5 + x
+    return total
+
+
+def dot(a: list[float], b: list[float]) -> float:
+    out = 0.0
+    i = 0
+    while i < len(a):
+        out = out + a[i] * b[i]
+        i = i + 1
+    return out
+
+
+def element(xs: list[float], i: int) -> float:
+    return xs[i]
+",
+        &calls,
+    );
+}
+
+/// the operands `//`, `%` and `**` treat specially: every sign of zero and infinity, a
+/// nan, a subnormal, results that overflow and underflow, and `-1.0`, `1.0` and `2.0`,
+/// which `**` answers without asking the platform
+const DIVMOD_EDGES: &str = "[float('nan'), float('inf'), float('-inf'), 0.0, -0.0, 1.0, -1.0, 1.5, -1.5, 2.0, -4.0, 113.0, -113.0, 1e300, -1e300, 5e-324]";
+/// exponents, adding the fractional ones that take a negative base out of the reals
+const EXPONENT_EDGES: &str = "[float('nan'), float('inf'), float('-inf'), 0.0, -0.0, 1.0, -1.0, 2.0, 3.0, -3.0, 0.5, -0.5, 1.0 / 3.0, 1e20, -1e20, 1e300]";
+
+#[test]
+fn float_floor_division_remainder_and_power_agree_at_every_edge() {
+    // python's `//` and `%` are not `floor(a / b)` and `fmod` with the sign fixed up:
+    // an infinite dividend floors to a nan, an infinite divisor floors a finite dividend
+    // of the other sign to `-1.0`, and a zero remainder takes the divisor's sign. its
+    // `**` raises on a zero base to a negative power and on a result too large for a
+    // double, and gives a complex number for a negative base to a fractional power —
+    // which a double cannot hold, so that pair is left to the object protocol
+    let calls = [
+        format!("[repr(_outcome(m.fdiv, a, b)) for a in {DIVMOD_EDGES} for b in {DIVMOD_EDGES}]"),
+        format!("[repr(_outcome(m.mod, a, b)) for a in {DIVMOD_EDGES} for b in {DIVMOD_EDGES}]"),
+        format!(
+            "[repr(_outcome(m.fdiv_mod, a, b)) for a in {DIVMOD_EDGES} for b in {DIVMOD_EDGES}]"
+        ),
+        format!(
+            "[repr(_outcome(m.power, a, b)) for a in {DIVMOD_EDGES} for b in {EXPONENT_EDGES}]"
+        ),
+        format!("[repr(_outcome(m.held, a, b)) for a in {DIVMOD_EDGES} for b in {EXPONENT_EDGES}]"),
+        format!(
+            "[repr(_outcome(m.declared, a, b)) for a in {DIVMOD_EDGES} for b in {EXPONENT_EDGES}]"
+        ),
+        format!(
+            "[repr(_outcome(m.augmented, a, b)) for a in {DIVMOD_EDGES} for b in (0, 1, -1, 2, 3, -3, 2**70, -(2**70), 10**400)]"
+        ),
+        format!(
+            "[repr(_outcome(m.int_exponent, a, b)) for a in {DIVMOD_EDGES} for b in (0, 1, -1, 2, 3, -3, 2**70, -(2**70), 10**400)]"
+        ),
+        format!(
+            "[repr(_outcome(m.int_base, a, b)) for a in (0, 1, -1, 2, -8, 10**400) for b in {EXPONENT_EDGES}]"
+        ),
+        format!("[repr(_outcome(m.squared, a)) for a in {DIVMOD_EDGES}]"),
+        format!("[repr(_outcome(m.rooted, a)) for a in {DIVMOD_EDGES}]"),
+        format!("[repr(_outcome(m.from_two, b)) for b in {EXPONENT_EDGES}]"),
+        format!("[repr(_outcome(m.summed, a)) for a in {DIVMOD_EDGES}]"),
+        format!(
+            "[repr(_outcome(m.builtin_pow, a, b)) for a in {DIVMOD_EDGES} for b in {EXPONENT_EDGES}]"
+        ),
+        format!(
+            "[repr(_outcome(m.math_pow, a, b)) for a in {DIVMOD_EDGES} for b in {EXPONENT_EDGES}]"
+        ),
+        format!(
+            "[repr(_outcome(m.mixed_fdiv, a, b)) for a in (0, 7, -7, 10**400) for b in {DIVMOD_EDGES}]"
+        ),
+        format!("[repr(_outcome(m.mixed_mod, a, b)) for a in {DIVMOD_EDGES} for b in (0, 2, -2)]"),
+    ];
+    let calls: Vec<&str> = calls.iter().map(String::as_str).collect();
+    agree(
+        "floatdivpow",
+        "\
+import math
+
+
+def fdiv(a: float, b: float) -> float:
+    return a // b
+
+
+def mod(a: float, b: float) -> float:
+    return a % b
+
+
+def fdiv_mod(a: float, b: float) -> tuple[float, float]:
+    return a // b, a % b
+
+
+def power(a: float, b: float) -> object:
+    return a ** b
+
+
+def held(a: float, b: float) -> object:
+    x = a ** b
+    return x
+
+
+def declared(a: float, b: float) -> float:
+    return a ** b
+
+
+def augmented(a: float, b: int) -> float:
+    x = a
+    x **= b
+    return x
+
+
+def int_exponent(a: float, b: int) -> float:
+    return a ** b
+
+
+def int_base(a: int, b: float) -> object:
+    return a ** b
+
+
+def squared(a: float) -> float:
+    return a ** 2.0
+
+
+def rooted(a: float) -> object:
+    return a ** 0.5
+
+
+def from_two(b: float) -> float:
+    return 2.0 ** b
+
+
+def summed(a: float) -> float:
+    total = 0.0
+    i = 0
+    while i < 3:
+        total = total + a ** 3.0 + a // 2.0 + a % -2.0
+        i = i + 1
+    return total
+
+
+def builtin_pow(a: float, b: float) -> object:
+    return pow(a, b)
+
+
+def math_pow(a: float, b: float) -> float:
+    return math.pow(a, b)
+
+
+def mixed_fdiv(a: int, b: float) -> float:
+    return a // b
+
+
+def mixed_mod(a: float, b: int) -> float:
+    return a % b
+",
+        &calls,
+    );
+}
+
+#[test]
+fn a_complex_power_is_refused_where_a_float_local_is_declared() {
+    // `float ** float` is `Any` to the checker, so a local declared `float` may be handed
+    // a power python answers with a complex number. the power itself is python's; the
+    // store is the unbox a declared `float` makes, and it refuses the complex loudly
+    // rather than holding a nan. this asserts on the compiled leg alone: python keeps
+    // the complex number
+    let Some(answers) = compiled_answers(
+        "floatpowrefused",
+        "\
+def assigned(a: float, b: float) -> float:
+    x: float = a ** b
+    return x
+
+
+def augmented(a: float, b: float) -> float:
+    x = a
+    x **= b
+    return x
+",
+        Options::default(),
+        &[
+            "repr(_capture(m.assigned, -8.0, 0.5))",
+            "repr(_capture(m.augmented, -8.0, 1.0 / 3.0))",
+            "m.assigned(-8.0, 3.0)",
+            "m.augmented(8.0, 0.5)",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(
+        answers,
+        [
+            "\"TypeError('expected float, got complex')\"",
+            "\"TypeError('expected float, got complex')\"",
+            "-512.0",
+            "2.8284271247461903",
+        ]
+    );
+}
+
+#[test]
+fn a_float_operation_given_python_s_numeric_promotion_agrees_at_every_edge() {
+    // python's `float` admits an `int` and a `bool`, so the same operations over a `.py`
+    // module meet them wherever a double was annotated
+    agree_python(
+        "floatedgespy",
+        "\
+def div(a: float, b: float) -> float:
+    return a / b
+
+
+def mod(a: float, b: float) -> float:
+    return a % b
+
+
+def scaled(n: int, d: int) -> float:
+    return 3.0 * n / d
+
+
+def counted(n: int) -> float:
+    total = 0.0
+    i = 0
+    while i < n:
+        total = total + i / 2
+        i = i + 1
+    return total
+",
+        &[
+            "[repr(_capture(m.div, a, b)) if b == 0 else repr(m.div(a, b)) for a in (1, True, -113.0, float('nan')) for b in (0, False, 2, True, -0.0, float('inf'))]",
+            "[repr(_capture(m.mod, a, b)) if b == 0 else repr(m.mod(a, b)) for a in (7, True, -113.0, -0.0) for b in (0, False, 2, -2.5, float('-inf'))]",
+            "[m.scaled(n, 3) for n in (True, False, 2**53 + 1, 2**63 - 1)]",
+            "repr(_capture(m.scaled, 10**400, 3))",
+            "repr(_capture(m.scaled, 1, 0))",
+            "[m.counted(n) for n in (0, 1, 1000)]",
+        ],
+    );
+}
+
+#[test]
+fn a_float_element_of_the_wrong_type_is_refused_where_it_is_unboxed() {
+    // a `.by` `list[float]` holds floats, so an `int` element is refused where the loop
+    // unboxes it — with the unbox's own error, and nothing left half-done
+    let Some(answers) = compiled_answers(
+        "floatrefused",
+        "\
+def walk(xs: list[float]) -> float:
+    total = 0.0
+    for x in xs:
+        total = total + x
+    return total
+
+
+def element(xs: list[float], i: int) -> float:
+    return xs[i]
+",
+        Options::default(),
+        &[
+            "repr(_capture(m.walk, [1.0, 2]))",
+            "repr(_capture(m.walk, [None]))",
+            "repr(_capture(m.element, [1.0, True], 1))",
+            "m.walk([1.0, -113.0])",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(
+        answers,
+        [
+            "\"TypeError('expected float, got int')\"",
+            "\"TypeError('expected float, got NoneType')\"",
+            "\"TypeError('expected float, got bool')\"",
+            "-112.0",
+        ]
     );
 }
 
@@ -2911,6 +3564,68 @@ def through_the_inner_tuple(n: int) -> list[str]:
             "m.both_discarded(2)",
             "m.one_passed_on(2)",
             "m.through_the_inner_tuple(2)",
+        ],
+    );
+}
+
+#[test]
+fn an_int_nothing_names_is_dropped_as_soon_as_it_is_used() {
+    // an `int` is held tagged, and a value too wide for the tag is a real object behind
+    // a pointer — an `int` subclass among them, which may have a finalizer. so when a
+    // tagged temporary is let go of is observable in exactly the way it is for any other
+    // temporary: python drops it once the expression that made it is done, before the
+    // next statement runs, and the loop shape asks the same of a register the next trip
+    // would otherwise be the first thing to overwrite.
+    //
+    // `handed_on` is the one that answers with a number rather than an order: the value
+    // the call stores has to outlive the register that handed it over
+    agree_python(
+        "inttemps",
+        "\
+from collections.abc import Callable
+
+
+def consume(make: Callable[[], int], log: list[str]) -> int:
+    total = make() + 1
+    log.append('after')
+    return total
+
+
+def looped(make: Callable[[], int], log: list[str], n: int) -> int:
+    total = 0
+    i = 0
+    while i < n:
+        total = total + make()
+        log.append('trip')
+        i = i + 1
+    return total
+
+
+def raised(make: Callable[[], int], log: list[str]) -> list[str]:
+    try:
+        make() // 0
+    except ZeroDivisionError:
+        log.append('caught')
+    log.append('after')
+    return list(log)
+
+
+def handed_on(make: Callable[[], int], sink: list[int], log: list[str]) -> int:
+    sink.append(make())
+    log.append('stored')
+    sink.clear()
+    log.append('cleared')
+    return len(log)
+",
+        &[
+            "(lambda log: (m.consume(lambda: type('B', (int,), \
+             {'__del__': lambda s: log.append('del')})(1 << 70), log), log))([])",
+            "(lambda log: (m.looped(lambda: type('B', (int,), \
+             {'__del__': lambda s: log.append('del')})(1 << 70), log, 3), log))([])",
+            "(lambda log: m.raised(lambda: type('B', (int,), \
+             {'__del__': lambda s: log.append('del')})(1 << 70), log))([])",
+            "(lambda log: (m.handed_on(lambda: type('B', (int,), \
+             {'__del__': lambda s: log.append('del')})(1 << 70), [], log), log))([])",
         ],
     );
 }
@@ -4404,6 +5119,35 @@ def walked(o) -> object:
 }
 
 #[test]
+fn a_loop_that_walks_an_exact_list_on_one_trip_and_anything_else_on_the_next_agrees() {
+    // whether a `for` walks an exact list is decided each time the loop opens, so one loop
+    // run again inside another can walk a list by index on one trip, then a subclass, a
+    // tuple, a generator or a list again on the next
+    agree(
+        "iterexactnest",
+        "\
+def flattened(rows: list[object]) -> object:
+    seen = []
+    for row in rows:
+        for x in row:
+            seen.append(x)
+    return seen
+
+
+def gen(n: int) -> object:
+    i = 0
+    while i < n:
+        yield i
+        i = i + 1
+",
+        &[
+            "m.flattened([[1, 2], (3, 4), type('D', (list,), {'__iter__': lambda self: iter([9])})([5, 6]), m.gen(2), [7], type('P', (list,), {})([8]), '', []])",
+            "m.flattened([m.gen(3), [1], (2,), [3, 4]])",
+        ],
+    );
+}
+
+#[test]
 fn a_list_resized_under_a_for_loop_agrees() {
     // cpython's list iterator holds a position and re-reads the length every step, so
     // a list appended to under a `for` keeps feeding it and one popped from ends it
@@ -4516,6 +5260,83 @@ def doubled(xs: list[int]) -> object:
 }
 
 #[test]
+fn a_for_loop_takes_a_reference_to_each_element_it_walks() {
+    // a `for` loop over an exact list walks it by index, reading the length again every
+    // step and taking a reference to the element it finds without asking whether the
+    // slot is empty — a slot inside an exact list's length never is. that reference keeps
+    // the element alive past anything the loop body does to the list, and everything
+    // that is not an exact list still goes through the protocol
+    agree(
+        "iterelement",
+        "\
+class Probe:
+    def __init__(self, tag: int) -> None:
+        self.tag = tag
+
+
+def walked(o) -> object:
+    seen = []
+    for x in o:
+        seen.append(x)
+    return seen
+
+
+def cleared_under(xs: list[Probe]) -> object:
+    seen = []
+    for x in xs:
+        xs.clear()
+        seen.append(x.tag)
+    return seen
+
+
+def replaced_under(xs: list[Probe]) -> object:
+    seen = []
+    i = 0
+    for x in xs:
+        if i + 1 < len(xs):
+            xs[i + 1] = Probe(x.tag * 10)
+        seen.append(x.tag)
+        i = i + 1
+    return seen
+
+
+def sliced_under(xs: list[int]) -> object:
+    seen = []
+    for x in xs:
+        if x == 1:
+            xs[:] = [7, 8, 9, 10]
+        seen.append(x)
+    return seen
+
+
+def summed(xs: list[float]) -> float:
+    total = 0.0
+    for x in xs:
+        total = total + x
+        if total > 100.0:
+            xs.append(-1.0)
+    return total
+",
+        &[
+            "m.walked((1, 2, 3))",
+            "m.walked(iter([1, 2, 3]))",
+            "m.walked('abc')",
+            "m.walked({'a': 1, 'b': 2})",
+            "m.walked(x * 2 for x in [1, 2])",
+            "m.walked(type('P', (list,), {})([1, 2, 3]))",
+            "m.walked(type('G', (list,), {'__getitem__': lambda s, i: -1, '__len__': lambda s: 9})([1, 2]))",
+            "m.cleared_under([m.Probe(1), m.Probe(2)])",
+            "m.replaced_under([m.Probe(1), m.Probe(2), m.Probe(3)])",
+            "m.sliced_under([1, 2, 3])",
+            "m.summed([60.0, 50.0, 1.0])",
+            "m.summed([])",
+            // the element a loop took stays alive for as long as the loop's reference does
+            "[_xs := [object()], __import__('sys').getrefcount(_xs[0]), m.walked(_xs)[0] is _xs[0], __import__('sys').getrefcount(_xs[0])][1::2]",
+        ],
+    );
+}
+
+#[test]
 fn a_for_loop_starts_over_on_every_trip_through_an_enclosing_one() {
     // one cursor register serves every trip through whatever encloses it, so it is set
     // where the loop opens rather than where the register is declared. left unset on
@@ -4552,9 +5373,9 @@ def restarted(xs: list[int], times: int) -> object:
 #[test]
 fn a_for_loop_in_a_generator_resumes_where_it_left_off() {
     // a generator parks its iterator in a field because no register survives a
-    // `yield`, and a cursor is a register — so a generator's loop keeps the protocol.
-    // given one, a resumed frame would start again from whatever an unset register
-    // holds, which is to say from the top
+    // `yield`, and the cursor a loop over an exact list keeps is parked beside it. were
+    // it left in a register, a resumed frame would start again from whatever an unset
+    // register holds, which is to say from the top
     agree(
         "itergen",
         "\
@@ -4565,6 +5386,36 @@ def each(xs: list[int]) -> object:
 
 def taken(xs: list[int]) -> object:
     return list(each(xs))
+
+def growing(xs: list[int]) -> object:
+    for x in xs:
+        if x < 3:
+            xs.append(x + 10)
+        yield x
+
+def shrinking(xs: list[int]) -> object:
+    for x in xs:
+        xs.pop()
+        yield x
+
+def nested(rows: list[list[int]]) -> object:
+    for row in rows:
+        for x in row:
+            yield x
+        yield -1
+
+def echoed(xs: list[int]) -> object:
+    for x in xs:
+        got = yield x
+        yield got
+
+def left_early(xs: list[int]) -> object:
+    for x in xs:
+        if x == 2:
+            break
+        yield x
+    for x in xs:
+        yield x * 10
 ",
         &[
             "m.taken([1, 2, 3])",
@@ -4572,6 +5423,17 @@ def taken(xs: list[int]) -> object:
             "list(m.each([4, 5]))",
             // stopping part way and resuming is the same question asked once
             "[next(it) for it in [iter(m.each([7, 8]))] for _ in range(3)]",
+            // a list changed while the frame is suspended is read again at the next step
+            "list(m.growing([1, 2, 5]))",
+            "list(m.shrinking([1, 2, 3, 4]))",
+            "(xs := [1, 2], g := m.each(xs), next(g), xs.append(3), list(g))[-1]",
+            "(xs := [1, 2], g := m.each(xs), next(g), next(g), xs.clear(), list(g))[-1]",
+            "list(m.nested([[1, 2], [], [3]]))",
+            "(g := m.echoed([1, 2]), next(g), g.send('a'), next(g), g.send('b'))[1:]",
+            "(g := m.each([1, 2]), next(g), type(_capture(g.throw, KeyError('k'))).__name__, list(g))[2:]",
+            "list(m.left_early([1, 2, 3]))",
+            // a subclass keeps its own iteration
+            "list(m.each(type('L', (list,), {'__iter__': lambda s: iter([9, 8])})([1, 2, 3])))",
         ],
     );
 }
@@ -5003,6 +5865,68 @@ def lookup(d: dict[str, int], k: str) -> int:
             "m.lookup({'a': 1, 'b': 2}, 'b')",
             "[(type(e).__name__) for e in [_capture(m.at, [1], 5)]]",
             "[(type(e).__name__) for e in [_capture(m.lookup, {}, 'z')]]",
+        ],
+    );
+}
+
+#[test]
+fn an_element_unboxed_straight_off_a_list_agrees() {
+    // an element read whose one use is to be unboxed borrows the element from an exact
+    // list across the unbox rather than retaining it. every other read — a subclass, a
+    // missed bound, a protocol read — takes the operations as they were. so what is asked
+    // here is where the borrowed path meets a failure: an element of the wrong type, an
+    // index out of range, and a `list` subclass whose `__getitem__` hands back a fresh
+    // object with a finalizer, which python lets go of before the handler runs. only the
+    // exception's type is compared, since a `.by` unbox words its `TypeError` its own way
+    agree(
+        "elementunbox",
+        "\
+def dot(a: list[float], b: list[float]) -> float:
+    out = 0.0
+    i = 0
+    while i < len(a):
+        out = out + a[i] * b[i]
+        i = i + 1
+    return out
+
+
+def pair_at(a: list[float], b: list[float], i: int) -> float:
+    return a[i] * b[i]
+
+
+def total(xs: list[int]) -> int:
+    out = 0
+    i = 0
+    while i < len(xs):
+        out = out + xs[i] * 1
+        i = i + 1
+    return out
+
+
+def guarded(a: list[float], b: list[float], i: int, log: list[str]) -> str:
+    try:
+        v = a[i] * b[i]
+        log.append('ok')
+        return str(v)
+    except TypeError:
+        log.append('type')
+        return 'type'
+    except IndexError:
+        log.append('index')
+        return 'index'
+",
+        &[
+            "m.dot([0.5, 1.5, 2.5], [2.0, 4.0, 6.0])",
+            "m.pair_at([1.0, 2.0, 3.0], [4.0, 5.0, 6.0], -1)",
+            "m.total([1, 2, 3])",
+            "m.total([1 << 70, 1 << 71, 5])",
+            "(lambda log: (m.guarded([3.0], [2.0], 0, log), log))([])",
+            "(lambda log: (m.guarded([3.0, 'x'], [2.0, 2.0], 1, log), log))([])",
+            "(lambda log: (m.guarded([3.0], [2.0], 9, log), log))([])",
+            "(lambda log: (m.guarded(type('S', (list,), {'__getitem__': lambda s, i: \
+             type('L', (), {'__del__': lambda o: log.append('del')})()})([0.0]), \
+             [1.0], 0, log), log))([])",
+            "(lambda e: type(e).__name__)(_capture(lambda: m.pair_at([1.0, 'x'], [2.0, 3.0], 1)))",
         ],
     );
 }
@@ -9449,6 +10373,51 @@ def rebinding(h: Holder, n: int) -> int:
 }
 
 #[test]
+fn two_fields_compared_on_loan_outlive_a_comparison_that_rebinds_them() {
+    // `h.low < h.high` reads both fields on loan, and a comparison of two `int`s outside
+    // the short range asks their class. a subclass's `__lt__` that writes both fields
+    // over drops the only references the fields held, so the comparison has to hold its
+    // operands for itself before it runs anything — and the loop has to read the fields
+    // again on the next trip rather than what it compared last
+    agree_python(
+        "comparefields",
+        "\
+class Holder:
+    low: int
+    high: int
+
+    def __init__(self, low: int, high: int) -> None:
+        self.low = low
+        self.high = high
+
+
+def below(h: Holder) -> bool:
+    return h.low < h.high
+
+
+def trips(h: Holder, cap: int) -> int:
+    n = 0
+    while h.low < h.high and n < cap:
+        n = n + 1
+    return n
+",
+        &[
+            "[m.below(m.Holder(1, 2)), m.below(m.Holder(2**70, 2**69)), m.trips(m.Holder(0, 5), 10)]",
+            "(box := [], Big := type('Big', (int,), {'__lt__': lambda s, o: (\
+               setattr(box[0], 'low', 7), setattr(box[0], 'high', 3), \
+               __import__('gc').collect(), int(s) < int(o), repr(s))[3]}), \
+               h := m.Holder(Big(2**70), Big(2**71)), box.append(h), \
+               m.below(h), h.low, h.high)[4:]",
+            "(box := [], Big := type('Big', (int,), {'__lt__': lambda s, o: (\
+               setattr(box[0], 'low', 5), setattr(box[0], 'high', 2), \
+               __import__('gc').collect(), int(s) < int(o), repr(s))[3]}), \
+               h := m.Holder(Big(2**70), Big(2**71)), box.append(h), \
+               m.trips(h, 10), h.low, h.high)[4:]",
+        ],
+    );
+}
+
+#[test]
 fn a_borrowed_narrowing_does_not_over_release_what_it_narrowed() {
     // the narrowing no longer retains, so the register is reading through something it
     // does not own. the subscript's temporary holds the only reference the borrow
@@ -12837,6 +13806,281 @@ def guarding(log: list[str]) -> object:
     );
 }
 
+/// `tp_iternext` ends a generator that returned `None` without raising, as cpython's own
+/// does, and every other way of asking still sees what python shows
+///
+/// the slot's quiet end is invisible from python by design — `next` raises
+/// `StopIteration` on its behalf and `for` or `list` never see one — so these pin the
+/// faces around it: `send` and `throw` still raise for a `None`, a value other than
+/// `None` still rides out on the exception, and a frame that finished stays finished
+#[test]
+fn a_generator_that_returns_none_ends_its_iteration_as_python_s_does() {
+    agree(
+        "iterquiet",
+        "\
+def plain(n: int) -> object:
+    i = 0
+    while i < n:
+        yield i
+        i = i + 1
+
+def valued(n: int) -> object:
+    yield n
+    return n * 2
+
+def caught() -> object:
+    try:
+        yield 1
+    except ValueError:
+        return
+
+def raising() -> object:
+    yield 1
+    raise KeyError('k')
+",
+        &[
+            "list(m.plain(3))",
+            "[v for v in m.plain(2)]",
+            "(g := m.plain(1), next(g), next(g, 'default'), next(g, 'again'))[1:]",
+            "(g := m.plain(0), (lambda e: (type(e).__name__, e.args, e.value))(_capture(g.__next__)))[1]",
+            "(g := m.plain(0), (lambda e: (type(e).__name__, e.args, e.value))(_capture(next, g)))[1]",
+            "(g := m.plain(1), next(g), (lambda e: (type(e).__name__, e.args, e.value))(_capture(g.send, None)))[2]",
+            "(g := m.caught(), next(g), (lambda e: (type(e).__name__, e.args, e.value))(_capture(g.throw, ValueError())))[2]",
+            "(g := m.valued(4), next(g), (lambda e: (type(e).__name__, e.args, e.value))(_capture(next, g)))[2]",
+            "(g := m.valued(4), list(g), type(_capture(next, g)).__name__)[1:]",
+            "(g := m.raising(), next(g), type(_capture(next, g)).__name__, type(_capture(next, g)).__name__)[2:]",
+            "_capture(list, m.raising())",
+            // an interpreted delegation reaches the same frame through the send slot
+            "(lambda: (yield from m.plain(2)))().__class__.__name__",
+            "list((lambda: (r := (yield from m.valued(3)), (yield r)))())",
+            "list((lambda: (r := (yield from m.plain(2)), (yield r)))())",
+            "list(zip(m.plain(3), m.plain(2)))",
+            "sorted(m.plain(3), reverse=True)",
+        ],
+    );
+}
+
+/// generators made and stepped by the same compiled frame, which steps them without the
+/// iterator protocol
+const STEPPED: &str = "\
+from collections.abc import Callable, Iterator
+
+
+def counting(n: int) -> Iterator[int]:
+    i = 0
+    while i < n:
+        yield i
+        i = i + 1
+
+
+def failing(n: int) -> Iterator[int]:
+    yield n
+    raise KeyError(n)
+
+
+def valued(n: int) -> Iterator[int]:
+    yield n
+    return n * 2
+
+
+def total(n: int) -> int:
+    t = 0
+    for v in counting(n):
+        t = t + v
+    return t
+
+
+def collected(n: int) -> list[int]:
+    out: list[int] = []
+    for v in counting(n):
+        out.append(v)
+    return out
+
+
+def relayed(n: int) -> Iterator[int]:
+    for v in counting(n):
+        yield v * 10
+
+
+def over_an_expression(xs: list[int]) -> list[int]:
+    out: list[int] = []
+    for v in (x * 2 for x in xs):
+        out.append(v)
+    return out
+
+
+def left_and_resumed(n: int) -> list[object]:
+    g = counting(n)
+    out: list[object] = []
+    for v in g:
+        out.append(v)
+        if v == 1:
+            break
+    out.append(next(g))
+    for v in g:
+        out.append(v)
+    out.append(next(g, 'done'))
+    for v in g:
+        out.append(v)
+    return out
+
+
+def raised(n: int) -> object:
+    t = 0
+    try:
+        for v in failing(n):
+            t = t + v
+    except KeyError as e:
+        return ('caught', t, e.args, e.__traceback__.tb_next is not None)
+    return t
+
+
+def returned(n: int) -> list[int]:
+    out: list[int] = []
+    for v in valued(n):
+        out.append(v)
+    return out
+
+
+def chosen(n: int, flip: bool) -> list[int]:
+    out: list[int] = []
+    for v in (counting(n) if flip else failing_free(n)):
+        out.append(v)
+    return out
+
+
+def failing_free(n: int) -> Iterator[int]:
+    yield -n
+
+
+def hooked(n: int, hook: Callable[[int], object]) -> Iterator[int]:
+    i = 0
+    while i < n:
+        hook(i)
+        yield i
+        i = i + 1
+
+
+def watched(n: int, hook: Callable[[int], object]) -> int:
+    t = 0
+    for v in hooked(n, hook):
+        t = t + v
+    return t
+
+
+def summed(n: int) -> int:
+    if n == 0:
+        return 0
+    t = 0
+    for v in feeding(n):
+        t = t + v
+    return t
+
+
+def feeding(n: int) -> Iterator[int]:
+    yield summed(n - 1) + 1
+";
+
+/// a `for` over a generator the same compiled frame made steps the compiled generator
+/// directly, and every answer is still the protocol's
+///
+/// the step is chosen by testing the iterator's type at every step, so a name rebound
+/// to something else, a subclass-free python generator, or a list all take the protocol
+/// instead, and a generator left by `break` is the same object a later `next` or `for`
+/// resumes
+#[test]
+fn a_for_over_a_compiled_generator_steps_it_directly() {
+    agree_python(
+        "stepped",
+        STEPPED,
+        &[
+            "m.total(5)",
+            "m.collected(4)",
+            "list(m.relayed(3))",
+            "m.over_an_expression([1, 2, 3])",
+            "m.left_and_resumed(5)",
+            "m.raised(7)",
+            "m.returned(3)",
+            "[m.chosen(3, True), m.chosen(3, False)]",
+            // a rebinding reaches the loop, which then takes the protocol
+            "(setattr(m, 'counting', lambda n: iter([n, n])), m.total(4), m.collected(3))[1:]",
+            "(setattr(m, 'counting', lambda n: (x for x in range(n, 0, -1))), m.total(4))[1]",
+            "(setattr(m, 'counting', m.failing_free), m.collected(4))[1]",
+            // the body runs python between the steps, and a hook that raises leaves the
+            // loop through its error edge
+            "(log := [], m.watched(3, log.append), log)[1:]",
+            "type(_capture(m.watched, 3, lambda i: 1 // (i - 1))).__name__",
+            "_deepest(m.summed, 60) > 0",
+            "type(_capture(m.summed, 10**5)).__name__",
+        ],
+    );
+}
+
+/// the direct step is what the loops in [`STEPPED`] are emitted as: the type test and
+/// the type's own step, with the depth the frame already holds
+///
+/// `agree` cannot tell the two apart — the protocol answers the same — so this reads
+/// the emitted C of each loop's function
+#[test]
+fn a_for_over_a_compiled_generator_is_emitted_as_its_type_s_step() {
+    let Some((_python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = diff_root().join("by_diff_stepped_pin");
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        require_native: true,
+        language: by_irbuild::Language::Python,
+        ..Options::default()
+    };
+    if build_source(STEPPED, "by_diff_stepped_pin", &toolchain, &dir, &options).is_err() {
+        eprintln!("skipping: no working C toolchain");
+        return;
+    }
+    let emitted = std::fs::read_to_string(dir.join("by_diff_stepped_pin.c"))
+        .expect("the generated C is written beside the extension");
+    let step =
+        "By_by_diff_stepped_pin_counting_gen_Type_next((By_by_diff_stepped_pin_counting_gen *)";
+    for symbol in [
+        "by_by_diff_stepped_pin_total",
+        "by_by_diff_stepped_pin_collected",
+        "by_by_diff_stepped_pin_left_and_resumed",
+        "by_by_diff_stepped_pin_relayed_gen__resume",
+    ] {
+        let body = emitted_function(&emitted, symbol);
+        assert!(body.contains(step), "{symbol}: {body}");
+        assert!(body.contains(", by_depth, 1)"), "{symbol}: {body}");
+    }
+    // a frame handed no depth looks it up once, and a generator's body is handed the one
+    // its step counted
+    assert!(
+        emitted_function(&emitted, "by_by_diff_stepped_pin_total")
+            .contains("ByDepth by_depth = By_DepthHere();"),
+        "{emitted}"
+    );
+    assert!(
+        !emitted_function(&emitted, "by_by_diff_stepped_pin_relayed_gen__resume")
+            .contains("By_DepthHere"),
+        "{emitted}"
+    );
+    // a generator expression is stepped the same way, and a loop whose iterable is not
+    // known to be one is left to the protocol with no depth looked up for it
+    assert!(
+        emitted_function(&emitted, "by_by_diff_stepped_pin_over_an_expression")
+            .contains("_genexpr0_gen_Type_next(("),
+        "{emitted}"
+    );
+    // `tp_iternext` finishes quietly through the same step
+    assert!(
+        emitted_function(
+            &emitted,
+            "By_by_diff_stepped_pin_counting_gen_Type_iternext"
+        )
+        .contains("By_by_diff_stepped_pin_counting_gen_Type_next("),
+        "{emitted}"
+    );
+}
+
 /// the send slot is answered by the compiled state object, and its return arrives
 /// without an exception
 ///
@@ -13227,16 +14471,22 @@ async def streamed() -> Any:
         }
     }
     // and a step that carries nothing carries `None` in, because the store cannot be
-    // skipped or the last `send` survives it: a generator's `__next__`, and the step of
-    // the awaitable an async generator's `__anext__` hands back — which is its `send`
-    // with nothing sent. a coroutine has no such step of its own — it is not an iterator
+    // skipped or the last `send` survives it: a generator's `__next__` — the per-type step
+    // its iternext slot runs — and the step of the awaitable an async generator's
+    // `__anext__` hands back, which is its `send` with nothing sent. a coroutine has no
+    // such step of its own — it is not an iterator
     for symbol in [
-        "By_by_diff_framekind_pin_plain_gen_Type_iternext",
+        "By_by_diff_framekind_pin_plain_gen_Type_next",
         "By_by_diff_framekind_pin_streamed_gen_Type_asend_send",
     ] {
         let step = emitted_function(&emitted, symbol);
         assert!(step.contains("Py_None"), "{symbol}: {step}");
     }
+    assert!(
+        emitted_function(&emitted, "By_by_diff_framekind_pin_plain_gen_Type_iternext")
+            .contains("By_by_diff_framekind_pin_plain_gen_Type_next("),
+        "{emitted}"
+    );
     assert!(
         !emitted.contains("By_by_diff_framekind_pin_awaited_gen_Type_iternext"),
         "{emitted}"
@@ -24540,6 +25790,164 @@ def other_array(xs: list[float], ys: list[float]) -> float:
 }
 
 #[test]
+fn a_nest_of_loops_entered_through_one_narrowing_agrees() {
+    // a nest whose bounds nothing inside it writes is duplicated once, and its copy is
+    // entered only when every one of those bounds is short — so an inner loop compares
+    // machine integers without a copy of its own, and a bound widened to a double inside
+    // the copy converts from the narrowed register. whichever bound is too large for the
+    // register sends the whole nest down the original, and the two have to agree
+    agree(
+        "unswitchnest",
+        "\
+def grid(rows: int, columns: int, depth: int) -> int:
+    total = 0
+    y = 0
+    while y < rows:
+        x = 0
+        while x < columns:
+            k = 0
+            while k < depth:
+                total = total + 1
+                k = k + 1
+            total = total + x
+            x = x + 1
+        y = y + 1
+    return total
+
+
+def scaled(width: int, height: int) -> float:
+    total = 0.0
+    y = 0
+    while y < height:
+        x = 0
+        while x < width:
+            total = total + 3.0 * x / width + 2.4 * y / height
+            x = x + 1
+        y = y + 1
+    return total
+
+
+def early(rows: int, columns: int, stop: int) -> int:
+    total = 0
+    y = 0
+    while y < rows:
+        x = 0
+        while x < columns:
+            total = total + 1
+            if total >= stop:
+                return total
+            x = x + 1
+        y = y + 1
+    return total
+
+
+def rebound(rows: int, columns: int, stop: int) -> int:
+    # the inner bound is written in the outer body, so only the outer bound is
+    # invariant across the nest and the inner loop is narrowed on its own
+    total = 0
+    y = 0
+    while y < rows:
+        width = columns + y
+        x = 0
+        while x < width:
+            total = total + x
+            if x >= stop:
+                return total
+            x = x + 1
+        y = y + 1
+    return total
+",
+        &[
+            "[m.grid(r, c, d) for r in (0, 1, 3) for c in (0, 2) for d in (0, 1, 4)]",
+            "m.grid(2, 3, -(10 ** 30))",
+            "[m.scaled(w, h) for w in (1, 3, 7) for h in (1, 5)]",
+            "m.scaled(2**62, 0)",
+            "m.early(2**62, 3, 7)",
+            "m.early(3, 2**62, 7)",
+            "m.early(10 ** 30, 10 ** 30, 11)",
+            "m.early(-(2**62) - 1, 5, 3)",
+            "m.early(4, 4, 100)",
+            "[m.rebound(r, c, 100) for r in (0, 1, 4) for c in (0, 3)]",
+            "[m.rebound(2, c, 5) for c in (2**62 - 2, 2**62 - 1, 2**62)]",
+        ],
+    );
+}
+
+#[test]
+fn a_counter_tagged_inside_a_narrowed_loop_agrees_at_the_edges_of_the_short_range() {
+    // inside a loop duplicated behind a narrowed bound, a counter the guard has just kept
+    // below the bound, and whose writes keep it from ever falling below the short range,
+    // is given its tagged value with no range test. a counter written again between the
+    // guard and the read is proven nothing, and one started outside the short range is
+    // never proven to stay inside it — each of those still takes the tested conversion,
+    // and all of them have to give python's answers at the edges of the range
+    agree(
+        "tagshort",
+        "\
+def split(value: int) -> tuple[int, int]:
+    return value // 7, value % 7
+
+
+def up(stop: int, n: int) -> list[int]:
+    out = [0]
+    i = 4611686018427387898
+    while i < n:
+        whole, part = split(i)
+        out.append(whole)
+        out.append(part)
+        i = i + 1
+        if i > stop:
+            return out
+    return out
+
+
+def down(n: int) -> list[int]:
+    out = [0]
+    i = 4611686018427387903
+    while i > n:
+        whole, part = split(i)
+        out.append(whole + part)
+        i = i - 1
+    return out
+
+
+def stepped_after_the_guard(n: int) -> list[int]:
+    out = [0]
+    i = 4611686018427387898
+    while i < n:
+        i = i + 2
+        whole, part = split(i)
+        out.append(whole)
+        out.append(part)
+    return out
+
+
+def started_outside(n: int) -> list[int]:
+    out = [0]
+    i = 4611686018427387906
+    while i > n:
+        i = i - 1
+        whole, part = split(i)
+        out.append(whole)
+        out.append(part)
+    return out
+",
+        &[
+            "m.up(2**62 + 5, 2**62 - 1)",
+            "m.up(2**62 + 5, 2**62 + 1)",
+            "m.up(2**62 - 3, 10**30)",
+            "m.up(0, 2**62 - 1)",
+            "m.down(2**62 - 4)",
+            "m.down(10**30)",
+            "m.stepped_after_the_guard(2**62 - 1)",
+            "m.stepped_after_the_guard(2**62)",
+            "m.started_outside(2**62 - 3)",
+            "m.started_outside(10**30)",
+        ],
+    );
+}
+
+#[test]
 fn a_float_subclass_handed_to_a_float_parameter_reaches_the_interpreted_definition() {
     // a `float` parameter compiles to a `double`, and a subclass of `float` is more than
     // its value: it can define its own operators, and it is its own type. the boundary
@@ -25930,6 +27338,215 @@ async def stream(n: int) -> AsyncIterator[int]:
     );
 }
 
+/// `close` finishes a generator no handler of its own encloses without running its frame,
+/// and one that some handler encloses still runs it
+#[test]
+fn a_close_with_nothing_to_run_finishes_the_frame() {
+    agree_python(
+        "quietclose",
+        QUIET_CLOSES,
+        &[
+            "(log := [], g := m.one(_LoggedSource(log, 'x')), next(g), g.close(), log[:], \
+              type(_capture(next, g)).__name__, g.close())[3:]",
+            "(g := m.plain(1), next(g), g.close(), type(_capture(next, g)).__name__, g.close())[2:]",
+            "(g := m.plain(1), g.close(), type(_capture(next, g)).__name__)[1:]",
+            // a value sent in is let go of by the close
+            "(log := [], O := type('O', (), {'__del__': lambda s: log.append('sent gone')}), \
+              g := m.plain(1), next(g), g.send(O()), g.close(), log[:])[5:]",
+            // a frame some handler encloses still runs it
+            "(log := [], g := m.guarded([1, 2], log), next(g), g.close(), log[:])[3:]",
+            "(log := [], g := m.caught([1, 2], log), next(g), g.close(), log[:])[3:]",
+            // abandoned by `any` part way, and collected the same way
+            "[m.any_of([1, 2, 3], k) for k in (0, 1, 3)]",
+            "(log := [], [(lambda g: (next(g), None))(m.one(_LoggedSource(log, str(k)))) \
+              for k in range(3)], log)[-1]",
+        ],
+    );
+}
+
+/// generators closed in [`a_close_with_nothing_to_run_finishes_the_frame`]
+const QUIET_CLOSES: &str = "\
+from collections.abc import Iterable, Iterator
+
+
+def one(src: Iterable[object]) -> Iterator[object]:
+    for a in src:
+        yield a
+
+
+def one_handled(src: Iterable[object]) -> Iterator[object]:
+    for a in src:
+        try:
+            yield a
+        except ValueError:
+            pass
+
+
+def looped(outer: Iterable[object], inner: Iterable[object]) -> Iterator[object]:
+    for a in outer:
+        for b in inner:
+            yield (a, b)
+
+
+def looped_handled(outer: Iterable[object], inner: Iterable[object]) -> Iterator[object]:
+    for a in outer:
+        for b in inner:
+            try:
+                yield (a, b)
+            except ValueError:
+                pass
+
+
+def plain(n: int) -> Iterator[int]:
+    yield n
+    yield n + 1
+
+
+def guarded(xs: Iterable[object], log: list[str]) -> Iterator[object]:
+    try:
+        for x in xs:
+            yield x
+    finally:
+        log.append('finally')
+
+
+def caught(xs: Iterable[object], log: list[str]) -> Iterator[object]:
+    for x in xs:
+        try:
+            yield x
+        except GeneratorExit:
+            log.append('exit')
+            raise
+
+
+def any_of(xs: list[int], k: int) -> bool:
+    return any(x == k for x in xs)
+";
+
+/// the close that runs nothing has what the unwinding would have had: the same iterators
+/// let go of in the same order, with the frame running while they go
+///
+/// each generator here is paired with one that differs only by an `except` its close
+/// runs through, so a compiled leg that finished the frame differently from how it unwinds
+/// one answers the pair differently. python itself answers the two halves of a pair
+/// differently where a finalizer asks the frame for its next value, and lets go of two
+/// iterators in the other order, so these are compiled against compiled
+#[test]
+fn a_close_with_nothing_to_run_has_the_unwinding_s_effects() {
+    let probe = |one: &str, looped: &str| {
+        [
+            format!(
+                "(log := [], box := [], g := m.{one}(_LoggedSource(log, 'x', box)), box.append(g), \
+                  next(g), g.close(), log[:], type(_capture(next, g)).__name__)[6:]"
+            ),
+            format!(
+                "(log := [], g := m.{looped}(_LoggedSource(log, 'outer'), _LoggedSource(log, 'inner')), \
+                  next(g), g.close(), log[:])[4:]"
+            ),
+        ]
+    };
+    let quiet = probe("one", "looped");
+    let handled = probe("one_handled", "looped_handled");
+    let calls: Vec<&str> = quiet.iter().chain(&handled).map(String::as_str).collect();
+    let Some(answers) = compiled_answers(
+        "quietcloseeffects",
+        QUIET_CLOSES,
+        Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+        &calls,
+    ) else {
+        return;
+    };
+    assert_eq!(answers[..2], answers[2..], "{answers:?}");
+}
+
+/// a generator's memory is kept back for the next generator of its type, and the next one
+/// is a new generator in every way python can ask about
+///
+/// what could survive into the next generator from the last is what the block does not
+/// reset: the collector's header, whose finalized bit would keep a suspended frame's
+/// `finally` from ever running. a generator the collector finalized in a cycle, one that
+/// raised, one closed, one that finished, one whose weak reference is still out and one
+/// never started are each followed by generators of the same type that have to run
+/// their cleanups, answer `gc.is_tracked` and start from the top
+#[test]
+fn a_recycled_generator_is_a_new_generator() {
+    agree_python(
+        "genrecycle",
+        "\
+from collections.abc import Iterator
+
+
+def guarded(log: list[str], tag: str) -> Iterator[int]:
+    try:
+        yield 1
+        yield 2
+    finally:
+        log.append('finally ' + tag)
+
+
+def raising(n: int) -> Iterator[int]:
+    yield n
+    raise ValueError(n)
+
+
+def counting(n: int) -> Iterator[int]:
+    i = 0
+    while i < n:
+        yield i
+        i = i + 1
+
+
+def rounds(n: int) -> list[object]:
+    out: list[object] = []
+    i = 0
+    while i < n:
+        g = raising(i)
+        out.append(next(g))
+        try:
+            next(g)
+        except ValueError as e:
+            out.append(('raised', e.args))
+        h = raising(i + 100)
+        out.append(next(h))
+        i = i + 1
+    return out
+
+
+def drained(n: int) -> list[int]:
+    out: list[int] = []
+    i = 0
+    while i < n:
+        for v in counting(i):
+            out.append(v)
+        i = i + 1
+    return out
+",
+        &[
+            // the collector finalizes a generator in a cycle, then frees its block
+            "(_cycled(lambda box, log: m.guarded(log, 'cycle')), \
+              (lambda log: ([(lambda g: (next(g), gc.is_tracked(g))[1])(m.guarded(log, str(k))) \
+                             for k in range(3)], log))([]))",
+            "[_cycled(lambda box, log: m.guarded(log, str(k))) for k in range(3)]",
+            "m.rounds(4)",
+            "m.drained(5)",
+            // closed, finished and unstarted generators, each followed by a new one
+            "(lambda log: ((lambda g: (next(g), g.close()))(m.guarded(log, 'a')), \
+                           list(m.guarded(log, 'b')), m.guarded(log, 'c') and None, \
+                           (lambda k: (next(k), next(k)))(m.guarded(log, 'd')), log))([])",
+            // a weak reference's callback runs on the old generator, and the new one has
+            // none of its own
+            "(lambda fired, wr, refs: ( \
+                (lambda g: (list(g), refs.append(wr.ref(g, lambda r: fired.append('gone')))))(m.counting(2)), \
+                fired[:], \
+                (lambda h: (wr.getweakrefcount(h), list(h)))(m.counting(3)), \
+                [r() for r in refs]))([], __import__('weakref'), [])",
+        ],
+    );
+}
+
 /// a frame that is running cannot be resumed a second time from inside itself
 ///
 /// python refuses every entry point while the frame executes, so the resumption in the
@@ -26646,6 +28263,94 @@ def grown(n: int) -> int:
             "m.grown(1)",
             "m.grown(9)",
             "m.grown(1000)",
+        ],
+    );
+}
+
+#[test]
+fn a_buffer_appended_in_a_loop_reports_every_element_wherever_the_loop_is_left() {
+    // a loop that only appends to a buffer may keep the buffer's length to itself while it
+    // runs, but whoever reads the buffer next sees every element: after the loop ends,
+    // after a `break`, from a handler an exception raised part way through a trip reached
+    // (past several growths, so the buffer has moved), through a second name bound to the
+    // same buffer before the loop, and from an outer loop reading it between inner loops
+    agree(
+        "pushlength",
+        "\
+from typing import Callable
+
+
+def partial_len(xs: list[float]) -> int:
+    out = []
+    try:
+        for x in xs:
+            out.append(1.0 / x)
+    except ZeroDivisionError:
+        pass
+    return len(out)
+
+
+def partial_last(xs: list[float]) -> float:
+    out = [0.0]
+    try:
+        for x in xs:
+            out.append(1.0 / x)
+    except ZeroDivisionError:
+        return out[len(out) - 1] + len(out)
+    return -1.0
+
+
+def broken(n: int, stop: int) -> int:
+    out = []
+    i = 0
+    while i < n:
+        if i == stop:
+            break
+        out.append(i * 2)
+        i = i + 1
+    return len(out) + out[len(out) - 1]
+
+
+def aliased(n: int) -> int:
+    out = [0]
+    other = out
+    i = 0
+    while i < n:
+        out.append(i)
+        i = i + 1
+    return len(other) + other[len(other) - 1]
+
+
+def rows(n: int) -> list[int]:
+    out = [0]
+    seen = []
+    r = 0
+    while r < 3:
+        i = 0
+        while i < n:
+            out.append(i)
+            i = i + 1
+        seen.append(len(out))
+        r = r + 1
+    return [seen[0], seen[1], seen[2], out[len(out) - 1]]
+
+
+def called(f: Callable[[int], None], n: int) -> int:
+    out = []
+    i = 0
+    while i < n:
+        f(i)
+        out.append(i)
+        i = i + 1
+    return len(out)
+",
+        &[
+            "[m.partial_len(xs) for xs in ([1.0, 2.0, 0.0, 4.0], [1.0] * 100 + [0.0], [0.0], [], [2.0] * 50)]",
+            "[m.partial_last(xs) for xs in ([1.0, 2.0, 0.0, 4.0], [4.0] * 37 + [0.0], [0.0], [8.0])]",
+            "[m.broken(n, stop) for n, stop in ((10, 3), (100, 99), (100, 1000), (5, 1))]",
+            "[m.aliased(n) for n in (0, 1, 7, 100)]",
+            "[m.rows(n) for n in (0, 1, 5, 40)]",
+            "(lambda seen: (m.called(seen.append, 20), len(seen)))([])",
         ],
     );
 }
@@ -32994,6 +34699,65 @@ def escapes(log: list[str]) -> str:
 }
 
 #[test]
+fn a_generator_local_held_in_its_own_representation_agrees() {
+    // a local some path reads before writing — a loop's target, one assigned in a branch —
+    // starts unset in the state object, and keeps its own representation where that has
+    // an unset value to spare: a tagged `int`'s error value, a pointer's `NULL`. every
+    // read still asks whether it was written, the body's own and a generator
+    // expression's through the state object alike
+    agree_python(
+        "gentyped",
+        "\
+from collections.abc import Iterator
+
+
+def doubled(xs: list[int]) -> Iterator[int]:
+    for x in xs:
+        yield x * 2
+
+
+def shouted(words: list[str]) -> Iterator[str]:
+    for w in words:
+        yield w + '!'
+
+
+def last_after(xs: list[int]) -> Iterator[object]:
+    for x in xs:
+        yield x
+    yield x
+
+
+def branch(n: int) -> Iterator[int]:
+    if n > 0:
+        y = n
+    yield 1
+    yield y
+
+
+def expression_reads_later(xs: list[int]) -> Iterator[object]:
+    g = (x + later for x in xs)
+    yield 'made'
+    try:
+        yield next(g)
+    except NameError as e:
+        yield type(e).__name__
+    later = 10**20
+    yield list(g)
+",
+        &[
+            "list(m.doubled([1, 2**70, -3]))",
+            "list(m.shouted(['a', 'bc']))",
+            "list(m.last_after([4, 5]))",
+            "type(_capture(list, m.last_after([]))).__name__",
+            "list(m.branch(3))",
+            "type(_capture(list, m.branch(0))).__name__",
+            "list(m.expression_reads_later([1, 2]))",
+            "list(m.doubled([True, False]))",
+        ],
+    );
+}
+
+#[test]
 fn an_unset_generator_local_agrees() {
     // a state field is unboxed only where it is provably assigned. each of these would
     // read a *zero* instead of raising if the rule were loose
@@ -36279,6 +38043,158 @@ class Widened(list):
 }
 
 #[test]
+fn a_machine_counter_reaches_a_double_an_object_and_a_buffer_at_every_edge() {
+    // a counter held as a machine integer is converted to a double, built into an object
+    // and used to index a packed buffer straight from that integer, rather than being
+    // given its tagged value first. what those have to agree on is every value the
+    // counter can hold: either side of the short range, either side of 2**53 where a
+    // double stops holding every integer, and the ends of the register itself
+    agree(
+        "counterreach",
+        "\
+def doubles_from(n: int) -> list[float]:
+    out = [0.0]
+    i = 9007199254740985
+    while i < n:
+        out.append(0.5 * i)
+        out.append(1.0 * i / 3.0)
+        i = i + 1
+    return out
+
+
+def doubles_short(n: int) -> list[float]:
+    out = [0.0]
+    i = 4611686018427387900
+    while i < n:
+        out.append(1.0 * i)
+        i = i + 1
+    return out
+
+
+def doubles_top(n: int) -> list[float]:
+    out = [0.0]
+    i = 9223372036854775800
+    while i < n:
+        out.append(1.0 * i)
+        i = i + 1
+    return out
+
+
+def doubles_bottom(n: int) -> list[float]:
+    out = [0.0]
+    i = -9223372036854775803
+    while i > n:
+        i = i - 1
+        out.append(1.0 * i)
+    return out
+
+
+def members(seen: set[int], n: int) -> list[bool]:
+    out = [False]
+    i = 4611686018427387900
+    while i < n:
+        out.append(i in seen)
+        i = i + 1
+    return out
+
+
+def members_top(seen: set[int], n: int) -> list[object]:
+    out: list[object] = []
+    i = 9223372036854775800
+    while i < n:
+        out.append(i)
+        out.append(i in seen)
+        i = i + 1
+    return out
+
+
+def keys(n: int) -> str:
+    out = ''
+    i = 4611686018427387900
+    while i < n:
+        out = out + str(i) + ','
+        i = i + 1
+    return out
+
+
+def keys_bottom(n: int) -> str:
+    out = ''
+    i = -9223372036854775803
+    while i > n:
+        i = i - 1
+        out = out + 'k' + str(i)
+    return out
+
+
+def packed(n: int) -> int:
+    flags = [True]
+    i = 1
+    while i < n:
+        flags.append(i % 3 == 0)
+        i = i + 1
+    count = 0
+    j = 0
+    while j < n:
+        if flags[j]:
+            flags[j] = False
+            count = count + 1
+        j = j + 1
+    k = -1
+    while k >= -n:
+        if not flags[k]:
+            flags[k] = True
+            count = count + 10
+        k = k - 1
+    return count
+
+
+def packed_past_the_short_range(n: int) -> int:
+    flags = [True]
+    j = 4611686018427387902
+    while j < n:
+        if flags[j]:
+            return 1
+        j = j + 1
+    return 0
+
+
+def packed_below_the_short_range(n: int) -> int:
+    flags = [True]
+    j = -4611686018427387902
+    while j > n:
+        j = j - 1
+        if flags[j]:
+            return 1
+    return 0
+
+
+def packed_at_the_top(n: int) -> int:
+    flags = [True]
+    j = 9223372036854775805
+    while j < n:
+        if flags[j]:
+            return 1
+        j = j + 1
+    return 0
+",
+        &[
+            "m.doubles_from(2**53 + 6)",
+            "m.doubles_short(2**62 + 3)",
+            "m.doubles_top(2**63 - 1)",
+            "m.doubles_bottom(-(2**63))",
+            "m.members({2**62 - 1, 2**62, 2**62 + 1}, 2**62 + 3)",
+            "m.members_top({2**63 - 2, 2**63 - 1}, 2**63 - 1)",
+            "m.keys(2**62 + 3)",
+            "m.keys_bottom(-(2**63))",
+            "[m.packed(n) for n in (1, 2, 7, 30)]",
+            "repr(_capture(m.packed_past_the_short_range, 2**62 + 2))",
+            "repr(_capture(m.packed_below_the_short_range, -(2**62) - 2))",
+            "repr(_capture(m.packed_at_the_top, 2**63 - 1))",
+        ],
+    );
+}
+
+#[test]
 fn an_unboxed_counter_indexes_every_container_and_every_edge() {
     // a counter a loop steps by one gets a machine representation, and a subscript
     // now reads the element at that number directly rather than making it a tagged
@@ -37047,6 +38963,55 @@ def call_rebound(f: Callable[[int], object], log: list[str]) -> None:
             "(lambda log: (m.call_named(lambda i: m.Loud(i, log), log), log)[1])([])",
             "(lambda log: (m.call_unpacked(lambda i: m.Loud(i, log), log), log)[1])([])",
             "(lambda log: (m.call_rebound(lambda i: m.Loud(i, log), log), log)[1])([])",
+        ],
+    );
+}
+
+#[test]
+fn a_tuple_of_ints_holds_its_elements_until_python_would_have_dropped_it() {
+    // the tagged twin of the test above. an `int` slot holding a value too wide for the
+    // tag holds a real object, which an `int` subclass can give a finalizer, so the slots
+    // of a returned pair are let go of on python's schedule too: each name as it is
+    // deleted once the pair is unpacked, and last to first when the pair itself goes.
+    // the pair takes each slot's reference from the temporary that computed it rather
+    // than one of its own, so nothing is left holding a slot past the pair
+    agree_python(
+        "inttuplelife",
+        "\
+from collections.abc import Callable
+
+
+def ints(f: Callable[[int], int]) -> tuple[int, int]:
+    return f(1), f(2)
+
+
+def unpacked(f: Callable[[int], int], log: list[str]) -> None:
+    a, b = ints(f)
+    log.append('unpacked')
+    del a
+    log.append('a gone')
+    del b
+    log.append('b gone')
+
+
+def held(f: Callable[[int], int], log: list[str]) -> None:
+    t = ints(f)
+    log.append('held')
+    del t
+    log.append('dropped')
+
+
+def discarded(f: Callable[[int], int], log: list[str]) -> None:
+    ints(f)
+    log.append('after')
+",
+        &[
+            "(lambda log: (m.unpacked(lambda i: type('B', (int,), \
+             {'__del__': lambda s: log.append('del ' + str(int(s) >> 70))})(i << 70), log), log)[1])([])",
+            "(lambda log: (m.held(lambda i: type('B', (int,), \
+             {'__del__': lambda s: log.append('del ' + str(int(s) >> 70))})(i << 70), log), log)[1])([])",
+            "(lambda log: (m.discarded(lambda i: type('B', (int,), \
+             {'__del__': lambda s: log.append('del ' + str(int(s) >> 70))})(i << 70), log), log)[1])([])",
         ],
     );
 }
