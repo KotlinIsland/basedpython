@@ -43,6 +43,7 @@ mod initialize;
 mod injections;
 mod inlay_hints;
 mod notebook;
+mod program_model;
 mod project_server;
 mod publish_diagnostics;
 mod pull_diagnostics;

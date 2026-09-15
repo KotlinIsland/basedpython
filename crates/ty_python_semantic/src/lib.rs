@@ -68,9 +68,9 @@ pub use types::static_resource::{ResourceError, render_as, resolve_static_resour
 pub use types::template::finite_string_set;
 pub use types::visibility::private_symbols;
 pub use types::{
-    DisplaySettings, FixtureBinding, FixtureExposure, FixtureNameSource, ProgramEnvironment,
-    TypeQualifiers, fixture_bindings_for_parameter, fixture_exposures_for_definition,
-    pytest_global_plugin_files,
+    CollectedTest, CollectedTestClass, DisplaySettings, FixtureBinding, FixtureExposure,
+    FixtureNameSource, ProgramEnvironment, TypeQualifiers, collected_pytest_tests,
+    fixture_bindings_for_parameter, fixture_exposures_for_definition, pytest_global_plugin_files,
 };
 
 pub mod api_lockfile;

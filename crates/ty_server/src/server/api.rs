@@ -10,6 +10,7 @@ use std::panic::{AssertUnwindSafe, UnwindSafe};
 pub(super) mod changes;
 mod diagnostics;
 mod notifications;
+mod program_files;
 mod requests;
 mod semantic_tokens;
 mod symbols;
@@ -109,6 +110,18 @@ pub(super) fn request(req: server::Request) -> Task {
         // into a prompt, with no file open at all.
         requests::ExplainRuleHandler::METHOD => {
             background_request_task::<requests::ExplainRuleHandler>(req, BackgroundSchedule::Worker)
+        }
+        // The program model a run configuration is built from. Asked by URI rather than by open
+        // document, because the module a configuration names is usually not open, and asked off
+        // an editor's own schedule, so none of the three is latency sensitive.
+        requests::EntryPointHandler::METHOD => {
+            background_request_task::<requests::EntryPointHandler>(req, BackgroundSchedule::Worker)
+        }
+        requests::TestItemsHandler::METHOD => {
+            background_request_task::<requests::TestItemsHandler>(req, BackgroundSchedule::Worker)
+        }
+        requests::RunModulesHandler::METHOD => {
+            background_request_task::<requests::RunModulesHandler>(req, BackgroundSchedule::Worker)
         }
         requests::TranspileRequestHandler::METHOD => background_document_request_task::<
             requests::TranspileRequestHandler,
