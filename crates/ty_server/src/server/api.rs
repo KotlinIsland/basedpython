@@ -133,6 +133,15 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::LatencySensitive
         ),
+        // Asked after every keystroke, and answered to what the keystroke after it does — an
+        // Enter that indents a suite, a statement moved as a unit — so it is the typing path at
+        // its most direct. It parses and nothing more.
+        requests::SyntaxOutlineRequestHandler::METHOD => {
+            background_document_request_task::<requests::SyntaxOutlineRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         requests::ExplainTranspilationHandler::METHOD => background_document_request_task::<
             requests::ExplainTranspilationHandler,
         >(req, BackgroundSchedule::Worker),
