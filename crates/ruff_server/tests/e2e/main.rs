@@ -711,7 +711,6 @@ impl TestServer {
     }
 
     /// Send a `textDocument/didChange` notification with the given content changes
-    #[expect(dead_code)]
     pub(crate) fn change_text_document(
         &mut self,
         path: impl AsRef<Path>,
@@ -1128,6 +1127,18 @@ impl TestServerBuilder {
         code_action.resolve_support = enabled.then(|| lsp_types::ClientCodeActionResolveOptions {
             properties: vec!["edit".to_string()],
         });
+        self
+    }
+
+    /// Claims the client reads a workspace edit's `documentChanges`, the shape that can say which
+    /// version of a document its edits were computed against.
+    pub(crate) fn enable_document_changes(mut self, enabled: bool) -> Self {
+        self.client_capabilities
+            .workspace
+            .get_or_insert_default()
+            .workspace_edit
+            .get_or_insert_default()
+            .document_changes = Some(enabled);
         self
     }
 

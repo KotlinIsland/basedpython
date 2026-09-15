@@ -136,7 +136,7 @@ pub(super) fn resolve_edit_for_fix_all(
     encoding: PositionEncoding,
 ) -> crate::Result<types::WorkspaceEdit> {
     let mut tracker = WorkspaceEditTracker::new(client_capabilities);
-    tracker.set_fixes_for_document(fix_all_edit(query, encoding)?, query.version())?;
+    tracker.set_fixes_for_document(fix_all_edit(query, encoding)?, query.edit_version())?;
     Ok(tracker.into_workspace_edit())
 }
 
@@ -153,7 +153,10 @@ pub(super) fn resolve_edit_for_organize_imports(
     encoding: PositionEncoding,
 ) -> crate::Result<types::WorkspaceEdit> {
     let mut tracker = WorkspaceEditTracker::new(client_capabilities);
-    tracker.set_fixes_for_document(organize_imports_edit(query, encoding)?, query.version())?;
+    tracker.set_fixes_for_document(
+        organize_imports_edit(query, encoding)?,
+        query.edit_version(),
+    )?;
     Ok(tracker.into_workspace_edit())
 }
 
@@ -214,7 +217,10 @@ pub(super) fn resolve_edit_for_optimize_imports(
     encoding: PositionEncoding,
 ) -> crate::Result<types::WorkspaceEdit> {
     let mut tracker = WorkspaceEditTracker::new(client_capabilities);
-    tracker.set_fixes_for_document(optimize_imports_edit(query, encoding)?, query.version())?;
+    tracker.set_fixes_for_document(
+        optimize_imports_edit(query, encoding)?,
+        query.edit_version(),
+    )?;
     Ok(tracker.into_workspace_edit())
 }
 
@@ -223,7 +229,10 @@ pub(super) fn resolve_edit_for_format_and_optimize_imports(
 ) -> crate::Result<types::WorkspaceEdit> {
     let query = snapshot.query();
     let mut tracker = WorkspaceEditTracker::new(snapshot.resolved_client_capabilities());
-    tracker.set_fixes_for_document(format_and_optimize_imports_edit(snapshot)?, query.version())?;
+    tracker.set_fixes_for_document(
+        format_and_optimize_imports_edit(snapshot)?,
+        query.edit_version(),
+    )?;
     Ok(tracker.into_workspace_edit())
 }
 
@@ -232,7 +241,10 @@ pub(super) fn resolve_edit_for_format_and_organize_imports(
 ) -> crate::Result<types::WorkspaceEdit> {
     let query = snapshot.query();
     let mut tracker = WorkspaceEditTracker::new(snapshot.resolved_client_capabilities());
-    tracker.set_fixes_for_document(format_and_organize_imports_edit(snapshot)?, query.version())?;
+    tracker.set_fixes_for_document(
+        format_and_organize_imports_edit(snapshot)?,
+        query.edit_version(),
+    )?;
     Ok(tracker.into_workspace_edit())
 }
 

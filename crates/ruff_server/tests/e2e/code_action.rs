@@ -428,3 +428,55 @@ fn format_and_optimize_imports_resolves_deferred() -> Result<()> {
 
     Ok(())
 }
+
+/// A source action's edit names the version of the document it was computed against, so a client
+/// that has moved on since — the user typed while the fix was being worked out — can refuse to
+/// apply ranges that no longer point where they did.
+#[test]
+fn source_action_edit_carries_the_document_version() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(".")?
+        .enable_document_changes(true)
+        .build();
+
+    server.open_text_document("test.py", "x = 1\n", 1);
+    server.change_text_document(
+        "test.py",
+        vec![
+            lsp_types::TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                lsp_types::TextDocumentContentChangeWholeDocument {
+                    text: NEEDS_EVERYTHING.to_string(),
+                },
+            ),
+        ],
+        7,
+    );
+
+    let actions = server
+        .code_action_request_only(
+            "test.py",
+            vec![CodeActionKind::new("source.optimizeImports.ruff")],
+        )
+        .expect("Expected Some response");
+
+    let [CodeActionResponse::CodeAction(action)] = actions.as_slice() else {
+        panic!("Expected exactly one code action, got {actions:?}");
+    };
+    let Some(changes) = action
+        .edit
+        .as_ref()
+        .and_then(|edit| edit.document_changes.as_ref())
+    else {
+        panic!("Expected document changes, got {:?}", action.edit);
+    };
+    let versions: Vec<_> = changes
+        .iter()
+        .map(|change| match change {
+            lsp_types::DocumentChange::TextDocumentEdit(edit) => edit.text_document.version,
+            other => panic!("Expected a text edit, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(versions, vec![Some(7)]);
+
+    Ok(())
+}

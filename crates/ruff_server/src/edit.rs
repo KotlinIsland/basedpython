@@ -113,10 +113,13 @@ impl WorkspaceEditTracker {
     }
 
     /// Sets a series of [`Fixes`] for a text or notebook document.
+    ///
+    /// `version` is the version the fixes were computed against — see
+    /// [`DocumentQuery::edit_version`](crate::session::DocumentQuery::edit_version).
     pub(crate) fn set_fixes_for_document(
         &mut self,
         fixes: Fixes,
-        version: DocumentVersion,
+        version: Option<DocumentVersion>,
     ) -> crate::Result<()> {
         #[expect(
             clippy::iter_over_hash_type,
@@ -134,7 +137,7 @@ impl WorkspaceEditTracker {
     pub(crate) fn set_edits_for_document(
         &mut self,
         uri: Uri,
-        _version: DocumentVersion,
+        version: Option<DocumentVersion>,
         edits: Vec<lsp_types::TextEdit>,
     ) -> crate::Result<()> {
         match self {
@@ -150,8 +153,9 @@ impl WorkspaceEditTracker {
                 document_edits.push(lsp_types::TextDocumentEdit {
                     text_document: lsp_types::OptionalVersionedTextDocumentIdentifier {
                         text_document_identifier: TextDocumentIdentifier { uri },
-                        // TODO(jane): Re-enable versioned edits after investigating whether it could work with notebook cells
-                        version: None,
+                        // a client applying an edit to a document that has moved on since would
+                        // land every range in the wrong place; the version is what lets it refuse
+                        version,
                     },
                     edits: edits.into_iter().map(lsp_types::Edit::TextEdit).collect(),
                 });

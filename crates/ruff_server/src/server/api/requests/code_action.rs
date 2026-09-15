@@ -179,7 +179,7 @@ fn quick_fix(
 
             tracker.set_edits_for_document(
                 document_uri.clone(),
-                document.version(),
+                document.edit_version(),
                 fix.edits.clone(),
             )?;
 
@@ -209,7 +209,7 @@ fn noqa_comments(snapshot: &DocumentSnapshot, fixes: &[DiagnosticFix]) -> Vec<Co
             tracker
                 .set_edits_for_document(
                     snapshot.query().make_key().into_uri(),
-                    snapshot.query().version(),
+                    snapshot.query().edit_version(),
                     vec![edit],
                 )
                 .ok()?;
