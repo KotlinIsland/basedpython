@@ -5652,6 +5652,87 @@ fn run_from_a_subdirectory_is_still_the_project() {
     );
 }
 
+/// a launcher is handed the interpreter the project's discovery chose, and is run once — for the
+/// program, not for the version probe
+#[cfg(unix)]
+#[test]
+fn run_starts_the_program_through_a_launcher_with_the_interpreter_it_discovered() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let environment = python_environment(&dir.path().join(".venv"));
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        format!(
+            "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n{}",
+            environment.requires_python()
+        ),
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), REPORTS_ITS_INTERPRETER).unwrap();
+    let seen = dir.path().join("seen");
+    let launcher = dir.path().join("launcher");
+    fs::write(
+        &launcher,
+        format!(
+            "#!/bin/sh\n\
+             printf 'invoked\\n' >> '{seen}'\n\
+             for arg in \"$@\"; do printf 'arg %s\\n' \"$arg\" >> '{seen}'; done\n\
+             exec \"$@\"\n",
+            seen = seen.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("run")
+        .arg("--launcher")
+        .arg(&launcher)
+        .args(["main", "extra"])
+        .current_dir(dir.path())
+        .env_remove("PYTHON")
+        .env_remove("VIRTUAL_ENV")
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert!(
+        environment.ran_it(&stdout),
+        "the program ran on the project's environment, launcher or not:\n{stdout}\n{stderr}"
+    );
+    let seen = fs::read_to_string(&seen).expect("the launcher ran");
+    assert_eq!(
+        seen.matches("invoked").count(),
+        1,
+        "the launcher is run for the program alone:\n{seen}"
+    );
+    let arguments: Vec<&str> = seen
+        .lines()
+        .filter_map(|line| line.strip_prefix("arg "))
+        .collect();
+    assert!(
+        arguments
+            .first()
+            .is_some_and(|python| environment.ran_it(python)),
+        "the launcher's first argument is the interpreter discovery chose:\n{seen}"
+    );
+    assert!(
+        arguments
+            .get(1)
+            .is_some_and(|runner| runner.ends_with("_by_runner.py")),
+        "then the runner:\n{seen}"
+    );
+    assert_eq!(
+        arguments.get(2..),
+        Some(&["main", "extra"][..]),
+        "then the program:\n{seen}"
+    );
+}
+
 #[test]
 fn build_from_a_subdirectory_builds_the_project() {
     let dir = tempfile::tempdir().expect("tempdir");

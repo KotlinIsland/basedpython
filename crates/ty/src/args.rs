@@ -87,6 +87,16 @@ pub(crate) enum Command {
         /// resolves imports against — then `$PYTHON`, then `python3` on `PATH`.
         #[arg(long, value_name = "PATH", alias = "venv")]
         python: Option<PathBuf>,
+        /// A program to start the interpreter through, such as a debugger that
+        /// has to be the process the program runs in.
+        ///
+        /// The interpreter is chosen exactly as it is without this, and the
+        /// program is started as `LAUNCHER <interpreter> <runner> <module> <args>`:
+        /// the launcher is handed the interpreter `by run` chose rather than
+        /// having to name one, and is run once, for the program — never for the
+        /// version probe, which is made against the interpreter itself.
+        #[arg(long, value_name = "PATH")]
+        launcher: Option<PathBuf>,
         #[command(flatten)]
         lowering: LoweringArgs,
         /// Compile every imported module to a native extension first.
