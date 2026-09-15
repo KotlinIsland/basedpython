@@ -8,7 +8,7 @@
 //! nothing here may fold an operation that could raise. `1 // 0` stays a division
 //! so that it still raises `ZeroDivisionError` at the right point in the program.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use by_ir::function::{Function, ModuleIr};
 use by_ir::ops::{BinOp, CmpOp, Op, RegisterId, Terminator, UnaryOp, Value};
@@ -191,7 +191,7 @@ fn fold(function: &mut Function, frozen: &HashSet<String>) {
                 read.retain(|(_, owner, name), _| *owner != class || *name != field);
             }
             match op {
-                Op::BuildTuple { dest, items } | Op::TupleBuild { dest, items } => {
+                Op::BuildTuple { dest, items } | Op::TupleBuild { dest, items, .. } => {
                     built.insert(*dest, items.clone());
                 }
                 Op::GetField {
@@ -266,6 +266,25 @@ fn fold_op(op: &Op) -> Option<Op> {
         } => Some(Op::Assign {
             dest: *dest,
             src: Value::Float(-value),
+        }),
+        // a negative literal is lowered as the negation of a positive one, and a counter
+        // written with one has to see the literal to be held as a machine integer.
+        // the one immediate whose negation has no immediate is left to the runtime
+        Op::Unary {
+            dest,
+            op: UnaryOp::Neg,
+            operand: Value::Int(value),
+        } => value.checked_neg().map(|negated| Op::Assign {
+            dest: *dest,
+            src: Value::Int(negated),
+        }),
+        Op::Unary {
+            dest,
+            op: UnaryOp::Invert,
+            operand: Value::Int(value),
+        } => Some(Op::Assign {
+            dest: *dest,
+            src: Value::Int(!value),
         }),
         _ => None,
     }
@@ -392,6 +411,7 @@ fn fold_unpack(types: &[RType], built: &HashMap<RegisterId, Vec<Value>>, op: &Op
     items.iter().all(boxed).then(|| Op::TupleBuild {
         dest: *dest,
         items: items.clone(),
+        moves: BTreeSet::new(),
     })
 }
 
@@ -614,6 +634,29 @@ mod tests {
             m.functions[0].blocks[0].ops[0],
             Op::IntBinary { .. }
         ));
+    }
+
+    #[test]
+    fn negating_an_integer_immediate_folds() {
+        let fold = |op: UnaryOp, value: i64| {
+            fold_op(&Op::Unary {
+                dest: RegisterId(0),
+                op,
+                operand: Value::Int(value),
+            })
+        };
+        let assigned = |value: i64| {
+            Some(Op::Assign {
+                dest: RegisterId(0),
+                src: Value::Int(value),
+            })
+        };
+        assert_eq!(fold(UnaryOp::Neg, 1), assigned(-1));
+        assert_eq!(fold(UnaryOp::Neg, i64::MAX), assigned(-i64::MAX));
+        assert_eq!(fold(UnaryOp::Invert, 3), assigned(-4));
+        assert_eq!(fold(UnaryOp::Invert, i64::MIN), assigned(i64::MAX));
+        // its negation is one past the largest immediate, which only the runtime holds
+        assert_eq!(fold(UnaryOp::Neg, i64::MIN), None);
     }
 
     #[test]
@@ -889,6 +932,7 @@ mod tests {
         builder.push(Op::TupleBuild {
             dest: slots,
             items: vec![Value::Register(b), Value::Register(a)],
+            moves: BTreeSet::new(),
         });
         // `a = <the first slot>`, which is `b`
         builder.push(Op::TupleGet {

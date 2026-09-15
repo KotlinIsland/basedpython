@@ -221,8 +221,11 @@ fn release_temporaries(function: &mut Function) {
 
 /// the places this pass may release: those of temporaries that own one reference apiece
 ///
-/// a tagged `int` is refcounted as well, but an `int` has no finalizer to run, so it is
-/// left for the frame to let go of, inside a tuple as much as on its own
+/// a tagged `int` is one of them. its short case owns nothing at all and its overflow
+/// case owns exactly one `PyLongObject`, and an `int` has no finalizer, so nothing about
+/// *when* it is let go of is observable — what is observable is that the register is left
+/// holding a reference until the next write of it, and the release that write makes then
+/// reads a value from whichever trip round the loop wrote it last
 fn candidates(function: &Function) -> HashSet<Place> {
     // a loop's cursor is read and written by the operation that advances it, outside
     // the operands this pass follows, so it is never offered
@@ -241,7 +244,7 @@ fn candidates(function: &Function) -> HashSet<Place> {
             places_of(function, register).into_iter().filter(|place| {
                 decl.ty
                     .element(&place.path)
-                    .is_some_and(RType::is_object_reference)
+                    .is_some_and(RType::owns_one_reference)
             })
         })
         .collect()
@@ -506,6 +509,7 @@ mod tests {
         Op::TupleBuild {
             dest,
             items: items.iter().copied().map(Value::Register).collect(),
+            moves: BTreeSet::new(),
         }
     }
 
@@ -656,6 +660,41 @@ mod tests {
         run(&mut module);
 
         // the returned value is read by the return itself, so it is not released
+        assert_eq!(
+            releases(&module, 0),
+            vec![(2, made)],
+            "{:?}",
+            module.functions[0].blocks
+        );
+        assert_eq!(verify(&module.functions[0]), Ok(()));
+    }
+
+    #[test]
+    fn a_tagged_int_temporary_is_released_after_its_last_read() {
+        // a tagged `int` holds a real `PyLongObject` whenever its value is too wide for
+        // the tag, and that object can be an `int` subclass with a finalizer. left for
+        // the frame to let go of, it is also left holding a reference across the next
+        // trip of whatever loop it sits in
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let p = builder.param("p", RType::OBJECT);
+        let made = builder.temp(RType::INT);
+        let answer = builder.temp(RType::INT);
+        builder.push(Op::Unbox {
+            dest: made,
+            src: Value::Register(p),
+            to: RType::INT,
+        });
+        builder.push(Op::IntBinary {
+            dest: answer,
+            op: by_ir::ops::BinOp::Add,
+            lhs: Value::Register(made),
+            rhs: Value::Int(1),
+        });
+        builder.terminate(Terminator::Return(Value::Register(answer)));
+
+        let mut module = module(builder.finish());
+        run(&mut module);
+
         assert_eq!(
             releases(&module, 0),
             vec![(2, made)],

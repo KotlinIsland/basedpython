@@ -105,66 +105,116 @@ fn move_dying_stores(function: &mut Function) {
     move_dying_copies(function);
 }
 
-/// turn each copy or element read whose source place is released after it, with
-/// nothing touching either in between, into a move
+/// one operation's read of a place that is released straight after it, so the read may
+/// take the reference rather than have one taken for it
+struct Handover {
+    block: usize,
+    /// where the reading operation sits
+    at: usize,
+    /// which slot of a tuple build reads it, where that is the reading operation
+    item: Option<usize>,
+    /// where the release of the place sits, which the handover replaces
+    release: usize,
+}
+
+/// turn each read of a dying place into a move: a copy, an element read off a tuple, or
+/// one slot of a tuple being built
 fn move_dying_copies(function: &mut Function) {
-    let mut moved: Vec<(usize, usize, usize)> = Vec::new();
+    let mut moved: Vec<Handover> = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         for (position, op) in block.ops.iter().enumerate() {
-            let (dest, source, path) = match op {
+            let reads: Vec<(Option<usize>, RegisterId, Vec<usize>)> = match op {
                 Op::Assign {
-                    dest,
+                    dest: _,
                     src: Value::Register(source),
-                } => (*dest, *source, Vec::new()),
+                } => vec![(None, *source, Vec::new())],
                 Op::TupleGet {
-                    dest,
+                    dest: _,
                     src: Value::Register(source),
                     index,
-                } => (*dest, *source, vec![*index]),
+                } => vec![(None, *source, vec![*index])],
+                Op::TupleBuild { items, .. } => items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, item)| match item {
+                        Value::Register(source) => Some((Some(slot), *source, Vec::new())),
+                        _ => None,
+                    })
+                    .collect(),
                 _ => continue,
             };
-            // a widening copy changes the representation the reference is held in,
-            // which a move does not
-            let same_type = function
-                .register(source)
-                .and_then(|decl| decl.ty.element(&path))
-                .zip(function.register(dest))
-                .is_some_and(|(element, decl)| *element == decl.ty);
-            if dest == source
-                || !same_type
-                || function.register(dest).is_none_or(|decl| decl.borrowed)
-                || !owns_place(function, source, &path)
-            {
-                continue;
-            }
-            let touches = |later: &Op| {
-                later.dest() == Some(source)
-                    || later.unbinds() == Some(source)
-                    || later.dest() == Some(dest)
-                    || later.unbinds() == Some(dest)
-                    || reads_place(later, source, &path)
-            };
-            let Some(offset) = block.ops[position + 1..]
-                .iter()
-                .position(|later| touches(later) || releases_place(later, source, &path))
-            else {
+            let Some(dest) = op.dest() else {
                 continue;
             };
-            let at = position + 1 + offset;
-            if releases_place(&block.ops[at], source, &path) {
-                moved.push((index, position, at));
+            for (item, source, path) in reads {
+                // a widening read changes the representation the reference is held in,
+                // which a move does not
+                let slot = match item {
+                    Some(slot) => vec![slot],
+                    None => Vec::new(),
+                };
+                let same_type = function
+                    .register(source)
+                    .and_then(|decl| decl.ty.element(&path))
+                    .zip(
+                        function
+                            .register(dest)
+                            .and_then(|decl| decl.ty.element(&slot)),
+                    )
+                    .is_some_and(|(read, written)| read == written);
+                if dest == source
+                    || !same_type
+                    || function.register(dest).is_none_or(|decl| decl.borrowed)
+                    || !owns_place(function, source, &path)
+                {
+                    continue;
+                }
+                let touches = |later: &Op| {
+                    later.dest() == Some(source)
+                        || later.unbinds() == Some(source)
+                        || later.dest() == Some(dest)
+                        || later.unbinds() == Some(dest)
+                        || reads_place(later, source, &path)
+                };
+                let Some(offset) = block.ops[position + 1..]
+                    .iter()
+                    .position(|later| touches(later) || releases_place(later, source, &path))
+                else {
+                    continue;
+                };
+                let at = position + 1 + offset;
+                // one release lets go of one reference, so it pays for one slot: a
+                // register named twice in the same build retains for the second
+                if releases_place(&block.ops[at], source, &path)
+                    && !moved
+                        .iter()
+                        .any(|held| held.block == index && held.release == at)
+                {
+                    moved.push(Handover {
+                        block: index,
+                        at: position,
+                        item,
+                        release: at,
+                    });
+                }
             }
         }
     }
 
-    for (index, position, _) in &moved {
+    for handover in &moved {
         let Some(op) = function
             .blocks
-            .get_mut(*index)
-            .and_then(|block| block.ops.get_mut(*position))
+            .get_mut(handover.block)
+            .and_then(|block| block.ops.get_mut(handover.at))
         else {
             continue;
         };
+        if let Some(slot) = handover.item {
+            if let Op::TupleBuild { moves, .. } = op {
+                moves.insert(slot);
+            }
+            continue;
+        }
         let replacement = match op {
             Op::Assign { dest, src } => Op::Move {
                 dest: *dest,
@@ -183,7 +233,7 @@ fn move_dying_copies(function: &mut Function) {
     // the releases go last and back to front, so removing one cannot move another
     let mut releases: Vec<(usize, usize)> = moved
         .into_iter()
-        .map(|(index, _, release)| (index, release))
+        .map(|handover| (handover.block, handover.release))
         .collect();
     releases.sort_unstable_by(|a, b| b.cmp(a));
     for (index, release) in releases {
@@ -201,10 +251,7 @@ fn owns_place(function: &Function, register: RegisterId, path: &[usize]) -> bool
         && function.register(register).is_some_and(|decl| {
             !decl.borrowed
                 && decl.name.is_none()
-                && decl
-                    .ty
-                    .element(path)
-                    .is_some_and(|ty| *ty == RType::INT || ty.is_object_reference())
+                && decl.ty.element(path).is_some_and(RType::owns_one_reference)
         })
 }
 
@@ -242,11 +289,9 @@ fn may_hand_over(function: &Function, register: RegisterId) -> bool {
     if register.index() < function.param_count {
         return false;
     }
-    function.register(register).is_some_and(|decl| {
-        !decl.borrowed
-            && decl.name.is_none()
-            && (decl.ty == RType::INT || decl.ty.is_object_reference())
-    })
+    function
+        .register(register)
+        .is_some_and(|decl| !decl.borrowed && decl.name.is_none() && decl.ty.owns_one_reference())
 }
 
 #[cfg(test)]
@@ -254,6 +299,7 @@ mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
     use by_ir::ops::{BinOp, Terminator};
+    use std::collections::BTreeSet;
 
     fn module(function: Function) -> ModuleIr {
         ModuleIr {
@@ -414,6 +460,7 @@ mod tests {
         builder.push(Op::TupleBuild {
             dest: pair,
             items: vec![Value::Register(p), Value::Register(p)],
+            moves: BTreeSet::new(),
         });
         builder.push(release(pair, &[1]));
         builder.push(Op::TupleGet {
@@ -438,6 +485,104 @@ mod tests {
             }
         );
         assert_eq!(by_ir::verify::verify(&module.functions[0]), Ok(()));
+    }
+
+    /// which slots of the one tuple build in `block` hand their reference over
+    fn built_moves(module: &ModuleIr) -> Vec<usize> {
+        module.functions[0].blocks[0]
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                Op::TupleBuild { moves, .. } => Some(moves.iter().copied().collect()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_tuple_takes_the_reference_of_a_slot_released_after_the_build() {
+        // `return a // 7, a % 7`: each part is built into a temporary and put in the
+        // tuple, which retains it, and the temporary is then let go of. the retain and
+        // the release are around nothing, and the tuple can have the reference instead
+        let mut builder = FunctionBuilder::new("f", RType::Tuple(Box::new([RType::INT; 2])));
+        let p = builder.param("p", RType::INT);
+        let first = builder.temp(RType::INT);
+        let second = builder.temp(RType::INT);
+        let pair = builder.temp(RType::Tuple(Box::new([RType::INT; 2])));
+        for (dest, op) in [(first, BinOp::FloorDiv), (second, BinOp::Mod)] {
+            builder.push(Op::IntBinary {
+                dest,
+                op,
+                lhs: Value::Register(p),
+                rhs: Value::Int(7),
+            });
+        }
+        builder.push(Op::TupleBuild {
+            dest: pair,
+            items: vec![Value::Register(first), Value::Register(second)],
+            moves: BTreeSet::new(),
+        });
+        builder.push(release(first, &[]));
+        builder.push(release(second, &[]));
+        builder.terminate(Terminator::Return(Value::Register(pair)));
+
+        let mut module = module(builder.finish());
+        run(&mut module);
+
+        assert_eq!(built_moves(&module), vec![0, 1]);
+        let ops = &module.functions[0].blocks[0].ops;
+        assert!(
+            !ops.iter().any(|op| matches!(op, Op::Release { .. })),
+            "{ops:?}"
+        );
+        assert_eq!(by_ir::verify::verify(&module.functions[0]), Ok(()));
+    }
+
+    #[test]
+    fn one_release_pays_for_one_slot_of_a_tuple_built_from_it_twice() {
+        // `(x, x)` needs two references and the release lets go of one, so the second
+        // slot takes one of its own
+        let mut builder = FunctionBuilder::new("f", RType::Tuple(Box::new([RType::OBJECT; 2])));
+        let p = builder.param("p", RType::OBJECT);
+        let made = builder.temp(RType::OBJECT);
+        let pair = builder.temp(RType::Tuple(Box::new([RType::OBJECT; 2])));
+        builder.push(call(made, p));
+        builder.push(Op::TupleBuild {
+            dest: pair,
+            items: vec![Value::Register(made), Value::Register(made)],
+            moves: BTreeSet::new(),
+        });
+        builder.push(release(made, &[]));
+        builder.terminate(Terminator::Return(Value::Register(pair)));
+
+        let mut module = module(builder.finish());
+        run(&mut module);
+
+        assert_eq!(built_moves(&module), vec![0]);
+        assert_eq!(by_ir::verify::verify(&module.functions[0]), Ok(()));
+    }
+
+    #[test]
+    fn a_slot_read_again_before_its_release_keeps_a_reference_of_its_own() {
+        let mut builder = FunctionBuilder::new("f", RType::OBJECT);
+        let p = builder.param("p", RType::OBJECT);
+        let made = builder.temp(RType::OBJECT);
+        let pair = builder.temp(RType::Tuple(Box::new([RType::OBJECT; 2])));
+        let again = builder.temp(RType::OBJECT);
+        builder.push(call(made, p));
+        builder.push(Op::TupleBuild {
+            dest: pair,
+            items: vec![Value::Register(made), Value::Register(p)],
+            moves: BTreeSet::new(),
+        });
+        builder.push(call(again, made));
+        builder.push(release(made, &[]));
+        builder.terminate(Terminator::Return(Value::Register(again)));
+
+        let mut module = module(builder.finish());
+        run(&mut module);
+
+        assert_eq!(built_moves(&module), Vec::<usize>::new());
     }
 
     #[test]

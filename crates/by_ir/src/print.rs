@@ -365,11 +365,24 @@ fn print_op(function: &Function, op: &Op) -> String {
         }
         Op::Box { dest, src } => format!("{} = box {}", name(*dest), value(src)),
         Op::IntToFloat { dest, src } => format!("{} = float {}", name(*dest), value(src)),
+        Op::TagShort { dest, src } => format!("{} = tag short {}", name(*dest), value(src)),
         Op::Unbox { dest, src, to } => {
             format!("{} = unbox {} as {}", name(*dest), value(src), to)
         }
-        Op::TupleBuild { dest, items } => {
-            let items = items.iter().map(value).collect::<Vec<_>>().join(", ");
+        Op::TupleBuild { dest, items, moves } => {
+            let items = items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let item = value(item);
+                    if moves.contains(&index) {
+                        format!("move {item}")
+                    } else {
+                        item
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("{} = ({})", name(*dest), items)
         }
         Op::CallUnpacked {
@@ -440,8 +453,19 @@ fn print_op(function: &Function, op: &Op) -> String {
             dest,
             array,
             value: v,
-        } => {
-            format!("{} = {} push {}", name(*dest), value(array), value(v))
+            length,
+        } => match length {
+            Some(length) => format!(
+                "{} = {} push {} counting {}",
+                name(*dest),
+                value(array),
+                value(v),
+                value(length)
+            ),
+            None => format!("{} = {} push {}", name(*dest), value(array), value(v)),
+        },
+        Op::ArrayStoreLength { array, length } => {
+            format!("{} length = {}", value(array), value(length))
         }
         Op::ToTuple { dest, src } => format!("{} = tuple {}", name(*dest), value(src)),
         Op::Extend {
@@ -910,6 +934,22 @@ fn print_terminator(function: &Function, terminator: &Terminator) -> String {
             print_value(function, src),
             fits.0,
             otherwise.0
+        ),
+        Terminator::MachineStep {
+            dest,
+            op,
+            lhs,
+            rhs,
+            fits,
+            overflows,
+        } => format!(
+            "{} = {} {} {} ? b{} : overflow b{}",
+            register_name(function, *dest),
+            print_value(function, lhs),
+            op.symbol(),
+            print_value(function, rhs),
+            fits.0,
+            overflows.0
         ),
         Terminator::Unreachable => "unreachable".to_string(),
     }

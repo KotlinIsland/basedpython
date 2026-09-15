@@ -34,6 +34,7 @@
 #include <frameobject.h>
 #include <string.h>
 #include <math.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -107,6 +108,11 @@ typedef size_t ByTagged;
 /* a tagged word of 1 is a pointer of 0 with the tag set, so it can never be a
  * real object and is free to mean "an exception is set" */
 #define BY_INT_ERROR ((ByTagged)1)
+/* what a register holds once its reference has been let go of. a short zero rather
+ * than the error sentinel, because the sentinel is odd: releasing it again takes the
+ * branch kept for a real PyLongObject, and the emptied register is released again on
+ * every exit and wherever the next write lets go of what was there */
+#define BY_INT_EMPTY ((ByTagged)0)
 /* a float error sentinel overlaps a valid value, so an error must be confirmed
  * with PyErr_Occurred() — see RType::error_overlaps */
 #define BY_FLOAT_ERROR (-113.0)
@@ -858,14 +864,111 @@ static inline double By_FloatObjDiv(double a, PyObject *b) {
     return By_FloatObjectSlow(a, b, PyNumber_TrueDivide);
 }
 
-static inline double By_FloatPow(double a, double b) { return pow(a, b); }
+/* `0.0 ** -1.0`, in the running interpreter's own words: 3.13 and 3.14 spell it
+ * differently, so the power is re-performed on a pair that must fail the same way */
+BY_COLD void By_ZeroToNegativePower(void) {
+    PyObject *zero = PyFloat_FromDouble(0.0);
+    PyObject *negative = PyFloat_FromDouble(-1.0);
+    PyObject *impossible = NULL;
+    if (zero != NULL && negative != NULL) impossible = PyNumber_Power(zero, negative, Py_None);
+    Py_XDECREF(zero);
+    Py_XDECREF(negative);
+    Py_XDECREF(impossible);
+    if (!PyErr_Occurred()) {
+        PyErr_SetString(PyExc_ZeroDivisionError, "zero to a negative power");
+    }
+}
+
+/* python's `float.__pow__`, case for case (cpython's `float_pow`), for a pair whose
+ * answer is known to be real: a negative base to a fractional power is a complex number
+ * in python, and the lowering sends any pair that could be one through the object
+ * protocol instead. the platform's `pow` is only asked about what cpython asks it, and
+ * a result it overflows raises `OverflowError` with the errno cpython reports */
+static double By_FloatPow(double iv, double iw) {
+    int negate = 0;
+    if (iw == 0.0) return 1.0;
+    if (isnan(iv)) return iv;
+    if (isnan(iw)) return iv == 1.0 ? 1.0 : iw;
+    if (isinf(iw)) {
+        iv = fabs(iv);
+        if (iv == 1.0) return 1.0;
+        if ((iw > 0.0) == (iv > 1.0)) return fabs(iw);
+        return 0.0;
+    }
+    if (isinf(iv)) {
+        int odd = fmod(fabs(iw), 2.0) == 1.0;
+        if (iw > 0.0) return odd ? iv : fabs(iv);
+        return odd ? copysign(0.0, iv) : 0.0;
+    }
+    if (iv == 0.0) {
+        int odd = fmod(fabs(iw), 2.0) == 1.0;
+        if (iw < 0.0) {
+            By_ZeroToNegativePower();
+            return BY_FLOAT_ERROR;
+        }
+        return odd ? iv : 0.0;
+    }
+    if (iv < 0.0) {
+        if (iw != floor(iw)) {
+            PyErr_SetString(PyExc_SystemError, "a complex power reached the float lowering");
+            return BY_FLOAT_ERROR;
+        }
+        iv = -iv;
+        negate = fmod(fabs(iw), 2.0) == 1.0;
+    }
+    if (iv == 1.0) return negate ? -1.0 : 1.0;
+    errno = 0;
+    double ix = pow(iv, iw);
+    /* cpython's `_Py_ADJUST_ERANGE1`: a platform that leaves errno alone on overflow
+     * still has to raise, and an underflow to zero is not an error */
+    if (errno == 0) {
+        if (ix == HUGE_VAL || ix == -HUGE_VAL) errno = ERANGE;
+    } else if (errno == ERANGE && ix == 0.0) {
+        errno = 0;
+    }
+    if (negate) ix = -ix;
+    if (errno != 0) {
+        PyErr_SetFromErrno(errno == ERANGE ? PyExc_OverflowError : PyExc_ValueError);
+        return BY_FLOAT_ERROR;
+    }
+    return ix;
+}
+
+/* the quotient and remainder of a divisor already known not to be zero, as cpython's
+ * `_float_div_mod` and `float_rem` compute them. emitted code tests the divisor itself
+ * and jumps straight to its error edge, so the answer never has to be told apart from
+ * an error value that is also a legal double
+ *
+ * `floor(a / b)` is not the same operation: `inf // 1.5` is a nan in python, since the
+ * remainder it is derived from is one, and `1.5 // -inf` is `-1.0` */
+static inline double By_FloatFloorDivNonzero(double vx, double wx) {
+    double mod = fmod(vx, wx);
+    double div = (vx - mod) / wx;
+    if (mod != 0.0 && ((wx < 0.0) != (mod < 0.0))) div -= 1.0;
+    if (div != 0.0) {
+        double floordiv = floor(div);
+        if (div - floordiv > 0.5) floordiv += 1.0;
+        return floordiv;
+    }
+    return copysign(0.0, vx / wx);
+}
+
+static inline double By_FloatModNonzero(double vx, double wx) {
+    double mod = fmod(vx, wx);
+    /* python's % takes the sign of the divisor, a zero remainder included */
+    if (mod != 0.0) {
+        if ((wx < 0.0) != (mod < 0.0)) mod += wx;
+        return mod;
+    }
+    return copysign(0.0, wx);
+}
 
 static inline double By_FloatFloorDiv(double a, double b) {
     if (b == 0.0) {
         By_ZeroDivision(PyNumber_FloorDivide, 1);
         return BY_FLOAT_ERROR;
     }
-    return floor(a / b);
+    return By_FloatFloorDivNonzero(a, b);
 }
 
 static inline double By_FloatMod(double a, double b) {
@@ -873,10 +976,7 @@ static inline double By_FloatMod(double a, double b) {
         By_ZeroDivision(PyNumber_Remainder, 1);
         return BY_FLOAT_ERROR;
     }
-    double r = fmod(a, b);
-    /* python's % takes the sign of the divisor */
-    if (r != 0.0 && ((r < 0.0) != (b < 0.0))) r += b;
-    return r;
+    return By_FloatModNonzero(a, b);
 }
 
 /* the conversion `float.__add__` performs on an `int` operand: correctly rounded,
@@ -888,6 +988,11 @@ static inline double By_TaggedToDouble(ByTagged x) {
     if (v == -1.0 && PyErr_Occurred()) return BY_FLOAT_ERROR;
     return v;
 }
+
+/* the half of the conversion that reaches cpython, for a caller that has tested the
+ * value short itself: `-1.0` with an exception set is the failure, as it is for
+ * `PyLong_AsDouble` */
+BY_COLD double By_TaggedToDoubleSlow(ByTagged x) { return PyLong_AsDouble(By_LongOf(x)); }
 
 static inline double By_FloatTrueDiv(double a, double b) {
     if (b == 0.0) {
@@ -998,6 +1103,13 @@ static inline PyObject *By_CallInterpreted(PyObject *fn, const char *name,
     }
     return PyObject_Vectorcall(fn, args, (size_t)nargs, kwnames);
 }
+
+/* `float`'s narrowing as a test, for a caller that branches on it and reads the double
+ * itself: the double a float holds may be any value at all, so a failure that is only an
+ * error value would have to ask the thread whether an exception is set on every read */
+static inline int By_IsFloat(PyObject *o) { return o != NULL && PyFloat_Check(o); }
+
+BY_COLD void By_UnboxFloatFailed(PyObject *o) { By_TypeError("float", o); }
 
 static inline double By_UnboxFloat(PyObject *o) {
     /* `PyFloat_Check` admits float subclasses but not `int`, which is exactly
@@ -2099,23 +2211,6 @@ BY_HOT char By_DepthEnter(ByDepth depth) {
 BY_HOT void By_DepthLeave(ByDepth depth) { depth.thread->BY_PY_RECURSION_REMAINING++; }
 
 #endif /* BY_RECURSION_STACK_ONLY */
-
-/* resume a compiled generator or coroutine's frame, counted as python counts pushing
- * the frame it would have resumed
- *
- * this is a cycle the call graph cannot see: `yield from f(n - 1)` makes the next
- * generator with a native call and then steps it through the iterator protocol, and the
- * interpreter counts none of that — so a generator delegating to itself ran off the
- * stack. NULL with `RecursionError` set where the frame could not be pushed, which the
- * caller finishes the generator on, as python closes one whose frame could not be */
-static inline PyObject *By_ResumeCounted(PyObject *self, PyObject *(*resume)(PyObject *)) {
-    ByDepth depth = By_DepthHere();
-    PyObject *result;
-    if (BY_UNLIKELY(By_DepthEnter(depth))) return NULL;
-    result = resume(self);
-    By_DepthLeave(depth);
-    return result;
-}
 
 /* a global read that remembers what the name resolved to last time
  *
@@ -8457,16 +8552,25 @@ BY_COLD PyObject *By_ItemSlow(PyObject *container, ByTagged index) {
  *
  * the index is an `int64_t` rather than a `Py_ssize_t` because that is what an
  * unboxed counter is. it is narrowed only after `i < n` has proved it is a
- * position in this list */
-static inline PyObject *By_ListItemAt(PyObject *container, int64_t i) {
+ * position in this list
+ *
+ * the element is the list's, not the caller's: it stays alive only while nothing
+ * can run python, since python is what could shrink the list and drop it */
+static inline PyObject *By_ListItemBorrowed(PyObject *container, int64_t i) {
     if (BY_LIKELY(container != NULL && PyList_CheckExact(container))) {
         int64_t n = (int64_t)PyList_GET_SIZE(container);
         if (i < 0) i += n;
         if (BY_LIKELY(i >= 0 && i < n)) {
-            return By_NewRef(PyList_GET_ITEM(container, (Py_ssize_t)i));
+            return PyList_GET_ITEM(container, (Py_ssize_t)i);
         }
     }
     return NULL;
+}
+
+/* as [`By_ListItemBorrowed`], with a reference of the caller's own */
+static inline PyObject *By_ListItemAt(PyObject *container, int64_t i) {
+    PyObject *item = By_ListItemBorrowed(container, i);
+    return item == NULL ? NULL : By_NewRef(item);
 }
 
 /* `container[index]` where the index is already an integer register
@@ -8854,14 +8958,16 @@ static inline void *By_ArrayItems(ByArrayHeader *array) { return (void *)(array 
 
 /* the index a `list` would use, normalized and bounds-checked the same way — a
  * negative index counts from the end, and out of range is `IndexError` */
-static inline Py_ssize_t By_ArrayIndex(ByArrayHeader *array, ByTagged tagged) {
+/* the same, for an index a counter holds as a machine integer. no index past the short
+ * range fits a buffer, so this answers exactly as the tagged form does for every value
+ * the counter can hold */
+static inline Py_ssize_t By_ArrayIndexI64(ByArrayHeader *array, int64_t at) {
     if (array == NULL) return -1;
-    if (BY_UNLIKELY(!By_IsShort(tagged))) {
-        // a big integer cannot be a valid index into a buffer this size
+    if (BY_UNLIKELY(at < PY_SSIZE_T_MIN || at > PY_SSIZE_T_MAX)) {
         PyErr_SetString(PyExc_IndexError, "list index out of range");
         return -1;
     }
-    Py_ssize_t index = By_ShortValue(tagged);
+    Py_ssize_t index = (Py_ssize_t)at;
     if (index < 0) index += array->len;
     if (index < 0 || index >= array->len) {
         PyErr_SetString(PyExc_IndexError, "list index out of range");
@@ -8870,10 +8976,19 @@ static inline Py_ssize_t By_ArrayIndex(ByArrayHeader *array, ByTagged tagged) {
     return index;
 }
 
-/* grow to hold one more, doubling so a run of appends stays amortized constant */
-static inline ByArrayHeader *By_ArrayGrow(ByArrayHeader *array, size_t width) {
+static inline Py_ssize_t By_ArrayIndex(ByArrayHeader *array, ByTagged tagged) {
+    if (array == NULL) return -1;
+    if (BY_UNLIKELY(!By_IsShort(tagged))) {
+        // a big integer cannot be a valid index into a buffer this size
+        PyErr_SetString(PyExc_IndexError, "list index out of range");
+        return -1;
+    }
+    return By_ArrayIndexI64(array, By_ShortValue(tagged));
+}
+
+/* grow a full buffer, doubling so a run of appends stays amortized constant */
+BY_COLD ByArrayHeader *By_ArrayGrowFull(ByArrayHeader *array, size_t width) {
     if (array == NULL) return NULL;
-    if (array->len < array->cap) return array;
     Py_ssize_t cap = array->cap < 4 ? 4 : array->cap * 2;
     ByArrayHeader *grown =
         (ByArrayHeader *)PyMem_Realloc(array, sizeof(ByArrayHeader) + (size_t)cap * width);
@@ -8883,6 +8998,13 @@ static inline ByArrayHeader *By_ArrayGrow(ByArrayHeader *array, size_t width) {
     }
     grown->cap = cap;
     return grown;
+}
+
+/* grow to hold one more */
+static inline ByArrayHeader *By_ArrayGrow(ByArrayHeader *array, size_t width) {
+    if (array == NULL) return NULL;
+    if (array->len < array->cap) return array;
+    return By_ArrayGrowFull(array, width);
 }
 
 /* `*x` or `**x` in a display: everything `x` holds, merged into a container this
@@ -9598,7 +9720,21 @@ static inline PyObject *By_CursorIter(PyObject *o) {
     return PyObject_GetIter(o);
 }
 
+/* the position a cursor that steps a real iterator holds instead of one
+ *
+ * whether the loop walks an exact list is asked once, of what [`By_CursorIter`] handed
+ * back, and kept in the cursor's sign: a list's exact type cannot change, and a loop
+ * never walks anything but what it started with */
+#define BY_CURSOR_PROTOCOL ((int64_t)-1)
+
+static inline int64_t By_CursorStart(PyObject *it) {
+    return PyList_CheckExact(it) ? 0 : BY_CURSOR_PROTOCOL;
+}
+
 /* one step of such a loop: the element, or NULL at the end
+ *
+ * a position that is not negative is one into an exact list — see
+ * [`By_CursorStart`] — so the list is not asked what it is again on every step.
  *
  * the length is read again every step, because that is what cpython's list iterator
  * does — a list appended to under a `for` keeps feeding it and one popped from ends
@@ -9607,6 +9743,9 @@ static inline PyObject *By_CursorIter(PyObject *o) {
  * `PyList_GET_ITEM` is safe here for the reason the bounds test just established,
  * and the exactness test is what makes reading `ob_item` at all legitimate: a list
  * subclass could have overridden `__getitem__`, and it never reaches this arm.
+ *
+ * a slot inside an exact list's length holds an element and never NULL, which is what
+ * cpython's own list iterator takes a reference to without asking.
  *
  * the bounds test is unsigned, so it rejects a negative position as well as one past
  * the end at no extra cost. a cursor should never be negative — the emitted loop sets
@@ -9618,14 +9757,17 @@ static inline PyObject *By_CursorIter(PyObject *o) {
  * the emitted register has, and the two are distinct types even where they are the
  * same size */
 static inline PyObject *By_CursorStep(PyObject *it, int64_t *at) {
-    if (BY_LIKELY(PyList_CheckExact(it))) {
+    if (BY_LIKELY(*at >= 0)) {
         if (BY_LIKELY((uint64_t) *at < (uint64_t) PyList_GET_SIZE(it))) {
             PyObject *item = PyList_GET_ITEM(it, (Py_ssize_t) *at);
             *at += 1;
-            return By_NewRef(item);
+            Py_INCREF(item);
+            return item;
         }
         return NULL;
     }
+    /* a position no loop started holds nothing to step */
+    if (*at != BY_CURSOR_PROTOCOL) return NULL;
     return PyIter_Next(it);
 }
 
@@ -10034,9 +10176,8 @@ static inline void By_RaiseWith(PyObject *error, PyObject *value);
  * that matters: the exception has already unwound the body's `finally` blocks on
  * its way out, and a machine still calling itself suspended would be resumed by
  * finalization and run every one of them a second time */
-static inline void By_FinishGenerator(ByTagged *state) {
-    By_DecRefTagged(*state);
-    *state = By_ShortFrom(-1);
+static inline void By_FinishGenerator(int64_t *state) {
+    *state = -1;
 }
 
 /* the value a `return` handed back, turned into the exception the iterator protocol
@@ -10068,8 +10209,8 @@ static inline PyObject *By_TakeReturn(PyObject **returned) {
 #define BY_FRAME_RUNNING -2
 
 /* whether a frame's resume is on the stack right now */
-static inline int By_FrameRunning(ByTagged state) {
-    return state == By_ShortFrom(BY_FRAME_RUNNING);
+static inline int By_FrameRunning(int64_t state) {
+    return state == BY_FRAME_RUNNING;
 }
 
 /* what python calls this surface in a message it writes about one */
@@ -10080,7 +10221,7 @@ static inline const char *By_FrameNoun(int frame) {
 }
 
 /* refuse to resume a frame whose resume is on the stack, which is its own body asking */
-static inline int By_RefuseRunning(ByTagged state, int frame) {
+static inline int By_RefuseRunning(int64_t state, int frame) {
     if (BY_LIKELY(!By_FrameRunning(state))) return 0;
     PyErr_Format(PyExc_ValueError, "%s already executing", By_FrameNoun(frame));
     return -1;
@@ -10109,10 +10250,9 @@ static inline int By_RefuseRunning(ByTagged state, int frame) {
  * `state` is 0 before the frame first runs and -1 once it has left for good, so
  * anything above 0 is a real suspension point with a `yield` to resume. `arg` is NULL
  * where the caller carries no sent value at all, as a `throw` does */
-static inline int By_RefuseResumption(ByTagged state, int frame, PyObject *arg) {
-    if (!By_IsShort(state)) return 0;
+static inline int By_RefuseResumption(int64_t state, int frame, PyObject *arg) {
     if (By_RefuseRunning(state, frame) < 0) return -1;
-    Py_ssize_t at = (Py_ssize_t)By_ShortValue(state);
+    int64_t at = state;
     if (at == 0 && arg != NULL && arg != Py_None) {
         PyErr_Format(PyExc_TypeError, "can't send non-None value to a just-started %s",
                      By_FrameNoun(frame));
@@ -10194,27 +10334,69 @@ static inline void By_ConvertStopIteration(int frame) {
  * close — the field would keep whatever the last `send` left in it, and the next
  * `yield` would read that same value a second time.
  *
- * on 3.12 and later `None` is immortal, so the pair of reference counts a `next()`
- * pays here are both branches that do no work */
+ * what it can skip is a store of the very object the field already holds, which leaves
+ * the field as it was — and that is every `next()` after the first, since each one
+ * parks `None` over the `None` the one before it parked */
 static inline void By_ParkSent(PyObject **sent, PyObject *value) {
     PyObject *old = *sent;
+    if (old == value) return;
     *sent = By_NewRef(value);
     Py_XDECREF(old);
 }
 
-/* resume a generator's frame, finishing it when the frame leaves for good */
+/* write `None` over a parked field on a frame's way out, letting go of what it held
+ *
+ * the field holds `None` before the old value is let go of, so a finalizer that runs on
+ * that release finds nothing of it left behind */
+static inline void By_ClearField(PyObject **field) {
+    PyObject *old = *field;
+    *field = By_NewRef(Py_None);
+    Py_XDECREF(old);
+}
+
+/* resume a generator's frame, finishing it when the frame leaves for good
+ *
+ * `resume` is the type's counted step, which takes a frame from the thread's depth around
+ * the body as python does on resuming one, and answers NULL with `RecursionError` set
+ * where the frame could not be pushed. every helper below that takes a `resume` means the
+ * same function */
 static inline PyObject *By_StepGenerator(PyObject *self, PyObject **sent, PyObject **returned,
-                                         ByTagged *state, int frame, PyObject *arg,
+                                         int64_t *state, int frame, PyObject *arg,
                                          PyObject *(*resume)(PyObject *)) {
     if (By_RefuseResumption(*state, frame, arg) < 0) return NULL;
     By_ParkSent(sent, arg);
-    PyObject *result = By_ResumeCounted(self, resume);
+    PyObject *result = resume(self);
     if (result != NULL) return result;
     By_FinishGenerator(state);
     /* an empty `$returned` is what says the frame left by *raising* rather than by
      * ending, and so is the one condition pep 479 asks about */
     if (*returned == NULL) By_ConvertStopIteration(frame);
     return By_TakeReturn(returned);
+}
+
+/* what `tp_iternext` answers once a generator's resume handed back nothing, which is
+ * cpython's `gen_iternext`: a frame that raised passes its error on, a frame that returned
+ * `None` ends the iteration with no exception at all, and any other value rides out on
+ * `StopIteration`. the `for`, `list` or `next` asking treats a NULL with nothing raised as
+ * the end, which is the whole point — a finish builds no exception.
+ *
+ * only this slot answers so. `send` and `throw` raise `StopIteration` for a `None` too,
+ * because `gen_send` and `gen_throw` do.
+ *
+ * `quiet` is a compiled `for` stepping the generator itself, which is `PyIter_Next`: the
+ * value a finish carries is dropped however it would have ridden out, since that is the
+ * exception `PyIter_Next` would only have cleared */
+static inline PyObject *By_IterFinished(int64_t *state, PyObject **returned, int quiet) {
+    By_FinishGenerator(state);
+    PyObject *value = *returned;
+    if (value == NULL) {
+        By_ConvertStopIteration(BY_FRAME_GENERATOR);
+        return NULL;
+    }
+    *returned = NULL;
+    if (!quiet && value != Py_None) By_RaiseWith(PyExc_StopIteration, value);
+    Py_DECREF(value);
+    return NULL;
 }
 
 /* the argument count `throw` and `athrow` take, in the words python uses for both
@@ -10315,7 +10497,7 @@ static inline PyObject *By_ThrownException(PyObject *const *args, Py_ssize_t nar
  * is parked as `None` all the same, because leaving the last `send`'s value standing is
  * what would let a later `yield` read it again */
 static inline PyObject *By_ResumeRaising(PyObject *self, PyObject **sent, PyObject **thrown,
-                                         PyObject **returned, ByTagged *state, int frame,
+                                         PyObject **returned, int64_t *state, int frame,
                                          PyObject *instance, PyObject *(*resume)(PyObject *)) {
     PyObject *old = *thrown;
     *thrown = instance;
@@ -10371,17 +10553,17 @@ static inline int By_CloseDelegate(PyObject *delegate) {
  * the frame counts as running for as long as the inner iterator has it, so a body that
  * reaches back into the frame is refused as python refuses it */
 static inline PyObject *By_ThrowIntoDelegate(PyObject *self, PyObject **sent, PyObject **thrown,
-                                             PyObject **returned, ByTagged *state, int frame,
+                                             PyObject **returned, int64_t *state, int frame,
                                              PyObject *const *args, Py_ssize_t nargs,
                                              PyObject *delegate,
                                              PyObject *(*resume)(PyObject *), int *forwarded) {
     static PyObject *by_throw = NULL;
-    ByTagged suspended = *state;
+    int64_t suspended = *state;
     *forwarded = 1;
     Py_INCREF(delegate);
     if (frame != BY_FRAME_ASYNC_GENERATOR
         && PyErr_GivenExceptionMatches(args[0], PyExc_GeneratorExit)) {
-        *state = By_ShortFrom(BY_FRAME_RUNNING);
+        *state = BY_FRAME_RUNNING;
         int closed = By_CloseDelegate(delegate);
         *state = suspended;
         Py_DECREF(delegate);
@@ -10411,13 +10593,13 @@ static inline PyObject *By_ThrowIntoDelegate(PyObject *self, PyObject **sent, Py
             if (instance == NULL) {
                 answer = NULL;
             } else {
-                *state = By_ShortFrom(BY_FRAME_RUNNING);
+                *state = BY_FRAME_RUNNING;
                 answer = PyObject_CallOneArg(method, instance);
                 *state = suspended;
                 Py_DECREF(instance);
             }
         } else {
-            *state = By_ShortFrom(BY_FRAME_RUNNING);
+            *state = BY_FRAME_RUNNING;
             answer = PyObject_Vectorcall(method, args, (size_t)nargs, NULL);
             *state = suspended;
         }
@@ -10444,12 +10626,12 @@ static inline PyObject *By_ThrowIntoDelegate(PyObject *self, PyObject **sent, Py
  * finish it — see below. otherwise it is the resumption that decides, and a body that
  * catches what was thrown leaves the machine usable */
 static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject **thrown,
-                                   PyObject **returned, ByTagged *state, int frame,
+                                   PyObject **returned, int64_t *state, int frame,
                                    PyObject *const *args, Py_ssize_t nargs,
                                    PyObject *(*delegate)(PyObject *),
                                    PyObject *(*resume)(PyObject *)) {
     if (thrown == NULL) return NULL;
-    PyObject *inner = delegate != NULL && By_IsShort(*state) && By_ShortValue(*state) > 0
+    PyObject *inner = delegate != NULL && *state > 0
                           ? delegate(self)
                           : NULL;
     if (inner != NULL) {
@@ -10482,7 +10664,7 @@ static inline PyObject *By_ThrowInto(PyObject *self, PyObject **sent, PyObject *
      * resuming instead would run the body from the top for a machine that never
      * started, and report exhaustion for one that has finished — two different wrong
      * answers about which exception the caller is holding */
-    if (By_ShortValue(*state) <= 0) {
+    if (*state <= 0) {
         By_FinishGenerator(state);
         PyErr_SetObject((PyObject *)Py_TYPE(instance), instance);
         Py_DECREF(instance);
@@ -10561,7 +10743,7 @@ static inline void By_WarnUnawaitedCoroutine(PyObject *coroutine, const char *qu
  * the throw is python's own `GeneratorExit`, so a frame suspended in a delegation closes
  * the iterator it delegates to first — see `By_ThrowIntoDelegate` */
 static inline PyObject *By_CloseGenerator(PyObject *self, PyObject **sent, PyObject **thrown,
-                                         PyObject **returned, ByTagged *state, int frame,
+                                         PyObject **returned, int64_t *state, int frame,
                                          PyObject *(*delegate)(PyObject *),
                                          PyObject *(*resume)(PyObject *)) {
     if (By_RefuseRunning(*state, frame) < 0) return NULL;
@@ -10570,7 +10752,7 @@ static inline PyObject *By_CloseGenerator(PyObject *self, PyObject **sent, PyObj
      * `By_ThrowInto` would give the right answer for a finished frame and the wrong
      * one for a frame that never started, which would run the whole body under a
      * `GeneratorExit` it had no way to see */
-    if (By_ShortValue(*state) <= 0) {
+    if (*state <= 0) {
         By_FinishGenerator(state);
         Py_RETURN_NONE;
     }
@@ -11759,13 +11941,13 @@ static ByRaisedIter By_RaisedIter = {PyObject_HEAD_INIT(&By_RaisedIter_Type)};
  * `yield` evaluating to the same thing. treating `None` as "carries nothing" and
  * skipping the store is what used to let a value survive into a later `yield` */
 static inline PySendResult By_SendGenerator(PyObject *self, PyObject **sent,
-                                            PyObject **returned, ByTagged *state, int frame,
+                                            PyObject **returned, int64_t *state, int frame,
                                             PyObject *(*resume)(PyObject *), PyObject *arg,
                                             PyObject **result) {
     PyObject *step;
     if (By_RefuseResumption(*state, frame, arg) < 0) return PYGEN_ERROR;
     By_ParkSent(sent, arg);
-    step = By_ResumeCounted(self, resume);
+    step = resume(self);
     if (step != NULL) {
         *result = step;
         return PYGEN_NEXT;

@@ -32,6 +32,12 @@ pub(crate) fn run(module: &mut ModuleIr) {
 /// of them has is memory exhaustion. so one whose result nothing reads is work the
 /// program cannot tell apart from work that was never done.
 ///
+/// a field read is a load and a retain: the object stays held by the field it was read
+/// from, so letting go of the copy runs nothing either. that is the value a `yield`
+/// statement evaluates to, which python computes and drops, and so does every resumption
+/// of the frame that makes one. whether the field is set is [`Op::RequireField`]'s
+/// question, which is not here
+///
 /// a `list`, `set` or `dict` display is deliberately *not* here even though a list
 /// looks the same: a set and a dict hash their elements, and hashing runs whatever
 /// `__hash__` the element's class wrote
@@ -43,6 +49,7 @@ fn computes_only(op: &Op) -> bool {
             | Op::BuildTuple { .. }
             | Op::TupleBuild { .. }
             | Op::TupleGet { .. }
+            | Op::GetField { .. }
     )
 }
 
@@ -187,6 +194,7 @@ mod tests {
     use by_ir::function::ModuleIr;
     use by_ir::ops::{Op, Terminator, Value};
     use by_ir::rtype::RType;
+    use std::collections::BTreeSet;
 
     fn module(function: by_ir::function::Function) -> ModuleIr {
         let mut module = ModuleIr::new("app");
@@ -268,6 +276,47 @@ mod tests {
     }
 
     #[test]
+    fn a_field_read_nothing_reads_goes() {
+        // `yield x` as a statement: the value `send` passed in is read out of the state
+        // object and dropped, and the field goes on holding it either way
+        let mut builder = FunctionBuilder::new("f", RType::OBJECT);
+        let state = builder.param("state", RType::OBJECT);
+        let sent = builder.temp(RType::OBJECT);
+        builder.push(Op::GetField {
+            dest: sent,
+            receiver: Value::Register(state),
+            class: "g$gen".to_string(),
+            field: "$sent".to_string(),
+        });
+        builder.terminate(Terminator::Return(Value::Register(state)));
+
+        let mut module = module(builder.finish());
+        super::run(&mut module);
+
+        assert!(module.functions[0].blocks[0].ops.is_empty());
+    }
+
+    #[test]
+    fn a_field_read_into_a_name_nothing_reads_is_kept() {
+        // a name holds what it was given until it is rebound, whatever the field does
+        let mut builder = FunctionBuilder::new("f", RType::OBJECT);
+        let state = builder.param("state", RType::OBJECT);
+        let held = builder.local("held".to_string(), RType::OBJECT);
+        builder.push(Op::GetField {
+            dest: held,
+            receiver: Value::Register(state),
+            class: "Box".to_string(),
+            field: "item".to_string(),
+        });
+        builder.terminate(Terminator::Return(Value::Register(state)));
+
+        let mut module = module(builder.finish());
+        super::run(&mut module);
+
+        assert_eq!(module.functions[0].blocks[0].ops.len(), 1);
+    }
+
+    #[test]
     fn a_tuple_nothing_reads_holding_objects_stays() {
         // `(make(p), make(p))` thrown away: the tuple is what keeps the first element
         // alive while the second is made, and what lets both go, last to first
@@ -281,6 +330,7 @@ mod tests {
         builder.push(Op::TupleBuild {
             dest: pair,
             items: vec![Value::Register(first), Value::Register(second)],
+            moves: BTreeSet::new(),
         });
         builder.terminate(Terminator::Return(Value::Register(p)));
 

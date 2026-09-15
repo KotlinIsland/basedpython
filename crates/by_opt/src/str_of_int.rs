@@ -40,9 +40,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use by_ir::function::{Function, ModuleIr};
+use by_ir::function::{Function, ModuleIr, RegisterDecl};
 use by_ir::ops::{BlockId, Op, RegisterId, Value};
-use by_ir::rtype::RType;
+use by_ir::rtype::{Primitive, RType};
 
 pub(crate) fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
@@ -72,6 +72,22 @@ fn fuse(function: &mut Function) {
     // a later one was found at
     pairs.sort_by_key(|pair| std::cmp::Reverse((pair.block.index(), pair.index)));
     for pair in pairs {
+        // a counter `unbox_counters` gave a machine representation boxes straight to an
+        // object, and is handed the tagged value the fused form formats
+        let tagging = matches!(
+            type_of(function, &pair.integer),
+            Some(RType::Primitive(Primitive::Fixed(_)))
+        )
+        .then(|| {
+            let tagged = RegisterId(function.registers.len());
+            function.registers.push(RegisterDecl {
+                name: None,
+                ty: RType::INT,
+                borrowed: false,
+                may_be_unassigned: false,
+            });
+            tagged
+        });
         let Some(block) = function.blocks.get_mut(pair.block.index()) else {
             continue;
         };
@@ -80,13 +96,22 @@ fn fuse(function: &mut Function) {
         };
         let fused = Op::StrOfInt {
             dest: *dest,
-            value: pair.integer,
+            value: tagging.map_or(pair.integer.clone(), Value::Register),
         };
+        let mut replacement = Vec::new();
+        if let Some(tagged) = tagging {
+            replacement.push(Op::Box {
+                dest: tagged,
+                src: pair.integer,
+            });
+        }
+        replacement.push(fused);
         if droppable.contains(&pair.boxed) {
-            block.ops[pair.index] = fused;
-            block.ops.remove(pair.index + 1);
+            block.ops.splice(pair.index..=pair.index + 1, replacement);
         } else {
-            block.ops[pair.index + 1] = fused;
+            block
+                .ops
+                .splice(pair.index + 1..=pair.index + 1, replacement);
         }
     }
 }
@@ -105,7 +130,10 @@ fn pairs(function: &Function) -> Vec<Pair> {
             if callee != "str" || args.as_slice() != [Value::Register(*dest)] {
                 continue;
             }
-            if type_of(function, src) != Some(RType::INT) {
+            if !matches!(
+                type_of(function, src),
+                Some(RType::Primitive(Primitive::Int | Primitive::Fixed(_)))
+            ) {
                 continue;
             }
             out.push(Pair {

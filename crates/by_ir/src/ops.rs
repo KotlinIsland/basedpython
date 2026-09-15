@@ -5,6 +5,8 @@
 //! exactly one [`Terminator`] — keeping the terminator out of the op list means
 //! "every block is terminated" is true by construction rather than by check.
 
+use std::collections::BTreeSet;
+
 use crate::rtype::RType;
 
 /// index of a register within a [`Function`](crate::function::Function)
@@ -659,8 +661,24 @@ pub enum Op {
     /// rather than an approximation of it. an integer too large to be a float
     /// raises `OverflowError`, exactly as python does
     IntToFloat { dest: RegisterId, src: Value },
+    /// give a machine integer its tagged representation, where it is proven to lie inside
+    /// the short range
+    ///
+    /// a [`Self::Box`] of a machine integer tests the range and builds an object where it
+    /// is outside, and the merge of those two arms hides from the C compiler everything it
+    /// knew about the value — that a counter is never negative, say, which is what lets a
+    /// `//` or `%` of it drop its sign fix-ups. inside a loop duplicated behind a narrowed
+    /// bound, the guard that has just held is the proof, and this is written instead
+    TagShort { dest: RegisterId, src: Value },
     /// build a fixed-length tuple from its elements
-    TupleBuild { dest: RegisterId, items: Vec<Value> },
+    TupleBuild {
+        dest: RegisterId,
+        items: Vec<Value>,
+        /// which items hand their register's reference over rather than having one
+        /// taken for them, by index into `items`. an index missing from it retains, so
+        /// the empty set is the plain build every lowering makes
+        moves: BTreeSet<usize>,
+    },
     /// unpack a value into a fixed-length tuple, the way an assignment target list
     /// does. `starred` is the slot that collects the surplus into a list
     ///
@@ -730,11 +748,20 @@ pub enum Op {
         index: Value,
     },
     /// append one, growing the buffer when it is full
+    ///
+    /// the buffer's register is written in place when a growth moves it. with `length`,
+    /// the number of elements is the machine register it names rather than the buffer's
+    /// own header, and the append advances that register in place: a loop that only
+    /// appends keeps the count to itself, and writes it back with
+    /// [`Self::ArrayStoreLength`] before anything reads the buffer again
     ArrayPush {
         dest: RegisterId,
         array: Value,
         value: Value,
+        length: Option<Value>,
     },
+    /// write a count kept in a machine register back into the buffer's header
+    ArrayStoreLength { array: Value, length: Value },
     /// `del container[index]`
     DeleteItem {
         dest: RegisterId,
@@ -1421,6 +1448,7 @@ impl Op {
             | Self::Contains { .. }
             | Self::Identity { .. }
             | Self::IntToFloat { .. }
+            | Self::TagShort { .. }
             | Self::TupleBuild { .. }
             | Self::Unpack { .. }
             | Self::CallUnpacked { .. }
@@ -1432,6 +1460,7 @@ impl Op {
             | Self::ArrayLen { .. }
             | Self::ArrayRead { .. }
             | Self::ArrayPush { .. }
+            | Self::ArrayStoreLength { .. }
             | Self::DeleteItem { .. }
             | Self::DeleteAttr { .. }
             | Self::ToTuple { .. }
@@ -1559,6 +1588,7 @@ impl Op {
             | Self::Identity { dest, .. }
             | Self::FloatObjectBinary { dest, .. }
             | Self::IntToFloat { dest, .. }
+            | Self::TagShort { dest, .. }
             | Self::IntBinary { dest, .. }
             | Self::FloatBinary { dest, .. }
             | Self::IntCompare { dest, .. }
@@ -1643,6 +1673,7 @@ impl Op {
             | Self::RaiseObject { .. }
             | Self::PopHandled { .. }
             | Self::Release { .. }
+            | Self::ArrayStoreLength { .. }
             | Self::Reraise { .. }
             | Self::LeaveGenerator { .. }
             | Self::LicenceHolds { .. }
@@ -1686,6 +1717,7 @@ impl Op {
             | Self::Identity { dest, .. }
             | Self::FloatObjectBinary { dest, .. }
             | Self::IntToFloat { dest, .. }
+            | Self::TagShort { dest, .. }
             | Self::IntBinary { dest, .. }
             | Self::FloatBinary { dest, .. }
             | Self::IntCompare { dest, .. }
@@ -1770,6 +1802,7 @@ impl Op {
             | Self::RaiseObject { .. }
             | Self::PopHandled { .. }
             | Self::Release { .. }
+            | Self::ArrayStoreLength { .. }
             | Self::Reraise { .. }
             | Self::LeaveGenerator { .. }
             | Self::LicenceHolds { .. }
@@ -1821,6 +1854,7 @@ impl Op {
             | Self::MatchSlice { sequence: src, .. }
             | Self::IsSequence { src, .. }
             | Self::IntToFloat { src, .. }
+            | Self::TagShort { src, .. }
             | Self::Unbox { src, .. }
             | Self::Truthy { src, .. }
             | Self::Len { src, .. }
@@ -1979,7 +2013,13 @@ impl Op {
                 container, index, ..
             } => vec![container, index],
             Self::DeleteAttr { receiver, .. } => vec![receiver],
-            Self::ArrayPush { array, value, .. } => vec![array, value],
+            Self::ArrayPush {
+                array,
+                value,
+                length,
+                ..
+            } => [array, value].into_iter().chain(length.as_ref()).collect(),
+            Self::ArrayStoreLength { array, length } => vec![array, length],
             Self::Extend {
                 container, source, ..
             } => vec![container, source],
@@ -2059,6 +2099,7 @@ impl Op {
             | Self::MatchSlice { sequence: src, .. }
             | Self::IsSequence { src, .. }
             | Self::IntToFloat { src, .. }
+            | Self::TagShort { src, .. }
             | Self::Unbox { src, .. }
             | Self::Truthy { src, .. }
             | Self::Len { src, .. }
@@ -2219,7 +2260,13 @@ impl Op {
             } => vec![container, index],
             Self::DeleteAttr { receiver, .. } => vec![receiver],
             Self::ArrayLen { array, .. } => vec![array],
-            Self::ArrayPush { array, value, .. } => vec![array, value],
+            Self::ArrayPush {
+                array,
+                value,
+                length,
+                ..
+            } => [array, value].into_iter().chain(length.as_mut()).collect(),
+            Self::ArrayStoreLength { array, length } => vec![array, length],
             Self::Extend {
                 container, source, ..
             } => vec![container, source],
@@ -2290,6 +2337,21 @@ pub enum Terminator {
         fits: BlockId,
         otherwise: BlockId,
     },
+    /// add or subtract two machine integers, taking `overflows` when the result does not
+    /// fit the machine word
+    ///
+    /// a loop counter is a machine integer only inside a copy of its loop, and a step that
+    /// leaves the word leaves the copy for the loop as written, which carries on in python's
+    /// arithmetic. so the overflow is an edge rather than a failure, and like
+    /// [`Self::NarrowShort`] `dest` holds a value only on the `fits` edge
+    MachineStep {
+        dest: RegisterId,
+        op: BinOp,
+        lhs: Value,
+        rhs: Value,
+        fits: BlockId,
+        overflows: BlockId,
+    },
     /// control cannot reach here. emitted after a raise, and after a body the
     /// checker proved diverges
     Unreachable,
@@ -2297,7 +2359,7 @@ pub enum Terminator {
 
 impl Terminator {
     /// the blocks control can transfer to
-    pub(crate) fn successors(&self) -> Vec<BlockId> {
+    pub fn successors(&self) -> Vec<BlockId> {
         match self {
             Self::Goto(target) => vec![*target],
             Self::Branch {
@@ -2308,14 +2370,24 @@ impl Terminator {
             Self::NarrowShort {
                 fits, otherwise, ..
             } => vec![*fits, *otherwise],
+            Self::MachineStep {
+                fits, overflows, ..
+            } => vec![*fits, *overflows],
             Self::Return(_) | Self::Unreachable => Vec::new(),
         }
     }
 
     /// the register this terminator writes, on the edge that writes one
     pub fn dest(&self) -> Option<RegisterId> {
+        self.written_on_edge().map(|(dest, _)| dest)
+    }
+
+    /// the register this terminator writes, and the one edge it holds a value on
+    pub(crate) fn written_on_edge(&self) -> Option<(RegisterId, BlockId)> {
         match self {
-            Self::NarrowShort { dest, .. } => Some(*dest),
+            Self::NarrowShort { dest, fits, .. } | Self::MachineStep { dest, fits, .. } => {
+                Some((*dest, *fits))
+            }
             Self::Goto(_) | Self::Branch { .. } | Self::Return(_) | Self::Unreachable => None,
         }
     }
@@ -2325,6 +2397,7 @@ impl Terminator {
         match self {
             Self::Branch { cond, .. } => vec![cond],
             Self::Return(value) | Self::NarrowShort { src: value, .. } => vec![value],
+            Self::MachineStep { lhs, rhs, .. } => vec![lhs, rhs],
             Self::Goto(_) | Self::Unreachable => Vec::new(),
         }
     }
@@ -2334,7 +2407,27 @@ impl Terminator {
         match self {
             Self::Branch { cond, .. } => vec![cond],
             Self::Return(value) | Self::NarrowShort { src: value, .. } => vec![value],
+            Self::MachineStep { lhs, rhs, .. } => vec![lhs, rhs],
             Self::Goto(_) | Self::Unreachable => Vec::new(),
+        }
+    }
+
+    /// every edge this terminator can take, mutably
+    pub fn successors_mut(&mut self) -> Vec<&mut BlockId> {
+        match self {
+            Self::Goto(target) => vec![target],
+            Self::Branch {
+                then_block,
+                else_block,
+                ..
+            } => vec![then_block, else_block],
+            Self::NarrowShort {
+                fits, otherwise, ..
+            } => vec![fits, otherwise],
+            Self::MachineStep {
+                fits, overflows, ..
+            } => vec![fits, overflows],
+            Self::Return(_) | Self::Unreachable => Vec::new(),
         }
     }
 }

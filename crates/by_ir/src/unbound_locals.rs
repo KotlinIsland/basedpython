@@ -18,7 +18,7 @@
 use std::collections::VecDeque;
 
 use crate::function::Function;
-use crate::ops::{BlockId, Terminator, Value};
+use crate::ops::{BlockId, Value};
 
 /// flag every local this function may read before writing
 ///
@@ -85,10 +85,7 @@ fn unassigned_reads(function: &Function) -> Vec<usize> {
         }
         // a handler is entered from *before* any of this block's writes: the very
         // first operation can be the one that failed
-        let narrowed = match &block.terminator {
-            Terminator::NarrowShort { dest, fits, .. } => Some((*dest, *fits)),
-            _ => None,
-        };
+        let narrowed = block.terminator.written_on_edge();
         let edges = block
             .terminator
             .successors()

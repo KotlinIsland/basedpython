@@ -124,6 +124,49 @@ fn delegate_accessor(resume: &by_ir::function::Resumption, type_name: &str) -> S
     }
 }
 
+/// how the frame a resumable class steps through presents itself, where `function` is
+/// that frame's body
+fn resumed_body<'a>(
+    module: &'a ModuleIr,
+    function: &Function,
+) -> Option<&'a by_ir::function::Resumption> {
+    function
+        .owner
+        .as_deref()
+        .and_then(|owner| class_named(module, owner))
+        .and_then(|class| {
+            class
+                .resume
+                .as_ref()
+                .filter(|_| class.resumes_through(function))
+        })
+}
+
+/// whether any loop in `function` steps an iterator it expects to be a compiled
+/// generator, and so needs the thread's depth in hand — see [`stepped_generator`]
+fn direct_steps(module: &ModuleIr, function: &Function) -> bool {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .any(|op| match op {
+            Op::IterNext { iter, .. } => stepped_generator(module, function, iter).is_some(),
+            _ => false,
+        })
+}
+
+/// the per-type step a generator's `tp_iternext` runs, which a compiled `for` over that
+/// type calls directly
+fn generator_step(module: &ModuleIr, class: &ClassIr) -> String {
+    format!("{}_next", class.type_name(module.name.dotted()))
+}
+
+/// the counted step every resumption of a resumable frame goes through, handed the
+/// thread's depth
+fn counted_resume(module: &ModuleIr, class: &ClassIr) -> String {
+    format!("{}_step", class.type_name(module.name.dotted()))
+}
+
 fn mangle_member(name: &str) -> String {
     by_ir::function::FieldDecl {
         cell: false,
@@ -1071,8 +1114,17 @@ const RECYCLED_INSTANCES: usize = 16;
 /// so a class with a finalizer is turned away. the bit is only ever set after a
 /// non-null `tp_finalize` has been called, and the two things that fill that slot
 /// are a written `__del__` — [`finalizes`], which asks the whole base chain — and a
-/// generator's own. with neither, the header of a parked block is all zeroes, which
-/// is exactly what the allocator hands back
+/// resumable frame's own. with neither, the header of a parked block is all zeroes,
+/// which is exactly what the allocator hands back
+///
+/// a *generator's* finalizer is the exception, because it has something to do only for
+/// a frame still suspended: its deallocator calls it for that frame alone, and a
+/// generator that ran to its end, or never started, is freed with the bit clear. the
+/// collector sets the bit on whatever it finalizes whether or not the finalizer did
+/// anything, so the block is asked before it is parked, and one the collector
+/// finalized goes back to the allocator instead. a coroutine's finalizer warns about a
+/// frame that never ran and an async generator's reaches the event loop's hooks, so
+/// neither is recycled
 ///
 /// **the object header's own trace links**, which only exist in a build tracing
 /// every object. those are inside the reset, and zeroing them would cut a live list
@@ -1089,7 +1141,12 @@ const RECYCLED_INSTANCES: usize = 16;
 /// plain member inside the struct — and a weakref list, which a spec of ours never
 /// asks for
 fn recycles_instances(module: &ModuleIr, class: &ClassIr) -> bool {
-    !mutable_type(module, class) && class.resume.is_none() && !finalizes(module, class)
+    !mutable_type(module, class)
+        && !finalizes(module, class)
+        && class
+            .resume
+            .as_ref()
+            .is_none_or(|resume| resume.surface == Surface::Generator)
 }
 
 /// a class keeping the memory of a dead instance back for the next one
@@ -1119,10 +1176,21 @@ fn emit_instance_recycling(module: &ModuleIr, class: &ClassIr) -> String {
     // address. `PyType_GenericAlloc` reads the flag to decide, and these two have
     // to agree with it or an instance is allocated under one discipline and freed
     // under another
-    let (release, track) = if instance_dict(module, class) || class.environment {
-        ("PyObject_GC_Del", "        PyObject_GC_Track(by_block);\n")
+    let (release, track) =
+        if instance_dict(module, class) || class.environment || class.resume.is_some() {
+            ("PyObject_GC_Del", "        PyObject_GC_Track(by_block);\n")
+        } else {
+            ("PyObject_Free", "")
+        };
+    // a generator's block the collector finalized carries the bit saying so, which no
+    // call clears — see [`recycles_instances`]
+    let finalized = if class.resume.is_some() {
+        "\x20   if (BY_UNLIKELY(PyObject_GC_IsFinalized((PyObject *)by_block))) {\n\
+         \x20       PyObject_GC_Del(by_block);\n\
+         \x20       return;\n\
+         \x20   }\n"
     } else {
-        ("PyObject_Free", "")
+        ""
     };
     // a free-threaded build gets none of it: the array is shared mutable state, and
     // this module tells such an interpreter it keeps none — see the `Py_mod_gil`
@@ -1167,6 +1235,7 @@ fn emit_instance_recycling(module: &ModuleIr, class: &ClassIr) -> String {
          }}\n\n\
          static void {type_name}_free(void *by_block) {{\n\
          {recycling}\n\
+         {finalized}\
          \x20   if (BY_LIKELY({type_name}_recycled_at < {RECYCLED_INSTANCES})) {{\n\
          \x20       {type_name}_recycled[{type_name}_recycled_at++] = (PyObject *)by_block;\n\
          \x20       return;\n\
@@ -1244,7 +1313,21 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
                 "    if (self->by_weakrefs != NULL) PyObject_ClearWeakRefs((PyObject *)self);\n",
             );
         }
-        if class.resume.is_some() || finalizes(module, class) {
+        // a generator's finalizer closes a suspended frame and does nothing for any other,
+        // so it is only called for one — which leaves the block of every other generator
+        // free of the collector's finalized bit, and so recyclable. a coroutine's warns
+        // about a frame that never ran, and an async generator's reaches the event loop
+        if class
+            .resume
+            .as_ref()
+            .is_some_and(|resume| resume.surface == Surface::Generator)
+        {
+            let _ = writeln!(
+                out,
+                "    if (self->{state} > 0 && PyObject_CallFinalizerFromDealloc((PyObject *)self) < 0) return;",
+                state = mangle_member(GENERATOR_STATE)
+            );
+        } else if class.resume.is_some() || finalizes(module, class) {
             out.push_str(
                 "    if (PyObject_CallFinalizerFromDealloc((PyObject *)self) < 0) return;\n",
             );
@@ -2166,12 +2249,36 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         // the *native* entry point, not the wrapper: `tp_iternext` already has the
         // receiver, and the wrapper's argument binding is pure overhead on what is a
         // generator's hottest path
-        let symbol = class
+        let body = class
             .methods
             .iter()
             .find(|method| method.name == resume.method)
             .map(|method| method.native_symbol(module.name.dotted()))
             .unwrap_or_default();
+        // every way of resuming the frame goes through one counted step, which counts the
+        // resume as python counts pushing the frame it would have resumed. the body is
+        // called from here and nowhere else — the runtime helpers `send`, `throw` and
+        // `close` share are handed the step behind a pointer rather than the body.
+        //
+        // a resume is a cycle the call graph cannot see: `yield from f(n - 1)` makes the
+        // next generator with a native call and then steps it through the iterator
+        // protocol, and the interpreter counts none of that — so a generator delegating
+        // to itself ran off the stack. NULL with `RecursionError` set where the frame could
+        // not be pushed, which the caller finishes the generator on, as python closes one
+        // whose frame could not be
+        let symbol = format!("{type_name}_resume");
+        let _ = writeln!(
+            out,
+            "static PyObject *{step}({struct_name} *self, ByDepth by_depth) {{\n\
+             \x20   if (BY_UNLIKELY(By_DepthEnter(by_depth))) return NULL;\n\
+             \x20   PyObject *by_result = {body}(self, by_depth);\n\
+             \x20   By_DepthLeave(by_depth);\n\
+             \x20   return by_result;\n\
+             }}\n\
+             static PyObject *{symbol}(PyObject *self) {{\n\
+             \x20   return {step}(({struct_name} *)self, By_DepthHere());\n}}",
+            step = counted_resume(module, class),
+        );
         // the iterator a suspension inside `yield from` or `await` waits on, which `throw`
         // and `close` reach before the frame. a frame that never delegates has none to
         // name, and says so with a null accessor rather than one that always answers NULL
@@ -2197,7 +2304,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                 out,
                 "static PyObject *{type_name}_delegate(PyObject *selfobj) {{\n\
                  \x20   {struct_name} *self = ({struct_name} *)selfobj;\n\
-                 \x20   switch (By_ShortValue(self->{state})) {{\n\
+                 \x20   switch (self->{state}) {{\n\
                  {cases}\
                  \x20   default: return NULL;\n\
                  \x20   }}\n}}",
@@ -2214,21 +2321,62 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20   {struct_name} *self = ({struct_name} *)selfobj;\n\
              \x20   return By_StepGenerator(selfobj, &self->{sent}, &self->by_returned,\n\
              \x20                           &self->{state}, {frame}, args[0],\n\
-             \x20                           (PyObject *(*)(PyObject *)){symbol});\n}}",
+             \x20                           {symbol});\n}}",
             sent = mangle_member(crate::GENERATOR_SENT),
             state = mangle_member(crate::GENERATOR_STATE)
         );
         // `close` throws `GeneratorExit` in, which runs every enclosing `finally`. the
         // frame finishes itself on the way out, and one that suspends again instead is
-        // still suspended — python refuses that close and a later step resumes it
+        // still suspended — python refuses that close and a later step resumes it.
+        //
+        // a generator suspended where nothing of its own handles an exception is finished
+        // here instead, with the effects its unwinding would have had in the order it
+        // would have had them: nothing sent, the frame running while its loops' iterators
+        // are let go of, and then finished. only a generator's surface: a coroutine and an
+        // async generator are closed by what drives them — see `QuietClose`
+        let mut quiet = String::new();
+        if resume.surface == Surface::Generator {
+            for close in &resume.quiet_closes {
+                let _ = writeln!(quiet, "\x20   case {}:", close.state);
+                let _ = writeln!(
+                    quiet,
+                    "\x20       By_ParkSent(&self->{sent}, Py_None);\n\
+                     \x20       self->{state} = BY_FRAME_RUNNING;",
+                    sent = mangle_member(crate::GENERATOR_SENT),
+                    state = mangle_member(crate::GENERATOR_STATE)
+                );
+                for field in &close.clears {
+                    let _ = writeln!(
+                        quiet,
+                        "\x20       By_ClearField(&self->{});",
+                        mangle_member(field)
+                    );
+                }
+                let _ = writeln!(
+                    quiet,
+                    "\x20       By_FinishGenerator(&self->{});\n\
+                     \x20       Py_RETURN_NONE;",
+                    mangle_member(crate::GENERATOR_STATE)
+                );
+            }
+        }
+        let quiet = if quiet.is_empty() {
+            quiet
+        } else {
+            format!(
+                "\x20   switch (self->{}) {{\n{quiet}\x20   default: break;\n\x20   }}\n",
+                mangle_member(crate::GENERATOR_STATE)
+            )
+        };
         let _ = writeln!(
             out,
             "static PyObject *{type_name}_close(PyObject *selfobj, PyObject *const *args, Py_ssize_t nargs) {{\n\
              \x20   (void)args; (void)nargs;\n\
              \x20   {struct_name} *self = ({struct_name} *)selfobj;\n\
+             {quiet}\
              \x20   return By_CloseGenerator(selfobj, &self->{sent}, &self->{thrown},\n\
              \x20                            &self->by_returned, &self->{state}, {frame},\n\
-             \x20                            {delegate}, (PyObject *(*)(PyObject *)){symbol});\n}}",
+             \x20                            {delegate}, {symbol});\n}}",
             sent = mangle_member(crate::GENERATOR_SENT),
             thrown = mangle_member(crate::GENERATOR_THROWN),
             state = mangle_member(crate::GENERATOR_STATE)
@@ -2244,7 +2392,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20                       &(({struct_name} *)selfobj)->{thrown},\n\
              \x20                       &(({struct_name} *)selfobj)->by_returned,\n\
              \x20                       &(({struct_name} *)selfobj)->{state}, {frame}, args, nargs,\n\
-             \x20                       {delegate}, (PyObject *(*)(PyObject *)){symbol});\n}}",
+             \x20                       {delegate}, {symbol});\n}}",
             sent = mangle_member(crate::GENERATOR_SENT),
             thrown = mangle_member(crate::GENERATOR_THROWN),
             state = mangle_member(crate::GENERATOR_STATE)
@@ -2261,7 +2409,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         // dropped before its first step for a missing `await`
         let unawaited = if resume.surface == Surface::Coroutine {
             format!(
-                "\x20   if ((({struct_name} *)selfobj)->{state} == By_ShortFrom(0)) {{\n\
+                "\x20   if ((({struct_name} *)selfobj)->{state} == 0) {{\n\
                  \x20       PyObject *by_type, *by_value, *by_tb;\n\
                  \x20       PyErr_Fetch(&by_type, &by_value, &by_tb);\n\
                  \x20       By_WarnUnawaitedCoroutine(selfobj, {qualname});\n\
@@ -2281,7 +2429,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
              \x20   /* only a *suspended* frame has anything to unwind: state 0 never\n\
              \x20    * started and -1 already finished, and resuming either would run\n\
              \x20    * the body a second time */\n\
-             \x20   if (By_ShortValue((({struct_name} *)selfobj)->{state}) <= 0) return;\n\
+             \x20   if ((({struct_name} *)selfobj)->{state} <= 0) return;\n\
              \x20   PyObject *by_type, *by_value, *by_tb;\n\
              \x20   PyErr_Fetch(&by_type, &by_value, &by_tb);\n\
              \x20   PyObject *by_r = {type_name}_close(selfobj, NULL, 0);\n\
@@ -2355,27 +2503,33 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     }
 
     // a generator's state object *is* the iterator: `tp_iternext` drives `$resume`,
-    // which returns the next yielded value or raises `StopIteration`
+    // which returns the next yielded value or ends the iteration
     let iterator = match &class.resume {
         None => String::new(),
         Some(resume) => {
             let frame = frame_kind(resume.surface);
-            let symbol = class
-                .methods
-                .iter()
-                .find(|method| method.name == resume.method)
-                .map(|method| method.native_symbol(module.name.dotted()))
-                .unwrap_or_default();
+            let symbol = format!("{type_name}_resume");
             // only a generator is an iterator: a coroutine is driven through its send
             // slot, and an async generator through the awaitable `__anext__` hands back
+            //
+            // the step is written out per type rather than through a shared helper handed
+            // the resume as a pointer, so the resume is a direct call the C compiler can
+            // inline. it takes the thread's depth from its caller, which `tp_iternext`
+            // looks up
             if resume.surface == Surface::Generator {
                 let _ = writeln!(
                     out,
-                    "static PyObject *{type_name}_iternext(PyObject *self) {{\n\
-                 \x20   return By_StepGenerator(self, &(({struct_name} *)self)->{sent},\n\
-                 \x20                           &(({struct_name} *)self)->by_returned,\n\
-                 \x20                           &(({struct_name} *)self)->{state}, {frame}, Py_None,\n\
-                 \x20                           (PyObject *(*)(PyObject *)){symbol});\n}}",
+                    "static inline PyObject *{next}({struct_name} *self, ByDepth by_depth, int by_quiet) {{\n\
+                     \x20   if (BY_UNLIKELY(By_RefuseRunning(self->{state}, BY_FRAME_GENERATOR) < 0)) return NULL;\n\
+                     \x20   By_ParkSent(&self->{sent}, Py_None);\n\
+                     \x20   PyObject *by_step = {counted}(self, by_depth);\n\
+                     \x20   if (BY_LIKELY(by_step != NULL)) return by_step;\n\
+                     \x20   return By_IterFinished(&self->{state}, &self->by_returned, by_quiet);\n\
+                     }}\n\
+                     static PyObject *{type_name}_iternext(PyObject *self) {{\n\
+                     \x20   return {next}(({struct_name} *)self, By_DepthHere(), 0);\n}}",
+                    next = generator_step(module, class),
+                    counted = counted_resume(module, class),
                     sent = mangle_member(crate::GENERATOR_SENT),
                     state = mangle_member(crate::GENERATOR_STATE)
                 );
@@ -2395,7 +2549,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20   return By_SendGenerator(self, &(({struct_name} *)self)->{sent},\n\
                      \x20                           &(({struct_name} *)self)->by_returned,\n\
                      \x20                           &(({struct_name} *)self)->{state}, {frame},\n\
-                     \x20                           (PyObject *(*)(PyObject *)){symbol},\n\
+                     \x20                           {symbol},\n\
                      \x20                           by_arg, by_result);\n}}",
                     sent = mangle_member(crate::GENERATOR_SENT),
                     state = mangle_member(crate::GENERATOR_STATE)
@@ -2479,7 +2633,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20       return NULL;\n\
                      \x20   return By_ThrowInto((PyObject *)by_gen, &by_gen->{sent}, &by_gen->{thrown},\n\
                      \x20                       &by_gen->by_returned, &by_gen->{state}, {frame}, args, nargs,\n\
-                     \x20                       {delegate}, (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20                       {delegate}, {symbol});\n\
                      }}\n\
                      static PyObject *{type_name}_asend_send(PyObject *self, PyObject *by_arg) {{\n\
                      \x20   {type_name}_asend *by_self = ({type_name}_asend *)self;\n\
@@ -2492,7 +2646,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20           {type_name}_refuse_reuse(by_self);\n\
                      \x20           return NULL;\n\
                      \x20       }}\n\
-                     \x20       if (By_ShortValue(by_gen->{state}) == -1) {{\n\
+                     \x20       if (by_gen->{state} == -1) {{\n\
                      \x20           by_self->by_state = 2;\n\
                      \x20           PyErr_SetNone(PyExc_StopIteration);\n\
                      \x20           return NULL;\n\
@@ -2521,7 +2675,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20               by_step = By_ThrowInto((PyObject *)by_gen, &by_gen->{sent}, &by_gen->{thrown},\n\
                      \x20                                      &by_gen->by_returned, &by_gen->{state}, {frame},\n\
                      \x20                                      &by_exit, 1, {delegate},\n\
-                     \x20                                      (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20                                      {symbol});\n\
                      \x20           }} else {{\n\
                      \x20               /* what `athrow` was called with, kept whole: python builds the exception\n\
                      \x20                * out of it at this step rather than at the call */\n\
@@ -2531,7 +2685,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20                                      &by_gen->by_returned, &by_gen->{state}, {frame},\n\
                      \x20                                      &PyTuple_GET_ITEM(by_carried, 0),\n\
                      \x20                                      PyTuple_GET_SIZE(by_carried), {delegate},\n\
-                     \x20                                      (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20                                      {symbol});\n\
                      \x20               by_step = {type_name}_unwrap(by_gen, by_step);\n\
                      \x20               if (by_step != NULL) return by_step;\n\
                      \x20               by_gen->by_running_async = 0;\n\
@@ -2541,7 +2695,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20       }} else {{\n\
                      \x20           by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->{sent}, &by_gen->by_returned,\n\
                      \x20                                      &by_gen->{state}, {frame}, by_arg,\n\
-                     \x20                                      (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20                                      {symbol});\n\
                      \x20           if (!by_closing) return {type_name}_unwrap(by_gen, by_step);\n\
                      \x20       }}\n\
                      \x20       /* `aclose()` from here on: a yield is the frame refusing to close, and the frame\n\
@@ -2579,7 +2733,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                      \x20   PyObject *by_step = By_StepGenerator((PyObject *)by_gen, &by_gen->{sent}, &by_gen->by_returned,\n\
                      \x20                                        &by_gen->{state}, {frame},\n\
                      \x20                                        by_arg != NULL ? by_arg : Py_None,\n\
-                     \x20                                        (PyObject *(*)(PyObject *)){symbol});\n\
+                     \x20                                        {symbol});\n\
                      \x20   by_step = {type_name}_unwrap(by_gen, by_step);\n\
                      \x20   if (by_step == NULL) by_self->by_state = 2;\n\
                      \x20   return by_step;\n\
@@ -2776,6 +2930,15 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         } else {
             String::new()
         };
+        // the pair that keeps a dead instance's memory back for the next one, as a spec
+        // built class takes it — see [`recycles_instances`]
+        let recycled = if recycles_instances(module, class) {
+            format!(
+                "             .tp_alloc = {type_name}_alloc,\n             .tp_free = {type_name}_free,\n"
+            )
+        } else {
+            String::new()
+        };
         let flags = if class.environment || class.resume.is_some() {
             format!(
                 "             .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC{refused},\n             .tp_traverse = (traverseproc){type_name}_traverse,\n             .tp_clear = (inquiry){type_name}_clear,\n"
@@ -2785,7 +2948,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         };
         let _ = write!(
             out,
-            "static PyTypeObject {type_name} = {{\n             PyVarObject_HEAD_INIT(NULL, 0)\n             .tp_name = \"{dotted}.{}\",\n             .tp_basicsize = sizeof({struct_name}),\n             .tp_itemsize = 0,\n             .tp_dealloc = (destructor){type_name}_dealloc,\n{flags}{weakrefs}{iterator}{dunders}             .tp_methods = {type_name}_methods,\n             .tp_getset = {type_name}_getset,\n{construction}         }};\n\
+            "static PyTypeObject {type_name} = {{\n             PyVarObject_HEAD_INIT(NULL, 0)\n             .tp_name = \"{dotted}.{}\",\n             .tp_basicsize = sizeof({struct_name}),\n             .tp_itemsize = 0,\n             .tp_dealloc = (destructor){type_name}_dealloc,\n{flags}{weakrefs}{recycled}{iterator}{dunders}             .tp_methods = {type_name}_methods,\n             .tp_getset = {type_name}_getset,\n{construction}         }};\n\
 ",
             class.name
         );
@@ -5269,6 +5432,120 @@ fn out_slot(buffer: &mut String) -> &mut String {
 }
 
 /// the function a `CallNative` names, if this module emits it
+/// the compiled generator an iterator is expected to be, where the value it steps can be
+/// traced back to a native call that builds and returns one
+///
+/// this is a guess about which type to *test* for, never a claim about what the value
+/// is: a `for` over `steps(n)` holds whatever `steps` names when the loop starts, which a
+/// rebinding can make anything at all, so the step asks `Py_TYPE` and goes through the
+/// protocol whenever the answer is no. a wrong guess costs one pointer comparison a step.
+///
+/// the value is followed through copies and — in a generator, which parks a loop's
+/// iterator in its state object across a suspension — through the field it is parked in
+fn stepped_generator<'a>(
+    module: &'a ModuleIr,
+    function: &Function,
+    value: &Value,
+) -> Option<&'a ClassIr> {
+    let Value::Register(start) = value else {
+        return None;
+    };
+    let mut pending = vec![*start];
+    let mut seen: HashSet<RegisterId> = HashSet::new();
+    while let Some(register) = pending.pop() {
+        if !seen.insert(register) {
+            continue;
+        }
+        for op in function.blocks.iter().flat_map(|block| &block.ops) {
+            if op.dest() != Some(register) {
+                continue;
+            }
+            match op {
+                Op::Assign {
+                    src: Value::Register(src),
+                    ..
+                }
+                | Op::Move {
+                    src: Value::Register(src),
+                    ..
+                }
+                | Op::GetIter {
+                    src: Value::Register(src),
+                    ..
+                } => pending.push(*src),
+                Op::GetField { class, field, .. } => {
+                    pending.extend(
+                        function
+                            .blocks
+                            .iter()
+                            .flat_map(|block| &block.ops)
+                            .filter_map(|store| match store {
+                                Op::SetField {
+                                    class: stored_class,
+                                    field: stored_field,
+                                    value: Value::Register(stored),
+                                    ..
+                                } if stored_class == class && stored_field == field => {
+                                    Some(*stored)
+                                }
+                                _ => None,
+                            }),
+                    );
+                }
+                Op::CallNative { owner, callee, .. } => {
+                    if let Some(class) = native_callee(module, owner.as_deref(), callee)
+                        .and_then(|callee| generator_built_by(module, callee))
+                    {
+                        return Some(class);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
+/// the compiled generator `function` builds and hands back, where every return it makes
+/// is a new state object of that one type
+fn generator_built_by<'a>(module: &'a ModuleIr, function: &Function) -> Option<&'a ClassIr> {
+    let defining = |register: RegisterId| {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .find(|op| op.dest() == Some(register))
+    };
+    let mut built: Option<&'a ClassIr> = None;
+    for block in &function.blocks {
+        let Terminator::Return(Value::Register(returned)) = &block.terminator else {
+            continue;
+        };
+        let mut register = *returned;
+        if let Some(Op::Box {
+            src: Value::Register(boxed),
+            ..
+        }) = defining(register)
+        {
+            register = *boxed;
+        }
+        let Some(Op::NewInstance { class, .. }) = defining(register) else {
+            return None;
+        };
+        let class = class_named(module, class).filter(|class| {
+            class
+                .resume
+                .as_ref()
+                .is_some_and(|resume| resume.surface == Surface::Generator)
+        })?;
+        if built.is_some_and(|other| other.name != class.name) {
+            return None;
+        }
+        built = Some(class);
+    }
+    built
+}
+
 fn native_callee<'a>(
     module: &'a ModuleIr,
     owner: Option<&str>,
@@ -5456,10 +5733,16 @@ fn signature(module: &ModuleIr, function: &Function) -> String {
         .enumerate()
         .map(|(index, decl)| format!("{} {}", ctype(module, &decl.ty), local(RegisterId(index))))
         .collect();
+    let resumed = resumed_body(module, function);
     let symbol = if is_recursive(function) {
         params.insert(0, "ByDepth by_depth".to_string());
         depth_symbol(module, function)
     } else {
+        // a resumable frame's body is handed the depth its counted step took the frame
+        // from, which a `for` in the body over a compiled generator hands on in turn
+        if resumed.is_some() {
+            params.push("ByDepth by_depth".to_string());
+        }
         function.native_symbol(module.name.dotted())
     };
     let params = if params.is_empty() {
@@ -5467,10 +5750,23 @@ fn signature(module: &ModuleIr, function: &Function) -> String {
     } else {
         params.join(", ")
     };
-    let linkage = match in_place(function) {
+    // a resumable frame's body has one caller, its type's counted step, which is
+    // decided here rather than left to the C compiler. a generator's is written out in
+    // the step: a `for` over the generator enters the body once an element, where the
+    // call was a measurable part of the step. a coroutine's or an async generator's is
+    // kept apart: it is entered once a suspending `await`, and written out in the step it
+    // runs its loops with the depth the step holds across it in a register (`coro_none`
+    // +12%), which a single caller would otherwise have had clang do
+    let placement = match resumed {
+        Some(resume) if resume.surface == Surface::Generator => InPlace::Always,
+        Some(_) => InPlace::Apart,
+        None => in_place(function),
+    };
+    let linkage = match placement {
         InPlace::Always => "__attribute__((always_inline)) static inline",
         InPlace::Offered => "static inline",
         InPlace::Left => "static",
+        InPlace::Apart => "__attribute__((noinline)) static",
     };
     format!(
         "{linkage} {} {symbol}({params})",
@@ -5487,6 +5783,8 @@ enum InPlace {
     Offered,
     /// left to the C compiler's own judgement
     Left,
+    /// never written out in place
+    Apart,
 }
 
 /// the most operations a body may have and still be offered to its callers to write out
@@ -5721,6 +6019,14 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
             let _ = writeln!(out, "    {retain}");
         }
     }
+    // a frame handed no depth looks it up once, for every step it makes of a compiled
+    // generator, where `tp_iternext` would have looked it up once a step
+    if !is_recursive(function)
+        && resumed_body(module, function).is_none()
+        && direct_steps(module, function)
+    {
+        out.push_str("    ByDepth by_depth = By_DepthHere();\n");
+    }
     if !function.registers.is_empty() {
         out.push('\n');
     }
@@ -5754,7 +6060,14 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
         // path — see [`tested_read`] and [`unset_test`]
         let mut tested_by_read: Option<ErrorEdge> = None;
         let mut tested_by_arithmetic: Vec<String> = Vec::new();
+        // the unbox and release an element read took into its own C, which are not
+        // emitted again where they stand
+        let mut taken_by_read: usize = 0;
         for (at, op) in block.ops.iter().enumerate() {
+            if taken_by_read > 0 {
+                taken_by_read -= 1;
+                continue;
+            }
             if let Op::Line { position } = op {
                 line = Some(position.offset);
                 in_generator_expression = position.generator_expression;
@@ -5790,6 +6103,36 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
             } else {
                 std::mem::take(&mut tested_by_arithmetic).concat()
             };
+            // the three share one line, so they share the edge worked out for the read
+            if unset.is_empty()
+                && let Some(taken) = block.ops.get(at..at + 3)
+                && let Some(fused) = borrowed_element_unbox(module, function, taken, edge)
+            {
+                fragment.push_str(&fused);
+                sites.note(&fragment, edge);
+                if let Some(at_error) = at_error.as_mut()
+                    && edge.target.is_none()
+                {
+                    for each in taken {
+                        note_shared_error_jump(
+                            &fragment,
+                            &error_label(edge),
+                            &written,
+                            each.dest(),
+                            at_error,
+                        );
+                    }
+                }
+                out.push_str(&fragment);
+                for each in taken {
+                    out.push_str(&mark_assigned(function, each));
+                    if let Some(dest) = each.dest() {
+                        written.insert(dest);
+                    }
+                }
+                taken_by_read = taken.len() - 1;
+                continue;
+            }
             match at
                 .checked_sub(1)
                 .and_then(|before| block.ops.get(before))
@@ -7291,13 +7634,33 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
         }
         Op::FloatBinary { dest, op, lhs, rhs } => {
             let (lhs, rhs) = (value_expr(lhs), value_expr(rhs));
+            // a division fails only on a zero divisor, and every double it can answer is a
+            // legal one — so the divisor is tested here and the test jumps to the error
+            // edge, rather than a sentinel answer being told apart from a real one by
+            // asking the thread for an exception on every division
+            let divided = match op {
+                BinOp::FloorDiv => Some((
+                    "PyNumber_FloorDivide",
+                    format!("By_FloatFloorDivNonzero({lhs}, {rhs})"),
+                )),
+                BinOp::Mod => Some((
+                    "PyNumber_Remainder",
+                    format!("By_FloatModNonzero({lhs}, {rhs})"),
+                )),
+                BinOp::TrueDiv => Some(("PyNumber_TrueDivide", format!("({lhs} / {rhs})"))),
+                _ => None,
+            };
+            if let Some((operation, quotient)) = divided {
+                return format!(
+                    "    if (BY_UNLIKELY({rhs} == 0.0)) {{ By_ZeroDivision({operation}, 1); goto {}; }}\n{}",
+                    error_label(error_target),
+                    assign_owned(module, function, *dest, &quotient)
+                );
+            }
             let expr = match op {
                 BinOp::Add => format!("({lhs} + {rhs})"),
                 BinOp::Sub => format!("({lhs} - {rhs})"),
                 BinOp::Mul => format!("({lhs} * {rhs})"),
-                BinOp::FloorDiv => format!("By_FloatFloorDiv({lhs}, {rhs})"),
-                BinOp::Mod => format!("By_FloatMod({lhs}, {rhs})"),
-                BinOp::TrueDiv => format!("By_FloatTrueDiv({lhs}, {rhs})"),
                 BinOp::Pow => format!("By_FloatPow({lhs}, {rhs})"),
                 // the bitwise operators have no float form; the frontend routes
                 // them through the object protocol instead
@@ -7543,9 +7906,41 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             enter + &body
         }
         Op::IntToFloat { dest, src } => {
-            let expr = format!("By_TaggedToDouble({})", value_expr(src));
-            assign_checked(module, function, *dest, &expr, error_target)
+            let value = value_expr(src);
+            // a machine integer always has a double, rounded to nearest-even exactly as
+            // `PyLong_AsDouble` rounds, so there is nothing to fail and nothing to box
+            if let Some(RType::Primitive(Primitive::Fixed(_))) = operand_type(function, src) {
+                return assign_owned(module, function, *dest, &format!("(double){value}"));
+            }
+            // only an `int` outside the short range reaches cpython, and only that half
+            // can fail — written apart, so a short never pays for the test
+            let short = assign_owned(
+                module,
+                function,
+                *dest,
+                &format!("(double)By_ShortValue({value})"),
+            );
+            let Some(decl) = function.register(*dest) else {
+                return String::new();
+            };
+            let slow = format!(
+                "    {{ {ctype} by_t = By_TaggedToDoubleSlow({value});\n      \
+                 if (BY_UNLIKELY(by_t == -1.0 && PyErr_Occurred())) goto {label};\n      \
+                 {target} = by_t; }}\n",
+                ctype = ctype(module, &decl.ty),
+                label = error_label(error_target),
+                target = local(*dest),
+            );
+            format!(
+                "    if (BY_LIKELY(By_IsShort({value}))) {{\n{short}    }} else {{\n{slow}    }}\n"
+            )
         }
+        Op::TagShort { dest, src } => assign_owned(
+            module,
+            function,
+            *dest,
+            &format!("By_ShortFrom((Py_ssize_t){})", value_expr(src)),
+        ),
         Op::Box { dest, src } => {
             // the borrow pass lends only a singleton this way, and a singleton needs no
             // reference of the frame's own to stay alive
@@ -7559,8 +7954,15 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             };
             let call = match src_ty {
                 RType::Primitive(Primitive::Int) => format!("By_BoxInt({})", value_expr(src)),
-                // to the *tagged* representation rather than to an object: an `int` is
-                // what a machine integer widens to, and that is what `RType::INT` is
+                // a machine integer widens to the tagged representation, unless what is
+                // wanted is the object itself, which it is built as directly
+                RType::Primitive(Primitive::Fixed(_))
+                    if function
+                        .register(*dest)
+                        .is_some_and(|decl| decl.ty == RType::OBJECT) =>
+                {
+                    format!("PyLong_FromLongLong({})", value_expr(src))
+                }
                 RType::Primitive(Primitive::Fixed(_)) => {
                     format!("By_IntFromI64({})", value_expr(src))
                 }
@@ -7594,9 +7996,11 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                     target = local(*dest),
                 );
             }
+            if *to == RType::FLOAT {
+                return unbox_float(function, *dest, &value_expr(src), error_target);
+            }
             let call = match to {
                 RType::Primitive(Primitive::Int) => format!("By_UnboxInt({})", value_expr(src)),
-                RType::Primitive(Primitive::Float) => format!("By_UnboxFloat({})", value_expr(src)),
                 RType::Primitive(Primitive::Bool) => format!("By_UnboxBool({})", value_expr(src)),
                 RType::Primitive(Primitive::None) => format!("By_UnboxNone({})", value_expr(src)),
                 RType::Primitive(Primitive::Str) => format!("By_UnboxStr({})", value_expr(src)),
@@ -7609,7 +8013,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             };
             assign_checked(module, function, *dest, &call, error_target)
         }
-        Op::TupleBuild { dest, items } => {
+        Op::TupleBuild { dest, items, moves } => {
             let Some(decl) = function.register(*dest) else {
                 return String::new();
             };
@@ -7625,8 +8029,21 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 format!("({}){{ {fields} }}", ctype(module, &decl.ty))
             };
             let mut out = assign_owned(module, function, *dest, &expr);
-            if let Some(retain) = inc_ref(&decl.ty, &local(*dest)) {
-                let _ = writeln!(out, "    {retain}");
+            // a slot given a reference of its own is retained; one handed a register's
+            // takes it, and the register is emptied where it held it. the emptying
+            // waits for the whole struct to be stored, because the release the store
+            // makes of what the destination held can run a finalizer
+            for (index, item) in items.iter().enumerate() {
+                let Some(slot) = decl.ty.element(&[index]) else {
+                    continue;
+                };
+                if moves.contains(&index) {
+                    if let Value::Register(id) = item {
+                        let _ = writeln!(out, "    {} = {};", local(*id), slot.emptied());
+                    }
+                } else if let Some(retain) = inc_ref(slot, &format!("{}.f{index}", local(*dest))) {
+                    let _ = writeln!(out, "    {retain}");
+                }
             }
             out
         }
@@ -7716,7 +8133,8 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             let mut out = String::new();
             let _ = writeln!(
                 out,
-                "    {{ Py_ssize_t by_i = By_ArrayIndex((ByArrayHeader *){}, {});",
+                "    {{ Py_ssize_t by_i = {}((ByArrayHeader *){}, {});",
+                array_index_helper(function, index),
                 value_expr(array),
                 value_expr(index)
             );
@@ -7743,7 +8161,8 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             let mut out = String::new();
             let _ = writeln!(
                 out,
-                "    {{ Py_ssize_t by_i = By_ArrayIndex((ByArrayHeader *){}, {});",
+                "    {{ Py_ssize_t by_i = {}((ByArrayHeader *){}, {});",
+                array_index_helper(function, index),
                 value_expr(array),
                 value_expr(index)
             );
@@ -7807,7 +8226,44 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 value_expr(index)
             }
         ),
-        Op::ArrayPush { dest, array, value } => {
+        Op::ArrayPush {
+            dest,
+            array,
+            value,
+            length: Some(length),
+        } => {
+            let width = element_ctype(module, function, array);
+            let (a, l) = (value_expr(array), value_expr(length));
+            let mut out = String::new();
+            // the count is the register's rather than the header's, so the header is never
+            // stored to and loaded back on every append: only the capacity is read, and it
+            // changes only when the buffer grows
+            let _ = writeln!(out, "    {{ ByArrayHeader *by_a = (ByArrayHeader *){a};");
+            let _ = writeln!(
+                out,
+                "      if (BY_UNLIKELY({l} >= by_a->cap)) {{ by_a = By_ArrayGrowFull(by_a, sizeof({width})); if (by_a == NULL) goto {}; {a} = ({})by_a; }}",
+                error_label(error_target),
+                array_ctype(module, function, array)
+            );
+            let _ = writeln!(out, "      {} = 0;", local(*dest));
+            let _ = writeln!(
+                out,
+                "      (({width} *)By_ArrayItems(by_a))[{l}++] = {}; }}",
+                value_expr(value)
+            );
+            out
+        }
+        Op::ArrayStoreLength { array, length } => format!(
+            "    ((ByArrayHeader *){})->len = {};\n",
+            value_expr(array),
+            value_expr(length)
+        ),
+        Op::ArrayPush {
+            dest,
+            array,
+            value,
+            length: None,
+        } => {
             let width = element_ctype(module, function, array);
             let mut out = String::new();
             let _ = writeln!(
@@ -8942,7 +9398,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             let mut out = format!(
                 "    {{ {} by_m = {place}; {place} = {};\n",
                 ctype(module, ty),
-                ty.undefined()
+                ty.emptied()
             );
             out.push_str(&assign_owned(module, function, *dest, "by_m"));
             out.push_str("    }\n");
@@ -8982,7 +9438,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 format!(
                     "    {{ {} by_old = {target}; {target} = {}; {release} }}\n",
                     ctype(module, ty),
-                    ty.undefined()
+                    ty.emptied()
                 )
             })
         }
@@ -9018,30 +9474,54 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             error_label(error_target)
         ),
         Op::GetIter { dest, src, cursor } => {
-            let mut out = match cursor {
-                Some(_) => {
-                    let expr = format!("By_CursorIter({})", value_expr(src));
-                    assign_checked(module, function, *dest, &expr, error_target)
-                }
-                None => {
-                    let expr = format!("By_GetIter({})", value_expr(src));
-                    assign_checked(module, function, *dest, &expr, error_target)
-                }
+            let protocol = match cursor {
+                Some(_) => format!("By_CursorIter({})", value_expr(src)),
+                None => format!("By_GetIter({})", value_expr(src)),
             };
-            // the cursor starts a loop at the top of whatever it is walking. it is
-            // set *here* rather than where the register is declared because one
-            // register serves every trip through an enclosing loop
+            // a compiled generator is its own iterator, which is all `PyObject_GetIter`
+            // would have found out about it
+            let expr = match stepped_generator(module, function, src) {
+                Some(class) => format!(
+                    "(BY_LIKELY({value} != NULL && Py_TYPE({value}) == (PyTypeObject *){type_name}_OBJ) ? By_NewRef({value}) : {protocol})",
+                    value = value_expr(src),
+                    type_name = class.type_name(module.name.dotted()),
+                ),
+                None => protocol,
+            };
+            let mut out = assign_checked(module, function, *dest, &expr, error_target);
+            // the cursor starts a loop at the top of whatever it is walking, and says
+            // whether that is an exact list. it is set *here* rather than where the
+            // register is declared because one register serves every trip through an
+            // enclosing loop
             if let Some(cursor) = cursor {
-                let _ = writeln!(out, "    {} = 0;", local(*cursor));
+                let _ = writeln!(
+                    out,
+                    "    {} = By_CursorStart({});",
+                    local(*cursor),
+                    local(*dest)
+                );
             }
             out
         }
         Op::IterNext { dest, iter, cursor } => {
             // a null result is exhaustion *or* failure, so the check has to
             // consult the exception state rather than the value alone
-            let expr = match cursor {
+            let protocol = match cursor {
                 Some(cursor) => format!("By_CursorStep({}, &{})", value_expr(iter), local(*cursor)),
                 None => format!("By_IterNext({})", value_expr(iter)),
+            };
+            // a step of a compiled generator calls that type's own step, handing it the
+            // depth this frame already holds rather than having `tp_iternext` look it up
+            // again every element — see [`direct_steps`]
+            let expr = match stepped_generator(module, function, iter) {
+                Some(class) => format!(
+                    "(BY_LIKELY(Py_TYPE({value}) == (PyTypeObject *){type_name}_OBJ) ? {step}(({struct_name} *){value}, by_depth, 1) : {protocol})",
+                    value = value_expr(iter),
+                    type_name = class.type_name(module.name.dotted()),
+                    struct_name = class.struct_name(module.name.dotted()),
+                    step = generator_step(module, class),
+                ),
+                None => protocol,
             };
             let mut out = assign_owned(module, function, *dest, &expr);
             let _ = writeln!(
@@ -9293,6 +9773,52 @@ fn emit_terminator(
                 otherwise.0
             )
         }
+        Terminator::MachineStep {
+            dest,
+            op,
+            lhs,
+            rhs,
+            fits,
+            overflows,
+        } => {
+            let (builtin, symbol) = match op {
+                BinOp::Sub => ("__builtin_sub_overflow", "-"),
+                _ => ("__builtin_add_overflow", "+"),
+            };
+            let (l, r, d) = (value_expr(lhs), value_expr(rhs), local(*dest));
+            // the overflow edge reads the operands as they were, and one of them is usually
+            // `dest` itself: `i = i + 1`. the builtin writes the wrapped result either way,
+            // and wrapping arithmetic takes it back exactly, so the result is written in
+            // place and undone on the cold edge rather than kept in a second register on
+            // every trip
+            let undo = if lhs == rhs {
+                // `i = i + i` leaves nothing unchanged to take the result back with
+                None
+            } else if *lhs == Value::Register(*dest) {
+                let inverse = if symbol == "+" { "-" } else { "+" };
+                Some(format!(
+                    "{d} = (int64_t)((uint64_t){d} {inverse} (uint64_t){r});"
+                ))
+            } else if *rhs == Value::Register(*dest) {
+                Some(if symbol == "+" {
+                    format!("{d} = (int64_t)((uint64_t){d} - (uint64_t){l});")
+                } else {
+                    format!("{d} = (int64_t)((uint64_t){l} - (uint64_t){d});")
+                })
+            } else {
+                None
+            };
+            match undo {
+                Some(undo) => format!(
+                    "    if (BY_UNLIKELY({builtin}({l}, {r}, &{d}))) {{ {undo} goto b{}; }}\n    goto b{};\n",
+                    overflows.0, fits.0
+                ),
+                None => format!(
+                    "    {{ int64_t by_s; if (BY_UNLIKELY({builtin}({l}, {r}, &by_s))) goto b{}; {d} = by_s; }}\n    goto b{};\n",
+                    overflows.0, fits.0
+                ),
+            }
+        }
         Terminator::Unreachable => {
             let mut out = emit_cleanup(function, "    ", live, None);
             let _ = writeln!(out, "    return {};", undefined(module, &function.ret));
@@ -9366,6 +9892,142 @@ fn split_int_binary_c(
         value_expr(rhs),
         error_label(error_target)
     ))
+}
+
+/// a list element read whose one use is to be unboxed, with the element borrowed from the
+/// list across the unbox, or `None` where `ops` is not that shape
+///
+/// `a[i]` over a `list[float]` retains the element into a register the unbox reads once and
+/// the release straight after lets go of: a retain and a release around a value the list
+/// goes on holding. where the container is an exact `list` and the index falls inside it,
+/// the element is unboxed straight off the list instead. the list holds it for as long as
+/// nothing can run python, and neither the read nor an unbox this allows can — each takes
+/// any reference its result needs for itself.
+///
+/// every other read, the protocol read and a missed bound among them, runs the three
+/// operations exactly as they stood, so what an exception finds held, and when that is let
+/// go of, is as it was. `ops` is the read, the unbox and the release, in that order
+fn borrowed_element_unbox(
+    module: &ModuleIr,
+    function: &Function,
+    ops: &[Op],
+    edge: ErrorEdge,
+) -> Option<String> {
+    let [
+        read @ Op::GetItem {
+            dest: element,
+            container,
+            index,
+        },
+        unbox @ Op::Unbox {
+            dest: unboxed,
+            src: Value::Register(source),
+            to,
+        },
+        release @ Op::Release {
+            value: Value::Register(released),
+            path,
+        },
+    ] = ops
+    else {
+        return None;
+    };
+    let temporary = |id: RegisterId| {
+        function
+            .register(id)
+            .is_some_and(|decl| decl.name.is_none() && !decl.borrowed && !decl.may_be_unassigned)
+    };
+    let borrowed = match function.value_type(index) {
+        Some(RType::Primitive(Primitive::Fixed(_))) => format!(
+            "By_ListItemBorrowed({}, {})",
+            value_expr(container),
+            value_expr(index)
+        ),
+        Some(RType::INT) if !holds_the_vararg(function, container) => {
+            let tagged = value_expr(index);
+            format!(
+                "(By_IsShort({tagged}) ? By_ListItemBorrowed({}, (int64_t)By_ShortValue({tagged})) : NULL)",
+                value_expr(container)
+            )
+        }
+        _ => return None,
+    };
+    if source != element
+        || released != element
+        || !path.is_empty()
+        || unboxed == element
+        || !temporary(*element)
+        || function.register(*unboxed).is_none_or(|decl| decl.borrowed)
+        || [container, index]
+            .into_iter()
+            .any(|operand| *operand == Value::Register(*element))
+    {
+        return None;
+    }
+    let helper = unbox_owning_nothing_of_its_source(to)?;
+    let fast = if *to == RType::FLOAT {
+        unbox_float(function, *unboxed, "by_e", edge)
+    } else {
+        assign_checked(module, function, *unboxed, &format!("{helper}(by_e)"), edge)
+    };
+    let slow = [read, unbox, release]
+        .into_iter()
+        .map(|op| emit_op(module, function, op, edge))
+        .collect::<String>();
+    Some(format!(
+        "    {{ PyObject *by_e = {borrowed};\n\
+         \x20   if (BY_LIKELY(by_e != NULL)) {{\n{fast}\
+         \x20   }} else {{\n{slow}\
+         \x20   }} }}\n"
+    ))
+}
+
+/// the helper that normalizes and bounds-checks an index into a packed buffer, for the
+/// representation the index is in
+fn array_index_helper(function: &Function, index: &Value) -> &'static str {
+    match function.value_type(index) {
+        Some(RType::Primitive(Primitive::Fixed(_))) => "By_ArrayIndexI64",
+        _ => "By_ArrayIndex",
+    }
+}
+
+/// narrow `src` to the double `dest` holds, as a type test with an error edge of its own
+///
+/// a double has no value to spare for an error, so the unbox helper's failure is one that
+/// has to be confirmed by asking the thread whether an exception is set — on every read,
+/// though only a wrong type can fail. testing the type here puts the whole failure on the
+/// branch that is never taken
+fn unbox_float(
+    function: &Function,
+    dest: RegisterId,
+    src: &str,
+    error_target: ErrorEdge,
+) -> String {
+    if function.register(dest).is_none() {
+        return String::new();
+    }
+    format!(
+        "    if (BY_UNLIKELY(!By_IsFloat({src}))) {{ By_UnboxFloatFailed({src}); goto {label}; }}\n    \
+         {target} = PyFloat_AS_DOUBLE({src});\n",
+        label = error_label(error_target),
+        target = local(dest),
+    )
+}
+
+/// the unbox helper for a representation whose unbox may read an object it does not own
+///
+/// each of these answers a machine value, or a tagged `int` that retains a value behind a
+/// pointer for itself, and none of them asks the object for anything — so the object only
+/// has to outlive the call. an unbox answering an object reference is not here: its answer
+/// is the object itself, which would then need a reference of its own
+fn unbox_owning_nothing_of_its_source(to: &RType) -> Option<&'static str> {
+    Some(match to {
+        RType::Primitive(Primitive::Int) => "By_UnboxInt",
+        RType::Primitive(Primitive::Float) => "By_UnboxFloat",
+        RType::Primitive(Primitive::Bool) => "By_UnboxBool",
+        RType::Primitive(Primitive::None) => "By_UnboxNone",
+        _ => return None,
+    })
 }
 
 fn split_int_binary(op: BinOp, lhs: &Value, rhs: &Value) -> Option<(&'static str, String)> {
@@ -11214,6 +11876,7 @@ mod tests {
     use by_ir::function::{CallConvention, Declined};
     use by_ir::rtype::IntWidth;
     use by_ir::verify::verify;
+    use std::collections::BTreeSet;
 
     fn module_with(function: Function) -> ModuleIr {
         ModuleIr {
@@ -11535,6 +12198,7 @@ mod tests {
             dest: pushed,
             array: Value::Register(buffer),
             value: Value::Bool(true),
+            length: None,
         });
         builder.terminate(Terminator::Return(Value::Register(pushed)));
         let c = emit_module(&module_with(builder.finish()));
@@ -12881,23 +13545,100 @@ mod tests {
     }
 
     #[test]
-    fn a_float_error_is_confirmed_against_the_exception_state() {
-        // BY_FLOAT_ERROR is a legal double, so the sentinel alone proves nothing
-        let mut builder = FunctionBuilder::new("div", RType::FLOAT);
-        let a = builder.param("a", RType::FLOAT);
-        let b = builder.param("b", RType::FLOAT);
+    fn a_float_division_tests_its_divisor_and_jumps_to_the_error() {
+        // every double a division answers is a legal one, so the zero divisor is what is
+        // tested — an error value would have to be confirmed against the thread's
+        // exception state on every division
+        for (op, operation, quotient) in [
+            (BinOp::TrueDiv, "PyNumber_TrueDivide", "(r0 / r1)"),
+            (
+                BinOp::FloorDiv,
+                "PyNumber_FloorDivide",
+                "By_FloatFloorDivNonzero(r0, r1)",
+            ),
+            (
+                BinOp::Mod,
+                "PyNumber_Remainder",
+                "By_FloatModNonzero(r0, r1)",
+            ),
+        ] {
+            let mut builder = FunctionBuilder::new("div", RType::FLOAT);
+            let a = builder.param("a", RType::FLOAT);
+            let b = builder.param("b", RType::FLOAT);
+            let out = builder.temp(RType::FLOAT);
+            builder.push(Op::FloatBinary {
+                dest: out,
+                op,
+                lhs: Value::Register(a),
+                rhs: Value::Register(b),
+            });
+            builder.terminate(Terminator::Return(Value::Register(out)));
+            let c = emit_module(&module_with(builder.finish()));
+            let expected = format!(
+                "    if (BY_UNLIKELY(r1 == 0.0)) {{ By_ZeroDivision({operation}, 1); goto by_error; }}\n    r2 = {quotient};\n"
+            );
+            assert!(c.contains(&expected), "{op:?}: {c}");
+            assert!(!c.contains("by_t == BY_FLOAT_ERROR"), "{op:?}: {c}");
+        }
+    }
+
+    #[test]
+    fn a_float_unbox_is_a_type_test_with_its_own_error_edge() {
+        let mut builder = FunctionBuilder::new("narrow", RType::FLOAT);
+        let a = builder.param("a", RType::OBJECT);
         let out = builder.temp(RType::FLOAT);
-        builder.push(Op::FloatBinary {
+        builder.push(Op::Unbox {
             dest: out,
-            op: BinOp::TrueDiv,
-            lhs: Value::Register(a),
-            rhs: Value::Register(b),
+            src: Value::Register(a),
+            to: RType::FLOAT,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let c = emit_module(&module_with(builder.finish()));
-        assert!(c.contains(
-            "if (BY_UNLIKELY(by_t == BY_FLOAT_ERROR && PyErr_Occurred())) goto by_error;"
-        ));
+        assert!(
+            c.contains(
+                "    if (BY_UNLIKELY(!By_IsFloat(r0))) { By_UnboxFloatFailed(r0); goto by_error; }\n    \
+                 r1 = PyFloat_AS_DOUBLE(r0);\n"
+            ),
+            "{c}"
+        );
+    }
+
+    #[test]
+    fn an_int_widened_to_a_float_tests_for_an_error_off_the_short_path() {
+        let mut builder = FunctionBuilder::new("widen", RType::FLOAT);
+        let a = builder.param("a", RType::INT);
+        let out = builder.temp(RType::FLOAT);
+        builder.push(Op::IntToFloat {
+            dest: out,
+            src: Value::Register(a),
+        });
+        builder.terminate(Terminator::Return(Value::Register(out)));
+        let c = emit_module(&module_with(builder.finish()));
+        assert!(
+            c.contains(
+                "    if (BY_LIKELY(By_IsShort(r0))) {\n    r1 = (double)By_ShortValue(r0);\n    } else {\n    \
+                 { double by_t = By_TaggedToDoubleSlow(r0);\n      \
+                 if (BY_UNLIKELY(by_t == -1.0 && PyErr_Occurred())) goto by_error;\n      \
+                 r1 = by_t; }\n    }\n"
+            ),
+            "{c}"
+        );
+    }
+
+    #[test]
+    fn a_machine_integer_widened_to_a_float_is_a_plain_conversion() {
+        let mut builder = FunctionBuilder::new("widen", RType::FLOAT);
+        let count = builder.local("count", RType::fixed(by_ir::rtype::IntWidth::I64));
+        let out = builder.temp(RType::FLOAT);
+        builder.assign(count, Value::Fixed(7));
+        builder.push(Op::IntToFloat {
+            dest: out,
+            src: Value::Register(count),
+        });
+        builder.terminate(Terminator::Return(Value::Register(out)));
+        let c = emit_module(&module_with(builder.finish()));
+        assert!(c.contains("    r1 = (double)r0;\n"), "{c}");
+        assert!(!c.contains("By_TaggedToDouble"), "{c}");
     }
 
     #[test]
@@ -13494,6 +14235,7 @@ mod tests {
         builder.push(Op::TupleBuild {
             dest: out,
             items: vec![Value::Register(a), Value::Float(1.5)],
+            moves: BTreeSet::new(),
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let c = emit_module(&module_with(builder.finish()));
@@ -13518,6 +14260,7 @@ mod tests {
         builder.push(Op::TupleBuild {
             dest: out,
             items: vec![Value::Register(made), Value::Register(n)],
+            moves: BTreeSet::new(),
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut module = module_with(builder.finish());
@@ -13559,6 +14302,7 @@ mod tests {
             builder.push(Op::TupleBuild {
                 dest: out,
                 items: vec![Value::Register(point), Value::Register(n)],
+                moves: BTreeSet::new(),
             });
             builder.terminate(Terminator::Return(Value::Register(out)));
             builder.finish()
