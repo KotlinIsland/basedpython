@@ -27,6 +27,7 @@
 //! [`await_request`]: TestServer::await_request
 //! [`await_notification`]: TestServer::await_notification
 
+mod alignment_groups;
 mod build_output;
 mod call_hierarchy;
 mod code_actions;

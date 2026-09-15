@@ -20,6 +20,12 @@
 //! draws a hint only while a key is held — so a width computed here would be wrong the moment the
 //! key came up. this module reports the grouping and the room the author left; the client turns
 //! that into pixels
+//!
+//! a column is counted the way a fixed-width editor lays the line out: a wide character takes two
+//! columns, a combining mark none, and a tab reaches the next multiple of the tab size — which is
+//! the client's setting, so the client says what it is
+
+use std::num::NonZeroU32;
 
 use ruff_db::PythonFile;
 use ruff_db::parsed::parsed_module;
@@ -28,8 +34,10 @@ use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_body, walk_node,
 };
 use ruff_python_ast::{AnyNodeRef, Stmt};
+use ruff_python_trivia::tab_offset_u32;
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
+use unicode_width::UnicodeWidthChar;
 
 use crate::Db;
 use crate::inlay_hints::untyped_declaration_value;
@@ -55,6 +63,19 @@ pub struct AlignmentMember {
     /// and since the column no longer has to be padded to be a column, it is not this module's
     /// either
     pub gap_end: TextSize,
+
+    /// the display column [`Self::gap_start`] is at — how far along its line a fixed-width editor
+    /// with the tab size given to [`alignment_groups`] draws it
+    ///
+    /// reported alongside the offset because a client lays hints out in columns, and a column is
+    /// not something it can read back off the offset without repeating this measurement
+    pub gap_start_column: u32,
+
+    /// the display column of the `=`, which every member of a group shares
+    ///
+    /// the gap is spaces only, so this less [`Self::gap_start_column`] is also its length in
+    /// characters
+    pub gap_end_column: u32,
 }
 
 /// assignments the author put in one column, reported together because they have to move together
@@ -96,10 +117,13 @@ pub struct AlignmentGroup {
 ///
 /// a group is reported whole even when only one of its lines is in `range`: the column is a
 /// property of every member at once, so half a group would be sized against the wrong maximum
+///
+/// `tab_size` is the number of columns between the tab stops of the editor the lines are shown in
 pub fn alignment_groups(
     db: &dyn Db,
     file: PythonFile<'_>,
     range: TextRange,
+    tab_size: NonZeroU32,
 ) -> Vec<AlignmentGroup> {
     let parsed = parsed_module(db, file).load(db);
     let source = source_text(db, file.file(db));
@@ -108,6 +132,7 @@ pub fn alignment_groups(
     let mut visitor = AlignmentVisitor {
         source,
         range,
+        tab_size,
         groups: Vec::new(),
     };
     walk_node(&mut visitor, AnyNodeRef::from(parsed.syntax()));
@@ -151,6 +176,9 @@ struct AlignmentVisitor<'a> {
 
     /// the span the caller asked about, used to skip nodes it does not reach
     range: TextRange,
+
+    /// the columns between tab stops, see [`display_column`]
+    tab_size: NonZeroU32,
 
     groups: Vec<AlignmentGroup>,
 }
@@ -204,7 +232,7 @@ impl AlignmentVisitor<'_> {
 
             let joins = match (run.first(), previous_end) {
                 (Some(first), Some(previous_end)) => {
-                    self.column_of(first.gap_end) == self.column_of(member.gap_end)
+                    first.gap_end_column == member.gap_end_column
                         && !self.blank_line_between(previous_end, stmt.start())
                 }
                 _ => false,
@@ -266,16 +294,23 @@ impl AlignmentVisitor<'_> {
             _ => return Alignment::Breaks,
         };
         match self.equals_after(gap_start) {
-            Some(gap_end) => Alignment::Member(AlignmentMember { gap_start, gap_end }),
+            Some(gap_end) => Alignment::Member(AlignmentMember {
+                gap_start,
+                gap_end,
+                gap_start_column: display_column(self.source, gap_start, self.tab_size),
+                gap_end_column: display_column(self.source, gap_end, self.tab_size),
+            }),
             None => Alignment::Breaks,
         }
     }
 
     /// the `=` that follows `from` with nothing but spaces in between, if that is what follows
     ///
-    /// spaces only, and deliberately: a tab is not a column anyone can agree on, and a newline or a
-    /// `\` means the `=` is on another line, where it is aligned with nothing. each of those makes
-    /// the statement unalignable rather than merely unpadded
+    /// spaces only, and deliberately. the gap is room a hint spends column for column, and a tab
+    /// is not that: how far it reaches depends on where it starts, so a hint drawn ahead of it
+    /// changes how much room it leaves. a newline or a `\` means the `=` is on another line, where
+    /// it is aligned with nothing. each of those makes the statement unalignable rather than merely
+    /// unpadded
     fn equals_after(&self, from: TextSize) -> Option<TextSize> {
         let rest = self.source.get(from.to_usize()..)?;
         let spaces = rest.len() - rest.trim_start_matches(' ').len();
@@ -283,25 +318,6 @@ impl AlignmentVisitor<'_> {
             return None;
         }
         Some(from + TextSize::try_from(spaces).ok()?)
-    }
-
-    /// how far into its line an offset is, in characters
-    ///
-    /// characters rather than bytes, because bytes do not answer the question being asked. `é = 1`
-    /// and `ab = 1` spend the same number of bytes reaching their `=` and put it in different
-    /// columns, so counting bytes would call those two lines aligned — and would miss two that
-    /// really are
-    ///
-    /// characters rather than rendered width, because width is the client's question — an editor
-    /// draws its own glyphs, and in a proportional font even two ASCII letters are not the same
-    /// width. all that is decided here is whether the author put two `=` in the same place
-    fn column_of(&self, offset: TextSize) -> usize {
-        let line_start = self.source.line_start(offset);
-        self.source
-            .get(line_start.to_usize()..offset.to_usize())
-            .unwrap_or_default()
-            .chars()
-            .count()
     }
 
     /// whether the author left an empty line between two statements
@@ -327,6 +343,30 @@ impl AlignmentVisitor<'_> {
     }
 }
 
+/// how far along its line a fixed-width editor draws `offset`
+///
+/// neither bytes nor characters answer that. `é = 1` and `ab = 1` spend the same number of bytes
+/// reaching their `=` and put it in different columns; `名前 = 1` and `abcd = 1` spend different
+/// numbers of characters and put it in the same one. so each character counts for its unicode
+/// width — two for a wide character, none for a combining mark — and a tab advances to the next
+/// multiple of `tab_size`, the same measure `ruff_linter`'s `LineWidthBuilder` gives a line
+///
+/// still columns rather than pixels: in a proportional font even two ASCII letters differ, and
+/// that is the client's to draw. what is decided here is whether the author put two `=` in the
+/// same place on a fixed grid
+fn display_column(source: &str, offset: TextSize, tab_size: NonZeroU32) -> u32 {
+    let line_start = source.line_start(offset);
+    source
+        .get(line_start.to_usize()..offset.to_usize())
+        .unwrap_or_default()
+        .chars()
+        .fold(0, |column, character| match character {
+            '\t' => column + tab_offset_u32(column, tab_size.get()),
+            #[expect(clippy::cast_possible_truncation)]
+            character => column + character.width().unwrap_or(0) as u32,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use insta::assert_snapshot;
@@ -341,20 +381,35 @@ mod tests {
         /// rendered rather than asserted as offsets because what matters about this analysis is
         /// which lines ended up together and how much room each has, and a list of byte offsets
         /// hides both
+        ///
+        /// with tab stops every four columns
         fn alignment_groups(&self) -> String {
+            self.alignment_groups_with_tab_size(4)
+        }
+
+        /// the same, with tab stops every `tab_size` columns
+        fn alignment_groups_with_tab_size(&self, tab_size: u32) -> String {
             let source = self.cursor.source.as_str();
-            self.alignment_groups_in(TextRange::new(TextSize::new(0), TextSize::of(source)))
+            self.alignment_groups_in(
+                TextRange::new(TextSize::new(0), TextSize::of(source)),
+                tab_size,
+            )
         }
 
         /// the same, for a caller asking about only part of the file
-        fn alignment_groups_in(&self, range: TextRange) -> String {
+        ///
+        /// each line is drawn with its tabs expanded, and the gap under it at the columns the
+        /// analysis reported, so a column it got wrong shows up as a gap drawn in the wrong place
+        fn alignment_groups_in(&self, range: TextRange, tab_size: u32) -> String {
             use std::fmt::Write;
 
             let source = self.cursor.source.as_str();
+            let tab_size = NonZeroU32::new(tab_size).unwrap();
             let groups = alignment_groups(
                 &self.db,
                 self.program_file(self.cursor.file).python_file(&self.db),
                 range,
+                tab_size,
             );
             if groups.is_empty() {
                 return "no groups".to_string();
@@ -370,9 +425,23 @@ mod tests {
                         .next()
                         .unwrap_or_default()
                         .trim_end_matches('\r');
-                    let lead = (member.gap_start - start).to_usize();
-                    let gap = (member.gap_end - member.gap_start).to_usize();
-                    writeln!(out, "  {line}").unwrap();
+                    // the same walk `display_column` makes, character by character: an oracle
+                    // that measured the line another way could agree with a wrong answer
+                    let mut expanded = String::new();
+                    let mut width = 0u32;
+                    for character in line.chars() {
+                        if character == '\t' {
+                            let stop = tab_offset_u32(width, tab_size.get());
+                            expanded.extend(std::iter::repeat_n(' ', stop as usize));
+                            width += stop;
+                        } else {
+                            expanded.push(character);
+                            width += u32::try_from(character.width().unwrap_or(0)).unwrap();
+                        }
+                    }
+                    let lead = member.gap_start_column as usize;
+                    let gap = (member.gap_end_column - member.gap_start_column) as usize;
+                    writeln!(out, "  {expanded}").unwrap();
                     writeln!(
                         out,
                         "  {}{} gap {gap}",
@@ -698,7 +767,7 @@ basdf = 1
         ");
     }
 
-    /// a column is where a reader sees the `=`, so it is counted in characters. these two spend the
+    /// a column is where a reader sees the `=`, so it is not counted in bytes. these two spend the
     /// same number of bytes reaching their `=` and put it in different columns
     #[test]
     fn a_column_is_not_a_byte_count() {
@@ -724,9 +793,91 @@ abcde = 2
         assert_snapshot!(test.alignment_groups(), @r"
         group 1
           é     = 1
-            ----- gap 5
+           ----- gap 5
           abcde = 2
                - gap 1
+        ");
+    }
+
+    /// a wide character takes two columns of the line, so these two put their `=` in one column
+    /// while spending different numbers of characters to get there
+    #[test]
+    fn a_wide_character_takes_two_columns() {
+        let test = cursor_test(
+            "\
+名前 = 1
+abcd = 2
+<CURSOR>",
+        );
+        assert_snapshot!(test.alignment_groups(), @r"
+        group 1
+          名前 = 1
+              - gap 1
+          abcd = 2
+              - gap 1
+        ");
+    }
+
+    /// and these spend the same number of characters and put their `=` in different columns
+    #[test]
+    fn a_column_is_not_a_character_count() {
+        let test = cursor_test(
+            "\
+名前   = 1
+abcd = 2
+<CURSOR>",
+        );
+        assert_snapshot!(test.alignment_groups(), @"no groups");
+    }
+
+    /// a tab before the gap reaches the next tab stop, so where the `=` lands depends on it
+    #[test]
+    fn a_tab_in_the_target_reaches_the_next_tab_stop() {
+        let test = cursor_test(
+            "\
+x:\tint = 1
+abcdefg = 2
+<CURSOR>",
+        );
+        assert_snapshot!(test.alignment_groups(), @r"
+        group 1
+          x:  int = 1
+                 - gap 1
+          abcdefg = 2
+                 - gap 1
+        ");
+    }
+
+    /// and the tab stop is the editor's, so the same lines with stops every eight columns put the
+    /// first `=` four columns further out
+    #[test]
+    fn the_tab_stop_is_the_editors() {
+        let test = cursor_test(
+            "\
+x:\tint = 1
+abcdefg = 2
+<CURSOR>",
+        );
+        assert_snapshot!(test.alignment_groups_with_tab_size(8), @"no groups");
+    }
+
+    /// indentation is measured with the rest of the line, so a suite indented with tabs lines up
+    /// the same as one indented with spaces
+    #[test]
+    fn a_suite_indented_with_tabs() {
+        let test = cursor_test(
+            "\
+def f():
+\ta     = 1
+\tbasdf = 2
+<CURSOR>",
+        );
+        assert_snapshot!(test.alignment_groups(), @r"
+        group 1
+              a     = 1
+               ----- gap 5
+              basdf = 2
+                   - gap 1
         ");
     }
 
@@ -790,7 +941,8 @@ dddddd    = 3
         assert_snapshot!(test.alignment_groups(), @"no groups");
     }
 
-    /// a tab is not a column anyone can agree on
+    /// a tab in the gap reaches further or less far depending on where the hint ahead of it ends, so
+    /// it is not room a hint can spend
     #[test]
     fn a_tab_before_the_equals_ends_the_block() {
         let test = cursor_test(
@@ -825,7 +977,7 @@ a     = 1
 basdf = 1
 <CURSOR>",
         );
-        assert_snapshot!(test.alignment_groups_in(test.line(1)), @r"
+        assert_snapshot!(test.alignment_groups_in(test.line(1), 4), @r"
         group 1
           a     = 1
            ----- gap 5
@@ -845,7 +997,7 @@ def f():
     basdf = 1
 <CURSOR>",
         );
-        assert_snapshot!(test.alignment_groups_in(test.line(1)), @r"
+        assert_snapshot!(test.alignment_groups_in(test.line(1), 4), @r"
         group 1
               a     = 1
                ----- gap 5
@@ -866,7 +1018,7 @@ cc    = 2
 dddde = 3
 <CURSOR>",
         );
-        assert_snapshot!(test.alignment_groups_in(test.line(3)), @r"
+        assert_snapshot!(test.alignment_groups_in(test.line(3), 4), @r"
         group 1
           cc    = 2
             ---- gap 4
