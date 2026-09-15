@@ -63,6 +63,13 @@ on an import the checker had no complaint about. all of that resolves against
 the project root rather than the working directory, so `by run` in a
 subdirectory is still this project
 
+`--launcher PATH` starts the program through another program — a debugger that
+has to be the process the program runs in, say — without choosing the
+interpreter for it. discovery runs exactly as above, and the program starts as
+`PATH <interpreter> <runner> MODULE [ARGS...]`, so the launcher is handed the
+interpreter `by run` chose and runs once, for the program: the version probe is
+still made against the interpreter itself
+
 the emitted code targets that interpreter's version by default. an explicit
 `--min-version` wins, but must not exceed the interpreter — `by run` refuses
 rather than emit code the interpreter cannot parse. an interpreter *older* than

@@ -119,6 +119,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             args,
             min_version,
             python,
+            launcher,
             lowering,
             compiled,
         } => by_commands::cmd_run(
@@ -128,6 +129,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             &lowering,
             compiled,
             python.as_deref(),
+            launcher.as_deref(),
         ),
         Command::Init {
             path,

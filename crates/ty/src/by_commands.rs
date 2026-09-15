@@ -131,6 +131,7 @@ pub(crate) fn cmd_run(
     lowering: &LoweringArgs,
     compiled: bool,
     python_flag: Option<&Path>,
+    launcher: Option<&Path>,
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     // one resolution of the project, for the environment and the target version
@@ -318,18 +319,37 @@ pub(crate) fn cmd_run(
     // relative path on its command line, and anything it reads or writes beside
     // the project, resolve against the directory they were written for. python
     // puts the runner's own directory — the generated tree — at the head of
-    // `sys.path`, so the module is still found there
-    let status = Command::new(&python)
+    // `sys.path`, so the module is still found there.
+    //
+    // a launcher goes in front of the interpreter rather than in place of it. a
+    // debugger that has to *be* the process the program runs in used to get
+    // there as `--python`, which switched this discovery off and left it to name
+    // an interpreter it could only guess at — and to tell the version probe apart
+    // from the program, since both were sent to it
+    let mut command = match launcher {
+        Some(launcher) => {
+            let mut command = Command::new(launcher);
+            command.arg(&python);
+            command
+        }
+        None => Command::new(&python),
+    };
+    let status = command
         .arg(tmp.path().join(BY_RUNNER_FILENAME))
         .arg(&module)
         .args(args)
         .current_dir(&cwd)
         .status()
-        .with_context(|| {
-            format!(
+        .with_context(|| match launcher {
+            Some(launcher) => format!(
+                "could not run the launcher `{}` for `{python}`, the interpreter from {}",
+                launcher.display(),
+                interpreter.origin
+            ),
+            None => format!(
                 "could not run `{python}`, the interpreter from {}",
                 interpreter.origin
-            )
+            ),
         })?;
 
     let code = status.code().unwrap_or(1);
