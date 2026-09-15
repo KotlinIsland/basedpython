@@ -148,8 +148,8 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
         }
         Command::Restage {
             build_directory,
-            file,
-        } => by_commands::cmd_restage(&build_directory, &file),
+            files,
+        } => by_commands::cmd_restage(&build_directory, &files),
         Command::Build {
             min_version,
             wheels,

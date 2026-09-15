@@ -160,13 +160,15 @@ pub(crate) enum Command {
         lowering: LoweringArgs,
     },
 
-    /// Recompute one file's slot in a build tree that already exists.
+    /// Recompute the slots of a set of edited files in a build tree that
+    /// already exists.
     ///
     /// What a debugger needs to give a running program an edit. `by run`
     /// transpiles the project into a directory and runs the program out of
     /// there, so nothing the user edits is the file the interpreter compiled: a
     /// `.by` because it was transpiled, a hand-written `.py` because it was
-    /// copied. This produces what that file's slot in the tree should now hold.
+    /// copied. This produces what each file's slot in the tree should now hold,
+    /// and the one `_by_sourcemap.py` that describes all of them together.
     ///
     /// It **writes nothing** and prints JSON. The caller writes the bytes,
     /// because the caller is the only one that can take the write back when the
@@ -180,9 +182,11 @@ pub(crate) enum Command {
         /// The build tree the program is running out of.
         #[arg(value_name = "BUILD_DIR")]
         build_directory: PathBuf,
-        /// The file in the project that was edited.
-        #[arg(value_name = "FILE")]
-        file: PathBuf,
+        /// The files in the project that were edited. Name every file of one
+        /// edit together: they share a sourcemap, and re-staging them one at a
+        /// time answers with a map per file that each drop the others' entries.
+        #[arg(value_name = "FILE", required = true)]
+        files: Vec<PathBuf>,
     },
 
     /// Compile .by and .py files to native CPython extension modules.

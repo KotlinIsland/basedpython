@@ -21,7 +21,7 @@ by <COMMAND>
 <dt><a href="#by-run"><code>by run</code></a></dt><dd><p>Transpile and run a module with <code>python -m &lt;module&gt;</code></p></dd>
 <dt><a href="#by-init"><code>by init</code></a></dt><dd><p>Start a new project</p></dd>
 <dt><a href="#by-build"><code>by build</code></a></dt><dd><p>Build the project as python</p></dd>
-<dt><a href="#by-restage"><code>by restage</code></a></dt><dd><p>Recompute one file's slot in a build tree that already exists</p></dd>
+<dt><a href="#by-restage"><code>by restage</code></a></dt><dd><p>Recompute the slots of a set of edited files in a build tree that already exists</p></dd>
 <dt><a href="#by-compile"><code>by compile</code></a></dt><dd><p>Compile .by and .py files to native CPython extension modules</p></dd>
 <dt><a href="#by-generate-api-file"><code>by generate-api-file</code></a></dt><dd><p>Generate an api lockfile (<code>api.lock</code>) summarising the public type-level surface of the project</p></dd>
 <dt><a href="#by-transpile"><code>by transpile</code></a></dt><dd><p>Transpile a file to stdout, or a whole directory in place (reads stdin if no path given)</p></dd>
@@ -320,9 +320,9 @@ by build [OPTIONS]
 
 ## by restage
 
-Recompute one file's slot in a build tree that already exists.
+Recompute the slots of a set of edited files in a build tree that already exists.
 
-What a debugger needs to give a running program an edit. `by run` transpiles the project into a directory and runs the program out of there, so nothing the user edits is the file the interpreter compiled: a `.by` because it was transpiled, a hand-written `.py` because it was copied. This produces what that file's slot in the tree should now hold.
+What a debugger needs to give a running program an edit. `by run` transpiles the project into a directory and runs the program out of there, so nothing the user edits is the file the interpreter compiled: a `.by` because it was transpiled, a hand-written `.py` because it was copied. This produces what each file's slot in the tree should now hold, and the one `_by_sourcemap.py` that describes all of them together.
 
 It **writes nothing** and prints JSON. The caller writes the bytes, because the caller is the only one that can take the write back when the replacement it was for is refused.
 
@@ -331,13 +331,13 @@ Editors should send `by/transpileForBuild` to the language server instead, which
 <h3 class="cli-reference">Usage</h3>
 
 ```
-by restage <BUILD_DIR> <FILE>
+by restage <BUILD_DIR> <FILE>...
 ```
 
 <h3 class="cli-reference">Arguments</h3>
 
 <dl class="cli-reference"><dt id="by-restage--build_directory"><a href="#by-restage--build_directory"><code>BUILD_DIRECTORY</code></a></dt><dd><p>The build tree the program is running out of</p>
-</dd><dt id="by-restage--file"><a href="#by-restage--file"><code>FILE</code></a></dt><dd><p>The file in the project that was edited</p>
+</dd><dt id="by-restage--files"><a href="#by-restage--files"><code>FILES</code></a></dt><dd><p>The files in the project that were edited. Name every file of one edit together: they share a sourcemap, and re-staging them one at a time answers with a map per file that each drop the others' entries</p>
 </dd></dl>
 
 <h3 class="cli-reference">Options</h3>

@@ -1,7 +1,7 @@
 //! Checking a project's sources and turning the ones that pass into python.
 //!
 //! The one transpile path. `by run`, `by build`, `by transpile <dir>` and the
-//! server's single-file re-stage all arrive here, which is the point: two paths
+//! server's re-stage of an edit all arrive here, which is the point: two paths
 //! could disagree about what a file lowers to, and a build tree whose modules were
 //! written by one and re-staged by the other is a tree the debugger will refuse —
 //! or worse, accept while the line table describes something else.

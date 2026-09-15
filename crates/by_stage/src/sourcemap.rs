@@ -62,7 +62,7 @@ pub fn stage_module(
 /// The same description [`stage_module`] produces, for a caller that is not going
 /// to write the file itself.
 ///
-/// The language server's single-file re-stage is that caller: it returns the bytes
+/// The language server's re-stage of an edit is that caller: it returns the bytes
 /// and lets the plugin write them, because only the plugin can roll the write back
 /// together with the debugger request that follows it. Its `py_path` is filled in
 /// by the caller, which is the one thing a description without a staging cannot

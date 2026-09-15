@@ -100,7 +100,7 @@ pub(super) fn request(req: server::Request) -> Task {
         // It reads the project db and writes nothing, which is what lets it run
         // on a worker at all
         requests::TranspileForBuildRequestHandler::METHOD => {
-            background_document_request_task::<requests::TranspileForBuildRequestHandler>(
+            background_request_task::<requests::TranspileForBuildRequestHandler>(
                 req,
                 BackgroundSchedule::LatencySensitive,
             )
