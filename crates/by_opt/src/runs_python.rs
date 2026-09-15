@@ -705,6 +705,7 @@ impl Held {
             } if exact(operand) == Some(Kind::Int) && *ty == RType::INT => Some(Kind::Int),
             // a machine value boxed is built as the builtin, and an exact value boxed is
             // itself
+            Op::TagShort { .. } => Some(Kind::Int),
             Op::Box { src, .. } => match function.value_type(src)? {
                 RType::Primitive(Primitive::Fixed(_)) => Some(Kind::Int),
                 RType::Primitive(Primitive::Float) => Some(Kind::Float),
@@ -819,13 +820,16 @@ fn op_itself_runs_python(function: &Function, op: &Op, held: &Held) -> bool {
         // `PyLong_AsDouble` reads the digits of any `int`, a subclass's included, and asks
         // it nothing
         Op::IntToFloat { .. } => false,
+        // a short is a word with its tag, and building one allocates nothing
+        Op::TagShort { .. } => false,
 
         // a buffer of the compiler's own, grown with the allocator and not the collector
         Op::ArrayNew { .. }
         | Op::ArrayGet { .. }
         | Op::ArrayLen { .. }
         | Op::ArrayRead { .. }
-        | Op::ArrayPush { .. } => false,
+        | Op::ArrayPush { .. }
+        | Op::ArrayStoreLength { .. } => false,
         // a store lets go of the element it replaces
         Op::ArraySet { array, .. } => !function
             .value_type(array)

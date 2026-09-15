@@ -525,7 +525,9 @@ pub struct FieldDecl {
     pub ty: crate::rtype::RType,
     /// whether this is a closure environment's *shared* cell: a name more than one frame
     /// writes, which every one of them reads and writes here, and which starts unset. a
-    /// capture that is only copied in is always set, so it is read without the test
+    /// capture that is only copied in is always set, so it is read without the test.
+    /// a generator's state object holds a local some path reads before writing the same
+    /// way, since a generator expression its body makes reads it from there
     pub cell: bool,
     /// the constructor's default for it, `None` where it has none
     ///
@@ -667,6 +669,25 @@ pub struct Resumption {
     /// iterator it delegates to is kept in. python's `throw` and `close` reach that
     /// iterator before the frame itself
     pub delegations: Vec<Delegation>,
+    /// the suspensions no handler of the frame's own encloses, which `close` finishes
+    /// without resuming the frame — see [`QuietClose`]
+    pub quiet_closes: Vec<QuietClose>,
+}
+
+/// a suspension where `close` has nothing for the frame to run
+///
+/// `close` throws `GeneratorExit` in at the suspension, and where nothing between the
+/// suspension and the frame's exit handles an exception — no `try`, no `with`, only the
+/// loops whose parked iterators are let go of on the way out — the frame can only unwind
+/// and finish. cpython's own `close` makes the same judgement and finishes such a frame
+/// without raising anything into it. what the unwinding would have done is these fields
+/// cleared, innermost first
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuietClose {
+    /// the value `$state` holds while the frame is suspended there
+    pub state: i64,
+    /// the fields the unwinding writes `None` over, in the order it writes them
+    pub clears: Vec<String>,
 }
 
 /// one suspension of a resumable frame that waits on an inner iterator

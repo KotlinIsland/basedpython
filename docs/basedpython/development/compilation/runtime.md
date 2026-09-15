@@ -983,6 +983,24 @@ Own.__new__(Own).count  # python: AttributeError; compiled: 0
 a subclass is not reached by anything the compiled class can run when it is made, so
 closing this would mean a test on every read of such a field
 
+### a complex power held where a `float` is declared
+
+python's `**` gives a complex number for a negative base to a fractional power, and the
+checker types `float ** float` as `Any` for that reason. a compiled `**` that could answer
+with one is python's own, through the object protocol. a place declared `float` holds an
+unboxed double, though, so storing a complex answer there raises `TypeError` where python
+stores it:
+
+```python
+def root(a: float) -> float:
+    x = a  # `x: float` in a `.by` module
+    x **= 0.5
+    return x
+
+
+root(-4.0)  # python: (1.2246467991473532e-16+2j); compiled: TypeError
+```
+
 ## debugging and inspection
 
 - **`#line` directives** in the generated C point at `.by` source. gdb, lldb,

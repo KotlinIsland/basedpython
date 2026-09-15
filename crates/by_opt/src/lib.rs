@@ -16,6 +16,7 @@ pub(crate) mod fold;
 mod guard_loops;
 pub(crate) mod infallible;
 mod liveness;
+mod push_lengths;
 pub(crate) mod refcount;
 pub(crate) mod release_temporaries;
 mod runs_python;
@@ -89,14 +90,6 @@ const PASSES: &[Pass] = &[
         name: "dict-find",
         run: dict_find::run,
     },
-    // before dead-registers, which is what removes the temporary it frees up
-    // after folding, which is what turns the step's operands into the immediates
-    // the analysis looks for, and before coalesce, which would merge the counter
-    // with a register of the tagged representation
-    Pass {
-        name: "unbox-counters",
-        run: unbox_counters::run,
-    },
     // after every fold, which is what orphans the allocations it removes, and before
     // coalesce, which would merge an orphaned register with a live one and so make
     // the write that fills it look read
@@ -130,6 +123,12 @@ const PASSES: &[Pass] = &[
     Pass {
         name: "unswitch",
         run: unswitch::run,
+    },
+    // after the passes that copy loops, so each copy keeps a length of its own, and before
+    // the ones that decide what a register owns and where it is released
+    Pass {
+        name: "push-lengths",
+        run: push_lengths::run,
     },
     Pass {
         name: "infallible",
@@ -200,16 +199,21 @@ mod tests {
 
     #[test]
     fn a_buffer_length_is_unboxed_alongside_the_counter_it_bounds() {
-        // `while i < len(a)` over an unboxed buffer: the length is a `Py_ssize_t`
-        // already, so tagging it only to compare it against a machine counter is the
-        // tag going round in a circle. both sides end up unboxed and the guard is a
-        // register compare
+        // `while i < len(a): i = i + 1` over an unboxed buffer: the length is a
+        // `Py_ssize_t` already, so tagging it only to compare it against a machine counter
+        // is the tag going round in a circle. inside the loop's copy both sides are
+        // machine integers and the guard is a register compare
         let mut builder = FunctionBuilder::new("scan", RType::INT);
         let array = builder.param("a", RType::Array(Box::new(RType::FLOAT)));
         let index = builder.local("i", RType::INT);
         let length = builder.temp(RType::INT);
         let more = builder.temp(RType::BIT);
         builder.assign(index, Value::Int(0));
+        let header = builder.new_block();
+        let body = builder.new_block();
+        let exit = builder.new_block();
+        builder.terminate(Terminator::Goto(header));
+        builder.switch_to(header);
         builder.push(Op::ArrayLen {
             dest: length,
             array: Value::Register(array),
@@ -220,30 +224,46 @@ mod tests {
             lhs: Value::Register(index),
             rhs: Value::Register(length),
         });
+        builder.terminate(Terminator::Branch {
+            cond: Value::Register(more),
+            then_block: body,
+            else_block: exit,
+        });
+        builder.switch_to(body);
+        builder.push(Op::IntBinary {
+            dest: index,
+            op: BinOp::Add,
+            lhs: Value::Register(index),
+            rhs: Value::Int(1),
+        });
+        builder.terminate(Terminator::Goto(header));
+        builder.switch_to(exit);
         builder.terminate(Terminator::Return(Value::Register(index)));
 
-        let mut module = ModuleIr {
-            name: by_ir::ModuleName::new("app"),
-            functions: vec![builder.finish()],
-            declined: Vec::new(),
-            classes: Vec::new(),
-            gradual: Vec::new(),
-            promoted: Vec::new(),
-            lines: None,
-            fallback_source: None,
-            fallback_code: None,
-            shims: None,
-            verify_install: true,
-            follow_recursion_limit: true,
-        };
+        let mut module = ModuleIr::new("app");
+        module.functions.push(builder.finish());
         assert!(optimize(&mut module).is_ok());
-        let fixed = |id: by_ir::ops::RegisterId| {
+        let function = &module.functions[0];
+        let fixed = |value: &Value| {
             matches!(
-                module.functions[0].register(id).map(|decl| &decl.ty),
+                function.value_type(value),
                 Some(RType::Primitive(by_ir::rtype::Primitive::Fixed(_)))
             )
         };
-        assert!(fixed(index) && fixed(length), "{:?}", module.functions[0]);
+        let guards: Vec<(&Value, &Value)> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .filter_map(|op| match op {
+                Op::IntCompare { lhs, rhs, .. } => Some((lhs, rhs)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            guards.iter().any(|(lhs, rhs)| fixed(lhs) && fixed(rhs)),
+            "{}",
+            by_ir::print::print_function(function)
+        );
     }
 
     #[test]

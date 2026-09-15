@@ -215,6 +215,7 @@ mod tests {
     use by_ir::function::{Function, ModuleIr};
     use by_ir::ops::{Concatenation, Mutation, Op, RegisterId, Terminator, Value};
     use by_ir::rtype::RType;
+    use std::collections::BTreeSet;
 
     /// `prefix + str(i)`, in the shape the passes before this one leave it
     fn built(prefix: &str, wire: impl FnOnce(&mut FunctionBuilder, RegisterId)) -> Function {
@@ -279,6 +280,7 @@ mod tests {
             builder.push(Op::TupleBuild {
                 dest: pair,
                 items: vec![Value::Register(checked)],
+                moves: BTreeSet::new(),
             });
         }));
         assert!(

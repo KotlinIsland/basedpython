@@ -1322,17 +1322,28 @@ fn lower_generator(
     let mut fields: Vec<by_ir::function::FieldDecl> = names
         .into_iter()
         .map(|name| by_ir::function::FieldDecl {
-            cell: false,
+            // a name some path reads before writing starts unset, and every frame reading
+            // it — a generator expression the body makes reaches it through `$outer` —
+            // reads it with the test
+            cell: name != generators::STATE_FIELD && !assigned.contains(&name),
             optional: false,
             defaulted_by: None,
-            // the state number is never unset — the constructor writes 0 — so it is
-            // an unboxed int, and the dispatch reads it without a narrowing
-            ty: if name == generators::STATE_FIELD || name == generators::KIND_FIELD {
+            // the state number is never unset — the constructor writes 0 — and never a
+            // python value at all: it is a machine integer the dispatch compares
+            // directly, and the runtime reads and writes it the same way
+            ty: if name == generators::STATE_FIELD {
+                RType::fixed(by_ir::rtype::IntWidth::I64)
+            } else if name == generators::KIND_FIELD {
                 RType::INT
             } else if assigned.contains(&name) {
                 representation(&name).unwrap_or(RType::OBJECT)
             } else {
-                RType::OBJECT
+                // a name some path reads before writing — a loop's target, say — is a
+                // cell, which starts unset. it keeps the local's own representation where
+                // that has an unset value of its own, as a shared cell does
+                representation(&name)
+                    .filter(has_an_unset_value)
+                    .unwrap_or(RType::OBJECT)
             },
             name,
             default: None,
@@ -1450,7 +1461,7 @@ fn lower_generator(
         outer: None,
         per_closure: None,
     });
-    let (resume, parked, delegations) = lower_resume(
+    let (resume, parked, delegations, quiet_closes) = lower_resume(
         Unit {
             layouts: &layouts_with_state,
             methods: &methods_with_state,
@@ -1524,6 +1535,7 @@ fn lower_generator(
                 },
                 qualname: qualname.to_string(),
                 delegations,
+                quiet_closes,
             }),
             fields,
             decorators: Vec::new(),
@@ -1642,7 +1654,8 @@ fn lower_generator_constructor(
     for field in fields {
         values.push(match field.name.as_str() {
             // the machine starts at resumption point 0, and nothing has been sent
-            generators::STATE_FIELD | generators::KIND_FIELD => Some(Value::Int(0)),
+            generators::STATE_FIELD => Some(Value::Fixed(0)),
+            generators::KIND_FIELD => Some(Value::Int(0)),
             generators::SENT_FIELD => Some(Value::None),
             name => registers.get(name).or(seeded.get(name)).map(|&id| {
                 // the field only needs boxing when it *is* an object — a
@@ -1678,6 +1691,16 @@ fn lower_generator_constructor(
 /// the body, as a method that resumes at `$state` and returns the next yielded value
 ///
 /// also reports the fields the parked registers took, which only the lowered body says
+/// what lowering a resumable frame's body hands back: the resume function, the fields its
+/// suspensions park registers in, the delegations it waits on, and the closes it can finish
+/// without resuming
+type ResumeLowering = (
+    Function,
+    Vec<by_ir::function::FieldDecl>,
+    Vec<by_ir::function::Delegation>,
+    Vec<by_ir::function::QuietClose>,
+);
+
 fn lower_resume(
     unit: Unit<'_>,
     function: &ast::StmtFunctionDef,
@@ -1686,11 +1709,7 @@ fn lower_resume(
     fields: &[by_ir::function::FieldDecl],
     assigned: &HashSet<String>,
     environment: Option<Closures>,
-) -> Lowered<(
-    Function,
-    Vec<by_ir::function::FieldDecl>,
-    Vec<by_ir::function::Delegation>,
-)> {
+) -> Lowered<ResumeLowering> {
     let Unit {
         db,
         model,
@@ -1784,6 +1803,7 @@ fn lower_resume(
             resumptions: Vec::new(),
             iterators: 0,
             delegations: Vec::new(),
+            records_kinds: generators::records_suspension_kinds(function),
         }),
         delegations: 0,
         contexts: 0,
@@ -1819,7 +1839,9 @@ fn lower_resume(
     // the dispatch: `$state` against each resumption point, falling through to
     // exhausted. a chain of branches *is* a jump table, and the C compiler builds it
     lowering.builder.switch_to(Function::entry());
-    let narrowed = lowering.builder.temp(RType::INT);
+    let narrowed = lowering
+        .builder
+        .temp(RType::fixed(by_ir::rtype::IntWidth::I64));
     lowering.builder.push(Op::GetField {
         dest: narrowed,
         receiver: Value::Register(receiver),
@@ -1832,7 +1854,7 @@ fn lower_resume(
         receiver: Value::Register(receiver),
         class: class.to_string(),
         field: generators::STATE_FIELD.to_string(),
-        value: Value::Int(generators::RUNNING_STATE),
+        value: Value::Fixed(generators::RUNNING_STATE),
         moves: false,
         present: false,
     });
@@ -1844,7 +1866,7 @@ fn lower_resume(
             dest: matched,
             op: CmpOp::Eq,
             lhs: Value::Register(narrowed),
-            rhs: Value::Int(*value),
+            rhs: Value::Fixed(*value),
         });
         let next = if index + 1 == targets.len() {
             exhausted
@@ -1870,7 +1892,7 @@ fn lower_resume(
         receiver: Value::Register(receiver),
         class: class.to_string(),
         field: generators::STATE_FIELD.to_string(),
-        value: Value::Int(-1),
+        value: Value::Fixed(-1),
         moves: false,
         present: false,
     });
@@ -1886,9 +1908,10 @@ fn lower_resume(
 
     let mut lowered = lowering.builder.finish();
     let parked = generators::park_live_registers(&mut lowered, class, &resumptions)?;
+    let quiet_closes = generators::quiet_closes(&lowered, &resumptions);
     lowered.owner = Some(class.to_string());
     lowered.exported = false;
-    Ok((lowered, parked, delegations))
+    Ok((lowered, parked, delegations, quiet_closes))
 }
 
 /// a lowering that does not verify is a *decline*, not a build failure
@@ -8290,6 +8313,8 @@ struct Generator {
     iterators: usize,
     /// the suspensions lowered so far that wait inside a delegation
     delegations: Vec<by_ir::function::Delegation>,
+    /// whether each suspension writes its kind — see [`generators::KIND_FIELD`]
+    records_kinds: bool,
 }
 
 /// the closure environment a frame allocates
@@ -10389,7 +10414,7 @@ impl Lowering<'_, '_> {
                     receiver: Value::Register(RegisterId(0)),
                     class,
                     field: generators::STATE_FIELD.to_string(),
-                    value: Value::Int(-1),
+                    value: Value::Fixed(-1),
                     moves: false,
                     present: false,
                 });
@@ -10508,7 +10533,7 @@ impl Lowering<'_, '_> {
                     Location::Place(Place::Register(dest)) => {
                         let dest = *dest;
                         let declared = self.register_type(dest)?;
-                        let result_ty = binary_result(op, &target_ty, &rhs_ty);
+                        let result_ty = binary_result(op, (&target, &target_ty), (&rhs, &rhs_ty));
                         // writing the result straight back is only sound when the
                         // operation produces what the register holds. `s += "%s" % x`
                         // on a `str` does not: `%` goes through the object protocol, so
@@ -10536,7 +10561,7 @@ impl Lowering<'_, '_> {
                     // anything else is read, then written: a temporary keeps the read
                     // from being released by the write
                     other => {
-                        let result_ty = binary_result(op, &target_ty, &rhs_ty);
+                        let result_ty = binary_result(op, (&target, &target_ty), (&rhs, &rhs_ty));
                         let temp = self.builder.temp(result_ty.clone());
                         self.emit_binary(
                             temp,
@@ -12806,20 +12831,17 @@ impl Lowering<'_, '_> {
         Ok(())
     }
 
-    /// the register a `for` loop keeps its position in, where the loop can hold one
+    /// the register a `for` loop keeps its position in
     ///
     /// with a cursor, an exact list stands in for its own iterator and a step is a
     /// bounds test and a load rather than a call through `tp_iternext`.
     ///
-    /// a generator's loop cannot have one. it parks its iterator in a field because
-    /// no register survives a `yield`, and the cursor is a register: a resumed frame
-    /// would start again from whatever an unset one holds. `By_CursorStep` would
-    /// still refuse to read outside the list, but the loop would silently start over
-    fn loop_cursor(&mut self) -> Option<RegisterId> {
-        if self.generator.is_some() {
-            return None;
-        }
-        Some(self.builder.temp(RType::fixed(by_ir::rtype::IntWidth::I64)))
+    /// a generator's loop has one too. no register survives a `yield`, so a cursor live
+    /// across one is parked in a field of its own and read back at the resumption, as
+    /// every other register crossing a suspension is — see
+    /// [`generators::park_live_registers`], whose liveness counts the cursor a step reads
+    fn loop_cursor(&mut self) -> RegisterId {
+        self.builder.temp(RType::fixed(by_ir::rtype::IntWidth::I64))
     }
 
     fn for_over_iterable(&mut self, node: &ast::StmtFor) -> Lowered<()> {
@@ -12843,7 +12865,7 @@ impl Lowering<'_, '_> {
         // the two halves are built together and share one decision, because a `GetIter`
         // that handed back a list to an `IterNext` with no cursor would step it through
         // the protocol — and a list is not its own iterator, so that never ends
-        let cursor = self.loop_cursor();
+        let cursor = Some(self.loop_cursor());
         self.builder.push(Op::GetIter {
             dest: iterator,
             src: boxed,
@@ -13708,7 +13730,11 @@ impl Lowering<'_, '_> {
             items.push(self.coerce(value, &ty, slot)?);
         }
         let dest = self.builder.temp(RType::Tuple(slots.into()));
-        self.builder.push(Op::TupleBuild { dest, items });
+        self.builder.push(Op::TupleBuild {
+            dest,
+            items,
+            moves: BTreeSet::new(),
+        });
         Ok(Value::Register(dest))
     }
 
@@ -14310,20 +14336,22 @@ impl Lowering<'_, '_> {
             return Err(Decline::new("a suspension outside a generator"));
         };
         let class = generator.class.clone();
-        self.builder.push(Op::SetField {
-            receiver: Value::Register(RegisterId(0)),
-            class: class.clone(),
-            field: generators::KIND_FIELD.to_string(),
-            value: Value::Int(kind as i64),
-            moves: false,
-            present: false,
-        });
+        if generator.records_kinds {
+            self.builder.push(Op::SetField {
+                receiver: Value::Register(RegisterId(0)),
+                class: class.clone(),
+                field: generators::KIND_FIELD.to_string(),
+                value: Value::Int(kind as i64),
+                moves: false,
+                present: false,
+            });
+        }
         let state = i64::try_from(generator.resumptions.len()).unwrap_or(i64::MAX - 1) + 1;
         self.builder.push(Op::SetField {
             receiver: Value::Register(RegisterId(0)),
             class: class.clone(),
             field: generators::STATE_FIELD.to_string(),
-            value: Value::Int(state),
+            value: Value::Fixed(state),
             moves: false,
             present: false,
         });
@@ -14375,6 +14403,7 @@ impl Lowering<'_, '_> {
                 state,
                 suspend: suspend_at,
                 resume: resume_at,
+                raising: None,
             });
             if let Some(Place::Field { name, .. }) = delegated.as_ref().map(|d| d.iterator) {
                 generator.delegations.push(by_ir::function::Delegation {
@@ -14401,6 +14430,14 @@ impl Lowering<'_, '_> {
         let settled = self.builder.new_block();
         let raising = self.builder.new_block();
         let continuing = self.builder.new_block();
+        if delegated.is_none()
+            && let Some(point) = self
+                .generator
+                .as_mut()
+                .and_then(|generator| generator.resumptions.last_mut())
+        {
+            point.raising = Some(raising);
+        }
         self.builder.terminate(Terminator::Branch {
             cond: Value::Register(quiet),
             then_block: continuing,
@@ -15411,7 +15448,7 @@ impl Lowering<'_, '_> {
         if let Some(call) = self.operator_dunder(&lhs_ty, &rhs_ty, binary_dunder(op)) {
             return self.direct_operator(call, (lhs, &lhs_ty), (rhs, &rhs_ty));
         }
-        let mut result_ty = binary_result(op, &lhs_ty, &rhs_ty);
+        let mut result_ty = binary_result(op, (&lhs, &lhs_ty), (&rhs, &rhs_ty));
         // a double meeting an object is an `object` result as far as the
         // representations go, but the pair may still be provably a float — and
         // then the object can be tested rather than the double boxed to reach it
@@ -15456,7 +15493,7 @@ impl Lowering<'_, '_> {
                 if !matches!(
                     op,
                     BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr
-                ) =>
+                ) && !power_may_be_complex(op, (&lhs, lhs_ty), (&rhs, rhs_ty)) =>
             {
                 self.builder.push(Op::FloatBinary { dest, op, lhs, rhs });
             }
@@ -15470,7 +15507,7 @@ impl Lowering<'_, '_> {
                 if !matches!(
                     op,
                     BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr
-                ) =>
+                ) && !power_may_be_complex(op, (&lhs, lhs_ty), (&rhs, rhs_ty)) =>
             {
                 let lhs = self.widen_to_float(lhs, lhs_ty);
                 let rhs = self.widen_to_float(rhs, rhs_ty);
@@ -15913,6 +15950,7 @@ impl Lowering<'_, '_> {
                 dest: status,
                 array: receiver,
                 value,
+                length: None,
             });
             // `list.append` answers `None`, and a statement discards it
             return Ok((Value::None, RType::NONE));
@@ -16606,7 +16644,7 @@ impl Lowering<'_, '_> {
         let (iterable, iterable_ty) = self.expression(&generator.iter)?;
         let boxed = self.widen_to_object(iterable, &iterable_ty);
         let iterator = self.builder.temp(RType::OBJECT);
-        let cursor = self.loop_cursor();
+        let cursor = Some(self.loop_cursor());
         self.builder.push(Op::GetIter {
             dest: iterator,
             src: boxed,
@@ -16904,6 +16942,7 @@ impl Lowering<'_, '_> {
                     dest: status,
                     array: Value::Register(accumulator),
                     value,
+                    length: None,
                 });
             }
             Comprehension::List(element) | Comprehension::Set(element) => {
@@ -18585,7 +18624,11 @@ impl Lowering<'_, '_> {
             items.push(self.narrow_answer(Value::Register(item), slot)?);
         }
         let built = self.builder.temp(to.clone());
-        self.builder.push(Op::TupleBuild { dest: built, items });
+        self.builder.push(Op::TupleBuild {
+            dest: built,
+            items,
+            moves: BTreeSet::new(),
+        });
         Ok(Value::Register(built))
     }
 
@@ -18871,7 +18914,11 @@ fn narrowable(rtype: &RType) -> bool {
 ///
 /// `/` between two ints is a float, and anything that is not a matched pair of
 /// unboxed numbers goes through the object protocol and yields an object
-fn binary_result(op: BinOp, lhs: &RType, rhs: &RType) -> RType {
+fn binary_result(op: BinOp, lhs: (&Value, &RType), rhs: (&Value, &RType)) -> RType {
+    if power_may_be_complex(op, lhs, rhs) {
+        return RType::OBJECT;
+    }
+    let ((_, lhs), (_, rhs)) = (lhs, rhs);
     let bitwise = matches!(
         op,
         BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr
@@ -18900,6 +18947,27 @@ fn binary_result(op: BinOp, lhs: &RType, rhs: &RType) -> RType {
         return RType::FLOAT;
     }
     RType::OBJECT
+}
+
+/// whether `**` over a pair a double operation would take could answer with a complex
+/// number, which a double cannot hold
+///
+/// python gives one for a negative base to a finite, fractional power. an `int` exponent
+/// is integral whatever its value, and so is a literal one that is integral, infinite or a
+/// nan; a base that is a literal and not negative never reaches the question
+fn power_may_be_complex(op: BinOp, lhs: (&Value, &RType), rhs: (&Value, &RType)) -> bool {
+    let ((lhs, lhs_ty), (rhs, rhs_ty)) = (lhs, rhs);
+    if op != BinOp::Pow || !(*lhs_ty == RType::FLOAT || *rhs_ty == RType::FLOAT) {
+        return false;
+    }
+    let integral_exponent = *rhs_ty == RType::INT
+        || matches!(rhs, Value::Float(exponent) if !exponent.is_finite() || exponent.fract() == 0.0);
+    let real_base = match lhs {
+        Value::Float(base) => base.is_nan() || *base >= 0.0,
+        Value::Int(base) => *base >= 0,
+        _ => false,
+    };
+    !(integral_exponent || real_base)
 }
 
 fn compare_op(op: AstCmpOp) -> Lowered<CmpOp> {

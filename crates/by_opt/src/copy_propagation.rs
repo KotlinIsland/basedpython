@@ -353,6 +353,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::Unary { dest, .. }
         | Op::Box { dest, .. }
         | Op::IntToFloat { dest, .. }
+        | Op::TagShort { dest, .. }
         | Op::Unbox { dest, .. }
         | Op::TupleBuild { dest, .. }
         | Op::FieldIsSet { dest, .. }
@@ -367,6 +368,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::RaiseObject { .. }
         | Op::PopHandled { .. }
         | Op::Release { .. }
+        | Op::ArrayStoreLength { .. }
         | Op::Reraise { .. }
         | Op::LeaveGenerator { .. }
         | Op::LicenceHolds { .. }

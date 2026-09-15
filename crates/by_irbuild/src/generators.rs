@@ -89,8 +89,15 @@ pub(crate) const THROWN_FIELD: &str = "$thrown";
 /// only an *async generator* has two: a `yield` produces an item for the awaitable
 /// `__anext__` handed back, and an `await` suspends and has to reach the event loop
 /// instead. one `resume` returns for both, so the driver reads this to tell them
-/// apart. `1` is a yield
+/// apart. `1` is a yield. no other frame has the field, since nothing would read it —
+/// see [`records_suspension_kinds`]
 pub(crate) const KIND_FIELD: &str = "$kind";
+
+/// whether a frame's suspensions say which kind they are, which only an async
+/// generator's driver asks
+pub(crate) fn records_suspension_kinds(function: &ast::StmtFunctionDef) -> bool {
+    function.is_async && is_generator(&function.body)
+}
 /// the method the iterator protocol drives
 pub(crate) const RESUME_METHOD: &str = "$resume";
 
@@ -206,8 +213,10 @@ pub(crate) fn state_names(function: &ast::StmtFunctionDef, locals: &[String]) ->
         STATE_FIELD.to_string(),
         SENT_FIELD.to_string(),
         THROWN_FIELD.to_string(),
-        KIND_FIELD.to_string(),
     ];
+    if records_suspension_kinds(function) {
+        out.push(KIND_FIELD.to_string());
+    }
     // one per `for`, because the *iterator* is the value most likely to be live
     // across a suspension and it has no source name to hold it
     for index in 0..for_loops(&function.body) {
@@ -337,6 +346,85 @@ pub(crate) struct Resumption {
     pub(crate) suspend: BlockId,
     /// the block `$resume` re-enters at
     pub(crate) resume: BlockId,
+    /// the block raising what `throw` or `close` handed the frame, where the suspension
+    /// waits on nothing else
+    pub(crate) raising: Option<BlockId>,
+}
+
+/// the suspensions `close` can finish without resuming the frame, and what each unwinds
+///
+/// the exception raised at a suspension leaves through its block's error target. what is
+/// followed from there is the unwinding a loop over a parked iterator lowers to — take
+/// the exception, write `None` over the field, raise it again — and nothing else: a
+/// handler that tests the exception, calls anything or suspends again is one the frame
+/// runs for itself, and the suspension is left to the resumption
+pub(crate) fn quiet_closes(
+    function: &by_ir::function::Function,
+    resumptions: &[Resumption],
+) -> Vec<by_ir::function::QuietClose> {
+    resumptions
+        .iter()
+        .filter_map(|point| {
+            let raising = function.block(point.raising?)?;
+            let mut clears = Vec::new();
+            let mut handler = raising.error_target;
+            let mut visited = 0;
+            while let Some(at) = handler {
+                visited += 1;
+                if visited > function.blocks.len() {
+                    return None;
+                }
+                let block = function.block(at)?;
+                clears.extend(unwound_field(block)?);
+                handler = block.error_target;
+            }
+            Some(by_ir::function::QuietClose {
+                state: point.state,
+                clears,
+            })
+        })
+        .collect()
+}
+
+/// the field an unwinding block writes `None` over on its way to raising what it caught
+/// again, or `None` for a block that is not only that
+fn unwound_field(block: &by_ir::function::BasicBlock) -> Option<Vec<String>> {
+    let [
+        ops @ ..,
+        Op::Reraise {
+            value: Value::Register(raised),
+        },
+    ] = block.ops.as_slice()
+    else {
+        return None;
+    };
+    if !matches!(block.terminator, Terminator::Unreachable) {
+        return None;
+    }
+    let mut fetched = None;
+    let mut nothing = BTreeSet::new();
+    let mut cleared = Vec::new();
+    for op in ops {
+        match op {
+            Op::FetchException { dest } if fetched.is_none() => fetched = Some(*dest),
+            Op::Line { .. } => {}
+            Op::Release { .. } => {}
+            Op::Box {
+                dest,
+                src: Value::None,
+            } => {
+                nothing.insert(*dest);
+            }
+            Op::SetField {
+                receiver: Value::Register(RegisterId(0)),
+                field,
+                value: Value::Register(value),
+                ..
+            } if nothing.contains(value) => cleared.push(field.clone()),
+            _ => return None,
+        }
+    }
+    (fetched == Some(*raised)).then_some(cleared)
 }
 
 /// the field a register is parked in while the frame is suspended
@@ -557,6 +645,24 @@ fn live_in(
             for op in block.ops.iter().rev() {
                 if let Some(dest) = op.dest() {
                     live.remove(&dest);
+                }
+                // a loop's cursor is neither a destination nor an operand: taking the
+                // iterator starts it at zero, and a step reads it and writes it back, so
+                // the position a suspended loop has reached is live across the suspension
+                match op {
+                    Op::GetIter {
+                        cursor: Some(cursor),
+                        ..
+                    } => {
+                        live.remove(cursor);
+                    }
+                    Op::IterNext {
+                        cursor: Some(cursor),
+                        ..
+                    } => {
+                        live.insert(*cursor);
+                    }
+                    _ => {}
                 }
                 // `del x` reads its destination before leaving it unbound, so a name
                 // deleted after a suspension is live across it — which is what puts it

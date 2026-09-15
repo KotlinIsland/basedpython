@@ -213,6 +213,8 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         | Op::PopHandled { .. }
         | Op::Release { .. }
         | Op::SetField { .. } => false,
+        // a header write into a buffer this frame holds
+        Op::ArrayStoreLength { .. } => false,
 
         // the module namespace is a dict this module already holds — the extension's
         // own init put it there before anything compiled could be called, so taking a
@@ -313,11 +315,15 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         // a call's failure is decided by the callee, in the fixed point above
         Op::CallNative { .. } => false,
 
+        Op::TagShort { .. } => false,
+        // a machine integer always has a float
+        Op::IntToFloat { src, .. } => !matches!(
+            function.value_type(src),
+            Some(RType::Primitive(Primitive::Fixed(_)))
+        ),
         // boxing allocates, unboxing is a checked narrowing, a raise raises, and
         // an integer with no float at all raises `OverflowError`
-        Op::Box { .. } | Op::IntToFloat { .. } | Op::Unbox { .. } | Op::RaiseStandard { .. } => {
-            true
-        }
+        Op::Box { .. } | Op::Unbox { .. } | Op::RaiseStandard { .. } => true,
     }
 }
 
