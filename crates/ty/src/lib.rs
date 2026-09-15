@@ -163,7 +163,8 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 by_commands::cmd_build(
                     min_version.as_deref(),
                     &lowering,
-                    out.as_deref().unwrap_or(Path::new("build")),
+                    out.as_deref()
+                        .unwrap_or(Path::new(by_stage::layout::DEFAULT_OUTPUT_DIRECTORY)),
                     print_manifest,
                 )
             }

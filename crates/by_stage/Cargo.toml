@@ -21,6 +21,7 @@ ty_project = { workspace = true }
 ty_python_semantic = { workspace = true }
 
 anyhow = { workspace = true }
+dunce = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -435,6 +435,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "by_transforms",
+ "dunce",
  "rayon",
  "ruff_db",
  "serde",
