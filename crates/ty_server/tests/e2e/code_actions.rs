@@ -23,7 +23,9 @@ fn code_actions_at(
                     panic!("Expected full diagnostic report")
                 }
             },
-            only: None,
+            // these are the fixes for diagnostics; the refactorings a range is also
+            // offered are tested in `refactors`
+            only: Some(vec![lsp_types::CodeActionKind::QuickFix]),
             trigger_kind: None,
         },
         work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),

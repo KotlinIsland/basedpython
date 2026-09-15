@@ -40,6 +40,7 @@ bitflags::bitflags! {
         const TRIGGER_SIGNATURE_HELP_COMMAND = 1 << 22;
         const LANGUAGE_INJECTION = 1 << 23;
         const SEMANTIC_TOKENS_REFRESH = 1 << 24;
+        const CODE_ACTION_EDIT_RESOLVE = 1 << 25;
     }
 }
 
@@ -209,6 +210,12 @@ impl ResolvedClientCapabilities {
     /// Returns `true` if the client supports "label details" in completion items.
     pub(crate) const fn supports_completion_item_label_details(self) -> bool {
         self.contains(Self::COMPLETION_ITEM_LABEL_DETAILS_SUPPORT)
+    }
+
+    /// Returns `true` if the client can ask for a code action's edit later, with
+    /// `codeAction/resolve`, rather than needing it in the `textDocument/codeAction` reply.
+    pub(crate) const fn supports_code_action_edit_resolve(self) -> bool {
+        self.contains(Self::CODE_ACTION_EDIT_RESOLVE)
     }
 
     /// Returns `true` if the client supports snippets in completion items.
@@ -459,6 +466,14 @@ impl ResolvedClientCapabilities {
         }
 
         if text_document
+            .and_then(|text_document| text_document.code_action.as_ref())
+            .and_then(|code_action| code_action.resolve_support.as_ref())
+            .is_some_and(|resolve| resolve.properties.iter().any(|property| property == "edit"))
+        {
+            flags |= Self::CODE_ACTION_EDIT_RESOLVE;
+        }
+
+        if text_document
             .and_then(|text_document| text_document.completion.as_ref())
             .and_then(|completion| completion.completion_item.as_ref())
             .and_then(|completion_item| completion_item.snippet_support)
@@ -493,7 +508,16 @@ pub(crate) fn server_capabilities(
         position_encoding: Some(position_encoding.into()),
         code_action_provider: Some(
             CodeActionOptions {
-                code_action_kinds: Some(vec![CodeActionKind::QuickFix]),
+                code_action_kinds: Some(
+                    std::iter::once(CodeActionKind::QuickFix)
+                        .chain(
+                            ty_ide::RefactorKind::ALL
+                                .into_iter()
+                                .map(|kind| CodeActionKind::new(kind.code_action_kind())),
+                        )
+                        .collect(),
+                ),
+                resolve_provider: Some(true),
                 ..CodeActionOptions::default()
             }
             .into(),

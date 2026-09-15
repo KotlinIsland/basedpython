@@ -48,6 +48,7 @@ mod program_model;
 mod project_server;
 mod publish_diagnostics;
 mod pull_diagnostics;
+mod refactors;
 mod rename;
 mod script_preparation;
 mod semantic_tokens;
@@ -1483,6 +1484,19 @@ impl TestServerBuilder {
             .completion_item
             .get_or_insert_default()
             .snippet_support = Some(enabled);
+        self
+    }
+
+    /// Let the client resolve a code action's edit with `codeAction/resolve`.
+    pub(crate) fn enable_code_action_edit_resolve(mut self) -> Self {
+        self.client_capabilities
+            .text_document
+            .get_or_insert_default()
+            .code_action
+            .get_or_insert_default()
+            .resolve_support = Some(lsp_types::ClientCodeActionResolveOptions {
+            properties: vec!["edit".to_string()],
+        });
         self
     }
 

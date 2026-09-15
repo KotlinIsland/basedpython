@@ -1,0 +1,55 @@
+---
+source: crates/ty_server/tests/e2e/refactors.rs
+expression: resolved
+---
+{
+  "title": "Inline variable `x`",
+  "kind": "refactor.inline.variable",
+  "edit": {
+    "changes": {
+      "file://<temp_dir>/src/main.py": [
+        {
+          "range": {
+            "start": {
+              "line": 2,
+              "character": 11
+            },
+            "end": {
+              "line": 2,
+              "character": 12
+            }
+          },
+          "newText": "compute()"
+        },
+        {
+          "range": {
+            "start": {
+              "line": 1,
+              "character": 0
+            },
+            "end": {
+              "line": 2,
+              "character": 0
+            }
+          },
+          "newText": ""
+        }
+      ]
+    }
+  },
+  "data": {
+    "range": {
+      "end": {
+        "character": 4,
+        "line": 1
+      },
+      "start": {
+        "character": 4,
+        "line": 1
+      }
+    },
+    "refactor": "inline-variable",
+    "uri": "file://<temp_dir>/src/main.py",
+    "version": 1
+  }
+}
