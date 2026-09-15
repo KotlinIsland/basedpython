@@ -251,9 +251,14 @@ lines were meant to be read together, with `by/alignmentGroups`:
   "range": {
     "start": { "line": 0, "character": 0 },
     "end": { "line": 1, "character": 13 }
-  }
+  },
+  "tabSize": 4
 }
 ```
+
+`tabSize` is required. whether two `=` share a column depends on it as soon as a
+tab comes before either, and it is the client's setting rather than anything the
+source says, so there is no value the server could assume
 
 the reply is the blocks whose lines the range reaches. `gapStart` is where the
 padding before the `=` begins and `gapEnd` is the `=` itself, so the difference
@@ -263,12 +268,28 @@ between them is the room the author left:
 [
   {
     "members": [
-      { "gapStart": { "line": 0, "character": 5 }, "gapEnd": { "line": 0, "character": 10 } },
-      { "gapStart": { "line": 1, "character": 9 }, "gapEnd": { "line": 1, "character": 10 } }
+      {
+        "gapStart": { "line": 0, "character": 5 },
+        "gapEnd": { "line": 0, "character": 10 },
+        "gapStartColumn": 5,
+        "gapEndColumn": 10
+      },
+      {
+        "gapStart": { "line": 1, "character": 9 },
+        "gapEnd": { "line": 1, "character": 10 },
+        "gapStartColumn": 9,
+        "gapEndColumn": 10
+      }
     ]
   }
 ]
 ```
+
+`gapStart` and `gapEnd` are positions, counted in the negotiated encoding's code
+units. `gapStartColumn` and `gapEndColumn` are display columns, counted the way a
+fixed-width editor lays the line out — a wide character takes two, a combining
+mark none, and a tab reaches the next multiple of `tabSize`. those are the
+numbers the grouping itself was decided by, and the ones to lay hints out in
 
 a block is a run of assignments that are siblings in one suite, unseparated by a
 blank line, already sharing a column, and padded — at least one of them written

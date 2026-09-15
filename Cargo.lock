@@ -4965,6 +4965,7 @@ dependencies = [
  "ty_python_semantic",
  "ty_static",
  "ty_vendored",
+ "unicode-width",
 ]
 
 [[package]]
