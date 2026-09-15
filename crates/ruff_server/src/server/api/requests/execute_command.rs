@@ -100,13 +100,16 @@ impl super::SyncRequestHandler for ExecuteCommand {
                     )
                     .with_failure_code(ErrorCode::InternalError)?;
                     edit_tracker
-                        .set_fixes_for_document(fixes, snapshot.query().version())
+                        .set_fixes_for_document(fixes, snapshot.query().edit_version())
                         .with_failure_code(ErrorCode::InternalError)?;
                 }
                 SupportedCommand::Format => {
                     let fixes = super::format::format_full_document(&snapshot)?;
                     edit_tracker
-                        .set_fixes_for_document(fixes, version)
+                        .set_fixes_for_document(
+                            fixes,
+                            snapshot.query().edit_version().map(|_| version),
+                        )
                         .with_failure_code(ErrorCode::InternalError)?;
                 }
                 SupportedCommand::OrganizeImports => {
@@ -116,7 +119,7 @@ impl super::SyncRequestHandler for ExecuteCommand {
                     )
                     .with_failure_code(ErrorCode::InternalError)?;
                     edit_tracker
-                        .set_fixes_for_document(fixes, snapshot.query().version())
+                        .set_fixes_for_document(fixes, snapshot.query().edit_version())
                         .with_failure_code(ErrorCode::InternalError)?;
                 }
                 SupportedCommand::OptimizeImports => {
@@ -126,7 +129,7 @@ impl super::SyncRequestHandler for ExecuteCommand {
                     )
                     .with_failure_code(ErrorCode::InternalError)?;
                     edit_tracker
-                        .set_fixes_for_document(fixes, snapshot.query().version())
+                        .set_fixes_for_document(fixes, snapshot.query().edit_version())
                         .with_failure_code(ErrorCode::InternalError)?;
                 }
                 SupportedCommand::FormatAndOptimizeImports => {
@@ -134,7 +137,7 @@ impl super::SyncRequestHandler for ExecuteCommand {
                         super::code_action_resolve::format_and_optimize_imports_edit(&snapshot)
                             .with_failure_code(ErrorCode::InternalError)?;
                     edit_tracker
-                        .set_fixes_for_document(fixes, snapshot.query().version())
+                        .set_fixes_for_document(fixes, snapshot.query().edit_version())
                         .with_failure_code(ErrorCode::InternalError)?;
                 }
                 SupportedCommand::Debug => {

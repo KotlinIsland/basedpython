@@ -620,6 +620,18 @@ impl DocumentQuery {
         }
     }
 
+    /// The version to stamp on an edit computed from this query, so a client can refuse to apply
+    /// it to a document that has changed since.
+    ///
+    /// Only a text document has one. The edits for a notebook are addressed to its cells, and a
+    /// cell has no version of its own to compare against — the notebook's version is not it.
+    pub(crate) fn edit_version(&self) -> Option<DocumentVersion> {
+        match self {
+            Self::Text { document, .. } => Some(document.version()),
+            Self::Notebook { .. } => None,
+        }
+    }
+
     /// Get the URI for the document selected by this query.
     fn file_uri(&self) -> &Uri {
         match self {
