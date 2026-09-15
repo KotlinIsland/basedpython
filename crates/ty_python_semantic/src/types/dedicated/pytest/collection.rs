@@ -42,10 +42,15 @@
 //!     def test_method(self): ...  # not recognized because the class defines __init__
 //! ```
 //!
-//! There are two entry points:
+//! A `.by` module is a test file under the same names (`test_*.by`, `*_test.by`): it transpiles to
+//! the `.py` of the same stem, and that is what pytest collects.
+//!
+//! There are two entry points, and one view of the second for editors:
 //!
 //! - [`pytest_test_for_binding`] classifies one binding definition, returning `None` when it does
 //!   not satisfy the collection rules.
+//! - [`collected_pytest_tests`] is [`pytest_tests_in_file`] named and placed: each test's bound
+//!   name, the classes it is collected under, and its ranges.
 //! - [`pytest_tests_in_file`] applies the same classification to bindings that are still available
 //!   at the end of their module or class scope, excluding bindings overwritten or deleted later in
 //!   that scope. It returns the collected tests in source order.
@@ -62,7 +67,7 @@
 //! [unittest-tests]: https://docs.pytest.org/en/stable/how-to/unittest.html
 
 use ruff_db::parsed::parsed_module;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{ProgramFile, global_scope, place_table, semantic_index, use_def_map};
@@ -76,6 +81,66 @@ use crate::types::{
     ClassBase, ClassLiteral, KnownClass, MemberLookupPolicy, ProgramEnvironment, Type,
     binding_type, definition_expression_type,
 };
+
+/// A test pytest collects from a file, as an editor names and places it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectedTest {
+    /// The name pytest reports the test under: the name it is bound to, which for an alias is not
+    /// the underlying function's.
+    pub name: String,
+    /// The classes pytest collects the test under, outermost first. Together with [`Self::name`]
+    /// these are the `::`-separated parts of the test's node id after its file.
+    pub classes: Vec<CollectedTestClass>,
+    /// The whole binding: the `def`, with its decorators, or the assignment or import.
+    pub full_range: TextRange,
+    /// The bound name.
+    pub focus_range: TextRange,
+    /// Collected because its class inherits from `unittest.TestCase`, so pytest does not inject
+    /// fixtures into it.
+    pub is_unittest: bool,
+}
+
+/// A class a [`CollectedTest`] is collected under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectedTestClass {
+    pub name: String,
+    pub full_range: TextRange,
+    pub focus_range: TextRange,
+}
+
+/// The tests pytest collects from `file` under the default collection conventions, in source order.
+///
+/// Statically: nothing is imported or run, so this is what an editor can show before anyone asks
+/// pytest itself.
+pub fn collected_pytest_tests<'db>(db: &'db dyn Db, file: ProgramFile<'db>) -> Vec<CollectedTest> {
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    pytest_tests_in_file(db, file)
+        .iter()
+        .map(|test| {
+            let mut classes = Vec::new();
+            let mut enclosing = test.enclosing_class;
+            while let Some(class) = enclosing {
+                classes.push(CollectedTestClass {
+                    name: class.name(db).unwrap_or_default(),
+                    full_range: class.full_range(db, &module).range(),
+                    focus_range: class.focus_range(db, &module).range(),
+                });
+                enclosing = match enclosing_scope(db, class) {
+                    Some(EnclosingScope::Class(parent)) => Some(parent),
+                    Some(EnclosingScope::Module) | None => None,
+                };
+            }
+            classes.reverse();
+            CollectedTest {
+                name: test.binding.name(db).unwrap_or_default(),
+                classes,
+                full_range: test.binding.full_range(db, &module).range(),
+                focus_range: test.binding.focus_range(db, &module).range(),
+                is_unittest: test.kind == PytestTestKind::StdlibUnittest,
+            }
+        })
+        .collect()
+}
 
 /// Returns the tests that pytest collects from `file` under the default collection conventions.
 #[salsa::tracked(returns(deref), heap_size=ruff_memory_usage::heap_size)]
@@ -450,7 +515,11 @@ fn is_default_pytest_test_file(db: &dyn Db, file: ProgramFile<'_>) -> bool {
         return false;
     };
 
-    let Some(stem) = file_name.strip_suffix(".py") else {
+    // a `.by` module transpiles to a `.py` of the same stem, which is the file pytest collects
+    let Some(stem) = file_name
+        .strip_suffix(".py")
+        .or_else(|| file_name.strip_suffix(".by"))
+    else {
         return false;
     };
 
@@ -1154,6 +1223,75 @@ class NonCallable(unittest.TestCase):
 
     fn pytest_db(path: &'static str, source: &'static str) -> TestDb {
         pytest_db_with_files(&[(path, source)])
+    }
+
+    /// Each test's node id after its file, `Class::Nested::test`, as [`super::collected_pytest_tests`]
+    /// names it.
+    fn node_ids(db: &TestDb, path: &str) -> Vec<String> {
+        super::collected_pytest_tests(db, program_file(db, path))
+            .into_iter()
+            .map(|test| {
+                test.classes
+                    .iter()
+                    .map(|class| class.name.as_str())
+                    .chain(std::iter::once(test.name.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("::")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn names_each_test_under_every_class_it_is_collected_in() {
+        let db = pytest_db(
+            "/src/test_example.py",
+            r#"
+class TestA:
+    def test_method(self): ...
+
+    class TestNested:
+        def test_deep(self): ...
+
+def outer():
+    def test_inner(): ...
+
+def test_after(): ...
+"#,
+        );
+
+        assert_eq!(
+            node_ids(&db, "/src/test_example.py"),
+            [
+                "TestA::test_method",
+                "TestA::TestNested::test_deep",
+                "test_after"
+            ]
+        );
+    }
+
+    #[test]
+    fn collects_a_basedpython_test_module_under_its_own_name() {
+        let db = pytest_db(
+            "/src/test_example.by",
+            r#"
+class TestA:
+    def test_method(self): ...
+
+def test_function(): ...
+"#,
+        );
+
+        assert_eq!(
+            node_ids(&db, "/src/test_example.by"),
+            ["TestA::test_method", "test_function"]
+        );
+    }
+
+    #[test]
+    fn a_basedpython_module_not_named_like_a_test_holds_none() {
+        let db = pytest_db("/src/main.by", "def test_function(): ...\n");
+
+        assert!(node_ids(&db, "/src/main.by").is_empty());
     }
 
     fn pytest_db_with_files(files: &[(&'static str, &'static str)]) -> TestDb {

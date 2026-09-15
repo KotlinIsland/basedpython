@@ -7,6 +7,14 @@ pub(crate) mod type_info;
 
 pub use config::{Config, FloatLiteralLowering, PythonVersion, SoundnessPositions};
 
+/// A module's `main` as the program's command line — the reading the entry-point
+/// guard and its argument parser are generated from.
+pub mod entry_point {
+    pub use crate::transforms::main_function::{
+        Choice, CliSpelling, EntryParameter, EntryPoint, ParameterKind, entry_point, main_guards,
+    };
+}
+
 use std::collections::{BTreeSet, HashSet};
 
 use ruff_db::files::{File, system_path_to_file};

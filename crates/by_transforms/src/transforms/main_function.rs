@@ -15,7 +15,9 @@
 //! existing `__main__` guard or a bare top-level `main()` call — so the entry
 //! point never runs twice
 
-use ruff_python_ast::{self as ast, CmpOp, Expr, ModModule, Parameters, Stmt, StmtFunctionDef};
+use ruff_python_ast::{
+    self as ast, CmpOp, Expr, ModModule, ParameterWithDefault, Parameters, Stmt, StmtFunctionDef,
+};
 
 use super::ast_driver::{AstPass, PassContext};
 use super::source_util::{is_synthetic_decorator, python_string_literal};
@@ -28,16 +30,6 @@ impl<'src> MainFunction<'src> {
     pub(crate) fn new(source: &'src str) -> Self {
         Self { source }
     }
-
-    /// true when `main` carries the synthetic `private` modifier, which the
-    /// modifiers pass renames to `_main` — so it is not a public entry point
-    /// and a synthesised `main()` call would dangle
-    fn is_private(&self, func: &StmtFunctionDef) -> bool {
-        func.decorator_list.iter().any(|dec| {
-            is_synthetic_decorator(self.source, dec)
-                && matches!(&dec.expression, Expr::Name(name) if name.id.as_str() == "private")
-        })
-    }
 }
 
 impl AstPass for MainFunction<'_> {
@@ -48,31 +40,27 @@ impl AstPass for MainFunction<'_> {
     }
 
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
-        let Some(main) = last_top_level_main(&module.body) else {
+        let Some(entry) = entry_point(&module.body, self.source) else {
             return;
         };
-        if self.is_private(main) {
-            return;
-        }
-        let Some(params) = cli_params(&main.parameters) else {
-            return;
-        };
-        // respect a hand-written entry point; never invoke `main` twice
-        if module_invokes_main(&module.body) {
+        // a `private main` is renamed, a `main` the command line cannot fill
+        // cannot be called, and a module that invokes `main` itself keeps its
+        // own entry point — `main` never runs twice
+        if !entry.generates_guard() {
             return;
         }
 
         ctx.epilogue.push("if __name__ == \"__main__\":".to_owned());
-        let extra = extra_arguments_converter(&main.parameters);
-        let call = if params.is_empty() && extra.is_none() {
+        let spec: Vec<String> = entry.exposed().map(EntryParameter::spec_entry).collect();
+        let extra = entry.extra_arguments;
+        let call = if spec.is_empty() && extra.is_none() {
             "main()".to_owned()
         } else {
             ctx.runtime.insert(crate::runtime::MAIN_ARGS);
             ctx.epilogue
                 .push("    _by_args, _by_kwargs = _by_main_args(main, [".to_owned());
-            for param in &params {
-                ctx.epilogue
-                    .push(format!("        {},", param.spec_entry()));
+            for entry in spec {
+                ctx.epilogue.push(format!("        {entry},"));
             }
             let close = match extra {
                 Some(converter) => format!("    ], {converter})"),
@@ -81,13 +69,243 @@ impl AstPass for MainFunction<'_> {
             ctx.epilogue.push(close);
             "main(*_by_args, **_by_kwargs)".to_owned()
         };
-        if main.is_async {
+        if entry.function.is_async {
             ctx.epilogue.push(format!("    asyncio.run({call})"));
             ctx.required_imports.push("import asyncio".to_owned());
         } else {
             ctx.epilogue.push(format!("    {call}"));
         }
     }
+}
+
+/// A module's top-level `main`, and what the transpiler makes of it as the
+/// program's command line.
+///
+/// This is the one reading of `main` there is: the pass above generates the
+/// guard and the argument parser from it, and anything else that needs to know
+/// a program's command line — an editor offering to fill in its arguments —
+/// asks [`entry_point`] rather than reading the signature a second way.
+pub struct EntryPoint<'a> {
+    /// the last top-level `def main` / `async def main`
+    pub function: &'a StmtFunctionDef,
+    /// `private def main` is renamed to `_main`, so it is no entry point and a
+    /// synthesised `main()` call would dangle
+    pub is_private: bool,
+    /// the module already invokes `main` itself — a `__main__` guard or a bare
+    /// top-level `main(...)` call
+    pub module_invokes_main: bool,
+    /// every parameter that is not variadic, in declared order
+    pub parameters: Vec<EntryParameter<'a>>,
+    /// the converter for the arguments the interface does not claim, when a
+    /// leading `*rest` asks for them — see `extra_arguments_converter`
+    pub extra_arguments: Option<&'static str>,
+}
+
+impl EntryPoint<'_> {
+    /// The first required parameter the command line cannot supply. Invoking
+    /// `main` would raise `TypeError`, so such a `main` is no entry point.
+    pub fn blocked_by(&self) -> Option<&EntryParameter<'_>> {
+        self.parameters
+            .iter()
+            .find(|param| param.is_required() && param.spelling.is_none())
+    }
+
+    /// Whether the transpiler appends the `__main__` guard that runs `main`.
+    pub fn generates_guard(&self) -> bool {
+        !self.is_private && !self.module_invokes_main && self.blocked_by().is_none()
+    }
+
+    /// The parameters the generated command-line interface fills.
+    fn exposed(&self) -> impl Iterator<Item = &EntryParameter<'_>> {
+        self.parameters
+            .iter()
+            .filter(|param| param.spelling.is_some())
+    }
+
+    /// `main`'s docstring — the generated parser's `--help` description, which
+    /// it reads from `main.__doc__`.
+    pub fn docstring(&self) -> Option<&str> {
+        let Stmt::Expr(expr) = self.function.body.first()? else {
+            return None;
+        };
+        let Expr::StringLiteral(string) = &*expr.value else {
+            return None;
+        };
+        Some(string.value.to_str())
+    }
+}
+
+/// How a `main` parameter can be passed to `main` itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ParameterKind {
+    /// positional-only: always handed over positionally
+    Positional,
+    /// either way
+    Any,
+    /// keyword-only: takes no positional slot
+    Keyword,
+}
+
+impl ParameterKind {
+    /// the spelling the `_by_main_args` spec carries
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Positional => "positional",
+            Self::Any => "any",
+            Self::Keyword => "keyword",
+        }
+    }
+}
+
+/// One non-variadic parameter of `main`.
+pub struct EntryParameter<'a> {
+    pub parameter: &'a ParameterWithDefault,
+    pub kind: ParameterKind,
+    /// how the command line spells it; `None` when the annotation has no
+    /// command-line spelling, so the parameter is not exposed
+    pub spelling: Option<CliSpelling>,
+}
+
+impl EntryParameter<'_> {
+    pub fn name(&self) -> &str {
+        self.parameter.parameter.name.as_str()
+    }
+
+    pub fn is_required(&self) -> bool {
+        self.parameter.default.is_none()
+    }
+
+    /// The option spellings `_by_main_args` registers for this parameter, dash
+    /// form first; a name with an underscore also answers to it as written.
+    pub fn flags(&self) -> Vec<String> {
+        let name = self.name();
+        let mut flags = vec![format!("--{}", name.replace('_', "-"))];
+        if name.contains('_') {
+            flags.push(format!("--{name}"));
+        }
+        flags
+    }
+
+    /// The `--no-…` spellings `_by_main_args` registers to set a flag false;
+    /// empty for a parameter that takes a value.
+    pub fn negative_flags(&self) -> Vec<String> {
+        if !matches!(
+            self.spelling,
+            Some(CliSpelling {
+                converter: None,
+                ..
+            })
+        ) {
+            return Vec::new();
+        }
+        self.flags()
+            .iter()
+            .map(|flag| format!("--no-{}", &flag[2..]))
+            .collect()
+    }
+
+    /// the `(name, converter, kind, required, choices)` tuple `_by_main_args`
+    /// consumes; only an exposed parameter has one
+    fn spec_entry(&self) -> String {
+        let (converter, choices) = match &self.spelling {
+            Some(spelling) => (spelling.converter.unwrap_or("None"), &spelling.choices),
+            None => ("None", &None),
+        };
+        let required = if self.is_required() { "True" } else { "False" };
+        let name = self.name();
+        let kind = self.kind.as_str();
+        let choices = match choices {
+            Some(values) => format!(
+                "({},)",
+                values
+                    .iter()
+                    .map(|choice| choice.literal.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None => "None".to_owned(),
+        };
+        format!("(\"{name}\", {converter}, \"{kind}\", {required}, {choices})")
+    }
+}
+
+/// How a `main` parameter is spelled on the command line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CliSpelling {
+    /// the callable that converts the argument, as the source names it; `None`
+    /// for a `--name` / `--no-name` flag pair, which takes no value
+    pub converter: Option<&'static str>,
+    /// the values the annotation admits, when it is a literal union — argparse
+    /// rejects anything else before `main` runs
+    pub choices: Option<Vec<Choice>>,
+}
+
+/// One value a literal-union parameter admits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    /// the value as a python literal, as the parser's `choices` holds it
+    pub literal: String,
+    /// the value as it is written on the command line
+    pub value: String,
+}
+
+/// The module's entry point, or `None` when it has no top-level `main`.
+///
+/// `source` is the text `body` was parsed from; the `private` modifier is read
+/// against it.
+pub fn entry_point<'a>(body: &'a [Stmt], source: &str) -> Option<EntryPoint<'a>> {
+    let function = last_top_level_main(body)?;
+    Some(EntryPoint {
+        function,
+        is_private: is_private(source, function),
+        module_invokes_main: module_invokes_main(body),
+        parameters: parameters(&function.parameters),
+        extra_arguments: extra_arguments_converter(&function.parameters),
+    })
+}
+
+/// true when `main` carries the synthetic `private` modifier, which the
+/// modifiers pass renames to `_main`
+fn is_private(source: &str, func: &StmtFunctionDef) -> bool {
+    func.decorator_list.iter().any(|dec| {
+        is_synthetic_decorator(source, dec)
+            && matches!(&dec.expression, Expr::Name(name) if name.id.as_str() == "private")
+    })
+}
+
+/// Every non-variadic parameter of `main`, with its command-line spelling.
+///
+/// A parameter whose annotation has no command-line spelling is not exposed,
+/// so it keeps its default — or, when it has none, stops `main` being an entry
+/// point ([`EntryPoint::blocked_by`]). Variadics never require an argument, so
+/// they are left out.
+fn parameters(params: &Parameters) -> Vec<EntryParameter<'_>> {
+    let groups = [
+        (&params.posonlyargs, ParameterKind::Positional),
+        (&params.args, ParameterKind::Any),
+        (&params.kwonlyargs, ParameterKind::Keyword),
+    ];
+    groups
+        .into_iter()
+        .flat_map(|(group, kind)| {
+            group.iter().map(move |parameter| EntryParameter {
+                parameter,
+                kind,
+                spelling: parameter
+                    .parameter
+                    .annotation
+                    .as_deref()
+                    .and_then(cli_type)
+                    .map(|(ty, choices)| CliSpelling {
+                        converter: match ty {
+                            CliType::Value(callable) => Some(callable),
+                            CliType::Flag => None,
+                        },
+                        choices,
+                    }),
+            })
+        })
+        .collect()
 }
 
 /// how a `main` parameter is spelled on the command line
@@ -98,78 +316,13 @@ enum CliType {
     Flag,
 }
 
-/// a `main` parameter the generated command-line interface fills
-struct CliParam {
-    name: String,
-    ty: CliType,
-    /// how the parameter can be passed to `main` itself: `positional`
-    /// (positional-only), `keyword` (keyword-only), or `any`
-    kind: &'static str,
-    required: bool,
-    /// the values the annotation admits, rendered as python literals, when it
-    /// is a literal union — argparse rejects anything else before `main` runs
-    choices: Option<Vec<String>>,
-}
-
-impl CliParam {
-    /// the `(name, converter, kind, required, choices)` tuple `_by_main_args`
-    /// consumes
-    fn spec_entry(&self) -> String {
-        let converter = match &self.ty {
-            CliType::Value(callable) => (*callable).to_owned(),
-            CliType::Flag => "None".to_owned(),
-        };
-        let required = if self.required { "True" } else { "False" };
-        let name = &self.name;
-        let kind = self.kind;
-        let choices = match &self.choices {
-            Some(values) => format!("({},)", values.join(", ")),
-            None => "None".to_owned(),
-        };
-        format!("(\"{name}\", {converter}, \"{kind}\", {required}, {choices})")
-    }
-}
-
-/// The parameters of `main` that the command line fills, or `None` when the
-/// signature has a required parameter the command line can't supply — such a
-/// `main` isn't an entry point, because invoking it would raise `TypeError`.
-///
-/// A parameter whose annotation has no command-line spelling is skipped rather
-/// than exposed, so it keeps its default. Variadics are skipped for the same
-/// reason: they never require an argument.
-fn cli_params(params: &Parameters) -> Option<Vec<CliParam>> {
-    let groups = [
-        (&params.posonlyargs, "positional"),
-        (&params.args, "any"),
-        (&params.kwonlyargs, "keyword"),
-    ];
-    let mut cli = Vec::new();
-    for (group, kind) in groups {
-        for param in group {
-            let required = param.default.is_none();
-            match param.parameter.annotation.as_deref().and_then(cli_type) {
-                Some((ty, choices)) => cli.push(CliParam {
-                    name: param.parameter.name.to_string(),
-                    ty,
-                    kind,
-                    required,
-                    choices,
-                }),
-                None if required => return None,
-                None => {}
-            }
-        }
-    }
-    Some(cli)
-}
-
 /// The command-line spelling of an annotation — its converter and, for a
 /// literal union, the values it admits — or `None` when it has none.
 ///
 /// Matched on the annotation as written: the converter emitted into the spec
 /// is the same name the source used, so it resolves to whatever that name is
 /// bound to at runtime.
-fn cli_type(annotation: &Expr) -> Option<(CliType, Option<Vec<String>>)> {
+fn cli_type(annotation: &Expr) -> Option<(CliType, Option<Vec<Choice>>)> {
     match annotation {
         Expr::Name(name) => {
             let ty = match name.id.as_str() {
@@ -193,7 +346,7 @@ fn cli_type(annotation: &Expr) -> Option<(CliType, Option<Vec<String>>)> {
         // a union: either `T | None`, which is `T?` written out, or a union of
         // literals, which argparse expresses as `choices`
         Expr::BinOp(bin_op) if matches!(bin_op.op, ast::Operator::BitOr) => {
-            let mut named: Option<(CliType, Option<Vec<String>>)> = None;
+            let mut named: Option<(CliType, Option<Vec<Choice>>)> = None;
             let mut literals = Vec::new();
             let mut literal_converter: Option<&'static str> = None;
             for operand in union_operands(annotation) {
@@ -311,12 +464,27 @@ fn is_none_literal(expr: &Expr) -> bool {
     expr.is_none_literal_expr()
 }
 
-/// a literal the command line can carry, as `(converter, python literal)`
-fn literal_choice(expr: &Expr) -> Option<(&'static str, String)> {
+/// a literal the command line can carry, as its converter and the value
+fn literal_choice(expr: &Expr) -> Option<(&'static str, Choice)> {
     match expr {
-        Expr::StringLiteral(string) => Some(("str", python_string_literal(string.value.to_str()))),
+        Expr::StringLiteral(string) => {
+            let value = string.value.to_str();
+            Some((
+                "str",
+                Choice {
+                    literal: python_string_literal(value),
+                    value: value.to_owned(),
+                },
+            ))
+        }
         Expr::NumberLiteral(number) => match &number.value {
-            ast::Number::Int(int) => Some(("int", int.to_string())),
+            ast::Number::Int(int) => Some((
+                "int",
+                Choice {
+                    literal: int.to_string(),
+                    value: int.to_string(),
+                },
+            )),
             _ => None,
         },
         _ => None,
@@ -340,6 +508,15 @@ fn module_invokes_main(body: &[Stmt]) -> bool {
         Stmt::If(if_stmt) => is_dunder_main_guard(&if_stmt.test),
         Stmt::Expr(expr) => is_main_call(&expr.value),
         _ => false,
+    })
+}
+
+/// The module's own top-level `if __name__ == "__main__":` statements — each an
+/// entry point written by hand, whatever the module's `main` is.
+pub fn main_guards(body: &[Stmt]) -> impl Iterator<Item = &ast::StmtIf> {
+    body.iter().filter_map(|stmt| match stmt {
+        Stmt::If(if_stmt) if is_dunder_main_guard(&if_stmt.test) => Some(if_stmt),
+        _ => None,
     })
 }
 
@@ -787,6 +964,74 @@ mod tests {
             def main(argv):
                 pass
         "});
+    }
+
+    fn parsed(source: &str) -> ruff_python_parser::Parsed<ruff_python_ast::ModModule> {
+        ruff_python_parser::parse_unchecked_source(
+            source,
+            ruff_python_ast::PySourceType::BasedPython,
+        )
+    }
+
+    /// the reading an editor asks for is the one the guard is generated from, so
+    /// a generic `main` is still `main`, and its parameters are still its own
+    #[test]
+    fn a_generic_main_is_the_entry_point() {
+        let source = "def main[T](name: str, count: int = 1):\n    pass\n";
+        assert!(guard(source).contains("(\"name\", str, \"any\", True, None),"));
+        let module = parsed(source);
+        let entry = super::entry_point(&module.syntax().body, source).expect("a main");
+        assert!(entry.generates_guard());
+        let names: Vec<&str> = entry
+            .parameters
+            .iter()
+            .map(super::EntryParameter::name)
+            .collect();
+        assert_eq!(names, ["name", "count"]);
+    }
+
+    #[test]
+    fn a_main_the_command_line_cannot_fill_names_what_blocks_it() {
+        let source = "def main(a: int, argv, b: str = \"x\"):\n    \"\"\"Adds.\"\"\"\n";
+        let module = parsed(source);
+        let entry = super::entry_point(&module.syntax().body, source).expect("a main");
+        assert_eq!(
+            entry.blocked_by().map(super::EntryParameter::name),
+            Some("argv")
+        );
+        assert!(!entry.generates_guard());
+        assert_eq!(entry.docstring(), Some("Adds."));
+    }
+
+    #[test]
+    fn a_main_call_inside_a_docstring_is_not_an_invocation() {
+        let source = "\"\"\"\nmain()\n\"\"\"\ndef main():\n    pass\n";
+        let module = parsed(source);
+        let entry = super::entry_point(&module.syntax().body, source).expect("a main");
+        assert!(!entry.module_invokes_main);
+        assert!(guard(source).contains("    main()"));
+    }
+
+    #[test]
+    fn flags_are_the_spellings_the_runtime_registers() {
+        let source = "def main(out_dir: Path, dry_run: bool = False, mode: \"a\" | \"b\" = \"a\"):\n    pass\n";
+        let module = parsed(source);
+        let entry = super::entry_point(&module.syntax().body, source).expect("a main");
+        let [out_dir, dry_run, mode] = entry.parameters.as_slice() else {
+            panic!("three parameters");
+        };
+        assert_eq!(out_dir.flags(), ["--out-dir", "--out_dir"]);
+        assert!(out_dir.negative_flags().is_empty());
+        assert_eq!(dry_run.negative_flags(), ["--no-dry-run", "--no-dry_run"]);
+        let choices: Vec<&str> = mode
+            .spelling
+            .as_ref()
+            .and_then(|spelling| spelling.choices.as_ref())
+            .expect("choices")
+            .iter()
+            .map(|choice| choice.value.as_str())
+            .collect();
+        assert_eq!(choices, ["a", "b"]);
     }
 
     /// a stub is never run as a script, so it declares `main` and nothing calls it

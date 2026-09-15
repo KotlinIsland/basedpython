@@ -199,7 +199,7 @@ pub(crate) fn cmd_run(
     // project with neither fails immediately rather than after transpiling
     let module = match module {
         Some(module) => module.to_owned(),
-        None => match configured_main(&db) {
+        None => match by_stage::run_module::configured_main(&db) {
             Some(main) => main,
             None => anyhow::bail!(
                 "no module given and no entry point configured — \
@@ -542,13 +542,6 @@ fn compiled_module_name(
         None if stem == "__init__" => None,
         None => Some(by_ir::ModuleName::new(stem)),
     })
-}
-
-/// The project's `run.main` entry point, if one is configured.
-fn configured_main(db: &ProjectDatabase) -> Option<String> {
-    let options = db.project().metadata(db).options();
-    let main = options.run.as_ref()?.main.as_ref()?;
-    Some((**main).clone())
 }
 
 /// The python version a brand new project should target.

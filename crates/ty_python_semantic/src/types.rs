@@ -31,8 +31,9 @@ pub use self::cyclic::CycleDetector;
 pub(crate) use self::cyclic::TypeTransformer;
 use self::cyclic::{ActiveRecursionDetector, TypeIdentity};
 pub use self::dedicated::pytest::{
-    FixtureBinding, FixtureExposure, FixtureNameSource, fixture_bindings_for_parameter,
-    fixture_exposures_for_definition, pytest_global_plugin_files,
+    CollectedTest, CollectedTestClass, FixtureBinding, FixtureExposure, FixtureNameSource,
+    collected_pytest_tests, fixture_bindings_for_parameter, fixture_exposures_for_definition,
+    pytest_global_plugin_files,
 };
 pub(crate) use self::diagnostic::TypeCheckDiagnostics;
 pub(crate) use self::diagnostic::register_lints;

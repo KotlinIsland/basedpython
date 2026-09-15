@@ -47,12 +47,15 @@
 //!   one sourcemap describing them, recomputed.
 //! - [`layout`] — where a project's build writes, and which output came from
 //!   which source, for an editor to ask.
+//! - [`run_module`] — which file `by run <module>` executes, and the module a
+//!   file runs as.
 
 pub mod emit;
 pub mod layout;
 pub mod project;
 pub mod record;
 pub mod restage;
+pub mod run_module;
 pub mod runtime;
 pub mod sourcemap;
 pub mod staging;
