@@ -1,0 +1,13 @@
+---
+source: crates/ty_server/tests/e2e/refactors.rs
+expression: invoked
+---
+[
+  {
+    "title": "Inline variable `x`",
+    "kind": "refactor.inline.variable",
+    "disabled": {
+      "reason": "a read of `x` may see another value, or none"
+    }
+  }
+]

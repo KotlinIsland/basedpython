@@ -54,8 +54,10 @@ expression: initialization_result
     "documentSymbolProvider": true,
     "codeActionProvider": {
       "codeActionKinds": [
-        "quickfix"
-      ]
+        "quickfix",
+        "refactor.inline.variable"
+      ],
+      "resolveProvider": true
     },
     "codeLensProvider": {
       "resolveProvider": false

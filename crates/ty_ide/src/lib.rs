@@ -28,6 +28,7 @@ mod injection;
 mod inlay_hints;
 mod markup;
 mod module_rename;
+mod refactor;
 mod references;
 mod rename;
 mod selection_range;
@@ -77,6 +78,7 @@ pub use markup::MarkupKind;
 pub use module_rename::{
     FileMove, ModuleRenameEdits, SkipReason, SkippedImport, module_rename_edits,
 };
+pub use refactor::{Refactor, RefactorKind, RefactorOffer, refactor, refactors};
 pub use references::ReferencesMode;
 pub use rename::{can_rename, rename};
 pub use selection_range::selection_range;

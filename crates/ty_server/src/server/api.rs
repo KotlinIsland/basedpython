@@ -39,6 +39,11 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::CodeActionRequestHandler::METHOD => background_document_request_task::<
             requests::CodeActionRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::CodeActionResolveRequestHandler::METHOD => background_document_request_task::<
+            requests::CodeActionResolveRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         requests::DocumentDiagnosticRequestHandler::METHOD => background_document_request_task::<
             requests::DocumentDiagnosticRequestHandler,
         >(

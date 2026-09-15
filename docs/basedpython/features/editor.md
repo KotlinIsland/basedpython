@@ -314,6 +314,35 @@ a [property](properties.md) is one member in the source, so it is one entry in
 the outline — not the getter, backing field and setter it lowers into. enum
 variants and an extension's methods appear under their declarations
 
+## refactorings
+
+the server offers refactorings as code actions. each is worked out from what the
+checker reads the file to mean, not from its text: inlining `x` replaces the reads
+of that variable, never a same-named parameter of another function, an attribute
+`obj.x` or a keyword argument `f(x=1)`
+
+a refactoring either keeps the program meaning what it meant or is refused, and a
+refusal says why. an editor that asks for refactorings explicitly shows the reason;
+one that asks while the caret moves is only offered what applies
+
+| refactoring     | kind                       | offered on               |
+| --------------- | -------------------------- | ------------------------ |
+| inline variable | `refactor.inline.variable` | a variable assigned once |
+
+moving an expression can change when it runs, so that is what most refusals are
+about. a value with an effect is only inlined into a single read in the very next
+statement, with nothing that could observe the move evaluated before it
+
+```by
+item = queue.pop()
+log("popped")       # inlining `item` is refused: the pop would now run after the log
+print(item)
+```
+
+a client that can resolve a code action's edit gets the action without one, and the
+edit is computed when the action is chosen — against the document version it was
+offered for, and refused as content modified if the document changed since
+
 ## debugger facts
 
 while a program is stopped, an editor knows something no checker does: what the
