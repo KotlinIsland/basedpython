@@ -822,7 +822,8 @@ fn detect_python_version(python: &str) -> Option<PythonVersion> {
 // ── build ────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::print_stderr)]
-/// Recompute one file's slot in a build tree that already exists, and print it.
+/// Recompute the slots of a set of edited files in a build tree that already
+/// exists, and print them.
 ///
 /// The command-line half of `by/transpileForBuild`, over the same implementation:
 /// the language server answers this out of a database that is already warm,
@@ -835,16 +836,21 @@ fn detect_python_version(python: &str) -> Option<PythonVersion> {
 /// non-zero: a caller in a script should be able to read `$?` rather than parse
 /// to find out whether it got bytes.
 #[allow(clippy::print_stdout)]
-pub(crate) fn cmd_restage(build_directory: &Path, file: &Path) -> anyhow::Result<ExitStatus> {
+pub(crate) fn cmd_restage(build_directory: &Path, files: &[PathBuf]) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
-    let file = if file.is_absolute() {
-        file.to_path_buf()
-    } else {
-        cwd.join(file)
-    };
+    let files: Vec<PathBuf> = files
+        .iter()
+        .map(|file| {
+            if file.is_absolute() {
+                file.clone()
+            } else {
+                cwd.join(file)
+            }
+        })
+        .collect();
     let (db, _, _, _) = build_project_db(&cwd, BY_SOURCES, Some(build_directory))?;
 
-    let restaged = by_stage::restage::restage_one(&db, build_directory, &file)?;
+    let restaged = by_stage::restage::restage(&db, build_directory, &files)?;
     println!(
         "{}",
         serde_json::to_string_pretty(&restaged)
@@ -1157,7 +1163,7 @@ pub(crate) fn cmd_compile(
     // authored the whole tree. while `compile` wrote artefacts alone, it deleted
     // the sourcemap and build record a `by build` into the same directory had
     // left — and `by restage` then refused that tree, which took the language
-    // server's single-file re-stage down with it
+    // server's re-stage down with it
     let roots = module_roots(&db, &root);
     let transpilable: Vec<(PathBuf, ruff_db::files::File)> = project
         .iter()

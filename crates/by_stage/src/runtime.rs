@@ -29,7 +29,7 @@ use ruff_db::system::{System, SystemPath};
 /// the copies a build writes
 ///
 /// claimed for every module rather than only those that turned out to call a
-/// helper: `by restage` recomputes one module against a tree an earlier build
+/// helper: `by restage` recomputes modules against a tree an earlier build
 /// wrote, and an edit that newly reaches for a helper has to find the copy there
 #[derive(Debug, Default)]
 pub struct RuntimeLayout {

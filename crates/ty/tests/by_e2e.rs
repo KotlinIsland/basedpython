@@ -218,7 +218,7 @@ fn compiling_one_module_leaves_the_others_importable() {
 fn a_compile_leaves_a_build_tree_readable() {
     // `compile` and `build` write to the same directory by design. while
     // `compile` wrote artefacts alone it took the sourcemap and the build record
-    // with it, and `by restage` — the language server's single-file re-stage —
+    // with it, and `by restage` — the language server's re-stage —
     // then refused the tree for having no `_by_build.json`, so a compile silently
     // disabled the editor plugin against it
     let dir = resource_project("by_cli_compile_then_restage");

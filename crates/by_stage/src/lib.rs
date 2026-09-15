@@ -43,7 +43,8 @@
 //!   entry at a time by a re-stage.
 //! - [`record`] — `_by_build.json`, what a tree says about the build that wrote
 //!   it.
-//! - [`restage`] — one file's slot in an existing tree, recomputed.
+//! - [`restage`] — the slots of an edit's files in an existing tree, and the
+//!   one sourcemap describing them, recomputed.
 
 pub mod emit;
 pub mod project;

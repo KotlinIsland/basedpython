@@ -1,4 +1,4 @@
-//! Re-staging one file into a build tree that already exists.
+//! Re-staging a set of edited files into a build tree that already exists.
 //!
 //! A build tree is what actually runs. `by run` transpiles the project into a
 //! temp directory, copies every other project file into it, and runs the program
@@ -12,7 +12,7 @@
 //! that is about 165 milliseconds. A button press can afford the second number and
 //! not the first, and the difference is the entire reason this operation exists.
 //!
-//! Two rules shape everything below.
+//! Three rules shape everything below.
 //!
 //! **It writes nothing.** The result is the bytes and where they go. The plugin
 //! writes them, because the plugin is the only party that can roll that write back
@@ -20,12 +20,22 @@
 //! replacement the debugger then refused is a tree that lies about what is
 //! running.
 //!
+//! **It answers for the whole set at once.** `_by_sourcemap.py` is one file
+//! holding an entry for every transpiled module, so a set of edits has one map,
+//! not one per file. Answering each file on its own would hand back a map per
+//! file, each holding the tree's map plus that one file's entry — and whichever a
+//! caller wrote last would silently drop every other edit's line table. So the
+//! set goes in as a set and comes back with one map that carries all of it.
+//!
 //! **It refuses rather than guesses.** Every refusal below is a case where the
 //! bytes produced would not be the bytes the build would have produced, or where
 //! the tree cannot be told what it is. A refusal costs the user a rebuild; a wrong
 //! answer costs them a debug session that reports lines from a file that no longer
-//! exists.
+//! exists. One file refused refuses the set, for the reason the debugger applies a
+//! replacement that way: a tree holding half of an edit describes a program that
+//! never existed.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use ruff_db::diagnostic::{
@@ -48,14 +58,12 @@ use crate::verbatim::verbatim_destination;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Restaged {
+    /// the file in the project this was produced from, as it was asked about
+    source: PathBuf,
     /// where the bytes go: absolute, inside the build directory
     generated: PathBuf,
     /// the full text to write there
     content: String,
-    /// the full new text of `_by_sourcemap.py`, or `None` when nothing about the
-    /// map changed — including for a file that has no entry in it, which is every
-    /// file the build copied rather than transpiled
-    sourcemap: Option<String>,
     /// sha-256 of the source bytes this was produced from
     by_digest: String,
     /// sha-256 of `content`
@@ -70,16 +78,43 @@ pub struct Restaged {
     changed: bool,
 }
 
-/// Why nothing was produced.
+/// Every slot of the set, and the one map that describes all of them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestagedSet {
+    /// one per distinct file asked about, in the order they were asked
+    files: Vec<Restaged>,
+    /// the full new text of `_by_sourcemap.py` with the entry of every
+    /// transpiled file of the set moved in it, or `None` when nothing about the
+    /// map changed — which includes a set of nothing but files the build copied
+    /// rather than transpiled, since none of those has an entry
+    sourcemap: Option<String>,
+}
+
+/// Why nothing was produced for one file, or for the tree as a whole.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Refusal {
+    /// the file this is about, or `None` when it is about the tree — a record
+    /// that cannot be read, a tree another `by` built — and so about every file
+    file: Option<PathBuf>,
     /// one sentence, written for a user rather than for a log
-    pub refused: String,
+    refused: String,
     /// the diagnostics behind it, when the refusal was the check gate. empty
     /// otherwise
     #[serde(default)]
-    pub diagnostics: Vec<String>,
+    diagnostics: Vec<String>,
+}
+
+/// Every reason the set was refused.
+///
+/// All of them rather than the first: a user who fixes one file and presses
+/// reload only to be told about the next has been made to find them one at a
+/// time.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Refused {
+    refusals: Vec<Refusal>,
 }
 
 /// The answer, either way.
@@ -91,32 +126,50 @@ pub struct Refusal {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum Restage {
-    Ready(Restaged),
-    Refused(Refusal),
+    Ready(RestagedSet),
+    Refused(Refused),
 }
 
 impl Restage {
-    fn refuse(reason: impl Into<String>) -> Self {
-        Self::Refused(Refusal {
-            refused: reason.into(),
-            diagnostics: Vec::new(),
+    /// The whole set refused, for a reason that is not about any one file.
+    pub fn refuse(reason: impl Into<String>) -> Self {
+        Self::Refused(Refused {
+            refusals: vec![Refusal {
+                file: None,
+                refused: reason.into(),
+                diagnostics: Vec::new(),
+            }],
         })
     }
 }
 
-/// Produce what `file`'s slot in `build_directory` should now contain.
+/// What the tree and the project say, read once for the whole set.
+struct Tree<'a> {
+    db: &'a ProjectDatabase,
+    directory: &'a Path,
+    record: BuildRecord,
+    config: by_transforms::config::Config,
+    rebuilder: Rebuilder,
+    /// the build's own source files, asked the way the build asks, each beside the path with
+    /// its links resolved — worked out once, because every file of the set is looked up against
+    /// all of them and resolving a path costs a syscall
+    sources: Vec<(PathBuf, ruff_db::files::File, PathBuf)>,
+}
+
+/// Produce what each of `files`' slots in `build_directory` should now contain,
+/// and the one `_by_sourcemap.py` that describes them together.
 ///
-/// `db` is the project database the file belongs to. The language server passes
+/// `db` is the project database the files belong to. The language server passes
 /// its own, warm and already indexed, which is the whole reason this is fast
 /// enough to sit behind a button; the CLI builds one first. Either way the source
 /// text comes out of the db, so an editor's unsaved buffer is what gets
 /// transpiled — the answer the user means by "reload this". The digest recorded
 /// for the `.by` is then over that buffer, so an unsaved file's tracebacks read as
 /// stale until it is saved, which is the honest report rather than a wrong line.
-pub fn restage_one(
+pub fn restage(
     db: &ProjectDatabase,
     build_directory: &Path,
-    file: &Path,
+    files: &[PathBuf],
 ) -> anyhow::Result<Restage> {
     // absolute from here down, whatever the caller spelled. `generated` is a path
     // the caller writes bytes to and `_by_sourcemap.py` keys its tables by the
@@ -133,6 +186,12 @@ pub fn restage_one(
             .unwrap_or_else(|_| build_directory.to_path_buf());
         &owned
     };
+
+    if files.is_empty() {
+        return Ok(Restage::refuse(
+            "no files were named, and an empty set has nothing in it to reload",
+        ));
+    }
 
     let record = match BuildRecord::read(build_directory) {
         Ok(record) => record,
@@ -163,60 +222,140 @@ pub fn restage_one(
         Err(error) => return Ok(Restage::refuse(error.to_string())),
     };
 
-    let is_source = file
-        .extension()
-        .and_then(std::ffi::OsStr::to_str)
-        .is_some_and(|extension| BY_SOURCES.contains(&extension));
-    if is_source {
-        restage_transpiled(db, build_directory, &record, &config, file)
+    // one file named twice — or under two spellings of one path — is one slot,
+    // and answering for it twice would hand a caller two writes to one file
+    let mut seen = HashSet::new();
+    let files: Vec<&Path> = files
+        .iter()
+        .filter(|file| seen.insert(std::fs::canonicalize(file).unwrap_or_else(|_| (*file).clone())))
+        .map(PathBuf::as_path)
+        .collect();
+
+    // read once for the set, and only when the set holds something the map
+    // describes: a set of copied files has no line table to move
+    let existing_map = if files.iter().any(|file| is_source(file)) {
+        match std::fs::read_to_string(build_directory.join(BY_SOURCEMAP_FILENAME)) {
+            Ok(existing) => Some(existing),
+            Err(error) => {
+                return Ok(Restage::refuse(format!(
+                    "`{}` has no {BY_SOURCEMAP_FILENAME}, so a reloaded module would have no \
+                     line table: {error}",
+                    build_directory.display(),
+                )));
+            }
+        }
     } else {
-        restage_verbatim(db, build_directory, &record, file)
+        None
+    };
+
+    let tree = Tree {
+        db,
+        directory: build_directory,
+        sources: project_sources(db, BY_SOURCES, &record.project_root, Some(build_directory))
+            .into_iter()
+            .map(|(path, file)| {
+                let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+                (path, file, resolved)
+            })
+            .collect(),
+        rebuilder: Rebuilder::for_project(db),
+        record,
+        config,
+    };
+
+    // every entry of the set moved in one text, one after another. each move
+    // substitutes that entry's two lines and nothing else, so the order they are
+    // applied in cannot change the result
+    let mut merged = existing_map.clone();
+    let mut restaged = Vec::with_capacity(files.len());
+    let mut refusals = Vec::new();
+    for file in files {
+        // which of the two a file goes through is decided by the file, never by whether a map
+        // happened to be read: a `.by` staged verbatim would copy basedpython into the tree
+        let outcome = if is_source(file) {
+            let Some(map) = merged.as_mut() else {
+                return Ok(Restage::refuse(format!(
+                    "`{}` is a source file and the set was read without a {BY_SOURCEMAP_FILENAME}",
+                    file.display(),
+                )));
+            };
+            restage_transpiled(&tree, file, map)?
+        } else {
+            restage_verbatim(&tree, file)?
+        };
+        match outcome {
+            Ok(one) => restaged.push(one),
+            Err(refusal) => refusals.push(refusal),
+        }
+    }
+
+    if !refusals.is_empty() {
+        return Ok(Restage::Refused(Refused { refusals }));
+    }
+    Ok(Restage::Ready(RestagedSet {
+        files: restaged,
+        sourcemap: merged.filter(|merged| Some(merged) != existing_map.as_ref()),
+    }))
+}
+
+/// Whether the build transpiled `file` rather than copying it.
+fn is_source(file: &Path) -> bool {
+    file.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| BY_SOURCES.contains(&extension))
+}
+
+/// A refusal about one file of the set.
+fn refuse_file(file: &Path, refused: String, diagnostics: Vec<String>) -> Refusal {
+    Refusal {
+        file: Some(file.to_path_buf()),
+        refused,
+        diagnostics,
     }
 }
 
-/// A `.by`: transpile it as the build would have, and move its one entry in the
-/// sourcemap.
+/// A `.by`: transpile it as the build would have, and move its one entry in
+/// `map`, the set's sourcemap so far.
 fn restage_transpiled(
-    db: &ProjectDatabase,
-    build_directory: &Path,
-    record: &BuildRecord,
-    config: &by_transforms::config::Config,
+    tree: &Tree<'_>,
     file: &Path,
-) -> anyhow::Result<Restage> {
-    // the build's own file set, asked the way the build asks it — so a source the
-    // project excludes is refused here rather than transpiled into a slot the
-    // build never wrote
-    let sources = project_sources(db, BY_SOURCES, &record.project_root, Some(build_directory));
+    map: &mut String,
+) -> anyhow::Result<Result<Restaged, Refusal>> {
+    let db = tree.db;
+    // the build's own file set, so a source the project excludes is refused here
+    // rather than transpiled into a slot the build never wrote
     let wanted = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
-    let Some(handle) = sources.into_iter().find(|(path, _)| {
-        *path == wanted || std::fs::canonicalize(path).is_ok_and(|path| path == wanted)
-    }) else {
-        return Ok(Restage::refuse(format!(
-            "`{}` is not one of the files `{}` was built from",
-            file.display(),
-            build_directory.display(),
+    let Some((source, source_file, _)) = tree
+        .sources
+        .iter()
+        .find(|(path, _, resolved)| *path == wanted || *resolved == wanted)
+    else {
+        return Ok(Err(refuse_file(
+            file,
+            format!(
+                "`{}` is not one of the files `{}` was built from",
+                file.display(),
+                tree.directory.display(),
+            ),
+            Vec::new(),
         )));
     };
 
     // the path the *db* holds, not the caller's spelling of it, so the destination
     // is computed against roots recorded in the same form
-    let relative = transpiled_destination(&record.module_roots, &record.project_root, &handle.0);
+    let relative =
+        transpiled_destination(&tree.record.module_roots, &tree.record.project_root, source);
 
-    let existing_map = match std::fs::read_to_string(build_directory.join(BY_SOURCEMAP_FILENAME)) {
-        Ok(existing) => existing,
-        Err(error) => {
-            return Ok(Restage::refuse(format!(
-                "`{}` has no {BY_SOURCEMAP_FILENAME}, so a reloaded module would have no line \
-                 table: {error}",
-                build_directory.display(),
-            )));
-        }
-    };
-    let Some(key) = sourcemap_key_for(&existing_map, &relative) else {
-        return Ok(Restage::refuse(format!(
-            "`{}` has no entry in {BY_SOURCEMAP_FILENAME} for `{}`, so it is not part of that build",
-            build_directory.display(),
-            file.display(),
+    let Some(key) = sourcemap_key_for(map, &relative) else {
+        return Ok(Err(refuse_file(
+            file,
+            format!(
+                "`{}` has no entry in {BY_SOURCEMAP_FILENAME} for `{}`, so it is not part of that \
+                 build",
+                tree.directory.display(),
+                file.display(),
+            ),
+            Vec::new(),
         )));
     };
 
@@ -226,22 +365,21 @@ fn restage_transpiled(
     let mut produced: Option<(crate::sourcemap::TracebackEntry, String)> = None;
     let outcome = check_and_transpile(
         db,
-        std::slice::from_ref(&handle),
+        std::slice::from_ref(&(source.clone(), *source_file)),
         &mut Emit {
-            config,
+            config: &tree.config,
             // the gate `by run` uses: a program that fails `by check` must not
             // run, and a module reloaded into a running one is that program
             // continuing
             gate: CheckGate::AllErrors,
-            rebuilder: &Rebuilder::for_project(db),
+            rebuilder: &tree.rebuilder,
             requirements: &mut by_transforms::RuntimeRequirements::default(),
-            // a re-stage writes one module back into a tree the build already
-            // laid out, so what it claims is thrown away: whatever copy of the
-            // runtime that module imports is already sitting where the build
-            // put it
+            // a re-stage writes modules back into a tree the build already laid
+            // out, so what it claims is thrown away: whatever copy of the runtime
+            // a module imports is already sitting where the build put it
             runtime: Some(&mut RuntimeLayout::default()),
-            roots: &record.module_roots,
-            root: &record.project_root,
+            roots: &tree.record.module_roots,
+            root: &tree.record.project_root,
         },
         |emitted: &Transpiled<'_>| {
             produced = Some((describe_module(emitted), emitted.python.to_owned()));
@@ -250,29 +388,30 @@ fn restage_transpiled(
     )?;
 
     let Some((mut entry, python)) = produced.filter(|_| outcome.ok) else {
-        return Ok(Restage::Refused(Refusal {
-            refused: format!(
+        return Ok(Err(refuse_file(
+            file,
+            format!(
                 "`{}` does not check, so it cannot be reloaded into a running program",
                 file.display(),
             ),
-            diagnostics: render_diagnostics(db, &outcome.diagnostics),
-        }));
+            render_diagnostics(db, &outcome.diagnostics),
+        )));
     };
     // the key the map already holds, so the rewritten file differs in the two
     // lines that had to move and in nothing else
     entry.py_path = key;
 
-    let rewritten = rewrite_sourcemap_entry(&existing_map, &entry).map_err(|refusal| {
+    *map = rewrite_sourcemap_entry(map, &entry).map_err(|refusal| {
         anyhow::anyhow!(
             "the sourcemap entry vanished between being found and being written: {refusal:?}"
         )
     })?;
 
-    let generated = build_directory.join(&relative);
-    Ok(Restage::Ready(Restaged {
+    let generated = tree.directory.join(&relative);
+    Ok(Ok(Restaged {
+        source: file.to_path_buf(),
         changed: differs_on_disk(&generated, &entry.py_digest),
         content: python,
-        sourcemap: (rewritten != existing_map).then_some(rewritten),
         by_digest: entry.by_digest,
         py_digest: entry.py_digest,
         generated,
@@ -281,23 +420,22 @@ fn restage_transpiled(
 
 /// A hand-written `.py`, or anything else the build copies: its own bytes, at the
 /// place the build copied them to.
-fn restage_verbatim(
-    db: &ProjectDatabase,
-    build_directory: &Path,
-    record: &BuildRecord,
-    file: &Path,
-) -> anyhow::Result<Restage> {
+fn restage_verbatim(tree: &Tree<'_>, file: &Path) -> anyhow::Result<Result<Restaged, Refusal>> {
     let Some(relative) = verbatim_destination(
-        db,
-        &record.project_root,
-        &record.module_roots,
-        build_directory,
+        tree.db,
+        &tree.record.project_root,
+        &tree.record.module_roots,
+        tree.directory,
         file,
     ) else {
-        return Ok(Restage::refuse(format!(
-            "`{}` is not one of the files `{}` was built from",
-            file.display(),
-            build_directory.display(),
+        return Ok(Err(refuse_file(
+            file,
+            format!(
+                "`{}` is not one of the files `{}` was built from",
+                file.display(),
+                tree.directory.display(),
+            ),
+            Vec::new(),
         )));
     };
 
@@ -307,22 +445,25 @@ fn restage_verbatim(
     // encoding json has no way to hold is one the build can stage and this cannot,
     // and saying so is better than handing back something lossy
     let Ok(content) = String::from_utf8(bytes) else {
-        return Ok(Restage::refuse(format!(
-            "`{}` is not utf-8, so its bytes cannot be sent back as text — rebuild to pick it up",
-            file.display(),
+        return Ok(Err(refuse_file(
+            file,
+            format!(
+                "`{}` is not utf-8, so its bytes cannot be sent back as text — rebuild to pick \
+                 it up",
+                file.display(),
+            ),
+            Vec::new(),
         )));
     };
 
     // one set of bytes, so one digest under both names: the file the build read
     // and the file it wrote are the same file
     let digest = content_digest(content.as_bytes());
-    let generated = build_directory.join(&relative);
-    Ok(Restage::Ready(Restaged {
+    let generated = tree.directory.join(&relative);
+    Ok(Ok(Restaged {
+        source: file.to_path_buf(),
         changed: differs_on_disk(&generated, &digest),
         content,
-        // a copied file has no line table to move, and a map rewritten to say so
-        // would be a map that changed for nothing
-        sourcemap: None,
         by_digest: digest.clone(),
         py_digest: digest,
         generated,
