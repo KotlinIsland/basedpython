@@ -16,18 +16,28 @@ use ty_project::{Db as _, ProjectDatabase};
 use crate::project::{BY_SOURCES, module_roots, project_sources};
 use crate::staging::transpiled_destination;
 
-/// The directory `by build` writes to when it is not given `--out`, relative to where it runs.
-pub const DEFAULT_OUTPUT_DIRECTORY: &str = "build";
+/// The directory `by build` and `by compile` write to when they are not given `--out`, relative
+/// to the project root — see [`default_build_directory`].
+const DEFAULT_OUTPUT_DIRECTORY: &str = "build";
+
+/// Where the project rooted at `project_root` is built when no `--out` names somewhere else.
+///
+/// Relative to the project, not to wherever a command happens to run: the output belongs to the
+/// project the way its sources and its `.venv` do, so `by build` in `tests/` writes the same tree
+/// as `by build` at the root, and the one place an editor is told the build writes is the place
+/// it does. An explicit `--out` is the caller's own path and stays relative to where they typed it.
+pub fn default_build_directory(project_root: &Path) -> PathBuf {
+    project_root.join(DEFAULT_OUTPUT_DIRECTORY)
+}
 
 /// A path's place in its project's build.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BuildOutput {
-    /// The project root, which is where `by build` has to run for [`Self::build_directory`] to be
-    /// where it writes: the output directory is resolved against the working directory.
+    /// The project root: the project a `by build` run anywhere inside it builds.
     project_root: PathBuf,
 
-    /// Where `by build`, run at [`Self::project_root`] with no `--out`, writes the project.
+    /// Where `by build`, run anywhere in the project with no `--out`, writes the project.
     build_directory: PathBuf,
 
     /// When the path is a `.by` or `.byi` the build is made of, the file it is written to.
@@ -46,26 +56,36 @@ pub struct BuildOutput {
 pub fn build_output(db: &ProjectDatabase, path: &Path) -> BuildOutput {
     let declared_root = db.project().root(db).as_std_path();
     let root = canonical(declared_root);
-    let build_directory = root.join(DEFAULT_OUTPUT_DIRECTORY);
+    let build_directory = default_build_directory(&root);
     let roots = module_roots(db, &root);
     let sources = project_sources(db, BY_SOURCES, &root, Some(&build_directory));
     let wanted = canonical(path);
 
-    let destination = |source: &Path| transpiled_destination(&roots, &root, &canonical(source));
-
-    let generated = sources
+    // resolved once for the whole sweep. both lookups below compare against every source, and
+    // `canonical` walks a path making a syscall per level, so resolving inside them would ask
+    // the file system the same questions once per source per lookup
+    let resolved: Vec<(PathBuf, PathBuf)> = sources
         .iter()
-        .find(|(source, _)| canonical(source) == wanted)
-        .map(|(source, _)| build_directory.join(destination(source)));
+        .map(|(source, _)| {
+            let source = canonical(source);
+            let destination = transpiled_destination(&roots, &root, &source);
+            (source, destination)
+        })
+        .collect();
+
+    let generated = resolved
+        .iter()
+        .find(|(source, _)| *source == wanted)
+        .map(|(_, destination)| build_directory.join(destination));
 
     let source = wanted
         .strip_prefix(&build_directory)
         .ok()
         .and_then(|relative| {
-            sources
+            resolved
                 .iter()
-                .find(|(source, _)| destination(source) == relative)
-                .map(|(source, _)| canonical(source))
+                .find(|(_, destination)| destination == relative)
+                .map(|(source, _)| source.clone())
         });
 
     BuildOutput {

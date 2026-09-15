@@ -15,7 +15,6 @@ mod version;
 
 use std::fmt::Display;
 use std::io::{BufWriter, Write};
-use std::path::Path;
 use std::process::{ExitCode, Termination};
 use std::sync::{Arc, Mutex};
 
@@ -163,8 +162,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                 by_commands::cmd_build(
                     min_version.as_deref(),
                     &lowering,
-                    out.as_deref()
-                        .unwrap_or(Path::new(by_stage::layout::DEFAULT_OUTPUT_DIRECTORY)),
+                    out.as_deref(),
                     print_manifest,
                 )
             }
@@ -182,7 +180,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             lowering,
         } => by_commands::cmd_compile(
             &files,
-            &output,
+            output.as_deref(),
             by_commands::CompileFlags {
                 verbose,
                 emit_c_only,
