@@ -859,7 +859,7 @@ pub(crate) fn cmd_restage(build_directory: &Path, files: &[PathBuf]) -> anyhow::
 pub(crate) fn cmd_build(
     min_version: Option<&str>,
     lowering: &LoweringArgs,
-    out: &Path,
+    out: Option<&Path>,
     print_manifest: bool,
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
@@ -868,7 +868,7 @@ pub(crate) fn cmd_build(
     let target = config.min_version.to_string();
     crate::by_stamps::fill_discovered(&mut config.stamps, &cwd, Some(&target));
 
-    let out = settled_output_dir(&cwd, out);
+    let out = output_dir(&cwd, out)?;
 
     let (db, handles, rebuilder, root) = build_project_db(&cwd, BY_SOURCES, Some(&out))?;
     if handles.is_empty() {
@@ -968,6 +968,28 @@ fn print_build_manifest(
     Ok(())
 }
 
+/// Where a command that writes the build tree writes it: `out` when it was given, against the
+/// working directory it was typed in; otherwise the project's own build directory, wherever in the
+/// project the command runs.
+///
+/// The default is the project's for the reason the sources are: `by build` in `tests/` builds the
+/// whole project, and writing that into `tests/build` put a second tree where nothing looks for
+/// it — not the language server's `by/buildOutput`, which names one build directory per project,
+/// and not the next `by build` run from the root. [`by_stage::layout::default_build_directory`] is
+/// the one answer both of them read.
+fn output_dir(cwd: &Path, out: Option<&Path>) -> anyhow::Result<PathBuf> {
+    Ok(match out {
+        Some(out) => settled_output_dir(cwd, out),
+        None => {
+            let project = ResolvedProject::discover(cwd)?;
+            settled_output_dir(
+                cwd,
+                &by_stage::layout::default_build_directory(project.root()),
+            )
+        }
+    })
+}
+
 /// Where a build's output goes, settled before the project is read.
 ///
 /// It is the one directory the project must not be read *from*: it holds a copy
@@ -1015,7 +1037,7 @@ pub(crate) struct CompileFlags {
 /// actually runs natively, so it is never hidden.
 pub(crate) fn cmd_compile(
     files: &[PathBuf],
-    output: &Path,
+    output: Option<&Path>,
     flags: CompileFlags,
 ) -> anyhow::Result<ExitStatus> {
     let CompileFlags {
@@ -1072,7 +1094,7 @@ pub(crate) fn cmd_compile(
     // context that used to sit here misreported a version refusal as a missing header
     let toolchain = by_build::Toolchain::probe(&python)?;
 
-    let out_dir = settled_output_dir(&cwd, output);
+    let out_dir = output_dir(&cwd, output)?;
     let mut compiled = 0usize;
     let mut declined_total = 0usize;
     // the output tree. `by_build` lays the artefacts out itself, so they are

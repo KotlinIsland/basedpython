@@ -107,7 +107,9 @@ whether anything was *reported*. so a build that prints an error exits 1 while
 still leaving a usable `build/`, and `by build && pytest build/tests` runs the tests
 only against a tree the checker had nothing to say about
 
-writes the transpiled python to `./build/` mirroring the *module* tree. a
+writes the transpiled python to the project root's `build/` — wherever in the
+project it is run, as `by compile` does too; `--out DIR` names another directory,
+relative to where you typed it — mirroring the *module* tree. a
 src-layout project's `src/package_name/main.by` is the module
 `package_name.main`, so it lands at `build/package_name/main.py` — `build/` is a
 directory you can put on `sys.path` as it stands, and `run.main` names a module

@@ -5675,13 +5675,52 @@ fn build_from_a_subdirectory_builds_the_project() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "by build failed:\n{stderr}");
+    // the tree the language server's `by/buildOutput` names for this project, which is the
+    // project's `build/` wherever the build was run from
     assert!(
-        elsewhere
+        dir.path()
             .join("build")
             .join("app")
             .join("__init__.py")
             .exists(),
-        "the module tree is the project's, not the caller's:\n{stderr}"
+        "the module tree is the project's, and so is where it is written:\n{stderr}"
+    );
+    assert!(
+        !elsewhere.join("build").exists(),
+        "a build run from a subdirectory wrote a second tree there:\n{stderr}"
+    );
+}
+
+/// `--out` is a path the caller typed, so it is the caller's directory it is relative to — only the
+/// default belongs to the project
+#[test]
+fn an_explicit_output_directory_is_relative_to_where_the_build_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("main.by"), "x = 1\n").unwrap();
+    let elsewhere = dir.path().join("tools");
+    fs::create_dir_all(&elsewhere).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["build", "--out", "here"])
+        .current_dir(&elsewhere)
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(
+        elsewhere.join("here").join("main.py").exists(),
+        "`--out` names a directory relative to where it was typed:\n{stderr}"
+    );
+    assert!(
+        !dir.path().join("build").exists(),
+        "an explicit `--out` still wrote the default tree:\n{stderr}"
     );
 }
 
