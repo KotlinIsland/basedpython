@@ -1,17 +1,32 @@
 use crate::goto::find_goto_target;
 use crate::references::{ReferencesMode, references};
-use crate::{Db, ReferenceTarget};
+use crate::syntax_outline::keyword_family;
+use crate::{Db, ReferenceKind, ReferenceTarget};
 use ruff_text_size::TextSize;
 use ty_python_core::ProgramFile;
 use ty_python_semantic::SemanticModel;
 
 /// Find all document highlights for a symbol at the given position.
 /// Document highlights are limited to the current file only.
+///
+/// On a keyword, the highlights are the keywords that belong with it — see `keyword_family`.
 pub fn document_highlights(
     db: &dyn Db,
     file: ProgramFile<'_>,
     offset: TextSize,
 ) -> Option<Vec<ReferenceTarget>> {
+    // A keyword is not a symbol, but it has occurrences that belong together — the `elif`s and
+    // `else` of an `if`, the `return`s of a `def` — and those are what an editor lights up for it.
+    if let Some(family) = keyword_family(db, file.python_file(db), offset) {
+        let target_file = file.file(db);
+        return Some(
+            family
+                .into_iter()
+                .map(|range| ReferenceTarget::new(target_file, range, ReferenceKind::Other))
+                .collect(),
+        );
+    }
+
     let parsed = ruff_db::parsed::parsed_module(db, file.python_file(db));
     let module = parsed.load(db);
     let model = SemanticModel::new(db, file);

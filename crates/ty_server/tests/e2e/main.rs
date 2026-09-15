@@ -51,6 +51,7 @@ mod rename;
 mod script_preparation;
 mod semantic_tokens;
 mod signature_help;
+mod syntax_outline;
 mod transpile;
 mod type_hierarchy;
 mod will_rename_files;

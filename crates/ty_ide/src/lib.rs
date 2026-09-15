@@ -35,6 +35,7 @@ mod semantic_tokens;
 mod signature_help;
 mod stub_mapping;
 mod symbols;
+mod syntax_outline;
 mod type_hierarchy;
 mod workspace_symbols;
 
@@ -85,6 +86,10 @@ pub use semantic_tokens::{
 };
 pub use signature_help::{ParameterDetails, SignatureDetails, SignatureHelpInfo, signature_help};
 pub use symbols::{FlatSymbols, HierarchicalSymbols, SymbolId, SymbolInfo, SymbolKind};
+pub use syntax_outline::{
+    OutlineCall, OutlineClause, OutlineModifier, OutlineStatement, OutlineString, SyntaxOutline,
+    syntax_outline,
+};
 pub use type_hierarchy::{
     TypeHierarchyItem, prepare_type_hierarchy, type_hierarchy_subtypes, type_hierarchy_supertypes,
 };
