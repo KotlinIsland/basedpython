@@ -45,8 +45,11 @@
 //!   it.
 //! - [`restage`] — the slots of an edit's files in an existing tree, and the
 //!   one sourcemap describing them, recomputed.
+//! - [`layout`] — where a project's build writes, and which output came from
+//!   which source, for an editor to ask.
 
 pub mod emit;
+pub mod layout;
 pub mod project;
 pub mod record;
 pub mod restage;
