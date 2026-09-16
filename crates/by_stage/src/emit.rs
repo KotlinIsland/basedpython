@@ -130,9 +130,16 @@ pub fn check_and_transpile(
     // batching files into fewer jobs measured 4.5x slower, and cloning only every
     // 32 files gives the saving up entirely — so anything that reduces the number
     // of clones silently undoes this
+    //
+    // ignoring the check mode, because these files are what the output is made of:
+    // a language server whose mode reports diagnostics only for open files still
+    // has to refuse a closed one that does not check, before its bytes are written
+    // into a tree a program is running out of
     let checked: Vec<Vec<Diagnostic>> = handles
         .par_iter()
-        .map_with_db(db, |db, (_, file)| db.check_file(*file))
+        .map_with_db(db, |db, (_, file)| {
+            ty_project::check_file_ignoring_check_mode(db, *file)
+        })
         .collect();
     for ((_, file), diags) in handles.iter().zip(checked) {
         if diags.iter().any(is_unusable_source) {

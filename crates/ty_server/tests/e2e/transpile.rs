@@ -275,12 +275,18 @@ fn one_file_of_an_edit_that_does_not_check_refuses_the_set() -> Result<()> {
         .build()
         .wait_until_workspaces_are_initialized();
     let build = stale_build(&server, SystemPath::new("build"))?;
-    // open, as the editor that edited it holds it: in its default mode this server's database
-    // reports diagnostics only for open files
+    // open, as the editor that edited it holds it. a closed one refuses the same way — see
+    // `a_file_edited_then_closed_that_does_not_check_refuses_the_set`
     server.open_text_document(SystemPath::new("project/other.by"), other, 1);
 
     let answer = restage(&mut server, &build, &["main", "other"]);
 
+    assert_other_refused_for_not_checking(&answer);
+    Ok(())
+}
+
+/// The refusal a file that does not check gets, asserted for `other.by`.
+fn assert_other_refused_for_not_checking(answer: &serde_json::Value) {
     assert!(answer.get("files").is_none(), "{answer}");
     let refusals = answer["refusals"]
         .as_array()
@@ -297,6 +303,73 @@ fn one_file_of_an_edit_that_does_not_check_refuses_the_set() -> Result<()> {
             .contains("does not check"),
         "{answer}"
     );
+    assert!(
+        refusals[0]["diagnostics"]
+            .as_array()
+            .is_some_and(|diagnostics| diagnostics.iter().any(|d| d
+                .as_str()
+                .is_some_and(|d| d.contains("invalid-return-type")))),
+        "{answer}"
+    );
+}
+
+/// **A file the editor has closed is checked all the same.** The edit is saved and its tab closed
+/// before the reload is pressed, and this server's default mode reports diagnostics only for open
+/// files — but the gate is whether the file checks, not whether an editor is holding it, so the
+/// type error must refuse exactly as it does while the file is open.
+#[test]
+fn a_file_edited_then_closed_that_does_not_check_refuses_the_set() -> Result<()> {
+    use lsp_types::{TextDocumentContentChangeEvent, TextDocumentContentChangeWholeDocument};
+
+    let main = "def go() -> int:\n    return 42\n";
+    let other = "def other() -> int:\n    return 6\n";
+    let broken = "def other() -> int:\n    return \"not an int\"\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file("project/main.by", main)?
+        .with_file("project/other.by", other)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let build = stale_build(&server, SystemPath::new("build"))?;
+
+    server.open_text_document(SystemPath::new("project/other.by"), other, 1);
+    server.change_text_document(
+        SystemPath::new("project/other.by"),
+        vec![
+            TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                TextDocumentContentChangeWholeDocument {
+                    text: broken.to_string(),
+                },
+            ),
+        ],
+        2,
+    );
+    server.write_file("project/other.by", broken)?;
+    server.close_text_document(SystemPath::new("project/other.by"));
+
+    let answer = restage(&mut server, &build, &["main", "other"]);
+
+    assert_other_refused_for_not_checking(&answer);
+    Ok(())
+}
+
+/// And a file no editor ever opened is checked too: the request names the files it re-stages, and
+/// those are the files it checks.
+#[test]
+fn a_file_never_opened_that_does_not_check_refuses_the_set() -> Result<()> {
+    let main = "def go() -> int:\n    return 42\n";
+    let other = "def other() -> int:\n    return \"not an int\"\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file("project/main.by", main)?
+        .with_file("project/other.by", other)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let build = stale_build(&server, SystemPath::new("build"))?;
+
+    let answer = restage(&mut server, &build, &["main", "other"]);
+
+    assert_other_refused_for_not_checking(&answer);
     Ok(())
 }
 
