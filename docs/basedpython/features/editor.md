@@ -325,18 +325,22 @@ a refactoring either keeps the program meaning what it meant or is refused, and 
 refusal says why. an editor that asks for refactorings explicitly shows the reason;
 one that asks while the caret moves is only offered what applies
 
-| refactoring     | kind                       | offered on               |
-| --------------- | -------------------------- | ------------------------ |
-| inline variable | `refactor.inline.variable` | a variable assigned once |
+| refactoring        | kind                        | offered on                        |
+| ------------------ | --------------------------- | --------------------------------- |
+| inline variable    | `refactor.inline.variable`  | a variable assigned once          |
+| extract variable   | `refactor.extract.variable` | a selected expression             |
+| introduce constant | `refactor.extract.constant` | a selected expression of literals |
 
 moving an expression can change when it runs, so that is what most refusals are
 about. a value with an effect is only inlined into a single read in the very next
-statement, with nothing that could observe the move evaluated before it
+statement, with nothing that could observe the move evaluated before it; an
+expression is only extracted above its statement when it runs exactly once each
+time the statement does — not in a loop condition, a conditional branch, a lambda
+or after a call
 
 ```by
-item = queue.pop()
-log("popped")       # inlining `item` is refused: the pop would now run after the log
-print(item)
+while queue.pending():  # extracting `queue.pending()` is refused: it runs every iteration
+    queue.pop()
 ```
 
 a client that can resolve a code action's edit gets the action without one, and the

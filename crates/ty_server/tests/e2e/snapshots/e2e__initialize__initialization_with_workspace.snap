@@ -55,7 +55,9 @@ expression: initialization_result
     "codeActionProvider": {
       "codeActionKinds": [
         "quickfix",
-        "refactor.inline.variable"
+        "refactor.inline.variable",
+        "refactor.extract.variable",
+        "refactor.extract.constant"
       ],
       "resolveProvider": true
     },

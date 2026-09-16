@@ -21,6 +21,7 @@ use crate::types::generics::GenericContext;
 use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
 use crate::types::infer::{infer_definition_types, nearest_enclosing_function};
 use crate::types::list_members::all_end_of_scope_members;
+use crate::types::literal::LiteralValueTypeKind;
 use crate::types::overrides::is_constructor_like_method;
 use crate::types::receivers;
 use crate::types::signatures::{
@@ -2629,6 +2630,30 @@ pub fn constructor_signature(model: &SemanticModel, call_expr: &ast::ExprCall) -
 ///
 /// The IDE surfaces this as an inlay hint, so a declared clause returns `None`:
 /// the source already says what it is.
+/// Whether ty folded `expr` down to one literal value.
+///
+/// The checker folds an operation over literals to the literal it produces exactly when it has
+/// carried that operation out: `60 * 60 * 24` folds to `Literal[86400]`, while `1 / 0` is only
+/// `float`, `1 % 0` only `int` and `1 + "a"` is `Unknown`. So a folded type is a proof that
+/// evaluating the expression yields a value rather than raising — which is what a caller moving
+/// a literal expression somewhere it will always be evaluated needs to know.
+pub fn folds_to_a_literal(model: &SemanticModel<'_>, expr: &ast::Expr) -> bool {
+    let Some(ty) = expr.inferred_type(model) else {
+        return false;
+    };
+    matches!(
+        ty.as_literal_value_kind(),
+        Some(
+            LiteralValueTypeKind::String(_)
+                | LiteralValueTypeKind::Bytes(_)
+                | LiteralValueTypeKind::Int(_)
+                | LiteralValueTypeKind::Bool(_)
+                | LiteralValueTypeKind::Float(_)
+                | LiteralValueTypeKind::Complex(_)
+        )
+    )
+}
+
 pub fn inferred_raises<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
