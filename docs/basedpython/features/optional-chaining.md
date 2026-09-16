@@ -84,6 +84,11 @@ user?.address.city  # error: `address` may be None
 add a `?.` at the step that needs guarding — `user?.address?.city` is
 `str | None`
 
+when `None` is the only part of a value's type that lacks the attribute, the
+`unresolved-attribute` error carries a quick fix that writes that `?.`. it is an
+unsafe fix: the read now evaluates to `None` where it used to raise, and
+whatever uses it has to handle that
+
 ## scope
 
 `?.` is recognized in attribute-access expressions only. there is no optional

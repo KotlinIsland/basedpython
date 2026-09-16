@@ -15255,13 +15255,37 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                     .collect::<Vec<_>>()
                                     .join(", ");
 
-                                builder.into_diagnostic(format_args!(
+                                let mut diagnostic = builder.into_diagnostic(format_args!(
                                     "Attribute `{attr_name}` is not defined on {} \
                                     in union `{union_like_type}`",
                                     missing_types,
                                     union_like_type =
                                         union_like_type.display_with(db, env, settings),
                                 ));
+                                // basedpython: when `None` is all that lacks the attribute,
+                                // `?.` is the access that reads it only when it is there. the
+                                // fix is unsafe because the read then evaluates to `None`
+                                // instead of raising, which whatever uses it has to handle
+                                if attribute.ctx.is_load()
+                                    && !attribute.optional
+                                    && self.file().source_type(db).is_basedpython()
+                                    && elements_missing_the_attribute.len() == 1
+                                    && elements_missing_the_attribute
+                                        .iter()
+                                        .all(|element| element.is_none(db))
+                                    && let Some(dot) = attribute_dot(
+                                        &source_text(db, self.file()),
+                                        attribute,
+                                    )
+                                {
+                                    diagnostic.help(format_args!(
+                                        "Use `?.` to read `{attr_name}` only when the value is not `None`"
+                                    ));
+                                    diagnostic.set_fix(Fix::unsafe_edit(Edit::insertion(
+                                        "?".to_string(),
+                                        dot,
+                                    )));
+                                }
                             }
                             return type_when_bound;
                         }
@@ -17715,6 +17739,21 @@ fn is_collection_literal(expression: &ast::Expr) -> bool {
         expression,
         ast::Expr::List(_) | ast::Expr::Set(_) | ast::Expr::Dict(_)
     )
+}
+
+/// The offset of the `.` of `attribute`, past any parentheses closing its value and any comment or
+/// line break before the dot.
+fn attribute_dot(source: &str, attribute: &ast::ExprAttribute) -> Option<ruff_text_size::TextSize> {
+    use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
+
+    SimpleTokenizer::new(
+        source,
+        TextRange::new(attribute.value.end(), attribute.attr.start()),
+    )
+    .skip_trivia()
+    .find(|token| token.kind() != SimpleTokenKind::RParen)
+    .filter(|token| token.kind() == SimpleTokenKind::Dot)
+    .map(|token| token.start())
 }
 
 /// Returns `true` if `expression` is a link of a basedpython optional chain: a `?.` access, or a
