@@ -14,6 +14,7 @@ mod flow;
 mod hazards;
 mod inline_variable;
 mod names;
+mod return_annotation;
 mod text;
 
 use ruff_db::files::File;
@@ -35,14 +36,16 @@ pub enum RefactorKind {
     ExtractVariable,
     IntroduceConstant,
     ExtractFunction,
+    AddReturnAnnotation,
 }
 
 impl RefactorKind {
-    pub const ALL: [RefactorKind; 4] = [
+    pub const ALL: [RefactorKind; 5] = [
         RefactorKind::InlineVariable,
         RefactorKind::ExtractVariable,
         RefactorKind::IntroduceConstant,
         RefactorKind::ExtractFunction,
+        RefactorKind::AddReturnAnnotation,
     ];
 
     /// The LSP code action kind the refactoring is offered as.
@@ -52,6 +55,7 @@ impl RefactorKind {
             RefactorKind::ExtractVariable => "refactor.extract.variable",
             RefactorKind::IntroduceConstant => "refactor.extract.constant",
             RefactorKind::ExtractFunction => "refactor.extract.function",
+            RefactorKind::AddReturnAnnotation => "refactor.rewrite.returnAnnotation",
         }
     }
 
@@ -63,6 +67,7 @@ impl RefactorKind {
             RefactorKind::ExtractVariable => "extract-variable",
             RefactorKind::IntroduceConstant => "introduce-constant",
             RefactorKind::ExtractFunction => "extract-function",
+            RefactorKind::AddReturnAnnotation => "add-return-annotation",
         }
     }
 
@@ -158,6 +163,7 @@ impl<'db> RefactorContext<'db> {
                 extract_variable::plan(self, range, extract_variable::Target::Constant)
             }
             RefactorKind::ExtractFunction => extract_function::plan(self, range),
+            RefactorKind::AddReturnAnnotation => return_annotation::plan(self, range),
         }
     }
 }

@@ -32,7 +32,7 @@ use ty_python_semantic::types::ide_support::{
     is_composable_function, is_reveal_type_function, is_union_special_form, numeric_promotion,
     parameter_stability, trailing_lambda_implicit_parameters, type_parameter_names,
 };
-use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail};
+use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail, TypeDisplayDetails};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
 
 #[derive(Debug, Clone)]
@@ -58,158 +58,32 @@ impl InlayHint {
         expr: &Expr,
         rhs: &Expr,
         ty: Type<'db>,
-        mut allow_edits: bool,
+        allow_edits: bool,
         named_type_arguments: bool,
     ) -> Option<Self> {
-        let InlayHintImportContext {
-            db,
-            file,
-            importer,
-            dynamic_imports,
-        } = context;
-
         let position = expr.range().end();
-        let env = ProgramEnvironment::from_file(file);
-        // Render the type to a string, and get subspans for all the types that make it up
-        let settings = DisplaySettings::from_possibly_ambiguous_types(db, &env, [ty]);
-        let settings = if named_type_arguments {
-            settings.with_named_type_arguments()
-        } else {
-            settings
-        };
-        // basedpython: a symbolic operation such as a repeated tuple, `(1, "a") * int`, has no
-        // python spelling, so a hint in a python file shows the type it reduces to — which that
-        // file can also hold as an annotation
-        let settings = if file.file(db).source_type(db).is_basedpython() {
-            settings
-        } else {
-            settings.with_reduced_symbolic_operations()
-        };
-        let details = ty.display_with(db, &env, settings).to_string_parts();
+        let details = type_display_details(context.db, context.file, ty, named_type_arguments);
 
         // Filter out repetitive hints like `x: T = T()`
         if call_matches_name(rhs, &details.label) {
             return None;
         }
 
-        let mut dynamic_importer = DynamicImporter::new(importer, expr, dynamic_imports);
+        let spelled = spell_type(context, expr.into(), expr.range().start(), &details);
 
-        // Ok so the idea here is that we potentially have a random soup of spans here,
-        // and each byte of the string can have at most one target associate with it.
-        // Thankfully, they were generally pushed in print order, with the inner smaller types
-        // appearing before the outer bigger ones.
-        //
-        // So we record where we are in the string, and every time we find a type, we
-        // check if it's further along in the string. If it is, great, we give it the
-        // span for its range, and then advance where we are.
-        let mut offset = 0;
-
-        // This edit label could be different from the original label if we need to
-        // qualify certain imported symbols. `A` could turn into `foo.A`.
-        let mut edit_label = details.label.clone();
-        let mut edit_offset: isize = 0;
-
-        let mut label_parts = vec![": ".into()];
-        for (target, detail) in details.targets.iter().zip(&details.details) {
-            match detail {
-                TypeDetail::Type(ty) => {
-                    let start = target.start().to_usize();
-                    let end = target.end().to_usize();
-                    // If we skipped over some bytes, push them with no target
-                    if start > offset {
-                        label_parts.push(details.label[offset..start].into());
-                    }
-
-                    // Possibly import the current type and return the qualified name
-                    let mut qualified_name = |dynamic_importer: &mut DynamicImporter<'_, 'db>| {
-                        let type_definition = ty.definition(db, &env)?;
-                        let definition = type_definition.definition()?;
-
-                        // Only module-level names can be imported with `from <module> import <name>`.
-                        // If the definition lives in a class or function body we can't produce a safe edit.
-                        if !definition.file_scope(db).is_global() {
-                            allow_edits = false;
-                            return None;
-                        }
-
-                        // Don't try to import symbols in scope
-                        let definition_file = definition.file(db);
-                        if definition_file == file.file(db) {
-                            return None;
-                        }
-
-                        let definition_name = definition.name(db);
-
-                        // Fallback to the label if we cannot find the name
-                        let definition_name = definition_name
-                            .as_deref()
-                            .unwrap_or(&details.label[start..end]);
-
-                        let file = definition.program_file(db);
-                        let module = file_to_module(db, file.resolver_file(db))?;
-
-                        if should_skip_import(db, module, *ty) {
-                            return None;
-                        }
-
-                        let module_name = module.name(db).as_str();
-
-                        dynamic_importer.import_symbol(
-                            db,
-                            &env,
-                            ty,
-                            module_name,
-                            definition_name,
-                            &details.label[start..end],
-                        )
-                    };
-
-                    // Ok, this is the first type that claimed these bytes, give it the target
-                    if start >= offset {
-                        // Try to import the symbol and update the edit label if required
-                        if let Some(qualified_name) = qualified_name(&mut dynamic_importer) {
-                            let edit_start = (start.cast_signed() + edit_offset).cast_unsigned();
-                            let edit_end = (end.cast_signed() + edit_offset).cast_unsigned();
-
-                            edit_label.replace_range(edit_start..edit_end, &qualified_name);
-                            edit_offset +=
-                                qualified_name.len().cast_signed() - (end - start).cast_signed();
-                        }
-
-                        let target = ty.navigation_targets(db, &env).into_iter().next();
-
-                        // Always use original text for the label part
-                        label_parts.push(
-                            InlayHintLabelPart::new(&details.label[start..end]).with_target(target),
-                        );
-                        offset = end;
-                    }
-                }
-                TypeDetail::SignatureStart
-                | TypeDetail::SignatureEnd
-                | TypeDetail::Parameter(_) => {
-                    // Don't care about these
-                }
-            }
-        }
-
-        // "flush" the rest of the label without any target
-        if offset < details.label.len() {
-            label_parts.push(details.label[offset..details.label.len()].into());
-        }
-
-        let text_edits = if details.is_valid_syntax && allow_edits {
+        let text_edits = if spelled.editable && allow_edits {
             let mut text_edits = vec![InlayHintTextEdit {
                 range: TextRange::new(position, position),
-                new_text: format!(": {edit_label}"),
+                new_text: format!(": {}", spelled.edit_label),
             }];
-
-            text_edits.extend(dynamic_importer.text_edits());
-
+            text_edits.extend(spelled.import_edits);
             text_edits
         } else {
             vec![]
         };
+
+        let mut label_parts = vec![": ".into()];
+        label_parts.extend(spelled.label_parts);
 
         Some(Self {
             position,
@@ -1181,6 +1055,209 @@ impl Default for InlayHintSettings {
             resolved_templates: true,
         }
     }
+}
+
+/// `ty` rendered to a string, with the spans of the types that make it up.
+fn type_display_details<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    ty: Type<'db>,
+    named_type_arguments: bool,
+) -> TypeDisplayDetails<'db> {
+    let env = ProgramEnvironment::from_file(file);
+    let settings = DisplaySettings::from_possibly_ambiguous_types(db, &env, [ty]);
+    let settings = if named_type_arguments {
+        settings.with_named_type_arguments()
+    } else {
+        settings
+    };
+    // basedpython: a symbolic operation such as a repeated tuple, `(1, "a") * int`, has no
+    // python spelling, so a hint in a python file shows the type it reduces to — which that
+    // file can also hold as an annotation
+    let settings = if file.file(db).source_type(db).is_basedpython() {
+        settings
+    } else {
+        settings.with_reduced_symbolic_operations()
+    };
+    ty.display_with(db, &env, settings).to_string_parts()
+}
+
+/// A type as a hint shows it and as an annotation would write it.
+struct SpelledType {
+    /// The rendering, each type in it linked to its definition.
+    label_parts: Vec<InlayHintLabelPart>,
+    /// The annotation to write, which qualifies a name where importing it
+    /// would clash with one in scope.
+    edit_label: String,
+    /// The imports the annotation needs.
+    import_edits: Vec<InlayHintTextEdit>,
+    /// Whether the annotation can be written at all: it is valid syntax, and
+    /// every type it names can be reached from the file.
+    editable: bool,
+}
+
+/// Spell `details` for the scope around `scope_node`, importing what it names.
+fn spell_type<'db>(
+    context: InlayHintImportContext<'_, 'db>,
+    scope_node: AnyNodeRef<'_>,
+    scope_offset: TextSize,
+    details: &TypeDisplayDetails<'db>,
+) -> SpelledType {
+    let InlayHintImportContext {
+        db,
+        file,
+        importer,
+        dynamic_imports,
+    } = context;
+    let env = ProgramEnvironment::from_file(file);
+    let mut editable = details.is_valid_syntax;
+
+    let mut dynamic_importer =
+        DynamicImporter::new(importer, scope_node, scope_offset, dynamic_imports);
+
+    // Ok so the idea here is that we potentially have a random soup of spans here,
+    // and each byte of the string can have at most one target associate with it.
+    // Thankfully, they were generally pushed in print order, with the inner smaller types
+    // appearing before the outer bigger ones.
+    //
+    // So we record where we are in the string, and every time we find a type, we
+    // check if it's further along in the string. If it is, great, we give it the
+    // span for its range, and then advance where we are.
+    let mut offset = 0;
+
+    // This edit label could be different from the original label if we need to
+    // qualify certain imported symbols. `A` could turn into `foo.A`.
+    let mut edit_label = details.label.clone();
+    let mut edit_offset: isize = 0;
+
+    let mut label_parts = Vec::new();
+    for (target, detail) in details.targets.iter().zip(&details.details) {
+        match detail {
+            TypeDetail::Type(ty) => {
+                let start = target.start().to_usize();
+                let end = target.end().to_usize();
+                // If we skipped over some bytes, push them with no target
+                if start > offset {
+                    label_parts.push(details.label[offset..start].into());
+                }
+
+                // Possibly import the current type and return the qualified name
+                let mut qualified_name = |dynamic_importer: &mut DynamicImporter<'_, 'db>| {
+                    let type_definition = ty.definition(db, &env)?;
+                    let definition = type_definition.definition()?;
+
+                    // Only module-level names can be imported with `from <module> import <name>`.
+                    // If the definition lives in a class or function body we can't produce a safe edit.
+                    if !definition.file_scope(db).is_global() {
+                        editable = false;
+                        return None;
+                    }
+
+                    // Don't try to import symbols in scope
+                    let definition_file = definition.file(db);
+                    if definition_file == file.file(db) {
+                        return None;
+                    }
+
+                    let definition_name = definition.name(db);
+
+                    // Fallback to the label if we cannot find the name
+                    let definition_name = definition_name
+                        .as_deref()
+                        .unwrap_or(&details.label[start..end]);
+
+                    let file = definition.program_file(db);
+                    let module = file_to_module(db, file.resolver_file(db))?;
+
+                    if should_skip_import(db, module, *ty) {
+                        return None;
+                    }
+
+                    let module_name = module.name(db).as_str();
+
+                    dynamic_importer.import_symbol(
+                        db,
+                        &env,
+                        ty,
+                        module_name,
+                        definition_name,
+                        &details.label[start..end],
+                    )
+                };
+
+                // Ok, this is the first type that claimed these bytes, give it the target
+                if start >= offset {
+                    // Try to import the symbol and update the edit label if required
+                    if let Some(qualified_name) = qualified_name(&mut dynamic_importer) {
+                        let edit_start = (start.cast_signed() + edit_offset).cast_unsigned();
+                        let edit_end = (end.cast_signed() + edit_offset).cast_unsigned();
+
+                        edit_label.replace_range(edit_start..edit_end, &qualified_name);
+                        edit_offset +=
+                            qualified_name.len().cast_signed() - (end - start).cast_signed();
+                    }
+
+                    let target = ty.navigation_targets(db, &env).into_iter().next();
+
+                    // Always use original text for the label part
+                    label_parts.push(
+                        InlayHintLabelPart::new(&details.label[start..end]).with_target(target),
+                    );
+                    offset = end;
+                }
+            }
+            TypeDetail::SignatureStart | TypeDetail::SignatureEnd | TypeDetail::Parameter(_) => {
+                // Don't care about these
+            }
+        }
+    }
+
+    // "flush" the rest of the label without any target
+    if offset < details.label.len() {
+        label_parts.push(details.label[offset..details.label.len()].into());
+    }
+
+    SpelledType {
+        label_parts,
+        edit_label,
+        import_edits: dynamic_importer.text_edits(),
+        editable,
+    }
+}
+
+/// `ty` written as an annotation in `file`, for a position in the scope around
+/// `scope_node`, with the imports it needs; `None` when no annotation the file
+/// could hold says it.
+pub(crate) fn annotation_for_type<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    scope_node: AnyNodeRef<'_>,
+    scope_offset: TextSize,
+    ty: Type<'db>,
+) -> Option<(String, Vec<InlayHintTextEdit>)> {
+    let ast = parsed_module(db, file.python_file(db)).load(db);
+    let source = source_text(db, file.file(db));
+    let stylist = Stylist::from_tokens(ast.tokens(), source.as_str());
+    let importer = Importer::new(db, &stylist, file, source.as_str(), &ast);
+    let mut dynamic_imports = FxHashMap::default();
+    // a basedpython file writes types in basedpython's own spelling
+    with_display_for_file(db, file.file(db), || {
+        let details = type_display_details(db, file, ty, false);
+        let spelled = spell_type(
+            InlayHintImportContext {
+                db,
+                file,
+                importer: &importer,
+                dynamic_imports: &mut dynamic_imports,
+            },
+            scope_node,
+            scope_offset,
+            &details,
+        );
+        spelled
+            .editable
+            .then_some((spelled.edit_label, spelled.import_edits))
+    })
 }
 
 struct InlayHintImportContext<'a, 'db> {
@@ -2526,13 +2603,14 @@ struct DynamicImporter<'a, 'db> {
 impl<'a, 'db> DynamicImporter<'a, 'db> {
     fn new(
         importer: &'a Importer<'db>,
-        expr: &'a Expr,
+        scope_node: AnyNodeRef<'a>,
+        scope_offset: TextSize,
         dynamic_imports: &'a mut FxHashMap<DynamicallyImportedMember, ImportAction>,
     ) -> Self {
         Self {
             importer,
-            scope_node: expr.into(),
-            scope_offset: expr.range().start(),
+            scope_node,
+            scope_offset,
             members: None,
             dynamic_imports,
             imported_members: Vec::new(),

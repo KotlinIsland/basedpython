@@ -3260,11 +3260,24 @@ pub fn inferred_property_type<'db>(
     model: &SemanticModel<'db>,
     getter: &ast::StmtFunctionDef,
 ) -> Option<Type<'db>> {
+    inferred_return_type(model, getter)
+}
+
+/// The return type ty settled on for `function`, as it would be written after its `->`.
+///
+/// This is the undecorated function's return type, so a decorator that changes what the name is
+/// bound to does not change it, and unlike [`inferred_return_annotation`] it includes `None`.
+/// `None` when ty could not read a return type from it at all.
+pub fn inferred_return_type<'db>(
+    model: &SemanticModel<'db>,
+    function: &ast::StmtFunctionDef,
+) -> Option<Type<'db>> {
     let db = model.db();
     let index = semantic_index(db, model.program_file());
-    // the getter is decorated with `property`, so its *binding* type is the descriptor —
-    // the undecorated function is what carries the signature the source wrote
-    let definition = index.try_definition(getter)?;
+    // a decorated function's *binding* type is whatever its decorators return — a property
+    // getter's is the descriptor — while the undecorated function carries the signature the
+    // source wrote
+    let definition = index.try_definition(function)?;
     let function = infer_definition_types(db, definition).function_type(definition)?;
 
     let return_ty = function

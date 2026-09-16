@@ -58,7 +58,8 @@ expression: initialization_result
         "refactor.inline.variable",
         "refactor.extract.variable",
         "refactor.extract.constant",
-        "refactor.extract.function"
+        "refactor.extract.function",
+        "refactor.rewrite.returnAnnotation"
       ],
       "resolveProvider": true
     },
