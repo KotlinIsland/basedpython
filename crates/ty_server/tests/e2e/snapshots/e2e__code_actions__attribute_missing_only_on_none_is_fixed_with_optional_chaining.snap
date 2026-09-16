@@ -1,0 +1,96 @@
+---
+source: crates/ty_server/tests/e2e/code_actions.rs
+expression: code_actions
+---
+[
+  {
+    "title": "Use `?.` to read `name` only when the value is not `None`",
+    "kind": "quickfix",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 4,
+            "character": 11
+          },
+          "end": {
+            "line": 4,
+            "character": 22
+          }
+        },
+        "severity": 1,
+        "code": "unresolved-attribute",
+        "codeDescription": {
+          "href": "https://ty.dev/rules#unresolved-attribute"
+        },
+        "source": "ty",
+        "message": "Attribute `name` is not defined on `None` in union `User | None`\n\nhelp: Use `?.` to read `name` only when the value is not `None`"
+      }
+    ],
+    "isPreferred": false,
+    "edit": {
+      "changes": {
+        "file://<temp_dir>/src/foo.by": [
+          {
+            "range": {
+              "start": {
+                "line": 4,
+                "character": 17
+              },
+              "end": {
+                "line": 4,
+                "character": 17
+              }
+            },
+            "newText": "?"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "title": "Ignore 'unresolved-attribute' for this line",
+    "kind": "quickfix",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 4,
+            "character": 11
+          },
+          "end": {
+            "line": 4,
+            "character": 22
+          }
+        },
+        "severity": 1,
+        "code": "unresolved-attribute",
+        "codeDescription": {
+          "href": "https://ty.dev/rules#unresolved-attribute"
+        },
+        "source": "ty",
+        "message": "Attribute `name` is not defined on `None` in union `User | None`\n\nhelp: Use `?.` to read `name` only when the value is not `None`"
+      }
+    ],
+    "isPreferred": false,
+    "edit": {
+      "changes": {
+        "file://<temp_dir>/src/foo.by": [
+          {
+            "range": {
+              "start": {
+                "line": 4,
+                "character": 22
+              },
+              "end": {
+                "line": 4,
+                "character": 22
+              }
+            },
+            "newText": "  # ty: ignore[unresolved-attribute]"
+          }
+        ]
+      }
+    }
+  }
+]

@@ -451,3 +451,36 @@ fn an_unresolved_import_in_a_uv_project_is_offered_the_command_that_installs() -
 
     Ok(())
 }
+
+/// A basedpython attribute read that only `None` lacks is fixed by reading it with `?.`.
+#[test]
+fn attribute_missing_only_on_none_is_fixed_with_optional_chaining() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.by");
+    let foo_content = "\
+class User:
+    name: str
+
+def f(user: User | None):
+    return (user).name
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let diagnostics = server.document_diagnostic_request(foo, None);
+    let range = full_range(foo_content);
+    let code_action_params = code_actions_at(&server, diagnostics, foo, range);
+
+    let code_action_id = server.send_request::<CodeActionRequest>(code_action_params);
+    let code_actions = server.await_response::<CodeActionRequest>(&code_action_id);
+
+    insta::assert_json_snapshot!(code_actions);
+
+    Ok(())
+}
