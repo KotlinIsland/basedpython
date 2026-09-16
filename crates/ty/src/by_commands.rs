@@ -123,16 +123,38 @@ impl LoweringArgs {
 
 // ── run ──────────────────────────────────────────────────────────────────────
 
+/// How `by run` was invoked, beyond what it is running.
+///
+/// The four choices a caller makes about the *process*: which interpreter, what
+/// stands in front of it, whether its modules are compiled first, and which
+/// directory it runs in. [`CompileFlags`] groups `by compile`'s for the same
+/// reason.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RunFlags<'a> {
+    /// Compile every imported module to a native extension first.
+    pub(crate) compiled: bool,
+    /// Run the program in the tree the run staged rather than where it was typed.
+    pub(crate) in_build: bool,
+    /// `--python`: the interpreter, or the environment holding it.
+    pub(crate) python: Option<&'a Path>,
+    /// `--launcher`: a program to start the interpreter through.
+    pub(crate) launcher: Option<&'a Path>,
+}
+
 #[allow(clippy::exit, clippy::print_stderr)]
 pub(crate) fn cmd_run(
     module: Option<&str>,
     args: &[String],
     min_version: Option<&str>,
     lowering: &LoweringArgs,
-    compiled: bool,
-    python_flag: Option<&Path>,
-    launcher: Option<&Path>,
+    flags: RunFlags<'_>,
 ) -> anyhow::Result<ExitStatus> {
+    let RunFlags {
+        compiled,
+        in_build,
+        python: python_flag,
+        launcher,
+    } = flags;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     // one resolution of the project, for the environment and the target version
     // both: they are two readings of the same configuration and must not be able
@@ -334,11 +356,17 @@ pub(crate) fn cmd_run(
         }
         None => Command::new(&python),
     };
+    // `--in-build` runs it in that tree instead, for the programs whose
+    // arguments are the project's own files: the project is python only there,
+    // so `pytest tests/test_x.py` finds a file at all only from inside it — and
+    // the whole project is inside it, configuration and data included, so what
+    // the program makes of the tree is what it would have made of the project
+    let workdir = if in_build { tmp.path() } else { cwd.as_path() };
     let status = command
         .arg(tmp.path().join(BY_RUNNER_FILENAME))
         .arg(&module)
         .args(args)
-        .current_dir(&cwd)
+        .current_dir(workdir)
         .status()
         .with_context(|| match launcher {
             Some(launcher) => format!(

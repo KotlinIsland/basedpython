@@ -109,6 +109,16 @@ pub(crate) enum Command {
         /// `__main__` needs a code object, and an extension module has none.
         #[arg(long)]
         compiled: bool,
+        /// Run in the tree this staged instead of in the current directory.
+        ///
+        /// For a program whose arguments are the project's own files — a test
+        /// runner, a coverage run, a type checker over the output. Those files
+        /// are python only in the staged tree, so a path naming one resolves
+        /// only from inside it. Everything else wants the default: a program
+        /// that reads or writes beside the project has to see the directory it
+        /// was started in.
+        #[arg(long)]
+        in_build: bool,
     },
 
     /// Start a new project.

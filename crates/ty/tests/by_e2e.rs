@@ -798,6 +798,110 @@ fn run_names_the_by_source_for_file_and_argv() {
     );
 }
 
+/// A project whose entry module reports the directory it runs in and whether it
+/// can see the project's own files from there, at `app/calc.py` (python only in
+/// the staged tree) and `pyproject.toml` (carried over into it unchanged).
+fn project_reporting_where_it_runs(dir: &Path) {
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let package = dir.join("app");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(package.join("__init__.by"), "").unwrap();
+    fs::write(
+        package.join("calc.by"),
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.by"),
+        "import os\n\nprint(os.getcwd())\nprint(os.path.exists('app/calc.py'))\nprint(os.path.exists('pyproject.toml'))\n",
+    )
+    .unwrap();
+    fs::create_dir_all(dir.join("tools")).unwrap();
+}
+
+/// the directory the program runs in is the one `by` was invoked from, not the
+/// project root and not the tree it staged: a relative path the program was
+/// given, and anything it reads or writes beside the project, mean what they
+/// meant when they were written
+#[test]
+fn run_runs_in_the_directory_it_was_started_in() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_reporting_where_it_runs(dir.path());
+    let elsewhere = dir.path().join("tools");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(&elsewhere)
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        Path::new(lines[0]).canonicalize().ok(),
+        elsewhere.canonicalize().ok(),
+        "ran in {} rather than where it was started:\n{stdout}",
+        lines[0]
+    );
+    assert_eq!(
+        &lines[1..],
+        ["False", "False"],
+        "the caller's directory holds neither, so neither is visible:\n{stdout}"
+    );
+}
+
+/// `--in-build` runs the program in the tree `by run` staged, which is where the
+/// project is python: a test runner handed `tests/test_x.py` finds a file at all
+/// only from inside it, and reports what it collects against a tree laid out
+/// like the project — configuration and carried-over files included
+#[test]
+fn run_in_build_runs_in_the_tree_it_staged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    project_reporting_where_it_runs(dir.path());
+    let elsewhere = dir.path().join("tools");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--in-build", "main"])
+        .current_dir(&elsewhere)
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "by run --in-build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_ne!(
+        Path::new(lines[0]).canonicalize().ok(),
+        elsewhere.canonicalize().ok(),
+        "ran where it was started rather than in the staged tree:\n{stdout}"
+    );
+    assert_ne!(
+        Path::new(lines[0]).canonicalize().ok(),
+        dir.path().canonicalize().ok(),
+        "ran in the project rather than in the staged tree:\n{stdout}"
+    );
+    assert_eq!(
+        &lines[1..],
+        ["True", "True"],
+        "the staged tree holds the transpiled module and the project's \
+         configuration beside it:\n{stdout}"
+    );
+}
+
 /// `multiprocessing`'s spawn start method — the default on macos and windows —
 /// reads `__main__.__spec__.name` to tell the child what to re-import, and falls
 /// back to running `__file__` as a *path* when there is none. `__file__` is a
