@@ -8,15 +8,18 @@
 //! unavailable.
 
 mod evaluation;
+mod extract_variable;
 mod flow;
 mod hazards;
 mod inline_variable;
+mod names;
 mod text;
 
 use ruff_db::files::File;
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::{SourceText, source_text};
 use ruff_diagnostics::Edit;
+use ruff_python_codegen::Stylist;
 use ruff_text_size::TextRange;
 use ty_project::Db;
 use ty_python_core::ProgramFile;
@@ -28,15 +31,23 @@ use crate::FileEdit;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefactorKind {
     InlineVariable,
+    ExtractVariable,
+    IntroduceConstant,
 }
 
 impl RefactorKind {
-    pub const ALL: [RefactorKind; 1] = [RefactorKind::InlineVariable];
+    pub const ALL: [RefactorKind; 3] = [
+        RefactorKind::InlineVariable,
+        RefactorKind::ExtractVariable,
+        RefactorKind::IntroduceConstant,
+    ];
 
     /// The LSP code action kind the refactoring is offered as.
     pub const fn code_action_kind(self) -> &'static str {
         match self {
             RefactorKind::InlineVariable => "refactor.inline.variable",
+            RefactorKind::ExtractVariable => "refactor.extract.variable",
+            RefactorKind::IntroduceConstant => "refactor.extract.constant",
         }
     }
 
@@ -45,6 +56,8 @@ impl RefactorKind {
     pub const fn id(self) -> &'static str {
         match self {
             RefactorKind::InlineVariable => "inline-variable",
+            RefactorKind::ExtractVariable => "extract-variable",
+            RefactorKind::IntroduceConstant => "introduce-constant",
         }
     }
 
@@ -100,18 +113,21 @@ pub(crate) struct RefactorContext<'db> {
     model: SemanticModel<'db>,
     parsed: ParsedModuleRef,
     source: SourceText,
+    stylist: Stylist<'static>,
 }
 
 impl<'db> RefactorContext<'db> {
     fn new(db: &'db dyn Db, file: ProgramFile<'db>) -> Self {
         let parsed = parsed_module(db, file.python_file(db)).load(db);
         let source = source_text(db, file.file(db));
+        let stylist = Stylist::from_tokens(parsed.tokens(), source.as_str()).into_owned();
         Self {
             db,
             file,
             model: SemanticModel::new(db, file),
             parsed,
             source,
+            stylist,
         }
     }
 
@@ -130,6 +146,12 @@ impl<'db> RefactorContext<'db> {
     fn plan(&self, kind: RefactorKind, range: TextRange) -> Result<Plan, Refusal> {
         match kind {
             RefactorKind::InlineVariable => inline_variable::plan(self, range),
+            RefactorKind::ExtractVariable => {
+                extract_variable::plan(self, range, extract_variable::Target::Variable)
+            }
+            RefactorKind::IntroduceConstant => {
+                extract_variable::plan(self, range, extract_variable::Target::Constant)
+            }
         }
     }
 }
@@ -222,6 +244,10 @@ pub(crate) mod test_support {
     impl RefactorTest {
         pub(crate) fn python(source: &str) -> Self {
             Self::with_files("main.py", source, &[])
+        }
+
+        pub(crate) fn basedpython(source: &str) -> Self {
+            Self::with_files("main.by", source, &[])
         }
 
         pub(crate) fn with_files(path: &str, source: &str, others: &[(&str, &str)]) -> Self {

@@ -1,10 +1,11 @@
 //! Locating statements in their suites and spelling the edits that move them.
 
 use ruff_diagnostics::Edit;
-use ruff_python_ast::{self as ast, Expr, Stmt};
+use ruff_python_ast::token::parenthesized_range;
+use ruff_python_ast::{self as ast, AnyNodeRef, Expr, ExprRef, Stmt};
 use ruff_python_trivia::{PythonWhitespace, indentation_at_offset};
 use ruff_source_file::LineRanges;
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::RefactorContext;
 
@@ -103,6 +104,13 @@ impl RefactorContext<'_> {
                 .is_none_or(|first| first == '#')
     }
 
+    /// The indentation `node` is written at.
+    pub(crate) fn indentation(&self, node: impl Ranged) -> &str {
+        let source = self.source();
+        let start = node.range().start();
+        &source[TextRange::new(source.line_start(start), start)]
+    }
+
     /// An edit that removes `statement` from `in_suite`, lines and trailing comment
     /// included, or replaces it with `pass` when it is all the suite holds.
     pub(crate) fn delete_statement(&self, in_suite: InSuite<'_>) -> Edit {
@@ -120,8 +128,34 @@ impl RefactorContext<'_> {
         &self.source()[expr.range()]
     }
 
+    /// The range of `expr` including any parentheses written around it.
+    pub(crate) fn parenthesized_range(&self, expr: &Expr, parent: AnyNodeRef<'_>) -> TextRange {
+        parenthesized_range(ExprRef::from(expr), parent, self.parsed.tokens())
+            .unwrap_or_else(|| expr.range())
+    }
+
+    pub(crate) fn line_ending(&self) -> &'static str {
+        self.stylist.line_ending().as_str()
+    }
+
     /// Whether the text at `range` spans more than one line.
     pub(crate) fn is_multiline(&self, range: TextRange) -> bool {
         self.source().contains_line_break(range)
     }
+}
+
+/// Where the comment lines directly above `offset`'s line begin, so a new
+/// statement does not separate a definition from its comment.
+pub(crate) fn leading_comments_start(source: &str, offset: TextSize) -> TextSize {
+    let mut start = source.line_start(offset);
+    while start > TextSize::default() {
+        let previous = source.line_start(start - TextSize::from(1));
+        let line = &source[TextRange::new(previous, start)];
+        if line.trim_whitespace().starts_with('#') {
+            start = previous;
+        } else {
+            break;
+        }
+    }
+    start
 }
