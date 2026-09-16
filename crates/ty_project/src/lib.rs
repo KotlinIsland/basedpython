@@ -928,6 +928,23 @@ impl ScriptFiles<'_> {
 }
 
 fn check_file(db: &dyn Db, file: File) -> Vec<Diagnostic> {
+    if !is_in_check_set(db, file) {
+        return Vec::new();
+    }
+
+    check_file_ignoring_check_mode(db, file)
+}
+
+/// Everything wrong with `file`, whether or not the check mode reports it.
+///
+/// For a caller that names the files it needs checked rather than asking what the project reports.
+/// A re-stage into a running program has to refuse a file that does not check whether or not an
+/// editor is holding it, and [`ProjectDatabase::check_file`] answers nothing for a file outside the
+/// mode's set — which under [`CheckMode::OpenFiles`] is every file the editor has closed.
+///
+/// The mode chooses which files a check reports; it does not decide whether a file *can* be
+/// checked. Every file [`should_check_file`](ty_python_core::Db::should_check_file) accepts can.
+pub fn check_file_ignoring_check_mode(db: &dyn Db, file: File) -> Vec<Diagnostic> {
     if !db.should_check_file(file) {
         return Vec::new();
     }
@@ -965,19 +982,30 @@ pub(crate) fn is_project_file(db: &dyn Db, file: File) -> bool {
     project.files(db).contains(file) || project.open_files(db).contains(&file)
 }
 
-/// Returns `true` if the file should be checked.
+/// Returns `true` if the type checker produces diagnostics for `file`: it is virtual, indexed in
+/// the project, or in the open file set.
 ///
-/// This depends on the project's check mode:
-/// * For [`CheckMode::OpenFiles`], it checks if the file is explicitly in the open file set.
-/// * For [`CheckMode::AllFiles`], it checks if the file is virtual, indexed in the project, or in
-///   the open file set.
+/// This does not depend on the project's check mode, and it must not. The checker asks it *inside*
+/// inference — see `LintDiagnosticGuardBuilder::severity_and_source` — so its answer is baked into
+/// every memoized result for the file. A gate that followed the mode therefore left a file the
+/// editor had closed impossible to check at all on an unchanged database, because its diagnostics
+/// were never collected in the first place; and the same gate, asked about the file some *other*
+/// callable is defined in, made an open file's diagnostics depend on which files happened to be
+/// open beside it. Which files a check *reports* is [`is_in_check_set`].
+///
+/// The cost of that is paid under [`CheckMode::OpenFiles`], where this now answers `true` for
+/// every project file rather than only the open ones: the checker builds a closed file's
+/// diagnostics while inferring it, and keeps them in the memoized inference result, instead of
+/// dropping them at `report_lint`. That is the price of the mode not reaching inside inference,
+/// and it buys an answer that does not depend on which editor tabs happen to be open. A mode
+/// that wants the saving back has to keep files out of inference altogether, not out of the
+/// diagnostics inference produces.
 ///
 /// This query provides a per-file backdating boundary around the project-wide file sets. Updating
 /// either set still revalidates this query, but unchanged results are backdated before invalidation
 /// reaches semantic-index and type-inference queries.
 #[salsa::tracked(returns(copy))]
 pub(crate) fn should_check_file(db: &dyn Db, file: File) -> bool {
-    let project = db.project();
     let path = file.path(db);
 
     // NOTE: The tracing messages below were added because whether a file should be checked or not
@@ -991,42 +1019,53 @@ pub(crate) fn should_check_file(db: &dyn Db, file: File) -> bool {
         return false;
     }
 
+    // Virtual files are always checked.
+    //
+    // We also check the open file set. In theory, we shouldn't need to do this since it is
+    // accounted for by the virtual file check (for the case when a file wants to be checked
+    // but isn't saved to disk yet). However, not all clients follow the LSP convention that
+    // URIs for documents not on disk yet use the `untitled://...` scheme. That is, we assume
+    // that a `file://...` scheme corresponds to a saved file on disk, and anything else is
+    // "virtual." For example, neovim uses `file://...` even for an open buffer that does not
+    // correspond to a file saved to disk yet.
+    if path.is_system_virtual_path() {
+        return true;
+    }
+
+    let project = db.project();
+    let should_check = project.files(db).contains(file) || project.open_files(db).contains(&file);
+    if !should_check {
+        tracing::trace!(
+            "Not checking {path} because it is not a virtual path, in the project files \
+             or in the open file set"
+        );
+    }
+    should_check
+}
+
+/// Returns `true` if a check reports `file`'s diagnostics.
+///
+/// This is where the project's check mode applies:
+/// * For [`CheckMode::OpenFiles`], the file must be in the open file set.
+/// * For [`CheckMode::AllFiles`], it is every file [`should_check_file`] accepts.
+///
+/// Unlike [`should_check_file`] this is answered outside of any query, so a file moving in or out
+/// of the set invalidates nothing the checker computed for it.
+fn is_in_check_set(db: &dyn Db, file: File) -> bool {
+    let project = db.project();
     match project.check_mode(db) {
         CheckMode::OpenFiles => {
-            let should_check = project.open_files(db).contains(&file);
-            if !should_check {
+            let reported = project.open_files(db).contains(&file);
+            if !reported {
                 tracing::trace!(
-                    "Not checking {path} because check mode is `OpenFiles` \
-                     and it is not in the open file set"
+                    "Not reporting {path} because check mode is `OpenFiles` \
+                     and it is not in the open file set",
+                    path = file.path(db)
                 );
             }
-            should_check
+            reported && db.should_check_file(file)
         }
-        CheckMode::AllFiles => {
-            // Virtual files are always checked.
-            //
-            // We also check the open file set. In theory, we shouldn't need to do this since it is
-            // accounted for by the virtual file check (for the case when a file wants to be checked
-            // but isn't saved to disk yet). However, not all clients follow the LSP convention that
-            // URIs for documents not on disk yet use the `untitled://...` scheme. That is, we assume
-            // that a `file://...` scheme corresponds to a saved file on disk, and anything else is
-            // "virtual." For example, neovim uses `file://...` even for an open buffer that does not
-            // correspond to a file saved to disk yet.
-            if path.is_system_virtual_path() {
-                return true;
-            }
-
-            let should_check =
-                project.files(db).contains(file) || project.open_files(db).contains(&file);
-            if !should_check {
-                tracing::trace!(
-                    "Not checking {path} because check mode is `AllFiles` \
-                     and it is not a virtual path, in the project files \
-                     or in the open file set"
-                );
-            }
-            should_check
-        }
+        CheckMode::AllFiles => db.should_check_file(file),
     }
 }
 
