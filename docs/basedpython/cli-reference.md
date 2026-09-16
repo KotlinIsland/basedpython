@@ -70,6 +70,30 @@ interpreter for it. discovery runs exactly as above, and the program starts as
 interpreter `by run` chose and runs once, for the program: the version probe is
 still made against the interpreter itself
 
+`--in-build` runs the program in the tree `by run` staged rather than in the
+directory it was typed in. the default is right for an application: a relative
+path on the command line, and anything the program reads or writes beside the
+project, mean what they meant when they were written. but the project is python
+only in the staged tree, which is reachable through `sys.path` alone — and
+`sys.path` serves an import and nothing else. so a program whose arguments *are*
+the project's own files could not name one:
+
+```console
+$ by run pytest -v tests/test_calc.py
+ERROR: file or directory not found: tests/test_calc.py
+```
+
+the only `tests/test_calc` in the working directory is a `.by`. with
+`--in-build` the whole project is there — every transpiled module at its place
+in the module tree, and beside them every file the build carries over unchanged,
+`pyproject.toml` included — so the path resolves, the tool finds its own
+configuration where it always was, and it reports against a tree laid out like
+the project: `tests/test_calc.py::TestGroup::test_add`, whatever the source
+layout
+
+it is a flag rather than something inferred because only the caller knows which
+of the two directories they mean, and the program's name does not say
+
 the emitted code targets that interpreter's version by default. an explicit
 `--min-version` wins, but must not exceed the interpreter — `by run` refuses
 rather than emit code the interpreter cannot parse. an interpreter *older* than

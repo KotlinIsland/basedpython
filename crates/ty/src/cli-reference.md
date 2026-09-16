@@ -15,12 +15,28 @@ by run main
 ```
 
 resolves `main.by` in the project root, transpiles it (and every other `.by`
-file in the project) to a temporary directory, then executes
-`python -m main` from there
+file in the project) to a temporary directory, and runs `main` out of that tree
+— in the directory you invoked `by` from, the way `python -m` does, so a
+relative path the program is given and anything it reads or writes beside the
+project mean what they say
 
 ```sh
 by run main --min-version 3.12
 ```
+
+### `--in-build`
+
+run in the staged tree instead of in the current directory:
+
+```sh
+by run --in-build pytest -v tests/test_calc.py
+```
+
+for a program whose arguments are the project's own files. the project is
+python only in the staged tree — `tests/test_calc.by` is `tests/test_calc.py`
+there, beside every file the build carries over unchanged, `pyproject.toml`
+included — so a path naming one of its modules resolves, and a tool reports
+paths relative to a tree laid out like the project.
 
 ## `by build`
 

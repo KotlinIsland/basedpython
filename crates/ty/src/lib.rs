@@ -122,14 +122,18 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             launcher,
             lowering,
             compiled,
+            in_build,
         } => by_commands::cmd_run(
             module.as_deref(),
             &args,
             min_version.as_deref(),
             &lowering,
-            compiled,
-            python.as_deref(),
-            launcher.as_deref(),
+            by_commands::RunFlags {
+                compiled,
+                in_build,
+                python: python.as_deref(),
+                launcher: launcher.as_deref(),
+            },
         ),
         Command::Init {
             path,
