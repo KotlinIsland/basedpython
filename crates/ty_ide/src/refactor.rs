@@ -7,6 +7,7 @@
 //! the answer: a client that asked for a refactoring explicitly shows why it is
 //! unavailable.
 
+mod data_class;
 mod evaluation;
 mod extract_function;
 mod extract_variable;
@@ -37,15 +38,19 @@ pub enum RefactorKind {
     IntroduceConstant,
     ExtractFunction,
     AddReturnAnnotation,
+    ConvertToDataClass,
+    ConvertFromDataClass,
 }
 
 impl RefactorKind {
-    pub const ALL: [RefactorKind; 5] = [
+    pub const ALL: [RefactorKind; 7] = [
         RefactorKind::InlineVariable,
         RefactorKind::ExtractVariable,
         RefactorKind::IntroduceConstant,
         RefactorKind::ExtractFunction,
         RefactorKind::AddReturnAnnotation,
+        RefactorKind::ConvertToDataClass,
+        RefactorKind::ConvertFromDataClass,
     ];
 
     /// The LSP code action kind the refactoring is offered as.
@@ -56,6 +61,8 @@ impl RefactorKind {
             RefactorKind::IntroduceConstant => "refactor.extract.constant",
             RefactorKind::ExtractFunction => "refactor.extract.function",
             RefactorKind::AddReturnAnnotation => "refactor.rewrite.returnAnnotation",
+            RefactorKind::ConvertToDataClass => "refactor.rewrite.toDataClass",
+            RefactorKind::ConvertFromDataClass => "refactor.rewrite.fromDataClass",
         }
     }
 
@@ -68,6 +75,8 @@ impl RefactorKind {
             RefactorKind::IntroduceConstant => "introduce-constant",
             RefactorKind::ExtractFunction => "extract-function",
             RefactorKind::AddReturnAnnotation => "add-return-annotation",
+            RefactorKind::ConvertToDataClass => "convert-to-data-class",
+            RefactorKind::ConvertFromDataClass => "convert-from-data-class",
         }
     }
 
@@ -164,6 +173,12 @@ impl<'db> RefactorContext<'db> {
             }
             RefactorKind::ExtractFunction => extract_function::plan(self, range),
             RefactorKind::AddReturnAnnotation => return_annotation::plan(self, range),
+            RefactorKind::ConvertToDataClass => {
+                data_class::plan(self, range, data_class::Direction::ToDataClass)
+            }
+            RefactorKind::ConvertFromDataClass => {
+                data_class::plan(self, range, data_class::Direction::FromDataClass)
+            }
         }
     }
 }
