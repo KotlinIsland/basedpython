@@ -8,6 +8,7 @@
 //! unavailable.
 
 mod evaluation;
+mod extract_function;
 mod extract_variable;
 mod flow;
 mod hazards;
@@ -33,13 +34,15 @@ pub enum RefactorKind {
     InlineVariable,
     ExtractVariable,
     IntroduceConstant,
+    ExtractFunction,
 }
 
 impl RefactorKind {
-    pub const ALL: [RefactorKind; 3] = [
+    pub const ALL: [RefactorKind; 4] = [
         RefactorKind::InlineVariable,
         RefactorKind::ExtractVariable,
         RefactorKind::IntroduceConstant,
+        RefactorKind::ExtractFunction,
     ];
 
     /// The LSP code action kind the refactoring is offered as.
@@ -48,6 +51,7 @@ impl RefactorKind {
             RefactorKind::InlineVariable => "refactor.inline.variable",
             RefactorKind::ExtractVariable => "refactor.extract.variable",
             RefactorKind::IntroduceConstant => "refactor.extract.constant",
+            RefactorKind::ExtractFunction => "refactor.extract.function",
         }
     }
 
@@ -58,6 +62,7 @@ impl RefactorKind {
             RefactorKind::InlineVariable => "inline-variable",
             RefactorKind::ExtractVariable => "extract-variable",
             RefactorKind::IntroduceConstant => "introduce-constant",
+            RefactorKind::ExtractFunction => "extract-function",
         }
     }
 
@@ -152,6 +157,7 @@ impl<'db> RefactorContext<'db> {
             RefactorKind::IntroduceConstant => {
                 extract_variable::plan(self, range, extract_variable::Target::Constant)
             }
+            RefactorKind::ExtractFunction => extract_function::plan(self, range),
         }
     }
 }

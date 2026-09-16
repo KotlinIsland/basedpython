@@ -330,6 +330,7 @@ one that asks while the caret moves is only offered what applies
 | inline variable    | `refactor.inline.variable`  | a variable assigned once          |
 | extract variable   | `refactor.extract.variable` | a selected expression             |
 | introduce constant | `refactor.extract.constant` | a selected expression of literals |
+| extract function   | `refactor.extract.function` | selected statements               |
 
 moving an expression can change when it runs, so that is what most refusals are
 about. a value with an effect is only inlined into a single read in the very next
@@ -342,6 +343,10 @@ or after a call
 while queue.pending():  # extracting `queue.pending()` is refused: it runs every iteration
     queue.pop()
 ```
+
+extracting statements from a method makes a method of the same class, called
+through the receiver. what the statements read from the function becomes a
+parameter, and what they assign that is read afterwards is returned
 
 a client that can resolve a code action's edit gets the action without one, and the
 edit is computed when the action is chosen — against the document version it was

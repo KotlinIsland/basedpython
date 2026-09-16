@@ -57,7 +57,8 @@ expression: initialization_result
         "quickfix",
         "refactor.inline.variable",
         "refactor.extract.variable",
-        "refactor.extract.constant"
+        "refactor.extract.constant",
+        "refactor.extract.function"
       ],
       "resolveProvider": true
     },

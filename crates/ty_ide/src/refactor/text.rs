@@ -138,6 +138,11 @@ impl RefactorContext<'_> {
         self.stylist.line_ending().as_str()
     }
 
+    /// One level of indentation, as the file writes it.
+    pub(crate) fn indent_unit(&self) -> &str {
+        self.stylist.indentation().as_str()
+    }
+
     /// Whether the text at `range` spans more than one line.
     pub(crate) fn is_multiline(&self, range: TextRange) -> bool {
         self.source().contains_line_break(range)
