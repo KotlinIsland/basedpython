@@ -3287,6 +3287,41 @@ pub fn inferred_return_type<'db>(
     is_settled(db, &model.program_environment(), return_ty).then_some(return_ty)
 }
 
+/// basedpython: why `class` cannot become a `data class` by writing the keyword, or `None`
+/// when it can.
+///
+/// A class that is already dataclass-like gets nothing from the keyword, and an enum, a
+/// protocol, a `TypedDict` or a named tuple is a kind of class the dataclass machinery does not
+/// apply to. The class is read before any decorator, since the keyword applies to that class.
+pub fn data_class_conversion_obstacle(
+    model: &SemanticModel<'_>,
+    class: &ast::StmtClassDef,
+) -> Option<&'static str> {
+    let db = model.db();
+    let index = semantic_index(db, model.program_file());
+    let definition = index.try_definition(class)?;
+    let literal = crate::types::infer::original_class_type(db, definition)?;
+    let Some(static_class) = literal.as_static() else {
+        return Some("the class is not one ty can read statically");
+    };
+    if crate::types::enums::is_enum_class(db, Type::ClassLiteral(literal)) {
+        return Some("an enum is not a data class");
+    }
+    if static_class.is_dataclass_like(db) {
+        return Some("the class is already a data class");
+    }
+    if static_class.is_protocol(db) {
+        return Some("a protocol is not a data class");
+    }
+    if static_class.is_typed_dict(db) {
+        return Some("a `TypedDict` is not a data class");
+    }
+    if static_class.has_named_tuple_class_in_mro(db) {
+        return Some("a named tuple is not a data class");
+    }
+    None
+}
+
 /// The type worth showing for a parameter the source leaves unannotated.
 ///
 /// A receiver's `Self` type says nothing the enclosing class does not already,
@@ -3305,6 +3340,16 @@ pub fn hintable_parameter_type<'db>(
         ty if ty.is_unknown() => None,
         ty => Some(ty),
     }
+}
+
+/// Whether `ty` is `dataclasses.field`, the descriptor factory only the dataclass machinery
+/// reads.
+pub fn is_dataclass_field_function<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    matches!(
+        ty.as_function_literal()
+            .and_then(|function| function.known(db)),
+        Some(KnownFunction::Field)
+    )
 }
 
 /// Whether `ty` is the `reveal_type` function.
