@@ -116,6 +116,7 @@ fn chains(function: &Function) -> Vec<Chain> {
                     dest: checked,
                     src,
                     to,
+                    ..
                 },
                 Op::StrConcat {
                     rhs,
@@ -232,6 +233,7 @@ mod tests {
             dest: checked,
             src: Value::Register(digits),
             to: RType::STR,
+            proved: false,
         });
         builder.push(Op::StrConcat {
             dest: out,
@@ -308,6 +310,7 @@ mod tests {
             dest: checked,
             src: Value::Register(digits),
             to: RType::STR,
+            proved: false,
         });
         builder.push(Op::StrConcat {
             dest: held,

@@ -768,6 +768,7 @@ mod tests {
             dest: length,
             src: Value::Register(answered),
             to: RType::INT,
+            proved: false,
         });
         builder.terminate(Terminator::Goto(guard));
 
@@ -1091,6 +1092,7 @@ mod tests {
             dest: answer,
             src: Value::Register(answered),
             to: RType::INT,
+            proved: false,
         });
         builder.terminate(Terminator::Goto(join));
         builder.switch_to(join);

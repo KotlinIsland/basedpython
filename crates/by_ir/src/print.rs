@@ -4,6 +4,7 @@
 //! deliberately terse. it is not parsed back — tests build BIR through the
 //! builder and compare the rendering.
 
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use crate::function::{Function, ModuleIr};
@@ -112,6 +113,27 @@ fn sound_target(function: &Function, target: &SoundTarget) -> String {
                 .join(", ")
         ),
     }
+}
+
+/// a container build's items, with the ones handing their reference over marked
+fn built_items(
+    items: &[Value],
+    moves: &BTreeSet<usize>,
+    value: impl Fn(&Value) -> String,
+) -> String {
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let item = value(item);
+            if moves.contains(&index) {
+                format!("move {item}")
+            } else {
+                item
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn print_op(function: &Function, op: &Op) -> String {
@@ -392,23 +414,17 @@ fn print_op(function: &Function, op: &Op) -> String {
         Op::Box { dest, src } => format!("{} = box {}", name(*dest), value(src)),
         Op::IntToFloat { dest, src } => format!("{} = float {}", name(*dest), value(src)),
         Op::TagShort { dest, src } => format!("{} = tag short {}", name(*dest), value(src)),
-        Op::Unbox { dest, src, to } => {
-            format!("{} = unbox {} as {}", name(*dest), value(src), to)
+        Op::Unbox {
+            dest,
+            src,
+            to,
+            proved,
+        } => {
+            let how = if *proved { "narrow" } else { "unbox" };
+            format!("{} = {how} {} as {}", name(*dest), value(src), to)
         }
         Op::TupleBuild { dest, items, moves } => {
-            let items = items
-                .iter()
-                .enumerate()
-                .map(|(index, item)| {
-                    let item = value(item);
-                    if moves.contains(&index) {
-                        format!("move {item}")
-                    } else {
-                        item
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
+            let items = built_items(items, moves, value);
             format!("{} = ({})", name(*dest), items)
         }
         Op::CallUnpacked {
@@ -783,16 +799,16 @@ fn print_op(function: &Function, op: &Op) -> String {
             value(receiver),
             value(v)
         ),
-        Op::BuildList { dest, items } => {
-            let items = items.iter().map(value).collect::<Vec<_>>().join(", ");
+        Op::BuildList { dest, items, moves } => {
+            let items = built_items(items, moves, value);
             format!("{} = [{items}]", name(*dest))
         }
         Op::BuildSet { dest, items } => {
             let items = items.iter().map(value).collect::<Vec<_>>().join(", ");
             format!("{} = {{{items}}}", name(*dest))
         }
-        Op::BuildTuple { dest, items } => {
-            let items = items.iter().map(value).collect::<Vec<_>>().join(", ");
+        Op::BuildTuple { dest, items, moves } => {
+            let items = built_items(items, moves, value);
             format!("{} = tuple({items})", name(*dest))
         }
         Op::BuildDict { dest, pairs } => {

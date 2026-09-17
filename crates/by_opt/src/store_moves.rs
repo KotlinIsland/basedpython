@@ -117,12 +117,45 @@ struct Handover {
     release: usize,
 }
 
+/// each slot of a container build that reads a register, and the type the slot holds
+///
+/// a typed tuple's slots each have their own type, read off the destination; a `list` or
+/// a `tuple` object holds objects, whatever the destination register is declared as. a
+/// `set` and a `dict` are not here: their insertions take references of their own, so
+/// there is nothing for a slot of one to be handed
+struct BuiltSlots {
+    /// each slot that reads a register, by index into the build's items
+    slots: Vec<(usize, RegisterId)>,
+    /// the type every slot holds, where the build settles it rather than the
+    /// destination register's own type doing so
+    held: Option<RType>,
+}
+
+fn built_slots(op: &Op) -> Option<BuiltSlots> {
+    let (items, held) = match op {
+        Op::TupleBuild { items, .. } => (items, None),
+        Op::BuildTuple { items, .. } | Op::BuildList { items, .. } => (items, Some(RType::OBJECT)),
+        _ => return None,
+    };
+    let slots = items
+        .iter()
+        .enumerate()
+        .filter_map(|(slot, item)| match item {
+            Value::Register(source) => Some((slot, *source)),
+            _ => None,
+        })
+        .collect();
+    Some(BuiltSlots { slots, held })
+}
+
 /// turn each read of a dying place into a move: a copy, an element read off a tuple, or
-/// one slot of a tuple being built
+/// one slot of a container being built
 fn move_dying_copies(function: &mut Function) {
     let mut moved: Vec<Handover> = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
         for (position, op) in block.ops.iter().enumerate() {
+            // where a built slot holds its own type rather than the destination's
+            let mut held: Option<RType> = None;
             let reads: Vec<(Option<usize>, RegisterId, Vec<usize>)> = match op {
                 Op::Assign {
                     dest: _,
@@ -133,15 +166,17 @@ fn move_dying_copies(function: &mut Function) {
                     src: Value::Register(source),
                     index,
                 } => vec![(None, *source, vec![*index])],
-                Op::TupleBuild { items, .. } => items
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(slot, item)| match item {
-                        Value::Register(source) => Some((Some(slot), *source, Vec::new())),
-                        _ => None,
-                    })
-                    .collect(),
-                _ => continue,
+                built => {
+                    let Some(built) = built_slots(built) else {
+                        continue;
+                    };
+                    held = built.held;
+                    built
+                        .slots
+                        .into_iter()
+                        .map(|(slot, source)| (Some(slot), source, Vec::new()))
+                        .collect()
+                }
             };
             let Some(dest) = op.dest() else {
                 continue;
@@ -153,14 +188,16 @@ fn move_dying_copies(function: &mut Function) {
                     Some(slot) => vec![slot],
                     None => Vec::new(),
                 };
+                let written = match &held {
+                    Some(ty) => Some(ty),
+                    None => function
+                        .register(dest)
+                        .and_then(|decl| decl.ty.element(&slot)),
+                };
                 let same_type = function
                     .register(source)
                     .and_then(|decl| decl.ty.element(&path))
-                    .zip(
-                        function
-                            .register(dest)
-                            .and_then(|decl| decl.ty.element(&slot)),
-                    )
+                    .zip(written)
                     .is_some_and(|(read, written)| read == written);
                 if dest == source
                     || !same_type
@@ -210,8 +247,13 @@ fn move_dying_copies(function: &mut Function) {
             continue;
         };
         if let Some(slot) = handover.item {
-            if let Op::TupleBuild { moves, .. } = op {
-                moves.insert(slot);
+            match op {
+                Op::TupleBuild { moves, .. }
+                | Op::BuildTuple { moves, .. }
+                | Op::BuildList { moves, .. } => {
+                    moves.insert(slot);
+                }
+                _ => {}
             }
             continue;
         }

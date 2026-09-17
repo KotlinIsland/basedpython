@@ -2081,6 +2081,7 @@ mod tests {
             dest: part,
             src: Value::Register(held),
             to,
+            proved: false,
         });
         builder.push(Op::Len {
             dest: length,

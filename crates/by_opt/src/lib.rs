@@ -16,6 +16,7 @@ pub(crate) mod fold;
 mod guard_loops;
 pub(crate) mod infallible;
 mod liveness;
+mod proved_narrowings;
 mod push_lengths;
 pub(crate) mod refcount;
 pub(crate) mod release_temporaries;
@@ -129,6 +130,13 @@ const PASSES: &[Pass] = &[
     Pass {
         name: "push-lengths",
         run: push_lengths::run,
+    },
+    // after every pass that copies a block, so a copy of a test and a copy of the
+    // narrowing behind it are matched up in the copy rather than across the two, and
+    // before infallible, which is what takes the error edge off the narrowings it proves
+    Pass {
+        name: "proved-narrowings",
+        run: proved_narrowings::run,
     },
     Pass {
         name: "infallible",

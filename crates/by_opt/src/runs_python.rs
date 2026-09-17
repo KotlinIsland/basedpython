@@ -1274,6 +1274,7 @@ mod tests {
             dest: below,
             src: Value::Register(answered),
             to: RType::INT,
+            proved: false,
         });
         builder.terminate(Terminator::Goto(join));
         builder.switch_to(join);
@@ -1383,6 +1384,7 @@ mod tests {
                 builder.push(Op::BuildList {
                     dest: list,
                     items: Vec::new(),
+                    moves: BTreeSet::new(),
                 });
             }
             builder.terminate(Terminator::Return(Value::Float(0.0)));
@@ -1522,6 +1524,7 @@ mod tests {
             dest: bound,
             src: Value::Register(other),
             to: RType::INT,
+            proved: false,
         });
         builder.terminate(Terminator::Goto(join));
         builder.switch_to(join);

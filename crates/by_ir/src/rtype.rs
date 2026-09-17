@@ -283,6 +283,19 @@ impl RType {
         }
     }
 
+    /// the value a place of this representation holds when it holds nothing: before
+    /// anything has been written to it, after a move has taken what it held away, and
+    /// on the error path a fallible function hands back
+    ///
+    /// those are deliberately one value rather than three. a tagged `int`'s is odd, so
+    /// releasing it again costs the branch kept for a real `PyLongObject` — and a short
+    /// zero, which is the same "holds nothing" and whose release the straight line
+    /// already passes, looks like the cheaper thing to empty a register with. it is not,
+    /// because a register whose every value is the *same* constant is one clang folds
+    /// the release of away outright, where a second constant defeats that and leaves a
+    /// real branch on every trip. measured 2026-09-21 over a `BY_INT_EMPTY` spelling of
+    /// the emptied value: `props_ext` +8.6%, `tuples` +7.8%, `coro` +5.5%, `globals_`
+    /// +4.8%, `inherit` +3.3%, `dot` +2.3%, against `sieve` unmoved
     pub fn undefined(&self) -> String {
         match self {
             Self::Array(_) => "NULL".to_string(),
@@ -314,28 +327,6 @@ impl RType {
             ),
             Self::Tuple(_) => "{0}".to_string(),
             Self::Instance { .. } => "NULL".to_string(),
-        }
-    }
-
-    /// the value a register holds once the reference it held has been let go of
-    ///
-    /// this is [`Self::undefined`] everywhere a representation's unset value costs
-    /// nothing to release again. a tagged `int`'s does not: `BY_INT_ERROR` is odd, so
-    /// every later release of the emptied register takes the branch meant for a real
-    /// `PyLongObject` and calls out of line to drop a `NULL`. a short zero is the same
-    /// "holds nothing" and its release is the test the straight line already passes
-    pub fn emptied(&self) -> String {
-        match self {
-            Self::Primitive(Primitive::Int) => "BY_INT_EMPTY".to_string(),
-            Self::Tuple(items) if !items.is_empty() => format!(
-                "{{ {} }}",
-                items
-                    .iter()
-                    .map(Self::emptied)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            other => other.undefined(),
         }
     }
 

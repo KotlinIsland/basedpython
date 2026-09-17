@@ -5787,7 +5787,7 @@ fn unbox_expr(ty: &RType, expr: &str) -> String {
 /// wrapper and one that leaks on every call
 fn box_owned(ty: &RType, expr: &str) -> String {
     match ty {
-        RType::Primitive(Primitive::Int) => format!("By_BoxInt({expr})"),
+        RType::Primitive(Primitive::Int) => format!("By_BoxIntOwned({expr})"),
         RType::Primitive(Primitive::Float) => format!("By_BoxFloat({expr})"),
         RType::Primitive(Primitive::Bool | Primitive::Bit) => format!("By_BoxBool({expr})"),
         RType::Primitive(Primitive::None) => "By_BoxNone()".to_string(),
@@ -6082,9 +6082,156 @@ fn owned_registers(function: &Function) -> Vec<bool> {
     owned
 }
 
+/// the copy of a function versioned at its entry that the test says no to, when it is
+/// worth a C function of its own
+///
+/// a function on a cycle of native calls runs its prologue once for every level of the
+/// recursion, and a C function's prologue saves every register the *whole* body needs.
+/// the copy the test says no to is the original body — every slow path the function has
+/// — and no recursion ever runs it twice, so leaving it beside the fast copy makes every
+/// level pay for the registers only it uses. `fib` saved ten callee-saved registers and
+/// 128 bytes of frame where the fast copy alone needs six and 64
+struct Outlined {
+    /// the block holding the version test
+    test: BlockId,
+    /// the block the test says no to, which the outlined function starts at
+    entry: BlockId,
+    /// every block reachable from it
+    blocks: HashSet<BlockId>,
+}
+
+/// whether the copy the version test says no to can be lifted out, and which blocks it is
+///
+/// the two copies have to be able to stand apart: nothing the fast copy runs may reach
+/// the slow one, and the slow one may read nothing the test block wrote. both hold for
+/// the shape [`by_opt`]'s entry versioning builds — the slow copy *is* the function as it
+/// was written, entered where it was entered — and both are asked rather than assumed,
+/// because a later pass is free to join the two up again
+fn outlined(module: &ModuleIr, function: &Function) -> Option<Outlined> {
+    // only a body that pays its prologue once a level wins more than the call costs
+    if !is_recursive(function) || resumed_body(module, function).is_some() {
+        return None;
+    }
+    // the parameters are handed on as the caller's own. a body that rebinds one holds a
+    // reference of its own to it, which the half that made the call would have to release
+    // around the call, and it is left as it stands instead
+    let owned = owned_registers(function);
+    if owned.iter().take(function.param_count).any(|owned| *owned) {
+        return None;
+    }
+    let entry = function.blocks.get(Function::entry().index())?;
+    if entry.ops.iter().any(|op| !matches!(op, Op::Line { .. })) || entry.error_target.is_some() {
+        return None;
+    }
+    let Terminator::Goto(test) = entry.terminator else {
+        return None;
+    };
+    let block = function.blocks.get(test.index())?;
+    let mut ops = block.ops.iter().filter(|op| !matches!(op, Op::Line { .. }));
+    let Some(Op::LoopGuardsHold { dest: answer, .. }) = ops.next() else {
+        return None;
+    };
+    if ops.next().is_some() || block.error_target.is_some() {
+        return None;
+    }
+    let Terminator::Branch {
+        cond: Value::Register(cond),
+        then_block,
+        else_block,
+    } = block.terminator
+    else {
+        return None;
+    };
+    if cond != *answer {
+        return None;
+    }
+    let cold = reachable_blocks(function, else_block);
+    let mut hot = reachable_blocks(function, then_block);
+    hot.insert(Function::entry());
+    hot.insert(test);
+    if cold.is_empty() || cold.intersection(&hot).next().is_some() {
+        return None;
+    }
+    Some(Outlined {
+        test,
+        entry: else_block,
+        blocks: cold,
+    })
+}
+
+/// every block control can reach from `from`, the exception edges included
+fn reachable_blocks(function: &Function, from: BlockId) -> HashSet<BlockId> {
+    let mut seen = HashSet::from([from]);
+    let mut queue = vec![from];
+    while let Some(id) = queue.pop() {
+        let Some(block) = function.blocks.get(id.index()) else {
+            continue;
+        };
+        for next in block.successors() {
+            if seen.insert(next) {
+                queue.push(next);
+            }
+        }
+    }
+    seen
+}
+
+/// the symbol the copy the version test says no to is emitted under
+fn unversioned_symbol(module: &ModuleIr, function: &Function) -> String {
+    format!(
+        "byu{}",
+        function
+            .native_symbol(module.name.dotted())
+            .trim_start_matches("by")
+    )
+}
+
+/// which of a split function's two halves is being written
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Half {
+    /// the whole function, or the copy the version test says yes to
+    Hot,
+    /// the copy the version test says no to, in a C function of its own
+    Cold,
+}
+
 fn emit_function(module: &ModuleIr, function: &Function) -> String {
+    match outlined(module, function) {
+        Some(split) => {
+            let mut out = emit_half(module, function, Some(&split), Half::Cold);
+            out.push_str(&emit_half(module, function, Some(&split), Half::Hot));
+            out
+        }
+        None => emit_half(module, function, None, Half::Hot),
+    }
+}
+
+fn emit_half(
+    module: &ModuleIr,
+    function: &Function,
+    split: Option<&Outlined>,
+    half: Half,
+) -> String {
     let mut out = line_directive(module, function.range);
-    let _ = writeln!(out, "{} {{", signature(module, function));
+    match half {
+        Half::Cold => {
+            let params = std::iter::once("ByDepth by_depth".to_string())
+                .chain(function.params().iter().enumerate().map(|(index, decl)| {
+                    format!("{} {}", ctype(module, &decl.ty), local(RegisterId(index)))
+                }))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(
+                out,
+                "__attribute__((noinline)) static {} {}({params}) {{",
+                ctype(module, &function.ret),
+                unversioned_symbol(module, function)
+            );
+        }
+        Half::Hot => {
+            let _ = writeln!(out, "{} {{", signature(module, function));
+        }
+    }
     let owned = owned_registers(function);
 
     for (index, decl) in function.registers.iter().enumerate() {
@@ -6132,6 +6279,11 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
     if !function.registers.is_empty() {
         out.push('\n');
     }
+    // the blocks keep the numbers they have in the function, so the copy the test says no
+    // to is rarely the first of them written out, and the half starts by jumping to it
+    if let (Half::Cold, Some(split)) = (half, split) {
+        let _ = writeln!(out, "    goto b{};", split.entry.0);
+    }
 
     let entered = written_on_entry(function);
     // what the shared error label has to release, accumulated as the body is
@@ -6141,6 +6293,11 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
 
     let mut sites = TracebackSites::default();
     for (index, block) in function.blocks.iter().enumerate() {
+        if let Some(split) = split
+            && split.blocks.contains(&BlockId(index)) != (half == Half::Cold)
+        {
+            continue;
+        }
         // a label immediately before a declaration is invalid in C89 and merely
         // ugly later; the empty statement keeps it valid everywhere
         let _ = writeln!(out, "b{index}: ;");
@@ -6209,6 +6366,7 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
             if unset.is_empty()
                 && let Some(taken) = block.ops.get(at..at + 3)
                 && let Some(fused) = borrowed_element_unbox(module, function, taken, edge)
+                    .or_else(|| unboxed_global(function, taken, edge))
             {
                 fragment.push_str(&fused);
                 sites.note(&fragment, edge);
@@ -6281,12 +6439,35 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
         }
         let edge = sites.edge(module, line, in_generator_expression, block.error_target);
         let mut fragment = guard_unassigned(function, &block.terminator.operands(), edge);
-        fragment.push_str(&emit_terminator(
-            module,
-            function,
-            &block.terminator,
-            block.owned_at_exit.as_deref(),
-        ));
+        // the half the test says yes to keeps the test, and reaches the other half by
+        // calling it. the call is not counted against the recursion limit: the frame this
+        // body is running in has already been counted, and the call makes no new one
+        match (split, &block.terminator) {
+            (
+                Some(split),
+                Terminator::Branch {
+                    cond, then_block, ..
+                },
+            ) if half == Half::Hot && split.test == BlockId(index) => {
+                let arguments = std::iter::once("by_depth".to_string())
+                    .chain((0..function.param_count).map(|index| local(RegisterId(index))))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let _ = writeln!(
+                    fragment,
+                    "    if ({}) goto b{}; else return {}({arguments});",
+                    value_expr(cond),
+                    then_block.0,
+                    unversioned_symbol(module, function),
+                );
+            }
+            _ => fragment.push_str(&emit_terminator(
+                module,
+                function,
+                &block.terminator,
+                block.owned_at_exit.as_deref(),
+            )),
+        }
         sites.note(&fragment, edge);
         if let Some(at_error) = at_error.as_mut()
             && edge.target.is_none()
@@ -6322,7 +6503,7 @@ fn emit_function(module: &ModuleIr, function: &Function) -> String {
     }
 
     out.push_str("}\n");
-    if is_recursive(function) {
+    if is_recursive(function) && half == Half::Hot {
         out.push_str(&emit_counted_entry(module, function));
     }
     out
@@ -7997,7 +8178,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
         }
         Op::ObjectRichCompare { dest, op, lhs, rhs } => {
             let expr = format!(
-                "PyObject_RichCompare({}, {}, {})",
+                "By_ObjRichCompare({}, {}, {})",
                 value_expr(lhs),
                 value_expr(rhs),
                 rich_compare_op(*op)
@@ -8255,7 +8436,24 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             };
             assign_checked(module, function, *dest, &call, error_target)
         }
-        Op::Unbox { dest, src, to } => {
+        Op::Unbox {
+            dest,
+            src,
+            to,
+            proved,
+        } => {
+            // a test standing over the operation has already asked what the check would
+            // ask, so what is left of the narrowing is the static type: the value keeps
+            // its representation, and a borrowed destination keeps the reference too
+            if *proved {
+                let ctype = ctype(module, to);
+                return if function.register(*dest).is_some_and(|decl| decl.borrowed) {
+                    format!("    {} = ({ctype}){};\n", local(*dest), value_expr(src))
+                } else {
+                    let taken = format!("({ctype})Py_NewRef({})", value_expr(src));
+                    assign_owned(module, function, *dest, &taken)
+                };
+            }
             if function.register(*dest).is_some_and(|decl| decl.borrowed)
                 && let Some(check) = check_expr(module, to, &value_expr(src))
             {
@@ -8317,7 +8515,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 };
                 if moves.contains(&index) {
                     if let Value::Register(id) = item {
-                        let _ = writeln!(out, "    {} = {};", local(*id), slot.emptied());
+                        let _ = writeln!(out, "    {} = {};", local(*id), slot.undefined());
                     }
                 } else if let Some(retain) = inc_ref(slot, &format!("{}.f{index}", local(*dest))) {
                     let _ = writeln!(out, "    {retain}");
@@ -8889,27 +9087,12 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             assign_checked(module, function, *dest, &call, error_target)
         }
         Op::LoadGlobal { dest, name } => {
-            let mut out = String::new();
-            let slot = format!("by_g_{}", mangle(name));
-            let _ = writeln!(out, "    {{ static PyObject *{slot} = NULL;");
+            let mut out = global_site_preamble(name, error_target);
             let _ = writeln!(
                 out,
-                "      if ({slot} == NULL) {slot} = By_InternedStr({});",
-                c_string_sized(name)
-            );
-            let _ = writeln!(
-                out,
-                "      if ({slot} == NULL) goto {};",
-                error_label(error_target)
-            );
-            let site = format!("by_gs_{}", mangle(name));
-            let _ = writeln!(
-                out,
-                "      static ByGlobalSite {site} = BY_GLOBAL_SITE_INIT;"
-            );
-            let _ = writeln!(
-                out,
-                "      PyObject *by_t = By_LookupGlobalSite(&{site}, by_module_dict, {slot});"
+                "      PyObject *by_t = By_LookupGlobalSite(&{}, by_module_dict, {});",
+                global_site(name),
+                global_name_slot(name),
             );
             out.push_str(&commit_checked(function, *dest, error_target));
             out
@@ -9525,28 +9708,40 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             out.push_str("    }\n");
             out
         }
-        Op::BuildList { dest, items } => emit_container(
+        Op::BuildList { dest, items, moves } => emit_container(
             function,
             *dest,
             items,
             "By_BuildList",
             items.len(),
+            Handover::Taken(moves),
             error_target,
         ),
-        Op::BuildSet { dest, items } | Op::BuildTuple { dest, items } => {
-            let builder = if matches!(op, Op::BuildSet { .. }) {
-                "By_BuildSet"
-            } else {
-                "By_BuildTuple"
-            };
-            emit_container(function, *dest, items, builder, items.len(), error_target)
-        }
+        Op::BuildSet { dest, items } => emit_container(
+            function,
+            *dest,
+            items,
+            "By_BuildSet",
+            items.len(),
+            Handover::Borrowed,
+            error_target,
+        ),
+        Op::BuildTuple { dest, items, moves } => emit_container(
+            function,
+            *dest,
+            items,
+            "By_BuildTuple",
+            items.len(),
+            Handover::Taken(moves),
+            error_target,
+        ),
         Op::BuildDict { dest, pairs } => emit_container(
             function,
             *dest,
             pairs,
             "By_BuildDict",
             pairs.len() / 2,
+            Handover::Borrowed,
             error_target,
         ),
         Op::GetItem {
@@ -9685,7 +9880,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             let mut out = format!(
                 "    {{ {} by_m = {place}; {place} = {};\n",
                 ctype(module, ty),
-                ty.emptied()
+                ty.undefined()
             );
             out.push_str(&assign_owned(module, function, *dest, "by_m"));
             out.push_str("    }\n");
@@ -9725,7 +9920,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 format!(
                     "    {{ {} by_old = {target}; {target} = {}; {release} }}\n",
                     ctype(module, ty),
-                    ty.emptied()
+                    ty.undefined()
                 )
             })
         }
@@ -9945,12 +10140,25 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
 ///
 /// each element is retained before the call, because the builder takes ownership
 /// of what it is handed and the operand registers keep theirs
+/// what a container builder does with the references it is handed
+#[derive(Clone, Copy)]
+enum Handover<'a> {
+    /// it takes each one over, so the caller hands one across per item — a tuple and a
+    /// list, whose element writes steal. the items named here hand the register's own
+    /// reference over; every other item has one taken for it
+    Taken(&'a BTreeSet<usize>),
+    /// it borrows, and takes references of its own where it needs them — a dict and a
+    /// set, whose insertions retain for themselves
+    Borrowed,
+}
+
 fn emit_container(
     function: &Function,
     dest: RegisterId,
     items: &[Value],
     builder: &str,
     count: usize,
+    handover: Handover<'_>,
     error_target: ErrorEdge,
 ) -> String {
     let mut out = String::new();
@@ -9964,13 +10172,28 @@ fn emit_container(
             .join(", ")
     };
     let _ = writeln!(out, "    {{ PyObject *by_items[] = {{ {argv} }};");
-    for item in items {
-        if let Some(retain) = inc_ref(&RType::OBJECT, &value_expr(item)) {
-            let _ = writeln!(out, "      {retain}");
+    if let Handover::Taken(moves) = handover {
+        for (index, item) in items.iter().enumerate() {
+            if moves.contains(&index) {
+                continue;
+            }
+            if let Some(retain) = inc_ref(&RType::OBJECT, &value_expr(item)) {
+                let _ = writeln!(out, "      {retain}");
+            }
         }
     }
     let _ = writeln!(out, "      PyObject *by_t = {builder}(by_items, {count});");
     out.push_str(&commit_checked(function, dest, error_target));
+    // a register that handed its reference to a slot holds nothing afterwards, and
+    // every later release of it finds that. the emptying waits for the build, whose
+    // failure path releases what it was given
+    if let Handover::Taken(moves) = handover {
+        for index in moves {
+            if let Some(Value::Register(id)) = items.get(*index) {
+                let _ = writeln!(out, "    {} = NULL;", local(*id));
+            }
+        }
+    }
     out
 }
 
@@ -10271,6 +10494,7 @@ fn borrowed_element_unbox(
             dest: unboxed,
             src: Value::Register(source),
             to,
+            ..
         },
         release @ Op::Release {
             value: Value::Register(released),
@@ -10328,6 +10552,102 @@ fn borrowed_element_unbox(
          \x20   }} else {{\n{slow}\
          \x20   }} }}\n"
     ))
+}
+
+/// the static holding one global name, interned so the key carries its hash
+fn global_name_slot(name: &str) -> String {
+    format!("by_g_{}", mangle(name))
+}
+
+/// the static holding what the namespace last answered for one global name
+fn global_site(name: &str) -> String {
+    format!("by_gs_{}", mangle(name))
+}
+
+/// the opening of a global read: the interned name and the memo the answer is kept in,
+/// both in statics of this site's own. the caller computes into `by_t` and closes the
+/// block, which is what [`commit_checked`] writes
+fn global_site_preamble(name: &str, error_target: ErrorEdge) -> String {
+    let slot = global_name_slot(name);
+    format!(
+        "    {{ static PyObject *{slot} = NULL;\n      \
+         if ({slot} == NULL) {slot} = By_InternedStr({interned});\n      \
+         if ({slot} == NULL) goto {label};\n      \
+         static ByGlobalSite {site} = BY_GLOBAL_SITE_INIT;\n",
+        interned = c_string_sized(name),
+        label = error_label(error_target),
+        site = global_site(name),
+    )
+}
+
+/// a global read whose only use is the unbox straight after it, as one memoised read
+///
+/// the memo already spares the lookup, but the caller is still handed a *reference* to
+/// an object it wants only in order to take apart: `while i < _limit` retains the object
+/// the namespace holds under the name, narrows it to an `int`, and lets it go again — on
+/// every trip. so the site remembers what the program actually asked for, and the retain,
+/// the release and the narrowing all go, leaving the generation compare they stood behind.
+///
+/// only a narrowing that takes nothing from the object it reads qualifies — the same set
+/// [`unbox_owning_nothing_of_its_source`] names for a borrowed element read, and the
+/// reason `ByGlobalUnboxedSite` may keep the narrowed value at all
+fn unboxed_global(function: &Function, ops: &[Op], edge: ErrorEdge) -> Option<String> {
+    let [
+        Op::LoadGlobal { dest: boxed, name },
+        Op::Unbox {
+            dest: unboxed,
+            src: Value::Register(source),
+            to,
+            proved: false,
+        },
+        Op::Release {
+            value: Value::Register(released),
+            path,
+        },
+    ] = ops
+    else {
+        return None;
+    };
+    // the object register has to be a temporary this read wrote and this unbox is the
+    // whole use of: a name goes on holding what it holds, a borrowed register owns
+    // nothing to have spared, and either would still have to be written
+    let temporary = function
+        .register(*boxed)
+        .is_some_and(|decl| decl.name.is_none() && !decl.borrowed && !decl.may_be_unassigned);
+    if source != boxed
+        || released != boxed
+        || !path.is_empty()
+        || unboxed == boxed
+        || !temporary
+        || function.register(*unboxed).is_none_or(|decl| decl.borrowed)
+        || function
+            .register(*unboxed)
+            .is_none_or(|decl| decl.ty != *to)
+    {
+        return None;
+    }
+    // `None` and `bool` narrow to the same byte and differ only in what they accept
+    let (ctype, helper, also) = match to {
+        RType::Primitive(Primitive::Int) => ("ByTagged", "By_LookupGlobalTaggedSite", ""),
+        RType::Primitive(Primitive::Float) => ("double", "By_LookupGlobalFloatSite", ""),
+        RType::Primitive(Primitive::Bool) => ("char", "By_LookupGlobalBitSite", ", 0"),
+        RType::Primitive(Primitive::None) => ("char", "By_LookupGlobalBitSite", ", 1"),
+        _ => return None,
+    };
+    let mut out = global_site_preamble(name, edge);
+    let memo = format!("by_gu_{}", mangle(name));
+    let _ = writeln!(
+        out,
+        "      static ByGlobalUnboxedSite {memo} = BY_GLOBAL_UNBOXED_SITE_INIT;"
+    );
+    let _ = writeln!(
+        out,
+        "      {ctype} by_t = {helper}(&{memo}, &{site}, by_module_dict, {slot}{also});",
+        site = global_site(name),
+        slot = global_name_slot(name),
+    );
+    out.push_str(&commit_checked(function, *unboxed, edge));
+    Some(out)
 }
 
 /// the helper that normalizes and bounds-checks an index into a packed buffer, for the
@@ -13967,6 +14287,7 @@ mod tests {
             dest: out,
             src: Value::Register(a),
             to: RType::FLOAT,
+            proved: false,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let c = emit_module(&module_with(builder.finish()));
@@ -14053,7 +14374,10 @@ mod tests {
         assert!(c.contains("ByTagged a1 = BY_INT_ERROR;"), "{c}");
         assert!(c.contains("a0 = By_UnboxInt(by_bound[0]);"), "{c}");
         assert!(c.contains("a1 = By_UnboxInt(by_bound[1]);"), "{c}");
-        assert!(c.contains("return By_BoxInt(by_result);"));
+        // the native entry hands back an owned tagged value, so the boxing that ends
+        // the wrapper takes that reference over rather than adding one of its own
+        assert!(c.contains("return By_BoxIntOwned(by_result);"));
+        assert!(!c.contains("return By_BoxInt(by_result);"));
     }
 
     /// a boundary with something to decide keeps the binding that decides it
@@ -14837,6 +15161,239 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("By_XIncRef(r1.f0)"), "{text}");
+    }
+
+    /// `f` reading the module global `_limit` and narrowing it to `ty`, with the object
+    /// let go of straight after — the shape a loop condition reading a global takes
+    fn a_global_read_narrowed_to(ty: RType) -> Function {
+        let mut builder = FunctionBuilder::new("f", ty.clone());
+        let boxed = builder.temp(RType::OBJECT);
+        let unboxed = builder.temp(ty.clone());
+        builder.push(Op::LoadGlobal {
+            dest: boxed,
+            name: "_limit".to_string(),
+        });
+        builder.push(Op::Unbox {
+            dest: unboxed,
+            src: Value::Register(boxed),
+            to: ty,
+            proved: false,
+        });
+        builder.push(Op::Release {
+            value: Value::Register(boxed),
+            path: Box::new([]),
+        });
+        builder.terminate(Terminator::Return(Value::Register(unboxed)));
+        builder.finish()
+    }
+
+    #[test]
+    fn a_global_read_whose_only_use_is_an_unbox_remembers_the_unboxed_value() {
+        // the memo of the object spares the lookup but not the reference, and the caller
+        // wanted the object only in order to take it apart — so the narrowed value is
+        // what is remembered, and the retain, the release and the narrowing all go
+        let function = a_global_read_narrowed_to(RType::INT);
+        assert_eq!(verify(&function), Ok(()));
+
+        let c = emit_function(&ModuleIr::new("app"), &function);
+        assert!(
+            c.contains("static ByGlobalUnboxedSite by_gu__limit = BY_GLOBAL_UNBOXED_SITE_INIT;"),
+            "{c}"
+        );
+        assert!(
+            c.contains(
+                "ByTagged by_t = By_LookupGlobalTaggedSite(&by_gu__limit, &by_gs__limit, \
+                 by_module_dict, by_g__limit);"
+            ),
+            "{c}"
+        );
+        // and neither half of what it replaces is left behind
+        assert!(!c.contains("By_LookupGlobalSite("), "{c}");
+        assert!(!c.contains("By_UnboxInt("), "{c}");
+    }
+
+    #[test]
+    fn a_global_read_narrowed_to_a_double_or_a_byte_remembers_that_instead() {
+        // the memo is over the representation, not over `int`: a `float` and a `bool`
+        // are copied out of the object outright, which is if anything the easier case
+        for (ty, helper) in [
+            (RType::FLOAT, "double by_t = By_LookupGlobalFloatSite("),
+            (RType::BOOL, "char by_t = By_LookupGlobalBitSite("),
+        ] {
+            let function = a_global_read_narrowed_to(ty.clone());
+            assert_eq!(verify(&function), Ok(()), "{ty}");
+            let c = emit_function(&ModuleIr::new("app"), &function);
+            assert!(c.contains(helper), "{ty}: {c}");
+            assert!(!c.contains("By_LookupGlobalSite("), "{ty}: {c}");
+        }
+    }
+
+    #[test]
+    fn a_global_read_something_else_reads_too_keeps_the_object() {
+        // the narrowing is not the whole use of the object here, so there is still an
+        // object to hand back and nothing to memoise in its place
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let boxed = builder.temp(RType::OBJECT);
+        let unboxed = builder.temp(RType::INT);
+        let length = builder.temp(RType::INT);
+        builder.push(Op::LoadGlobal {
+            dest: boxed,
+            name: "_limit".to_string(),
+        });
+        builder.push(Op::Unbox {
+            dest: unboxed,
+            src: Value::Register(boxed),
+            to: RType::INT,
+            proved: false,
+        });
+        builder.push(Op::Len {
+            dest: length,
+            src: Value::Register(boxed),
+        });
+        builder.terminate(Terminator::Return(Value::Register(length)));
+        let function = builder.finish();
+        assert_eq!(verify(&function), Ok(()));
+
+        let c = emit_function(&ModuleIr::new("app"), &function);
+        assert!(c.contains("By_LookupGlobalSite(&by_gs__limit"), "{c}");
+        assert!(c.contains("By_UnboxInt("), "{c}");
+        assert!(!c.contains("ByGlobalUnboxedSite"), "{c}");
+    }
+
+    #[test]
+    fn a_display_that_takes_an_element_over_empties_the_register_it_came_from() {
+        // a slot handed a register's own reference takes it rather than retaining, so
+        // the register has to be *written* empty and not merely left alone: the release
+        // the frame makes of every written register on its way out would otherwise find
+        // that reference a second time.
+        //
+        // the value written is the one the register was declared with, and pointedly
+        // not a second "holds nothing" pattern of its own: one constant through a
+        // register's whole lifetime is one clang folds the later release of away, and
+        // a cheaper-looking second constant defeats that — see [`RType::undefined`]
+        let tuple_ty = RType::Tuple(Box::new([RType::STR, RType::INT]));
+        let mut builder = FunctionBuilder::new("pair", tuple_ty.clone());
+        let seed = builder.param("seed", RType::STR);
+        let text = builder.temp(RType::STR);
+        let count = builder.temp(RType::INT);
+        let out = builder.temp(tuple_ty);
+        builder.push(Op::CallNative {
+            owner: None,
+            dest: Some(text),
+            callee: "label".to_string(),
+            args: vec![Value::Register(seed)],
+        });
+        builder.push(Op::CallNative {
+            owner: None,
+            dest: Some(count),
+            callee: "tally".to_string(),
+            args: vec![Value::Register(seed)],
+        });
+        builder.push(Op::TupleBuild {
+            dest: out,
+            items: vec![Value::Register(text), Value::Register(count)],
+            moves: BTreeSet::from([0, 1]),
+        });
+        builder.terminate(Terminator::Return(Value::Register(out)));
+        let function = builder.finish();
+        assert_eq!(verify(&function), Ok(()));
+
+        let c = emit_function(&ModuleIr::new("app"), &function);
+        assert!(c.contains(&format!("    {} = NULL;\n", local(text))), "{c}");
+        assert!(
+            c.contains(&format!("    {} = BY_INT_ERROR;\n", local(count))),
+            "{c}"
+        );
+        // and a slot that took the reference over does not also retain it
+        assert!(
+            !c.contains(&format!("By_XIncRef({}.f0)", local(out))),
+            "{c}"
+        );
+    }
+
+    #[test]
+    fn a_moving_field_store_empties_the_register_it_took_the_reference_from() {
+        // the field takes the register's reference rather than retaining, so the
+        // register has to be written empty — the frame releases every written register
+        // on its way out, and the field now holds the only reference there was
+        let mut builder = FunctionBuilder::new("__init__", RType::NONE);
+        let receiver = builder.param(
+            "self",
+            RType::Instance {
+                class: "Wrapped".to_string(),
+                exact: true,
+            },
+        );
+        let seed = builder.param("seed", RType::OBJECT);
+        let value = builder.temp(RType::OBJECT);
+        builder.defaults(vec![None, None]);
+        builder.push(Op::CallNative {
+            owner: None,
+            dest: Some(value),
+            callee: "label".to_string(),
+            args: vec![Value::Register(seed)],
+        });
+        builder.push(Op::SetField {
+            receiver: Value::Register(receiver),
+            class: "Wrapped".to_string(),
+            field: "tag".to_string(),
+            value: Value::Register(value),
+            moves: true,
+            present: false,
+        });
+        builder.terminate(Terminator::Return(Value::None));
+        let mut init = builder.finish();
+        init.owner = Some("Wrapped".to_string());
+        assert_eq!(verify(&init), Ok(()));
+        let mut module = module_with(init);
+        module.classes.push(appending_class());
+
+        let c = emit_module(&module);
+        let register = local(value);
+        assert!(
+            c.contains(&format!(
+                "->by_f_tag = {register};\n    {register} = NULL;\n"
+            )),
+            "{c}"
+        );
+        // and a store that hands the reference over takes none of its own for the field
+        assert!(!c.contains(&format!("By_XIncRef({register})")), "{c}");
+    }
+
+    #[test]
+    fn a_function_known_to_stand_resolves_to_an_empty_register() {
+        // `FunctionStood` is what a resolution becomes once a guard has established that
+        // the name still stands for the native entry, and its answer is *nothing to
+        // call*. so the register has to be written, not merely released: every later
+        // read tests it against NULL to decide whether to go straight to the entry, and
+        // the release the frame makes of it on the way out would find it a second time.
+        //
+        // the guard this replaces a resolution under makes the register empty already,
+        // which is why no behaviour reaches the difference — the op's contract is
+        // asserted here instead of through a program
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let callee = builder.temp(RType::OBJECT);
+        let answer = builder.temp(RType::INT);
+        builder.push(Op::FunctionStood {
+            dest: callee,
+            name: "helper".to_string(),
+        });
+        builder.push(Op::CallNative {
+            owner: None,
+            dest: Some(answer),
+            callee: "helper".to_string(),
+            args: Vec::new(),
+        });
+        builder.terminate(Terminator::Return(Value::Register(answer)));
+
+        let text = emit_function(&ModuleIr::new("app"), &builder.finish());
+        let register = local(callee);
+        assert!(
+            text.contains(&format!(
+                "{{ PyObject *by_old = {register}; {register} = NULL; Py_XDECREF(by_old); }}"
+            )),
+            "{text}"
+        );
     }
 
     #[test]
