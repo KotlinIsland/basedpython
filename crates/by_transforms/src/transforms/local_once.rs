@@ -9,9 +9,9 @@
 //! (mirroring the `let` init prefix), so
 //! [`parameter_modifiers`](ruff_python_ast::helpers::parameter_modifiers)
 //! recovers them from the source span and yields the ranges to delete. Deleting
-//! is all this pass does; when another AST pass re-renders the whole enclosing
-//! statement, the keyword is dropped for free (it was never in the AST) and this
-//! edit is skipped by the splice's overlap dedup.
+//! is all this pass does; when another AST pass rewrites the `def` itself, the
+//! `def` is printed from the AST, where the keyword never was, and this edit
+//! goes with the rest of its source.
 
 use ruff_python_ast::helpers::parameter_modifiers;
 use ruff_python_ast::visitor::{Visitor, walk_parameter};
@@ -68,6 +68,10 @@ impl<'src> LocalOncePass<'src> {
 }
 
 impl AstPass for LocalOncePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::LocalOnce)
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut inner = LocalOnceStrip {
             source: self.source,
@@ -217,9 +221,8 @@ mod tests {
 
     #[test]
     fn modifier_survives_body_rerender() {
-        // a body construct that forces the whole statement to be re-rendered
-        // (here a `??` coalesce) must still drop the parameter modifier — the
-        // keyword is never in the AST, so the re-render omits it
+        // a body construct another pass lowers (here a `??` coalesce) must still
+        // leave the parameter modifier dropped
         let out = transpile(
             "def f(local x: int | None) -> int:\n    return x ?? 0\n",
             &Config::test_default(),

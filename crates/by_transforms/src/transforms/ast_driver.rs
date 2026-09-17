@@ -37,7 +37,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use super::source_util::preamble_offset;
 use super::{
     annotation, anon_named_tuple, auto_quote, build_stamps, callable, character_type, checked_cast,
-    class_pattern_star, coalesce, coalesce_chain, compat, conformance, context_params, conversion,
+    class_pattern_star, coalesce, compat, conformance, context_params, conversion, debug_field,
     decl_site_variance, decorated_binding, decorator_keyword, dedent_string, destructure,
     django_lookup, dynamic_keyword, empty_declarations, export_import, extension, flexible_keyword,
     float_const, force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap,
@@ -47,9 +47,9 @@ use super::{
     postfix_await, propagate, properties, protocol_type, raises_clause, reified_class,
     reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel, some_ctor,
     soundness, statement_expression, static_resource, string_tag, super_keyword, symbolic_type_op,
-    template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
-    typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings, unpack,
-    use_site_variance, visibility_rename,
+    template_expression, template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is,
+    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings,
+    unpack, use_site_variance, visibility_rename,
 };
 use crate::Config;
 use crate::source_map::Replacement;
@@ -69,7 +69,7 @@ enum SemDb<'p> {
 /// with any sibling edits inside them applied, so a wide rewrite (e.g.
 /// `a ?? b` → `a if a is not None else b`) composes with lowerings inside its
 /// operands instead of clobbering them via first-wins overlap dedup
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Fragment {
     Lit(String),
     Src(TextRange),
@@ -105,9 +105,10 @@ pub(crate) struct PassContext {
     pub(crate) text_edits: Vec<(TextRange, String)>,
     /// Structured sub-statement edits whose replacement is a [`Fragment`] list.
     /// Unlike `text_edits` (whose plain string wins over anything nested inside
-    /// it), the `Src` passthrough spans of a template are materialized with the
-    /// sibling edits they contain applied — use this for any rewrite that
-    /// re-emits operand source
+    /// it — which is a transpile error unless the pass writes that lowering itself,
+    /// see [`TypeAwarePass::subsumes`]), the `Src` passthrough spans of a template are
+    /// materialized with the sibling edits they contain applied — use this for any
+    /// rewrite that re-emits operand source
     pub(crate) template_edits: Vec<(TextRange, Vec<Fragment>)>,
     /// Templates inserted at a *statement* boundary — a guard a pass injects
     /// ahead of the statement starting at that offset. Identical to a
@@ -127,6 +128,12 @@ pub(crate) struct PassContext {
     /// the substitution by shape alone, which cannot tell two substitutions of
     /// one span apart
     pub(crate) relocating_edits: Vec<(TextRange, Vec<Fragment>)>,
+    /// Soundness checks made in top-level statements an AST pass rewrote, by the
+    /// statement's index in the original module body. The nodes a pass changed are
+    /// printed from the syntax tree, where a text edit made at a node the pass
+    /// replaced does not land, so these are written into that tree before it is
+    /// printed
+    pub(crate) rerendered_checks: Vec<(usize, Vec<super::soundness::RerenderedCheck>)>,
     /// Hard transpile errors a pass surfaced — abort the pipeline rather
     /// than emit partial / invalid output. Each entry is a human-readable
     /// message suitable for showing the user
@@ -146,11 +153,50 @@ pub(crate) struct PassContext {
     /// [`walk_type_positions_skipping`](super::type_expr_walker::walk_type_positions_skipping)
     /// so they don't re-process an operation that no longer appears in the output
     pub(crate) claimed_type_op_ranges: Vec<TextRange>,
+    /// The `typeof` nodes nested under a structural type form, which the
+    /// type-expression lowerer rewrites as part of that form. Every other `typeof`
+    /// is lowered in the syntax tree, and only there
+    pub(crate) structural_typeof_ranges: Vec<TextRange>,
     /// The same operations as `(range, rendered)` pairs. A pass that replaces a
     /// whole statement subsumes any fold inside it — skipping is not enough, the
     /// rendered text has to be spliced into the replacement or the operation is
     /// re-emitted from source and reaches the runtime
     pub(crate) symbolic_substitutions: Vec<(TextRange, String)>,
+}
+
+/// a lowering whose edits another pass may leave out of its own, because that pass writes
+/// the construct the edit lowers itself — see [`TypeAwarePass::subsumes`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lowering {
+    AnonNamedTuple,
+    Callable,
+    ContextParams,
+    Conversion,
+    DynamicKeyword,
+    FloatConst,
+    GenericPolyfill,
+    InferredAnnotation,
+    JustFloat,
+    /// the whitespace the keyword blanking collapses. only spacing is at stake, so any
+    /// edit it lands inside may leave it out
+    KeywordPadding,
+    LiteralType,
+    LocalOnce,
+    MatchType,
+    Modifiers,
+    NoneChain,
+    NoneCoalesce,
+    OptionalType,
+    ParametricIs,
+    ProtocolType,
+    RepeatedUnderscore,
+    StatementExpression,
+    SymbolicTypeOp,
+    TupleLiteralType,
+    Typeof,
+    Unpack,
+    VarianceStrip,
+    VisibilityRename,
 }
 
 /// A single AST-level rewrite pass.
@@ -163,6 +209,21 @@ pub(crate) trait AstPass {
     /// See [`TypeAwarePass::runtime_only`].
     fn runtime_only(&self) -> bool {
         false
+    }
+
+    /// See [`TypeAwarePass::lowering`].
+    fn lowering(&self) -> Option<Lowering> {
+        None
+    }
+
+    /// See [`TypeAwarePass::subsumes`].
+    fn subsumes(&self) -> &'static [Lowering] {
+        &[]
+    }
+
+    /// what a transform conflict calls the pass
+    fn name(&self) -> &'static str {
+        short_type_name(std::any::type_name::<Self>())
     }
 }
 
@@ -183,6 +244,35 @@ pub(crate) trait TypeAwarePass {
     fn runtime_only(&self) -> bool {
         false
     }
+
+    /// the lowering this pass's edits make, when another pass may write the constructs
+    /// they lower itself — see [`subsumes`](Self::subsumes)
+    fn lowering(&self) -> Option<Lowering> {
+        None
+    }
+
+    /// the lowerings whose constructs this pass writes itself, wherever one of its edits
+    /// covers them: an edit such a lowering makes inside one of this pass's edits is left
+    /// out of the output, and that is not a loss
+    ///
+    /// every other edit inside one of this pass's edits has to land in source the edit
+    /// passes through, or the transpile is refused. so a lowering is listed here only
+    /// where this pass writes what that lowering would have written, and a lowering added
+    /// later that reaches inside one of its edits is refused until it is
+    fn subsumes(&self) -> &'static [Lowering] {
+        &[]
+    }
+
+    /// what a transform conflict calls the pass
+    fn name(&self) -> &'static str {
+        short_type_name(std::any::type_name::<Self>())
+    }
+}
+
+/// `path::to::Type<Args>` as `Type`
+fn short_type_name(name: &'static str) -> &'static str {
+    let bare = name.split('<').next().unwrap_or(name);
+    bare.rsplit("::").next().unwrap_or(bare)
 }
 
 /// Adapter: lift a [`Transformer`] (visitor that mutates AST in place)
@@ -198,9 +288,18 @@ pub(crate) struct VisitorPass<'a, T: Transformer> {
     /// computes the new sub-AST, renders it via [`render_expr`], and pushes
     /// `(original_range, replacement)` here
     text_edits: RefCell<Vec<(TextRange, String)>>,
+    lowering: Option<Lowering>,
 }
 
 impl<T: Transformer> AstPass for VisitorPass<'_, T> {
+    fn lowering(&self) -> Option<Lowering> {
+        self.lowering
+    }
+
+    fn name(&self) -> &'static str {
+        short_type_name(std::any::type_name::<T>())
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         for (idx, stmt) in module.body.iter_mut().enumerate() {
             self.changed_cell.set(false);
@@ -248,6 +347,12 @@ enum SubPatch {
     /// [`SubPatch::Template`]; the difference is only that it leads every other
     /// edit at its span
     Relocating(Vec<Fragment>),
+    /// a node an AST pass rewrote, re-emitted at its range — see
+    /// [`super::rerender`]. Materializes exactly like [`SubPatch::Template`], and
+    /// leads the other rewrites at its span, as printing the whole statement
+    /// used to. an insertion at its boundary is not absorbed: the text it prints
+    /// there is the node's own, which no insertion targets
+    Rerendered(Vec<Fragment>),
 }
 
 /// whether a template spanning `start..end` only wraps it: its one passthrough
@@ -271,6 +376,15 @@ fn is_wrapper(frags: &[Fragment], start: usize, end: usize) -> bool {
 /// default re-evaluation guard re-emits a parameter default at the body start —
 /// and the lowerings inside that span have to materialize where the source
 /// lands, not where it was written.
+///
+/// A [`SubPatch::Relocating`] edit is the one thing that does *not* travel with
+/// that source. It is the stand-in a pass leaves at the span it moved a
+/// construct away from — `_MISSING` where the default was written — and a
+/// passthrough of exactly that span, from outside the template's own range, is
+/// the place the construct moved *to*. Materializing the stand-in there too
+/// would put `_MISSING` at both ends and the construct at neither, which is how
+/// a `decorator def` whose header template re-emits the whole signature came to
+/// emit `if tags is _MISSING: tags = _MISSING`.
 fn template_claimees(
     frags: &[Fragment],
     all: &[(usize, usize, SubPatch)],
@@ -289,12 +403,52 @@ fn template_claimees(
             let in_src = frags.iter().any(|frag| match frag {
                 Fragment::Lit(_) => false,
                 Fragment::Src(span) => {
-                    s >= usize::from(span.start()) && e <= usize::from(span.end())
+                    let (span_start, span_end) =
+                        (usize::from(span.start()), usize::from(span.end()));
+                    s >= span_start
+                        && e <= span_end
+                        && !(matches!(all[m].2, SubPatch::Relocating(_))
+                            && (s, e) == (span_start, span_end))
                 }
             });
             in_own || in_src
         })
         .collect()
+}
+
+/// Whether a template over `range` puts text there other than the text already
+/// written there.
+///
+/// Read fragment by fragment against the covered source, so neither side is
+/// built up: a literal has to match the source ahead of it, and a passthrough
+/// has to be the very span it stands at.
+///
+/// A `Src` passthrough carries any sibling edit that falls inside it, which this
+/// reading leaves out — but such a sibling is an entry of the same edit list, and
+/// the caller asks the list as a whole. So a template that only re-emits what it
+/// covers answers `false` here while a real rewrite nested inside it still
+/// answers `true` under its own entry.
+fn rewrites_covered_source(range: TextRange, frags: &[Fragment], source: &str) -> bool {
+    let Some(covered) = source.get(usize::from(range.start())..usize::from(range.end())) else {
+        return true;
+    };
+    let mut rest = covered;
+    for frag in frags {
+        let piece = match frag {
+            Fragment::Lit(text) => text.as_str(),
+            Fragment::Src(span) => {
+                match source.get(usize::from(span.start())..usize::from(span.end())) {
+                    Some(text) => text,
+                    None => return true,
+                }
+            }
+        };
+        match rest.strip_prefix(piece) {
+            Some(tail) => rest = tail,
+            None => return true,
+        }
+    }
+    !rest.is_empty()
 }
 
 /// Materialize a template's fragments into `out`. `Src` passthrough spans are
@@ -312,6 +466,7 @@ fn materialize_fragments(
     all: &[(usize, usize, SubPatch)],
     contained: &[usize],
     anchor: usize,
+    emitted: &mut [bool],
 ) {
     for (i, frag) in frags.iter().enumerate() {
         match frag {
@@ -337,6 +492,7 @@ fn materialize_fragments(
                     all,
                     contained,
                     include_end,
+                    emitted,
                 );
             }
         }
@@ -351,7 +507,8 @@ fn materialize_fragments(
 /// templates — one statement expression inside another's suite, and any pass
 /// whose template lands inside the suite it passes through. `include_end` controls
 /// whether a zero-width insertion exactly at `e0` is emitted here (see
-/// [`materialize_fragments`]).
+/// [`materialize_fragments`]). every edit written out is marked in `emitted`
+#[expect(clippy::too_many_arguments)]
 fn apply_within(
     out: &mut Replacement,
     source: &str,
@@ -360,6 +517,7 @@ fn apply_within(
     all: &[(usize, usize, SubPatch)],
     contained: &[usize],
     include_end: bool,
+    emitted: &mut [bool],
 ) {
     let mut cursor = s0;
     let mut k = 0;
@@ -373,23 +531,561 @@ fn apply_within(
             continue;
         }
         out.push_source(source, cursor, s);
+        emitted[idx] = true;
         match &all[idx].2 {
             SubPatch::Text(t) => out.push_generated(t, s),
             SubPatch::Template(frags)
             | SubPatch::Statement(frags)
-            | SubPatch::Relocating(frags) => {
+            | SubPatch::Relocating(frags)
+            | SubPatch::Rerendered(frags) => {
                 let inner: Vec<usize> = contained[k + 1..]
                     .iter()
                     .copied()
                     .filter(|&m| all[m].0 >= s && all[m].1 <= e && all[m].0 != e)
                     .collect();
-                materialize_fragments(out, frags, source, all, &inner, s);
+                materialize_fragments(out, frags, source, all, &inner, s, emitted);
             }
         }
         cursor = cursor.max(e);
         k += 1;
     }
     out.push_source(source, cursor, e0);
+}
+
+/// the sub-statement edits spliced into the source, first-wins on overlap, and an error
+/// for each edit the splice loses. `origins` names, by index into `authors`, who wrote
+/// each edit
+///
+/// an edit is left out when a wider edit it sits inside prints text of its own over it: a
+/// node an AST pass rewrote that no longer passes the edit's source through, a template
+/// that writes the construct itself, or a plain-text replacement. whatever the edit made of
+/// the construct is then gone — whether or not the printed text happens to spell the
+/// construct again — so that is refused rather than emitted, unless the wider edit
+/// accounts for it (see [`lost_edits`])
+fn splice(
+    source: &str,
+    sub_edits: Vec<(usize, usize, SubPatch)>,
+    origins: Vec<Vec<usize>>,
+    authors: &[Author],
+) -> (Vec<(usize, usize, Replacement)>, Vec<String>) {
+    let mut edits: Vec<(usize, usize, Replacement)> = Vec::new();
+    let mut emitted = vec![false; sub_edits.len()];
+    let mut tagged: Vec<_> = sub_edits.into_iter().zip(origins).collect();
+    // start asc. tie-break by edit shape:
+    //   1. zero-width insertions first — they don't consume bytes, so any
+    //      following deletion/replacement at the same start can still apply.
+    //      a statement-anchored insertion leads them: it emits whole statements
+    //      that must precede everything the statement itself lowers to
+    //   2. then wider replacements before narrower ones — so a wider edit
+    //      wins over (or, for templates, absorbs) a narrow one nested inside
+    //      it
+    //   3. at one identical span, a *relocating* edit leads: it says the
+    //      construct has moved, and the pass that moved it re-emits the span
+    //      itself, so every other edit there materializes at the new home
+    //   4. then a *wrapper* — a template whose one passthrough is its whole
+    //      span, adding text around the construct without removing any of it.
+    //      it claims the other edits at that span and materializes them inside
+    //      its passthrough, so whatever the construct becomes ends up inside the
+    //      wrapping (a quoted forward reference around an arrow type the
+    //      callable lowering replaced as text)
+    //   5. then a node an AST pass rewrote, which the syntax tree says the
+    //      construct became — see [`super::rerender`]
+    //   6. then a *substitution* — plain text, or a template with no `Src`
+    //      passthrough — ahead of a *rewrite*, a template that re-emits part of
+    //      the span. a substitution says the construct does not appear here at
+    //      all, which a rewrite of it cannot outrank
+    tagged.sort_by(|(a, _), (b, _)| {
+        let priority = |e: &(usize, usize, SubPatch)| {
+            let rewrites = i64::from(match &e.2 {
+                SubPatch::Text(_) => false,
+                SubPatch::Template(frags)
+                | SubPatch::Statement(frags)
+                | SubPatch::Relocating(frags)
+                | SubPatch::Rerendered(frags) => {
+                    frags.iter().any(|frag| matches!(frag, Fragment::Src(_)))
+                }
+            });
+            let statement = i64::from(!matches!(e.2, SubPatch::Statement(_)));
+            let relocating = i64::from(!matches!(e.2, SubPatch::Relocating(_)));
+            let wraps = i64::from(
+                !matches!(&e.2, SubPatch::Template(frags) if is_wrapper(frags, e.0, e.1)),
+            );
+            let rerendered = i64::from(!matches!(e.2, SubPatch::Rerendered(_)));
+            // (start, is_replacement_not_insertion, statement-insert-first,
+            //  neg_end-for-wider-first, relocating-first, wrapper-first,
+            //  rerendered-first, substitution-before-rewrite)
+            if e.1 == e.0 {
+                (
+                    e.0, 0i64, statement, 0i64, relocating, wraps, rerendered, rewrites,
+                ) // insertion
+            } else {
+                #[allow(clippy::cast_possible_wrap)]
+                let neg_end = -(e.1 as i64);
+                (
+                    e.0, 1i64, statement, neg_end, relocating, wraps, rerendered, rewrites,
+                )
+            }
+        };
+        priority(a).cmp(&priority(b))
+    });
+    let (sub_edits, origins): (Vec<_>, Vec<_>) = tagged.into_iter().unzip();
+    // claim pre-pass: each replacement, outermost-first (the sort guarantees an
+    // enclosing edit precedes anything inside it), claims the edits nested in
+    // its span. a template *materializes* its claimees inside its `Src` spans;
+    // a plain-text replacement drops them (first-wins). same-start zero-width
+    // insertions are absorbed by a template (they target the construct's first
+    // token, e.g. `_force_unwrap(` ahead of a coalesce operand) but stay
+    // independent ahead of a plain-text replacement, preserving the documented
+    // insertion + deletion compose behaviour. the one exception is a
+    // statement-anchored insertion sharing a boundary: it emits statements, so
+    // absorbing it into an expression rewrite of the statement it precedes
+    // would splice a suite into the middle of an expression
+    let mut claimed = vec![false; sub_edits.len()];
+    for i in 0..sub_edits.len() {
+        let (s_i, e_i) = (sub_edits[i].0, sub_edits[i].1);
+        if e_i == s_i || claimed[i] {
+            continue;
+        }
+        // a rerendered node claims what is inside it as a template does, but not an
+        // insertion at its boundary, which targets the source around it
+        let is_template = matches!(
+            sub_edits[i].2,
+            SubPatch::Template(_) | SubPatch::Statement(_) | SubPatch::Relocating(_)
+        );
+        for (m, edit) in sub_edits.iter().enumerate() {
+            if m == i || claimed[m] {
+                continue;
+            }
+            let (s_m, e_m) = (edit.0, edit.1);
+            let inside = s_m >= s_i && e_m <= e_i && s_m != e_i;
+            let boundary_insertion = s_m == e_m && (s_m == s_i || s_m == e_i);
+            let anchored = matches!(edit.2, SubPatch::Statement(_));
+            if inside && (is_template || !boundary_insertion) && !(boundary_insertion && anchored) {
+                claimed[m] = true;
+            }
+        }
+    }
+
+    let mut cursor = 0usize;
+    let mut i = 0;
+    while i < sub_edits.len() {
+        if claimed[i] {
+            i += 1;
+            continue;
+        }
+        let (start, end) = (sub_edits[i].0, sub_edits[i].1);
+        if start < cursor {
+            i += 1;
+            continue;
+        }
+        // coalesce all unclaimed zero-width insertions sharing this start into
+        // a single combined insertion (text concatenated in push order). this
+        // sidesteps the replace_range-at-same-position ordering issue: each
+        // pass pushes its slice in left-to-right intent order, and we
+        // splice them as one contiguous string
+        if end == start {
+            let mut combined = Replacement::default();
+            let mut j = i;
+            while j < sub_edits.len() && sub_edits[j].0 == start && sub_edits[j].1 == start {
+                if !claimed[j] {
+                    emitted[j] = true;
+                    match &sub_edits[j].2 {
+                        SubPatch::Text(t) => combined.push_generated(t, start),
+                        SubPatch::Template(frags)
+                        | SubPatch::Statement(frags)
+                        | SubPatch::Relocating(frags)
+                        | SubPatch::Rerendered(frags) => {
+                            let contained = template_claimees(frags, &sub_edits, &claimed, j, None);
+                            materialize_fragments(
+                                &mut combined,
+                                frags,
+                                source,
+                                &sub_edits,
+                                &contained,
+                                start,
+                                &mut emitted,
+                            );
+                        }
+                    }
+                }
+                j += 1;
+            }
+            edits.push((start, start, combined));
+            i = j;
+            continue;
+        }
+        emitted[i] = true;
+        let repl = match &sub_edits[i].2 {
+            // a plain-text replacement wins over anything inside it
+            SubPatch::Text(t) => Replacement::generated(t, start),
+            SubPatch::Template(frags)
+            | SubPatch::Statement(frags)
+            | SubPatch::Relocating(frags)
+            | SubPatch::Rerendered(frags) => {
+                // the claimees nested in this span materialize inside the
+                // template's `Src` passthrough fragments
+                let contained =
+                    template_claimees(frags, &sub_edits, &claimed, i, Some((start, end)));
+                let mut out = Replacement::default();
+                materialize_fragments(
+                    &mut out,
+                    frags,
+                    source,
+                    &sub_edits,
+                    &contained,
+                    start,
+                    &mut emitted,
+                );
+                out
+            }
+        };
+        edits.push((start, end, repl));
+        cursor = end;
+        i += 1;
+    }
+
+    let lost = lost_edits(source, &sub_edits, &origins, authors, &emitted);
+    (edits, lost)
+}
+
+/// the errors for the edits in `sub_edits`, in the order it is sorted in, that the splice
+/// left out of its output — those not marked in `emitted` — and that the edit they were
+/// left out for does not account for
+///
+/// what an edit was left out for is the innermost edit around it, or at exactly its range
+/// when that edit sorts ahead of it — the nearest, of several there. that edit accounts
+/// for it when:
+///
+/// - it deletes what it covers, so nothing inside is printed at all
+/// - it is at the same span and writes the same thing, as two lowerings of one construct
+///   can
+/// - one pass wrote both, and so wrote them to agree
+/// - its pass writes the constructs of every pass the lost edit came from itself — see
+///   [`TypeAwarePass::subsumes`]
+///
+/// a node an AST pass rewrote accounts for nothing: it prints what the syntax tree says,
+/// which no edit of the source reaches
+fn lost_edits(
+    source: &str,
+    sub_edits: &[(usize, usize, SubPatch)],
+    origins: &[Vec<usize>],
+    authors: &[Author],
+    emitted: &[bool],
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for (index, (start, end, _)) in sub_edits.iter().enumerate() {
+        if emitted[index] {
+            continue;
+        }
+        let (start, end) = (*start, *end);
+        let around = sub_edits
+            .iter()
+            .enumerate()
+            .filter(|&(other, (other_start, other_end, _))| {
+                let (other_start, other_end) = (*other_start, *other_end);
+                other != index
+                    && if (other_start, other_end) == (start, end) {
+                        other < index
+                    } else {
+                        other_start <= start && end <= other_end && other_start < other_end
+                    }
+            })
+            // of two around it at one span, the later one sorts nearer to it
+            .min_by_key(|&(other, (other_start, other_end, _))| {
+                (other_end - other_start, std::cmp::Reverse(other))
+            })
+            .map(|(other, (_, _, patch))| (other, patch));
+        let lost: Vec<&Author> = origins[index]
+            .iter()
+            .filter_map(|&author| authors.get(author))
+            .collect();
+        let only_spacing = !lost.is_empty()
+            && lost
+                .iter()
+                .all(|author| author.lowering == Some(Lowering::KeywordPadding));
+        if only_spacing {
+            continue;
+        }
+        if let Some((other, patch)) = around {
+            let deletes = matches!(patch, SubPatch::Text(text) if text.is_empty());
+            let same = (sub_edits[other].0, sub_edits[other].1) == (start, end)
+                && writes_the_same(patch, &sub_edits[index].2);
+            let winner = match origins[other].as_slice() {
+                [author] if !matches!(patch, SubPatch::Rerendered(_)) => Some(*author),
+                _ => None,
+            };
+            let accounted = winner.is_some_and(|winner| {
+                !origins[index].is_empty()
+                    && origins[index].iter().all(|&author| {
+                        author == winner
+                            || authors[author].lowering.is_some_and(|lowering| {
+                                authors[winner].subsumes.contains(&lowering)
+                            })
+                    })
+            });
+            if deletes || same || accounted {
+                continue;
+            }
+        }
+        let what = if start == end {
+            format!("text inserted at byte {start}")
+        } else {
+            let preview: String = source[start..end].chars().take(40).collect();
+            format!("an edit of `{preview}`")
+        };
+        let by = match lost.as_slice() {
+            [] => String::new(),
+            names => format!(
+                " by {}",
+                names
+                    .iter()
+                    .map(|author| format!("`{}`", author.name))
+                    .collect::<Vec<_>>()
+                    .join(" and ")
+            ),
+        };
+        let lost_to = match around {
+            Some((_, SubPatch::Rerendered(_))) => {
+                "lands inside a node an AST pass rewrote and prints again".to_owned()
+            }
+            Some((other, _)) => {
+                let name = match origins[other].as_slice() {
+                    [author] => authors.get(*author).map_or("another pass", |a| a.name),
+                    _ => "another pass",
+                };
+                format!("lands inside a construct `{name}` writes itself")
+            }
+            None => "overlaps a construct another edit rewrote".to_owned(),
+        };
+        errors.push(format!(
+            "transform conflict: {what}{by} {lost_to}, so the lowering would be lost"
+        ));
+    }
+    errors
+}
+
+/// whether `a` and `b`, two edits of one span, put the same thing there
+fn writes_the_same(a: &SubPatch, b: &SubPatch) -> bool {
+    match (a, b) {
+        (SubPatch::Text(a), SubPatch::Text(b)) => a == b,
+        (
+            SubPatch::Template(a) | SubPatch::Statement(a) | SubPatch::Relocating(a),
+            SubPatch::Template(b) | SubPatch::Statement(b) | SubPatch::Relocating(b),
+        ) => a == b,
+        _ => false,
+    }
+}
+
+/// a pass, or a part of the driver, that writes edits into a [`PassContext`]
+pub(crate) struct Author {
+    name: &'static str,
+    lowering: Option<Lowering>,
+    subsumes: &'static [Lowering],
+}
+
+impl Author {
+    /// the driver writing edits of its own
+    fn driver(name: &'static str, lowering: Option<Lowering>) -> Self {
+        Self {
+            name,
+            lowering,
+            subsumes: &[],
+        }
+    }
+}
+
+/// the edit lists of a [`PassContext`], in the order the driver chains them
+#[derive(Clone, Copy)]
+enum EditList {
+    Text,
+    Template,
+    Statement,
+    Relocating,
+}
+
+/// who wrote each edit in a [`PassContext`] and rewrote each statement, read off how long
+/// each list was as each author finished — the lists only ever grow while passes run
+#[derive(Default)]
+struct Authorship {
+    authors: Vec<Author>,
+    /// the length of the four edit lists, then of `changed`, as each author finished
+    marks: Vec<[usize; 5]>,
+}
+
+impl Authorship {
+    fn finished(&mut self, author: Author, ctx: &PassContext) {
+        self.authors.push(author);
+        self.marks.push([
+            ctx.text_edits.len(),
+            ctx.template_edits.len(),
+            ctx.statement_inserts.len(),
+            ctx.relocating_edits.len(),
+            ctx.changed.len(),
+        ]);
+    }
+
+    /// the author of the edit at `index` in `list`
+    fn author_of(&self, list: EditList, index: usize) -> Option<usize> {
+        self.marks
+            .iter()
+            .position(|mark| index < mark[list as usize])
+    }
+
+    /// the authors that rewrote each statement, by its index in `changed`, the context's
+    /// list of rewritten statements before it is sorted
+    fn rewriters(&self, changed: &[usize]) -> std::collections::HashMap<usize, Vec<usize>> {
+        let mut rewriters: std::collections::HashMap<usize, Vec<usize>> =
+            std::collections::HashMap::new();
+        for (position, &statement) in changed.iter().enumerate() {
+            if let Some(author) = self.marks.iter().position(|mark| position < mark[4]) {
+                let authors = rewriters.entry(statement).or_default();
+                if !authors.contains(&author) {
+                    authors.push(author);
+                }
+            }
+        }
+        rewriters
+    }
+}
+
+/// one `from <module> import …` statement of the module's own that a preamble line could join
+struct OwnImport {
+    /// the module as written, dots included, so `.mod` and `mod` are not the same target
+    module: String,
+    /// where to write more names: the end of the statement, which is ahead of any comment
+    /// trailing it
+    end: usize,
+    /// the spellings it already imports, so a name it has is not added twice
+    spellings: Vec<String>,
+}
+
+/// Fold each `from <module> import …` line of `imports` into a statement of `body`'s own
+/// leading import block importing from the same module, and hand back the lines that found no
+/// home there.
+///
+/// The preamble is written above the module's own imports, so a name the lowering needs and a
+/// name the module imports from the same place land on two lines saying `from typing import`.
+/// One line is what a reader — and the `.py` the build ships — should have. Folding also keeps
+/// the output's line count unchanged, which the line table depends on: the preamble accounts
+/// for the lines it adds, and a name written into a line that is already there adds none.
+///
+/// Only the leading block, only a statement written on one line, and only a name nothing else
+/// in that block binds. Everything between the preamble's position and the statement is then an
+/// import too, so moving the binding down to it cannot pass a read of the name — and cannot
+/// change which binding wins, either.
+///
+/// And only a name the rest of the preamble does not read. The preamble is not imports alone:
+/// a hoisted `class _Protocol_…(Protocol)` stands beside them and reads `Protocol` as it is
+/// defined, so folding that import into the module's own line would leave the class with no
+/// such name at all.
+pub(crate) fn merge_into_own_imports(body: &mut String, imports: Vec<String>) -> Vec<String> {
+    let at = preamble_offset(body);
+    let parsed = ruff_python_parser::parse_unchecked_source(
+        &body[at..],
+        ruff_python_ast::PySourceType::Python,
+    );
+    let mut own: Vec<OwnImport> = Vec::new();
+    // every name the block binds, which says whether folding a name into one of its statements
+    // could change which binding the module ends up with
+    let mut bound: Vec<(usize, String)> = Vec::new();
+    for stmt in parsed.suite() {
+        match stmt {
+            Stmt::Import(import) => {
+                for alias in &import.names {
+                    let name = alias.asname.as_ref().map_or_else(
+                        || alias.name.split('.').next().unwrap_or_default().to_owned(),
+                        ToString::to_string,
+                    );
+                    bound.push((own.len(), name));
+                }
+            }
+            Stmt::ImportFrom(import) => {
+                let index = own.len();
+                let module = format!(
+                    "{}{}",
+                    ".".repeat(import.level as usize),
+                    import.module.as_ref().map_or("", |module| module.as_str())
+                );
+                let one_line = !body[at + usize::from(import.range().start())
+                    ..at + usize::from(import.range().end())]
+                    .contains('\n');
+                let mut spellings = Vec::new();
+                for alias in &import.names {
+                    bound.push((
+                        index,
+                        alias.asname.as_ref().unwrap_or(&alias.name).to_string(),
+                    ));
+                    spellings.push(match &alias.asname {
+                        Some(asname) => format!("{} as {asname}", alias.name),
+                        None => alias.name.to_string(),
+                    });
+                }
+                // a star import says nothing about what it binds, so nothing can be folded
+                // into it or judged against it
+                if one_line && !import.names.iter().any(|alias| &*alias.name == "*") {
+                    own.push(OwnImport {
+                        module,
+                        end: at + usize::from(import.range().end()),
+                        spellings,
+                    });
+                } else {
+                    return imports;
+                }
+            }
+            _ => break,
+        }
+    }
+
+    // an import statement reads nothing, so this is what the preamble's *other* entries read
+    let preamble_reads = crate::names_written(
+        ruff_python_parser::parse_unchecked_source(
+            &imports.join("\n"),
+            ruff_python_ast::PySourceType::Python,
+        )
+        .suite(),
+    );
+
+    let mut left_over = Vec::new();
+    let mut insertions: Vec<(usize, String)> = Vec::new();
+    for line in imports {
+        let Some((module, names)) = line
+            .strip_prefix("from ")
+            .and_then(|rest| rest.split_once(" import "))
+            .filter(|(_, names)| !names.contains(['(', '*', '\n']))
+        else {
+            left_over.push(line);
+            continue;
+        };
+        let Some(index) = own.iter().position(|entry| entry.module == module) else {
+            left_over.push(line);
+            continue;
+        };
+        let spellings: Vec<&str> = names.split(", ").collect();
+        let elsewhere = spellings.iter().any(|spelling| {
+            let bind = spelling.rsplit(" as ").next().unwrap_or(spelling);
+            preamble_reads.contains(bind)
+                || bound
+                    .iter()
+                    .any(|(owner, name)| *owner != index && name == bind)
+        });
+        if elsewhere {
+            left_over.push(line);
+            continue;
+        }
+        let added: Vec<&str> = spellings
+            .into_iter()
+            .filter(|spelling| !own[index].spellings.iter().any(|had| had == spelling))
+            .collect();
+        if !added.is_empty() {
+            insertions.push((own[index].end, format!(", {}", added.join(", "))));
+        }
+    }
+    // descending, so an earlier statement's offsets are still the ones the parse reported
+    insertions.sort_by_key(|(end, _)| std::cmp::Reverse(*end));
+    for (end, text) in insertions {
+        body.insert_str(end, &text);
+    }
+    left_over
 }
 
 /// Coalesce repeated `from <module> import X` lines into a single
@@ -404,7 +1100,13 @@ fn merge_from_imports(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
     let mut groups: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
     let mut other: Vec<String> = Vec::new();
     for line in lines {
-        if let Some(rest) = line.strip_prefix("from ")
+        // an entry that spans lines is not an import line but a block — the
+        // `if TYPE_CHECKING:` one, which opens with a `from typing import`. merged
+        // as though the whole block were a name list, the block's own lines become
+        // a "name" and every later `from typing import` lands after them, inside
+        // the block: `if TYPE_CHECKING:\n    import types, overload`
+        if !line.contains('\n')
+            && let Some(rest) = line.strip_prefix("from ")
             && let Some((module, names)) = rest.split_once(" import ")
         {
             let entry = groups.entry(module.trim().to_owned()).or_default();
@@ -440,6 +1142,7 @@ fn merge_from_imports(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
 /// suite must come from one db
 pub(crate) fn run_against_source<'a>(
     source: &'a str,
+    written: repeated_underscore::WrittenNames,
     config: &Config,
     project: Option<(&dyn ty_python_semantic::Db, ruff_db::files::File)>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>) {
@@ -490,7 +1193,18 @@ pub(crate) fn run_against_source<'a>(
     // tokens go when the syntax tree is taken out of the parse
     let accessor_value_ranges =
         properties::collect_value_ranges(&parsed.syntax().body, parsed.tokens());
+    // a statement an AST pass rewrote is re-emitted in the source's own indentation,
+    // since the lines it passes through keep theirs
+    let indentation = ruff_python_codegen::Stylist::from_tokens(parsed.tokens(), source_ref)
+        .indentation()
+        .clone();
+    // and with the comments between the nodes it passes through, which are found in the
+    // tokens rather than read off the text, where a `#` may be inside a string
+    let comments = ruff_python_trivia::CommentRanges::from(parsed.tokens());
     let mut module = parsed.into_syntax();
+    // what each statement was before any pass rewrote it, which is what says which
+    // of its nodes a pass rewrote
+    let parsed_body = module.body.clone();
     // capture each top-level statement's original source range before any
     // pass mutates the AST. AST mutations replace nodes with synthesised
     // ones whose ranges are zeroed (default `TextRange`), so the splice
@@ -502,14 +1216,15 @@ pub(crate) fn run_against_source<'a>(
         .collect();
     let mut ctx = PassContext::default();
 
-    let coalesce_inner = coalesce_chain::CoalesceFold::new();
-    let coalesce_pass = VisitorPass {
-        inner: &coalesce_inner,
-        changed_cell: coalesce_inner.changed_cell(),
-        imports: vec![],
-        hoist: RefCell::new(vec![]),
-        text_edits: RefCell::new(vec![]),
-    };
+    // how each parameter list that repeats `_` is lowered is ty's answer, which every pass
+    // that names a parameter reads through `written` — the ones walking a tree of their own
+    // too, so it is read off the db's parse now, by range
+    let underscore_lowerings = repeated_underscore::collect(
+        parsed_handle.suite(),
+        &semantic_model,
+        config.min_version >= ruff_python_ast::PythonVersion::PY38,
+    );
+    let written = written.with_lowerings(&underscore_lowerings);
 
     // resolve symbolic operations in type positions (`1 + 1` → `Literal[2]`)
     // up front, from the original parse where `typeof` operands are still
@@ -545,6 +1260,7 @@ pub(crate) fn run_against_source<'a>(
         &semantic_model,
         &ctx.claimed_type_op_ranges,
     );
+    ctx.structural_typeof_ranges.clone_from(&typeof_skip);
     let typeof_inner = typeof_keyword::TypeofFold::new(typeof_skip);
     let typeof_pass = VisitorPass {
         inner: &typeof_inner,
@@ -552,6 +1268,7 @@ pub(crate) fn run_against_source<'a>(
         imports: vec![],
         hoist: RefCell::new(vec![]),
         text_edits: RefCell::new(vec![]),
+        lowering: Some(Lowering::Typeof),
     };
 
     let tuple_index_pass = tuple_index::TupleIndexPass::new();
@@ -565,16 +1282,11 @@ pub(crate) fn run_against_source<'a>(
         imports: vec![],
         hoist: RefCell::new(vec![]),
         text_edits: RefCell::new(vec![]),
+        lowering: None,
     };
 
-    let repeated_underscore_inner = repeated_underscore::RepeatedUnderscore::new();
-    let repeated_underscore_pass = VisitorPass {
-        inner: &repeated_underscore_inner,
-        changed_cell: repeated_underscore_inner.changed_cell(),
-        imports: vec![],
-        hoist: RefCell::new(vec![]),
-        text_edits: RefCell::new(vec![]),
-    };
+    let repeated_underscore_pass =
+        repeated_underscore::RepeatedUnderscore::new(source_ref, written);
 
     let typed_lambda_inner = typed_lambda::TypedLambda::new(source_ref);
     let typed_lambda_pass = VisitorPass {
@@ -583,6 +1295,7 @@ pub(crate) fn run_against_source<'a>(
         imports: vec![],
         hoist: RefCell::new(vec![]),
         text_edits: RefCell::new(vec![]),
+        lowering: None,
     };
 
     let export_import_pass = export_import::ExportImport::new(source_ref);
@@ -595,10 +1308,10 @@ pub(crate) fn run_against_source<'a>(
     let compat_pass = compat::CompatRewrite::new(source_ref, config.clone());
     let string_tag_pass = string_tag::StringTagPass::new(source_ref, config.clone());
     let dedent_string_pass = dedent_string::DedentString::new(source_ref);
-    let super_keyword_pass = super_keyword::SuperKeyword::new();
+    let super_keyword_pass = super_keyword::SuperKeyword::new(written);
     let postfix_await_pass = postfix_await::PostfixAwait::new(source_ref);
     let mutable_defaults_pass =
-        mutable_defaults::MutableDefaultsPass::new(source_ref, config.is_stub);
+        mutable_defaults::MutableDefaultsPass::new(source_ref, written, config.is_stub);
     let unique_loop_bindings_pass =
         unique_loop_bindings::UniqueLoopBindingsPass::new(source_ref, config.unique_loop_bindings);
     let auto_quote_pass = auto_quote::AutoQuote::new(
@@ -607,7 +1320,7 @@ pub(crate) fn run_against_source<'a>(
         config.inject_future_annotations,
     );
     let init_method_pass =
-        init_method::InitMethod::new(source_ref, config.float_literals, config.is_stub);
+        init_method::InitMethod::new(source_ref, written, config.float_literals, config.is_stub);
     let properties_pass = properties::PropertiesPass::new(source_ref, accessor_value_ranges);
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
@@ -620,11 +1333,20 @@ pub(crate) fn run_against_source<'a>(
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
     let match_type_pass = match_type::MatchTypePass::new(source_ref);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref, config.is_stub);
-    let main_function_pass = main_function::MainFunction::new(source_ref);
+    let main_function_pass = main_function::MainFunction::new(source_ref, written);
     let build_stamps_pass = build_stamps::BuildStampsPass::new(source_ref, config.stamps.clone());
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
     let overload_pass = overload::Overload::new(source_ref, config.is_stub);
-    let decorator_keyword_pass = decorator_keyword::DecoratorKeyword::new(source_ref);
+    let decorator_keyword_pass = decorator_keyword::DecoratorKeyword::new(
+        source_ref,
+        written,
+        config.is_stub,
+        decorator_keyword::collect_return_types(
+            parsed_handle.suite(),
+            &semantic_model,
+            config.min_version,
+        ),
+    );
     let unpack_pass = unpack::UnpackSyntax::new(config.clone());
     let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass::new(source_ref);
     let just_float_pass = just_float::JustFloatPass::new();
@@ -638,12 +1360,16 @@ pub(crate) fn run_against_source<'a>(
     let visibility_rename_pass = visibility_rename::VisibilityRenamePass;
     let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
-    let inferred_annotation_pass = inferred_annotation::InferredAnnotationPass::new();
+    let inferred_annotation_pass =
+        inferred_annotation::InferredAnnotationPass::new(config.min_version);
     let template_type_pass = template_type::TemplateTypePass;
-    let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref, config.clone());
+    let tuple_types_pass =
+        annotation::TupleLiteralTypePass::new(source_ref, written, config.clone());
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref, config.float_literals);
-    let callable_pass = callable::CallableSyntaxPass::new(source_ref, config.float_literals);
-    let protocol_type_pass = protocol_type::ProtocolTypePass::new(source_ref, config.clone());
+    let callable_pass =
+        callable::CallableSyntaxPass::new(source_ref, written, config.float_literals);
+    let protocol_type_pass =
+        protocol_type::ProtocolTypePass::new(source_ref, written, config.clone());
     let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref);
     let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);
     let flexible_keyword_pass = flexible_keyword::FlexibleKeywordPass;
@@ -652,8 +1378,8 @@ pub(crate) fn run_against_source<'a>(
     let none_chain_pass = none_chain::NoneChainPass::new(source_ref);
     let optional_type_pass = optional_type::OptionalTypePass::new(source_ref, config.min_version);
     let runtime_union_pass = runtime_union::RuntimeUnionPass::new(config.min_version);
-    let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
-    let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
+    let generics_pass = generics::GenericPolyfillPass::new(source_ref, written, config.clone());
+    let soundness_pass = soundness::SoundnessPass::new(source_ref, written, config);
     let checked_cast_pass = checked_cast::CheckedCastPass;
     let module_api_pass = module_api::ModuleApiPass::new(source_ref);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
@@ -662,7 +1388,8 @@ pub(crate) fn run_against_source<'a>(
     let destructure_pass = destructure::DestructurePass::new(source_ref);
     let statement_expression_pass = statement_expression::StatementExpressionPass::new(source_ref);
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
-    let extension_block_pass = extension::ExtensionBlockPass::new(source_ref, config.is_stub);
+    let extension_block_pass =
+        extension::ExtensionBlockPass::new(source_ref, written, config.is_stub);
     let extension_call_pass = extension::ExtensionCallPass;
     let witness_dispatch_pass = conformance::WitnessDispatchPass;
     let conversion_pass = conversion::ConversionPass::new(source_ref);
@@ -671,7 +1398,7 @@ pub(crate) fn run_against_source<'a>(
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
     let anon_named_tuple_pass =
-        anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());
+        anon_named_tuple::AnonNamedTuplePass::new(source_ref, written, config.clone());
 
     // Order matters: passes that read source ranges via `text_edits` mode
     // must run BEFORE passes that mutate the AST (which zero source ranges
@@ -751,25 +1478,28 @@ pub(crate) fn run_against_source<'a>(
         // first among the mutation passes — before `typeof` and before any
         // pass that zeroes ranges
         &symbolic_pass,
-        &coalesce_pass,
         &typeof_pass,
         &sentinel_pass,
         &repeated_underscore_pass,
         &typed_lambda_pass,
         // a static resource import is replaced whole by the document it names,
-        // in the source *and* in the AST. last, because the statements it
-        // splices in are parsed from the rendering and carry that text's
-        // ranges, which name nothing in this file — no pass after it may read
-        // them. it declares no change of its own, so the source edit is what
-        // normally lands and the AST rewrite only matters when another pass
-        // has already forced the statement to be re-rendered
+        // as an edit of the source
         &static_resource_pass,
     ];
+    let mut authorship = Authorship::default();
     for pass in passes {
         if config.is_stub && pass.runtime_only() {
             continue;
         }
         pass.run(&mut module, &mut ctx);
+        authorship.finished(
+            Author {
+                name: pass.name(),
+                lowering: pass.lowering(),
+                subsumes: pass.subsumes(),
+            },
+            &ctx,
+        );
     }
 
     // type-aware passes: operate on the salsa-owned parsed module (so
@@ -960,6 +1690,14 @@ pub(crate) fn run_against_source<'a>(
             continue;
         }
         pass.run(parsed_handle.suite(), &semantic_model, &mut ctx);
+        authorship.finished(
+            Author {
+                name: pass.name(),
+                lowering: pass.lowering(),
+                subsumes: pass.subsumes(),
+            },
+            &ctx,
+        );
     }
 
     // collect import requests the inner passes raised at the end of their run
@@ -982,6 +1720,7 @@ pub(crate) fn run_against_source<'a>(
     // typed lambdas are removed as source deletions so the statement around
     // them is never re-rendered (see `typed_lambda`); collect them here
     ctx.text_edits.extend(typed_lambda_inner.take_edits());
+    authorship.finished(Author::driver(typed_lambda_pass.name(), None), &ctx);
     if sentinel_inner.ever_changed() {
         ctx.required_imports
             .push("from typing_extensions import Sentinel".to_owned());
@@ -1002,13 +1741,86 @@ pub(crate) fn run_against_source<'a>(
         ctx.text_edits
             .push((*range, use_site_variance::collapsed_to(source_ref, *range)));
     }
+    authorship.finished(
+        Author::driver("keyword blanking", Some(Lowering::KeywordPadding)),
+        &ctx,
+    );
     for (range, replacement) in literal_string_rewrites.edits() {
         ctx.text_edits.push((range, replacement));
     }
+    authorship.finished(Author::driver("literal string", None), &ctx);
     if literal_string_rewrites.needs_import {
         ctx.required_imports
             .push("from typing import LiteralString".to_owned());
     }
+
+    // the last thing written into the tree: a soundness check made in a statement an
+    // `AstPass` rewrote, which the re-render reads rather than the edit list. it happens
+    // here, ahead of the runtime block below, because the two rewrites that answer for
+    // what a program reads back read the finished tree and can ask for a helper of their
+    // own
+    for (idx, checks) in std::mem::take(&mut ctx.rerendered_checks) {
+        if let Some(stmt) = module.body.get_mut(idx)
+            && let Err(error) = super::soundness::place_in_rerendered(stmt, checks)
+        {
+            ctx.errors.push(error);
+        }
+    }
+
+    // which t-string fields a pass replaced in the syntax tree, read before the `=` field
+    // rewrite below moves any of them: the tree still holds one field per field the
+    // author wrote, which is what matches the two up
+    let fields_replaced_in_tree =
+        template_expression::replaced_in_tree(&module, &parsed_body, &ctx.changed);
+
+    // every edit that puts something other than what it covers at the span it covers —
+    // which is to say, every lowering that actually lowered something. the two rewrites
+    // below read this to decide which replacement fields report a text that is no longer
+    // the author's
+    //
+    // an edit that writes back what it covers is left out. the keyword blanking makes a
+    // plain one for every marker it collapses, and a type test against `None` on an
+    // optional makes a template one — `a is not None` is the python spelling of
+    // `a is None?`'s negation and of what the author wrote. acting on either would print
+    // the same text out of a longer f-string, which is how a `.py` file's
+    // `f"{(a if a is not None else b)=}"` stopped surviving a round trip
+    let rewriting: Vec<TextRange> = ctx
+        .text_edits
+        .iter()
+        .filter(|(range, replacement)| {
+            source_ref.get(usize::from(range.start())..usize::from(range.end()))
+                != Some(replacement.as_str())
+        })
+        .map(|(range, _)| *range)
+        .chain(
+            ctx.template_edits
+                .iter()
+                .filter(|(range, frags)| rewrites_covered_source(*range, frags, source_ref))
+                .map(|(range, _)| *range),
+        )
+        .chain(
+            ctx.relocating_edits
+                .iter()
+                .filter(|(range, frags)| rewrites_covered_source(*range, frags, source_ref))
+                .map(|(range, _)| *range),
+        )
+        .chain(
+            ctx.statement_inserts
+                .iter()
+                .map(|(at, _)| TextRange::empty(*at)),
+        )
+        .collect();
+    // a t-string hands a reader the source text of every one of its fields, not only a
+    // `=` one, so a field any lowering reached has to report what the author wrote. which
+    // templates those are is known only now, from the finished edit list, for the same
+    // reason the `=` fields above are
+    let template_wraps = template_expression::claim(
+        source_ref,
+        parsed_handle.suite(),
+        &rewriting,
+        &fields_replaced_in_tree,
+        config.min_version >= ruff_python_ast::PythonVersion::PY314,
+    );
 
     // a synthesized annotation may name a class the source never imported. the
     // import goes under `if TYPE_CHECKING:` as one block: every such annotation
@@ -1032,6 +1844,12 @@ pub(crate) fn run_against_source<'a>(
     // nothing from the module, and a synthesized class may name one of its
     // helpers where it is evaluated at once — `Optional` in the annotation of a
     // `NamedTuple` field. never sorted: set-up code follows its definition
+    if template_wraps
+        .iter()
+        .any(template_expression::Wrap::rebuilds)
+    {
+        ctx.runtime.insert(crate::runtime::TEMPLATE_TEXT);
+    }
     if !ctx.runtime.is_empty() {
         let helpers = ctx.runtime.iter().copied();
         match config.runtime_module.as_deref() {
@@ -1042,6 +1860,8 @@ pub(crate) fn run_against_source<'a>(
         }
     }
     ctx.required_imports.extend(definitions);
+    // who rewrote each statement, read before the list is put in order
+    let rewritten_by = authorship.rewriters(&ctx.changed);
     ctx.changed.sort_unstable();
     ctx.changed.dedup();
 
@@ -1064,66 +1884,108 @@ pub(crate) fn run_against_source<'a>(
     // splice for their target idx
     let mut hoisted_by_idx: std::collections::BTreeMap<usize, Vec<Stmt>> =
         std::collections::BTreeMap::new();
-    for (idx, stmt) in ctx.hoisted {
+    for (idx, stmt) in std::mem::take(&mut ctx.hoisted) {
         hoisted_by_idx.entry(idx).or_default().push(stmt);
     }
 
-    let original_body = &module.body;
-    let mut all_idx: std::collections::BTreeSet<usize> = ctx.changed.iter().copied().collect();
-    for k in hoisted_by_idx.keys() {
-        all_idx.insert(*k);
+    // an f-string `=` field prints the source text between its braces, so a field whose
+    // expression a pass replaced in the syntax tree would print that replacement rather
+    // than what the author wrote. the field is taken apart here, once the tree is the one
+    // the re-render will read, and the fields it claimed are kept so the edit-driven half
+    // below leaves them alone
+    let (debug_fields_claimed, debug_field_errors) =
+        debug_field::rewrite_changed(&mut module, &parsed_body, &ctx.changed);
+    ctx.errors.extend(debug_field_errors);
+
+    let mut edited: Vec<TextRange> = ctx
+        .text_edits
+        .iter()
+        .map(|(range, _)| *range)
+        .chain(ctx.template_edits.iter().map(|(range, _)| *range))
+        .chain(ctx.relocating_edits.iter().map(|(range, _)| *range))
+        .chain(
+            ctx.statement_inserts
+                .iter()
+                .map(|(at, _)| TextRange::empty(*at)),
+        )
+        .collect();
+    // the other half of the `=` field rewrite: a field whose expression one of the edits
+    // above rewrites is taken apart over the whole field, so the author's own text is
+    // printed beside the value rather than in place of it. it comes last because it is
+    // the finished edit list that says which fields those are
+    let (debug_field_edits, debug_field_errors) =
+        debug_field::claim_lowered(parsed_handle.suite(), &rewriting, &debug_fields_claimed);
+    ctx.errors.extend(debug_field_errors);
+    edited.extend(debug_field_edits.iter().map(|(range, _)| *range));
+    ctx.template_edits.extend(debug_field_edits);
+    authorship.finished(Author::driver("`=` field rewrite", None), &ctx);
+
+    if !template_wraps.is_empty() {
+        // a template in a statement the driver re-renders is rebuilt in the tree, which is
+        // what that re-render reads. everywhere else the literal stays in the source and
+        // the rebuild is an edit over it, so a lowering inside a field still applies
+        let rerendered_spans: Vec<TextRange> = ctx
+            .changed
+            .iter()
+            .filter_map(|&idx| original_ranges.get(idx))
+            .map(|&(start, end)| {
+                TextRange::new(
+                    TextSize::try_from(start).unwrap_or_default(),
+                    TextSize::try_from(end).unwrap_or_default(),
+                )
+            })
+            .collect();
+        // a string tag's literal stays in the source: its call is written there, as an edit
+        let (in_tree, in_source): (Vec<_>, Vec<_>) = template_wraps.into_iter().partition(|wrap| {
+            !wrap.tagged
+                && rerendered_spans
+                    .iter()
+                    .any(|span| span.contains_range(wrap.range))
+        });
+        template_expression::rewrite_changed(&mut module, &ctx.changed, &in_tree);
+        for wrap in in_source {
+            let fragments = wrap.fragments();
+            edited.push(wrap.range);
+            ctx.template_edits.push((wrap.range, fragments));
+        }
+    }
+    authorship.finished(Author::driver("t-string field rewrite", None), &ctx);
+
+    let rerendering =
+        super::rerender::Rerendering::new(source_ref, &comments, &edited, &indentation);
+    let mut rerendered: Vec<(TextRange, Vec<Fragment>)> = Vec::new();
+    let mut rerendered_by: Vec<Vec<usize>> = Vec::new();
+    for &idx in &ctx.changed {
+        let (start, end) = original_ranges[idx];
+        let range = TextRange::new(
+            TextSize::try_from(start).unwrap_or_default(),
+            TextSize::try_from(end).unwrap_or_default(),
+        );
+        let edits = rerendering.edits(&parsed_body[idx], &module.body[idx], range);
+        let rewriters = rewritten_by.get(&idx).cloned().unwrap_or_default();
+        rerendered_by.extend(std::iter::repeat_n(rewriters, edits.len()));
+        rerendered.extend(edits);
     }
 
-    // only statements an AST pass actually re-rendered occupy their range —
-    // a hoist-only target keeps its original text (the hoists are emitted as a
-    // zero-width insertion before it), so sub-statement edits inside it still
-    // apply
-    let occupied_ranges: Vec<(usize, usize)> =
-        ctx.changed.iter().map(|&i| original_ranges[i]).collect();
-    let overlaps = |start: usize, end: usize| -> bool {
-        occupied_ranges.iter().any(|(s, e)| start < *e && *s < end)
-    };
-
     let mut edits: Vec<(usize, usize, Replacement)> = Vec::new();
-    for idx in all_idx.iter().copied() {
-        let (start, end) = original_ranges[idx];
+    for (idx, hoists) in std::mem::take(&mut hoisted_by_idx) {
+        let (start, _) = original_ranges[idx];
         let line_indent = {
             let prefix = &source_ref[..start];
             let line_start = prefix.rfind('\n').map(|i| i + 1).unwrap_or(0);
             &source_ref[line_start..start]
         }
         .to_owned();
-
+        // inserted ahead of the statement, whose source bytes (and every edit inside
+        // them) stay where they are
         let mut block = String::new();
-        if let Some(hoists) = hoisted_by_idx.remove(&idx) {
-            for h in hoists {
-                let rendered = render_stmt(&h).trim_end_matches('\n').to_owned();
-                block.push_str(&rendered);
-                block.push('\n');
-                block.push_str(&line_indent);
-            }
+        for h in hoists {
+            let rendered = render_stmt(&h).trim_end_matches('\n').to_owned();
+            block.push_str(&rendered);
+            block.push('\n');
+            block.push_str(&line_indent);
         }
-
-        if ctx.changed.binary_search(&idx).is_ok() {
-            let rendered = render_stmt(&original_body[idx]);
-            // render_stmt emits a trailing newline. drop it when the source
-            // already has one immediately after the stmt (avoids `\n\n`); keep
-            // it when the stmt is at end-of-file with no trailing newline so
-            // we don't lose multi-line structure
-            let source_has_trailing_newline = source_ref.as_bytes().get(end) == Some(&b'\n');
-            if source_has_trailing_newline {
-                block.push_str(rendered.trim_end_matches('\n'));
-            } else {
-                block.push_str(&rendered);
-            }
-            // a re-rendered statement is printed from its AST, which keeps no
-            // source ranges: every line of it is charged to the statement
-            edits.push((start, end, Replacement::generated(&block, start)));
-        } else if !block.is_empty() {
-            // hoist-only: insert the hoisted lines before the statement and
-            // leave its source bytes (and any edits inside them) in place
-            edits.push((start, start, Replacement::generated(&block, start)));
-        }
+        edits.push((start, start, Replacement::generated(&block, start)));
     }
     // ruff-style first-wins dedup for sub-statement edits. sort by start; skip
     // any edit whose start is before the running cursor (overlaps a prior
@@ -1133,7 +1995,19 @@ pub(crate) fn run_against_source<'a>(
     // can compose. a plain-text edit wins over anything nested inside it; a
     // template edit instead *materializes* nested edits within its `Src`
     // passthrough spans, so wide rewrites compose with inner lowerings
-    let mut sub_edits: Vec<(usize, usize, SubPatch)> = ctx
+    // who wrote each edit, in the order they are chained below
+    let origins: Vec<Vec<usize>> = [
+        (EditList::Text, ctx.text_edits.len()),
+        (EditList::Template, ctx.template_edits.len()),
+        (EditList::Statement, ctx.statement_inserts.len()),
+        (EditList::Relocating, ctx.relocating_edits.len()),
+    ]
+    .into_iter()
+    .flat_map(|(list, len)| (0..len).map(move |index| (list, index)))
+    .map(|(list, index)| authorship.author_of(list, index).into_iter().collect())
+    .chain(rerendered_by)
+    .collect();
+    let sub_edits: Vec<(usize, usize, SubPatch)> = ctx
         .text_edits
         .into_iter()
         .map(|(r, s)| {
@@ -1161,180 +2035,17 @@ pub(crate) fn run_against_source<'a>(
                 SubPatch::Relocating(frags),
             )
         }))
+        .chain(rerendered.iter().map(|(r, frags)| {
+            (
+                usize::from(r.start()),
+                usize::from(r.end()),
+                SubPatch::Rerendered(frags.clone()),
+            )
+        }))
         .collect();
-    // start asc. tie-break by edit shape:
-    //   1. zero-width insertions first — they don't consume bytes, so any
-    //      following deletion/replacement at the same start can still apply.
-    //      a statement-anchored insertion leads them: it emits whole statements
-    //      that must precede everything the statement itself lowers to
-    //   2. then wider replacements before narrower ones — so a wider edit
-    //      wins over (or, for templates, absorbs) a narrow one nested inside
-    //      it
-    //   3. at one identical span, a *relocating* edit leads: it says the
-    //      construct has moved, and the pass that moved it re-emits the span
-    //      itself, so every other edit there materializes at the new home
-    //   4. then a *wrapper* — a template whose one passthrough is its whole
-    //      span, adding text around the construct without removing any of it.
-    //      it claims the other edits at that span and materializes them inside
-    //      its passthrough, so whatever the construct becomes ends up inside the
-    //      wrapping (a quoted forward reference around an arrow type the
-    //      callable lowering replaced as text)
-    //   5. then a *substitution* — plain text, or a template with no `Src`
-    //      passthrough — ahead of a *rewrite*, a template that re-emits part of
-    //      the span. a substitution says the construct does not appear here at
-    //      all, which a rewrite of it cannot outrank
-    sub_edits.sort_by(|a, b| {
-        let priority = |e: &(usize, usize, SubPatch)| {
-            let rewrites = i64::from(match &e.2 {
-                SubPatch::Text(_) => false,
-                SubPatch::Template(frags)
-                | SubPatch::Statement(frags)
-                | SubPatch::Relocating(frags) => {
-                    frags.iter().any(|frag| matches!(frag, Fragment::Src(_)))
-                }
-            });
-            let statement = i64::from(!matches!(e.2, SubPatch::Statement(_)));
-            let relocating = i64::from(!matches!(e.2, SubPatch::Relocating(_)));
-            let wraps = i64::from(
-                !matches!(&e.2, SubPatch::Template(frags) if is_wrapper(frags, e.0, e.1)),
-            );
-            // (start, is_replacement_not_insertion, statement-insert-first,
-            //  neg_end-for-wider-first, relocating-first, wrapper-first,
-            //  substitution-before-rewrite)
-            if e.1 == e.0 {
-                (e.0, 0i64, statement, 0i64, relocating, wraps, rewrites) // insertion
-            } else {
-                #[allow(clippy::cast_possible_wrap)]
-                let neg_end = -(e.1 as i64);
-                (e.0, 1i64, statement, neg_end, relocating, wraps, rewrites)
-            }
-        };
-        priority(a).cmp(&priority(b))
-    });
-    // claim pre-pass: each replacement, outermost-first (the sort guarantees an
-    // enclosing edit precedes anything inside it), claims the edits nested in
-    // its span. a template *materializes* its claimees inside its `Src` spans;
-    // a plain-text replacement drops them (first-wins). same-start zero-width
-    // insertions are absorbed by a template (they target the construct's first
-    // token, e.g. `_force_unwrap(` ahead of a coalesce operand) but stay
-    // independent ahead of a plain-text replacement, preserving the documented
-    // insertion + deletion compose behaviour. the one exception is a
-    // statement-anchored insertion sharing a boundary: it emits statements, so
-    // absorbing it into an expression rewrite of the statement it precedes
-    // would splice a suite into the middle of an expression
-    let mut claimed = vec![false; sub_edits.len()];
-    for i in 0..sub_edits.len() {
-        let (s_i, e_i) = (sub_edits[i].0, sub_edits[i].1);
-        if e_i == s_i || claimed[i] {
-            continue;
-        }
-        let is_template = matches!(
-            sub_edits[i].2,
-            SubPatch::Template(_) | SubPatch::Statement(_) | SubPatch::Relocating(_)
-        );
-        for (m, edit) in sub_edits.iter().enumerate() {
-            if m == i || claimed[m] {
-                continue;
-            }
-            let (s_m, e_m) = (edit.0, edit.1);
-            let inside = s_m >= s_i && e_m <= e_i && s_m != e_i;
-            let boundary_insertion = s_m == e_m && (s_m == s_i || s_m == e_i);
-            let anchored = matches!(edit.2, SubPatch::Statement(_));
-            if inside && (is_template || !boundary_insertion) && !(boundary_insertion && anchored) {
-                claimed[m] = true;
-            }
-        }
-    }
-
-    let mut dropped_by_splice: Vec<(usize, usize)> = Vec::new();
-    let mut cursor = 0usize;
-    let mut i = 0;
-    while i < sub_edits.len() {
-        if claimed[i] {
-            i += 1;
-            continue;
-        }
-        let (start, end) = (sub_edits[i].0, sub_edits[i].1);
-        if start < cursor {
-            i += 1;
-            continue;
-        }
-        if overlaps(start, end) {
-            if end > start {
-                dropped_by_splice.push((start, end));
-            }
-            i += 1;
-            continue;
-        }
-        // coalesce all unclaimed zero-width insertions sharing this start into
-        // a single combined insertion (text concatenated in push order). this
-        // sidesteps the replace_range-at-same-position ordering issue: each
-        // pass pushes its slice in left-to-right intent order, and we
-        // splice them as one contiguous string
-        if end == start {
-            let mut combined = Replacement::default();
-            let mut j = i;
-            while j < sub_edits.len() && sub_edits[j].0 == start && sub_edits[j].1 == start {
-                if !claimed[j] {
-                    match &sub_edits[j].2 {
-                        SubPatch::Text(t) => combined.push_generated(t, start),
-                        SubPatch::Template(frags)
-                        | SubPatch::Statement(frags)
-                        | SubPatch::Relocating(frags) => {
-                            let contained = template_claimees(frags, &sub_edits, &claimed, j, None);
-                            materialize_fragments(
-                                &mut combined,
-                                frags,
-                                source_ref,
-                                &sub_edits,
-                                &contained,
-                                start,
-                            );
-                        }
-                    }
-                }
-                j += 1;
-            }
-            edits.push((start, start, combined));
-            i = j;
-            continue;
-        }
-        let repl = match &sub_edits[i].2 {
-            // a plain-text replacement wins over anything inside it
-            SubPatch::Text(t) => Replacement::generated(t, start),
-            SubPatch::Template(frags)
-            | SubPatch::Statement(frags)
-            | SubPatch::Relocating(frags) => {
-                // the claimees nested in this span materialize inside the
-                // template's `Src` passthrough fragments
-                let contained =
-                    template_claimees(frags, &sub_edits, &claimed, i, Some((start, end)));
-                let mut out = Replacement::default();
-                materialize_fragments(&mut out, frags, source_ref, &sub_edits, &contained, start);
-                out
-            }
-        };
-        edits.push((start, end, repl));
-        cursor = end;
-        i += 1;
-    }
-
-    // composition invariant: an edit dropped because an AST pass re-rendered
-    // its enclosing statement is fine when the pass consumed the construct,
-    // but a leak when the re-render reprinted it. detect the leak precisely
-    // rather than letting it surface as a confusing syntax error downstream
-    for (start, end) in dropped_by_splice {
-        let construct = &source_ref[start..end];
-        let leaked = edits.iter().any(|(bs, be, replacement)| {
-            *be > *bs && *bs <= start && end <= *be && replacement.text().contains(construct)
-        });
-        if leaked {
-            let preview: String = construct.chars().take(40).collect();
-            ctx.errors.push(format!(
-                "transform conflict: `{preview}` was lowered by a sub-statement edit, but an AST pass re-rendered its enclosing statement and the construct leaked into the output"
-            ));
-        }
-    }
+    let (spliced, lost) = splice(source_ref, sub_edits, origins, &authorship.authors);
+    edits.extend(spliced);
+    ctx.errors.extend(lost);
     // line table for the spliced body, built from the ascending edit list
     // before the descending application sort consumes it. generated lines from
     // the import prefix (top) and epilogue (bottom) have no source origin
@@ -1351,6 +2062,13 @@ pub(crate) fn run_against_source<'a>(
     let mut out = source_ref.to_owned();
     for (start, end, repl) in edits {
         out.replace_range(start..end, repl.text());
+    }
+    // a name the module already imports from the same place goes on its line rather than on
+    // one of ours. done here and not against `required_imports` alone, because the statement
+    // it joins is the module's own
+    if !ctx.required_imports.is_empty() {
+        ctx.required_imports =
+            merge_into_own_imports(&mut out, std::mem::take(&mut ctx.required_imports));
     }
     // an entry may be multi-line (runtime helper defs), so the table prefix
     // counts the lines each entry emits, not the entries themselves
@@ -1418,10 +2136,201 @@ mod driver_tests {
     use super::*;
     use crate::Config;
 
+    /// what [`splice`] reports lost of `edit`, made against `source`, once its first
+    /// statement is rewritten by `rewrite` and re-emitted
+    fn lost(source: &str, rewrite: impl FnOnce(&mut Stmt), edit: (TextRange, &str)) -> Vec<String> {
+        let parsed = ruff_python_parser::parse_module(source).expect("the source parses");
+        let comments = ruff_python_trivia::CommentRanges::from(parsed.tokens());
+        let module = parsed.into_syntax();
+        let original = &module.body[0];
+        let mut rewritten = original.clone();
+        rewrite(&mut rewritten);
+        let indentation = Indentation::default();
+        let edited = [edit.0];
+        let rerendered =
+            super::super::rerender::Rerendering::new(source, &comments, &edited, &indentation)
+                .edits(original, &rewritten, original.range());
+        let mut sub_edits: Vec<(usize, usize, SubPatch)> = rerendered
+            .into_iter()
+            .map(|(range, frags)| {
+                (
+                    usize::from(range.start()),
+                    usize::from(range.end()),
+                    SubPatch::Rerendered(frags),
+                )
+            })
+            .collect();
+        sub_edits.push((
+            usize::from(edit.0.start()),
+            usize::from(edit.0.end()),
+            SubPatch::Text(edit.1.to_owned()),
+        ));
+        let origins = vec![Vec::new(); sub_edits.len()];
+        splice(source, sub_edits, origins, &[]).1
+    }
+
+    /// the call of `stmt`, an assignment of one
+    fn assigned_call(stmt: &mut Stmt) -> &mut ruff_python_ast::ExprCall {
+        let Stmt::Assign(assign) = stmt else {
+            panic!("an assignment")
+        };
+        let Expr::Call(call) = assign.value.as_mut() else {
+            panic!("a call")
+        };
+        call
+    }
+
+    /// a pass that rebuilds an argument prints it from the syntax tree, where `'s'` is
+    /// spelled `"s"`. the edit a lowering made of `'s'` is in none of the source the
+    /// statement passes through, and is refused — looking for its construct again in
+    /// the output, which does not spell it the same way, would have let it go
+    #[test]
+    fn an_edit_in_a_construct_a_rewrite_respells_is_refused() {
+        let source = "x = f('s')\n";
+        let argument = TextRange::new(TextSize::new(6), TextSize::new(9));
+        let errors = lost(
+            source,
+            |stmt| {
+                let mut rebuilt = ruff_python_parser::parse_expression("\"s\"")
+                    .expect("an expression")
+                    .into_expr();
+                super::super::rerender::forget_expr_ranges(&mut rebuilt);
+                assigned_call(stmt).arguments.args[0] = rebuilt;
+            },
+            (argument, "S"),
+        );
+        assert_eq!(
+            errors,
+            [
+                "transform conflict: an edit of `'s'` lands inside a node an AST pass rewrote and prints again, so the lowering would be lost"
+            ]
+        );
+    }
+
+    /// an insertion inside a node a pass rewrote lands only in source the node passes
+    /// through. the callee is printed from the syntax tree, and the insertion made
+    /// after the name it replaced has nowhere to go
+    #[test]
+    fn an_insertion_with_no_source_to_land_in_is_refused() {
+        let source = "x = f(a)\n";
+        let errors = lost(
+            source,
+            |stmt| {
+                let mut callee = ruff_python_parser::parse_expression("g")
+                    .expect("an expression")
+                    .into_expr();
+                super::super::rerender::forget_expr_ranges(&mut callee);
+                *assigned_call(stmt).func = callee;
+            },
+            (TextRange::empty(TextSize::new(5)), "_inserted"),
+        );
+        assert_eq!(
+            errors,
+            [
+                "transform conflict: text inserted at byte 5 lands inside a node an AST pass rewrote and prints again, so the lowering would be lost"
+            ]
+        );
+    }
+
+    /// an edit inside a node the rewritten statement kept is passed through with it
+    #[test]
+    fn an_edit_in_source_a_rewrite_passes_through_is_applied() {
+        let source = "x = f(a)\n";
+        let errors = lost(
+            source,
+            |stmt| {
+                let mut callee = ruff_python_parser::parse_expression("g")
+                    .expect("an expression")
+                    .into_expr();
+                super::super::rerender::forget_expr_ranges(&mut callee);
+                *assigned_call(stmt).func = callee;
+            },
+            (TextRange::new(TextSize::new(6), TextSize::new(7)), "b"),
+        );
+        assert_eq!(errors, Vec::<String>::new());
+    }
+
+    /// what [`splice`] reports lost of an edit by `inserter` of `", /"` after `b` in
+    /// `def f(a, b): ...`, once a template by `writer` spells `a, b)` itself
+    fn lost_in_a_written_parameter_list(writer: Author, inserter: Author) -> Vec<String> {
+        let source = "def f(a, b): ...\n";
+        let parameters = TextRange::new(TextSize::new(6), TextSize::new(11));
+        let sub_edits = vec![
+            (
+                6,
+                11,
+                SubPatch::Template(vec![Fragment::Lit("a, b)".to_owned())]),
+            ),
+            (10, 10, SubPatch::Text(", /".to_owned())),
+        ];
+        assert_eq!(&source[parameters.to_std_range()], "a, b)");
+        splice(
+            source,
+            sub_edits,
+            vec![vec![0], vec![1]],
+            &[writer, inserter],
+        )
+        .1
+    }
+
+    fn author(lowering: Option<Lowering>, subsumes: &'static [Lowering]) -> Author {
+        Author {
+            name: "Pass",
+            lowering,
+            subsumes,
+        }
+    }
+
+    /// a template that writes a construct itself prints none of the source an edit
+    /// inside it was made against, so the edit is refused — whether or not the text the
+    /// template writes happens to agree with it
+    #[test]
+    fn an_insertion_inside_a_construct_a_template_writes_is_refused() {
+        let errors = lost_in_a_written_parameter_list(
+            author(None, &[]),
+            author(Some(Lowering::RepeatedUnderscore), &[]),
+        );
+        assert_eq!(
+            errors,
+            [
+                "transform conflict: text inserted at byte 10 by `Pass` lands inside a construct `Pass` writes itself, so the lowering would be lost"
+            ]
+        );
+    }
+
+    /// a pass that says it writes a lowering's constructs itself takes that lowering's
+    /// edits inside its own
+    #[test]
+    fn a_lowering_the_template_writes_itself_is_accounted_for() {
+        let errors = lost_in_a_written_parameter_list(
+            author(None, &[Lowering::RepeatedUnderscore]),
+            author(Some(Lowering::RepeatedUnderscore), &[]),
+        );
+        assert_eq!(errors, Vec::<String>::new());
+    }
+
+    /// what a deletion covers is not printed at all, so nothing inside it is lost
+    #[test]
+    fn a_deletion_takes_the_edits_inside_it() {
+        let source = "x: int? = 1\n";
+        let sub_edits = vec![
+            (1, 7, SubPatch::Text(String::new())),
+            (6, 7, SubPatch::Text(" | None".to_owned())),
+        ];
+        let authors = [author(None, &[]), author(Some(Lowering::OptionalType), &[])];
+        let errors = splice(source, sub_edits, vec![vec![0], vec![1]], &authors).1;
+        assert_eq!(errors, Vec::<String>::new());
+    }
+
     #[test]
     fn double_coalesce_spliced() {
         let src = "x = None\na = x ?? x ?? \"fallback\"\n";
-        let (out, _, _) = run_against_source(src, &Config::test_default(), None);
+        let (out, _, _) = run_against_source(
+            src,
+            repeated_underscore::WrittenNames::new(src),
+            &Config::test_default(),
+            None,
+        );
         assert!(!out.contains("??"), "still has ??: {out}");
     }
 
@@ -1461,7 +2370,7 @@ mod driver_tests {
             Fragment::Lit("Y".to_owned()),
         ];
         let mut out = Replacement::default();
-        materialize_fragments(&mut out, &frags, source, &all, &[0], 0);
+        materialize_fragments(&mut out, &frags, source, &all, &[0], 0, &mut [false]);
         assert_eq!(out.text(), "[1])Y");
     }
 
@@ -1477,7 +2386,7 @@ mod driver_tests {
             Fragment::Src(TextRange::new(TextSize::from(3u32), TextSize::from(4u32))),
         ];
         let mut out = Replacement::default();
-        materialize_fragments(&mut out, &frags, source, &all, &[0], 0);
+        materialize_fragments(&mut out, &frags, source, &all, &[0], 0, &mut [false]);
         assert_eq!(out.text(), "[1])W");
     }
 }

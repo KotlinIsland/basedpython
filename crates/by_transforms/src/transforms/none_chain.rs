@@ -5,6 +5,7 @@ use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::transforms::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::source_util::temporary_name;
 use crate::type_info::TypeInfo;
 
@@ -32,15 +33,15 @@ impl<'src> NoneChain<'src> {
 const TEMP_VARS: usize = 10;
 
 /// The name a `?.` or `??` expansion walruses its receiver into.
-pub(super) fn temp_var(index: usize) -> String {
-    temporary_name("t", index)
+pub(super) fn temp_var(written: WrittenNames<'_>, index: usize) -> String {
+    temporary_name(written, "t", index)
 }
 
-fn pick_temp_var(types: &dyn TypeInfo, anchor: &Expr) -> String {
+fn pick_temp_var(written: WrittenNames<'_>, types: &dyn TypeInfo, anchor: &Expr) -> String {
     (0..TEMP_VARS)
-        .map(temp_var)
+        .map(|index| temp_var(written, index))
         .find(|name| types.is_unbound_at(name, anchor))
-        .unwrap_or_else(|| temp_var(TEMP_VARS))
+        .unwrap_or_else(|| temp_var(written, TEMP_VARS))
 }
 
 /// walks an attribute-access chain and returns `Some((python_form, guards, base))`
@@ -179,6 +180,10 @@ impl<'src> NoneChainPass<'src> {
 }
 
 impl TypeAwarePass for NoneChainPass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::NoneChain)
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = NoneChain::new(self.source, types);
         for stmt in stmts {
@@ -229,7 +234,7 @@ impl<'ast> Visitor<'ast> for NoneChain<'_> {
         // `[i for i in a?.b]` would not even parse. the parentheses keep the emitted tree
         // the one that was parsed
         if let Some((head, form, guards, base)) = chain_head(expr, self.source, self.types) {
-            let temp = pick_temp_var(self.types, expr);
+            let temp = pick_temp_var(WrittenNames::new(self.source), self.types, expr);
             let trailers = TextRange::new(head.range().end(), expr.range().end());
             let mut fragments = vec![Fragment::Lit("(".to_owned())];
             fragments.extend(build_expansion(&guards, &form, &temp, base));
@@ -288,7 +293,7 @@ mod tests {
     fn double_chain_t_taken() {
         check(
             "__by_t_0__ = 1\nx = a?.a?.b\n",
-            "__by_t_0__ = 1\nx = (None if a is None else None if (__by_t_1__ := a.a) is None else __by_t_1__.b)\n",
+            "__by_t_0__ = 1\nx = (None if a is None else None if (__by_t_0__2 := a.a) is None else __by_t_0__2.b)\n",
         );
     }
 

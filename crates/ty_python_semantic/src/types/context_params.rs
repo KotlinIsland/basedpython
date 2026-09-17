@@ -30,13 +30,14 @@ use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_core::definition::Definition;
+use ty_python_core::place::ScopedPlaceId;
 use ty_python_core::scope::{NodeWithScopeKind, ScopeId, ScopeKind};
 use ty_python_core::{place_table, semantic_index};
 
 use crate::Db;
 use crate::types::ProgramEnvironment;
 use crate::types::receivers::{ImplicitReceiverName, implicit_receiver_name};
-use crate::types::soundness::single_signature;
+use crate::types::signatures::{Parameter, Parameters, Signature};
 use crate::types::trailing_lambda::{enclosing_block_callee, trailing_lambda_it_type};
 use crate::types::{Type, binding_type};
 
@@ -53,6 +54,15 @@ pub(crate) enum ContextResolution<'db> {
     NotFound,
     /// several candidates in the winning scope match, in source order
     Ambiguous(Vec<Name>),
+    /// a candidate that matches in the winning scope is a `_` parameter its
+    /// function repeats. python binds only one of those parameters to the name,
+    /// and which one a read of `_` means is not decided, so the value is refused
+    /// rather than guessed
+    RepeatedUnderscore,
+    /// the parameter being filled is a `_` its function repeats. which of those
+    /// parameters a keyword `_` names is not decided, so no argument can be
+    /// written for it
+    RepeatedUnderscoreParameter,
 }
 
 /// a value that can fill a `context` parameter, found in one scope
@@ -64,6 +74,8 @@ struct Candidate<'db> {
     /// the body runs, and has no value expression a call could sit inside
     range: Option<TextRange>,
     binding: CandidateBinding<'db>,
+    /// whether this is a `_` parameter of a function that has several
+    is_repeated_underscore: bool,
 }
 
 /// where a candidate's type comes from, and how a call site can name it
@@ -90,15 +102,20 @@ impl<'db> CandidateBinding<'db> {
     }
 }
 
-/// resolve the implicit argument for one unmatched `context` parameter of a
-/// call at `call_offset` inside `scope`
+/// resolve the implicit argument for `parameter`, an unmatched `context`
+/// parameter among `parameters`, of a call at `call_offset` inside `scope`
 pub(crate) fn resolve_context_argument<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     scope: ScopeId<'db>,
     call_offset: TextSize,
-    parameter_ty: Type<'db>,
+    parameters: &Parameters<'db>,
+    parameter: &Parameter<'db>,
 ) -> ContextResolution<'db> {
+    if is_repeated_underscore(db, parameters, parameter) {
+        return ContextResolution::RepeatedUnderscoreParameter;
+    }
+    let parameter_ty = parameter.annotated_type();
     let file = scope.file(db);
     let index = semantic_index(db, db.program_file(file));
     let module = parsed_module(db, db.program_file(file).python_file(db)).load(db);
@@ -144,10 +161,15 @@ pub(crate) fn resolve_context_argument<'db>(
             })
         });
 
-        // a name redeclared later shadows its earlier declaration
+        // a name redeclared later shadows its earlier declaration. a repeated `_`
+        // parameter is not a redeclaration: python binds only one of them to the
+        // name, and which one is not decided, so each stays a candidate
         candidates.reverse();
         let mut seen = Vec::new();
         candidates.retain(|candidate| {
+            if candidate.is_repeated_underscore {
+                return true;
+            }
             let fresh = !seen.contains(&candidate.name);
             if fresh {
                 seen.push(candidate.name.clone());
@@ -156,27 +178,36 @@ pub(crate) fn resolve_context_argument<'db>(
         });
         candidates.reverse();
 
-        let matching: Vec<(Name, Type<'db>, CandidateBinding<'db>)> = candidates
+        let matching: Vec<(Candidate<'db>, Type<'db>)> = candidates
             .into_iter()
             .filter_map(|candidate| {
                 let ty = candidate.binding.ty(db);
-                ty.is_assignable_to(db, env, parameter_ty).then_some((
-                    candidate.name,
-                    ty,
-                    candidate.binding,
-                ))
+                ty.is_assignable_to(db, env, parameter_ty)
+                    .then_some((candidate, ty))
             })
             .collect();
 
-        match matching.len() {
-            0 => {}
-            1 => {
-                let (name, ty, binding) = matching.into_iter().next().expect("length checked");
-                return ContextResolution::Resolved { name, ty, binding };
+        if matching
+            .iter()
+            .any(|(candidate, _)| candidate.is_repeated_underscore)
+        {
+            return ContextResolution::RepeatedUnderscore;
+        }
+        match <[_; 1]>::try_from(matching) {
+            Ok([(candidate, ty)]) => {
+                return ContextResolution::Resolved {
+                    name: candidate.name,
+                    ty,
+                    binding: candidate.binding,
+                };
             }
-            _ => {
+            Err(matching) if matching.is_empty() => {}
+            Err(matching) => {
                 return ContextResolution::Ambiguous(
-                    matching.into_iter().map(|(name, _, _)| name).collect(),
+                    matching
+                        .into_iter()
+                        .map(|(candidate, _)| candidate.name)
+                        .collect(),
                 );
             }
         }
@@ -187,8 +218,43 @@ pub(crate) fn resolve_context_argument<'db>(
     ContextResolution::NotFound
 }
 
+/// whether `parameter` is one of several `parameters` the source names `_`, and no keyword
+/// but an ambiguous `_` reaches it
+///
+/// the lowering names such a parameter and makes it positional-only, so the signature does
+/// not call it `_` any more. one that takes its name from the method it overrides is
+/// reached by that name, and is filled like any other
+fn is_repeated_underscore<'db>(
+    db: &'db dyn Db,
+    parameters: &Parameters<'db>,
+    parameter: &Parameter<'db>,
+) -> bool {
+    let is_underscore =
+        |parameter: &Parameter<'db>| written_name(db, parameter).is_some_and(|name| name == "_");
+    is_underscore(parameter)
+        && parameters
+            .iter()
+            .filter(|other| is_underscore(other))
+            .count()
+            > 1
+        && parameter.keyword_name().is_none_or(|name| name == "_")
+}
+
+/// the name `parameter` is written with, which the signature need not share
+fn written_name<'db>(db: &'db dyn Db, parameter: &Parameter<'db>) -> Option<Name> {
+    match parameter.definition() {
+        Some(definition) if let ScopedPlaceId::Symbol(symbol) = definition.place(db) => Some(
+            place_table(db, definition.scope(db))
+                .symbol(symbol)
+                .name()
+                .clone(),
+        ),
+        _ => parameter.name().cloned(),
+    }
+}
+
 /// one `context` parameter of a call site and the value filling it
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImplicitContextArgument {
     /// the `context` parameter left unmatched by the explicit arguments
     pub parameter: Name,
@@ -209,39 +275,231 @@ pub struct ImplicitContextArgument {
     pub is_module_private: bool,
 }
 
+/// the `context` arguments a call site leaves implicit
+#[derive(Debug, Clone, Default)]
+pub struct ImplicitContextArguments {
+    /// the arguments the transpiler must append to the call, in parameter order
+    pub arguments: Vec<ImplicitContextArgument>,
+    /// the `context` parameters whose value would come from a repeated `_`
+    /// parameter, which checking reports and the transpiler must refuse. which of
+    /// the repeated parameters a read of `_` means is not decided, so no argument
+    /// can be written for them
+    pub from_repeated_underscore: Vec<Name>,
+    /// whether a `context` parameter left to be filled is a `_` the callee
+    /// repeats, which checking reports and the transpiler must refuse. which of
+    /// those parameters a keyword `_` names is not decided, so no argument can be
+    /// written for it
+    pub for_repeated_underscore: bool,
+}
+
+impl ImplicitContextArguments {
+    /// whether no `context` parameter of the call is decided by what is in scope:
+    /// nothing is filled, and nothing is refused for coming from a repeated `_`
+    pub fn is_empty(&self) -> bool {
+        self.arguments.is_empty()
+            && self.from_repeated_underscore.is_empty()
+            && !self.for_repeated_underscore
+    }
+}
+
 /// the implicit arguments the transpiler must append to `call`: for each
 /// `context` parameter of `callee` that no explicit argument matches, the
 /// in-scope declaration that fills it, in parameter order. parameters that
 /// fail to resolve are skipped — checking already reported them. calls that
 /// use `*` / `**` unpacking are skipped entirely: whether the unpacking covers
 /// a parameter is not knowable statically
+///
+/// An overloaded callee is read through its first overload, restricted to the parameters
+/// `overload_fillable_context_parameters` says every overload agrees on. Which overload a
+/// call selects is decided elsewhere, so only an argument that is the right one for each of
+/// them separately may be written. A parameter left out falls back to the default it
+/// declares, which is what it does when no candidate is in scope at all.
 pub fn implicit_context_arguments<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
     callee: Type<'db>,
     call: &ast::ExprCall,
-) -> Vec<ImplicitContextArgument> {
+) -> ImplicitContextArguments {
     let has_unpacking = call.arguments.args.iter().any(ast::Expr::is_starred_expr)
         || call.arguments.keywords.iter().any(|kw| kw.arg.is_none());
     if has_unpacking {
-        return Vec::new();
+        return ImplicitContextArguments::default();
     }
 
-    let Some(signature) = single_signature(db, callee) else {
-        return Vec::new();
+    let signatures = callee_signatures(db, callee);
+    let Some(first) = signatures.first() else {
+        return ImplicitContextArguments::default();
     };
-    let parameters = signature.parameters();
 
     let index = semantic_index(db, db.program_file(file));
     let Some(file_scope_id) = index.try_expression_scope_id(&ast::ExprRef::from(call)) else {
-        return Vec::new();
+        return ImplicitContextArguments::default();
     };
     let scope = file_scope_id.to_scope_id(db, db.program_file(file));
 
+    let fillable =
+        overload_fillable_context_parameters(db, env, scope, call.range().start(), &signatures);
+    implicit_context_arguments_for(
+        db,
+        env,
+        file,
+        scope,
+        first.parameters(),
+        fillable.as_ref().map(|agreed| &agreed.fillable),
+        call,
+    )
+}
+
+/// the signatures `callee` may be called through, in declaration order
+fn callee_signatures<'db>(db: &'db dyn Db, callee: Type<'db>) -> Box<[Signature<'db>]> {
+    match callee {
+        Type::FunctionLiteral(function) => {
+            function.signature(db).overloads.iter().cloned().collect()
+        }
+        Type::BoundMethod(method) => method
+            .bound_signatures(db)
+            .overloads
+            .iter()
+            .cloned()
+            .collect(),
+        _ => Box::default(),
+    }
+}
+
+/// the `context` parameters of an overload set that a call site may fill, or `None` when
+/// `signatures` is a single signature and the question does not arise.
+///
+/// A call selects one overload, and which one is decided by the arguments it is given — not
+/// here. So a parameter may be filled only where doing so is right for every overload at
+/// once: the name has to mean the same thing in all of them, and it has to be one the call
+/// either gives or does not give in all of them alike.
+///
+/// That second half is what restricts this to **keyword-only** parameters. A keyword names
+/// the same parameter in every overload, so whether the call already supplies it cannot
+/// depend on which one is selected; a positional slot can sit at a different index in each,
+/// and then an argument written for one of them is an argument the others never asked for.
+/// A `decorator def`'s options are keyword-only, which is the shape this is here for.
+pub(crate) fn overload_fillable_context_parameters<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    scope: ScopeId<'db>,
+    call_offset: TextSize,
+    signatures: &[Signature<'db>],
+) -> Option<OverloadContextParameters> {
+    let (first, rest) = signatures.split_first()?;
+    if rest.is_empty() {
+        return None;
+    }
+    let resolutions = |signature: &Signature<'db>| {
+        let parameters = signature.parameters();
+        parameters
+            .iter()
+            .filter(|parameter| parameter.is_context() && parameter.is_keyword_only())
+            .filter_map(|parameter| {
+                let name = parameter.name()?.clone();
+                let resolution =
+                    resolve_context_argument(db, env, scope, call_offset, parameters, parameter);
+                Some((name, resolution))
+            })
+            .collect::<Vec<_>>()
+    };
+    let per_overload: Vec<_> = signatures.iter().map(resolutions).collect();
+    let mut agreed = resolutions(first);
+    for signature in rest {
+        let other = resolutions(signature);
+        agreed.retain(|entry| other.contains(entry));
+    }
+    let fillable: Vec<Name> = agreed.into_iter().map(|(name, _)| name).collect();
+
+    // every keyword-only `context` parameter any overload declares, in the order they are
+    // first written. the ones that are not fillable are exactly the ones the overloads did
+    // not agree on, and an author has no way to see that from "no overload matches arguments"
+    let mut disagreements: Vec<ContextDisagreement> = Vec::new();
+    for (name, _) in per_overload.iter().flatten() {
+        if fillable.contains(name) || disagreements.iter().any(|d| d.parameter == *name) {
+            continue;
+        }
+        disagreements.push(ContextDisagreement {
+            parameter: name.clone(),
+            per_overload: per_overload
+                .iter()
+                .map(|resolutions| {
+                    match resolutions.iter().find(|(declared, _)| declared == name) {
+                        None => ContextChoice::Undeclared,
+                        Some((_, ContextResolution::Resolved { name, .. })) => {
+                            ContextChoice::Takes(name.clone())
+                        }
+                        Some(_) => ContextChoice::NoValue,
+                    }
+                })
+                .collect(),
+        });
+    }
+    Some(OverloadContextParameters {
+        fillable,
+        disagreements,
+    })
+}
+
+/// what an overload set makes of its keyword-only `context` parameters at one call site
+#[derive(Debug, Clone)]
+pub(crate) struct OverloadContextParameters {
+    /// the names every overload agrees on, which are the ones a call may be given implicitly
+    pub(crate) fillable: Vec<Name>,
+    /// the names they do not agree on, with what each overload made of each
+    pub(crate) disagreements: Vec<ContextDisagreement>,
+}
+
+/// one `context` parameter an overload set could not fill implicitly, because its overloads do
+/// not agree on it.
+///
+/// Nothing is written for such a parameter, so a call that does not pass it explicitly goes
+/// without an argument — which on its own reads as an ordinary failure to match. What each
+/// overload made of the parameter is kept so the report can say where they part.
+#[derive(Debug, Clone)]
+pub(crate) struct ContextDisagreement {
+    pub(crate) parameter: Name,
+    /// one entry per overload, in declaration order
+    pub(crate) per_overload: Vec<ContextChoice>,
+}
+
+/// what one overload would have done with a `context` parameter
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ContextChoice {
+    /// the overload does not declare the parameter as a keyword-only `context` one at all
+    Undeclared,
+    /// it declares it, and would take the value this declaration holds
+    Takes(Name),
+    /// it declares it, and no visible declaration supplies a value for it
+    NoValue,
+}
+
+impl ContextChoice {
+    /// how this overload's answer reads in a report, as the tail of "overload N …"
+    pub(crate) fn describe(&self, parameter: &Name) -> String {
+        match self {
+            ContextChoice::Undeclared => format!("does not declare `{parameter}`"),
+            ContextChoice::Takes(name) => format!("would take `{name}`"),
+            ContextChoice::NoValue => format!("finds no value for `{parameter}`"),
+        }
+    }
+}
+
+/// [`implicit_context_arguments`] against one signature's parameter list. `fillable`
+/// restricts it to the names an overload set agrees on; `None` places no restriction
+fn implicit_context_arguments_for<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    scope: ScopeId<'db>,
+    parameters: &Parameters<'db>,
+    fillable: Option<&Vec<Name>>,
+    call: &ast::ExprCall,
+) -> ImplicitContextArguments {
+    let mut implicit = ImplicitContextArguments::default();
     let positional_count = call.arguments.args.len();
     let mut positional_index = 0;
-    let mut implicit = Vec::new();
     for parameter in parameters {
         let fills_positional_slot = parameter.is_positional();
         let matched_positionally = fills_positional_slot && positional_index < positional_count;
@@ -254,25 +512,33 @@ pub fn implicit_context_arguments<'db>(
         let Some(name) = parameter.name() else {
             continue;
         };
+        if fillable.is_some_and(|fillable| !fillable.contains(name)) {
+            continue;
+        }
         let matched_by_keyword = call
             .arguments
             .keywords
             .iter()
             .any(|kw| kw.arg.as_ref().is_some_and(|arg| arg.id == *name));
-        if matched_positionally || matched_by_keyword {
+        // a keyword `_` is not taken to match a `_` the callee repeats: which of
+        // those parameters it names is not decided
+        if matched_positionally
+            || (matched_by_keyword && !is_repeated_underscore(db, parameters, parameter))
+        {
             continue;
         }
-        if let ContextResolution::Resolved {
+        let resolution =
+            resolve_context_argument(db, env, scope, call.range().start(), parameters, parameter);
+        if resolution == ContextResolution::RepeatedUnderscore {
+            implicit.from_repeated_underscore.push(name.clone());
+        } else if resolution == ContextResolution::RepeatedUnderscoreParameter {
+            implicit.for_repeated_underscore = true;
+        } else if let ContextResolution::Resolved {
             name: variable,
             binding,
             ..
-        } = resolve_context_argument(
-            db,
-            env,
-            scope,
-            call.range().start(),
-            parameter.annotated_type(),
-        ) {
+        } = resolution
+        {
             let declaration = match binding {
                 CandidateBinding::Written(definition) => Some(definition.focus_range(
                     db,
@@ -287,7 +553,7 @@ pub fn implicit_context_arguments<'db>(
                 }
                 CandidateBinding::BlockArgument(_) | CandidateBinding::BlockReceiver(_) => false,
             };
-            implicit.push(ImplicitContextArgument {
+            implicit.arguments.push(ImplicitContextArgument {
                 parameter: name.clone(),
                 variable,
                 declaration,
@@ -297,6 +563,60 @@ pub fn implicit_context_arguments<'db>(
         }
     }
     implicit
+}
+
+/// the `context` parameters of `callee` that a decoration cannot fill.
+///
+/// `@deco` is a call — it runs `deco(g)` — but it is the one call whose argument list the
+/// source has nowhere to write. The lowering completes a call by appending the resolved
+/// argument after the ones the source wrote, and a decoration has none to append to: the
+/// parameter would quietly take its default, or, with no default, the decoration would
+/// raise `TypeError`. Neither is the ambient value the declaration promised, so each such
+/// parameter is reported and the decoration is left as written — the same bargain every
+/// other unresolvable `context` parameter gets.
+///
+/// The decorated definition fills the first positional slot, exactly as it does at runtime,
+/// so a `context` parameter that *is* that slot is not among these.
+///
+/// An overloaded callee is read through every one of its overloads, and only a parameter
+/// left unfilled in all of them is reported — which overload a decoration selects is not
+/// decided here, and a report true of every one of them is true whichever it is. This is
+/// what reaches a `decorator def`, whose declaration is always the pair of overloads it is
+/// applied in.
+pub fn unfilled_decoration_context_parameters<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> Vec<Name> {
+    let signatures = match callee {
+        Type::FunctionLiteral(function) => function.signature(db).clone(),
+        Type::BoundMethod(method) => method.bound_signatures(db).clone(),
+        _ => return Vec::new(),
+    };
+    let mut unfilled: Option<Vec<Name>> = None;
+    for signature in &signatures.overloads {
+        let mut decorated_slot_taken = false;
+        let mut in_this_one = Vec::new();
+        for parameter in signature.parameters() {
+            if parameter.is_positional() && !decorated_slot_taken {
+                decorated_slot_taken = true;
+                continue;
+            }
+            if !parameter.is_context() {
+                continue;
+            }
+            if let Some(name) = parameter.name() {
+                in_this_one.push(name.clone());
+            }
+        }
+        unfilled = Some(match unfilled {
+            None => in_this_one,
+            Some(so_far) => so_far
+                .into_iter()
+                .filter(|name| in_this_one.contains(name))
+                .collect(),
+        });
+    }
+    unfilled.unwrap_or_default()
 }
 
 /// collect the names the trailing lambda block containing `scope` binds
@@ -328,6 +648,7 @@ fn collect_block_candidates<'db>(
             name: Name::new_static("self"),
             range: None,
             binding: CandidateBinding::BlockReceiver(ty),
+            is_repeated_underscore: false,
         });
     }
 
@@ -338,6 +659,7 @@ fn collect_block_candidates<'db>(
             name: Name::new_static("it"),
             range: None,
             binding: CandidateBinding::BlockArgument(ty),
+            is_repeated_underscore: false,
         });
     }
 }
@@ -352,6 +674,10 @@ fn collect_candidates<'db>(
     out: &mut Vec<Candidate<'db>>,
 ) {
     let mut push_params = |parameters: &ast::Parameters| {
+        let underscores = parameters
+            .iter()
+            .filter(|parameter| parameter.name() == "_")
+            .count();
         for parameter in parameters.iter().map(ast::AnyParameterRef::as_parameter) {
             if parameter.is_context
                 && let Some(definition) = index.try_definition(parameter)
@@ -360,6 +686,7 @@ fn collect_candidates<'db>(
                     name: parameter.name.id.clone(),
                     range: Some(parameter.range()),
                     binding: CandidateBinding::Written(definition),
+                    is_repeated_underscore: parameter.name.id == "_" && underscores > 1,
                 });
             }
         }
@@ -403,6 +730,7 @@ fn collect_declarations<'db>(
                         name: target.id.clone(),
                         range: Some(decl.range()),
                         binding: CandidateBinding::Written(definition),
+                        is_repeated_underscore: false,
                     });
                 }
             }

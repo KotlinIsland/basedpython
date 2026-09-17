@@ -6,6 +6,7 @@ mod transforms;
 pub(crate) mod type_info;
 
 pub use config::{Config, FloatLiteralLowering, PythonVersion, SoundnessPositions};
+pub use transforms::repeated_underscore::{WrittenNames, python_parameter_name};
 pub use transforms::soundness::{SoundnessSites, soundness_sites};
 
 /// A module's `main` as the program's command line — the reading the entry-point
@@ -149,13 +150,17 @@ fn transpile_with_report(
         return Ok((source.to_owned(), RuntimeRequirements::default()));
     }
 
+    // the names the module spells as written, which a repeated `_` parameter is
+    // numbered around. read before any rewrite, as the native compiler reads them
+    let written_names = WrittenNames::new(source);
+
     // one db over the original source, shared by the qualification phase below
     // and — as long as nothing rewrites the source — by phase 0's type-aware
     // passes, which would otherwise build an identical one of their own
     let (local_db, local_file) = make_in_memory_db(source);
     // what the author wrote, before any rewrite, so phase 3 can tell a helper
     // call the transpiler emitted from a name the program reads itself
-    let written = names_written(
+    let author = AuthorNames::new(
         ruff_db::parsed::parsed_module(
             &local_db,
             ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
@@ -199,6 +204,7 @@ fn transpile_with_report(
         && matches!(enum_lowered.output, std::borrow::Cow::Borrowed(_));
     let (source, ast_errors, _phase0_map) = transforms::ast_driver::run_against_source(
         source,
+        written_names,
         config,
         unchanged.then_some((&local_db as &dyn ty_python_semantic::Db, local_file)),
     );
@@ -230,7 +236,7 @@ fn transpile_with_report(
 
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
     let (final_output, requirements) = run_import_redirect_phase(output, config);
-    let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
+    let final_output = run_anon_named_tuple_cleanup(final_output, written_names, config)?;
     let final_output = run_lazy_import_phase(
         final_output,
         config,
@@ -240,7 +246,7 @@ fn transpile_with_report(
     let final_output = run_version_polyfill_phase(final_output, config);
 
     // --- Phase 3: syntax verification ---
-    verify_syntax(&final_output, &written).map_err(|e| e.message)?;
+    verify_syntax(&final_output, &author).map_err(|e| e.message)?;
     verify_target_syntax(&final_output, config).map_err(|e| e.message)?;
 
     Ok((final_output, requirements))
@@ -343,6 +349,9 @@ pub fn transpile_typed_with_report(
     };
     let source_ref = ruff_db::source::source_text(db, file);
     let original_source = source_ref.as_str();
+    // the names the module spells as written, which a repeated `_` parameter is
+    // numbered around. read before any rewrite, as the native compiler reads them
+    let written_names = WrittenNames::new(original_source);
 
     if config.is_python {
         let out = original_source.to_owned();
@@ -353,7 +362,7 @@ pub fn transpile_typed_with_report(
         ));
     }
 
-    let written = names_written(
+    let author = AuthorNames::new(
         ruff_db::parsed::parsed_module(
             db,
             ty_python_semantic::Db::program_file(db, file).python_file(db),
@@ -425,7 +434,7 @@ pub fn transpile_typed_with_report(
     let eager_imports = eager_model.eagerly_imported_modules();
     let eager_names = eager_model.eagerly_imported_names();
     let (spliced, ast_errors, phase0_map) =
-        transforms::ast_driver::run_against_source(working_source, config, project);
+        transforms::ast_driver::run_against_source(working_source, written_names, config, project);
     if let Some(first) = ast_errors.first() {
         return Err(first.clone().into());
     }
@@ -466,7 +475,7 @@ pub fn transpile_typed_with_report(
     }
 
     let (final_output, requirements) = run_import_redirect_phase(output, config);
-    let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
+    let final_output = run_anon_named_tuple_cleanup(final_output, written_names, config)?;
     let final_output = run_lazy_import_phase(final_output, config, &eager_imports, &eager_names);
     let final_output = run_version_polyfill_phase(final_output, config);
 
@@ -507,11 +516,15 @@ pub fn transpile_typed_with_report(
     line_map.extend(composed[kept..].iter().copied());
 
     // verify last: on failure, map the generated span back to a `.by` range
-    let verified = verify_syntax(&final_output, &written)
+    let verified = verify_syntax(&final_output, &author)
         .and_then(|()| verify_target_syntax(&final_output, config));
     if let Err(mut err) = verified {
-        err.by_range = err.output_range.and_then(|r| {
-            output_offset_to_by_range(&line_map, &final_output, original_source, r.start())
+        // a range already set is one in the `.by` source to begin with — the
+        // helper-name clash points at where the author bound the name
+        err.by_range = err.by_range.or_else(|| {
+            err.output_range.and_then(|r| {
+                output_offset_to_by_range(&line_map, &final_output, original_source, r.start())
+            })
         });
         return Err(err);
     }
@@ -535,7 +548,11 @@ fn line_count(s: &str) -> usize {
 /// Re-runs the anon-named-tuple lowering on post-transform output to catch
 /// expressions that other transforms (e.g. the PEP-695 polyfill) copied
 /// verbatim from the source after the original pass ran
-fn run_anon_named_tuple_cleanup(mut source: String, config: &Config) -> Result<String, String> {
+fn run_anon_named_tuple_cleanup(
+    mut source: String,
+    written: WrittenNames,
+    config: &Config,
+) -> Result<String, String> {
     use ruff_python_ast::visitor::Visitor;
 
     for _ in 0..4 {
@@ -553,14 +570,15 @@ fn run_anon_named_tuple_cleanup(mut source: String, config: &Config) -> Result<S
         );
 
         let mut anon =
-            transforms::anon_named_tuple::AnonNamedTuple::new(src, &model, config.clone());
+            transforms::anon_named_tuple::AnonNamedTuple::new(src, written, &model, config.clone());
         for stmt in module.suite() {
             anon.visit_stmt(stmt);
         }
         if let Some(err) = anon.errors.first() {
             return Err(err.clone());
         }
-        let protocol = transforms::protocol_type::cleanup(src, &model, module.suite(), config)?;
+        let protocol =
+            transforms::protocol_type::cleanup(src, written, &model, module.suite(), config)?;
 
         if anon.edits.is_empty() && !anon.needs_import && protocol.is_none() {
             return Ok(source);
@@ -660,7 +678,8 @@ fn run_import_redirect_phase(source: String, config: &Config) -> (String, Runtim
 ///
 /// `eager_names` names the *bindings* that must be bound to the real object: a
 /// lazy proxy cannot stand where cpython checks for a real class, which is what
-/// `except` does
+/// `except` does, nor where a special form is told apart by identity, nor in an
+/// annotation something reads back
 ///
 /// A stub defers nothing: it is never executed, and deferring its imports would
 /// hand a checker a call result where the stub declares a module or a class
@@ -682,6 +701,22 @@ fn run_lazy_import_phase(
         ty_python_semantic::Db::program_file(&db, file).python_file(&db),
     )
     .load(&db);
+    // the lowering writes imports of its own — an enum's `ClassVar` among them — which
+    // the source the transpile began from never held, so the output is asked too. the
+    // annotations are read off the output for the same reason: a lowering writes those
+    let mut eager_names = eager_names.to_vec();
+    eager_names.extend(
+        ty_python_semantic::SemanticModel::new(
+            &db,
+            ty_python_semantic::Db::program_file(&db, file),
+        )
+        .eagerly_imported_names(),
+    );
+    eager_names.extend(transforms::lazy_import::annotation_names(
+        module.suite(),
+        src,
+    ));
+    eager_names.extend(transforms::lazy_import::decorator_names(module.suite()));
 
     let deferral = if config.is_stub {
         transforms::lazy_import::Deferral::Never
@@ -694,7 +729,7 @@ fn run_lazy_import_phase(
     // through a proxy would be a proxy call on every use
     let mut eager = eager.to_vec();
     eager.extend(config.runtime_module.clone());
-    let mut lazy = transforms::lazy_import::LazyImport::new(src, deferral, &eager, eager_names);
+    let mut lazy = transforms::lazy_import::LazyImport::new(src, deferral, &eager, &eager_names);
     for stmt in module.suite() {
         lazy.visit_stmt(stmt);
     }
@@ -713,8 +748,21 @@ fn run_lazy_import_phase(
         return source;
     }
 
+    let (mut body, _) = apply_transforms_once(src, lazy.edits);
+    // phase 0 already gave the module the helpers *it* needed. where that was an import of the
+    // runtime written beside it, the helpers this phase needs belong on that same line rather
+    // than on a second one naming the same module
+    if let Some(module) = config.runtime_module.as_deref()
+        && !helpers.is_empty()
+    {
+        let line = runtime::import_line(module, helpers.iter().copied());
+        let left_over = transforms::ast_driver::merge_into_own_imports(&mut body, vec![line]);
+        return match left_over.first() {
+            Some(line) => splice_preamble(&body, &format!("{line}\n")),
+            None => body,
+        };
+    }
     let preamble = runtime_preamble(config, &helpers);
-    let (body, _) = apply_transforms_once(src, lazy.edits);
     if preamble.is_empty() {
         body
     } else {
@@ -778,6 +826,7 @@ fn verify_target_syntax(source: &str, config: &Config) -> Result<(), TranspileEr
     // the parser's own wording already names both versions: "Cannot use
     // `except*` on Python 3.9 (syntax was added in Python 3.11)"
     Err(TranspileError {
+        kind: TranspileErrorKind::InvalidSyntax,
         message: first.to_string(),
         output_range: Some(first.range),
         by_range: None,
@@ -828,6 +877,25 @@ pub struct TranspileError {
     pub message: String,
     pub output_range: Option<ruff_text_size::TextRange>,
     pub by_range: Option<ruff_text_size::TextRange>,
+    pub kind: TranspileErrorKind,
+}
+
+/// What a transpile failure is, so that it reaches the user through the channel that fits.
+///
+/// The three are not interchangeable. A refusal is about the module and the author can act on
+/// it; the other two are about the transpiler, and the reader's next step is to report them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TranspileErrorKind {
+    /// the python the transpiler produced does not parse, or needs syntax the target version
+    /// does not have
+    #[default]
+    InvalidSyntax,
+    /// the module is well-formed basedpython with no correct lowering, and the message says
+    /// what to change
+    Refused,
+    /// the transpiler broke a contract of its own — emitting a call to a helper it never asked
+    /// for, or leaving surface syntax unlowered
+    Bug,
 }
 
 impl std::fmt::Display for TranspileError {
@@ -842,11 +910,12 @@ impl From<String> for TranspileError {
             message,
             output_range: None,
             by_range: None,
+            kind: TranspileErrorKind::default(),
         }
     }
 }
 
-fn verify_syntax(source: &str, written: &HashSet<String>) -> Result<(), TranspileError> {
+fn verify_syntax(source: &str, author: &AuthorNames) -> Result<(), TranspileError> {
     use ruff_python_ast::{PySourceType, visitor::Visitor};
 
     let parsed = ruff_python_parser::parse_unchecked_source(source, PySourceType::Python);
@@ -861,6 +930,7 @@ fn verify_syntax(source: &str, written: &HashSet<String>) -> Result<(), Transpil
         // `first.error` is the clean message; the full `Display` would append
         // "at byte range …" which is meaningless to the user
         return Err(TranspileError {
+            kind: TranspileErrorKind::InvalidSyntax,
             message: format!("transpiler produced invalid Python: {}", first.error),
             output_range: Some(first.location),
             by_range: None,
@@ -908,6 +978,7 @@ fn verify_syntax(source: &str, written: &HashSet<String>) -> Result<(), Transpil
     if let Some(range) = scanner.leftover_range {
         let snippet = &source[usize::from(range.start())..usize::from(range.end())];
         return Err(TranspileError {
+            kind: TranspileErrorKind::Bug,
             message: format!("transpiler failed to lower anonymous named tuple syntax `{snippet}`"),
             output_range: Some(range),
             by_range: None,
@@ -916,6 +987,7 @@ fn verify_syntax(source: &str, written: &HashSet<String>) -> Result<(), Transpil
     if let Some(range) = scanner.leftover_typeof {
         let snippet = &source[usize::from(range.start())..usize::from(range.end())];
         return Err(TranspileError {
+            kind: TranspileErrorKind::Bug,
             message: format!("transpiler failed to lower `typeof` syntax `{snippet}`"),
             output_range: Some(range),
             by_range: None,
@@ -928,17 +1000,243 @@ fn verify_syntax(source: &str, written: &HashSet<String>) -> Result<(), Transpil
     // apply again — and a `match` that fails them is python that will not parse
     if let Some(error) = first_invalid_match_statement(parsed.suite()) {
         return Err(TranspileError {
+            kind: TranspileErrorKind::InvalidSyntax,
             message: format!("transpiler produced invalid Python: {error}"),
             output_range: Some(error.range),
             by_range: None,
         });
     }
 
-    verify_runtime_helpers(parsed.suite(), written)
+    verify_runtime_helpers(parsed.suite(), &author.reads)?;
+    verify_no_helper_name_clash(parsed.suite(), author)?;
+    verify_no_shadowed_helper(parsed.suite(), author)
+}
+
+/// what the author's own source does with the names the lowering also uses: which it reads, and
+/// which it binds at module scope
+///
+/// Both halves are read before any rewrite, so a name that reaches phase 3 can be told apart from
+/// one the transpiler put there.
+pub(crate) struct AuthorNames {
+    /// every name the source reads
+    reads: HashSet<String>,
+    /// every name one of the source's own top-level statements binds, how many of them bind it,
+    /// and where the first one is. the runtime is only ever provided at module scope, so this is
+    /// the scope where a name of the author's and a name of the lowering's are the same binding
+    binds_at_module_scope: std::collections::HashMap<String, (usize, TextRange)>,
+    /// each scope of the source's own that takes a helper name over, and how many reads of that
+    /// name the source itself makes under it — the reads that are the author's to have written
+    shadows: HelperShadows,
+}
+
+/// what a parse does with the helper names its own scopes take over: where the taking-over
+/// scopes are, and how many reads land on them
+///
+/// keyed by the helper name alone, not by the scope that binds it. the author's half of the
+/// count is read from the `.by` source and the other half from the lowered output, and the
+/// two parses have no scope in common to key on: a lowering renames a scope (a class's
+/// `private def helper` reaches the output as `__helper`) and writes scopes of its own, so a
+/// per-scope key reads the one scope under two names and reports the module for a read it
+/// made itself
+#[derive(Default)]
+struct HelperShadows {
+    /// helper name → where in the `.by` source the first scope that takes it over was
+    /// written, and what to call that scope
+    scopes: std::collections::HashMap<String, (TextRange, String)>,
+    /// helper name → how many reads one of those bindings, rather than module scope, answers
+    reads: std::collections::HashMap<String, usize>,
+}
+
+impl HelperShadows {
+    fn of(suite: &[Stmt]) -> Self {
+        let found = runtime::shadowing(suite);
+        let mut scopes: std::collections::HashMap<String, (TextRange, String)> =
+            std::collections::HashMap::new();
+        // `runtime::shadowing` hands the scopes back in source order, so the first entry for
+        // a name is the scope the author wrote first
+        for (name, range, scope) in found.scopes {
+            scopes.entry(name).or_insert((range, scope));
+        }
+        let mut reads: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (name, _) in found.reads {
+            *reads.entry(name).or_insert(0) += 1;
+        }
+        Self { scopes, reads }
+    }
+}
+
+impl AuthorNames {
+    fn new(suite: &[Stmt]) -> Self {
+        let mut binds_at_module_scope: std::collections::HashMap<String, (usize, TextRange)> =
+            std::collections::HashMap::new();
+        for stmt in suite {
+            // the range is the binding's own, so a refusal points at the `x` of `x = 1`
+            // rather than at the whole statement
+            for (name, range) in runtime::bindings(stmt) {
+                binds_at_module_scope
+                    .entry(name)
+                    .and_modify(|(count, _)| *count += 1)
+                    .or_insert((1, range));
+            }
+        }
+        Self {
+            reads: names_written(suite),
+            binds_at_module_scope,
+            shadows: HelperShadows::of(suite),
+        }
+    }
+
+    #[cfg(test)]
+    fn none() -> Self {
+        Self {
+            reads: HashSet::new(),
+            binds_at_module_scope: std::collections::HashMap::new(),
+            shadows: HelperShadows::default(),
+        }
+    }
+}
+
+/// reject output whose module binds a name the runtime helpers it was given bind
+///
+/// the helpers reach a module under fixed names — pasted in as definitions, or
+/// imported from the `_by_runtime` beside it — and both renderings put those names
+/// in the module's own globals, ahead of everything the author wrote. a module that
+/// binds one of them itself therefore takes the helper's name over, and the lowered
+/// lines that run after it call the author's value: `_soundness_check = 3` beside a
+/// checked call raises `TypeError: 'int' object is not callable`, and
+/// `from typing import Optional` beside a `Some(...)` raises `Cannot instantiate
+/// typing.Optional`. The lowering has no way to spell the helper other than its
+/// name, so the clash is reported rather than miscompiled
+fn verify_no_helper_name_clash(suite: &[Stmt], author: &AuthorNames) -> Result<(), TranspileError> {
+    let mut provided: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for stmt in suite {
+        for name in runtime::bindings(stmt).into_keys() {
+            if runtime::defines(&name) {
+                *provided.entry(name).or_insert(0) += 1;
+            }
+        }
+    }
+    // the author's own top-level bindings are in `suite` too, so a name bound more often there
+    // than the author bound it is one the preamble also binds — and the module then has two
+    // bindings of the one name, of which the author's is the later and therefore the live one
+    let mut clashes: Vec<(&String, TextRange)> = author
+        .binds_at_module_scope
+        .iter()
+        .filter(|(name, (count, _))| provided.get(*name).is_some_and(|provided| provided > count))
+        .map(|(name, (_, range))| (name, *range))
+        .collect();
+    clashes.sort_by(|a, b| a.1.start().cmp(&b.1.start()).then_with(|| a.0.cmp(b.0)));
+    match clashes.first() {
+        Some((name, range)) => Err(TranspileError {
+            kind: TranspileErrorKind::Refused,
+            message: format!(
+                "this module binds `{name}`, which is the name a runtime helper its lowering \
+                 needs is provided under, so the lowered code would read this module's value \
+                 instead of the helper. Rename it"
+            ),
+            output_range: None,
+            by_range: Some(*range),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// reject output whose lowered code reads a helper through a name one of the module's own
+/// scopes has taken over
+///
+/// [`verify_no_helper_name_clash`] answers this at module scope, where the author's binding and
+/// the preamble's are the same binding. A `def`, `class`, `lambda` or comprehension that binds a
+/// helper name instead *shadows* the preamble's, for that scope alone — so a module is only
+/// wrong when the lowering emits a read of the name inside such a scope:
+///
+/// ```python
+/// def go() -> str:
+///     _soundness_check = "mine"          # the author's own local
+///     return _soundness_check(pick(xs, 0), str)   # the lowering's read, which finds it
+/// ```
+///
+/// A scope that binds the name and reads it *itself* is not that — `from typing import Optional`
+/// beside a `return Optional` is a module using its own import — so the author's own reads are
+/// subtracted: the refusal is for a read the module's own source does not account for.
+///
+/// The subtraction is per helper name across the whole module, not per scope: see
+/// [`HelperShadows`] for why the two parses have no scope to key on. So a read the author makes
+/// under one scope pays for a read the lowering emits under another, and a module that both
+/// reads a helper name itself and has the lowering emit that name elsewhere is let through.
+/// Telling the two apart needs the emitted reads marked where they are emitted.
+fn verify_no_shadowed_helper(suite: &[Stmt], author: &AuthorNames) -> Result<(), TranspileError> {
+    let output = HelperShadows::of(suite);
+    let own = own_shadowed_reads_in(suite);
+    let mut emitted: Vec<&String> = output
+        .reads
+        .iter()
+        .filter(|(name, count)| {
+            let accounted = author.shadows.reads.get(*name).copied().unwrap_or(0)
+                + own.get(name.as_str()).copied().unwrap_or(0);
+            **count > accounted
+        })
+        .map(|(name, _)| name)
+        .collect();
+    // the message names one scope, so the choice has to be stable: the one the author wrote
+    // first, and failing a scope of the author's at all, the name itself
+    emitted.sort_by_key(|name| {
+        (
+            author
+                .shadows
+                .scopes
+                .get(*name)
+                .map_or(u32::MAX, |(range, _)| range.start().into()),
+            (*name).clone(),
+        )
+    });
+    let Some(name) = emitted.first() else {
+        return Ok(());
+    };
+    let written = author.shadows.scopes.get(*name);
+    // the span is the binding's own rather than the scope's, which is the only thing to
+    // point at when the scope has no name — a comprehension or a lambda gives an author
+    // nothing to search for, and the line the name is bound on does
+    let range = written.map(|(range, _)| *range);
+    let binder = match written {
+        Some((_, scope)) => format!("{scope} binds"),
+        None => "this module binds".to_owned(),
+    };
+    Err(TranspileError {
+        kind: TranspileErrorKind::Refused,
+        message: format!(
+            "{binder} `{name}`, which is the name a runtime helper its lowering needs is \
+             provided under, so the lowered code in that scope would read this binding \
+             instead of the helper. Rename it"
+        ),
+        output_range: None,
+        by_range: range,
+    })
+}
+
+/// how many shadowed reads of each helper name the runtime definitions this output was *given*
+/// make on their own behalf
+///
+/// some of the runtime shadows on purpose: `_by_character_class` builds a local `class
+/// Character` and hands it back, and those reads say nothing about the module it was written
+/// beside. they only reach the output when the definition that makes them was pasted into it,
+/// so a build that imports the helper from `_by_runtime` instead gets no allowance for them
+fn own_shadowed_reads_in(suite: &[Stmt]) -> std::collections::HashMap<&'static str, usize> {
+    let bound: HashSet<String> = suite
+        .iter()
+        .flat_map(|stmt| runtime::bindings(stmt).into_keys())
+        .collect();
+    let mut counts: std::collections::HashMap<&'static str, usize> =
+        std::collections::HashMap::new();
+    for ((name, scope), count) in runtime::own_shadowed_reads() {
+        if bound.contains(scope) {
+            *counts.entry(name.as_str()).or_insert(0) += count;
+        }
+    }
+    counts
 }
 
 /// every name the author's own source reads
-fn names_written(suite: &[Stmt]) -> HashSet<String> {
+pub(crate) fn names_written(suite: &[Stmt]) -> HashSet<String> {
     use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 
     struct Reads(HashSet<String>);
@@ -989,7 +1287,10 @@ fn verify_runtime_helpers(suite: &[Stmt], written: &HashSet<String>) -> Result<(
         }
     }
 
-    let provided: HashSet<String> = suite.iter().flat_map(runtime::bindings).collect();
+    let provided: HashSet<String> = suite
+        .iter()
+        .flat_map(|stmt| runtime::bindings(stmt).into_keys())
+        .collect();
     let mut emitted = Emitted {
         written,
         reads: Vec::new(),
@@ -1003,6 +1304,7 @@ fn verify_runtime_helpers(suite: &[Stmt], written: &HashSet<String>) -> Result<(
         .find(|(name, _)| !provided.contains(name))
     {
         Some((name, range)) => Err(TranspileError {
+            kind: TranspileErrorKind::Bug,
             message: format!(
                 "transpiler emitted a call to the runtime helper `{name}` without asking for \
                  it, so the module it produced does not define it"
@@ -1112,13 +1414,71 @@ fn run_lowering_phase(source: &str, stmts: &[Stmt], config: &Config) -> Lowering
     let needs_lazy_annotations =
         config.inject_future_annotations || config.min_version < PythonVersion::PY310;
     if needs_lazy_annotations && !config.is_stub && !has_future_annotations(stmts) {
+        // a string is the module's `__doc__` only while it is the first statement,
+        // so the import goes after it rather than over it — a module whose
+        // annotations had to be deferred used to read back no docstring at all.
+        // every later phase splices at the same place, and the line map is built
+        // for it: see `run_...` phases 2 and 2c, and `kept` in `transpile_inner`
+        let at = transforms::source_util::docstring_end(source);
+        output.push_str(&source[..at]);
         output.push_str("from __future__ import annotations\n");
+        output.push_str(&source[at..]);
+    } else {
+        output.push_str(source);
     }
-    output.push_str(source);
 
     LoweringResult {
         output,
         errors: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod lowering_preamble {
+    use super::{Config, PythonVersion, transpile};
+
+    /// the transpiled form of `source` on a target whose runtime cannot evaluate
+    /// `X | Y` annotations, so the deferred-annotations import is emitted
+    fn with_future_import(source: &str) -> String {
+        let out = transpile(
+            source,
+            &Config {
+                min_version: PythonVersion::PY39,
+                ..Config::test_default()
+            },
+        )
+        .unwrap_or_else(|error| panic!("{source:?}: {error}"));
+        assert!(
+            out.contains("from __future__ import annotations"),
+            "expected the deferred-annotations import:\n{out}"
+        );
+        out
+    }
+
+    /// a string is the module's `__doc__` only while it is the first statement, so
+    /// the deferred-annotations import goes after it. a module built from a `.by`
+    /// file whose annotations had to be deferred used to read back no docstring
+    #[test]
+    fn the_future_import_goes_after_the_module_docstring() {
+        let out = with_future_import("\"\"\"what this module is for.\"\"\"\n\nx: int = 1\n");
+        assert!(
+            out.starts_with("\"\"\"what this module is for.\"\"\"\n"),
+            "the docstring is no longer first:\n{out}"
+        );
+    }
+
+    /// a module with no docstring keeps the import at the very top, where a first
+    /// statement that only looks like one — an expression, an assignment — must not
+    /// be mistaken for it
+    #[test]
+    fn a_module_without_a_docstring_keeps_the_import_first() {
+        for source in ["x: int = 1\n", "print(\"not a docstring\")\n"] {
+            let out = with_future_import(source);
+            assert!(
+                out.starts_with("from __future__ import annotations\n"),
+                "{source:?} gave:\n{out}"
+            );
+        }
     }
 }
 
@@ -1313,6 +1673,27 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(unique_loop_bindings_rev.edits);
     fixes.extend(typing_redirect_rev.edits);
     fixes.extend(export_import_rev.edits);
+
+    // an f-string `=` field prints the source text between its braces, so a rewrite of the
+    // expression there would change what the program prints rather than only how it is
+    // written. the `.by` written here has to print what this python printed, so those
+    // spans are left exactly as they are
+    //
+    // a t-string reports every one of its fields that way, not only a `=` one, so all of
+    // them are left alone for the same reason
+    let mut printed = transforms::debug_field::printed_expressions(module.suite());
+    printed.extend(transforms::template_expression::read_expressions(
+        module.suite(),
+    ));
+    if !printed.is_empty() {
+        fixes.retain(|fix| {
+            !fix.edits().iter().any(|edit| {
+                printed
+                    .iter()
+                    .any(|span| span.contains_range(TextRange::new(edit.start(), edit.end())))
+            })
+        });
+    }
 
     let body = apply_transforms_once(src, fixes).0;
     // most reverse transforms swap an import-backed feature (`@dataclass`,
@@ -1720,7 +2101,7 @@ mod transpile_error {
             // nested in a function, which the scan has to reach
             "def f(x):\n    match x:\n        case a | b:\n            pass\n",
         ] {
-            let err = verify_syntax(source, &std::collections::HashSet::new()).unwrap_err();
+            let err = verify_syntax(source, &AuthorNames::none()).unwrap_err();
             assert!(
                 err.message
                     .starts_with("transpiler produced invalid Python:"),
@@ -1736,15 +2117,14 @@ mod transpile_error {
     fn verify_syntax_accepts_a_qualified_match() {
         verify_syntax(
             "match x:\n    case Color.Red | Color.Green:\n        pass\n    case Color.Blue:\n        pass\n",
-            &std::collections::HashSet::new(),
+            &AuthorNames::none(),
         )
         .unwrap();
     }
 
     #[test]
     fn verify_syntax_message_has_no_byte_range() {
-        let err =
-            verify_syntax("def f(:\n    pass\n", &std::collections::HashSet::new()).unwrap_err();
+        let err = verify_syntax("def f(:\n    pass\n", &AuthorNames::none()).unwrap_err();
         assert!(
             !err.message.contains("byte range"),
             "message must not leak internal byte ranges: {}",
@@ -2305,7 +2685,7 @@ mod cross_file {
         ]);
         let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
-            out.contains("from temps import Fahrenheit as _by_conv__Fahrenheit"),
+            out.contains("from temps import Celsius, report, Fahrenheit as _by_conv__Fahrenheit"),
             "the target class should be imported under its alias, got:\n{out}"
         );
         assert!(
@@ -2365,7 +2745,7 @@ mod cross_file {
         ]);
         let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
-            out.contains("from temps import Fahrenheit as _by_conv__Fahrenheit"),
+            out.contains("from temps import Celsius, report, Fahrenheit as _by_conv__Fahrenheit"),
             "the alias keeps the local class intact, got:\n{out}"
         );
         assert!(
@@ -2494,13 +2874,12 @@ mod cross_file {
 
 #[cfg(test)]
 mod runtime_helper_check {
-    use std::collections::HashSet;
-
-    use super::{Config, transpile, verify_syntax};
+    use super::{AuthorNames, Config, transpile, verify_syntax};
 
     fn verify(output: &str, written: &[&str]) -> Result<(), String> {
-        let written: HashSet<String> = written.iter().map(|name| (*name).to_owned()).collect();
-        verify_syntax(output, &written).map_err(|error| error.message)
+        let mut author = AuthorNames::none();
+        author.reads = written.iter().map(|name| (*name).to_owned()).collect();
+        verify_syntax(output, &author).map_err(|error| error.message)
     }
 
     #[test]
@@ -2545,6 +2924,385 @@ mod runtime_helper_check {
         transpile(
             "from helpers import *\n\nprint(_by_alias(1))\n",
             &Config::test_default(),
+        )
+        .unwrap();
+    }
+
+    /// the unit-test config turns the soundness checks off, so a case about them
+    /// asks for the default set
+    fn checked_config() -> Config {
+        Config {
+            soundness: crate::config::SoundnessPositions::defaults(),
+            ..Config::test_default()
+        }
+    }
+
+    fn clash(source: &str, config: &Config) -> String {
+        transpile(source, config).expect_err("binding a helper's name should be reported")
+    }
+
+    /// the helper reaches the module under its own name and the module's own
+    /// binding takes it over, so every lowered line below reads the module's value
+    #[test]
+    fn a_module_that_binds_a_helper_name_is_reported() {
+        let error = clash(
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "xs: list[str] = [\"a\"]\n",
+                "_soundness_check = 3\n",
+                "print(pick(xs, 0))\n",
+            ),
+            &checked_config(),
+        );
+        assert!(error.contains("`_soundness_check`"), "{error}");
+    }
+
+    /// `Optional` is the wrapper `Some(...)` builds, and `from typing import
+    /// Optional` is how a program most easily takes that name over
+    #[test]
+    fn a_typing_import_that_takes_the_wrapper_name_is_reported() {
+        let error = clash(
+            "from typing import Optional\n\nx = Some(3)\nprint(x!)\n",
+            &Config::test_default(),
+        );
+        assert!(error.contains("`Optional`"), "{error}");
+    }
+
+    /// the module's own binding need not be the one it wrote last: whatever the module binds at
+    /// module scope runs after the preamble, so it is the live one from there on
+    #[test]
+    fn an_import_that_takes_a_helper_name_is_reported() {
+        let error = clash(
+            concat!(
+                "from string import capwords as _soundness_check\n",
+                "\n",
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "xs: list[str] = [\"a\"]\n",
+                "print(pick(xs, 0))\n",
+            ),
+            &checked_config(),
+        );
+        assert!(error.contains("`_soundness_check`"), "{error}");
+    }
+
+    /// a binding in a nested scope shadows the helper for that scope alone, so it is reported
+    /// only when the lowering emits a read of the name inside it — here the checked return
+    /// value, which lands one line below the author's own local
+    #[test]
+    fn a_binding_a_lowered_line_reads_in_the_same_function_is_reported() {
+        let error = clash(
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "def go() -> str:\n",
+                "    _soundness_check = \"mine\"\n",
+                "    xs: list[str] = [\"a\"]\n",
+                "    return pick(xs, 0)\n",
+            ),
+            &checked_config(),
+        );
+        assert!(error.contains("`_soundness_check`"), "{error}");
+        assert!(error.contains("`go` binds"), "{error}");
+    }
+
+    /// a comprehension is a scope of its own, so a target of its that spells a helper name
+    /// takes the name over for the element the lowering emits into. this transpiled to
+    /// `[_soundness_check(pick(xs, 0), str) for _soundness_check in range(1)]`, which raises
+    /// `TypeError: 'int' object is not callable`
+    #[test]
+    fn a_comprehension_target_a_lowered_element_reads_is_reported() {
+        let error = clash(
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "xs: list[str] = [\"a\"]\n",
+                "ys = [pick(xs, 0) for _soundness_check in range(1)]\n",
+            ),
+            &checked_config(),
+        );
+        assert!(error.contains("`_soundness_check`"), "{error}");
+        // python calls that scope `<listcomp>`, which names nothing the author wrote, so
+        // the refusal describes it instead and points at the binding's own line
+        assert!(error.contains("a list comprehension binds"), "{error}");
+    }
+
+    /// the other scopes an author cannot name: a lambda, a generator expression, a set
+    /// comprehension and a dict comprehension. each is described rather than called by
+    /// python's own `<lambda>` / `<genexpr>` name for it
+    #[test]
+    fn a_scope_with_no_name_of_its_own_is_described() {
+        let preamble = concat!(
+            "def pick[T](items: list[T], i: int) -> T:\n",
+            "    return items[i]\n",
+            "\n",
+            "xs: list[str] = [\"a\"]\n",
+        );
+        for (tail, described) in [
+            (
+                "f = lambda _soundness_check: pick(xs, 0)\n",
+                "a lambda binds",
+            ),
+            (
+                "ys = (pick(xs, 0) for _soundness_check in range(1))\n",
+                "a generator expression binds",
+            ),
+            (
+                "ys = {pick(xs, 0) for _soundness_check in range(1)}\n",
+                "a set comprehension binds",
+            ),
+            (
+                "ys = {pick(xs, 0): 1 for _soundness_check in range(1)}\n",
+                "a dict comprehension binds",
+            ),
+        ] {
+            let error = clash(&format!("{preamble}{tail}"), &checked_config());
+            assert!(error.contains(described), "{tail}: {error}");
+            assert!(error.contains("`_soundness_check`"), "{tail}: {error}");
+        }
+    }
+
+    /// the first iterable of a comprehension is evaluated where the comprehension is
+    /// written, before its scope exists, so a lowering that emits into that iterable reads
+    /// the helper and not the target
+    #[test]
+    fn a_comprehension_target_does_not_cover_its_first_iterable() {
+        transpile(
+            concat!(
+                "def pick[T](items: list[T], i: int) -> list[T]:\n",
+                "    return items\n",
+                "\n",
+                "xs: list[str] = [\"a\"]\n",
+                "ys = [xs for _soundness_check in pick(xs, 0)]\n",
+            ),
+            &checked_config(),
+        )
+        .unwrap();
+    }
+
+    /// and a comprehension whose target reads its own name is the module's own business,
+    /// exactly as a function's local is
+    #[test]
+    fn a_comprehension_target_the_module_reads_itself_is_left_alone() {
+        transpile(
+            "ys = [Optional for Optional in range(1)]\nprint(Some(3)!)\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+    }
+
+    /// a `:=` binds like any other assignment, wherever the expression around it is
+    /// evaluated. this transpiled to `_soundness_check(pick(xs, 0), str)` two lines below
+    /// `if (_soundness_check := 3)`, which raises `TypeError: 'int' object is not callable`
+    #[test]
+    fn a_walrus_that_takes_a_helper_name_is_reported() {
+        for source in [
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "if (_soundness_check := 3):\n",
+                "    pass\n",
+                "xs: list[str] = [\"a\"]\n",
+                "print(pick(xs, 0))\n",
+            ),
+            // and inside a function, where it shadows for that scope alone
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "def go() -> str:\n",
+                "    xs: list[str] = [\"a\"]\n",
+                "    if (_soundness_check := 3):\n",
+                "        pass\n",
+                "    return pick(xs, 0)\n",
+            ),
+        ] {
+            let error = clash(source, &checked_config());
+            assert!(error.contains("`_soundness_check`"), "{error}");
+        }
+    }
+
+    /// a `case` binds too, through the names its pattern captures and through its body
+    #[test]
+    fn a_match_case_that_takes_a_helper_name_is_reported() {
+        for source in [
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "match 1:\n",
+                "    case _soundness_check:\n",
+                "        pass\n",
+                "xs: list[str] = [\"a\"]\n",
+                "print(pick(xs, 0))\n",
+            ),
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "match 1:\n",
+                "    case 1:\n",
+                "        _soundness_check = 3\n",
+                "xs: list[str] = [\"a\"]\n",
+                "print(pick(xs, 0))\n",
+            ),
+        ] {
+            let error = clash(source, &checked_config());
+            assert!(error.contains("`_soundness_check`"), "{error}");
+        }
+    }
+
+    /// every basedpython binding form binds too: a destructuring `let`, the pattern of an
+    /// `if let` clause, the pattern of a destructuring `for`, and the statement a statement
+    /// expression holds. each of these transpiled to `_soundness_check(pick(xs, 0), str)`
+    /// beside a module that had taken the name over, which raises
+    /// `TypeError: 'tuple' object is not callable` the first time the lowered line runs
+    ///
+    /// they were each found one at a time, which is why [`runtime::bindings`] now answers for
+    /// every statement by name rather than defaulting the ones nobody thought of
+    #[test]
+    fn a_basedpython_binding_form_that_takes_a_helper_name_is_reported() {
+        let preamble = concat!(
+            "def pick[T](items: list[T], i: int) -> T:\n",
+            "    return items[i]\n",
+            "\n",
+            "xs: list[str] = [\"a\"]\n",
+        );
+        for tail in [
+            // a destructuring `let`
+            "let (_soundness_check, b) := (1, 2)\nprint(pick(xs, 0))\n",
+            // the pattern of an `if let` clause
+            "if let (_soundness_check, b) := (1, 2):\n    pass\nprint(pick(xs, 0))\n",
+            // the pattern of a destructuring `for`
+            "for (_soundness_check, b) in [(1, 2)]:\n    pass\nprint(pick(xs, 0))\n",
+            // the statement a statement expression holds
+            "y = match 1:\n    case _soundness_check:\n        1\nprint(pick(xs, 0))\n",
+        ] {
+            let error = clash(&format!("{preamble}{tail}"), &checked_config());
+            assert!(error.contains("`_soundness_check`"), "{tail}: {error}");
+        }
+    }
+
+    /// the same binding in a function the lowering emits nothing into is the module's own
+    /// business, and is left alone
+    #[test]
+    fn a_binding_no_lowered_line_reads_is_left_alone() {
+        transpile(
+            concat!(
+                "def go() -> str:\n",
+                "    _soundness_check = \"mine\"\n",
+                "    return _soundness_check\n",
+            ),
+            &checked_config(),
+        )
+        .unwrap();
+    }
+
+    /// and an import written inside a function body is that function's own to read: the module
+    /// accounts for the read itself, so nothing the lowering did lands on it
+    #[test]
+    fn a_nested_import_of_a_helper_name_the_module_reads_itself_is_left_alone() {
+        transpile(
+            concat!(
+                "def f() -> object:\n",
+                "    from typing import Optional\n",
+                "    return Optional\n",
+                "\n",
+                "x = Some(3)\n",
+                "print(x!)\n",
+            ),
+            &Config::test_default(),
+        )
+        .unwrap();
+    }
+
+    /// but a lowering that emits into that same function reads the import, not the wrapper:
+    /// `Some(...)` beside the author's own `Optional` is one read more than the module made
+    #[test]
+    fn a_nested_import_a_lowered_line_reads_is_reported() {
+        let error = clash(
+            concat!(
+                "def f() -> object:\n",
+                "    from typing import Optional\n",
+                "    x = Some(3)\n",
+                "    return Optional\n",
+            ),
+            &Config::test_default(),
+        );
+        assert!(error.contains("`Optional`"), "{error}");
+        assert!(error.contains("`f` binds"), "{error}");
+    }
+
+    /// a scope the lowering renames is the same scope: a class's `private def helper` reaches
+    /// the output as `__helper`, and the import it reads is still the module's own. counting the
+    /// author's reads per scope reported this correct program, because the `.by` source and
+    /// the output spelled the one scope differently
+    #[test]
+    fn a_scope_the_lowering_renames_is_still_the_module_reading_its_own() {
+        transpile(
+            concat!(
+                "class C:\n",
+                "    private def helper(self) -> object:\n",
+                "        from typing import Optional\n",
+                "        return Optional\n",
+                "\n",
+                "x = Some(3)\n",
+                "print(x!)\n",
+            ),
+            &Config::test_default(),
+        )
+        .unwrap();
+    }
+
+    /// the reads are counted per helper name across the module, so a read the lowering emits
+    /// under one scope is reported even where the author reads the same name under another
+    #[test]
+    fn a_lowered_read_under_another_scope_is_still_reported() {
+        let error = clash(
+            concat!(
+                "def a() -> object:\n",
+                "    from typing import Optional\n",
+                "    return Optional\n",
+                "\n",
+                "def b() -> object:\n",
+                "    from typing import Optional\n",
+                "    return Some(3)\n",
+            ),
+            &Config::test_default(),
+        );
+        assert!(error.contains("`Optional`"), "{error}");
+        assert!(error.contains("`a` binds"), "{error}");
+    }
+
+    /// nothing is reported where the lowering never asked for the helper: the
+    /// name is then the module's alone
+    #[test]
+    fn a_helper_name_no_lowering_needs_is_left_alone() {
+        transpile(
+            "from typing import Optional\n\nx: Optional[int] = 1\nprint(x)\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+    }
+
+    /// and nothing is reported for a module that only reads the name it was given
+    #[test]
+    fn reading_a_helper_the_lowering_provided_is_not_a_clash() {
+        transpile(
+            concat!(
+                "def pick[T](items: list[T], i: int) -> T:\n",
+                "    return items[i]\n",
+                "\n",
+                "xs: list[str] = [\"a\"]\n",
+                "print(pick(xs, 0))\n",
+            ),
+            &checked_config(),
         )
         .unwrap();
     }

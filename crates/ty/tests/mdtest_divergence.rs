@@ -259,6 +259,13 @@ fn clean_mdtest_blocks_run() {
         .args(["-c", "frozendict"])
         .output()
         .is_ok_and(|o| o.status.success());
+    // `string.templatelib` arrived in 3.14, and a block importing a name from it to
+    // annotate with imports the module where the statement stands — the lazy-import
+    // polyfill keeps a name an annotation reads eager
+    let has_templatelib = Command::new(&python)
+        .args(["-c", "import string.templatelib"])
+        .output()
+        .is_ok_and(|o| o.status.success());
 
     let dir = mdtest_dir();
     let mut files: Vec<PathBuf> = fs::read_dir(&dir)
@@ -292,6 +299,7 @@ fn clean_mdtest_blocks_run() {
     let unavailable: Vec<&str> = [
         (!has_typing_extensions).then_some("typing_extensions"),
         (!has_frozendict).then_some("frozendict"),
+        (!has_templatelib).then_some("string.templatelib"),
         (!has_pydantic).then_some("pydantic"),
         (!has_sqlalchemy).then_some("sqlalchemy"),
         (!has_pytest).then_some("pytest"),

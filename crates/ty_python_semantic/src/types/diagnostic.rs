@@ -23,6 +23,7 @@ use crate::types::function::{FunctionDecorators, FunctionType, KnownFunction, Ov
 use crate::types::infer::UnsupportedComparisonError;
 use crate::types::overrides::MethodKind;
 use crate::types::protocol_class::ProtocolMember;
+use crate::types::repeated_underscore::UnderscoreRefusal;
 use crate::types::special_form::TypeQualifier;
 use crate::types::string_annotation::{
     ESCAPE_CHARACTER_IN_FORWARD_ANNOTATION, IMPLICIT_CONCATENATED_STRING_TYPE_ANNOTATION,
@@ -108,6 +109,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_BASE);
     registry.register_lint(&INVALID_CONTEXT_MANAGER);
     registry.register_lint(&INVALID_DECLARATION);
+    registry.register_lint(&INVALID_DECORATOR_DEF);
+    registry.register_lint(&INVALID_REPEATED_UNDERSCORE);
     registry.register_lint(&INVALID_EXCEPTION_CAUGHT);
     registry.register_lint(&INVALID_ENUM_MEMBER_ANNOTATION);
     registry.register_lint(&INVALID_GENERIC_ENUM);
@@ -575,6 +578,26 @@ declare_lint! {
     pub(crate) static MISSING_FUNCTION_BODY = {
         summary: "detects a `def` written with no body in a position that needs an implementation",
         status: LintStatus::stable("0.0.81"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/invalid-decorator-def.md")]
+    pub(crate) static INVALID_DECORATOR_DEF = {
+        summary: "detects a `decorator def` whose shape has no decorator to expand into",
+        status: LintStatus::stable("0.0.82"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/invalid-repeated-underscore.md")]
+    pub(crate) static INVALID_REPEATED_UNDERSCORE = {
+        summary: "detects a repeated `_` parameter the lowering has no python spelling for",
+        status: LintStatus::stable("0.0.83"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }
@@ -2871,11 +2894,14 @@ declare_lint! {
     /// ## What it does
     /// Checks for calls that leave a basedpython `context` parameter unfilled:
     /// no explicit argument matches it and no `context` declaration in scope
-    /// has a type assignable to it.
+    /// has a type assignable to it. A decoration is also reported, because it
+    /// is a call with no argument list to supply the value in.
     ///
     /// ## Why is this bad?
     /// A `context` parameter has no default — the call raises `TypeError` at
-    /// runtime unless something supplies the argument.
+    /// runtime unless something supplies the argument. One that does have a
+    /// default quietly takes it instead of the ambient value the declaration
+    /// promised.
     ///
     /// ## Examples
     /// ```python
@@ -2884,6 +2910,11 @@ declare_lint! {
     /// f(1)                  # error: no context value in scope
     /// context s = "hello"
     /// f(1)                  # ok — `s` is passed implicitly
+    ///
+    /// def deco(fn: (...) -> object, context b: str = "d") -> object: ...
+    ///
+    /// @deco                 # error: `b` cannot be filled at a decoration
+    /// def g(): ...
     /// ```
     pub(crate) static MISSING_CONTEXT_ARGUMENT = {
         summary: "detects calls whose `context` parameter has no matching context value",
@@ -5357,6 +5388,48 @@ pub(super) fn report_bad_dunder_delattr_call(
     }
 }
 
+/// basedpython: report each `context` parameter a decoration leaves unfilled.
+///
+/// `@deco` is a call with no argument list to append to, so the lowering has nowhere to
+/// write the ambient value and the parameter takes its default instead. Reporting it is
+/// what keeps that from happening quietly; the call form (`deco(f, b=...)`, or a decorator
+/// factory `@deco(b=...)`) is where the argument can be written.
+pub(super) fn report_unfilled_decoration_context_parameters<'db>(
+    context: &InferContext<'db, '_>,
+    decorator: &ast::Decorator,
+    decorator_ty: Type<'db>,
+) {
+    // a modifier keyword (`final def f()`) parses as a synthetic decorator that decorates
+    // nothing, and resolves to no signature of its own
+    if matches!(&decorator.expression, ast::Expr::Name(name) if name.ctx.is_invalid()) {
+        return;
+    }
+    if !matches!(
+        decorator_ty,
+        Type::FunctionLiteral(_) | Type::BoundMethod(_)
+    ) {
+        return;
+    }
+    for parameter in crate::types::context_params::unfilled_decoration_context_parameters(
+        context.db(),
+        decorator_ty,
+    ) {
+        let Some(builder) = context.report_lint(&MISSING_CONTEXT_ARGUMENT, decorator) else {
+            return;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "context parameter `{parameter}` cannot be filled at a decoration"
+        ));
+        diagnostic.sub(SubDiagnostic::new(
+            SubDiagnosticSeverity::Info,
+            format_args!(
+                "a decoration has no argument list to write it in; call the decorator \
+                 explicitly, or give it a factory form the decoration can pass it to"
+            ),
+        ));
+    }
+}
+
 pub(super) fn report_dynamic_function_decorator_return<'db>(
     context: &InferContext<'db, '_>,
     decorator: &ast::Decorator,
@@ -5874,6 +5947,94 @@ pub(super) fn report_missing_function_body(
     diagnostic.info(" - as an `abstract def` or an `@abstractmethod`-decorated method");
     diagnostic.info(" - or as an overload declaration");
     diagnostic.help("Write the body, or `: ...` if the function is meant to do nothing");
+}
+
+/// basedpython: report a parameter list that repeats `_` in a shape the lowering refuses — see
+/// [`UnderscoreRefusal`]. the transpiler refuses the same definition for the same reason, so
+/// the refusal arrives while the file is being checked
+pub(super) fn report_invalid_repeated_underscore(
+    context: &InferContext,
+    parameter: AnyNodeRef,
+    refusal: &UnderscoreRefusal,
+) {
+    let Some(builder) = context.report_lint(&INVALID_REPEATED_UNDERSCORE, parameter) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(refusal.message());
+    diagnostic.help(refusal.help());
+}
+
+/// basedpython: what is wrong with a `decorator def` the lowering cannot expand.
+pub(super) enum InvalidDecoratorDef<'a> {
+    /// written in a class body, where the keyword is not available at all
+    InClassBody,
+    /// no parameter to receive the decorated function
+    NoDecoratedParameter,
+    /// a variadic parameter, which neither the function nor an option can arrive through
+    Variadic,
+    /// a default on the parameter that receives the decorated function
+    DecoratedParameterDefault { parameter: &'a str },
+    /// an option with no default, which decorating without options cannot supply
+    OptionWithoutDefault { parameter: &'a str },
+}
+
+/// basedpython: report a `decorator def` whose shape has no decorator to expand into.
+///
+/// The lowering builds the two overloads and the runtime dispatcher out of a first parameter that
+/// receives the decorated function and options that each carry a default. Without that shape there
+/// is nothing to build, and the transpile refuses the file. ty reports the same refusal, so a
+/// `decorator def` that cannot be lowered is caught where the rest of the file's problems are.
+pub(super) fn report_invalid_decorator_def(
+    context: &InferContext,
+    node: AnyNodeRef,
+    name: &str,
+    problem: &InvalidDecoratorDef,
+) {
+    let Some(builder) = context.report_lint(&INVALID_DECORATOR_DEF, node) else {
+        return;
+    };
+    let mut diagnostic = match problem {
+        InvalidDecoratorDef::InClassBody => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`decorator def {name}` is only valid at module scope"
+            ));
+            diagnostic.help("Write a plain `def` that returns a callable");
+            diagnostic
+        }
+        InvalidDecoratorDef::NoDecoratedParameter => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`decorator def {name}` declares no parameter for the function it decorates"
+            ));
+            diagnostic.help(format_args!(
+                "Add a first parameter, which `@{name}` hands the decorated function"
+            ));
+            diagnostic
+        }
+        InvalidDecoratorDef::Variadic => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`decorator def {name}` cannot declare `*args` or `**kwargs`"
+            ));
+            diagnostic.help("Declare the decorated function and each option as a named parameter");
+            diagnostic
+        }
+        InvalidDecoratorDef::DecoratedParameterDefault { parameter } => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "The decorated parameter `{parameter}` of `decorator def {name}` cannot have a default"
+            ));
+            diagnostic.help("Remove the default");
+            diagnostic
+        }
+        InvalidDecoratorDef::OptionWithoutDefault { parameter } => {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "Option `{parameter}` of `decorator def {name}` has no default"
+            ));
+            diagnostic.help(format_args!(
+                "Give it one: `@{name}` decorates with no options at all"
+            ));
+            diagnostic
+        }
+    };
+    diagnostic.info("A `decorator def` takes the decorated function first, then options that each have a default");
 }
 
 pub(super) fn report_invalid_type_checking_constant(context: &InferContext, node: AnyNodeRef) {

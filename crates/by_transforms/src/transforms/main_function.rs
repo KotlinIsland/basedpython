@@ -15,20 +15,23 @@
 //! existing `__main__` guard or a bare top-level `main()` call — so the entry
 //! point never runs twice
 
+use ruff_python_ast::name::Name;
 use ruff_python_ast::{
     self as ast, CmpOp, Expr, ModModule, ParameterWithDefault, Parameters, Stmt, StmtFunctionDef,
 };
 
 use super::ast_driver::{AstPass, PassContext};
+use super::repeated_underscore::{WrittenNames, positional_only_count};
 use super::source_util::{is_synthetic_decorator, python_string_literal};
 
 pub(crate) struct MainFunction<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
 }
 
 impl<'src> MainFunction<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
+        Self { source, written }
     }
 }
 
@@ -40,7 +43,7 @@ impl AstPass for MainFunction<'_> {
     }
 
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
-        let Some(entry) = entry_point(&module.body, self.source) else {
+        let Some(entry) = entry_point(&module.body, self.source, self.written) else {
             return;
         };
         // a `private main` is renamed, a `main` the command line cannot fill
@@ -160,6 +163,9 @@ impl ParameterKind {
 /// One non-variadic parameter of `main`.
 pub struct EntryParameter<'a> {
     pub parameter: &'a ParameterWithDefault,
+    /// the name python binds it to, which `main` is called with: a repeated `_`
+    /// is numbered by the lowering
+    pub python_name: Name,
     pub kind: ParameterKind,
     /// how the command line spells it; `None` when the annotation has no
     /// command-line spelling, so the parameter is not exposed
@@ -168,7 +174,7 @@ pub struct EntryParameter<'a> {
 
 impl EntryParameter<'_> {
     pub fn name(&self) -> &str {
-        self.parameter.parameter.name.as_str()
+        self.python_name.as_str()
     }
 
     pub fn is_required(&self) -> bool {
@@ -252,14 +258,19 @@ pub struct Choice {
 /// The module's entry point, or `None` when it has no top-level `main`.
 ///
 /// `source` is the text `body` was parsed from; the `private` modifier is read
-/// against it.
-pub fn entry_point<'a>(body: &'a [Stmt], source: &str) -> Option<EntryPoint<'a>> {
+/// against it. `written` is the module as its author wrote it, which names a
+/// repeated `_` parameter the way the lowering does
+pub fn entry_point<'a>(
+    body: &'a [Stmt],
+    source: &str,
+    written: WrittenNames,
+) -> Option<EntryPoint<'a>> {
     let function = last_top_level_main(body)?;
     Some(EntryPoint {
         function,
         is_private: is_private(source, function),
         module_invokes_main: module_invokes_main(body),
-        parameters: parameters(&function.parameters),
+        parameters: parameters(&function.parameters, written),
         extra_arguments: extra_arguments_converter(&function.parameters),
     })
 }
@@ -279,31 +290,39 @@ fn is_private(source: &str, func: &StmtFunctionDef) -> bool {
 /// so it keeps its default — or, when it has none, stops `main` being an entry
 /// point ([`EntryPoint::blocked_by`]). Variadics never require an argument, so
 /// they are left out.
-fn parameters(params: &Parameters) -> Vec<EntryParameter<'_>> {
+fn parameters<'a>(params: &'a Parameters, written: WrittenNames) -> Vec<EntryParameter<'a>> {
     let groups = [
         (&params.posonlyargs, ParameterKind::Positional),
         (&params.args, ParameterKind::Any),
         (&params.kwonlyargs, ParameterKind::Keyword),
     ];
+    // a repeated `_` makes the parameters up to the last of them positional-only in the
+    // python, whichever group the source wrote them in
+    let positional_only = positional_only_count(params, written);
     groups
         .into_iter()
-        .flat_map(|(group, kind)| {
-            group.iter().map(move |parameter| EntryParameter {
-                parameter,
-                kind,
-                spelling: parameter
-                    .parameter
-                    .annotation
-                    .as_deref()
-                    .and_then(cli_type)
-                    .map(|(ty, choices)| CliSpelling {
-                        converter: match ty {
-                            CliType::Value(callable) => Some(callable),
-                            CliType::Flag => None,
-                        },
-                        choices,
-                    }),
-            })
+        .flat_map(|(group, kind)| group.iter().map(move |parameter| (parameter, kind)))
+        .enumerate()
+        .map(|(index, (parameter, kind))| EntryParameter {
+            parameter,
+            python_name: crate::python_parameter_name(params, &parameter.parameter, written),
+            kind: if index < positional_only {
+                ParameterKind::Positional
+            } else {
+                kind
+            },
+            spelling: parameter
+                .parameter
+                .annotation
+                .as_deref()
+                .and_then(cli_type)
+                .map(|(ty, choices)| CliSpelling {
+                    converter: match ty {
+                        CliType::Value(callable) => Some(callable),
+                        CliType::Flag => None,
+                    },
+                    choices,
+                }),
         })
         .collect()
 }
@@ -550,7 +569,7 @@ fn is_str(expr: &Expr, value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Config, transpile};
+    use crate::{Config, WrittenNames, transpile};
     use indoc::indoc;
 
     fn check(input: &str, expected: &str) {
@@ -954,6 +973,21 @@ mod tests {
         );
     }
 
+    /// `main` is called with each value under the name python binds its parameter to,
+    /// and a repeated `_` is numbered there. two specs named `_` register one option
+    /// twice, which `argparse` refuses before anything runs. the numbered parameters
+    /// are positional-only, so they are filled by position
+    #[test]
+    fn a_repeated_underscore_is_filled_by_its_numbered_name() {
+        let out = guard("def main(_: int, _: str):\n    pass\n");
+        assert!(
+            out.contains(
+                "(\"_\", int, \"positional\", True, None),\n        (\"_2\", str, \"positional\", True, None),"
+            ),
+            "got:\n{out}"
+        );
+    }
+
     #[test]
     fn last_main_definition_decides() {
         // the trailing `def main` (with a required arg) is the live binding,
@@ -980,7 +1014,8 @@ mod tests {
         let source = "def main[T](name: str, count: int = 1):\n    pass\n";
         assert!(guard(source).contains("(\"name\", str, \"any\", True, None),"));
         let module = parsed(source);
-        let entry = super::entry_point(&module.syntax().body, source).expect("a main");
+        let entry = super::entry_point(&module.syntax().body, source, WrittenNames::new(source))
+            .expect("a main");
         assert!(entry.generates_guard());
         let names: Vec<&str> = entry
             .parameters
@@ -994,7 +1029,8 @@ mod tests {
     fn a_main_the_command_line_cannot_fill_names_what_blocks_it() {
         let source = "def main(a: int, argv, b: str = \"x\"):\n    \"\"\"Adds.\"\"\"\n";
         let module = parsed(source);
-        let entry = super::entry_point(&module.syntax().body, source).expect("a main");
+        let entry = super::entry_point(&module.syntax().body, source, WrittenNames::new(source))
+            .expect("a main");
         assert_eq!(
             entry.blocked_by().map(super::EntryParameter::name),
             Some("argv")
@@ -1007,7 +1043,8 @@ mod tests {
     fn a_main_call_inside_a_docstring_is_not_an_invocation() {
         let source = "\"\"\"\nmain()\n\"\"\"\ndef main():\n    pass\n";
         let module = parsed(source);
-        let entry = super::entry_point(&module.syntax().body, source).expect("a main");
+        let entry = super::entry_point(&module.syntax().body, source, WrittenNames::new(source))
+            .expect("a main");
         assert!(!entry.module_invokes_main);
         assert!(guard(source).contains("    main()"));
     }
@@ -1016,7 +1053,8 @@ mod tests {
     fn flags_are_the_spellings_the_runtime_registers() {
         let source = "def main(out_dir: Path, dry_run: bool = False, mode: \"a\" | \"b\" = \"a\"):\n    pass\n";
         let module = parsed(source);
-        let entry = super::entry_point(&module.syntax().body, source).expect("a main");
+        let entry = super::entry_point(&module.syntax().body, source, WrittenNames::new(source))
+            .expect("a main");
         let [out_dir, dry_run, mode] = entry.parameters.as_slice() else {
             panic!("three parameters");
         };

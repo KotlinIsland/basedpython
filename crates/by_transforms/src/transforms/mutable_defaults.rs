@@ -50,6 +50,7 @@ use ruff_python_ast::{Expr, ParameterWithDefault, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::repeated_underscore::{WrittenNames, reads_underscore, rebound_underscore};
 use super::source_util::{PrologueStatement, body_prologue, first_body_statement};
 use crate::type_info::TypeInfo;
 
@@ -60,25 +61,59 @@ pub(crate) enum Guard {
     /// through a [`Fragment::Src`] passthrough so the lowerings written inside
     /// it (`?.`, `!`, an `is` test, a `context` argument) land in the body copy
     /// rather than being dropped with the signature they came from
-    Reevaluate { name: String, default: TextRange },
+    Reevaluate {
+        name: String,
+        sentinel: String,
+        default: TextRange,
+    },
     /// raise — the parameter is required, its sentinel default only exists
     /// because python rejects a required parameter after a defaulted one
-    Required { name: String, function: String },
+    Required {
+        name: String,
+        sentinel: String,
+        function: String,
+    },
+    /// bind `_` to the parameter that was the first `_`, for a body that reads it. a
+    /// repeated `_` that takes its name from an overridden method leaves no parameter
+    /// named `_`, and a read of `_` is the first one's value — after its default is
+    /// settled, so this comes after the guards above
+    Rebind { parameter: String },
+}
+
+impl Guard {
+    /// whether the guard tests for the `_MISSING` sentinel, which the output then defines
+    pub(crate) fn uses_sentinel(&self) -> bool {
+        match self {
+            Guard::Reevaluate { .. } | Guard::Required { .. } => true,
+            Guard::Rebind { .. } => false,
+        }
+    }
 }
 
 impl PrologueStatement for Guard {
     fn push(&self, frags: &mut Vec<Fragment>, base: &str) {
         match self {
-            Guard::Reevaluate { name, default } => {
+            Guard::Reevaluate {
+                name,
+                sentinel,
+                default,
+            } => {
                 frags.push(Fragment::Lit(format!(
-                    "if {name} is _MISSING:\n{base}    {name} = "
+                    "if {name} is {sentinel}:\n{base}    {name} = "
                 )));
                 frags.push(Fragment::Src(*default));
             }
-            Guard::Required { name, function } => {
+            Guard::Required {
+                name,
+                sentinel,
+                function,
+            } => {
                 frags.push(Fragment::Lit(format!(
-                    "if {name} is _MISSING:\n{base}    raise TypeError(\"{function}() missing required argument: '{name}'\")"
+                    "if {name} is {sentinel}:\n{base}    raise TypeError(\"{function}() missing required argument: '{name}'\")"
                 )));
+            }
+            Guard::Rebind { parameter } => {
+                frags.push(Fragment::Lit(format!("_ = {parameter}")));
             }
         }
     }
@@ -86,6 +121,7 @@ impl PrologueStatement for Guard {
 
 struct MutableDefaults<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     /// the `_MISSING` substitutions, whose defaults the guards re-evaluate
@@ -106,8 +142,32 @@ struct MutableDefaults<'src> {
 /// it *absorbs* the zero-width insertions a lowering anchored to the default's
 /// first token left behind (`_force_unwrap(`), which a plain-text replacement
 /// leaves stranded in the signature. the guard re-emits them
-fn sentinel_edit(default: TextRange) -> (TextRange, Vec<Fragment>) {
-    (default, vec![Fragment::Lit("_MISSING".to_owned())])
+fn sentinel_edit(default: TextRange, sentinel: &str) -> (TextRange, Vec<Fragment>) {
+    (default, vec![Fragment::Lit(sentinel.to_owned())])
+}
+
+/// The name the sentinel goes into the output under.
+///
+/// It stands for "no argument was given", so it has to be a value nothing else can be —
+/// which a name the module binds itself is not. Taken past whatever `source` spells, so a
+/// module that writes `_MISSING` of its own keeps it and the sentinel goes somewhere else.
+pub(crate) fn sentinel_name(source: &str) -> String {
+    WrittenNames::new(source).fresh("_MISSING")
+}
+
+/// The lines the output needs before it can use the sentinel: the sentinel itself, and the
+/// import its annotation names.
+///
+/// The sentinel stands where the source wrote an annotated default, so an unannotated
+/// `object()` there is a default the parameter cannot hold and a checker reading the output
+/// says so. Declaring it `Any` is how typeshed declares its own sentinels, and it costs the
+/// output nothing: the value never reaches the body, whose guard replaces it before anything
+/// reads it.
+pub(crate) fn sentinel_definition(source: &str) -> [String; 2] {
+    [
+        "from typing import Any".to_owned(),
+        format!("{}: Any = object()", sentinel_name(source)),
+    ]
 }
 
 /// A default written into the signature at the end of the parameter it belongs to.
@@ -151,6 +211,8 @@ pub(crate) struct ParameterGuards {
 /// calls.
 pub(crate) fn parameter_guards(
     f: &StmtFunctionDef,
+    written_names: WrittenNames,
+    sentinel: &str,
     types: &dyn TypeInfo,
     is_stub: bool,
 ) -> ParameterGuards {
@@ -169,9 +231,11 @@ pub(crate) fn parameter_guards(
             Some(d) => {
                 seen_default = true;
                 if !is_stub && !is_immutable_scalar_default(d) && !body_cannot_evaluate(d) {
-                    sentinels.push(sentinel_edit(d.range()));
+                    sentinels.push(sentinel_edit(d.range(), sentinel));
                     guards.push(Guard::Reevaluate {
-                        name: pw.parameter.name.id.to_string(),
+                        name: crate::python_parameter_name(params, &pw.parameter, written_names)
+                            .to_string(),
+                        sentinel: sentinel.to_owned(),
                         default: d.range(),
                     });
                 }
@@ -183,12 +247,16 @@ pub(crate) fn parameter_guards(
                 written.push(written_default(pw, &value));
             }
             None if seen_default && is_stub => {
-                undeclarable.push(pw.parameter.name.id.to_string());
+                undeclarable.push(
+                    crate::python_parameter_name(params, &pw.parameter, written_names).to_string(),
+                );
             }
             None if seen_default => {
-                written.push(written_default(pw, "_MISSING"));
+                written.push(written_default(pw, sentinel));
                 guards.push(Guard::Required {
-                    name: pw.parameter.name.id.to_string(),
+                    name: crate::python_parameter_name(params, &pw.parameter, written_names)
+                        .to_string(),
+                    sentinel: sentinel.to_owned(),
                     function: f.name.id.to_string(),
                 });
             }
@@ -198,9 +266,11 @@ pub(crate) fn parameter_guards(
     for pw in &params.kwonlyargs {
         match pw.default.as_deref() {
             Some(d) if !is_stub && !is_immutable_scalar_default(d) && !body_cannot_evaluate(d) => {
-                sentinels.push(sentinel_edit(d.range()));
+                sentinels.push(sentinel_edit(d.range(), sentinel));
                 guards.push(Guard::Reevaluate {
-                    name: pw.parameter.name.id.to_string(),
+                    name: crate::python_parameter_name(params, &pw.parameter, written_names)
+                        .to_string(),
+                    sentinel: sentinel.to_owned(),
                     default: d.range(),
                 });
             }
@@ -211,6 +281,14 @@ pub(crate) fn parameter_guards(
                 }
             }
         }
+    }
+    if !is_stub
+        && let Some(parameter) = rebound_underscore(params, written_names)
+        && reads_underscore(&f.body)
+    {
+        guards.push(Guard::Rebind {
+            parameter: parameter.to_string(),
+        });
     }
     ParameterGuards {
         sentinels,
@@ -289,7 +367,13 @@ impl MutableDefaults<'_> {
             written,
             guards,
             undeclarable,
-        } = parameter_guards(f, self.types, self.is_stub);
+        } = parameter_guards(
+            f,
+            self.written,
+            &sentinel_name(self.source),
+            self.types,
+            self.is_stub,
+        );
         self.undeclarable.extend(
             undeclarable
                 .into_iter()
@@ -300,12 +384,12 @@ impl MutableDefaults<'_> {
         if guards.is_empty() {
             return;
         }
-        self.used = true;
+        self.used |= guards.iter().any(Guard::uses_sentinel);
 
         // the guards go at the start of the first body statement the source
         // actually wrote
         match body_prologue(self.source, f, &guards) {
-            Some(anchored) => self.guards.push(anchored),
+            Some(anchored) => self.guards.extend(anchored),
             // nothing in the body came from the source, so there is nowhere to
             // put the guard. say so rather than splice it at a synthesized
             // node's offset, which lands inside the signature
@@ -325,12 +409,17 @@ impl<'ast> Visitor<'ast> for MutableDefaults<'_> {
 
 pub(crate) struct MutableDefaultsPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     is_stub: bool,
 }
 
 impl<'src> MutableDefaultsPass<'src> {
-    pub(crate) fn new(source: &'src str, is_stub: bool) -> Self {
-        Self { source, is_stub }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, is_stub: bool) -> Self {
+        Self {
+            source,
+            written,
+            is_stub,
+        }
     }
 }
 
@@ -338,6 +427,7 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = MutableDefaults {
             source: self.source,
+            written: self.written,
             types,
             edits: Vec::new(),
             relocating: Vec::new(),
@@ -366,7 +456,8 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
             return;
         }
         if inner.used {
-            ctx.required_imports.push("_MISSING = object()".to_owned());
+            ctx.required_imports
+                .extend(sentinel_definition(self.source));
         }
         ctx.template_edits.extend(inner.edits);
         ctx.relocating_edits.extend(inner.relocating);
@@ -482,7 +573,8 @@ mod tests {
                         print(a)
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 class A:
                     def f(self, a = _MISSING): 
                         if a is _MISSING:
@@ -537,7 +629,8 @@ mod tests {
                     init(items: list[int] = [])
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 class S:
                     def __init__(self, items: list[int] = _MISSING):
                         if items is _MISSING:
@@ -550,7 +643,8 @@ mod tests {
                     init(let items: list[int] = [])
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 class S:
                     def __init__(self, items: list[int] = _MISSING):
                         if items is _MISSING:
@@ -570,7 +664,8 @@ mod tests {
                     init(let first: int = 1, let second: str)
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 class S:
                     def __init__(self, first: int = 1, second: str = _MISSING):
                         if second is _MISSING:
@@ -592,7 +687,8 @@ mod tests {
                         print(items)
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 class S:
                     def __init__(self, items: list[int] = _MISSING):
                         if items is _MISSING:
@@ -625,7 +721,8 @@ mod tests {
                         self.items = items
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 class S:
                     def __init__(self, items: list[int] = _MISSING) -> None:
                         if items is _MISSING:
@@ -643,7 +740,8 @@ mod tests {
                     pass
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x=_MISSING):
                     if x is _MISSING:
                         x = []
@@ -660,7 +758,8 @@ mod tests {
                     pass
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x=_MISSING):
                     if x is _MISSING:
                         x = {}
@@ -677,7 +776,8 @@ mod tests {
                     pass
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x=_MISSING):
                     if x is _MISSING:
                         x = {1, 2}
@@ -730,7 +830,8 @@ mod tests {
                     pass
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x=_MISSING, y=_MISSING):
                     if x is _MISSING:
                         x = []
@@ -750,7 +851,8 @@ mod tests {
                     pass
             "#},
             indoc! {r#"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x=_MISSING):
                     """doc"""
                     if x is _MISSING:
@@ -758,6 +860,61 @@ mod tests {
                     pass
             "#},
         );
+    }
+
+    /// a docstring written on the `def`'s own line is a body of exactly one statement, and
+    /// nothing can follow a statement there. the guard needs a line, so the docstring is
+    /// given one first — written where it stood, the guard was indented under a suite that
+    /// had already closed and the emitted file did not parse
+    #[test]
+    fn a_docstring_on_the_def_line_is_given_a_line_of_its_own() {
+        check(
+            "def f(x=[]): \"\"\"doc\"\"\"\n",
+            "from typing import Any\n_MISSING: Any = object()\ndef f(x=_MISSING): \n    \"\"\"doc\"\"\"\n    if x is _MISSING:\n        x = []\n",
+        );
+    }
+
+    /// a body written on the `def`'s own line can hold more than the one statement, and the
+    /// break and the guard then want different offsets: the break goes ahead of the
+    /// docstring, which has to stay the body's first statement to stay a docstring, and the
+    /// guard goes ahead of the statement that follows it. taking both from the guard's
+    /// offset left the docstring on the clause's line with an indented suite under it, and
+    /// the whole file failed to parse with `Unexpected indentation`
+    #[test]
+    fn a_docstring_followed_by_statements_on_the_def_line_is_given_a_line_of_its_own() {
+        check(
+            "def f(x=[]): \"\"\"doc\"\"\"; x.append(1); return x\n",
+            "from typing import Any\n_MISSING: Any = object()\ndef f(x=_MISSING): \n    \"\"\"doc\"\"\"; \n    if x is _MISSING:\n        x = []\n    x.append(1); return x\n",
+        );
+    }
+
+    /// the same body without a docstring breaks at the one offset, because the statement the
+    /// guard goes ahead of is the body's first
+    #[test]
+    fn statements_on_the_def_line_without_a_docstring_take_one_break() {
+        check(
+            "def f(x=[]): x.append(1); return x\n",
+            "from typing import Any\n_MISSING: Any = object()\ndef f(x=_MISSING): \n    if x is _MISSING:\n        x = []\n    x.append(1); return x\n",
+        );
+    }
+
+    /// and a method reached the same way, since the break is indented from the `def` rather
+    /// than from the module
+    #[test]
+    fn a_method_body_on_the_clause_line_is_broken_at_its_own_indentation() {
+        check(
+            "class C:\n    def m(self, x=[]): \"\"\"doc\"\"\"; x.append(1); return x\n",
+            "from typing import Any\n_MISSING: Any = object()\nclass C:\n    def m(self, x=_MISSING): \n        \"\"\"doc\"\"\"; \n        if x is _MISSING:\n            x = []\n        x.append(1); return x\n",
+        );
+    }
+
+    /// with no guard to write, nothing breaks the line at all: a body on the clause's line
+    /// is left exactly as it was written
+    #[test]
+    fn a_body_on_the_def_line_is_left_alone_when_nothing_writes_into_it() {
+        unchanged("def f(x: int) -> int: \"\"\"doc\"\"\"; return x\n");
+        unchanged("def f(x: int) -> int: return x\n");
+        unchanged("class C:\n    def m(self, x: int) -> int: \"\"\"doc\"\"\"; return x\n");
     }
 
     #[test]
@@ -770,7 +927,8 @@ mod tests {
                     pass
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x=_MISSING):
                     if x is _MISSING:
                         x = []
@@ -791,7 +949,8 @@ mod tests {
                     print(x, a)
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x=1, a=_MISSING):
                     if a is _MISSING:
                         raise TypeError(\"f() missing required argument: 'a'\")
@@ -808,7 +967,8 @@ mod tests {
                     print(x, a)
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x: int = 1, a: int = _MISSING):
                     if a is _MISSING:
                         raise TypeError(\"f() missing required argument: 'a'\")
@@ -827,7 +987,8 @@ mod tests {
                     print(x, a)
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x=_MISSING, a=_MISSING):
                     if x is _MISSING:
                         x = []
@@ -863,7 +1024,8 @@ mod tests {
                     print(a)
             "#},
             indoc! {r#"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 data = "fdsa"
                 def f(a=_MISSING):
                     if a is _MISSING:
@@ -884,7 +1046,8 @@ mod tests {
                     print(a)
             "#},
             indoc! {r#"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 data = "fdsa"
                 def f(a=_MISSING):
                     if a is _MISSING:
@@ -908,7 +1071,8 @@ mod tests {
                 f(2)
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(a, b = _MISSING):
                     if b is _MISSING:
                         b = a + 1
@@ -931,7 +1095,7 @@ mod tests {
                     a: int = []
                 ) -> int: ...
             "},
-            "_MISSING = object()\ndef f(\n    a: int = _MISSING\n) -> int: \n    if a is _MISSING:\n        a = []\n    ...\n",
+            "from typing import Any\n_MISSING: Any = object()\ndef f(\n    a: int = _MISSING\n) -> int: \n    if a is _MISSING:\n        a = []\n    ...\n",
         );
     }
 
@@ -939,7 +1103,7 @@ mod tests {
     fn inline_ellipsis_body() {
         check(
             "def f(x=[]): ...",
-            "_MISSING = object()\ndef f(x=_MISSING): \n    if x is _MISSING:\n        x = []\n    ...",
+            "from typing import Any\n_MISSING: Any = object()\ndef f(x=_MISSING): \n    if x is _MISSING:\n        x = []\n    ...",
         );
     }
 
@@ -955,7 +1119,8 @@ mod tests {
                     return x
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x = _MISSING):
                     if x is _MISSING:
                         x = [True]
@@ -976,7 +1141,8 @@ mod tests {
                     return x
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(x = _MISSING):
                     if x is _MISSING:
                         x = True
@@ -1021,7 +1187,8 @@ mod tests {
                     return a ?? len(xs)
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def f(xs: list[int] = _MISSING) -> int:
                     if xs is _MISSING:
                         xs = []
@@ -1083,6 +1250,31 @@ mod tests {
         assert!(
             error.contains("a stub cannot declare parameter `y` of `f`"),
             "got: {error}"
+        );
+    }
+
+    /// the sentinel stands for "no argument was given", which a value the module itself binds
+    /// is not — the guard would take a real argument for a missing one, and the module's own
+    /// binding would be the one overwritten
+    #[test]
+    fn the_sentinel_goes_past_a_name_the_module_binds() {
+        check(
+            indoc! {"
+                _MISSING = 5
+
+                def f(xs: list[int] = []) -> int:
+                    return len(xs) + _MISSING
+            "},
+            indoc! {"
+                from typing import Any
+                _MISSING2: Any = object()
+                _MISSING = 5
+
+                def f(xs: list[int] = _MISSING2) -> int:
+                    if xs is _MISSING2:
+                        xs = []
+                    return len(xs) + _MISSING
+            "},
         );
     }
 }

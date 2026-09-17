@@ -10,13 +10,14 @@ use crate::{
         diagnostic::{
             ABSTRACT_AND_FINAL_METHOD, FINAL_ON_NON_METHOD, INEFFECTIVE_PRIVATE,
             INVALID_FIXTURE_TYPE, INVALID_PARAMETER_DEFAULT, INVALID_PARAMETRIZE,
-            INVALID_PARAMSPEC, INVALID_TYPE_FORM, REDUNDANT_RETURN_ANNOTATION, REIFIED_CLASSMETHOD,
-            TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE,
-            UNSOUND_RETURN_STATEMENT, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
-            is_invalid_typed_dict_literal, report_bool_as_int, report_implicit_return_type,
-            report_invalid_generator_function_return_type, report_invalid_return_type,
-            report_missing_function_body, report_shadowed_type_variable,
-            report_unsound_return_statement,
+            INVALID_PARAMSPEC, INVALID_TYPE_FORM, InvalidDecoratorDef, REDUNDANT_RETURN_ANNOTATION,
+            REIFIED_CLASSMETHOD, TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE,
+            UNKNOWN_FIXTURE, UNSOUND_RETURN_STATEMENT, USELESS_OVERLOAD_BODY,
+            add_type_expression_reference_link, is_invalid_typed_dict_literal, report_bool_as_int,
+            report_implicit_return_type, report_invalid_decorator_def,
+            report_invalid_generator_function_return_type, report_invalid_repeated_underscore,
+            report_invalid_return_type, report_missing_function_body,
+            report_shadowed_type_variable, report_unsound_return_statement,
         },
         extensions,
         function::{
@@ -58,6 +59,7 @@ use ty_python_core::{
 use ruff_db::diagnostic::{Annotation, Span};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
+use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::helpers::{MemberVisibility, ReturnGuardForm, return_guards};
 use ruff_text_size::Ranged;
 use rustc_hash::FxHashSet;
@@ -84,6 +86,19 @@ fn is_synthesized_from_another_construct(function: &ast::StmtFunctionDef) -> boo
                         )
             )
         })
+}
+
+/// basedpython: whether this function was written `decorator def`, which the parser records with a
+/// synthetic `decorator_keyword` marker decorator.
+fn is_decorator_def(function: &ast::StmtFunctionDef) -> bool {
+    function.decorator_list.iter().any(|decorator| {
+        matches!(
+            &decorator.expression,
+            ast::Expr::Name(marker)
+                if matches!(marker.ctx, ast::ExprContext::Invalid)
+                    && marker.id.as_str() == "decorator_keyword"
+        )
+    })
 }
 
 fn function_has_deferred_annotations(function: &ast::StmtFunctionDef) -> bool {
@@ -337,6 +352,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // basedpython: a `def` written with no body at all declares a signature. where the
         // position asks for an implementation, the missing body is the whole of the problem
         self.check_missing_function_body(function);
+
+        // basedpython: a `decorator def` the lowering cannot expand is refused when the file is
+        // transpiled; reported here, the refusal arrives while the file is being checked
+        self.check_decorator_def(function);
+
+        // basedpython: a parameter list that repeats `_` in a shape the lowering has no python
+        // spelling for is refused when the file is transpiled, and reported here
+        self.check_repeated_underscores(function);
 
         let enclosing_function_for_return_check =
             nearest_enclosing_function(db, self.index, self.scope());
@@ -646,6 +669,105 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         }
         report_missing_function_body(&self.context, function);
+    }
+
+    /// basedpython: report a `decorator def` that has no decorator to expand into.
+    ///
+    /// The lowering builds the two overloads and the runtime dispatcher out of a first parameter
+    /// that receives the decorated function and options that each carry a default, and refuses
+    /// anything else. What it refuses is what is reported here, so the shape is settled while the
+    /// file is checked rather than when it is transpiled. ty models the accepted shape as the same
+    /// pair of signatures — see [`Signature::decorator_keyword_overloads`] — and reads a
+    /// declaration it refuses as the plain function it was written as.
+    ///
+    /// [`Signature::decorator_keyword_overloads`]: crate::types::signatures::Signature::decorator_keyword_overloads
+    fn check_decorator_def(&self, function: &ast::StmtFunctionDef) {
+        if !is_decorator_def(function) {
+            return;
+        }
+        let name = function.name.id.as_str();
+        let report = |node: AnyNodeRef, problem: &InvalidDecoratorDef| {
+            report_invalid_decorator_def(&self.context, node, name, problem);
+        };
+
+        // the keyword is module-scope only: the overloads the lowering writes would stand in the
+        // enclosing class's namespace, where they are attributes rather than declarations
+        if self
+            .index
+            .ancestor_scopes(self.scope().file_scope_id(self.db()))
+            .skip(1)
+            .any(|(_, ancestor)| ancestor.kind().is_class())
+        {
+            report((&function.name).into(), &InvalidDecoratorDef::InClassBody);
+            return;
+        }
+
+        let parameters = &function.parameters;
+        if let Some(variadic) = parameters.vararg.as_deref().or(parameters.kwarg.as_deref()) {
+            report(variadic.into(), &InvalidDecoratorDef::Variadic);
+            return;
+        }
+
+        let mut positional = parameters.posonlyargs.iter().chain(&parameters.args);
+        let Some(decorated) = positional.next() else {
+            report(
+                parameters.as_ref().into(),
+                &InvalidDecoratorDef::NoDecoratedParameter,
+            );
+            return;
+        };
+        if let Some(default) = decorated.default.as_deref() {
+            report(
+                default.into(),
+                &InvalidDecoratorDef::DecoratedParameterDefault {
+                    parameter: decorated.name().as_str(),
+                },
+            );
+            return;
+        }
+
+        for option in positional.chain(&parameters.kwonlyargs) {
+            if option.default.is_none() {
+                report(
+                    (&option.parameter).into(),
+                    &InvalidDecoratorDef::OptionWithoutDefault {
+                        parameter: option.name().as_str(),
+                    },
+                );
+                return;
+            }
+        }
+    }
+
+    /// basedpython: report a parameter list that repeats `_` in a shape the lowering refuses.
+    /// the refusal is the one the definition's signature is built from — see
+    /// [`OverloadLiteral::repeated_underscores`]
+    fn check_repeated_underscores(&self, function: &ast::StmtFunctionDef) {
+        let db = self.db();
+        if function
+            .parameters
+            .iter()
+            .filter(|parameter| parameter.name() == "_")
+            .count()
+            < 2
+        {
+            return;
+        }
+        let Some(function_type) = nearest_enclosing_function(db, self.index, self.scope()) else {
+            return;
+        };
+        let Some(Err(refusal)) = function_type
+            .literal(db)
+            .last_definition
+            .repeated_underscores(db)
+        else {
+            return;
+        };
+        let node = function.parameters.iter().nth(refusal.index()).map_or_else(
+            || AnyNodeRef::from(function.parameters.as_ref()),
+            |parameter| AnyNodeRef::from(parameter.as_parameter()),
+        );
+        report_invalid_repeated_underscore(&self.context, node, refusal);
     }
 
     /// basedpython: whether a `def` written with no body at all declares a signature in this

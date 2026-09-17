@@ -67,6 +67,7 @@ use ruff_python_ast::{
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
+use super::repeated_underscore::WrittenNames;
 use super::source_util::{preamble_offset, temporary_name};
 use crate::Config;
 
@@ -167,7 +168,7 @@ impl Lower<'_> {
     /// A temporary name nothing else in the file spells.
     fn fresh(&mut self) -> String {
         loop {
-            let name = temporary_name("match", self.counter);
+            let name = temporary_name(WrittenNames::new(self.source), "match", self.counter);
             self.counter += 1;
             if !self.source.contains(&name) {
                 return name;

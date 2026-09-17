@@ -1148,6 +1148,67 @@ fn run_still_rewrites_traceback_frames_to_by_lines() {
     );
 }
 
+/// what a running program reads back about its own locations is the `.by` it was
+/// written as: a traceback it formats itself, the place a warning is attributed to,
+/// and a code object's file, which agrees with the module's `__file__`
+#[test]
+fn run_hands_a_program_its_own_by_locations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import traceback
+import warnings
+
+def boom(a: int?) -> int:
+    return a!
+
+def main():
+    try:
+        _ = boom(None)
+    except RuntimeError:
+        print(traceback.format_exc())
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter(\"always\")
+        warnings.warn(\"careful\")
+    print(\"warned at\", caught[0].filename, caught[0].lineno)
+    print(\"same file\", main.__code__.co_filename == __file__)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert!(
+        stdout.contains("main.by\", line 9, in main") && stdout.contains("_ = boom(None)"),
+        "a formatted traceback should name the .by line of the call:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("main.by\", line 5, in boom") && stdout.contains("return a!"),
+        "and the .by line that raised, as it is written:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains(".py\"") && !stdout.contains("_force_unwrap(a)"),
+        "no frame may name the generated file or its text:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("main.by 14"),
+        "a warning should be attributed to its .by line:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("same file True"),
+        "a code object's file should be the module's own:\n{stdout}"
+    );
+}
+
 /// a frame inside a trailing-lambda block is reported at the block's own `.by`
 /// line. the block's suite is hoisted into a `def` ahead of the call it hung
 /// off, and the map used to charge every line of that `def` — header and body
@@ -2571,6 +2632,43 @@ fn reverse_paren_tuple_in_type_subscript() {
     );
 }
 
+/// a module the transpiler declines to lower is not a syntax error, and does not read as one:
+/// the author's `.by` parses, and the report names what to rename. `invalid-syntax` is kept for
+/// the failures that really are syntax, which `transpile_renders_parse_error_with_location`
+/// covers
+#[test]
+fn a_refused_transpile_is_not_reported_as_a_syntax_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let by_path = dir.path().join("clash.by");
+    fs::write(
+        &by_path,
+        "from typing import Optional\n\nx = Some(3)\nprint(x!)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("transpile")
+        .arg(&by_path)
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("error[transpile-refused]"),
+        "the refusal should carry its own code:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("invalid-syntax"),
+        "and must not read as a syntax error:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("`Optional`"),
+        "naming what to rename:\n{stderr}"
+    );
+}
+
 #[test]
 fn transpile_renders_parse_error_with_location() {
     // file-based transpile should surface ty-style diagnostics on invalid
@@ -2611,6 +2709,24 @@ fn transpile_renders_parse_error_with_location() {
     assert!(
         stdout.is_empty(),
         "stdout should be empty when transpile aborts:\n{stdout}"
+    );
+}
+
+/// The lowering asks for the names it needs one at a time and the driver puts them on one
+/// `from typing import …` line. The lazy-import rewrite reads that line again and re-emits the
+/// names it leaves eager, which it has to do without taking the line apart. `by_transforms`'
+/// own tests run with lazy imports switched off, so only a test of the command sees this.
+#[test]
+fn transpile_writes_one_import_line_for_the_names_it_adds() {
+    let out = transpile(
+        "def apply(f: (int) -> int, xs: list[int] = []) -> int:\n\
+         \x20   return f(xs[0] if xs else 0)\n",
+    );
+    assert!(out.contains("from typing import Any, Callable\n"), "{out}");
+    assert_eq!(
+        out.matches("from typing import").count(),
+        1,
+        "the names the lowering added should share one import line:\n{out}"
     );
 }
 
@@ -6394,6 +6510,21 @@ fn a_built_package_runs_off_one_copy_of_the_runtime() {
         !one.contains("_lazy_attr(\"app._by_runtime\""),
         "the runtime import is eager:\n{one}"
     );
+    // the lowering asks for helpers in two places — `cast!` during the AST rewrite, the
+    // lazified `import json` after it — and both sets belong on the one import line
+    assert_eq!(
+        one.matches("from app._by_runtime import").count(),
+        1,
+        "every helper the module calls should share one runtime import:\n{one}"
+    );
+    for helper in ["_checked_cast_pred", "_lazy_module"] {
+        assert!(
+            one.lines()
+                .find(|line| line.starts_with("from app._by_runtime import"))
+                .is_some_and(|line| line.contains(helper)),
+            "`{helper}` should be on that line:\n{one}"
+        );
+    }
 
     assert_eq!(
         run_python(

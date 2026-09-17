@@ -102,13 +102,14 @@ use crate::types::diagnostic::{
     report_invalid_exception_cause, report_invalid_exception_raised,
     report_invalid_exception_tuple_caught, report_invalid_generator_yield_type,
     report_invalid_key_on_typed_dict, report_invalid_match_args_type,
-    report_invalid_type_checking_constant,
+    report_invalid_repeated_underscore, report_invalid_type_checking_constant,
     report_match_pattern_against_non_runtime_checkable_protocol,
     report_match_pattern_against_typed_dict, report_mismatched_type_name,
     report_possibly_missing_attribute, report_possibly_unresolved_reference,
     report_restricted_constructor, report_too_many_positional_patterns_for_class_pattern,
-    report_unplaceable_starred_class_pattern, report_unsound_assignment, report_unsound_yield,
-    report_unsupported_augmented_assignment, report_unsupported_comparison,
+    report_unfilled_decoration_context_parameters, report_unplaceable_starred_class_pattern,
+    report_unsound_assignment, report_unsound_yield, report_unsupported_augmented_assignment,
+    report_unsupported_comparison,
 };
 use crate::types::enums::{enum_ignored_names, is_enum_class_by_inheritance};
 use crate::types::exceptions::CallSolution;
@@ -138,6 +139,9 @@ use crate::types::newtype::NewType;
 use crate::types::receivers;
 use crate::types::regex;
 use crate::types::reified_infer::{self, ErasedTargetReason, ReifiedInferenceError};
+use crate::types::repeated_underscore::{
+    LoweredParameters, WrittenNames, lower_repeated_underscores, parameter_slots,
+};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
 use crate::types::soundness::{
@@ -6892,6 +6896,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }),
         };
 
+        // basedpython: a `context` parameter of the decorator itself is not filled here —
+        // there is no argument list to write it in — so say so rather than let it take its
+        // default
+        report_unfilled_decoration_context_parameters(&self.context, decorator_node, decorator_ty);
+
         let call_arguments = CallArguments::positional([decorated_ty]);
         let (return_ty, decorator_bindings) = match decorator_ty.try_call(db, env, &call_arguments)
         {
@@ -10640,6 +10649,40 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         self.infer_expression(&lambda_expression.body, tcx);
     }
 
+    /// basedpython: the names and kinds the lowering gives a lambda's parameters when they
+    /// repeat `_`, reporting a shape it refuses. a lambda overrides nothing and has no receiver,
+    /// so the answer is the parameter list's alone
+    fn lambda_repeated_underscores(
+        &self,
+        parameters: &ast::Parameters,
+    ) -> Option<LoweredParameters> {
+        if !self.is_basedpython_file() {
+            return None;
+        }
+        let slots = parameter_slots(parameters);
+        let slash = self.program_environment().python_version(self.db()) >= PythonVersion::PY38;
+        match lower_repeated_underscores(&slots, false, None, |_| false, slash)? {
+            Ok(lowering) => {
+                let source = source_text(self.db(), self.file());
+                Some(LoweredParameters::new(
+                    &lowering,
+                    &slots,
+                    WrittenNames::new(source.as_str()),
+                ))
+            }
+            Err(refusal) => {
+                if let Some(parameter) = parameters.iter().nth(refusal.index()) {
+                    report_invalid_repeated_underscore(
+                        &self.context,
+                        parameter.as_parameter().into(),
+                        &refusal,
+                    );
+                }
+                None
+            }
+        }
+    }
+
     fn infer_lambda_expression(
         &mut self,
         lambda_expression: &ast::ExprLambda,
@@ -10715,7 +10758,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         };
 
-        let parameters = if let Some(parameters) = parameters {
+        let parameters = if let Some(parameters_node) = parameters {
+            let parameters = parameters_node;
             let positional_only = parameters
                 .posonlyargs
                 .iter()
@@ -10793,7 +10837,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .chain(keyword_only)
                 .chain(keyword_variadic);
 
-            Parameters::from_annotation(db, env, parameters)
+            // basedpython: a lambda that repeats `_` takes the names and kinds the lowering
+            // writes it with, as a `def` does
+            match self.lambda_repeated_underscores(parameters_node) {
+                Some(lowered) => {
+                    Parameters::from_annotation(db, env, lowered.apply(parameters.collect()))
+                }
+                None => Parameters::from_annotation(db, env, parameters),
+            }
         } else {
             Parameters::empty()
         };

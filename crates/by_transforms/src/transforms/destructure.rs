@@ -66,6 +66,7 @@ use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
+use super::repeated_underscore::WrittenNames;
 use super::source_util::{line_indent, line_start, temporary_name};
 
 pub(crate) struct DestructurePass<'src> {
@@ -84,7 +85,7 @@ impl AstPass for DestructurePass<'_> {
             source: self.source,
             edits: Vec::new(),
             errors: Vec::new(),
-            names: NameGen::default(),
+            names: NameGen::new(self.source),
         };
         for stmt in &module.body {
             lower.visit_stmt(stmt);
@@ -98,7 +99,7 @@ struct DestructureLower<'src> {
     source: &'src str,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     errors: Vec<String>,
-    names: NameGen,
+    names: NameGen<'src>,
 }
 
 impl<'ast> Visitor<'ast> for DestructureLower<'_> {
@@ -219,7 +220,11 @@ impl DestructureLower<'_> {
             ));
             return;
         };
-        let selector = temporary_name("let", u32::from(let_stmt.range().start()));
+        let selector = temporary_name(
+            WrittenNames::new(self.source),
+            "let",
+            u32::from(let_stmt.range().start()),
+        );
 
         let mut fragments = vec![Fragment::Lit(format!("{selector} = 0\n{indent}"))];
         if !self.push_destructure(
@@ -360,12 +365,23 @@ impl DestructureLower<'_> {
         let (header_end, span_end, body_indent) = match (leading_docstring, anchor_stmt) {
             // the block goes after the docstring, on its own line
             (Some(docstring), _) => {
-                let end = docstring.range().end();
-                (
-                    end,
-                    end,
-                    line_indent(self.source, docstring.range().start()).to_owned(),
-                )
+                let (start, end) = (docstring.range().start(), docstring.range().end());
+                let same_line =
+                    !self.source[usize::from(colon_end)..usize::from(start)].contains('\n');
+                if same_line {
+                    // the docstring was written on the clause's line, where nothing
+                    // can follow it. it is given a line of its own first, as its own
+                    // insertion so that a second destructuring parameter's block —
+                    // which this edit passes through — still composes
+                    let indent = format!("{}    ", line_indent(self.source, colon_end));
+                    self.edits.push((
+                        TextRange::empty(start),
+                        vec![Fragment::Lit(format!("\n{indent}"))],
+                    ));
+                    (end, end, indent)
+                } else {
+                    (end, end, line_indent(self.source, start).to_owned())
+                }
             }
             (None, Some(stmt)) => {
                 let stmt_start = stmt.range().start();
@@ -431,8 +447,9 @@ impl DestructureLower<'_> {
         let indent = line_indent(self.source, match_stmt.range().start()).to_owned();
         let case_indent = format!("{indent}    ");
         let offset = u32::from(match_stmt.range().start());
-        let subject_name = temporary_name("subject", offset);
-        let selector = temporary_name("case", offset);
+        let written = WrittenNames::new(self.source);
+        let subject_name = temporary_name(written, "subject", offset);
+        let selector = temporary_name(written, "case", offset);
 
         let Some(header_colon) = self.colon_end(match_stmt.subject.range().end()) else {
             self.errors.push(format!(
@@ -561,7 +578,7 @@ pub(crate) fn push_destructure(
     pattern: &Pattern,
     guard: Option<&Expr>,
     on_match: &str,
-    names: &mut NameGen,
+    names: &mut NameGen<'_>,
 ) -> Result<(), String> {
     // every temporary this lowering makes, to be dropped once the nest is done
     let mut temporaries = Vec::new();
@@ -632,14 +649,23 @@ pub(crate) fn push_destructure(
 /// changes its output only where the formatting did. Two passes each holding one
 /// can name the same temporary, which is harmless: a temporary never outlives
 /// the `match` nest that made it — the nest drops it before any body runs.
-#[derive(Default)]
-pub(crate) struct NameGen(usize);
+pub(crate) struct NameGen<'src> {
+    written: WrittenNames<'src>,
+    counter: usize,
+}
 
-impl NameGen {
+impl<'src> NameGen<'src> {
+    pub(crate) fn new(source: &'src str) -> Self {
+        Self {
+            written: WrittenNames::new(source),
+            counter: 0,
+        }
+    }
+
     fn next(&mut self, kind: &str) -> String {
-        let index = self.0;
-        self.0 += 1;
-        temporary_name(kind, index)
+        let index = self.counter;
+        self.counter += 1;
+        temporary_name(self.written, kind, index)
     }
 }
 
@@ -655,7 +681,7 @@ struct Step {
 fn collect_steps(
     subject: &[Fragment],
     pattern: &Pattern,
-    names: &mut NameGen,
+    names: &mut NameGen<'_>,
     binders: &mut Vec<String>,
     steps: &mut Vec<Step>,
 ) -> Result<(), String> {
@@ -962,6 +988,44 @@ mod tests {
             "}),
             "got:\n{out}"
         );
+    }
+
+    /// and when that docstring is written on the `def`'s own line it is given a line of
+    /// its own first. nothing can follow a statement there, so the block was emitted at
+    /// the `def`'s own indentation — outside the function, where it ran at import and
+    /// raised `NameError` on a name no module binds
+    #[test]
+    fn a_parameter_destructure_opens_a_docstring_written_on_the_def_line() {
+        let out = check(&format!(
+            "{POINT}\ndef f(Point(x, y): Point): 'what f does'\n"
+        ));
+        assert!(
+            out.contains(indoc! {"
+                def f(__by_destructure_N__: Point): \n    'what f does'
+                    match __by_destructure_N__:
+                        case Point(x, y):
+                            pass
+                    del __by_destructure_N__
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    /// the break is an insertion of its own, so a second destructuring parameter — whose
+    /// block this edit passes through — is still written
+    #[test]
+    fn two_parameters_destructure_under_a_docstring_on_the_def_line() {
+        let out = check(&format!(
+            "{POINT}\ndef f(Point(x, y): Point, Point(a, b): Point): 'what f does'\n"
+        ));
+        for pattern in ["Point(x, y)", "Point(a, b)"] {
+            assert!(
+                out.contains(&format!(
+                    "\n    match __by_destructure_N__:\n        case {pattern}:\n            pass\n    del "
+                )),
+                "got:\n{out}"
+            );
+        }
     }
 
     /// a conjunction is a match per conjunct, nested inside the previous one

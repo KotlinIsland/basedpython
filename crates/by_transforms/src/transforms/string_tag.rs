@@ -12,10 +12,11 @@
 //! ```
 //!
 //! On Python 3.14+, `Template` is `string.templatelib.Template` and `t"..."`
-//! is native, so the call lowers to `tag(t"...")` with two narrow edits (a
-//! `(t` insertion before the quote and a `)` after the close) that keep the
-//! literal's source verbatim — any sibling lowering inside an interpolation
-//! still applies.
+//! is native, so the call lowers to `tag(t"...")`: the tag and the literal pass
+//! through as source, so any sibling lowering inside an interpolation still
+//! applies. the literal's `t` is written with the rest of what a t-string needs
+//! (see [`template_expression`]), since a field a lowering reached is rebuilt
+//! around the whole literal, prefix included.
 //!
 //! Below 3.14 there is no runtime t-string, so the literal is rewritten to an
 //! explicit `_Template(...)` constructor over a polyfill with the same
@@ -35,6 +36,8 @@ use ruff_text_size::{Ranged, TextRange};
 use crate::Config;
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
+use super::source_util::string_repr;
+use super::template_expression;
 
 pub(crate) struct StringTagPass<'src> {
     source: &'src str,
@@ -107,13 +110,16 @@ impl State<'_> {
         let func_end = call.func.range().end();
         let lit_range = tstring.range();
         if self.native {
-            // wrap the verbatim literal: `tag` `(t` `"..."` `)`. two narrow
-            // edits keep the source bytes between them, so a lowering inside an
-            // interpolation still applies
-            self.text_edits
-                .push((TextRange::empty(func_end), "(t".to_owned()));
-            self.text_edits
-                .push((TextRange::empty(call.range().end()), ")".to_owned()));
+            // `tag` `(` `"..."` `)`, the literal's `t` left to the t-string lowering
+            self.template_edits.push((
+                call.range(),
+                vec![
+                    Fragment::Src(TextRange::new(call.range().start(), func_end)),
+                    Fragment::Lit("(".to_owned()),
+                    Fragment::Src(lit_range),
+                    Fragment::Lit(")".to_owned()),
+                ],
+            ));
             return;
         }
 
@@ -150,7 +156,7 @@ impl State<'_> {
                         frags.push(Fragment::Src(interp.expression.range()));
                         frags.push(Fragment::Lit(format!(
                             ", {}",
-                            string_repr(self.src(interp.expression.range()))
+                            string_repr(template_expression::author_text(self.source, interp))
                         )));
                         let conversion = conversion_arg(interp.conversion);
                         let format_spec = interp
@@ -201,25 +207,6 @@ impl<'ast> Visitor<'ast> for State<'_> {
         }
         walk_expr(self, expr);
     }
-}
-
-/// render `value` as a python string literal. defers to a conservative escaper
-/// that always emits a double-quoted form so the result re-lexes as one token
-fn string_repr(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 /// the PEP 750 conversion argument: `None`, or the conversion char as a string

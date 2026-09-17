@@ -36,6 +36,10 @@ impl<'src> VarianceStripPass<'src> {
 }
 
 impl TypeAwarePass for VarianceStripPass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::VarianceStrip)
+    }
+
     fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut state = State {
             source: self.source,

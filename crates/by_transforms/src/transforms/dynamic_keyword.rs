@@ -77,6 +77,10 @@ impl DynamicKeywordPass {
 }
 
 impl TypeAwarePass for DynamicKeywordPass {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::DynamicKeyword)
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = DynamicKeyword::new(types);
         walk_type_positions(stmts, Some(types), &mut inner);
@@ -208,8 +212,7 @@ mod tests {
         check(
             "from typing import Callable\nf: Callable[[dynamic], dynamic]\n",
             indoc! {"
-                from typing import Any
-                from typing import Callable
+                from typing import Callable, Any
                 f: Callable[[Any], Any]
             "},
         );
@@ -220,8 +223,7 @@ mod tests {
         check(
             "from typing import cast\nb = cast(dynamic, a)\n",
             indoc! {"
-                from typing import Any
-                from typing import cast
+                from typing import cast, Any
                 b = cast(Any, a)
             "},
         );

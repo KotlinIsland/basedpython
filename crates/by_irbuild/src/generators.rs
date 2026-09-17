@@ -208,7 +208,11 @@ pub(crate) fn check(function: &ast::StmtFunctionDef) -> Lowered<()> {
 /// conservatively all of them rather than only those live across a yield. a liveness
 /// analysis would shrink the object; it would not change what compiles, and getting
 /// it wrong would lose a value across a suspension
-pub(crate) fn state_names(function: &ast::StmtFunctionDef, locals: &[String]) -> Vec<String> {
+pub(crate) fn state_names(
+    function: &ast::StmtFunctionDef,
+    written: by_transforms::WrittenNames,
+    locals: &[String],
+) -> Vec<String> {
     let mut out = vec![
         STATE_FIELD.to_string(),
         SENT_FIELD.to_string(),
@@ -227,7 +231,14 @@ pub(crate) fn state_names(function: &ast::StmtFunctionDef, locals: &[String]) ->
     for name in function
         .parameters
         .iter()
-        .map(|parameter| parameter.name().to_string())
+        .map(|parameter| {
+            by_transforms::python_parameter_name(
+                &function.parameters,
+                parameter.as_parameter(),
+                written,
+            )
+            .to_string()
+        })
         .chain(locals.iter().cloned())
     {
         if seen.insert(name.clone()) {
@@ -697,12 +708,22 @@ fn live_in(
 /// - an augmented assignment reads before it writes
 /// - a `for` target, or an assignment nested in an `if` or a loop — the body may not run
 /// - a name whose first mention is a read, which is `UnboundLocalError` territory
-pub(crate) fn definitely_assigned(function: &ast::StmtFunctionDef) -> HashSet<String> {
+pub(crate) fn definitely_assigned(
+    function: &ast::StmtFunctionDef,
+    written: by_transforms::WrittenNames,
+) -> HashSet<String> {
     // a parameter is assigned on entry: the constructor seeds its field
     let mut out: HashSet<String> = function
         .parameters
         .iter()
-        .map(|parameter| parameter.name().to_string())
+        .map(|parameter| {
+            by_transforms::python_parameter_name(
+                &function.parameters,
+                parameter.as_parameter(),
+                written,
+            )
+            .to_string()
+        })
         .collect();
 
     let mut mentioned: HashSet<String> = HashSet::new();

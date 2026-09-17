@@ -8,6 +8,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::config::Config;
 use crate::transforms::callable::lower_type_expr_full;
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 use ruff_python_ast::PythonVersion;
 
@@ -18,6 +19,7 @@ use ruff_python_ast::PythonVersion;
 /// - `type Alias = T` → `Alias: TypeAlias = T`
 pub(crate) struct GenericPolyfill<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     config: Config,
     edits: Vec<Fix>,
@@ -155,6 +157,7 @@ struct ProcessedTypeParams {
 impl<'src> GenericPolyfill<'src> {
     fn new(
         source: &'src str,
+        written: WrittenNames<'src>,
         types: &'src dyn TypeInfo,
         config: Config,
         symbolic_substitutions: Vec<(TextRange, String)>,
@@ -162,6 +165,7 @@ impl<'src> GenericPolyfill<'src> {
     ) -> Self {
         Self {
             source,
+            written,
             types,
             config,
             edits: Vec::new(),
@@ -473,6 +477,7 @@ impl<'src> GenericPolyfill<'src> {
                             } else {
                                 lower_type_expr_full(
                                     self.source,
+                                    self.written,
                                     self.types,
                                     bound,
                                     &self.subsume_within(bound.range()),
@@ -490,6 +495,7 @@ impl<'src> GenericPolyfill<'src> {
                     if let Some(default) = &tv.default {
                         let default_src = lower_type_expr_full(
                             self.source,
+                            self.written,
                             self.types,
                             default,
                             &self.subsume_within(default.range()),
@@ -934,6 +940,7 @@ impl<'src> GenericPolyfill<'src> {
 
         let value_src = lower_type_expr_full(
             self.source,
+            self.written,
             self.types,
             &alias.value,
             &substitutions,
@@ -1294,16 +1301,41 @@ pub(crate) fn mangle(name: &str) -> String {
 
 pub(crate) struct GenericPolyfillPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     config: Config,
 }
 
 impl<'src> GenericPolyfillPass<'src> {
-    pub(crate) fn new(source: &'src str, config: Config) -> Self {
-        Self { source, config }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: Config) -> Self {
+        Self {
+            source,
+            written,
+            config,
+        }
     }
 }
 
 impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::GenericPolyfill)
+    }
+
+    /// a header or alias it polyfills is re-printed with its type parameters renamed, and it
+    /// re-renders what the lowerings inside wrote rather than their source — the symbolic
+    /// folds, the private alias names, the tuple, named tuple and match types, and the variance
+    /// keywords as `TypeVar` arguments
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[
+            super::ast_driver::Lowering::TupleLiteralType,
+            super::ast_driver::Lowering::AnonNamedTuple,
+            super::ast_driver::Lowering::MatchType,
+            super::ast_driver::Lowering::SymbolicTypeOp,
+            super::ast_driver::Lowering::Modifiers,
+            super::ast_driver::Lowering::VisibilityRename,
+            super::ast_driver::Lowering::VarianceStrip,
+        ]
+    }
+
     fn run(
         &self,
         stmts: &[ruff_python_ast::Stmt],
@@ -1312,6 +1344,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
     ) {
         let mut inner = GenericPolyfill::new(
             self.source,
+            self.written,
             types,
             self.config.clone(),
             ctx.symbolic_substitutions.clone(),
@@ -2329,8 +2362,7 @@ mod tests {
                 class A[P: (*: *, **: *)]: ...
             "},
             indoc! {"
-                from typing import ParamSpec, Generic
-                from typing import TypeVar
+                from typing import TypeVar, ParamSpec, Generic
 
                 _P = ParamSpec(\"_P\")
                 class A(Generic[_P]): ...

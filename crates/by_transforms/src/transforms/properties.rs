@@ -712,6 +712,16 @@ fn join_assignments(out: &mut Vec<Fragment>, assignments: Vec<Vec<Fragment>>, in
 }
 
 impl TypeAwarePass for PropertiesPass<'_> {
+    /// an accessor block it replaces is written as the `@property` members the parser
+    /// synthesized, with the modifiers as their decorators and the declared type as the
+    /// backing field's annotation
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[
+            super::ast_driver::Lowering::Modifiers,
+            super::ast_driver::Lowering::InferredAnnotation,
+        ]
+    }
+
     fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut finder = ClassFinder {
             classes: Vec::new(),

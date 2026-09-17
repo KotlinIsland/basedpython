@@ -201,6 +201,61 @@ assert textwrap.indent("a", " ") == " a", "and the alias after that one binds to
 print("ok")
 "#;
 
+/// the readers of an annotation, each asserting the answer python gives for the names it
+/// finds. a proxy is not the object it stands for, and no forwarded operator makes it one:
+/// `dataclasses` tells a `KW_ONLY` annotation from a field by identity, and a type hint is
+/// compared by identity by whatever consumes it. so a name an annotation reads is imported
+/// eagerly. `InitVar[int]` and `singledispatch`'s registration by annotation are readers
+/// the proxy happened to satisfy, and are kept here as readers all the same
+const ANNOTATIONS_MAIN: &str = r#"
+from dataclasses import dataclass, fields, KW_ONLY, InitVar
+from fractions import Fraction
+from functools import singledispatch
+import fractions
+import typing
+
+@dataclass
+class Row:
+    name: str
+    _: KW_ONLY
+    extra: int = 0
+    seed: InitVar[int] = 0
+
+assert [field.name for field in fields(Row)] == ["name", "extra"], "`KW_ONLY` and `InitVar` are not fields"
+assert Row("a", extra=1, seed=2).extra == 1, "the row constructs with its keyword-only field"
+
+@singledispatch
+def describe(value: object) -> str:
+    return "object"
+
+@describe.register
+def _(value: Fraction) -> str:
+    return "fraction"
+
+assert describe(Fraction(1, 2)) == "fraction", "an annotation registers a class"
+
+def half(value: Fraction) -> Fraction:
+    return value / Fraction(2)
+
+assert typing.get_type_hints(half)["value"] === fractions.Fraction, "the hint is the class itself"
+print("ok")
+"#;
+
+/// under `from __future__ import annotations` every annotation is a string, and
+/// `typing.get_type_hints` evaluates it against the module's globals
+const FUTURE_ANNOTATIONS_MAIN: &str = r#"
+from __future__ import annotations
+from fractions import Fraction
+import fractions
+import typing
+
+def half(value: Fraction) -> None:
+    pass
+
+assert typing.get_type_hints(half)["value"] === fractions.Fraction, "the string resolves to the class"
+print("ok")
+"#;
+
 /// an interpreter to run the transpiled output on. `$PYTHON` first, then the
 /// usual names; `None` (test skips) when none is found
 fn python() -> Option<String> {
@@ -217,6 +272,15 @@ fn python() -> Option<String> {
             .map(|s| s.success())
             .unwrap_or(false)
     })
+}
+
+/// whether `python` runs what the transpiler targets by default, 3.10 — a
+/// dataclass's `KW_ONLY` among it
+fn runs_the_default_target(python: &str) -> bool {
+    Command::new(python)
+        .args(["-c", "import sys; sys.exit(sys.version_info < (3, 10))"])
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// transpile `sources` (`module stem` → basedpython source) into a fresh
@@ -320,5 +384,36 @@ fn a_submodule_resolves_through_the_proxy() {
         return;
     };
     let dir = build_case("lazy_submodule", &[("main", SUBMODULE_MAIN)]);
+    run_main(&python, &dir);
+}
+
+#[test]
+fn an_annotation_reads_the_imported_object() {
+    let Some(python) = python() else {
+        eprintln!("skipping lazy-import runtime test: no python interpreter found");
+        return;
+    };
+    if !runs_the_default_target(&python) {
+        eprintln!("skipping lazy-import runtime test: {python} is older than python 3.10");
+        return;
+    }
+    let dir = build_case("lazy_annotations", &[("main", ANNOTATIONS_MAIN)]);
+    run_main(&python, &dir);
+}
+
+#[test]
+fn a_string_annotation_resolves_to_the_imported_object() {
+    let Some(python) = python() else {
+        eprintln!("skipping lazy-import runtime test: no python interpreter found");
+        return;
+    };
+    if !runs_the_default_target(&python) {
+        eprintln!("skipping lazy-import runtime test: {python} is older than python 3.10");
+        return;
+    }
+    let dir = build_case(
+        "lazy_future_annotations",
+        &[("main", FUTURE_ANNOTATIONS_MAIN)],
+    );
     run_main(&python, &dir);
 }

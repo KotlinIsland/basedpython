@@ -43,10 +43,12 @@ impl AstPass for Overload<'_> {
             source: self.source,
             is_stub: self.is_stub,
             edits: RefCell::new(Vec::new()),
-            needs_overload: false,
+            first_emitted: None,
         };
         state.visit_body(&module.body);
-        if state.needs_overload {
+        if let Some(first_emitted) = state.first_emitted
+            && !imports_overload_before(&module.body, first_emitted)
+        {
             ctx.required_imports
                 .push("from typing import overload".to_owned());
         }
@@ -54,11 +56,39 @@ impl AstPass for Overload<'_> {
     }
 }
 
+/// whether the module already binds `overload` at `pos`, through a top-level
+/// `from typing import overload` of its own.
+///
+/// the name is read where a decorator runs, which is when the `def` below it is
+/// evaluated — so an import after that `def` binds the name too late and the output
+/// still needs its own. an alias binds some other name, and an import nested in a
+/// function or under `if TYPE_CHECKING:` is not in scope at module level at all,
+/// so neither is one of these
+fn imports_overload_before(body: &[Stmt], pos: TextSize) -> bool {
+    body.iter().any(|stmt| {
+        let Stmt::ImportFrom(import) = stmt else {
+            return false;
+        };
+        import.level == 0
+            && import
+                .module
+                .as_ref()
+                .is_some_and(|m| m.as_str() == "typing")
+            && import.range().end() <= pos
+            && import
+                .names
+                .iter()
+                .any(|alias| alias.name.as_str() == "overload" && alias.asname.is_none())
+    })
+}
+
 struct State<'src> {
     source: &'src str,
     is_stub: bool,
     edits: RefCell<Vec<(TextRange, String)>>,
-    needs_overload: bool,
+    /// where the earliest `@overload` this pass writes goes, which is the position the
+    /// name has to be bound by. `None` when it writes none and needs no import
+    first_emitted: Option<TextSize>,
 }
 
 impl State<'_> {
@@ -119,11 +149,29 @@ impl State<'_> {
         )
     }
 
+    /// the source may write `@overload` itself and still use the bodyless shorthand for
+    /// the signature. the decorator it wrote is the one the output keeps — a second copy
+    /// applies `overload` twice, and `typing.overload` is not idempotent in what it
+    /// registers
+    fn wears_overload(func: &StmtFunctionDef) -> bool {
+        func.decorator_list.iter().any(|dec| match &dec.expression {
+            Expr::Name(n) => n.id.as_str() == "overload",
+            // `typing.overload`, or any module it was imported through
+            Expr::Attribute(a) => a.attr.as_str() == "overload",
+            _ => false,
+        })
+    }
+
     fn add_overload_stub(&mut self, func: &StmtFunctionDef) {
-        self.needs_overload = true;
-        let indent = self.line_indent(func.range().start()).to_owned();
-        let start = func.range().start();
-        self.push(TextRange::new(start, start), format!("@overload\n{indent}"));
+        if !Self::wears_overload(func) {
+            let start = func.range().start();
+            self.first_emitted = Some(match self.first_emitted {
+                Some(first) => first.min(start),
+                None => start,
+            });
+            let indent = self.line_indent(start).to_owned();
+            self.push(TextRange::new(start, start), format!("@overload\n{indent}"));
+        }
         if func.body.is_empty() {
             let end = func.range().end();
             self.push(TextRange::new(end, end), ": ...".to_owned());
@@ -308,6 +356,160 @@ mod tests {
         );
     }
 
+    /// the two spellings can be mixed: `@overload` written out, with the signature left
+    /// bodyless. only the body is missing, so only the body is added
+    #[test]
+    fn written_overload_with_bodyless_shorthand() {
+        check(
+            indoc! {"
+                from typing import overload
+                @overload
+                def q(a: int) -> int
+                @overload
+                def q(a: str) -> str
+                def q(a: object) -> object:
+                    return a
+            "},
+            indoc! {"
+                from typing import overload
+                @overload
+                def q(a: int) -> int: ...
+                @overload
+                def q(a: str) -> str: ...
+                def q(a: object) -> object:
+                    return a
+            "},
+        );
+    }
+
+    /// a module reached through `typing` spells the decorator the same way
+    #[test]
+    fn qualified_overload_with_bodyless_shorthand() {
+        check(
+            indoc! {"
+                import typing
+                @typing.overload
+                def q(a: int) -> int
+                @typing.overload
+                def q(a: str) -> str
+                def q(a: object) -> object:
+                    return a
+            "},
+            indoc! {"
+                import typing
+                @typing.overload
+                def q(a: int) -> int: ...
+                @typing.overload
+                def q(a: str) -> str: ...
+                def q(a: object) -> object:
+                    return a
+            "},
+        );
+    }
+
+    /// a run the source decorates only in part still needs the decorator on the rest,
+    /// and takes the name from the import the source already wrote
+    #[test]
+    fn partly_written_overload_run() {
+        check(
+            indoc! {"
+                from typing import overload
+                @overload
+                def q(a: int) -> int
+                def q(a: str) -> str
+                def q(a: object) -> object:
+                    return a
+            "},
+            indoc! {"
+                from typing import overload
+                @overload
+                def q(a: int) -> int: ...
+                @overload
+                def q(a: str) -> str: ...
+                def q(a: object) -> object:
+                    return a
+            "},
+        );
+    }
+
+    /// a decorator is read when the `def` under it runs, so an import further down the
+    /// module binds the name too late and the output carries its own
+    #[test]
+    fn overload_imported_after_the_run_is_too_late() {
+        check(
+            indoc! {"
+                def q(a: int) -> int
+                def q(a: str) -> str
+                def q(a: object) -> object:
+                    return a
+
+                from typing import overload
+            "},
+            indoc! {"
+                from typing import overload
+                @overload
+                def q(a: int) -> int: ...
+                @overload
+                def q(a: str) -> str: ...
+                def q(a: object) -> object:
+                    return a
+
+                from typing import overload
+            "},
+        );
+    }
+
+    /// a run that writes `@overload` itself and also needs a name of the lowering's — the
+    /// `Callable` an arrow type becomes — puts both on the import the module already wrote,
+    /// rather than opening a second `from typing import` above it
+    #[test]
+    fn a_name_the_lowering_adds_joins_the_modules_own_typing_import() {
+        check(
+            indoc! {"
+                from typing import overload
+                @overload
+                def q(a: (int) -> int) -> int
+                @overload
+                def q(a: str) -> str
+                def q(a: object) -> object:
+                    return a
+            "},
+            indoc! {"
+                from typing import overload, Callable
+                @overload
+                def q(a: Callable[[int], int]) -> int: ...
+                @overload
+                def q(a: str) -> str: ...
+                def q(a: object) -> object:
+                    return a
+            "},
+        );
+    }
+
+    /// an alias binds some other name, so the decorator the output writes still needs
+    /// `overload` itself
+    #[test]
+    fn aliased_overload_import_does_not_count() {
+        check(
+            indoc! {"
+                from typing import overload as ol
+                def q(a: int) -> int
+                def q(a: str) -> str
+                def q(a: object) -> object:
+                    return a
+            "},
+            indoc! {"
+                from typing import overload as ol, overload
+                @overload
+                def q(a: int) -> int: ...
+                @overload
+                def q(a: str) -> str: ...
+                def q(a: object) -> object:
+                    return a
+            "},
+        );
+    }
+
     #[test]
     fn python_unchanged() {
         unchanged(indoc! {"
@@ -329,8 +531,7 @@ mod tests {
                     abstract def f(self) -> int
             "},
             indoc! {"
-                from abc import abstractmethod
-                from abc import ABC
+                from abc import ABC, abstractmethod
 
                 class A(ABC):
                     @abstractmethod

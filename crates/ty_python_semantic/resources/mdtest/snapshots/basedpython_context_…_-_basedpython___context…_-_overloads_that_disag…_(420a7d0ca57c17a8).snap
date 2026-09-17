@@ -1,0 +1,57 @@
+---
+source: crates/mdtest/src/lib.rs
+expression: snapshot
+---
+
+---
+mdtest name: basedpython_context_parameters.md - basedpython: context parameters - overloads that disagree on a `context` parameter fill nothing
+mdtest path: crates/ty_python_semantic/resources/mdtest/basedpython_context_parameters.md
+---
+
+# Source files
+
+## mdtest_snippet.by
+
+```
+ 1 | from typing import overload
+ 2 | 
+ 3 | @overload
+ 4 | def f(a: int, *, context b: str) -> int: ...
+ 5 | @overload
+ 6 | def f(a: str, *, context b: int) -> str: ...
+ 7 | def f(a: int | str, *, context b: str | int) -> int | str:
+ 8 |     return a
+ 9 | 
+10 | context t: str = "hello"
+11 | context u: int = 1
+12 | 
+13 | f(1)  # error: [no-matching-overload]
+```
+
+# Diagnostics
+
+```
+error[no-matching-overload]: No overload of function `f` matches arguments
+  --> src/mdtest_snippet.by:13:1
+   |
+13 | f(1)  # error: [no-matching-overload]
+   | ^^^^
+info: `b` is a `context` parameter, and an overload set is given one implicitly only where every overload would be given the same argument
+info: overload 1 would take `t`; overload 2 would take `u`
+info: Pass `b` explicitly
+info: First overload defined here
+ --> src/mdtest_snippet.by:3:1
+  |
+3 | / @overload
+4 | | def f(a: int, *, context b: str) -> int: ...
+  | |____________________________________________^ First overload defined here
+info: Possible overloads for function `f`:
+info:   (a: int, *, b: str) -> int
+info:   (a: str, *, b: int) -> str
+info: Overload implementation defined here
+ --> src/mdtest_snippet.by:7:5
+  |
+7 | def f(a: int | str, *, context b: str | int) -> int | str:
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+```

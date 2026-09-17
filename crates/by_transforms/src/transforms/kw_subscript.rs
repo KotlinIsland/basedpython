@@ -322,6 +322,11 @@ impl<'src> KwSubscriptPass<'src> {
 }
 
 impl TypeAwarePass for KwSubscriptPass<'_> {
+    /// the value of a keyword subscript it rewrites is printed with its `T?` lowered
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::OptionalType]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner: KwSubscript<'_, dyn TypeInfo> =
             KwSubscript::new(self.source, Some(types), self.min_version);

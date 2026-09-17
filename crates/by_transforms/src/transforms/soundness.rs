@@ -46,9 +46,11 @@
 //! wrapped expression (coalesce, force-unwrap, generic-call stripping) are
 //! materialized inside the check's passthrough span, and nested checks
 //! (`t()[0]`, an argument inside a checked call) compose by template
-//! recursion. Statements an AST-mutation pass re-rendered (casts, coalesce
-//! chains, `typeof`) are skipped wholesale — their source ranges no longer
-//! align with the output.
+//! recursion. In a top-level statement an AST-mutation pass rewrote (a
+//! coalesce chain, `typeof`, a repeated `_` parameter) the checks are written
+//! into the syntax tree instead — see [`place_in_rerendered`]: a check made at a
+//! node the pass replaced has no source left to land on as a text edit, and
+//! written into the tree it is either placed or reported.
 //!
 //! The `returns`/`assignments`/`arguments` gates share a "value is unhelpful"
 //! rule — the value is a plain `Any`, or a gated projection whose own type is
@@ -62,19 +64,23 @@
 //! defined later in the module can raise `NameError` if the checked line runs
 //! at import time before the class body.
 
+use std::cell::Cell;
 use std::collections::HashMap;
-use std::fmt::Write as _;
 
+use ruff_python_ast::name::Name;
+use ruff_python_ast::visitor::transformer::{self, Transformer};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
-    Comprehension, Expr, ExprCall, HasNodeIndex, Parameter, Stmt, StmtFunctionDef, UnaryOp,
+    AtomicNodeIndex, Comprehension, Expr, ExprCall, ExprName, HasNodeIndex, Parameter, Stmt,
+    StmtFunctionDef, UnaryOp,
 };
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::types::soundness::CheckTarget;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::parametric_is::variance_tuple;
-use super::source_util::{line_indent, line_start};
+use super::repeated_underscore::WrittenNames;
+use super::source_util::{PrologueStatement, body_prologue};
 use crate::Config;
 use crate::config::SoundnessPositions;
 use crate::type_info::{SoundnessCheck, TypeInfo};
@@ -108,7 +114,9 @@ enum Site<'ast> {
     /// `function`'s own parameters are checked where its body begins
     Parameters {
         function: &'ast StmtFunctionDef,
-        guards: Vec<(&'ast str, SoundnessCheck)>,
+        /// each checked parameter by the name python binds it to, which for a repeated
+        /// `_` is not the one the source spells
+        guards: Vec<(Name, SoundnessCheck)>,
     },
 }
 
@@ -117,28 +125,30 @@ enum Site<'ast> {
 struct Soundness<'a, 'ast> {
     types: &'a dyn TypeInfo,
     positions: SoundnessPositions,
+    /// the module as written, which a repeated `_` parameter's name is numbered around
+    written: WrittenNames<'a>,
     sites: Vec<Site<'ast>>,
     /// gated expressions already covered by a wrap on an enclosing `!`
     /// force-unwrap — wrapping them directly would splice the check's second
     /// argument into `_force_unwrap`'s call parens
     consumed: Vec<TextRange>,
-    /// spans whose *source text* is user-visible, so nothing may be inserted into
-    /// them: an f-string's `{expr=}` renders the text between the braces, and a
-    /// check wrapped there would print itself
-    verbatim: Vec<TextRange>,
     /// declared-return-type check plans of the enclosing functions (innermost
     /// last); `None` when a function has no annotation or an uncheckable one
     return_targets: Vec<Option<SoundnessCheck>>,
 }
 
 impl<'a, 'ast> Soundness<'a, 'ast> {
-    fn new(types: &'a dyn TypeInfo, positions: SoundnessPositions) -> Self {
+    fn new(
+        types: &'a dyn TypeInfo,
+        positions: SoundnessPositions,
+        written: WrittenNames<'a>,
+    ) -> Self {
         Self {
             types,
             positions,
+            written,
             sites: Vec::new(),
             consumed: Vec::new(),
-            verbatim: Vec::new(),
             return_targets: Vec::new(),
         }
     }
@@ -279,7 +289,10 @@ impl<'a, 'ast> Soundness<'a, 'ast> {
         {
             let parameter = &pwd.parameter;
             if let Some(plan) = self.parameter_plan(parameter) {
-                guards.push((parameter.name.as_str(), plan));
+                guards.push((
+                    crate::python_parameter_name(params, parameter, self.written),
+                    plan,
+                ));
             }
         }
         if !guards.is_empty() {
@@ -363,25 +376,6 @@ impl<'ast> Visitor<'ast> for Soundness<'_, 'ast> {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        // `f"{x=}"` renders the source between the braces, so a check inserted
-        // there would show up in the output. nothing inside one is wrapped
-        if let Expr::FString(fstring) = expr {
-            for element in fstring.value.elements() {
-                if let ruff_python_ast::InterpolatedStringElement::Interpolation(part) = element
-                    && part.debug_text.is_some()
-                {
-                    self.verbatim.push(part.expression.range());
-                }
-            }
-        }
-        if self
-            .verbatim
-            .iter()
-            .any(|span| span.contains_range(expr.range()))
-        {
-            walk_expr(self, expr);
-            return;
-        }
         if let Expr::UnaryOp(unary) = expr
             && unary.op == UnaryOp::Force
         {
@@ -465,8 +459,8 @@ impl SoundnessSites {
         self.elements.get(&SiteKey::of(iterable)?)
     }
 
-    /// the checks made on `function`'s own parameters where its body begins, by
-    /// parameter name, in the order the parameters are written
+    /// the checks made on `function`'s own parameters where its body begins, by the
+    /// name python binds each parameter to, in the order the parameters are written
     pub fn parameters(&self, function: &StmtFunctionDef) -> &[(String, SoundnessCheck)] {
         SiteKey::of(function)
             .and_then(|key| self.parameters.get(&key))
@@ -474,9 +468,11 @@ impl SoundnessSites {
     }
 }
 
-/// decide every soundness check `suite` makes under `positions`
+/// decide every soundness check `suite` makes under `positions`. `written` is the
+/// module `suite` is parsed from, as it was written
 pub fn soundness_sites(
     model: &ty_python_semantic::SemanticModel<'_>,
+    written: WrittenNames,
     suite: &[Stmt],
     positions: SoundnessPositions,
 ) -> SoundnessSites {
@@ -484,7 +480,7 @@ pub fn soundness_sites(
     if !positions.any() {
         return sites;
     }
-    let mut walker = Soundness::new(model, positions);
+    let mut walker = Soundness::new(model, positions, written);
     walker.visit_body(suite);
     for site in walker.sites {
         match site {
@@ -502,7 +498,7 @@ pub fn soundness_sites(
                 if let Some(key) = SiteKey::of(function) {
                     let guards = guards
                         .into_iter()
-                        .map(|(name, plan)| (name.to_owned(), plan))
+                        .map(|(name, plan)| (name.to_string(), plan))
                         .collect();
                     sites.parameters.insert(key, guards);
                 }
@@ -512,6 +508,17 @@ pub fn soundness_sites(
     sites
 }
 
+/// One entry guard written at the top of a body. The guard is a call on a line
+/// of its own and never continues onto a second one, so it re-establishes no
+/// indentation
+struct EntryGuard(String);
+
+impl PrologueStatement for EntryGuard {
+    fn push(&self, frags: &mut Vec<Fragment>, _indent: &str) {
+        frags.push(Fragment::Lit(self.0.clone()));
+    }
+}
+
 /// what the checks a pass decided on are written as
 #[derive(Default)]
 #[expect(
@@ -519,9 +526,14 @@ pub fn soundness_sites(
     reason = "independent runtime-helper usage flags, not a state machine"
 )]
 struct Rendered {
-    edits: Vec<(TextRange, Vec<Fragment>)>,
+    /// each value passed through a call: the span it is at, the text opening the call
+    /// and the text closing it
+    wraps: Vec<(TextRange, String, String)>,
     /// the entry-guard suites, anchored at the body statement they precede
     guards: Vec<(TextSize, Vec<Fragment>)>,
+    /// functions whose body holds nothing the source wrote, so a guard has no
+    /// position to anchor to
+    unanchored: Vec<String>,
     used_iter: bool,
     used_aiter: bool,
     used_iter_p: bool,
@@ -535,14 +547,8 @@ impl Rendered {
     /// wrap `source[range]` in `helper(<source>, <trailing-args>)`. `trailing`
     /// carries its own leading `, ` (e.g. `", str"` or `", A[int], (0,)"`)
     fn wrap_call(&mut self, range: TextRange, helper: &str, trailing: &str) {
-        self.edits.push((
-            range,
-            vec![
-                Fragment::Lit(format!("{helper}(")),
-                Fragment::Src(range),
-                Fragment::Lit(format!("{trailing})")),
-            ],
-        ));
+        self.wraps
+            .push((range, format!("{helper}("), format!("{trailing})")));
     }
 
     /// wrap `range` in the scalar check (`_soundness_check` /
@@ -592,6 +598,14 @@ impl Rendered {
         self.wrap_call(iterable.range(), helper, &trailing);
     }
 
+    /// the guard statements that validate each of `checks`, in order
+    fn guard_stmts(&mut self, checks: &[(Name, SoundnessCheck)]) -> Vec<String> {
+        checks
+            .iter()
+            .map(|(name, plan)| self.guard_stmt(name, plan))
+            .collect()
+    }
+
     /// the guard statement that validates parameter `name` against `plan`
     fn guard_stmt(&mut self, name: &str, plan: &SoundnessCheck) -> String {
         match plan {
@@ -611,61 +625,38 @@ impl Rendered {
         &mut self,
         source: &str,
         func: &StmtFunctionDef,
-        checks: &[(&str, SoundnessCheck)],
+        checks: &[(Name, SoundnessCheck)],
     ) {
-        let guards: Vec<String> = checks
-            .iter()
-            .map(|(name, plan)| self.guard_stmt(name, plan))
+        let guards: Vec<EntryGuard> = self
+            .guard_stmts(checks)
+            .into_iter()
+            .map(EntryGuard)
             .collect();
-
-        // insert after a leading docstring (which must stay the first
-        // statement); mirrors `mutable_defaults`' body-prologue insertion
-        let docstring_count = usize::from(matches!(
-            func.body.first(),
-            Some(Stmt::Expr(e)) if matches!(e.value.as_ref(), Expr::StringLiteral(_))
-        ));
-        let mut text = String::new();
-        let insert_at = if let Some(stmt) = func.body.get(docstring_count) {
-            let at = stmt.range().start();
-            let prefix = &source[usize::from(line_start(source, at))..usize::from(at)];
-            if prefix.trim().is_empty() {
-                // multi-line body: each guard sits at the body indent and
-                // re-establishes it for the statement that follows
-                for guard in &guards {
-                    let _ = write!(text, "{guard}\n{prefix}");
-                }
-            } else {
-                // single-line body (`def f(a: A[int]): ...`) — break the body
-                // onto its own indented line after the guards
-                let base = format!("{}    ", line_indent(source, func.range().start()));
-                for guard in &guards {
-                    let _ = write!(text, "\n{base}{guard}");
-                }
-                let _ = write!(text, "\n{base}");
-            }
-            at
-        } else {
-            // docstring-only body: append the guards after it
-            let base = format!("{}    ", line_indent(source, func.range().start()));
-            for guard in &guards {
-                let _ = write!(text, "\n{base}{guard}");
-            }
-            func.body[docstring_count - 1].range().end()
-        };
-        self.guards.push((insert_at, vec![Fragment::Lit(text)]));
+        // the same anchor `mutable_defaults` and `init_method` hang their own body
+        // insertions off, so the four agree about where the top of a body is
+        match body_prologue(source, func, &guards) {
+            Some(anchored) => self.guards.extend(anchored),
+            // nothing in the body came from the source. a check with nowhere to go
+            // is an error rather than a check dropped: a native build of the module
+            // makes it from the same site, and the two builds would answer
+            // differently
+            None => self.unanchored.push(func.name.to_string()),
+        }
     }
 }
 
 pub(crate) struct SoundnessPass<'src> {
     positions: SoundnessPositions,
     source: &'src str,
+    written: WrittenNames<'src>,
 }
 
 impl<'src> SoundnessPass<'src> {
-    pub(crate) fn new(source: &'src str, config: &Config) -> Self {
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: &Config) -> Self {
         Self {
             positions: config.soundness,
             source,
+            written,
         }
     }
 }
@@ -680,30 +671,70 @@ impl TypeAwarePass for SoundnessPass<'_> {
         if !self.positions.any() {
             return;
         }
-        let mut walker = Soundness::new(types, self.positions);
+        let mut inner = Rendered::default();
+        let mut rerendered = Vec::new();
         for (idx, stmt) in stmts.iter().enumerate() {
-            // an AST-mutation pass re-rendered this statement; edits into its
-            // original source range would be dropped and flagged as leaks
+            let mut walker = Soundness::new(types, self.positions, self.written);
+            walker.visit_stmt(stmt);
+            // an AST-mutation pass rewrote this statement, and an edit at a node it
+            // replaced would be dropped: its checks go into the tree it is printed from
             if ctx.changed.contains(&idx) {
+                let mut rendered = Rendered::default();
+                let mut checks = Vec::new();
+                for site in &walker.sites {
+                    match site {
+                        Site::Value { expr, plan } => rendered.wrap_check(expr.range(), plan),
+                        Site::Elements {
+                            iterable,
+                            is_async,
+                            plan,
+                        } => rendered.wrap_iteration(iterable, *is_async, plan),
+                        Site::Parameters { function, guards } => {
+                            checks.push(RerenderedCheck::Guards {
+                                function: function.range(),
+                                statements: rendered.guard_stmts(guards),
+                            });
+                        }
+                    }
+                }
+                checks.extend(rendered.wraps.drain(..).map(|(range, before, after)| {
+                    RerenderedCheck::Wrap {
+                        range,
+                        before,
+                        after,
+                    }
+                }));
+                inner.used_iter |= rendered.used_iter;
+                inner.used_aiter |= rendered.used_aiter;
+                inner.used_iter_p |= rendered.used_iter_p;
+                inner.used_aiter_p |= rendered.used_aiter_p;
+                inner.used_parametric |= rendered.used_parametric;
+                if !checks.is_empty() {
+                    rerendered.push((idx, checks));
+                }
                 continue;
             }
-            walker.visit_stmt(stmt);
-        }
-        let mut inner = Rendered::default();
-        for site in &walker.sites {
-            match site {
-                Site::Value { expr, plan } => inner.wrap_check(expr.range(), plan),
-                Site::Elements {
-                    iterable,
-                    is_async,
-                    plan,
-                } => inner.wrap_iteration(iterable, *is_async, plan),
-                Site::Parameters { function, guards } => {
-                    inner.insert_param_guards(self.source, function, guards);
+            for site in &walker.sites {
+                match site {
+                    Site::Value { expr, plan } => inner.wrap_check(expr.range(), plan),
+                    Site::Elements {
+                        iterable,
+                        is_async,
+                        plan,
+                    } => inner.wrap_iteration(iterable, *is_async, plan),
+                    Site::Parameters { function, guards } => {
+                        inner.insert_param_guards(self.source, function, guards);
+                    }
                 }
             }
         }
-        if inner.edits.is_empty() && inner.guards.is_empty() {
+        if let Some(name) = inner.unanchored.first() {
+            ctx.errors.push(format!(
+                "`{name}` has a body nothing in the source anchors, so an entry guard has nowhere to go"
+            ));
+            return;
+        }
+        if inner.wraps.is_empty() && inner.guards.is_empty() && rerendered.is_empty() {
             return;
         }
         ctx.runtime.insert(crate::runtime::SOUNDNESS_CHECK);
@@ -725,8 +756,172 @@ impl TypeAwarePass for SoundnessPass<'_> {
         if inner.used_aiter_p {
             ctx.runtime.insert(crate::runtime::SOUNDNESS_AITER_P);
         }
-        ctx.template_edits.extend(inner.edits);
+        ctx.template_edits
+            .extend(inner.wraps.into_iter().map(|(range, before, after)| {
+                (
+                    range,
+                    vec![
+                        Fragment::Lit(before),
+                        Fragment::Src(range),
+                        Fragment::Lit(after),
+                    ],
+                )
+            }));
         ctx.statement_inserts.extend(inner.guards);
+        ctx.rerendered_checks.extend(rerendered);
+    }
+}
+
+/// a check to write into a top-level statement that is printed from its syntax tree,
+/// found by the source range of the node it is made at
+pub(crate) enum RerenderedCheck {
+    /// the value the expression at `range` produces, passed through the call
+    /// `before` opens and `after` closes
+    Wrap {
+        range: TextRange,
+        before: String,
+        after: String,
+    },
+    /// the entry guards of the function at `function`
+    Guards {
+        function: TextRange,
+        statements: Vec<String>,
+    },
+}
+
+/// write `checks` into `stmt`, a top-level statement an AST-mutation pass rewrote
+///
+/// a mutation leaves every node it did not replace at its source range, and a check
+/// is made at a node the source holds, so each is found where the text edit would
+/// have landed. a check with nowhere to go is an error rather than a check dropped:
+/// a native build of the module makes it from the same sites, and the two builds
+/// would answer differently
+pub(crate) fn place_in_rerendered(
+    stmt: &mut Stmt,
+    checks: Vec<RerenderedCheck>,
+) -> Result<(), String> {
+    let mut wraps = Vec::new();
+    let mut guards = Vec::new();
+    for check in checks {
+        match check {
+            RerenderedCheck::Wrap {
+                range,
+                before,
+                after,
+            } => {
+                let placeholder = "__by_soundness_value__";
+                let Ok(parsed) =
+                    ruff_python_parser::parse_expression(&format!("{before}{placeholder}{after}"))
+                else {
+                    return Err(format!(
+                        "a soundness check could not be written: `{before}…{after}`"
+                    ));
+                };
+                let mut parsed = *parsed.into_syntax().body;
+                super::rerender::forget_expr_ranges(&mut parsed);
+                let Expr::Call(call) = parsed else {
+                    return Err(format!(
+                        "a soundness check is not a call: `{before}…{after}`"
+                    ));
+                };
+                wraps.push((range, call, Cell::new(false)));
+            }
+            RerenderedCheck::Guards {
+                function,
+                statements,
+            } => {
+                let Ok(parsed) = ruff_python_parser::parse_module(&statements.join("\n")) else {
+                    return Err(format!(
+                        "a parameter guard could not be written: `{}`",
+                        statements.join("; ")
+                    ));
+                };
+                let mut statements: Vec<Stmt> = parsed.into_syntax().body.into_iter().collect();
+                statements
+                    .iter_mut()
+                    .for_each(super::rerender::forget_stmt_ranges);
+                guards.push((function, statements, Cell::new(false)));
+            }
+        }
+    }
+    let placing = Placing { wraps, guards };
+    placing.visit_stmt(stmt);
+    let unplaced = placing
+        .wraps
+        .iter()
+        .filter(|(_, _, placed)| !placed.get())
+        .map(|(range, _, _)| *range)
+        .chain(
+            placing
+                .guards
+                .iter()
+                .filter(|(_, _, placed)| !placed.get())
+                .map(|(range, _, _)| *range),
+        )
+        .next();
+    match unplaced {
+        Some(range) => Err(format!(
+            "a soundness check at {range:?} could not be written: a lowering rewrote the \
+             expression it checks"
+        )),
+        None => Ok(()),
+    }
+}
+
+struct Placing {
+    wraps: Vec<(TextRange, ExprCall, Cell<bool>)>,
+    guards: Vec<(TextRange, Vec<Stmt>, Cell<bool>)>,
+}
+
+impl Transformer for Placing {
+    fn visit_stmt(&self, stmt: &mut Stmt) {
+        transformer::walk_stmt(self, stmt);
+        let Stmt::FunctionDef(function) = stmt else {
+            return;
+        };
+        let Some((_, statements, placed)) = self
+            .guards
+            .iter()
+            .find(|(range, _, _)| *range == function.range)
+        else {
+            return;
+        };
+        // after a docstring, which has to stay the first statement
+        let at = super::source_util::body_prologue_index(function);
+        function.body.splice(at..at, statements.iter().cloned());
+        placed.set(true);
+    }
+
+    fn visit_annotation(&self, _expr: &mut Expr) {}
+
+    fn visit_expr(&self, expr: &mut Expr) {
+        // the children first, so a check made inside this value is inside its check
+        transformer::walk_expr(self, expr);
+        // a node a lowering left twice — `a ?? b` repeats a side-effect-free `a` —
+        // is checked wherever it is evaluated
+        let at = expr.range();
+        for (range, call, placed) in &self.wraps {
+            if at != *range {
+                continue;
+            }
+            let value = std::mem::replace(
+                expr,
+                Expr::Name(ExprName {
+                    node_index: AtomicNodeIndex::NONE,
+                    range: TextRange::default(),
+                    id: ruff_python_ast::name::Name::new_static("None"),
+                    ctx: ruff_python_ast::ExprContext::Load,
+                }),
+            );
+            // a second check made at the same node is written around this one, as the
+            // text edits compose
+            let mut call = call.clone();
+            if let Some(first) = call.arguments.args.first_mut() {
+                *first = value;
+            }
+            *expr = Expr::Call(call);
+            placed.set(true);
+        }
     }
 }
 
@@ -816,13 +1011,18 @@ mod tests {
         );
     }
 
+    /// a `=` field is checked like any other expression. the check used to be skipped
+    /// there, because `f"{x=}"` prints the source between the braces and the wrap would
+    /// print itself — but the field is now taken apart around the value
+    /// ([`super::debug_field`]), so the author's own text is what is printed and the value
+    /// is free to be wrapped
     #[test]
-    fn a_debug_interpolation_is_left_verbatim() {
-        // `f"{x=}"` renders the source between the braces, so a check inserted
-        // there would print itself
+    fn a_debug_interpolation_is_checked_beside_the_text_it_prints() {
         let out = check("def f(d: dict[str, int]):\n    return f\"{d.get('k')=}\"\n");
-        assert!(!out.contains("_soundness_check"), "got:\n{out}");
-        assert!(out.contains("f\"{d.get('k')=}\""), "got:\n{out}");
+        assert!(
+            out.contains("f\"d.get('k')={(_soundness_check(d.get('k'), (int, type(None))))!r}\""),
+            "got:\n{out}"
+        );
     }
 
     #[test]
@@ -1355,6 +1555,21 @@ mod tests {
         );
     }
 
+    /// an `init(…)` shorthand's body opens with the attribute declarations the parser
+    /// synthesized from its parameters, whose ranges point back into the signature.
+    /// anchored at one of those, the guard was spliced into the parameter list
+    #[test]
+    fn entry_guard_in_an_init_shorthand_sits_in_the_body() {
+        let out = check_with(
+            "class A:\n    init(let s: str):\n        print(s)\n",
+            params_only(),
+        );
+        assert!(
+            out.contains("    def __init__(self, s: str):\n        _soundness_check(s, str)\n        self.s: str = s\n        print(s)\n"),
+            "got:\n{out}"
+        );
+    }
+
     #[test]
     fn entry_guard_follows_docstring() {
         // the docstring must stay the first statement; the guard goes after it
@@ -1426,10 +1641,85 @@ mod tests {
         );
     }
 
+    /// a repeated `_` is numbered in the python its `def` lowers to, so each guard checks
+    /// the parameter python binds: spelled by its source name, the second `_` would be
+    /// checked as the first, and an `int` refused where a `str` was declared
+    #[test]
+    fn a_repeated_underscore_is_guarded_by_its_numbered_name() {
+        let out = check_with(
+            "def f(_: int, _: str) -> int:\n    return 1\n",
+            params_only(),
+        );
+        assert!(out.contains("_soundness_check(_, int)"), "got:\n{out}");
+        assert!(out.contains("_soundness_check(_2, str)"), "got:\n{out}");
+    }
+
     #[test]
     fn all_includes_parameters() {
         let out = check_with("def f(s: str): ...\n", crate::SoundnessPositions::all());
         assert!(out.contains("_soundness_check(s, str)"), "got:\n{out}");
+    }
+
+    // ── statements a syntax-tree pass prints again ──────────────────────
+
+    /// `typeof` is lowered by rewriting the syntax tree, and a top-level statement
+    /// holding one is printed again from that tree rather than edited in place. the
+    /// checks everywhere else in the statement are made all the same — a native build
+    /// of the module makes them, from the same sites
+    #[test]
+    fn a_statement_printed_from_its_syntax_tree_keeps_its_checks() {
+        let out = check(
+            "from typing import Any\n\ndef f(x: Any, a: list[str], n: int) -> int:\n    b: int = x\n    for s in a:\n        print(s)\n    m: typeof(n) = n\n    return m\n",
+        );
+        assert!(
+            out.contains("TypeOf[n]"),
+            "`typeof` no longer rewrites the tree, got:\n{out}"
+        );
+        assert!(
+            out.contains("b: int = _soundness_check(x, int)"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("for s in _soundness_iter(a, str):"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_function_printed_from_its_syntax_tree_keeps_its_entry_guards() {
+        // a repeated `_` parameter is renamed on the syntax tree
+        let out = check_with(
+            "def f(_: int, _: int, v: str) -> str:\n    return v\n",
+            params_only(),
+        );
+        assert!(
+            out.contains("_2"),
+            "the parameters are no longer renamed, got:\n{out}"
+        );
+        assert!(out.contains("_soundness_check(v, str)"), "got:\n{out}");
+    }
+
+    /// and it keeps its docstring. the parser writes an `init(…)` shorthand's attribute
+    /// declarations ahead of everything the source wrote, so the docstring is not the
+    /// body's first statement in the tree — read as though it were, the guard landed
+    /// above the string and the method lost its `__doc__`
+    #[test]
+    fn an_entry_guard_follows_the_docstring_of_an_init_shorthand() {
+        // `typeof` rewrites the syntax tree, so the whole class is printed from it
+        let out = check_with(
+            "class C:\n    init(let x: int):\n        \"\"\"doc\"\"\"\n        print(x)\n\n    def m(self):\n        y: typeof(self.x) = 1\n        print(y)\n",
+            params_only(),
+        );
+        assert!(
+            out.contains("TypeOf[self.x]"),
+            "`typeof` no longer rewrites the tree, got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "        \"\"\"doc\"\"\"\n        _soundness_check(x, int)\n        self.x: int = x\n"
+            ),
+            "got:\n{out}"
+        );
     }
 
     /// a stub is never run, so it produces no value to check

@@ -152,6 +152,20 @@ x = foo()!     # raises if foo() is None_ or Err(_)
 panics raise `RuntimeError("force-unwrap of absent value")` and include the
 wrapped error as `__cause__` when the value was an `Err`
 
+inside an f-string replacement field a `!` is python's conversion flag when
+one can follow it, and the force-unwrap when none can:
+
+```by
+print(f"{foo()!}")      # force unwrap, then format
+print(f"{foo()!:>4}")   # force unwrap, then the format spec
+print(f"{foo()!!r}")    # force unwrap, then the `!r` conversion
+print(f"{x!r}")         # the conversion alone, as in python
+```
+
+`!=` is the comparison operator there as everywhere else, so `f"{x!=y}"`
+compares. a force-unwrap printed with `=` needs the parenthesised form,
+`f"{(x!)=}"`
+
 ### `??` — coalesce
 
 > against a genuine wrapped type (`int??`, `T ? E`) the wrapper-aware behaviour

@@ -16,9 +16,9 @@
 //! in the working AST without marking the statement changed. that mutation is
 //! what lets it run before `typeof` lowering: a `typeof` operand (`1 + typeof
 //! d`) disappears from the AST here, so the `typeof` pass never sees it and
-//! never claims the statement out from under the text edit. if some *other*
-//! pass does end up re-rendering the statement, the AST already carries the
-//! resolved type, so the result stays correct either way.
+//! never claims the operation out from under the text edit. if some *other*
+//! pass rewrites a node around it, which is printed from the AST, the AST
+//! already carries the resolved type, so the result stays correct either way.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -206,13 +206,9 @@ impl TypeExprVisitor for FoldCollector<'_> {
         if rendered == "Any" {
             self.needs_any_import = true;
         }
-        self.folds.insert(
-            expr.range(),
-            Fold {
-                node: *parsed.into_syntax().body,
-                rendered,
-            },
-        );
+        let mut node = *parsed.into_syntax().body;
+        super::rerender::forget_expr_ranges(&mut node);
+        self.folds.insert(expr.range(), Fold { node, rendered });
         // the whole operation is replaced; its operands are gone from the output
         Recurse::Stop
     }
@@ -249,6 +245,24 @@ impl Transformer for SymbolicTypeOp {
 }
 
 impl AstPass for SymbolicTypeOp {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::SymbolicTypeOp)
+    }
+
+    /// a fold replaces the operation with the type ty computed for it, which no longer
+    /// holds any of the operands' own spelling
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[
+            super::ast_driver::Lowering::Callable,
+            super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::LiteralType,
+            super::ast_driver::Lowering::JustFloat,
+            super::ast_driver::Lowering::DynamicKeyword,
+            super::ast_driver::Lowering::FloatConst,
+            super::ast_driver::Lowering::Typeof,
+        ]
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         // mutate the working AST (so `typeof` and other AST passes never see the
         // consumed operands) but drive the output through text edits, leaving the

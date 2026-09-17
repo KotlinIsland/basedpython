@@ -1281,6 +1281,16 @@
             }
           ]
         },
+        "invalid-decorator-def": {
+          "title": "detects a `decorator def` whose shape has no decorator to expand into",
+          "description": "## What it does\n\nChecks for a `decorator def` whose parameters, or whose position, leave it with no decorator to\nexpand into.\n\n## Why is this bad?\n\nA `decorator def` is lowered to a pair of overloads and a runtime dispatcher, built from a first\nparameter that receives the decorated function and options that each carry a default. A declaration\nthat does not have that shape has nothing to build from, and the lowering refuses it. Reported here,\nthe refusal arrives while the file is being checked rather than when it is transpiled.\n\n## Examples\n\nThe first parameter is the one a decoration hands the function to, so there has to be one:\n\n```by\n# error: [invalid-decorator-def]\ndecorator def logged() -> int:\n    return 1\n```\n\nEvery shape the decorator is applied in supplies that function, so the parameter never falls back to\na default:\n\n```by\ndef nothing() -> None: ...\n\n# error: [invalid-decorator-def]\ndecorator def retry(fn: (...) -> object = nothing) -> int:\n    return 1\n```\n\nThe options are what `@traced` decorates without, so each of them needs a default:\n\n```by\n# error: [invalid-decorator-def]\ndecorator def traced(fn: (...) -> object, label: str) -> int:\n    return 1\n```\n\n`decorator def` is module-scope only. A decorator written in a class body is a plain `def` that\nreturns a callable:\n\n```by\nclass Registry:\n    # error: [invalid-decorator-def]\n    decorator def register(fn: (...) -> object) -> int:\n        return 1\n```\n\nThe form the lowering accepts is a decorated parameter followed by options that each have a default:\n\n```by\ndecorator def traced(fn: (...) -> object, label: str = \"\") -> int:\n    return len(label)\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-enum-member-annotation": {
           "title": "detects type annotations on enum members",
           "description": "## What it does\n\nChecks for enum members that have explicit type annotations.\n\n## Why is this bad?\n\nThe [typing spec] states that type checkers should infer a literal type for all enum members. An\nexplicit type annotation on an enum member is misleading because the annotated type will be\nincorrect — the actual runtime type is the enum class itself, not the annotated type.\n\nIn CPython's `enum` module, annotated assignments with values are still treated as members at\nruntime, but the annotation will confuse readers of the code.\n\n## Examples\n\n```python\nfrom enum import Enum\n\n\nclass Pet(Enum):\n    CAT = 1  # OK\n    # enum members should not be annotated\n    DOG: int = 2  # error\n```\n\nUse instead:\n\n```python\nfrom enum import Enum\n\n\nclass Pet(Enum):\n    CAT = 1\n    DOG = 2\n```\n\n## References\n\n- [Typing spec: Enum members](https://typing.python.org/en/latest/spec/enums.html#enum-members)\n\n[typing spec]: https://typing.python.org/en/latest/spec/enums.html#enum-members",
@@ -1601,6 +1611,16 @@
             }
           ]
         },
+        "invalid-repeated-underscore": {
+          "title": "detects a repeated `_` parameter the lowering has no python spelling for",
+          "description": "## What it does\n\nChecks for a parameter list that repeats `_` in a shape the lowering has no python spelling for.\n\n## Why is this bad?\n\nPython refuses two parameters of one name, so every `_` after the first is given a name of its own.\nThat name is the lowering's rather than the author's, so a call reaches the parameter by position\nalone: it is positional-only. Where that cannot be written, or would change a parameter the author\nnamed, the lowering refuses the definition. Reported here, the refusal arrives while the file is\nbeing checked rather than when it is transpiled.\n\n## Examples\n\nPython's `/` makes every parameter before it positional-only, so a named parameter ahead of a\nrepeated `_` would stop being reachable by keyword:\n\n```by\n# error: [invalid-repeated-underscore]\ndef pair(a: int, _: int, b: int, _: int) -> int:\n    return a + b\n```\n\nWriting the `/` says so, and is accepted:\n\n```by\ndef explicit(a: int, _: int, b: int, _: int, /) -> int:\n    return a + b\n```\n\nA repeated `_` after `*` is keyword-only, and only a keyword reaches it:\n\n```by\n# error: [invalid-repeated-underscore]\ndef keyword(_: int, *, _: int) -> None: ...\n```\n\nPython before 3.8 has no `/` at all, so a module targeting it cannot make a repeated `_`\npositional-only, and every definition that needs the `/` is refused there.\n\nA method that overrides one takes the names the overridden method gives those positions. A name the\nbody reads from an enclosing scope would then read the parameter instead. Refused, the override\nkeeps no names a caller of the base could pass by keyword, which is reported too:\n\n```by\nx = 1\n\nclass Base:\n    def f(self, x: int, y: int) -> int:\n        return x + y\n\nclass Override(Base):\n    # error: [invalid-repeated-underscore]\n    # error: [invalid-method-override]\n    override def f(self, _: int, _: int) -> int:\n        return x\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-return-type": {
           "title": "detects returned values that can't be assigned to the function's annotated return type",
           "description": "## What it does\n\nDetects returned values that can't be assigned to the function's annotated return type.\n\nNote that the special case of a function with a non-`None` return type and an empty body is handled\nby the separate `empty-body` error code.\n\n## Why is this bad?\n\nReturning an object of a type incompatible with the annotated return type is unsound, and will lead\nto ty inferring incorrect types elsewhere.\n\n## Examples\n\n```python\ndef func() -> int:\n    return \"a\"  # error: [invalid-return-type]\n```",
@@ -1883,7 +1903,7 @@
         },
         "missing-context-argument": {
           "title": "detects calls whose `context` parameter has no matching context value",
-          "description": "## What it does\nChecks for calls that leave a basedpython `context` parameter unfilled:\nno explicit argument matches it and no `context` declaration in scope\nhas a type assignable to it.\n\n## Why is this bad?\nA `context` parameter has no default — the call raises `TypeError` at\nruntime unless something supplies the argument.\n\n## Examples\n```python\ndef f(a: int, context b: str): ...\n\nf(1)                  # error: no context value in scope\ncontext s = \"hello\"\nf(1)                  # ok — `s` is passed implicitly\n```",
+          "description": "## What it does\nChecks for calls that leave a basedpython `context` parameter unfilled:\nno explicit argument matches it and no `context` declaration in scope\nhas a type assignable to it. A decoration is also reported, because it\nis a call with no argument list to supply the value in.\n\n## Why is this bad?\nA `context` parameter has no default — the call raises `TypeError` at\nruntime unless something supplies the argument. One that does have a\ndefault quietly takes it instead of the ambient value the declaration\npromised.\n\n## Examples\n```python\ndef f(a: int, context b: str): ...\n\nf(1)                  # error: no context value in scope\ncontext s = \"hello\"\nf(1)                  # ok — `s` is passed implicitly\n\ndef deco(fn: (...) -> object, context b: str = \"d\") -> object: ...\n\n@deco                 # error: `b` cannot be filled at a decoration\ndef g(): ...\n```",
           "default": "error",
           "oneOf": [
             {

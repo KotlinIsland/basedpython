@@ -1888,6 +1888,186 @@ fn fstring_conversion_after_ternary_is_not_force_unwrap() {
     }
 }
 
+/// The value of the first replacement field of the first f-string in `source`, parsed as
+/// basedpython, together with its conversion flag.
+fn first_interpolation(source: &str) -> (Expr, ruff_python_ast::ConversionFlag) {
+    let parsed = parse_basedpython_module(source);
+    let Some(Stmt::Expr(stmt)) = parsed.syntax().body.first() else {
+        panic!("expected an expression statement for {source:?}");
+    };
+    let Expr::FString(fstring) = &*stmt.value else {
+        panic!("expected an f-string for {source:?}, got {:?}", stmt.value);
+    };
+    let element = fstring
+        .value
+        .elements()
+        .find_map(InterpolatedStringElement::as_interpolation)
+        .unwrap_or_else(|| panic!("expected a replacement field in {source:?}"));
+    ((*element.expression).clone(), element.conversion)
+}
+
+#[test]
+fn force_unwrap_in_interpolation_where_no_conversion_can_follow() {
+    // inside a replacement field a `!` normally introduces python's conversion
+    // flag, so the postfix force-unwrap has to give way to it. but a conversion
+    // is a single `s`/`r`/`a` before the field's `}` or its format spec, so a
+    // `!` sitting directly in front of `}`, `:` or another `!` cannot be one —
+    // there the `!` is the force-unwrap, and `f"{a!}"` no longer has to be
+    // written `f"{(a!)}"` to be understood
+    for source in [
+        r#"f"{a!}""#,
+        r#"f"{a!:>4}""#,
+        r#"f"{a!!}""#,
+        r#"f"{a?.b()!}""#,
+    ] {
+        let (expr, conversion) = first_interpolation(source);
+        assert!(
+            matches!(&expr, Expr::UnaryOp(unary) if unary.op == UnaryOp::Force),
+            "expected the field of {source:?} to be a force-unwrap, got {expr:?}"
+        );
+        assert!(
+            conversion.is_none(),
+            "expected no conversion flag on {source:?}"
+        );
+    }
+
+    // the conversion the `!` is usually reaching for keeps every spelling it has
+    for (source, expected) in [
+        (r#"f"{a!r}""#, ruff_python_ast::ConversionFlag::Repr),
+        (r#"f"{a!s:>10}""#, ruff_python_ast::ConversionFlag::Str),
+        (r#"f"{a!a}""#, ruff_python_ast::ConversionFlag::Ascii),
+        (r#"f"{a=!r}""#, ruff_python_ast::ConversionFlag::Repr),
+    ] {
+        let (expr, conversion) = first_interpolation(source);
+        assert_eq!(conversion, expected, "conversion flag of {source:?}");
+        assert!(
+            matches!(expr, Expr::Name(_)),
+            "expected a plain name under the conversion of {source:?}, got {expr:?}"
+        );
+    }
+
+    // `!` glued to `=` is the comparison operator, in a replacement field as
+    // everywhere else, so `f"{a!=b}"` keeps meaning `a != b` and a force-unwrap
+    // the author wants to print with `=` still needs `f"{(a!)=}"`
+    let (expr, _) = first_interpolation(r#"f"{a!=b}""#);
+    assert!(
+        matches!(&expr, Expr::Compare(_)),
+        "expected a comparison for `f\"{{a!=b}}\"`, got {expr:?}"
+    );
+
+    // a force-unwrap in front of the conversion's own `!` leaves the conversion
+    // alone, so `f"{a!!r}"` unwraps `a` and prints its repr
+    let (expr, conversion) = first_interpolation(r#"f"{a!!r}""#);
+    assert_eq!(conversion, ruff_python_ast::ConversionFlag::Repr);
+    assert!(
+        matches!(&expr, Expr::UnaryOp(unary) if unary.op == UnaryOp::Force),
+        "expected a force-unwrap under the conversion, got {expr:?}"
+    );
+
+    // a `.py` file has no force-unwrap to reach for, and `f"{x!}"` there is a
+    // mistyped conversion — so python's own diagnostic is what it keeps
+    for source in [r#"f"{a!}""#, r#"f"{a!:>4}""#] {
+        let parsed = crate::parse_unchecked(source, ParseOptions::from(Mode::Module));
+        let messages: Vec<String> = parsed.errors().iter().map(ToString::to_string).collect();
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.contains("invalid conversion character")),
+            "expected {source:?} to keep python's conversion diagnostic, got {messages:?}"
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.contains("force-unwrap")),
+            "expected {source:?} not to be reported as a force-unwrap, got {messages:?}"
+        );
+    }
+}
+
+/// the basedpython parse errors of `source`, in the order the parser raised them
+fn basedpython_errors(source: &str) -> Vec<String> {
+    let options = ParseOptions::from(Mode::Module).with_basedpython(true);
+    crate::parse_unchecked(source, options)
+        .errors()
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+}
+
+#[test]
+fn force_unwrap_in_front_of_a_debug_equal_is_refused() {
+    // a `!` in front of a replacement field's `=` is the one place the force-unwrap
+    // cannot be claimed. the lexer glues `!=`, so `f"{a!=}"` and `f"{a! = }"` would
+    // differ only by a space — and `f"{a!=b}"` is a comparison that has to stay one,
+    // so a space would be deciding which operator was written. python's grammar never
+    // does that, and neither do we: both spellings are refused, and the refusal names
+    // the parenthesised form that does work
+    for source in [
+        r#"f"{a!=}""#,
+        r#"f"{a!= }""#,
+        r#"f"{a!=:>4}""#,
+        r#"f"{a!=!r}""#,
+        r#"f"{a! = }""#,
+        r#"f"{a! =}""#,
+        r#"f"{a ! = }""#,
+        r#"f"{a! =:>4}""#,
+    ] {
+        let messages = basedpython_errors(source);
+        assert!(
+            messages
+                .first()
+                .is_some_and(|message| message.contains(r#"f"{(a!) = }""#)),
+            "expected {source:?} to be refused with the parenthesised spelling, got {messages:?}"
+        );
+    }
+
+    // every comparison keeps its meaning, however it is spaced and whatever follows it
+    for source in [
+        r#"f"{a!=b}""#,
+        r#"f"{a != b}""#,
+        r#"f"{a!=-1}""#,
+        r#"f"{d[a!=b] = }""#,
+        r#"f"{(a != b)}""#,
+    ] {
+        assert_eq!(
+            basedpython_errors(source),
+            Vec::<String>::new(),
+            "expected {source:?} to parse"
+        );
+    }
+
+    // the parenthesised spelling the refusal names really does work, and a field with
+    // no `!` in front of its `=` is python's own
+    for source in [
+        r#"f"{(a!) = }""#,
+        r#"f"{(a!)=}""#,
+        r#"f"{a = }""#,
+        r#"f"{a=!r}""#,
+    ] {
+        assert_eq!(
+            basedpython_errors(source),
+            Vec::<String>::new(),
+            "expected {source:?} to parse"
+        );
+    }
+
+    // a `.py` file has no force-unwrap to reach for, so it keeps python's own wording
+    for source in [r#"f"{a!=}""#, r#"f"{a! = }""#] {
+        let messages: Vec<String> =
+            crate::parse_unchecked(source, ParseOptions::from(Mode::Module))
+                .errors()
+                .iter()
+                .map(ToString::to_string)
+                .collect();
+        assert!(
+            !messages
+                .iter()
+                .any(|message| message.contains("force-unwrap")),
+            "expected {source:?} to keep python's own diagnostic, got {messages:?}"
+        );
+    }
+}
+
 #[test]
 fn nested_parens_grow_stack() {
     let src = format!("{}1{}", "(".repeat(1_000), ")".repeat(1_000));

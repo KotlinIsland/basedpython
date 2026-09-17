@@ -98,6 +98,10 @@ impl JustFloatPass {
 }
 
 impl TypeAwarePass for JustFloatPass {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::JustFloat)
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = JustFloat::new(types);
         walk_type_positions(stmts, Some(types), &mut inner);

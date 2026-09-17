@@ -203,7 +203,7 @@ pub fn check_and_transpile(
                 })?;
             }
             Err(e) => {
-                all_diagnostics.push(transpile_bug_diagnostic(*file, &e));
+                all_diagnostics.push(transpile_failure_diagnostic(*file, &e));
                 ok = false;
                 if gate == CheckGate::AllErrors {
                     break;
@@ -235,15 +235,20 @@ pub fn is_unusable_source(d: &Diagnostic) -> bool {
 /// source. When the failure maps back to a `.by` range, attach it so the
 /// diagnostic renders with `--> file:line:col` and a source caret like any
 /// other; otherwise fall back to a bare message.
-pub fn transpile_bug_diagnostic(
+///
+/// The id is the failure's own kind, because the three read differently to whoever gets
+/// them: a refusal is about the module and says what to rename, while `invalid-syntax` and
+/// `internal-error` are about the transpiler and the next step is to report them.
+pub fn transpile_failure_diagnostic(
     file: ruff_db::files::File,
     err: &by_transforms::TranspileError,
 ) -> Diagnostic {
-    let mut diag = Diagnostic::new(
-        DiagnosticId::InvalidSyntax,
-        Severity::Error,
-        err.message.clone(),
-    );
+    let id = match err.kind {
+        by_transforms::TranspileErrorKind::InvalidSyntax => DiagnosticId::InvalidSyntax,
+        by_transforms::TranspileErrorKind::Refused => DiagnosticId::TranspileRefused,
+        by_transforms::TranspileErrorKind::Bug => DiagnosticId::InternalError,
+    };
+    let mut diag = Diagnostic::new(id, Severity::Error, err.message.clone());
     if let Some(range) = err.by_range {
         diag.annotate(Annotation::primary(Span::from(file).with_range(range)));
     }
