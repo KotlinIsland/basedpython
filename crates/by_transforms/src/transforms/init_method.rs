@@ -31,12 +31,14 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::callable::lower_type_expr_full;
 use super::mutable_defaults::{parameter_guards, undeclarable_error};
-use super::source_util::{PrologueStatement, first_body_statement};
+use super::repeated_underscore::WrittenNames;
+use super::source_util::{PrologueStatement, body_prologue, first_body_statement};
 use crate::config::FloatLiteralLowering;
 use crate::type_info::TypeInfo;
 
 pub(crate) struct InitMethod<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     float_literals: FloatLiteralLowering,
     is_stub: bool,
 }
@@ -44,11 +46,13 @@ pub(crate) struct InitMethod<'src> {
 impl<'src> InitMethod<'src> {
     pub(crate) fn new(
         source: &'src str,
+        written: WrittenNames<'src>,
         float_literals: FloatLiteralLowering,
         is_stub: bool,
     ) -> Self {
         Self {
             source,
+            written,
             float_literals,
             is_stub,
         }
@@ -59,6 +63,7 @@ impl TypeAwarePass for InitMethod<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut state = State {
             source: self.source,
+            written: self.written,
             types,
             symbolic_substitutions: ctx.symbolic_substitutions.clone(),
             float_literals: self.float_literals,
@@ -73,7 +78,8 @@ impl TypeAwarePass for InitMethod<'_> {
             state.visit_stmt(stmt);
         }
         if state.needs_missing.into_inner() {
-            ctx.required_imports.push("_MISSING = object()".to_owned());
+            ctx.required_imports
+                .extend(super::mutable_defaults::sentinel_definition(self.source));
         }
         ctx.text_edits.extend(state.edits.into_inner());
         ctx.template_edits.extend(state.templates.into_inner());
@@ -102,8 +108,34 @@ fn is_init_owned_modifier(word: &str) -> bool {
     matches!(word, "let" | "var" | "private" | "protected" | "public")
 }
 
+/// One `self.<name>: <ann> = <name>` line a declaring parameter stands for. The
+/// line is written in full here and never continues onto a second one, so it
+/// re-establishes no indentation of its own
+struct SelfAssignment(String);
+
+impl PrologueStatement for SelfAssignment {
+    fn push(&self, frags: &mut Vec<Fragment>, _indent: &str) {
+        frags.push(Fragment::Lit(self.0.clone()));
+    }
+}
+
+/// The text of fragments that pass no source through. A self-assignment is
+/// written in full, so the insertion it sits in is plain text: a template would
+/// absorb the zero-width insertions a sibling lowering left at the same offset,
+/// and those belong to the statement the assignments precede
+fn literal_text(frags: &[Fragment]) -> String {
+    frags
+        .iter()
+        .map(|frag| match frag {
+            Fragment::Lit(lit) => lit.as_str(),
+            Fragment::Src(_) => "",
+        })
+        .collect()
+}
+
 struct State<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     /// `(range, rendered)` for every symbolic fold in the module. the `__init__`
     /// line is fresh output, so a fold inside a parameter annotation is dropped
@@ -171,6 +203,7 @@ impl State<'_> {
             .collect();
         lower_type_expr_full(
             self.source,
+            self.written,
             self.types,
             ann,
             &substitutions,
@@ -225,7 +258,7 @@ impl State<'_> {
         // 2. collect attribute-declaring parameters (`let` / `var`, optionally
         //    `private` / `public`) from every slot, strip the modifier prefix
         //    from the source, and validate the combination
-        let mut let_assignments: Vec<String> = Vec::new();
+        let mut let_assignments: Vec<SelfAssignment> = Vec::new();
         let mut handle = |param: &Parameter| {
             let Some((prefix_range, words)) = self.modifier_prefix(param) else {
                 return;
@@ -278,13 +311,14 @@ impl State<'_> {
             // `protected`. the parameter itself keeps its declared name
             let attr = visibility_rename(name, visibility.name_prefix())
                 .unwrap_or_else(|| name.to_owned());
+            let value = crate::python_parameter_name(&func.parameters, param, self.written);
             let line = if let Some(ann) = &param.annotation {
                 let ann_src = self.lower_annotation(ann);
-                format!("self.{attr}: {ann_src} = {name}")
+                format!("self.{attr}: {ann_src} = {value}")
             } else {
-                format!("self.{attr} = {name}")
+                format!("self.{attr} = {value}")
             };
-            let_assignments.push(line);
+            let_assignments.push(SelfAssignment(line));
         };
         for p in &func.parameters.posonlyargs {
             handle(&p.parameter);
@@ -305,18 +339,18 @@ impl State<'_> {
         // 3. insert the self-assignments. whether there is a body at all is the
         // question `mutable_defaults` asks too, so the two never disagree about
         // which of them writes the guards a default needs
-        let first_user_stmt = first_body_statement(func);
-        if let Some(first) = first_user_stmt {
-            if !let_assignments.is_empty() {
-                let stmt_indent = self.line_indent(first.range().start()).to_owned();
-                let mut text = String::new();
-                for line in &let_assignments {
-                    text.push_str(line);
-                    text.push('\n');
-                    text.push_str(&stmt_indent);
+        if first_body_statement(func).is_some() {
+            // the same anchor `mutable_defaults` hangs its guards off, so the two
+            // agree about where the top of the body is: after a docstring, and on
+            // a line of its own when the source wrote the suite on the clause's
+            // line, where the class body's indentation would put the statements
+            // outside the method
+            if !let_assignments.is_empty()
+                && let Some(anchored) = body_prologue(self.source, func, &let_assignments)
+            {
+                for (at, frags) in anchored {
+                    self.push(TextRange::new(at, at), literal_text(&frags));
                 }
-                let pos = first.range().start();
-                self.push(TextRange::new(pos, pos), text);
             }
         } else {
             // the whole body is written here, so the guards a defaulted or
@@ -327,7 +361,13 @@ impl State<'_> {
                 written,
                 guards,
                 undeclarable,
-            } = parameter_guards(func, self.types, self.is_stub);
+            } = parameter_guards(
+                func,
+                self.written,
+                &super::mutable_defaults::sentinel_name(self.source),
+                self.types,
+                self.is_stub,
+            );
             if let Some(parameter) = undeclarable.first() {
                 self.errors
                     .borrow_mut()
@@ -345,7 +385,8 @@ impl State<'_> {
                     guard.push(&mut frags, &body_indent);
                 }
                 for line in &let_assignments {
-                    frags.push(Fragment::Lit(format!("\n{body_indent}{line}")));
+                    frags.push(Fragment::Lit(format!("\n{body_indent}")));
+                    line.push(&mut frags, &body_indent);
                 }
             }
             // an inherited default is a signature edit that needs no guard, so the sentinels
@@ -357,17 +398,15 @@ impl State<'_> {
                 // no passthrough to carry, so emit plain text: a template
                 // absorbs the zero-width insertions a sibling lowering left at
                 // this offset, and here they belong to the signature
-                let text = frags
-                    .iter()
-                    .map(|frag| match frag {
-                        Fragment::Lit(lit) => lit.as_str(),
-                        Fragment::Src(_) => "",
-                    })
-                    .collect::<String>();
-                self.push(TextRange::new(pos, pos), text);
+                self.push(TextRange::new(pos, pos), literal_text(&frags));
                 return;
             }
-            *self.needs_missing.borrow_mut() = true;
+            if guards
+                .iter()
+                .any(super::mutable_defaults::Guard::uses_sentinel)
+            {
+                *self.needs_missing.borrow_mut() = true;
+            }
             self.templates
                 .borrow_mut()
                 .push((TextRange::new(pos, pos), frags));
@@ -442,6 +481,25 @@ mod tests {
                 class A:
                     def __init__(self, a: int, *args: str):
                         self.a: int = a
+            "},
+        );
+    }
+
+    /// a declaring parameter assigns its attribute from the parameter python binds, and
+    /// a repeated `_` is numbered there: read by its source name, the second assignment
+    /// would store the first argument again
+    #[test]
+    fn a_repeated_underscore_declares_from_its_numbered_name() {
+        check(
+            indoc! {"
+                class A:
+                    init(let _: int, let _: int)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, _: int, _2: int, /):
+                        self._: int = _
+                        self._: int = _2
             "},
         );
     }
@@ -636,6 +694,136 @@ mod tests {
                     def __init__(self, a: int):
                         self.a: int = a
                         print(\"hi\")
+            "},
+        );
+    }
+
+    /// a body written on the `init` clause's own line has no line of its own for the
+    /// attribute declaration to precede it on. written at the body statement's
+    /// indentation — which is the *class body's* — the statement fell out of the method
+    /// and ran at class creation, where the parameter is not a name at all
+    #[test]
+    fn an_inline_body_stays_inside_the_method() {
+        check(
+            indoc! {"
+                class A:
+                    init(let z: int): print(z)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, z: int): \n        self.z: int = z
+                        print(z)
+            "},
+        );
+    }
+
+    /// the declaration follows a docstring rather than displacing it: written above one,
+    /// the string stops being the first statement and the method loses its `__doc__`
+    #[test]
+    fn a_declaration_follows_the_docstring() {
+        check(
+            indoc! {"
+                class A:
+                    init(let a: int):
+                        \"\"\"doc\"\"\"
+                        print(a)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, a: int):
+                        \"\"\"doc\"\"\"
+                        self.a: int = a
+                        print(a)
+            "},
+        );
+    }
+
+    /// and it follows the guard that fills its parameter in, which `mutable_defaults`
+    /// writes at the same anchor — read before the guard runs, the attribute would be
+    /// stored as the sentinel
+    #[test]
+    fn a_declaration_follows_the_guard_for_its_own_default() {
+        check(
+            indoc! {"
+                class A:
+                    init(let a: list[int] = []):
+                        \"\"\"doc\"\"\"
+                        print(a)
+            "},
+            indoc! {"
+                from typing import Any
+                _MISSING: Any = object()
+                class A:
+                    def __init__(self, a: list[int] = _MISSING):
+                        \"\"\"doc\"\"\"
+                        if a is _MISSING:
+                            a = []
+                        self.a: list[int] = a
+                        print(a)
+            "},
+        );
+    }
+
+    /// a docstring written on the clause's line is a body of exactly one statement, and
+    /// nothing can follow a statement there. the docstring moves onto a line of its own so
+    /// the declaration has somewhere to go — written after it where it was, the emitted
+    /// line was indented under a suite that had already closed, and the whole file failed
+    /// to parse
+    #[test]
+    fn a_docstring_on_the_clause_line_is_given_a_line_of_its_own() {
+        check(
+            indoc! {"
+                class A:
+                    init(let a: int): \"\"\"doc\"\"\"
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, a: int): \n        \"\"\"doc\"\"\"
+                        self.a: int = a
+            "},
+        );
+    }
+
+    /// and the break is one insertion of its own, ahead of the docstring, so a second pass
+    /// writing into the same body still composes: `mutable_defaults` and this pass both
+    /// write at the offset after the docstring, in the order they run
+    #[test]
+    fn two_passes_write_under_a_docstring_on_the_clause_line() {
+        check(
+            indoc! {"
+                class A:
+                    init(let a: list[int] = []): \"\"\"doc\"\"\"
+            "},
+            indoc! {"
+                from typing import Any
+                _MISSING: Any = object()
+                class A:
+                    def __init__(self, a: list[int] = _MISSING): \n        \n        \"\"\"doc\"\"\"
+                        if a is _MISSING:
+                            a = []
+                        self.a: list[int] = a
+            "},
+        );
+    }
+
+    /// and a clause-line body that holds more than the docstring is broken the same way:
+    /// the break stays ahead of the docstring, and both passes write ahead of the statement
+    /// that follows it
+    #[test]
+    fn a_docstring_followed_by_statements_on_the_clause_line_is_given_a_line_of_its_own() {
+        check(
+            indoc! {"
+                class A:
+                    init(let a: list[int] = []): \"\"\"doc\"\"\"; print(a)
+            "},
+            indoc! {"
+                from typing import Any
+                _MISSING: Any = object()
+                class A:
+                    def __init__(self, a: list[int] = _MISSING): \n        \n        \"\"\"doc\"\"\"; \n        if a is _MISSING:
+                            a = []
+                        \n        self.a: list[int] = a
+                        print(a)
             "},
         );
     }

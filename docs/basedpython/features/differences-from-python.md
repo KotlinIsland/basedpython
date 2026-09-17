@@ -75,6 +75,25 @@ module scope — no longer happens just because the importing module was loaded.
 `from __future__ import ...`, `from x import *`, and an unaliased `import a.b`
 stay eager. see [lazy imports](lazy-imports.md)
 
+### an annotation read at runtime is its python spelling
+
+a program that reads its own annotations reads the python they were lowered to:
+
+```by
+def f(x: int?, cb: (int) -> str): ...
+
+print(f.__annotations__)
+```
+
+prints `{'x': int | None, 'cb': typing.Callable[[int], str]}`.
+where python keeps annotations as strings — below python 3.10, or under
+`from __future__ import annotations` — the strings are the lowered text too,
+`'int | None'` or `'Union[int, None]'` rather than `'int?'`. there is no string
+that says what you wrote: python evaluates that string to get the type, and
+`int?` is not python. `typing.get_type_hints` and `inspect.signature` read the
+same annotations, and a dataclass's fields carry them, so all of them show the
+python spelling
+
 ## what an annotation means
 
 the same annotation denotes a different type

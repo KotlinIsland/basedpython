@@ -52,9 +52,59 @@ pub(crate) fn gate_function(
             "`{first}` is a reified type parameter, and a specialization has no emitted function to rebuild"
         )));
     }
+    if reads_a_repeated_underscore(function) {
+        return Err(Decline::new(
+            "a body reading a repeated `_` parameter reads the first of them, where ty reads the last",
+        ));
+    }
     let mut scanner = Scanner { found: None };
     scanner.walk_function(function);
     scanner.into_result()
+}
+
+/// whether `function` repeats the parameter `_` and its body reads that name
+///
+/// python refuses a repeated parameter, so the transpiler keeps the first `_` and
+/// numbers the rest — a read of `_` is the first parameter's value. ty binds each
+/// parameter in turn and takes the read for the *last* one, so a lowering built on
+/// ty's type for the read would treat one parameter's value as the other's type.
+/// a body that only ignores its `_` parameters is unaffected, and is lowered under the
+/// numbered names
+fn reads_a_repeated_underscore(function: &ast::StmtFunctionDef) -> bool {
+    struct Reads {
+        found: bool,
+    }
+    impl<'a> Visitor<'a> for Reads {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            if let Stmt::AugAssign(node) = stmt
+                && matches!(node.target.as_ref(), Expr::Name(name) if name.id == "_")
+            {
+                self.found = true;
+            }
+            walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Name(name) = expr
+                && name.id == "_"
+                && !name.ctx.is_store()
+            {
+                self.found = true;
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let underscores = function
+        .parameters
+        .iter()
+        .filter(|parameter| parameter.name() == "_")
+        .count();
+    if underscores < 2 {
+        return false;
+    }
+    let mut reads = Reads { found: false };
+    reads.visit_body(&function.body);
+    reads.found
 }
 
 /// whether this class may be lowered at all

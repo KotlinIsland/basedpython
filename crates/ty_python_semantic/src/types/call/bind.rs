@@ -38,7 +38,10 @@ use crate::types::constraints::{
     Solutions,
 };
 use crate::types::context::LintDiagnosticGuardBuilder;
-use crate::types::context_params::{ContextResolution, resolve_context_argument};
+use crate::types::context_params::{
+    ContextDisagreement, ContextResolution, overload_fillable_context_parameters,
+    resolve_context_argument,
+};
 use crate::types::dedicated::django;
 use crate::types::dedicated::pydantic::{self, ConfigBoolean};
 use crate::types::diagnostic::{
@@ -1086,10 +1089,11 @@ impl<'db> Bindings<'db> {
     /// basedpython: after parameter matching, fill unmatched `context`
     /// parameters from the `context` declarations visible at the call site,
     /// rewriting each binding's missing-argument errors. must run before
-    /// `check_types` so a fully resolved call binds cleanly. overloaded
-    /// callables are skipped — the transpiler's injection is limited to
-    /// single-signature callees (`single_signature`), and checking must not
-    /// accept a call the lowering cannot complete
+    /// `check_types` so a fully resolved call binds cleanly.
+    ///
+    /// An overloaded callable is filled only where every one of its overloads agrees, since
+    /// checking must not accept a call the lowering cannot complete and the lowering writes
+    /// only what they agree on — see [`overload_fillable_context_parameters`]
     pub(crate) fn resolve_context_arguments(
         &mut self,
         db: &'db dyn Db,
@@ -1098,10 +1102,32 @@ impl<'db> Bindings<'db> {
         call_offset: ruff_text_size::TextSize,
     ) {
         for callable_binding in self.iter_flat_mut() {
-            let [binding] = callable_binding.overloads.as_mut_slice() else {
-                continue;
-            };
-            binding.resolve_context_arguments(db, env, scope, call_offset);
+            let signatures: Vec<_> = callable_binding
+                .overloads
+                .iter()
+                .map(|binding| binding.signature.clone())
+                .collect();
+            let agreed = overload_fillable_context_parameters(
+                db,
+                env,
+                scope,
+                call_offset,
+                signatures.as_slice(),
+            );
+            for binding in &mut callable_binding.overloads {
+                binding.resolve_context_arguments(
+                    db,
+                    env,
+                    scope,
+                    call_offset,
+                    agreed.as_ref().map(|agreed| &agreed.fillable),
+                );
+            }
+            // kept for the report: a parameter the overloads could not agree on is one the
+            // call was never going to be given, and nothing else says so
+            callable_binding.context_disagreements = agreed
+                .map(|agreed| agreed.disagreements)
+                .unwrap_or_default();
         }
     }
 
@@ -3664,6 +3690,7 @@ impl<'db> From<Binding<'db>> for Bindings<'db> {
             overload_call_result: None,
             matching_overload_before_type_checking: None,
             overloads: smallvec_inline![from],
+            context_disagreements: Vec::new(),
         };
         Bindings {
             callable_type,
@@ -3741,6 +3768,10 @@ pub(crate) struct CallableBinding<'db> {
     /// By using `SmallVec`, we avoid an extra heap allocation for the common case of a
     /// non-overloaded callable.
     overloads: SmallVec<[Binding<'db>; 1]>,
+
+    /// basedpython: the keyword-only `context` parameters this overload set could not fill
+    /// implicitly because its overloads do not agree on them. Empty for everything else.
+    context_disagreements: Vec<ContextDisagreement>,
 }
 
 #[derive(Copy, Clone)]
@@ -3801,6 +3832,7 @@ impl<'db> CallableBinding<'db> {
             overload_call_result: None,
             matching_overload_before_type_checking: None,
             overloads,
+            context_disagreements: Vec::new(),
         }
     }
 
@@ -3813,6 +3845,7 @@ impl<'db> CallableBinding<'db> {
             overload_call_result: None,
             matching_overload_before_type_checking: None,
             overloads: smallvec![],
+            context_disagreements: Vec::new(),
         }
     }
 
@@ -4050,6 +4083,93 @@ impl<'db> CallableBinding<'db> {
                     })
                 })
         })
+    }
+
+    /// basedpython: the `context` parameters this call was reported missing that are the ones
+    /// an overload set never writes an argument for.
+    ///
+    /// A `context` parameter is filled through an overload set only where every overload agrees
+    /// on it, and agreement needs the parameter to be keyword-only: a keyword names the same
+    /// parameter whichever overload is selected, where a positional slot can sit at a different
+    /// index in each — so whether the call already supplies it is a different question for each
+    /// overload, and no one argument is right for all of them.
+    ///
+    /// Left as it is, the call fails for want of an argument that was never going to be written,
+    /// and "no overload matches arguments" gives an author no way to see why. So the name is
+    /// reported alongside it.
+    fn unfilled_positional_context_parameters(&self) -> Vec<Name> {
+        let mut names: Vec<Name> = Vec::new();
+        for binding in &self.overloads {
+            let parameters = binding.signature.parameters();
+            for error in &binding.errors {
+                let BindingError::MissingArguments {
+                    parameters: missing,
+                    ..
+                } = error
+                else {
+                    continue;
+                };
+                for missing in &missing.0 {
+                    let Some(parameter) = parameters.get(missing.signature_parameter_index) else {
+                        continue;
+                    };
+                    if !parameter.is_context() || parameter.is_keyword_only() {
+                        continue;
+                    }
+                    let Some(name) = parameter.name() else {
+                        continue;
+                    };
+                    if !names.contains(name) {
+                        names.push(name.clone());
+                    }
+                }
+            }
+        }
+        names
+    }
+
+    /// basedpython: the `context` parameters this call was reported missing that its overloads
+    /// could not agree on.
+    ///
+    /// A keyword-only `context` parameter is filled through an overload set only where every
+    /// overload would be given the same argument for it — the name has to mean the same thing in
+    /// all of them, since which overload the call selects is decided by its arguments and not
+    /// here. Where they part, nothing is written, and the call goes without an argument that was
+    /// never going to be there. So the report says which overloads parted and over what.
+    fn unagreed_context_parameters(&self) -> Vec<&ContextDisagreement> {
+        if self.context_disagreements.is_empty() {
+            return Vec::new();
+        }
+        let mut missing_names: Vec<&Name> = Vec::new();
+        for binding in &self.overloads {
+            let parameters = binding.signature.parameters();
+            for error in &binding.errors {
+                let BindingError::MissingArguments {
+                    parameters: missing,
+                    ..
+                } = error
+                else {
+                    continue;
+                };
+                for missing in &missing.0 {
+                    let Some(parameter) = parameters.get(missing.signature_parameter_index) else {
+                        continue;
+                    };
+                    if !parameter.is_context() || !parameter.is_keyword_only() {
+                        continue;
+                    }
+                    if let Some(name) = parameter.name()
+                        && !missing_names.contains(&name)
+                    {
+                        missing_names.push(name);
+                    }
+                }
+            }
+        }
+        self.context_disagreements
+            .iter()
+            .filter(|disagreement| missing_names.contains(&&disagreement.parameter))
+            .collect()
     }
 
     /// Returns the distinct source overload indexes that should be shown in diagnostics.
@@ -5158,6 +5278,35 @@ impl<'db> CallableBinding<'db> {
                     diag.info(format_args!(
                         "Limit of argument type expansion reached at argument {index}"
                     ));
+                }
+
+                for parameter in self.unfilled_positional_context_parameters() {
+                    diag.info(format_args!(
+                        "`{parameter}` is a `context` parameter, and an overload set is given one \
+                        implicitly only where it is keyword-only in every overload"
+                    ));
+                    diag.info(format_args!(
+                        "Declare `{parameter}` after a `*` in every overload, or pass it explicitly"
+                    ));
+                }
+
+                for disagreement in self.unagreed_context_parameters() {
+                    let parameter = &disagreement.parameter;
+                    diag.info(format_args!(
+                        "`{parameter}` is a `context` parameter, and an overload set is given one \
+                        implicitly only where every overload would be given the same argument"
+                    ));
+                    let parted = disagreement
+                        .per_overload
+                        .iter()
+                        .enumerate()
+                        .map(|(index, choice)| {
+                            format!("overload {} {}", index + 1, choice.describe(parameter))
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    diag.info(format_args!("{parted}"));
+                    diag.info(format_args!("Pass `{parameter}` explicitly"));
                 }
 
                 if let Some((kind, function)) = function_type_and_kind {
@@ -9252,6 +9401,7 @@ impl<'db> Binding<'db> {
         env: &ProgramEnvironment<'db>,
         scope: ScopeId<'db>,
         call_offset: ruff_text_size::TextSize,
+        fillable: Option<&Vec<Name>>,
     ) {
         let parameters = self.signature.parameters();
         if !parameters.iter().any(Parameter::is_context) {
@@ -9274,13 +9424,15 @@ impl<'db> Binding<'db> {
                 if !parameter.is_context() {
                     return true;
                 }
-                match resolve_context_argument(
-                    db,
-                    env,
-                    scope,
-                    call_offset,
-                    parameter.annotated_type(),
-                ) {
+                // an overload set fills only what all of its overloads agree on; a parameter
+                // outside that keeps its missing-argument error, because nothing will be
+                // written for it
+                if fillable.is_some_and(|fillable| {
+                    parameter.name().is_none_or(|name| !fillable.contains(name))
+                }) {
+                    return true;
+                }
+                match resolve_context_argument(db, env, scope, call_offset, parameters, parameter) {
                     ContextResolution::Resolved { .. } => false,
                     ContextResolution::NotFound => {
                         context_errors.push(BindingError::NoContextArgument {
@@ -9292,6 +9444,18 @@ impl<'db> Binding<'db> {
                         context_errors.push(BindingError::AmbiguousContextArgument {
                             parameter: parameter_context.clone(),
                             candidates,
+                        });
+                        false
+                    }
+                    ContextResolution::RepeatedUnderscore => {
+                        context_errors.push(BindingError::RepeatedUnderscoreContextArgument {
+                            parameter: parameter_context.clone(),
+                        });
+                        false
+                    }
+                    ContextResolution::RepeatedUnderscoreParameter => {
+                        context_errors.push(BindingError::RepeatedUnderscoreContextParameter {
+                            parameter: parameter_context.clone(),
                         });
                         false
                     }
@@ -9868,7 +10032,9 @@ impl ParameterContext {
             signature_parameter_index: index,
             source_parameter_index: parameter.source_parameter_index(),
             is_receiver: parameter.is_receiver(),
-            positional,
+            // basedpython: a repeated `_` is one of several of that name, so its position
+            // is what tells it apart
+            positional: positional || parameter.is_repeated_underscore(),
         }
     }
 }
@@ -10020,6 +10186,16 @@ pub(crate) enum BindingError<'db> {
     AmbiguousContextArgument {
         parameter: ParameterContext,
         candidates: Vec<ast::name::Name>,
+    },
+    /// basedpython: a `context` parameter is unmatched and the value in scope
+    /// that would fill it is a `_` parameter its function repeats.
+    RepeatedUnderscoreContextArgument {
+        parameter: ParameterContext,
+    },
+    /// basedpython: a `context` parameter is unmatched and is a `_` its function
+    /// repeats, which no implicit argument can be written for.
+    RepeatedUnderscoreContextParameter {
+        parameter: ParameterContext,
     },
     /// A call argument can't be matched to any parameter.
     UnknownArgument {
@@ -10200,6 +10376,8 @@ impl BindingError<'_> {
             | BindingError::MissingArguments { .. }
             | BindingError::NoContextArgument { .. }
             | BindingError::AmbiguousContextArgument { .. }
+            | BindingError::RepeatedUnderscoreContextArgument { .. }
+            | BindingError::RepeatedUnderscoreContextParameter { .. }
             | BindingError::UnmatchedOverload
             | BindingError::PropertyHasNoGetter(..)
             | BindingError::PropertyHasNoSetter(..)
@@ -10277,6 +10455,8 @@ impl<'db> BindingError<'db> {
             | Self::MissingArguments { .. }
             | Self::NoContextArgument { .. }
             | Self::AmbiguousContextArgument { .. }
+            | Self::RepeatedUnderscoreContextArgument { .. }
+            | Self::RepeatedUnderscoreContextParameter { .. }
             | Self::UnknownArgument { .. }
             | Self::UnknownKeywordVariadicArgument { .. }
             | Self::PositionalOnlyParameterAsKwarg { .. }
@@ -10676,6 +10856,45 @@ impl<'db> BindingError<'db> {
                     diag.sub(SubDiagnostic::new(
                         SubDiagnosticSeverity::Info,
                         format_args!("{candidates} all match; pass the argument explicitly"),
+                    ));
+                }
+            }
+
+            Self::RepeatedUnderscoreContextArgument { parameter } => {
+                let range = all_arguments_range(node);
+                if let Some(builder) = context.report_lint(&MISSING_CONTEXT_ARGUMENT, range) {
+                    let mut diag = builder.into_diagnostic(format_args!(
+                        "a repeated `_` parameter cannot supply context parameter {parameter}{}",
+                        callable_description
+                            .map(|description| format!(" of {description}"))
+                            .unwrap_or_default()
+                    ));
+                    diag.sub(SubDiagnostic::new(
+                        SubDiagnosticSeverity::Info,
+                        format_args!(
+                            "python binds only one of the parameters named `_`; give the one \
+                             that supplies it a name of its own"
+                        ),
+                    ));
+                }
+            }
+
+            Self::RepeatedUnderscoreContextParameter { parameter } => {
+                let range = all_arguments_range(node);
+                if let Some(builder) = context.report_lint(&MISSING_CONTEXT_ARGUMENT, range) {
+                    let mut diag = builder.into_diagnostic(format_args!(
+                        "repeated `_` parameter {}{} cannot be supplied implicitly",
+                        parameter.signature_parameter_index + 1,
+                        callable_description
+                            .map(|description| format!(" of {description}"))
+                            .unwrap_or_default()
+                    ));
+                    diag.sub(SubDiagnostic::new(
+                        SubDiagnosticSeverity::Info,
+                        format_args!(
+                            "which of the parameters named `_` a keyword names is not decided; \
+                             pass the argument positionally, or give the parameter a name of its own"
+                        ),
                     ));
                 }
             }

@@ -149,7 +149,13 @@ impl BackgroundRequestHandler for EntryPointHandler {
         let source_type = file.source_type(db);
         let generates_entry_points = source_type.is_basedpython() && !source_type.is_stub();
         let main = generates_entry_points
-            .then(|| by_transforms::entry_point::entry_point(body, source.as_str()))
+            .then(|| {
+                by_transforms::entry_point::entry_point(
+                    body,
+                    source.as_str(),
+                    by_transforms::WrittenNames::new(source.as_str()),
+                )
+            })
             .flatten()
             .and_then(|entry| {
                 Some(MainFunction {

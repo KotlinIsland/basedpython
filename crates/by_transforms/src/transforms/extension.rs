@@ -37,6 +37,7 @@ use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::ExtensionMemberKind;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::repeated_underscore::{WrittenNames, positional_only_count};
 use super::source_util::{is_synthetic_decorator, line_start};
 use crate::type_info::TypeInfo;
 
@@ -124,7 +125,11 @@ pub(crate) fn parse_kind_word(word: &str) -> Option<ExtensionMemberKind> {
 /// render a member's parameter list without annotations (they reference type
 /// parameters with no runtime binding). defaults pass through as source spans
 /// so lowerings inside them compose
-fn parameter_fragments(parameters: &ast::Parameters, fragments: &mut Vec<Fragment>) {
+fn parameter_fragments(
+    parameters: &ast::Parameters,
+    written: WrittenNames,
+    fragments: &mut Vec<Fragment>,
+) {
     let mut first = true;
     let mut separate = |fragments: &mut Vec<Fragment>| {
         if !first {
@@ -132,36 +137,43 @@ fn parameter_fragments(parameters: &ast::Parameters, fragments: &mut Vec<Fragmen
         }
         first = false;
     };
-    for param in &parameters.posonlyargs {
+    let name =
+        |parameter: &ast::Parameter| crate::python_parameter_name(parameters, parameter, written);
+    // a repeated `_` moves the `/` to after the last of them
+    let positional_only = positional_only_count(parameters, written);
+    for (index, param) in parameters
+        .posonlyargs
+        .iter()
+        .chain(&parameters.args)
+        .enumerate()
+    {
+        if index > 0 && index == positional_only {
+            separate(&mut *fragments);
+            fragments.push(Fragment::Lit("/".to_owned()));
+        }
         separate(fragments);
-        fragments.push(Fragment::Lit(param.parameter.name.to_string()));
+        fragments.push(Fragment::Lit(name(&param.parameter).to_string()));
         if let Some(default) = &param.default {
             fragments.push(Fragment::Lit("=".to_owned()));
             fragments.push(Fragment::Src(default.range()));
         }
     }
-    if !parameters.posonlyargs.is_empty() {
+    if positional_only > 0
+        && positional_only == parameters.posonlyargs.len() + parameters.args.len()
+    {
         separate(&mut *fragments);
         fragments.push(Fragment::Lit("/".to_owned()));
     }
-    for param in &parameters.args {
-        separate(fragments);
-        fragments.push(Fragment::Lit(param.parameter.name.to_string()));
-        if let Some(default) = &param.default {
-            fragments.push(Fragment::Lit("=".to_owned()));
-            fragments.push(Fragment::Src(default.range()));
-        }
-    }
     if let Some(vararg) = &parameters.vararg {
         separate(&mut *fragments);
-        fragments.push(Fragment::Lit(format!("*{}", vararg.name)));
+        fragments.push(Fragment::Lit(format!("*{}", name(vararg))));
     } else if !parameters.kwonlyargs.is_empty() {
         separate(&mut *fragments);
         fragments.push(Fragment::Lit("*".to_owned()));
     }
     for param in &parameters.kwonlyargs {
         separate(fragments);
-        fragments.push(Fragment::Lit(param.parameter.name.to_string()));
+        fragments.push(Fragment::Lit(name(&param.parameter).to_string()));
         if let Some(default) = &param.default {
             fragments.push(Fragment::Lit("=".to_owned()));
             fragments.push(Fragment::Src(default.range()));
@@ -169,19 +181,24 @@ fn parameter_fragments(parameters: &ast::Parameters, fragments: &mut Vec<Fragmen
     }
     if let Some(kwarg) = &parameters.kwarg {
         separate(&mut *fragments);
-        fragments.push(Fragment::Lit(format!("**{}", kwarg.name)));
+        fragments.push(Fragment::Lit(format!("**{}", name(kwarg))));
     }
 }
 
 /// lowers `extension` blocks to module-level backing functions
 pub(crate) struct ExtensionBlockPass<'a> {
     source: &'a str,
+    written: WrittenNames<'a>,
     is_stub: bool,
 }
 
 impl<'a> ExtensionBlockPass<'a> {
-    pub(crate) fn new(source: &'a str, is_stub: bool) -> Self {
-        Self { source, is_stub }
+    pub(crate) fn new(source: &'a str, written: WrittenNames<'a>, is_stub: bool) -> Self {
+        Self {
+            source,
+            written,
+            is_stub,
+        }
     }
 
     /// lower one extension block to its backing functions, in place. the block
@@ -273,7 +290,7 @@ impl<'a> ExtensionBlockPass<'a> {
                 "def {}(",
                 backing_name(target, ordinal, func.name.as_str())
             )));
-            parameter_fragments(&func.parameters, &mut fragments);
+            parameter_fragments(&func.parameters, self.written, &mut fragments);
             fragments.push(Fragment::Lit(")".to_owned()));
 
             let marker = format!("{EXTENSION_MARKER} {} {header}", kind_word(kind));
@@ -330,6 +347,24 @@ impl<'a> ExtensionBlockPass<'a> {
 }
 
 impl TypeAwarePass for ExtensionBlockPass<'_> {
+    /// a member's backing function writes its own header: no annotations, no modifiers or
+    /// `context` prefixes, the extension's type parameters as the class's own, and each
+    /// parameter under the name ty decided, with the `/` a repeated `_` needs
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[
+            super::ast_driver::Lowering::Callable,
+            super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::LiteralType,
+            super::ast_driver::Lowering::JustFloat,
+            super::ast_driver::Lowering::DynamicKeyword,
+            super::ast_driver::Lowering::FloatConst,
+            super::ast_driver::Lowering::Modifiers,
+            super::ast_driver::Lowering::ContextParams,
+            super::ast_driver::Lowering::GenericPolyfill,
+            super::ast_driver::Lowering::RepeatedUnderscore,
+        ]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         // occurrence index per target name, module-wide — the mangle
         // discriminator shared with ty's `backing_function_name`
@@ -645,7 +680,14 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                         // parameters have to be filled here — the injection
                         // `context_params` anchors to the closing paren lands
                         // inside the range being replaced and is dropped
-                        for (parameter, variable) in self.types.implicit_context_arguments(call) {
+                        let implicit = match self.types.implicit_context_arguments(call) {
+                            Ok(implicit) => implicit,
+                            Err(error) => {
+                                self.errors.push(error);
+                                Vec::new()
+                            }
+                        };
+                        for (parameter, variable) in implicit {
                             if written {
                                 fragments.push(Fragment::Lit(", ".to_owned()));
                             }
@@ -820,6 +862,20 @@ mod tests {
             "got:\n{out}"
         );
         assert!(!out.contains("extension list"), "got:\n{out}");
+    }
+
+    /// the backing function declares the member's parameters as python binds them, and
+    /// two parameters named `_` are a `SyntaxError` there. the numbered one is
+    /// positional-only, as it is on any `def`
+    #[test]
+    fn a_repeated_underscore_in_a_member_is_numbered() {
+        let out = check(
+            "extension list:\n    def pick(self, _: int, _: int, i: int) -> Element:\n        return self[i]\n",
+        );
+        assert!(
+            out.contains("def _by_ext__list__pick(self, _, _2, /, i):"),
+            "got:\n{out}"
+        );
     }
 
     #[test]

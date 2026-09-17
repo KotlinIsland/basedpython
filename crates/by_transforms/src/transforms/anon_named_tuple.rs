@@ -39,6 +39,7 @@ use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtFunctionDef, StmtReturn};
 use ruff_text_size::Ranged;
 
 use crate::transforms::callable::CallableSyntax;
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 /// Synthetic field name for the i-th positional element of a mixed
@@ -164,11 +165,16 @@ pub(crate) struct AnonNamedTuple<'src> {
 }
 
 impl<'src> AnonNamedTuple<'src> {
-    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo, config: crate::Config) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        types: &'src dyn TypeInfo,
+        config: crate::Config,
+    ) -> Self {
         Self {
             source,
             types,
-            callable: CallableSyntax::new(source, config.float_literals).with_types(types),
+            callable: CallableSyntax::new(source, written, config.float_literals).with_types(types),
             config,
             edits: Vec::new(),
             shapes: indexmap::IndexMap::new(),
@@ -377,11 +383,10 @@ impl<'src> AnonNamedTuple<'src> {
     /// (`(name=v, ...)`). Same conventions as `extract_type_shape`; field
     /// types come from ty's promoted (literal-stripped) inference.
     ///
-    /// Returns `Err(message)` on hard structural failure. Returns
-    /// `Ok(None)` if any field's value type can't be resolved by ty (e.g.
-    /// unresolved import) — the caller falls back to leaving the source
-    /// expression alone, and `verify_syntax` will catch any leftover anon-NT
-    /// AST in the output.
+    /// Returns `Err(message)` on hard structural failure, and on a field whose value has no
+    /// type the emitted python can name: the class it would have to write is the whole
+    /// lowering, so a field it cannot annotate is a refusal rather than a shape to leave
+    /// alone. `Ok(None)` means the tuple is not a value-form anonymous named tuple at all.
     fn extract_value_shape(
         &self,
         tuple: &ruff_python_ast::ExprTuple,
@@ -414,8 +419,22 @@ impl<'src> AnonNamedTuple<'src> {
             {
                 class_name
             } else {
-                let Some(d) = self.types.promoted_type_display(value_expr) else {
-                    return Ok(None);
+                // the field needs an annotation the emitted file can read, and
+                // `promoted_type_display` refuses a spelling that names anything the output
+                // does not bind — a generator's element type keeps a `Literal` inside it,
+                // which is not one of the names basedpython imports for a synthesized
+                // annotation. say so here: written out, the class would read a name that is
+                // not there, and left alone the tuple reaches the output as a shape python
+                // has no syntax for
+                let Some(d) = self
+                    .types
+                    .promoted_type_display(value_expr, self.config.min_version)
+                else {
+                    return Err(format!(
+                        "anonymous named tuple field `{name}` has no type the emitted python \
+                         can name; annotate it, or give the tuple a `NamedTuple` class of \
+                         its own"
+                    ));
                 };
                 self.type_only_imports.borrow_mut().extend(d.modules);
                 self.typing_names.borrow_mut().extend(d.typing_names);
@@ -860,23 +879,50 @@ impl<'ast> Visitor<'ast> for AnonNamedTuple<'_> {
 
 pub(crate) struct AnonNamedTuplePass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     config: crate::Config,
 }
 
 impl<'src> AnonNamedTuplePass<'src> {
-    pub(crate) fn new(source: &'src str, config: crate::Config) -> Self {
-        Self { source, config }
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        config: crate::Config,
+    ) -> Self {
+        Self {
+            source,
+            written,
+            config,
+        }
     }
 }
 
 impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::AnonNamedTuple)
+    }
+
+    /// a named tuple type it replaces moves into a class, whose field types the shared
+    /// type-expression lowerer prints, a `typeof` among them
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[
+            super::ast_driver::Lowering::Callable,
+            super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::LiteralType,
+            super::ast_driver::Lowering::JustFloat,
+            super::ast_driver::Lowering::DynamicKeyword,
+            super::ast_driver::Lowering::FloatConst,
+            super::ast_driver::Lowering::Typeof,
+        ]
+    }
+
     fn run(
         &self,
         stmts: &[ruff_python_ast::Stmt],
         types: &dyn TypeInfo,
         ctx: &mut super::ast_driver::PassContext,
     ) {
-        let mut inner = AnonNamedTuple::new(self.source, types, self.config.clone());
+        let mut inner = AnonNamedTuple::new(self.source, self.written, types, self.config.clone());
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -953,9 +999,9 @@ mod tests {
         );
     }
 
-    /// `typeof` is lowered by an AST pass that re-renders its whole statement,
-    /// which drops this pass's edit — the cleanup run then re-lowers the
-    /// restored surface form, and must not emit the class a second time
+    /// `typeof` is lowered by an AST pass, inside the construct this pass replaces
+    /// whole — the cleanup run then lowers what is left in the output, and must
+    /// not emit the class a second time
     #[test]
     fn a_re_rendered_statement_does_not_duplicate_the_class() {
         let out = transpile("b: int = 1\na: (m: typeof b)\n", &Config::test_default()).unwrap();
@@ -1173,6 +1219,23 @@ mod tests {
         // transpiler must abort rather than emit invalid Python.
         let err = transpile("a = (1, arg0=2)\n", &Config::test_default()).unwrap_err();
         assert!(err.contains("duplicate field name `arg0`"), "got: {err}");
+    }
+
+    /// the class this lowering writes is the whole of it, so a field it cannot annotate is
+    /// a refusal. ty spells a generator's type `types.GeneratorType[Literal[1], None,
+    /// None]`, and `Literal` is not one of the names a synthesized annotation may import —
+    /// writing the class would give the emitted file a name that is not in it
+    #[test]
+    fn a_field_with_no_nameable_type_is_a_hard_error() {
+        let err = transpile(
+            "a = (gen=(x for x in [1]), n=20)\n",
+            &Config::test_default(),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("field `gen` has no type the emitted python can name"),
+            "got: {err}"
+        );
     }
 
     #[test]

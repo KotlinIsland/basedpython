@@ -1684,7 +1684,8 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        let arguments = implicit_context_arguments(self.db, env, self.model.file(), callee, call);
+        let arguments =
+            implicit_context_arguments(self.db, env, self.model.file(), callee, call).arguments;
         if arguments.is_empty() {
             return;
         }
@@ -12414,6 +12415,34 @@ def each(fn: (int) -> None) -> None:
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             inherited_parameter_defaults: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// An override that repeats `_` takes the names its base gives those positions, so a
+    /// call is hinted with the base's names. The numbered `_` of a function that overrides
+    /// nothing is positional-only, and hinted with nothing.
+    #[test]
+    fn basedpython_repeated_underscore_parameter_names() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                def f(self, x: int = 1, y: str = 'a') -> None: ...
+
+            class B(A):
+                override def f(self, _, _) -> None: ...
+
+            def g(_: int, _: int) -> None: ...
+
+            B().f(1, 'b')
+            g(1, 2)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            call_argument_names: true,
+            inherited_parameter_defaults: true,
+            inherited_parameter_types: true,
             ..InlayHintSettings::none()
         }));
     }

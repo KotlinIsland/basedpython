@@ -48,6 +48,16 @@ use crate::type_info::TypeInfo;
 pub(crate) struct VisibilityRenamePass;
 
 impl TypeAwarePass for VisibilityRenamePass {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::VisibilityRename)
+    }
+
+    /// a private definition it renames is written under its mangled name, without the
+    /// `private` keyword
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::Modifiers]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let module_private: HashSet<String> = types.private_module_symbols().into_iter().collect();
         let mut declarations = RenamedDeclarations::default();

@@ -307,9 +307,10 @@ one reified changes how the program is built, and turning a check on must not do
 that. an unreified parameter stays on its ceiling, where a `PermissionError`
 passes
 
-a decorated function whose statement another lowering re-renders cannot carry
-the guard — the insertion sits inside the range being rebuilt — and that is a
-transpile error rather than a silently missing check
+a decorated function whose `def` another lowering rewrites — numbering a
+repeated `_` parameter is one — cannot carry the guard: the `def` is printed from
+its syntax tree, and the insertion has nowhere in it to go. that is a transpile
+error rather than a silently missing check
 
 ## known gaps
 

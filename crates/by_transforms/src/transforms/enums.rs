@@ -427,7 +427,7 @@ fn emit_sealed_hierarchy(
         imports.add("typing", "ClassVar");
     }
     for variant in variants {
-        let variant_class = format!("_{name}_{}", variant.name);
+        let variant_class = variant_class_name(source, name, &variant.name);
         let declared = match variant.kind {
             // a payload variant is the class its call constructs
             VariantKind::Tuple => format!("type[{variant_class}]"),
@@ -449,8 +449,19 @@ fn emit_sealed_hierarchy(
     // variant subclasses, emitted at module level and attached to the enum
     for variant in variants {
         out.push_gen("\n");
-        emit_variant_class(out, name, variant, config);
+        emit_variant_class(out, source, name, variant, config);
     }
+}
+
+/// the module-level name a variant's subclass is bound to.
+///
+/// a module that spells `_Shape_Circle` itself — a class of its own by that name —
+/// gets a different one, because the lowering binds this name at module scope and
+/// would otherwise replace what the author wrote there without saying so. the name
+/// is derived rather than carried, so every place that needs it asks for it here
+/// and they cannot drift apart
+fn variant_class_name(source: &str, enum_name: &str, variant: &str) -> String {
+    super::repeated_underscore::WrittenNames::new(source).fresh(&format!("_{enum_name}_{variant}"))
 }
 
 /// Emit one variant as a module-level subclass of the enum and attach it (or, for
@@ -459,10 +470,16 @@ fn emit_sealed_hierarchy(
 /// A stub gets the subclass alone. The attachment and the name reset run as the
 /// module does, and the enum's body already declares `EnumName.Variant` to a
 /// checker
-fn emit_variant_class(out: &mut Out, enum_name: &str, variant: &Variant, config: &Config) {
+fn emit_variant_class(
+    out: &mut Out,
+    source: &str,
+    enum_name: &str,
+    variant: &Variant,
+    config: &Config,
+) {
     // a private module-level name holds the subclass; the public binding is the
     // attached `EnumName.Variant`
-    let mangled = format!("_{enum_name}_{}", variant.name);
+    let mangled = variant_class_name(source, enum_name, &variant.name);
     match variant.kind {
         VariantKind::Unit => {
             // a payload-less variant is a *value*, not a class — `A.Baz` is the
@@ -1038,9 +1055,8 @@ mod tests {
             PythonVersion::PY310,
             indoc! {"
                 from __future__ import annotations
-                from typing import TypeVar, Generic
                 from dataclasses import dataclass
-                from typing import final, ClassVar
+                from typing import final, ClassVar, TypeVar, Generic
                 _T = TypeVar(\"_T\")
                 _E = TypeVar(\"_E\")
                 class Result(Generic[_T, _E]):
@@ -1224,6 +1240,35 @@ mod tests {
                     def __repr__(self): return \"Point\"
                     def __reduce__(self): return type(self).__qualname__
             "}
+        );
+    }
+
+    /// the lowering binds the variant subclass at module scope, so a module that
+    /// already has a class of that name keeps its own and the variant takes another
+    #[test]
+    fn a_variant_subclass_gives_way_to_a_class_of_that_name() {
+        let out = transpile(
+            indoc! {"
+                class _Shape_Circle:
+                    tag = \"mine\"
+
+                enum class Shape:
+                    case Circle(radius: int)
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("class _Shape_Circle:\n    tag: str = \"mine\""),
+            "the module's own class is gone:\n{out}"
+        );
+        assert!(
+            out.contains("class _Shape_Circle2(Shape):"),
+            "the variant did not take another name:\n{out}"
+        );
+        assert!(
+            out.contains("Circle: ClassVar[type[_Shape_Circle2]]"),
+            "the declaration names the wrong class:\n{out}"
         );
     }
 }

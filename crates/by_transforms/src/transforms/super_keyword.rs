@@ -13,18 +13,22 @@ use ruff_python_ast::{Expr, ExprContext, ModModule, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{AstPass, PassContext, render_expr};
+use super::repeated_underscore::WrittenNames;
 
-pub(crate) struct SuperKeyword;
+pub(crate) struct SuperKeyword<'src> {
+    written: WrittenNames<'src>,
+}
 
-impl SuperKeyword {
-    pub(crate) fn new() -> Self {
-        Self
+impl<'src> SuperKeyword<'src> {
+    pub(crate) fn new(written: WrittenNames<'src>) -> Self {
+        Self { written }
     }
 }
 
-impl AstPass for SuperKeyword {
+impl AstPass for SuperKeyword<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let state = State {
+            written: self.written,
             edits: RefCell::new(Vec::new()),
             class_stack: RefCell::new(Vec::new()),
             self_stack: RefCell::new(Vec::new()),
@@ -37,22 +41,27 @@ impl AstPass for SuperKeyword {
     }
 }
 
-struct State {
+struct State<'src> {
+    written: WrittenNames<'src>,
     edits: RefCell<Vec<(TextRange, String)>>,
     class_stack: RefCell<Vec<String>>,
     self_stack: RefCell<Vec<String>>,
 }
 
-fn first_param_name(func: &ruff_python_ast::StmtFunctionDef) -> Option<String> {
+/// the name the receiver is bound to in the python, which a repeated `_` may have changed
+fn first_param_name(
+    func: &ruff_python_ast::StmtFunctionDef,
+    written: WrittenNames,
+) -> Option<String> {
     let params = &func.parameters;
     params
         .posonlyargs
         .first()
         .or_else(|| params.args.first())
-        .map(|p| p.parameter.name.as_str().to_owned())
+        .map(|p| crate::python_parameter_name(params, &p.parameter, written).to_string())
 }
 
-impl<'ast> Visitor<'ast> for &State {
+impl<'ast> Visitor<'ast> for &State<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match stmt {
             Stmt::ClassDef(c) => {
@@ -63,7 +72,7 @@ impl<'ast> Visitor<'ast> for &State {
                 self.class_stack.borrow_mut().pop();
             }
             Stmt::FunctionDef(f) => {
-                let pushed = first_param_name(f);
+                let pushed = first_param_name(f, self.written);
                 if let Some(name) = &pushed {
                     self.self_stack.borrow_mut().push(name.clone());
                 }

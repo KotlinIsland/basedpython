@@ -73,8 +73,11 @@ this covers the gradual `(...) -> T`, a parameter pack, and any declared paramet
 terms of the decorator's own type variables — a type variable belongs to the scope that declared
 it, so it cannot stand as a parameter type here
 
-an overloaded decorator declares nothing either: which overload a decoration picks depends on the
-shape of the function, which is the very thing being inferred
+an overloaded decorator declares what the overload a decoration can call declares. a decoration
+passes the function as one positional argument, so an overload that cannot be called that way is
+never the one it picks — the option-only overload of a [`decorator def`](decorator-keyword.md), say.
+when more than one of them can take the function, which one a decoration picks depends on the shape
+of the function, which is the very thing being inferred, and nothing is declared
 
 ## more than one decorator
 

@@ -387,6 +387,37 @@ class _Template:
                 yield self.interpolations[index]
 
 
+# a `t"..."` the author wrote, carrying the text the author wrote for each of its
+# fields rather than the text this file was lowered to
+#
+# `Interpolation.expression` is the source of the field, which python reads off the
+# compiled file — `t"{a!}"` would hand a reader `_force_unwrap(a)`. `_exprs` runs
+# parallel to the fields: a string is the author's own text for that field, and
+# `None` a field nothing lowered, which keeps the interpolation python built and so
+# stays byte-identical to what python would have reported
+#
+# the import is made here rather than at the top of the file because this module is
+# shared with runtimes that have no `string.templatelib`. only a t-string can reach
+# this helper, and a t-string needs 3.14
+def _by_template(_t, _exprs):
+    from string.templatelib import Interpolation, Template
+
+    _strings = _t.strings
+    _parts = []
+    for _index, _field in enumerate(_t.interpolations):
+        _parts.append(_strings[_index])
+        _expr = _exprs[_index]
+        _parts.append(
+            _field
+            if _expr is None
+            else Interpolation(
+                _field.value, _expr, _field.conversion, _field.format_spec
+            )
+        )
+    _parts.append(_strings[-1])
+    return Template(*_parts)
+
+
 def _by_graphemes(_text):
     try:
         import regex as _regex
@@ -1230,11 +1261,14 @@ class _LazyAttr:
             object.__setattr__(self, "_by_val", v)
             object.__setattr__(self, "_by_has", True)
         return self._by_val
+    # the three below really do override `object`'s, and `@override` is what says
+    # so — but it is `typing.override`, which arrived in 3.12, and this polyfill
+    # runs on 3.9. the suppression is what the decorator would have been
     @property
-    def __class__(self): return self._by_resolve().__class__
+    def __class__(self): return self._by_resolve().__class__  # ty: ignore[missing-override-decorator]
     def __getattr__(self, k): return getattr(self._by_resolve(), k)
-    def __setattr__(self, k, v): setattr(self._by_resolve(), k, v)
-    def __delattr__(self, k): delattr(self._by_resolve(), k)
+    def __setattr__(self, k, v): setattr(self._by_resolve(), k, v)  # ty: ignore[missing-override-decorator]
+    def __delattr__(self, k): delattr(self._by_resolve(), k)  # ty: ignore[missing-override-decorator]
     def __call__(self, *a, **k): return self._by_resolve()(*a, **k)
     def __class_getitem__(cls, k): return cls
     def __instancecheck__(self, o): return isinstance(o, self._by_resolve())

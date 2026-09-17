@@ -156,6 +156,92 @@ def g():
     f()  # error: [missing-context-argument]
 ```
 
+## a `context _` parameter supplies a context argument
+
+A `context` parameter named `_` is an ordinary name when it is the function's only parameter named
+`_`.
+
+```by
+def show(context label: str) -> str:
+    return label
+
+def relay(context _: str) -> str:
+    return show()
+
+print(relay("a"))
+```
+
+## a repeated `_` parameter does not supply a context argument
+
+A function may name several parameters `_`, but Python binds only one of them to the name `_`. Which
+one a call site would read is not decided, so a `context` parameter whose value would come from a
+repeated `_` is reported rather than filled from either of them.
+
+```by
+def show(context label: str) -> str:
+    return label
+
+def relay(context _: int, context _: str) -> str:
+    # error: [missing-context-argument] "a repeated `_` parameter cannot supply context parameter `label` of function `show`"
+    return show()
+```
+
+This holds for every repeated `_` that matches, not only the last one, and for a `context` `_`
+repeated by an ordinary parameter.
+
+```by
+def count(context n: int) -> int:
+    return n
+
+def first(context _: int, context _: str) -> int:
+    # error: [missing-context-argument] "a repeated `_` parameter cannot supply context parameter `n` of function `count`"
+    return count()
+
+def mixed(_: str, context _: int) -> int:
+    # error: [missing-context-argument] "a repeated `_` parameter cannot supply context parameter `n` of function `count`"
+    return count()
+```
+
+## a repeated `_` parameter is not filled implicitly
+
+A function may name several parameters `_`, `context` ones among them. They are positional-only, so
+a call passes them by position, and an implicit argument is written as a keyword, so none can be
+written for one. Each such parameter the call leaves unmatched is reported, whatever is in scope.
+
+```by
+def show(context _: int, context _: str) -> str:
+    return "ok"
+
+context n = 1
+context s = "a"
+
+show(2, "b")
+
+# error: [missing-context-argument] "repeated `_` parameter 1 of function `show` cannot be supplied implicitly"
+# error: [missing-context-argument] "repeated `_` parameter 2 of function `show` cannot be supplied implicitly"
+show()
+```
+
+A keyword `_` fills neither of them.
+
+```by
+# error: [positional-only-parameter-as-kwarg]
+# error: [missing-context-argument] "repeated `_` parameter 2 of function `show` cannot be supplied implicitly"
+show(_=2)
+```
+
+This holds for a `context` parameter `_` that repeats the name of an ordinary one.
+
+```by
+def mixed(_: int, context _: str) -> str:
+    return "ok"
+
+mixed(1, "b")
+
+# error: [missing-context-argument] "repeated `_` parameter 2 of function `mixed` cannot be supplied implicitly"
+mixed(1)
+```
+
 ## a trailing lambda block's `it` is a candidate
 
 A block binds the value its callback is called with as `it`, and nobody writes that binding. It is
@@ -345,7 +431,7 @@ def f(context b: str, *args: int): ...  # error: [invalid-syntax] "`*` parameter
 
 ## resolution is limited to plain functions and bound methods
 
-The transpiler can only inject implicit arguments where it can see a single signature, so
+The transpiler can only inject implicit arguments where it can see the callee's own signature, so
 constructors (and other indirect callables) keep the plain missing-argument behaviour and require
 explicit arguments.
 
@@ -359,6 +445,175 @@ context s = "asdf"
 A()  # error: [missing-argument]
 a = A(s)
 a.m()  # ok — bound methods resolve
+```
+
+## an overloaded callee fills a parameter every overload agrees on
+
+Which overload a call selects is decided by the arguments it is given, so an argument may be written
+only where it is the right one for every overload at once: the same name, resolved to the same
+value, and keyword-only in all of them so that whether the call already supplies it cannot depend on
+which one is selected.
+
+```by
+from typing import overload
+
+@overload
+def f(a: int, *, context b: str) -> int: ...
+@overload
+def f(a: str, *, context b: str) -> str: ...
+def f(a: int | str, *, context b: str) -> int | str:
+    return a
+
+context t: str = "hello"
+
+reveal_type(f(1))  # revealed: int
+```
+
+## overloads that disagree on a `context` parameter fill nothing
+
+<!-- snapshot-diagnostics -->
+
+The name means a different thing in each overload, so no one argument is right whichever is
+selected. Nothing is written, and a parameter with no default is the missing argument it is.
+
+The call then goes without an argument nothing was ever going to write, so the report says which
+overloads parted and what each of them would have done.
+
+```by
+from typing import overload
+
+@overload
+def f(a: int, *, context b: str) -> int: ...
+@overload
+def f(a: str, *, context b: int) -> str: ...
+def f(a: int | str, *, context b: str | int) -> int | str:
+    return a
+
+context t: str = "hello"
+context u: int = 1
+
+f(1)  # error: [no-matching-overload]
+```
+
+## an overload that leaves the `context` parameter out
+
+<!-- snapshot-diagnostics -->
+
+Declaring the parameter in only some overloads is a disagreement of the same kind: a call that
+selects the overload without it would be given an argument it never asked for.
+
+```by
+from typing import overload
+
+@overload
+def g(a: int, *, context b: str) -> int: ...
+@overload
+def g(a: int, x: int) -> str: ...
+def g(a: int, x: int = 0, *, context b: str = "") -> int | str:
+    return a
+
+context t: str = "hello"
+
+g(1)  # error: [no-matching-overload]
+```
+
+## a positional `context` parameter of an overload set is not filled
+
+<!-- snapshot-diagnostics -->
+
+A positional slot can sit at a different index in each overload, so whether the call already fills
+it is not the same question for all of them. Only a keyword-only parameter is read through an
+overload set.
+
+The call then goes without an argument nothing was ever going to write, which on its own reads as an
+ordinary failure to match. So the report names the parameter and the spelling that would have
+worked.
+
+```by
+from typing import overload
+
+@overload
+def f(a: int, context b: str) -> int: ...
+@overload
+def f(a: str, context b: str) -> str: ...
+def f(a: int | str, context b: str) -> int | str:
+    return a
+
+context t: str = "hello"
+
+f(1)  # error: [no-matching-overload]
+```
+
+## a decoration cannot fill a `context` parameter
+
+`@deco` is a call — it runs `deco(g)` — but it is the one call the source writes no argument list
+for, so there is nowhere to put the implicit argument. A parameter with a default would quietly take
+it rather than the ambient value the declaration promised, so the decoration is reported and left as
+written. The call form is where the argument can be written.
+
+```by
+def deco(fn: (...) -> object, context b: str = "default") -> object:
+    return fn
+
+context t: str = "hello"
+
+# error: [missing-context-argument] "context parameter `b` cannot be filled at a decoration"
+@deco
+def g(): ...
+
+def undecorated(): ...
+
+def call_it() -> object:
+    return deco(undecorated)  # ok — `t` is passed implicitly
+```
+
+The decorated definition is the decorator's first positional argument, so a `context` parameter
+standing in that slot is filled by it like any other.
+
+```by
+def only(context fn: object) -> object:
+    return fn
+
+@only
+def h(): ...
+```
+
+## a decoration of a `decorator def` cannot fill one either
+
+A `decorator def` is declared as the pair of overloads it is applied in, and the option is unfilled
+in both — so which one the decoration selects does not change the answer.
+
+```by
+decorator def d(fn: (...) -> object, context tag: str = "default") -> object:
+    print("decorating with", tag)
+    return fn
+
+context t: str = "hello"
+
+# error: [missing-context-argument] "context parameter `tag` cannot be filled at a decoration"
+@d
+def g(): ...
+```
+
+## an overload that fills the parameter leaves the decoration alone
+
+Only a parameter unfilled in every overload is reported: which overload a decoration selects is not
+decided here, so a report has to be true whichever it is.
+
+```by
+from typing import overload
+
+@overload
+def deco(fn: (...) -> object, context b: str = "default") -> object: ...
+@overload
+def deco(fn: int) -> object: ...
+def deco(fn: object, b: str = "default") -> object:
+    return fn
+
+context t: str = "hello"
+
+@deco
+def g(): ...
 ```
 
 ## reveal_type of the parameter inside the body

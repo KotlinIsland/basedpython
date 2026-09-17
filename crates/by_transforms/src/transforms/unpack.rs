@@ -32,6 +32,10 @@ impl UnpackSyntax {
 }
 
 impl AstPass for UnpackSyntax {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::Unpack)
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         // a parameter pack is a `ParamSpec` at runtime, and neither `**kwargs: **Pack` nor
         // `*args: *P` is valid python at any version, so this lowering is not version-gated

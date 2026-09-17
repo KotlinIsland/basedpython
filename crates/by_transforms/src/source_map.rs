@@ -41,7 +41,7 @@ pub(crate) struct Replacement {
 
 impl Replacement {
     /// Text no source span spells, standing for the construct at `anchor` — a
-    /// re-rendered statement, a plain-text substitution.
+    /// hoisted statement, a plain-text substitution.
     pub(crate) fn generated(text: &str, anchor: usize) -> Self {
         let mut replacement = Self::default();
         replacement.push_generated(text, anchor);
@@ -849,14 +849,33 @@ mod tests {
         );
     }
 
-    /// a statement an AST pass re-renders is printed from its AST, which keeps
-    /// no source ranges: nothing says which rendered line came from which source
-    /// line, so every line of it is charged to the statement's first line (see
-    /// the re-render edit in `ast_driver::run_against_source`). the repeated
-    /// `_` parameter is one such pass; the text after the statement resumes on
-    /// its own lines
+    /// a name the lowering needs that is folded into an import the module already wrote adds
+    /// no line, so that line goes on mapping to where the module wrote it. the preamble
+    /// accounts for the lines it adds, and this is the case where it adds none
     #[test]
-    fn a_statement_re_rendered_from_its_ast_is_charged_whole_to_its_first_line() {
+    fn a_name_folded_into_the_modules_own_import_keeps_its_line() {
+        assert_mapped(
+            indoc! {"
+                from typing import Any
+
+                def apply(f: (int) -> int) -> Any:
+                    return f(1)
+            "},
+            &[
+                (0, "from typing import Any, Callable"),
+                (1, ""),
+                (2, "def apply(f: Callable[[int], int]) -> Any:"),
+                (3, "    return f(1)"),
+            ],
+        );
+    }
+
+    /// a statement an AST pass rewrote prints only the nodes the pass changed and
+    /// passes the rest of its source through (see `rerender`), so the lines it
+    /// passes through keep their own. the repeated `_` parameter changes only the
+    /// `def` line, which is charged to itself
+    #[test]
+    fn a_statement_an_ast_pass_rewrote_keeps_the_lines_it_passes_through() {
         assert_mapped(
             indoc! {"
                 def ignore(_: int, _: int) -> int:
@@ -866,9 +885,9 @@ mod tests {
                 print(ignore(1, 2))
             "},
             &[
-                (0, "def ignore(_: int, _2: int) -> int:"),
-                (0, "    a = 1"),
-                (0, "    return a"),
+                (0, "def ignore(_: int, _2: int, /) -> int:"),
+                (1, "    a = 1"),
+                (2, "    return a"),
                 (3, ""),
                 (4, "print(ignore(1, 2))"),
             ],

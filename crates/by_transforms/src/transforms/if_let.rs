@@ -41,6 +41,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::destructure::{NameGen, push_destructure};
+use super::repeated_underscore::WrittenNames;
 use super::source_util::{line_indent, temporary_name};
 use crate::type_info::TypeInfo;
 
@@ -62,7 +63,7 @@ impl TypeAwarePass for IfLetPass<'_> {
             edits: Vec::new(),
             errors: Vec::new(),
             counter: 0,
-            names: NameGen::default(),
+            names: NameGen::new(self.source),
         };
         for stmt in stmts {
             lower.visit_stmt(stmt);
@@ -88,7 +89,7 @@ struct IfLetLower<'a, 'src> {
     /// monotonic across the file so sibling chains get distinct selectors
     counter: usize,
     /// names the temporaries a clause's destructuring needs
-    names: NameGen,
+    names: NameGen<'src>,
 }
 
 impl<'ast> Visitor<'ast> for IfLetLower<'_, '_> {
@@ -105,7 +106,7 @@ impl IfLetLower<'_, '_> {
     /// generated assignments can't shadow anything the source binds
     fn fresh_selector(&mut self, anchor: &Expr) -> String {
         loop {
-            let name = temporary_name("if_let", self.counter);
+            let name = temporary_name(WrittenNames::new(self.source), "if_let", self.counter);
             self.counter += 1;
             if self.types.is_unbound_at(&name, anchor) {
                 return name;
@@ -260,7 +261,7 @@ fn push_guard(
     value: usize,
     pattern: Option<&Pattern>,
     test: &Expr,
-    names: &mut NameGen,
+    names: &mut NameGen<'_>,
 ) -> Result<(), String> {
     match pattern {
         Some(pattern) => push_destructure(

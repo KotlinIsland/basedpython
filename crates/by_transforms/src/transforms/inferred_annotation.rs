@@ -29,18 +29,25 @@ use ruff_text_size::{Ranged, TextRange};
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
-pub(crate) struct InferredAnnotationPass;
+pub(crate) struct InferredAnnotationPass {
+    min_version: ruff_python_ast::PythonVersion,
+}
 
 impl InferredAnnotationPass {
-    pub(crate) fn new() -> Self {
-        Self
+    pub(crate) fn new(min_version: ruff_python_ast::PythonVersion) -> Self {
+        Self { min_version }
     }
 }
 
 impl TypeAwarePass for InferredAnnotationPass {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::InferredAnnotation)
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut state = State {
             types,
+            min_version: self.min_version,
             edits: Vec::new(),
             modules: BTreeSet::new(),
             typing_names: BTreeSet::new(),
@@ -62,6 +69,7 @@ impl TypeAwarePass for InferredAnnotationPass {
 
 struct State<'a> {
     types: &'a dyn TypeInfo,
+    min_version: ruff_python_ast::PythonVersion,
     edits: Vec<(TextRange, String)>,
     /// modules a synthesized annotation names but the source never imported
     modules: BTreeSet<String>,
@@ -93,7 +101,10 @@ impl State<'_> {
         if is_dunder(name.id.as_str()) {
             return;
         }
-        let Some(annotation) = self.types.inferred_annotation(&assign.value) else {
+        let Some(annotation) = self
+            .types
+            .inferred_annotation(&assign.value, self.min_version)
+        else {
             return;
         };
         let pos = name.range().end();
@@ -252,6 +263,33 @@ mod tests {
         );
     }
 
+    /// and the block stays a block. it opens with a `from typing import TYPE_CHECKING`,
+    /// and merging the imports by module treated the whole thing as one such line — every
+    /// `typing` name that sorts after `TYPE_CHECKING` was then appended to the block's last
+    /// line, inside the block: `if TYPE_CHECKING:\n    import decimal, final`
+    #[test]
+    fn a_typing_import_is_not_merged_into_the_type_checking_block() {
+        check(
+            indoc! {"
+                from decimal import Decimal as Dec
+
+                final class A:
+                    d = Dec(1)
+            "},
+            indoc! {"
+                from typing import final
+                from typing import TYPE_CHECKING
+                if TYPE_CHECKING:
+                    import decimal
+                from decimal import Decimal as Dec
+
+                @final
+                class A:
+                    d: decimal.Decimal = Dec(1)
+            "},
+        );
+    }
+
     #[test]
     fn a_class_shadowed_by_its_own_module_is_qualified() {
         // `datetime` names the *module* in the output, so the bare display would
@@ -293,6 +331,38 @@ mod tests {
                     n: Never = boom()
             "},
         );
+    }
+
+    /// ty reports the modules a *type* lives in, which is not the same question as which
+    /// ones its spelling names: the type spelled `None` is reported as living in `types`,
+    /// and importing it bought the emitted file a `if TYPE_CHECKING: import types` block
+    /// that nothing in it read
+    #[test]
+    fn a_module_the_spelling_does_not_name_is_not_imported() {
+        check(
+            indoc! {"
+                class A:
+                    a = None
+            "},
+            indoc! {"
+                class A:
+                    a: None = None
+            "},
+        );
+    }
+
+    /// a `typing` name basedpython does not bind implicitly has no import to write, so the
+    /// annotation is refused rather than written. `Literal` is such a name, and a generator
+    /// keeps one inside its element type where promotion cannot reach it — written out, the
+    /// emitted file read a `Literal` it never imported
+    #[test]
+    fn an_annotation_naming_an_unimportable_typing_name_is_refused() {
+        let source = "class A:\n    g = (x for x in [1])\n";
+        let config = Config {
+            min_version: ruff_python_ast::PythonVersion::PY313,
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(source, &config).unwrap(), source);
     }
 
     #[test]

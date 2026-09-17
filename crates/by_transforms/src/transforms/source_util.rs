@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::fmt::Write as _;
 
 use super::ast_driver::Fragment;
+use super::repeated_underscore::WrittenNames;
 
 use ruff_python_ast::helpers::consumed_keywords;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
@@ -69,6 +70,42 @@ pub(crate) fn preamble_offset(text: &str) -> usize {
     at
 }
 
+/// Render `value` as a python string literal.
+///
+/// A conservative escaper that always emits a double-quoted form, so the result
+/// re-lexes as one token whatever the text holds.
+pub(crate) fn string_repr(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `value` as a string literal node, for a lowering that writes into the syntax
+/// tree rather than into the source.
+pub(crate) fn string_literal(value: &str) -> ruff_python_ast::ExprStringLiteral {
+    ruff_python_ast::ExprStringLiteral {
+        node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        range: TextRange::default(),
+        value: ruff_python_ast::StringLiteralValue::single(ruff_python_ast::StringLiteral {
+            node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+            range: TextRange::default(),
+            value: value.into(),
+            flags: ruff_python_ast::StringLiteralFlags::empty(),
+        }),
+    }
+}
+
 /// the offset just past the end of the line `end` falls on
 fn line_end(text: &str, end: usize) -> usize {
     text[end..]
@@ -76,8 +113,15 @@ fn line_end(text: &str, end: usize) -> usize {
         .map_or(text.len(), |newline| end + newline + 1)
 }
 
-pub(crate) fn temporary_name(kind: &str, index: impl Display) -> String {
-    format!("__by_{kind}_{index}__")
+/// A name for a value the lowering needs to hold on to and the source never named.
+///
+/// The spelling is chosen to be one nobody writes, but "nobody writes it" is not something
+/// the transpiler gets to assume: a module that does write it has the temporary land on top
+/// of its own binding, and a read of that binding inside the function the temporary is
+/// written in becomes an `UnboundLocalError`. So the name is taken past whatever the module
+/// spells, the same way a numbered `_` parameter is.
+pub(crate) fn temporary_name(written: WrittenNames<'_>, kind: &str, index: impl Display) -> String {
+    written.fresh(&format!("__by_{kind}_{index}__"))
 }
 
 /// Where the text between a statement's own words and its value begins.
@@ -477,8 +521,22 @@ pub(crate) trait PrologueStatement {
     fn push(&self, frags: &mut Vec<Fragment>, indent: &str);
 }
 
-/// The insertion that writes `statements` at the top of `f`'s body — after a
+/// The insertions that write `statements` at the top of `f`'s body — after a
 /// docstring, before everything else the source wrote there.
+///
+/// Usually one insertion. A body the source wrote on the clause's line
+/// (`def f(a): """what f does"""`, `def f(a): return 1`) needs a second one:
+/// nothing indented can follow a statement there, so the body has to be broken
+/// onto a line of its own before anything can be written under it. The break is
+/// an insertion of its own, ahead of the body, so that two passes writing into
+/// the same body still compose — their statements coalesce at the one offset,
+/// exactly as they do for a body that already had a line to itself.
+///
+/// Whether the body is on the clause's line and where the statements go are two
+/// separate questions, because a clause-line body can hold several statements:
+/// `def f(a): """doc"""; a.append("x"); return len(a)` breaks at the docstring,
+/// which has to stay the body's first statement to stay a docstring, but writes
+/// the prologue ahead of the `a.append` that follows it.
 ///
 /// `None` when the body holds nothing the source wrote at all: the `init(…)`
 /// shorthand generates its whole body, and an offset taken from a statement the
@@ -487,44 +545,78 @@ pub(crate) fn body_prologue(
     source: &str,
     f: &StmtFunctionDef,
     statements: &[impl PrologueStatement],
-) -> Option<(TextSize, Vec<Fragment>)> {
+) -> Option<Vec<(TextSize, Vec<Fragment>)>> {
+    let header_end = header_end(f);
+    let body_start = first_body_statement(f)
+        .and_then(|stmt| body_range(stmt, header_end))?
+        .start();
+    let mut inserts = Vec::new();
+    let body_own_line =
+        &source[usize::from(line_start(source, body_start))..usize::from(body_start)];
+    let indent = if body_own_line.trim().is_empty() {
+        // the insertion lands after the body's own indentation; each statement
+        // re-establishes it for the line that follows
+        body_own_line.to_owned()
+    } else {
+        let indent = format!("{}    ", line_indent(source, f.range().start()));
+        inserts.push((body_start, vec![Fragment::Lit(format!("\n{indent}"))]));
+        indent
+    };
+
     let mut frags: Vec<Fragment> = Vec::new();
-    if let Some(range) = first_source_statement(f).and_then(|s| body_range(s, header_end(f))) {
-        let insert_at = range.start();
-        let prefix = &source[usize::from(line_start(source, insert_at))..usize::from(insert_at)];
-        if prefix.trim().is_empty() {
-            // the insertion lands after the statement's own indentation; each
-            // statement re-establishes it for the line that follows
-            for statement in statements {
-                statement.push(&mut frags, prefix);
-                frags.push(Fragment::Lit(format!("\n{prefix}")));
+    match first_source_statement(f).and_then(|stmt| body_range(stmt, header_end)) {
+        Some(range) => {
+            let insert_at = range.start();
+            // that statement follows a docstring on one line when the break
+            // above went somewhere else and left text before it, so a line has
+            // to be opened for the prologue as well
+            let prefix =
+                &source[usize::from(line_start(source, insert_at))..usize::from(insert_at)];
+            if insert_at != body_start && !prefix.trim().is_empty() {
+                frags.push(Fragment::Lit(format!("\n{indent}")));
             }
-        } else {
-            // single-line body (`def f(self): return T`) — break it onto its
-            // own indented line after the insertion
-            let indent = format!("{}    ", line_indent(source, f.range().start()));
+            for statement in statements {
+                statement.push(&mut frags, &indent);
+                frags.push(Fragment::Lit(format!("\n{indent}")));
+            }
+            inserts.push((insert_at, frags));
+        }
+        // a docstring is the only thing the source wrote: the insertion follows
+        // it, because a docstring is only a docstring while it is the body's
+        // first statement
+        None => {
+            let docstring = source_statements(f)
+                .next()
+                .filter(|stmt| is_docstring(stmt))
+                .and_then(|stmt| body_range(stmt, header_end))?;
             for statement in statements {
                 frags.push(Fragment::Lit(format!("\n{indent}")));
                 statement.push(&mut frags, &indent);
             }
-            frags.push(Fragment::Lit(format!("\n{indent}")));
+            inserts.push((docstring.end(), frags));
         }
-        return Some((insert_at, frags));
     }
-    // a docstring is the only thing the source wrote: the insertion follows it
-    let docstring = f
-        .body
-        .first()
-        .filter(|stmt| {
-            matches!(stmt, Stmt::Expr(e) if matches!(e.value.as_ref(), Expr::StringLiteral(_)))
-        })
-        .and_then(|stmt| body_range(stmt, header_end(f)))?;
-    let indent = format!("{}    ", line_indent(source, f.range().start()));
-    for statement in statements {
-        frags.push(Fragment::Lit(format!("\n{indent}")));
-        statement.push(&mut frags, &indent);
-    }
-    Some((docstring.end(), frags))
+    Some(inserts)
+}
+
+/// The index in `f`'s body that a statement written at the top of it goes at:
+/// past a docstring the source wrote, and at 0 when it wrote none.
+///
+/// This is [`body_prologue`]'s counterpart for a statement printed from its
+/// syntax tree rather than spliced into the source. There is no offset to
+/// anchor to there, only a position in the body — but the question is the same
+/// one, and so is the trap: the parser writes an `init(…)` shorthand's
+/// attribute declarations *ahead* of everything the source wrote, so asking
+/// whether `body[0]` is a docstring answers no for every `init(…)` that
+/// declares an attribute, and the statement lands above the docstring, where
+/// the string stops being one and the method loses its `__doc__`.
+pub(crate) fn body_prologue_index(f: &StmtFunctionDef) -> usize {
+    let header_end = header_end(f);
+    f.body
+        .iter()
+        .position(|stmt| body_range(stmt, header_end).is_some())
+        .filter(|&index| is_docstring(&f.body[index]))
+        .map_or(0, |index| index + 1)
 }
 
 /// The first statement in `f`'s body that came from the source, skipping a
@@ -536,16 +628,31 @@ pub(crate) fn body_prologue(
 ///
 /// [`init_method`]: super::init_method
 fn first_source_statement(f: &StmtFunctionDef) -> Option<&Stmt> {
-    let header_end = header_end(f);
-    let docstring_count = if let Some(Stmt::Expr(e)) = f.body.first() {
-        usize::from(matches!(e.value.as_ref(), Expr::StringLiteral(_)))
+    let mut statements = source_statements(f);
+    let first = statements.next()?;
+    if is_docstring(first) {
+        statements.next()
     } else {
-        0
-    };
+        Some(first)
+    }
+}
+
+/// The statements in `f`'s body the source wrote, in order.
+///
+/// A body can hold statements the parser synthesized as well — the `init(…)`
+/// shorthand's attribute declarations, which it writes *ahead* of everything the
+/// source wrote. Asking whether the body's first statement is a docstring would
+/// therefore answer no for every `init(…)` that declares an attribute, and put a
+/// generated line above the docstring, where it stops being one.
+fn source_statements(f: &StmtFunctionDef) -> impl Iterator<Item = &Stmt> {
+    let header_end = header_end(f);
     f.body
         .iter()
-        .skip(docstring_count)
-        .find(|s| body_range(s, header_end).is_some())
+        .filter(move |s| body_range(s, header_end).is_some())
+}
+
+fn is_docstring(stmt: &Stmt) -> bool {
+    matches!(stmt, Stmt::Expr(e) if matches!(e.value.as_ref(), Expr::StringLiteral(_)))
 }
 
 /// The first statement in `f`'s body that came from the source, a docstring

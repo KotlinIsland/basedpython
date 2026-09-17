@@ -4,6 +4,7 @@ use crate::transforms::trailing_lambda::RECEIVER_PARAMETER;
 use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::{
     Expr, ExprCall, ExprName, ExprRef, Parameter, ParameterWithDefault, Stmt, StmtClassDef,
+    StmtFunctionDef,
 };
 use ruff_python_parser::parse_expression;
 use ruff_python_stdlib::basedpython::IMPLICIT_TYPING_NAMES;
@@ -12,6 +13,7 @@ use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::call_type_forms::CallTypeForm;
 use ty_python_semantic::types::exceptions::RaisesRuntimeTarget;
+use ty_python_semantic::types::repeated_underscore::{UnderscoreLowering, UnderscoreRefusal};
 use ty_python_semantic::types::{
     DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
@@ -123,6 +125,21 @@ pub(crate) trait TypeInfo {
         &self,
         function: &ruff_python_ast::StmtFunctionDef,
     ) -> Option<RaisesRuntimeTarget>;
+
+    /// the return type of a `def` that wrote no return annotation, spelled for the
+    /// emitted file — what its body returns, which is what ty reads there.
+    ///
+    /// `None` when the source wrote an annotation (the annotation itself is what to
+    /// re-emit, and it may carry a lowering of its own), when the type carries a
+    /// dynamic part, when it has no python type-expression spelling, or when that
+    /// spelling reads a name the emitted file would not resolve — `Literal[1]` is
+    /// ty's exact answer for `return 1` and `Literal` is not a name basedpython binds
+    /// implicitly, so there is no import to write for it
+    fn inferred_return_annotation(
+        &self,
+        function: &ruff_python_ast::StmtFunctionDef,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<SynthesizedType>;
 
     /// whether `name` resolves to a basedpython return-value marker —
     /// `ignorable_return_value` or `must_use_return_value`. both are pure
@@ -375,7 +392,11 @@ pub(crate) trait TypeInfo {
     /// example: a literal `20` inferred as `Literal[20]` is promoted to
     /// `"int"` here so two value-forms with structurally compatible fields
     /// hash to the same class shape.
-    fn promoted_type_display(&self, expr: &Expr) -> Option<SynthesizedType>;
+    fn promoted_type_display(
+        &self,
+        expr: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<SynthesizedType>;
 
     /// whether `expr` is an application of a `type def` — `F[bool]` where `F` is
     /// a type function. such an application lowers to the type the type function
@@ -539,8 +560,12 @@ pub(crate) trait TypeInfo {
     /// lambda block binds implicitly, when the call is inside one. the variable
     /// name is already the *emitted* one, so a block receiver comes back as the
     /// lowering's receiver parameter rather than as `self`. empty when the
-    /// callee has no context parameters or nothing resolves
-    fn implicit_context_arguments(&self, call: &ExprCall) -> Vec<(String, String)>;
+    /// callee has no context parameters or nothing resolves. an error, naming the
+    /// parameter, when a value that would fill one is a repeated `_` parameter:
+    /// which of those a read of `_` means is not decided, so no argument can be
+    /// written for it. an error too when a parameter to fill is a `_` the callee
+    /// repeats, since which of those a keyword `_` names is not decided either
+    fn implicit_context_arguments(&self, call: &ExprCall) -> Result<Vec<(String, String)>, String>;
 
     /// whether `expr`'s inferred type is a string — a `str` / `Character` /
     /// `LiteralString` / string-literal / `str`-subclass instance. dynamic
@@ -576,7 +601,11 @@ pub(crate) trait TypeInfo {
     /// the promoted type carries a dynamic part (`Unknown` / `Any`), or it has
     /// no python type-expression spelling (a module, a callable in arrow form,
     /// a class local to a function)
-    fn inferred_annotation(&self, expr: &Expr) -> Option<SynthesizedType>;
+    fn inferred_annotation(
+        &self,
+        expr: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<SynthesizedType>;
 
     /// basedpython: the default this parameter takes from the method its `def` overrides,
     /// written the way a signature writes it — `1`, `"a"`, `None`.
@@ -586,6 +615,14 @@ pub(crate) trait TypeInfo {
     /// signature. `None` when the parameter writes a default of its own, when nothing it
     /// overrides declares one, or when the base's default is an expression rather than a value
     fn inherited_parameter_default(&self, parameter: &ParameterWithDefault) -> Option<String>;
+
+    /// basedpython: how the lowering writes `function`'s parameters when they repeat `_`: the
+    /// names and kinds ty's signature of the definition is built from, or why there are none.
+    /// `None` when they do not repeat it
+    fn repeated_underscore_lowering(
+        &self,
+        function: &StmtFunctionDef,
+    ) -> Option<Result<UnderscoreLowering, UnderscoreRefusal>>;
 
     /// whether adding a type annotation to a bare `name = value` assignment in
     /// `class_def`'s body would change the class's runtime semantics — true for
@@ -692,6 +729,30 @@ impl TypeInfo for SemanticModel<'_> {
             self.file(),
             function.inferred_type(self)?,
         )
+    }
+
+    fn inferred_return_annotation(
+        &self,
+        function: &ruff_python_ast::StmtFunctionDef,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<SynthesizedType> {
+        if function.returns.is_some() {
+            return None;
+        }
+        let db = self.db();
+        let env = self.program_environment();
+        let ty =
+            ty_python_semantic::types::declared_return_type(db, function.inferred_type(self)?)?;
+        // a dynamic part (`Unknown` from an unresolved import, `Any`) has no faithful
+        // annotation
+        if ty.has_dynamic(db, &env) {
+            return None;
+        }
+        // the promoted form, as for a synthesized assignment annotation: `A()` infers
+        // `final A`, which has no python spelling at all, and the annotation a reader
+        // would write for it is `A`
+        let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
+        spell_for_python(db, &env, self, promoted, min_version)
     }
 
     fn is_return_value_marker(&self, name: &ExprName) -> bool {
@@ -1001,12 +1062,16 @@ impl TypeInfo for SemanticModel<'_> {
             })
     }
 
-    fn promoted_type_display(&self, expr: &Expr) -> Option<SynthesizedType> {
+    fn promoted_type_display(
+        &self,
+        expr: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<SynthesizedType> {
         let db = self.db();
         let env = self.program_environment();
         let ty = expr.inferred_type(self)?;
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted)
+        spell_for_python(db, &env, self, promoted, min_version)
     }
 
     fn template_literal_strings(&self, expr: &Expr) -> Option<Vec<String>> {
@@ -1177,6 +1242,13 @@ impl TypeInfo for SemanticModel<'_> {
         ty_python_semantic::types::ide_support::inherited_parameter_default(self, parameter)
     }
 
+    fn repeated_underscore_lowering(
+        &self,
+        function: &StmtFunctionDef,
+    ) -> Option<Result<UnderscoreLowering, UnderscoreRefusal>> {
+        ty_python_semantic::types::ide_support::repeated_underscore_lowering(self, function)
+    }
+
     fn parameter_check_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck> {
         let ty = parameter.inferred_type(self)?;
         ty_python_semantic::types::soundness::parameter_runtime_check_plan(
@@ -1257,31 +1329,44 @@ impl TypeInfo for SemanticModel<'_> {
         SemanticModel::trailing_lambda_callee_is_once(self, callee)
     }
 
-    fn implicit_context_arguments(&self, call: &ExprCall) -> Vec<(String, String)> {
+    fn implicit_context_arguments(&self, call: &ExprCall) -> Result<Vec<(String, String)>, String> {
         let Some(callee) = call.func.inferred_type(self) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        ty_python_semantic::types::context_params::implicit_context_arguments(
+        let implicit = ty_python_semantic::types::context_params::implicit_context_arguments(
             self.db(),
             &self.program_environment(),
             self.file(),
             callee,
             call,
-        )
-        .into_iter()
-        .map(|argument| {
-            let variable = if argument.is_block_receiver {
-                RECEIVER_PARAMETER.to_string()
-            } else if argument.is_module_private {
-                // the binding is a module-level `private` variable, which the
-                // lowering emits under its underscored name
-                crate::transforms::modifiers::module_private_name(&argument.variable)
-            } else {
-                argument.variable.to_string()
-            };
-            (argument.parameter.to_string(), variable)
-        })
-        .collect()
+        );
+        if let Some(parameter) = implicit.from_repeated_underscore.first() {
+            return Err(format!(
+                "a repeated `_` parameter cannot supply the context argument `{parameter}`"
+            ));
+        }
+        if implicit.for_repeated_underscore {
+            return Err(
+                "a context argument cannot be supplied implicitly for a repeated `_` parameter"
+                    .to_string(),
+            );
+        }
+        Ok(implicit
+            .arguments
+            .into_iter()
+            .map(|argument| {
+                let variable = if argument.is_block_receiver {
+                    RECEIVER_PARAMETER.to_string()
+                } else if argument.is_module_private {
+                    // the binding is a module-level `private` variable, which the
+                    // lowering emits under its underscored name
+                    crate::transforms::modifiers::module_private_name(&argument.variable)
+                } else {
+                    argument.variable.to_string()
+                };
+                (argument.parameter.to_string(), variable)
+            })
+            .collect())
     }
 
     fn is_string_like(&self, expr: &Expr) -> bool {
@@ -1319,7 +1404,11 @@ impl TypeInfo for SemanticModel<'_> {
         ty_python_semantic::types::class_framework_role(self.db(), class)
     }
 
-    fn inferred_annotation(&self, expr: &Expr) -> Option<SynthesizedType> {
+    fn inferred_annotation(
+        &self,
+        expr: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<SynthesizedType> {
         let db = self.db();
         let env = self.program_environment();
         let ty = expr.inferred_type(self)?;
@@ -1332,7 +1421,7 @@ impl TypeInfo for SemanticModel<'_> {
         // `<class 'int'>`); `type[int]` is its promoted form, and the type ty
         // itself reads back off the undeclared attribute through an instance
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted)
+        spell_for_python(db, &env, self, promoted, min_version)
     }
 
     fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool {
@@ -1405,11 +1494,19 @@ fn display_for_python<'db>(
 /// qualifying them and reporting the module to import; the `typing` names ride the same
 /// table [`implicit_typing`](super::transforms::implicit_typing) uses for names the source
 /// does write, which never sees a synthesized annotation.
+///
+/// A name it can place neither way is a refusal, not an omission: dropped, it reaches the
+/// emitted file unresolved — ty spells a generator's element type `types.GeneratorType[
+/// Literal[1], None, None]`, and `Literal` is not one of the names basedpython binds. And
+/// the modules reported are only those the spelling actually names, because the reporting
+/// is per-type rather than per-name: ty names `types` for the type spelled `None`, which
+/// bought an emitted file a `if TYPE_CHECKING: import types` it never read.
 fn spell_for_python<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     model: &SemanticModel<'db>,
     ty: Type<'db>,
+    min_version: ruff_python_ast::PythonVersion,
 ) -> Option<SynthesizedType> {
     let spelling = ty.source_spelling_in(
         db,
@@ -1418,22 +1515,51 @@ fn spell_for_python<'db>(
         DisplaySettings::default().with_reduced_symbolic_operations(),
     )?;
     let text = strip_binding_context_suffix(&spelling.text);
-    let parsed = parse_expression(&text).ok()?;
+    let read = names_read(&text)?;
 
-    let mut names = NameCollector(Vec::new());
-    ruff_python_ast::visitor::Visitor::visit_expr(&mut names, parsed.expr());
-    let typing_names = names
-        .0
-        .into_iter()
+    let typing_names: Vec<&'static str> = read
+        .iter()
         .filter(|name| !model.is_bound_globally(name))
         .filter_map(|name| IMPLICIT_TYPING_NAMES.iter().copied().find(|n| *n == name))
         .collect();
+    let mut modules = spelling.modules;
+    modules.retain(|module| read.iter().any(|name| name == module));
 
-    Some(SynthesizedType {
+    let spelled = SynthesizedType {
         text,
-        modules: spelling.modules,
+        modules,
         typing_names,
+    };
+    resolvable_in_output(model, min_version, &spelled, &read).then_some(spelled)
+}
+
+/// Whether every name `spelled` reads will resolve in the emitted file.
+///
+/// [`spell_for_python`] accounts for two kinds of name it has to import — a qualified
+/// class's module, and a `typing` name basedpython binds implicitly. What is left is fine
+/// only if the output binds it anyway: a builtin, or a name the source's own global scope
+/// binds, which the emitted file keeps. Anything else would reach the output unresolved,
+/// so the spelling is refused rather than written with a name that is not there.
+fn resolvable_in_output(
+    model: &SemanticModel<'_>,
+    min_version: ruff_python_ast::PythonVersion,
+    spelled: &SynthesizedType,
+    read: &[String],
+) -> bool {
+    read.iter().all(|name| {
+        spelled.modules.iter().any(|module| module == name)
+            || spelled.typing_names.contains(&name.as_str())
+            || model.is_bound_globally(name)
+            || ruff_python_stdlib::builtins::is_python_builtin(name, min_version.minor, false)
     })
+}
+
+/// the root names `text` reads, or `None` when it is not an expression at all
+fn names_read(text: &str) -> Option<Vec<String>> {
+    let parsed = parse_expression(text).ok()?;
+    let mut names = NameCollector(Vec::new());
+    ruff_python_ast::visitor::Visitor::visit_expr(&mut names, parsed.expr());
+    Some(names.0)
 }
 
 /// The names a spelled type reads at its roots — `decimal` in `decimal.Decimal`, `Never`

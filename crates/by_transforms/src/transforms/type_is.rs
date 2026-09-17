@@ -35,6 +35,12 @@ impl<'src> TypeIs<'src> {
 }
 
 impl AstPass for TypeIs<'_> {
+    /// a return guard it rewrites into `TypeIs[T]` is the `is` pair the parametric lowering
+    /// would otherwise have tested
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::ParametricIs]
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut state = State {
             edits: Vec::new(),

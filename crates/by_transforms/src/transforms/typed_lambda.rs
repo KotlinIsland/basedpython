@@ -8,15 +8,14 @@
 //! annotation on them.
 //!
 //! All of that is removed as **source deletions** rather than by clearing the
-//! AST: a cleared node would make the driver re-render the whole enclosing
-//! statement, and a re-render drops every sub-statement edit inside it. A
-//! lambda is a value, so what surrounds it is ordinary code that other passes
-//! rewrite — a loop's [per-iteration binding](super::unique_loop_bindings)
-//! wraps it, `??` lowers inside its body — and those edits have to survive.
-//! Deletions leave the rest of the statement's bytes alone, so they do.
+//! AST: a cleared node would be printed from the syntax tree rather than from
+//! the source. A lambda is a value, so what surrounds it is ordinary code that
+//! other passes rewrite — a loop's [per-iteration binding](super::unique_loop_bindings)
+//! wraps it, `??` lowers inside its body — and deletions leave every byte of it
+//! but the surface they remove, so those edits apply as written.
 //!
-//! A shape with no parenthesized parameter list to anchor to keeps the old AST
-//! rewrite, and the re-render that comes with it.
+//! A shape with no parenthesized parameter list to anchor to keeps the AST
+//! rewrite.
 
 use std::cell::{Cell, RefCell};
 

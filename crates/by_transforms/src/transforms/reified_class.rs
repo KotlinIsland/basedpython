@@ -156,7 +156,7 @@ impl<'src> ReifiedClass<'src> {
                 })
                 .collect();
             match body_prologue(self.source, method.function, &bindings) {
-                Some(anchored) => self.prologues.push(anchored),
+                Some(anchored) => self.prologues.extend(anchored),
                 None => self.unanchored.push(method.function.name.id.to_string()),
             }
         }

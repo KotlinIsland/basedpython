@@ -125,6 +125,30 @@ assert [t.degrees for t in temperatures] == [32.0, 212.0]
 mapping: dict[str, Fahrenheit] = {"boiling": Celsius(100.0)}
 assert mapping["boiling"].degrees == 212.0
 
+# a conversion inside a `def` another lowering rewrites in the syntax tree — here the
+# numbering of a repeated `_` — spelled the way the source spells it rather than the
+# way the tree would be printed
+def ignoring(c: Celsius, _: int, _: int, /) -> object:
+    return report(
+        c,
+    )
+
+assert ignoring(Celsius(100.0), 1, 2) == 212.0, ignoring(Celsius(100.0), 1, 2)
+
+# a call that also passes a trailing lambda's block, or fills a `context` parameter:
+# each is an argument the lowering adds after the converted one
+def report_then(t: Fahrenheit, then: (float) -> None):
+    then(t.degrees)
+
+report_then(Celsius(100.0)):
+    assert it == 212.0, it
+
+def report_in(t: Fahrenheit, context unit: str) -> str:
+    return f"{t.degrees}{unit}"
+
+context unit = "F"
+assert report_in(Celsius(100.0)) == "212.0F", report_in(Celsius(100.0))
+
 print("ok")
 "#;
 

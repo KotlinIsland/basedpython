@@ -6209,6 +6209,42 @@ fn a_value_nothing_verified_is_checked_where_the_interpreted_build_checks_it() {
 }
 
 #[test]
+fn a_value_nothing_verified_is_checked_in_a_statement_the_transpiler_prints_from_its_tree() {
+    // `typeof` is lowered by rewriting the syntax tree, so the top-level statement holding
+    // one is printed again rather than edited in place. the interpreted build still makes
+    // every check in that statement, as the compiled module does
+    agree(
+        "unverifiedtree",
+        "\
+from typing import Any
+
+
+def dyn() -> Any:
+    return 'x'
+
+
+def typed(n: int) -> object:
+    a: int = dyn()
+    b: typeof(n) = n
+    return a
+
+
+def looped(n: int, xs: list[Any]) -> object:
+    b: typeof(n) = n
+    total = 0
+    for x in xs:
+        c: int = x
+        total = total + c
+    return total
+",
+        &[
+            "str(_capture(m.typed, 1))",
+            "(str(_capture(m.looped, 1, [2, 'y'])), m.looped(1, [2, 3]))",
+        ],
+    );
+}
+
+#[test]
 fn with_no_soundness_checks_neither_build_checks_a_value_nothing_verified() {
     // `--soundness none` transpiles no checks, and a compiled module then makes none
     // either: a value only a check would have refused reaches its caller in both builds
@@ -6259,6 +6295,45 @@ def produce(x: dict[str, int]) -> Iterator[object]:
             "next(m.produce({'a': 1}))",
         ],
         by_transforms::SoundnessPositions::all(),
+    );
+}
+
+#[test]
+fn a_repeated_underscore_parameter_is_checked_against_its_own_type() {
+    // the `parameters` position checks each parameter by the name both builds bind it
+    // to, and a repeated `_` is numbered there. checked by its source name, the second
+    // `_` was the first again, and a call passing what was declared was refused
+    let Some(compiled) = agree_built(
+        "underscorecheck",
+        "\
+def pick(_: int, _: str) -> int:
+    return 1
+",
+        &[
+            "str(_capture(m.pick, 1, 'a'))",
+            "str(_capture(m.pick, 1, 2))",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+        Config {
+            soundness: by_transforms::SoundnessPositions::all(),
+            ..Config::default()
+        },
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscorecheck as m\n\
+             assert m.__file__.endswith('.so'), m.__file__\n\
+             print(m.pick(1, 'a'))\n",
+        ),
+        "1"
     );
 }
 
@@ -17016,6 +17091,112 @@ def calls_none() -> int:
             "m.calls_both(1)",
             "m.calls_none()",
         ],
+    );
+}
+
+#[test]
+fn repeated_underscore_parameters_agree() {
+    // basedpython lets a `def` repeat `_` for parameters it ignores, and python refuses a
+    // repeated name, so the interpreted definition keeps the first `_` and numbers the rest.
+    // the compiled one answers to the same names — the forwarder spells them, and a keyword
+    // call reaches them — where it used to spell `_` twice and fail the module's import
+    let Some(compiled) = agree_in(
+        "underscores",
+        "\
+from collections.abc import Iterator
+
+def pair(_: int, _: int) -> int:
+    return 7
+
+def spaced(a: int, _: int, b: int, _: int) -> int:
+    return a * 10 + b
+
+def every_kind(_: int, *_: int, _: int, **_: int) -> int:
+    return 1
+
+def counted(_: int, n: int, _: int) -> Iterator[int]:
+    for i in range(n):
+        yield i
+
+def outer(n: int) -> int:
+    def inner(_: int, _: int) -> int:
+        return n
+    return inner(1, 2)
+
+def through_lambda(n: int) -> int:
+    ignore = lambda _, _: n
+    return ignore(1, 2)
+
+class Holder:
+    def method(self, _: int, _: int) -> int:
+        return 5
+",
+        &[
+            "[str(__import__('inspect').signature(f)) for f in (m.pair, m.spaced, m.every_kind, m.counted, m.Holder().method)]",
+            "(m.pair(1, 2), m.pair(1, _2=2), m.pair(_=1, _2=2))",
+            "str(_capture_kw(m.pair, (1,), {'_': 2}))",
+            "(m.spaced(1, 2, 3, _2=4), m.every_kind(1, 2, 3, _2=4, x=5), m.every_kind(1, _2=4))",
+            "(list(m.counted(1, 3, 2)), list(m.counted(1, 3, _2=2)))",
+            "(m.outer(1), m.through_lambda(4))",
+            "(m.Holder().method(5, _2=6), str(_capture(m.Holder().method, 5, 6, 7)))",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscores as m\n\
+             print([f.__code__.co_filename for f in (m.pair, m.spaced, m.every_kind, m.counted)])\n",
+        ),
+        "['<by native forwarder>', '<by native forwarder>', '<by native forwarder>', '<by native forwarder>']"
+    );
+}
+
+#[test]
+fn a_numbered_underscore_parameter_does_not_shadow_a_module_name() {
+    // the numbered name of a repeated `_` is a local of the function, so numbering one
+    // `_2` in a module that binds `_2` had the default and the body read the second
+    // argument where python reads the module's list. both builds skip every name the
+    // module spells, and have to skip the same ones: the signature spells the result
+    let Some(compiled) = agree_in(
+        "underscorenames",
+        "\
+_2: list[int] = [9]
+
+def defaulted(_: int, _: int, x: list[int] = _2) -> list[int]:
+    return x
+
+def reads(_: int, _: int) -> list[int]:
+    return _2
+",
+        &[
+            "(m.defaulted(1, 2), m.reads(1, 2))",
+            "[list(__import__('inspect').signature(f).parameters) for f in (m.defaulted, m.reads)]",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscorenames as m\n\
+             assert m.__file__.endswith('.so'), m.__file__\n\
+             print(m.defaulted(1, 2), m.reads(1, 2))\n",
+        ),
+        "[9] [9]"
     );
 }
 

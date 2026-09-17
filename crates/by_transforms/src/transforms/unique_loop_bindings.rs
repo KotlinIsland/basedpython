@@ -649,7 +649,8 @@ mod tests {
                             return value
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def build():
                     for i in items:
                         @_by_loop_bind(i=i)
@@ -820,7 +821,8 @@ mod tests {
                             return cb
             "},
             indoc! {"
-                _MISSING = object()
+                from typing import Any
+                _MISSING: Any = object()
                 def build():
                     for i in items:
                         @_by_loop_bind(i=i)

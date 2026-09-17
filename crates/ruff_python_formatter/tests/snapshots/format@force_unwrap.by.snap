@@ -1,0 +1,49 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/force_unwrap.by
+---
+## Input
+```bython
+x = a!
+y = a!.bit_length()
+z = a?.b!
+
+print(f"{a!}")
+print(f"{a!:>4}")
+print(f"{a!!r}")
+print(f"{(a!)!r}")
+print(f"{(a!)=}")
+print(f"{a?.b()!}")
+print(f"{ [a!, b] }")
+print(f"{f'{a!}'}")
+print(f"{b:{a!}}")
+
+print(f"{a!r}")
+print(f"{a!s:>10}")
+print(f"{a!a}")
+print(f"{a=!r}")
+print(f"{a!=b}")
+```
+
+## Output
+```bython
+x = a!
+y = a!.bit_length()
+z = a?.b!
+
+print(f"{a!}")
+print(f"{a!:>4}")
+print(f"{a!!r}")
+print(f"{(a!)!r}")
+print(f"{(a!)=}")
+print(f"{a?.b()!}")
+print(f"{[a!, b]}")
+print(f"{f'{a!}'}")
+print(f"{b:{a!}}")
+
+print(f"{a!r}")
+print(f"{a!s:>10}")
+print(f"{a!a}")
+print(f"{a=!r}")
+print(f"{a != b}")
+```

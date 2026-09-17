@@ -91,6 +91,62 @@ from errors import ParseError
 decode = _lazy_attr("errors", "decode")
 ```
 
+nor is a **special form** — `ClassVar`, `Final`, `Literal`, `Annotated`, `Protocol` and
+the rest of what a type checker gives a meaning of its own. what reads one tells it
+apart by identity: `dataclasses` decides a bare `ClassVar` annotation is not a field
+by asking whether it *is* `typing.ClassVar`, and a checker reading the emitted python
+rejects `ClassVar[int]` once `ClassVar` names a variable. that holds for the imports the
+transpiler writes itself, such as the `ClassVar` an `enum class` lowers through:
+
+```py
+from typing import ClassVar
+cast = _lazy_attr("typing", "cast")
+```
+
+nor is a name an **annotation** reads. whatever reads an annotation back is handed what
+the name is bound to, and a proxy is not the object it stands for: `dataclasses` decides
+that `_: KW_ONLY` is not a field by asking whether the annotation *is*
+`dataclasses.KW_ONLY`, and `typing.get_type_hints` answers with the proxy rather than the
+class. so a `from` import whose name any annotation reads stays an ordinary import — a
+parameter's or a return's annotation, a variable's in a module or a class body, or one
+that is a string, as every annotation is under `from __future__ import annotations`:
+
+```by
+from fractions import Fraction
+from json import dumps
+
+def show(value: Fraction) -> str:
+    return dumps(str(value))
+```
+
+```py
+from fractions import Fraction
+dumps = _lazy_attr("json", "dumps")
+```
+
+this is an edge of the polyfill: **an import used only in annotations is not deferred on
+python before 3.15**, and the module it names runs where the import is written — so one
+this python does not have fails there, as an ordinary import does. an
+annotation on a variable inside a function body is never evaluated, so it does not count.
+on 3.15 and later the `lazy` keyword binds the real object, and such an import is deferred
+like any other
+
+the functional forms build annotations out of values instead: `NamedTuple("P", [("x", T)])`,
+`TypedDict("TD", {"a": T})` and `dataclasses.make_dataclass(...)` are handed their types as
+arguments, when the call runs. a name imported with `from` and read only there is read as a
+value, so under the polyfill it is still a proxy, and whatever reads those annotations back is
+handed the proxy: `typing.get_type_hints(P)["x"]` is the proxy rather than the class, and
+`make_dataclass` makes a field of the `_` in this `Row`, and leaves `extra` positional:
+
+```by
+from dataclasses import KW_ONLY, make_dataclass
+
+Row = make_dataclass("Row", [("name", str), ("_", KW_ONLY), ("extra", int)])
+```
+
+reach such a name through its module — `import dataclasses` and `dataclasses.KW_ONLY` — which
+binds the real module rather than a proxy, or target `--min-version 3.15`
+
 two things a proxy cannot emulate, and which are therefore limitations of the
 polyfill only:
 

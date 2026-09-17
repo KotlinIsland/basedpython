@@ -787,6 +787,7 @@ impl<'a, 'db> ReadsCollector<'a, 'db> {
             // name in scope here, exactly as if the call had written it
             for implicit in
                 implicit_context_arguments(db, &self.env, self.program_file.file(db), callee, call)
+                    .arguments
             {
                 if implicit.is_block_receiver {
                     continue;

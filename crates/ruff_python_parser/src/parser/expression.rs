@@ -136,6 +136,23 @@ pub(super) const fn starts_statement_expression(kind: TokenKind) -> bool {
     )
 }
 
+/// basedpython: the refusal for a force-unwrap written in front of a replacement field's
+/// `=` debug marker.
+///
+/// Both spellings of it — `f"{a!=}"`, which the lexer reads as one `!=`, and `f"{a! = }"`,
+/// which it reads as two tokens — are refused, because accepting either would make the
+/// meaning of `!=` inside a field depend on the whitespace around it. `f"{a!=b}"` is a
+/// comparison and has to stay one, and python's grammar has no other place where a space
+/// decides which operator was written.
+fn force_unwrap_before_debug_equal() -> ParseErrorType {
+    ParseErrorType::BasedPythonOnly(
+        "`!=` is the comparison operator inside a replacement field too, so a `!` written \
+         in front of the field's `=` cannot be the force-unwrap. Parenthesise the operand: \
+         `f\"{(a!) = }\"`"
+            .to_string(),
+    )
+}
+
 impl<'src> Parser<'src> {
     /// Returns `true` if the parser is at a name or keyword (including soft keyword) token.
     pub(super) fn at_name_or_keyword(&self) -> bool {
@@ -1428,11 +1445,41 @@ impl<'src> Parser<'src> {
                         node_index: AtomicNodeIndex::NONE,
                     })
                 }
-                // basedpython postfix `!` force-unwrap. Inside an interpolated
-                // string replacement field a trailing `!` is the conversion flag
-                // (`f"{x!r}"`), so it is suppressed there.
+                // basedpython: a `!` in front of a replacement field's `=` is the
+                // one place the force-unwrap cannot be claimed. `!=` is the
+                // comparison operator everywhere, `f"{a!=b}"` included, and the
+                // lexer glues it — so `f"{a!=}"` and `f"{a! = }"` would differ
+                // only by a space, which python's grammar never uses to tell two
+                // operators apart. neither is claimed, and this says so where
+                // python's "invalid conversion character" would not.
                 TokenKind::Exclamation
-                    if self.options.mode != Mode::Ipython && !context.is_in_interpolation() =>
+                    if self.options.is_basedpython
+                        && context.is_in_interpolation()
+                        && self.peek() == TokenKind::Equal =>
+                {
+                    let range = self.current_token_range();
+                    self.add_error(force_unwrap_before_debug_equal(), range);
+                    break lhs;
+                }
+                // basedpython postfix `!` force-unwrap. Inside an interpolated
+                // string replacement field a `!` introduces python's conversion
+                // flag (`f"{x!r}"`), so there it is the force-unwrap operator
+                // only where no conversion can follow it: the field's closing
+                // `}`, the `:` that opens its format spec, or another `!`,
+                // which is then the conversion's own (`f"{x!!r}"` unwraps `x`
+                // and prints its repr). python rejects all three spellings, so
+                // this takes nothing away from it — but a `.py` file keeps
+                // python's "invalid conversion character", which is what a
+                // mistyped `!r` needs to hear rather than a message about an
+                // operator that language does not have.
+                TokenKind::Exclamation
+                    if self.options.mode != Mode::Ipython
+                        && (!context.is_in_interpolation()
+                            || (self.options.is_basedpython
+                                && matches!(
+                                    self.peek(),
+                                    TokenKind::Rbrace | TokenKind::Colon | TokenKind::Exclamation
+                                ))) =>
                 {
                     self.error_if_not_basedpython(
                         "`!` (force-unwrap) operator is not valid in .py files".to_string(),
@@ -2269,6 +2316,26 @@ impl<'src> Parser<'src> {
             identity_ops.resize(index, false);
             identity_ops.push(identity);
         };
+        // basedpython: the other spelling of a force-unwrap in front of a replacement
+        // field's `=`, where the lexer glued the two into one `!=`. a comparison with
+        // nothing on its right is never valid, so the author meant the debug form —
+        // but claiming it here would make `f"{a!=}"` and `f"{a!=b}"` different
+        // operators, told apart by what follows. see the `Exclamation` arm in
+        // `parse_lhs_expression` for the other half
+        if self.options.is_basedpython
+            && op == CmpOp::NotEq
+            && context.is_in_interpolation()
+            && self.at(TokenKind::NotEqual)
+        {
+            let followed_by_end_of_field = matches!(
+                self.peek(),
+                TokenKind::Rbrace | TokenKind::Colon | TokenKind::Exclamation
+            );
+            if followed_by_end_of_field {
+                let range = self.current_token_range();
+                self.add_error(force_unwrap_before_debug_equal(), range);
+            }
+        }
         record_identity(&mut identity_ops, 0, self.at_identity_operator(op));
         self.bump_cmp_op(op);
 
@@ -5535,9 +5602,10 @@ bitflags! {
         const EXCLUDE_FOR = 1 << 5;
 
         /// basedpython: set while parsing the top-level value of an interpolated
-        /// string replacement field (`f"{value!r}"`). Suppresses the postfix
-        /// `!` force-unwrap operator so the trailing `!` stays available as the
-        /// conversion flag. A parenthesised `(value!)` resets the context.
+        /// string replacement field (`f"{value!r}"`). Keeps a trailing `!` available
+        /// as the conversion flag rather than reading it as the postfix force-unwrap
+        /// operator, except where no conversion can follow it. A parenthesised
+        /// `(value!)` resets the context.
         const IN_INTERPOLATION = 1 << 6;
 
         /// basedpython: set while parsing the lower end of a type-parameter bound range
@@ -5661,8 +5729,8 @@ impl ExpressionContext {
     }
 
     /// basedpython: returns `true` if parsing the value of an interpolated-string
-    /// replacement field, where a trailing `!` is the conversion flag rather
-    /// than the postfix force-unwrap operator
+    /// replacement field, where a `!` that could introduce a conversion flag is
+    /// read as that rather than as the postfix force-unwrap operator
     const fn is_in_interpolation(self) -> bool {
         self.0.contains(ExpressionContextFlags::IN_INTERPOLATION)
     }

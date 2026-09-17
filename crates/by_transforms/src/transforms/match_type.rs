@@ -42,6 +42,16 @@ impl<'src> MatchTypePass<'src> {
 }
 
 impl AstPass for MatchTypePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::MatchType)
+    }
+
+    /// a match type polyfilled as a `TypeAliasType` names its type parameters as the
+    /// parameter objects themselves, a pack's without the `*` or `Unpack` around it
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::Unpack]
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut inner = MatchTypeLowering {
             source: self.source,

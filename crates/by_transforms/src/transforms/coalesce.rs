@@ -3,6 +3,7 @@ use ruff_python_ast::{Expr, Operator, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 /// rewrites `a ?? b` to `a if a is not None else b`.
@@ -31,7 +32,7 @@ fn expand_none_chain(expr: &Expr, source: &str, types: &dyn TypeInfo) -> Option<
     Some(super::none_chain::build_expansion(
         &guards,
         &form,
-        &super::none_chain::temp_var(0),
+        &super::none_chain::temp_var(WrittenNames::new(source), 0),
         base,
     ))
 }
@@ -82,7 +83,7 @@ impl NoneCoalesce<'_> {
         } else {
             ""
         };
-        let temp = super::none_chain::temp_var(0);
+        let temp = super::none_chain::temp_var(WrittenNames::new(self.source), 0);
         match expand_none_chain(&b.left, self.source, self.types) {
             Some(expanded) => {
                 let mut t = vec![Fragment::Lit(format!("{temp}{unwrap} if ({temp} := "))];
@@ -174,6 +175,15 @@ impl<'src> NoneCoalescePass<'src> {
 }
 
 impl TypeAwarePass for NoneCoalescePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::NoneCoalesce)
+    }
+
+    /// an optional chain on the left of a `??` is written into the coalesce's own test
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::NoneChain]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = NoneCoalesce::new(self.source, types);
         for stmt in stmts {
@@ -281,6 +291,77 @@ mod tests {
         assert!(
             out.contains("x = __by_t_0__.value if (__by_t_0__ := g()) is not None else -1\n"),
             "got: {out}"
+        );
+    }
+
+    /// a parameter's default is a value like any other, and the `??` in one lowers
+    /// here. a second pass used to claim it for an AST rewrite of the whole `def`,
+    /// which printed the signature again over this edit and left the program refused
+    #[test]
+    fn coalesce_in_a_parameter_default() {
+        check(
+            indoc::indoc! {"
+                g: int? = None
+
+                def f(y: int = g ?? 1) -> int:
+                    return y
+            "},
+            indoc::indoc! {"
+                from typing import Any
+                _MISSING: Any = object()
+                g: int | None = None
+
+                def f(y: int = _MISSING) -> int:
+                    if y is _MISSING:
+                        y = g if g is not None else 1
+                    return y
+            "},
+        );
+    }
+
+    /// the same default with the body written on the clause's line
+    #[test]
+    fn coalesce_in_a_parameter_default_with_an_inline_body() {
+        check(
+            indoc::indoc! {"
+                g: int? = None
+
+                def f(y: int = g ?? 1) -> int: return y
+            "},
+            indoc::indoc! {"
+                from typing import Any
+                _MISSING: Any = object()
+                g: int | None = None
+
+                def f(y: int = _MISSING) -> int: \n    if y is _MISSING:
+                        y = g if g is not None else 1
+                    return y
+            "},
+        );
+    }
+
+    /// and a chain longer than one link, which recurses in the same edit
+    #[test]
+    fn a_chained_coalesce_in_a_parameter_default() {
+        check(
+            indoc::indoc! {"
+                g: int? = None
+                h: int? = None
+
+                def f(y: int = g ?? h ?? 1) -> int:
+                    return y
+            "},
+            indoc::indoc! {"
+                from typing import Any
+                _MISSING: Any = object()
+                g: int | None = None
+                h: int | None = None
+
+                def f(y: int = _MISSING) -> int:
+                    if y is _MISSING:
+                        y = __by_t_0__ if (__by_t_0__ := g if g is not None else h) is not None else 1
+                    return y
+            "},
         );
     }
 

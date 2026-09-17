@@ -45,7 +45,6 @@
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Alias, ModModule, Stmt, StmtImport};
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use thin_vec::ThinVec;
 
 use super::ast_driver::{AstPass, PassContext};
 use crate::type_info::TypeInfo;
@@ -160,17 +159,12 @@ fn indented(source: &str, indent: &str) -> String {
 
 /// Replaces each static resource import with the document it names.
 ///
-/// The import goes from the source text *and* from the AST, because either one
-/// alone leaves the other standing. A statement no pass mutated keeps its source
-/// bytes, and ignores the AST; a statement some pass did mutate is re-rendered
-/// from the AST, and the text edit inside it is dropped. An `import` statement
-/// that survived to the output is not python at all — a path is not a module
-/// name — so phase 3 rejects the whole file.
-///
-/// The AST rewrite deliberately does not declare the statement changed. Saying
-/// so would re-render every enclosing `def` through the code generator, losing
-/// the comments and the formatting of everything else in it; leaving it undeclared
-/// means the rewrite matters only when something else already forced a re-render.
+/// The import is replaced in the source text alone. A statement an AST pass
+/// rewrote passes the source of every statement it kept through, with the edits
+/// inside applied, so the import is replaced there as well. Replacing it in the
+/// syntax tree too would make the statement around it one a pass rewrote, and the
+/// edit a second lowering of what the tree already says — which is refused, since
+/// nothing tells it apart from an edit the rewrite lost.
 pub(crate) struct StaticResource {
     lowerings: ResourceLowerings,
     source: String,
@@ -183,82 +177,10 @@ impl StaticResource {
             source: source.to_string(),
         }
     }
-
-    fn rendering_for(&self, range: TextRange) -> Option<&str> {
-        self.lowerings
-            .replacements
-            .iter()
-            .find_map(|(replaced, rendering)| (*replaced == range).then_some(rendering.as_str()))
-    }
-
-    /// Replace every lowered import in `body` with the statements it renders to.
-    fn rewrite_body(&self, body: &mut ThinVec<Stmt>) {
-        let mut index = 0;
-        while index < body.len() {
-            let rendered = match &body[index] {
-                Stmt::Import(import) if import.names.iter().any(|alias| alias.is_resource) => {
-                    self.rendering_for(import.range()).and_then(|rendering| {
-                        let parsed = ruff_python_parser::parse_module(rendering).ok()?;
-                        Some(parsed.into_syntax().body)
-                    })
-                }
-                _ => None,
-            };
-
-            if let Some(rendered) = rendered {
-                let count = rendered.len();
-                body.splice(index..=index, rendered);
-                index += count;
-                continue;
-            }
-
-            self.rewrite_within(&mut body[index]);
-            index += 1;
-        }
-    }
-
-    /// Rewrite the bodies `stmt` holds, if it holds any.
-    fn rewrite_within(&self, stmt: &mut Stmt) {
-        match stmt {
-            Stmt::FunctionDef(node) => self.rewrite_body(&mut node.body),
-            Stmt::ClassDef(node) => self.rewrite_body(&mut node.body),
-            Stmt::For(node) => {
-                self.rewrite_body(&mut node.body);
-                self.rewrite_body(&mut node.orelse);
-            }
-            Stmt::While(node) => {
-                self.rewrite_body(&mut node.body);
-                self.rewrite_body(&mut node.orelse);
-            }
-            Stmt::If(node) => {
-                self.rewrite_body(&mut node.body);
-                for clause in &mut node.elif_else_clauses {
-                    self.rewrite_body(&mut clause.body);
-                }
-            }
-            Stmt::With(node) => self.rewrite_body(&mut node.body),
-            Stmt::Match(node) => {
-                for case in &mut node.cases {
-                    self.rewrite_body(&mut case.body);
-                }
-            }
-            Stmt::Try(node) => {
-                self.rewrite_body(&mut node.body);
-                for handler in &mut node.handlers {
-                    let ruff_python_ast::ExceptHandler::ExceptHandler(handler) = handler;
-                    self.rewrite_body(&mut handler.body);
-                }
-                self.rewrite_body(&mut node.orelse);
-                self.rewrite_body(&mut node.finalbody);
-            }
-            // every other statement holds expressions, and an import is not one
-            _ => {}
-        }
-    }
 }
 
 impl AstPass for StaticResource {
-    fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
+    fn run(&self, _module: &mut ModModule, ctx: &mut PassContext) {
         for error in &self.lowerings.errors {
             ctx.errors.push(error.clone());
         }
@@ -277,8 +199,6 @@ impl AstPass for StaticResource {
                 .to_string();
             ctx.text_edits.push((*range, replacement));
         }
-
-        self.rewrite_body(&mut module.body);
     }
 }
 
@@ -341,10 +261,9 @@ mod tests {
         );
     }
 
-    /// an ast-mutating pass re-renders the whole top-level statement it touched,
-    /// through the code generator rather than from source. a resource import
-    /// inside one is re-spelled by the generator, and a path written as a name
-    /// is not python
+    /// numbering a repeated `_` rewrites the `def`, and the import in its body is
+    /// passed through as source with the replacement applied. printed from the
+    /// syntax tree instead, a path written as a name is not python
     #[test]
     fn an_import_inside_a_statement_another_pass_rewrites_survives() {
         let output = transpile(&[
@@ -356,14 +275,13 @@ mod tests {
         ])
         .expect("transpile should succeed");
 
-        assert!(output.contains("def f(_, _2):"), "{output}");
+        assert!(output.contains("def f(_, _2, /):"), "{output}");
         assert!(output.contains("class config:"), "{output}");
         assert!(!output.contains("import data/config.json"), "{output}");
     }
 
-    /// the statements spliced into the AST are parsed from the rendering and
-    /// carry its ranges, which name nothing in this file. a pass reading one as
-    /// a range in the source slices out of bounds
+    /// a rewritten `def` holding a resource import composes with the passes that
+    /// rewrite the statements around it
     #[test]
     fn a_rewritten_statement_does_not_poison_the_passes_around_it() {
         let output = transpile(&[
