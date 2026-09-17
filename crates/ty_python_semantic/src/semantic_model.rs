@@ -2283,6 +2283,21 @@ pub fn basedpython_class_type<'db>(
     Some(binding_type(model.db, index.try_definition(class)?))
 }
 
+/// basedpython: the type an augmented assignment to a name binds it to — the result of the
+/// operation, which may be wider than either operand — or `None` where the index holds no
+/// single definition for it.
+///
+/// the target expression of `x += y` is typed as the value it held before, so this is the
+/// only place the bound value's type can be read. the native compiler needs it to choose a
+/// representation that holds every value a local is given
+pub fn basedpython_augmented_assignment_type<'db>(
+    model: &SemanticModel<'db>,
+    assignment: &ast::StmtAugAssign,
+) -> Option<Type<'db>> {
+    let index = semantic_index(model.db, model.program_file());
+    Some(binding_type(model.db, index.try_definition(assignment)?))
+}
+
 macro_rules! impl_binding_has_ty_def {
     ($ty: ty) => {
         impl HasDefinition for $ty {

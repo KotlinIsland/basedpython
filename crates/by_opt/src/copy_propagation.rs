@@ -268,6 +268,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::MatchKey { dest, .. }
         | Op::MatchRest { dest, .. }
         | Op::IsMapping { dest, .. }
+        | Op::HoldsLayout { dest, .. }
         | Op::AsyncIter { dest, .. }
         | Op::AsyncContext { dest, .. }
         | Op::IsMissing { dest, .. }
@@ -373,6 +374,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
         | Op::LeaveGenerator { .. }
         | Op::LicenceHolds { .. }
         | Op::RequireField { .. }
+        | Op::CheckSound { .. }
         | Op::Line { .. }
         | Op::SetField { .. } => {}
     }

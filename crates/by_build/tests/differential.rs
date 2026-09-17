@@ -25,13 +25,15 @@
     reason = "skip notices belong on the test harness's stderr"
 )]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use by_build::{Options, Toolchain, build_source};
 use by_transforms::Config;
 
 mod common;
+
+use common::Scratch;
 
 /// a test whose *source* needs a newer interpreter than this one has nothing to
 /// say: neither leg can run it, so there is nothing to compare
@@ -49,25 +51,6 @@ fn missing_toolchain(error: &anyhow::Error) -> bool {
         let text = cause.to_string();
         text.contains("could not run the C compiler") || text.contains("No such file or directory")
     })
-}
-
-/// a temp directory of this process's own
-///
-/// every leg below builds into a fixed path under the system temp directory, named after
-/// the test. nextest gives each *test* a process of its own, so one run never collides
-/// with itself — but nothing stops two *runs* choosing the same directory, and a 3.13
-/// sweep beside a 3.14 one does exactly that. the two then overwrite each other's sources
-/// between the build and the read.
-///
-/// the failures that produces are the convincing kind. a collision during setup fails
-/// fast enough to look like a missing toolchain, and one *after* the build fails having
-/// genuinely compiled and compared, so it reads as a difference the compiler produced.
-/// twenty-nine of those were chased as a regression before the shared path was noticed.
-///
-/// the module's own name is a separate argument from the directory holding it, so putting
-/// the process id here changes where a test builds and nothing about what it builds
-fn diff_root() -> PathBuf {
-    std::env::temp_dir().join(format!("by_diff_p{}", std::process::id()))
 }
 
 fn environment() -> Option<(String, Toolchain)> {
@@ -1299,6 +1282,47 @@ def _deleted(h):
     out.append(hasattr(h, '_Held__hidden'))
     out.append(repr(_capture(h.drop_hidden)))
     return out
+
+# what a function says about its annotations, its signature and its parameters, read the
+# ways the standard library reads them. an annotation `annotationlib` could not evaluate is
+# a `ForwardRef` whose representation names its owner's address, so only its text is kept
+def _annotation_report(f):
+    import inspect, sys, typing
+    def attempt(read):
+        try:
+            return read()
+        except Exception as e:
+            return type(e).__name__ + ': ' + str(e)
+    out = {
+        'annotations': attempt(lambda: f.__annotations__),
+        'same': attempt(lambda: f.__annotations__ is f.__annotations__),
+        'hints': attempt(lambda: typing.get_type_hints(f)),
+        'signature': attempt(lambda: str(inspect.signature(f))),
+        'defaults': attempt(lambda: (f.__defaults__, f.__kwdefaults__)),
+        'code': attempt(lambda: (f.__code__.co_qualname, f.__code__.co_varnames)),
+        'type_params': attempt(lambda: [param.__name__ for param in f.__type_params__]),
+    }
+    if sys.version_info >= (3, 14):
+        import annotationlib
+        for format in (annotationlib.Format.VALUE, annotationlib.Format.FORWARDREF,
+                       annotationlib.Format.STRING):
+            out[format.name] = attempt(lambda: {
+                key: getattr(value, '__forward_arg__', value)
+                for key, value in annotationlib.get_annotations(f, format=format).items()
+            })
+        out['annotate'] = attempt(lambda: f.__annotate__ and f.__annotate__.__qualname__)
+    return out
+
+# whether what `make` built is still alive once the only references left are the ones
+# `keep` took from it, handed back beside what `keep` took so a caller can go on to use it
+def _outlives(make, keep):
+    import weakref
+    made = make()
+    alive = weakref.ref(made)
+    kept = keep(made)
+    del made
+    gc.collect()
+    return alive() is not None, kept
 ";
 
 fn run(python: &str, dir: &Path, body: &str) -> String {
@@ -1327,6 +1351,11 @@ fn agree_python(tag: &str, source: &str, calls: &[&str]) {
     agree_in(tag, source, calls, false, by_irbuild::Language::Python);
 }
 
+/// as [`agree_python`], handing back the directory the compiled leg was built into
+fn agree_python_built(tag: &str, source: &str, calls: &[&str]) -> Option<Scratch> {
+    agree_in(tag, source, calls, false, by_irbuild::Language::Python)
+}
+
 /// as [`agree_python`], but the source is expected to contain declined functions
 fn agree_python_with_declines(tag: &str, source: &str, calls: &[&str]) {
     agree_in(tag, source, calls, true, by_irbuild::Language::Python);
@@ -1342,8 +1371,28 @@ fn agree_inner(tag: &str, source: &str, calls: &[&str], allow_declines: bool) {
     );
 }
 
-/// build `source` under `options` and hand back what each of `calls` printed from the
-/// compiled leg alone
+/// as [`agree`], with both builds under `soundness` rather than the default positions
+fn agree_with_soundness(
+    tag: &str,
+    source: &str,
+    calls: &[&str],
+    soundness: by_transforms::SoundnessPositions,
+) {
+    agree_built(
+        tag,
+        source,
+        calls,
+        false,
+        by_irbuild::Language::BasedPython,
+        Config {
+            soundness,
+            ..Config::default()
+        },
+    );
+}
+
+/// build `source` under `options` and hand back the directory it was built into and what
+/// each of `calls` printed from the compiled leg alone
 ///
 /// for the tradeoffs the build makes on purpose, where the interpreted leg is not the
 /// expected value. `None` where there is no toolchain to build with
@@ -1352,10 +1401,9 @@ fn compiled_answers(
     source: &str,
     options: Options,
     calls: &[&str],
-) -> Option<Vec<String>> {
+) -> Option<(Scratch, Vec<String>)> {
     let (python, toolchain) = environment()?;
-    let dir = diff_root().join(format!("by_diff_{tag}_c"));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new(format!("by_diff_{tag}_c"));
     let module = format!("by_diff_{tag}");
     let options = Options {
         recheck_licences: recheck_licences(),
@@ -1377,19 +1425,18 @@ fn compiled_answers(
         "{tag} declined functions the test expects to be compiled: {:?}",
         built.declined
     );
-    Some(
-        calls
-            .iter()
-            .map(|call| {
-                let body = format!(
-                    "import {module} as m\n\
-                     assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
-                     {CAPTURE_HELPER}print(repr({call}))\n"
-                );
-                run(&python, &dir, &body)
-            })
-            .collect(),
-    )
+    let answers = calls
+        .iter()
+        .map(|call| {
+            let body = format!(
+                "import {module} as m\n\
+                 assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
+                 {CAPTURE_HELPER}print(repr({call}))\n"
+            );
+            run(&python, &dir, &body)
+        })
+        .collect();
+    Some((dir, answers))
 }
 
 /// whether this run has every licensed call re-ask the lookup it skipped
@@ -1407,21 +1454,39 @@ fn recheck_licences() -> bool {
     !std::env::var("BY_LICENCE_RECHECK").is_ok_and(|value| value == "0")
 }
 
+/// the directory the compiled leg was built into, for a test that asks that build
+/// something more once the two legs agree
 fn agree_in(
     tag: &str,
     source: &str,
     calls: &[&str],
     allow_declines: bool,
     language: by_irbuild::Language,
-) {
-    let Some((python, toolchain)) = environment() else {
-        return;
-    };
+) -> Option<Scratch> {
+    agree_built(
+        tag,
+        source,
+        calls,
+        allow_declines,
+        language,
+        Config::default(),
+    )
+}
 
-    let compiled_dir = diff_root().join(format!("by_diff_{tag}_c"));
-    let interpreted_dir = diff_root().join(format!("by_diff_{tag}_i"));
-    let _ = std::fs::remove_dir_all(&compiled_dir);
-    let _ = std::fs::remove_dir_all(&interpreted_dir);
+/// [`agree_in`], with the interpreted leg transpiled under `config` and the compiled leg
+/// handed it as its fallback's
+fn agree_built(
+    tag: &str,
+    source: &str,
+    calls: &[&str],
+    allow_declines: bool,
+    language: by_irbuild::Language,
+    config: Config,
+) -> Option<Scratch> {
+    let (python, toolchain) = environment()?;
+
+    let compiled_dir = Scratch::new(format!("by_diff_{tag}_c"));
+    let interpreted_dir = Scratch::new(format!("by_diff_{tag}_i"));
 
     let module = format!("by_diff_{tag}");
 
@@ -1429,9 +1494,10 @@ fn agree_in(
     // cpython, under the same config `by_build` uses — including the *target
     // version*, which has to be this interpreter's or the two legs are not the
     // same program. for python there is nothing to transpile — it already is one
+    let fallback = config.clone();
     let interpreted_source = match language {
         by_irbuild::Language::BasedPython => {
-            let mut config = Config::default();
+            let mut config = config;
             if let Some((major, minor)) = toolchain.version
                 && let Ok(parsed) = format!("{major}.{minor}").parse()
             {
@@ -1452,6 +1518,7 @@ fn agree_in(
     let options = Options {
         language,
         recheck_licences: recheck_licences(),
+        fallback: Some(fallback),
         ..Options::default()
     };
     let built = match build_source(source, module.as_str(), &toolchain, &compiled_dir, &options) {
@@ -1465,7 +1532,7 @@ fn agree_in(
                 "{tag} failed to build: {error:#}"
             );
             eprintln!("skipping {tag}: no working C toolchain ({error})");
-            return;
+            return None;
         }
     };
     if !allow_declines {
@@ -1485,6 +1552,7 @@ fn agree_in(
             "{tag}: `{call}` differs — compiled {compiled}, interpreted {interpreted}"
         );
     }
+    Some(compiled_dir)
 }
 
 #[test]
@@ -1940,8 +2008,7 @@ fn an_operation_that_keeps_leaving_the_short_range_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_bigleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_bigleak");
     let source = "\
 def climb(a: int, n: int) -> int:
     total = 0
@@ -1987,8 +2054,7 @@ fn a_result_that_is_not_an_int_is_refused_rather_than_tagged() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_notanint");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_notanint");
     let source = "\
 def halve(value: int) -> int:
     return value // 2
@@ -2017,7 +2083,10 @@ def halve(value: int) -> int:
          except TypeError as error:\n\
          \x20   print(f'TypeError: {error}')\n",
     );
-    assert_eq!(out, "True\nTypeError: expected int, got str");
+    assert_eq!(
+        out,
+        "True\nTypeError: type soundness violation: expected int, got str"
+    );
 }
 
 #[test]
@@ -2312,31 +2381,176 @@ def mixed_mod(a: float, b: int) -> float:
 }
 
 #[test]
+fn an_int_to_a_negative_int_power_is_a_float() {
+    // `**` over two ints is a float for a negative exponent, so an int result is only known
+    // where the exponent is a literal that is not negative. anywhere else the power is
+    // python's own
+    agree(
+        "intpower",
+        "\
+def power(a: int, b: int) -> object:
+    return a ** b
+
+
+def held(a: int, b: int) -> object:
+    x = a ** b
+    return x
+
+
+def literal(a: int) -> object:
+    return (a ** 2, a ** 0, a ** -1, a ** -2)
+
+
+def summed(n: int) -> object:
+    total = 0
+    i = -2
+    while i < n:
+        total = total + 2 ** i
+        i = i + 1
+    return total
+
+
+def declared(a: int, b: int) -> int:
+    return a ** b
+",
+        &[
+            "[repr(_outcome(m.power, a, b)) for a in (2, -3, 0, 1, 2**70) for b in (-1, 0, 3, -2, 70)]",
+            "[repr(_outcome(m.held, a, b)) for a in (2, -3, 0) for b in (-1, 0, 3)]",
+            "[repr(_outcome(m.literal, a)) for a in (2, -3, 0, 2**70)]",
+            "m.summed(5)",
+            "[m.declared(a, b) for a in (2, -3, 2**70) for b in (0, 3, 70)]",
+        ],
+    );
+}
+
+#[test]
+fn an_augmented_assignment_holds_whatever_its_operation_answers() {
+    // the name an augmented assignment rebinds is given the operation's result, and that
+    // is not always of the right-hand operand's type — nor the left's: `x **= 0.5` on a
+    // float can be complex, `x /= b` on an int is a float, and `x **= b` on an int is a
+    // float for a negative `b`. the local has to hold each of them as python does
+    agree(
+        "augmentedresult",
+        "\
+def power(a: float, b: float) -> object:
+    x: object = a
+    x **= b
+    return x
+
+
+def root(a: float, b: float) -> object:
+    x = a
+    x **= b
+    return x
+
+
+def int_div(a: int, b: int) -> object:
+    x = a
+    x /= b
+    return x
+
+
+def int_plus_float(a: int, b: float) -> object:
+    x = a
+    x += b
+    return x
+
+
+def int_pow_neg(a: int, b: int) -> object:
+    x = a
+    x **= b
+    return x
+
+
+def str_times(s: str, n: int) -> object:
+    x = s
+    x *= n
+    return x
+
+
+def bool_plus(a: bool, n: int) -> object:
+    x = a
+    x += n
+    return x
+
+
+def floordiv_float(a: int, b: float) -> object:
+    x = a
+    x //= b
+    return x
+
+
+def mod_float(a: int, b: float) -> object:
+    x = a
+    x %= b
+    return x
+
+
+def list_plus(xs: list[int], ys: list[int]) -> object:
+    x = xs
+    x += ys
+    return x
+
+
+def shift(a: int, b: int) -> object:
+    x = a
+    x <<= b
+    x >>= 1
+    x |= 8
+    x &= 255
+    x ^= 3
+    return x
+
+
+def float_minus_int(a: float, b: int) -> object:
+    x = a
+    x -= b
+    x *= b
+    return x
+
+
+def ann_int_truediv(a: int) -> object:
+    x: int | float = a
+    x /= 2
+    return x
+",
+        &[
+            "[repr(_outcome(m.power, a, b)) for a in (-4.0, 4.0, 0.0) for b in (0.5, 2.0, -1.0)]",
+            "[repr(_outcome(m.root, a, b)) for a in (-8.0, 8.0) for b in (1.0 / 3.0, 0.5, 3.0)]",
+            "[repr(_outcome(m.int_div, a, b)) for a in (3, -7, 0) for b in (2, -2, 0)]",
+            "[repr(_outcome(m.int_plus_float, a, b)) for a in (1, -3) for b in (0.5, float('nan'))]",
+            "[repr(_outcome(m.int_pow_neg, a, b)) for a in (2, -3, 0) for b in (-1, 0, 3, -2)]",
+            "m.str_times('ab', 3)",
+            "[m.bool_plus(a, n) for a in (True, False) for n in (2, -1)]",
+            "[repr(_outcome(m.floordiv_float, a, b)) for a in (7, -7) for b in (2.0, -2.5, 0.0)]",
+            "[repr(_outcome(m.mod_float, a, b)) for a in (7, -7) for b in (2.5, -2.5, 0.0)]",
+            "m.list_plus([1], [2])",
+            "[m.shift(a, b) for a in (3, -3) for b in (0, 4, 70)]",
+            "[m.float_minus_int(a, b) for a in (2.5, -1.0) for b in (2, 0)]",
+            "[m.ann_int_truediv(a) for a in (3, 4, -5)]",
+        ],
+    );
+}
+
+#[test]
 fn a_complex_power_is_refused_where_a_float_local_is_declared() {
     // `float ** float` is `Any` to the checker, so a local declared `float` may be handed
     // a power python answers with a complex number. the power itself is python's; the
     // store is the unbox a declared `float` makes, and it refuses the complex loudly
     // rather than holding a nan. this asserts on the compiled leg alone: python keeps
-    // the complex number
-    let Some(answers) = compiled_answers(
+    // the complex number. an augmented assignment is not this: what it binds is the
+    // operation's result, which the local is chosen to hold
+    let Some((_dir, answers)) = compiled_answers(
         "floatpowrefused",
         "\
 def assigned(a: float, b: float) -> float:
     x: float = a ** b
     return x
-
-
-def augmented(a: float, b: float) -> float:
-    x = a
-    x **= b
-    return x
 ",
         Options::default(),
         &[
             "repr(_capture(m.assigned, -8.0, 0.5))",
-            "repr(_capture(m.augmented, -8.0, 1.0 / 3.0))",
             "m.assigned(-8.0, 3.0)",
-            "m.augmented(8.0, 0.5)",
         ],
     ) else {
         return;
@@ -2344,10 +2558,8 @@ def augmented(a: float, b: float) -> float:
     assert_eq!(
         answers,
         [
-            "\"TypeError('expected float, got complex')\"",
-            "\"TypeError('expected float, got complex')\"",
-            "-512.0",
-            "2.8284271247461903",
+            "\"TypeError('type soundness violation: expected float, got complex')\"",
+            "-512.0"
         ]
     );
 }
@@ -2394,7 +2606,7 @@ def counted(n: int) -> float:
 fn a_float_element_of_the_wrong_type_is_refused_where_it_is_unboxed() {
     // a `.by` `list[float]` holds floats, so an `int` element is refused where the loop
     // unboxes it — with the unbox's own error, and nothing left half-done
-    let Some(answers) = compiled_answers(
+    let Some((_dir, answers)) = compiled_answers(
         "floatrefused",
         "\
 def walk(xs: list[float]) -> float:
@@ -2420,9 +2632,9 @@ def element(xs: list[float], i: int) -> float:
     assert_eq!(
         answers,
         [
-            "\"TypeError('expected float, got int')\"",
-            "\"TypeError('expected float, got NoneType')\"",
-            "\"TypeError('expected float, got bool')\"",
+            "\"TypeError('type soundness violation: expected float, got int')\"",
+            "\"TypeError('type soundness violation: expected float, got NoneType')\"",
+            "\"TypeError('type soundness violation: expected float, got bool')\"",
             "-112.0",
         ]
     );
@@ -2659,7 +2871,7 @@ fn a_raised_recursion_limit_still_stops_at_the_stack() {
     // python frames live on the heap, so python answers these where a native frame
     // cannot: the limit allows it and the C stack does not. the compiled leg raises
     // instead, and the same holds on a thread whose stack is smaller than the main one
-    let Some(answers) = compiled_answers(
+    let Some((_dir, answers)) = compiled_answers(
         "recstack",
         RECURSIONS,
         Options {
@@ -2690,7 +2902,7 @@ fn a_raised_recursion_limit_still_stops_at_the_stack() {
 fn a_build_not_following_the_recursion_limit_still_stops_at_the_stack() {
     // the configuration that counts no frames against the limit leaves a lowered limit
     // unobserved, which is the tradeoff it makes, and still never crashes
-    let Some(answers) = compiled_answers(
+    let Some((_dir, answers)) = compiled_answers(
         "recstackonly",
         RECURSIONS,
         Options {
@@ -2944,7 +3156,7 @@ fn a_build_binding_functions_early_goes_on_calling_what_it_compiled() {
     // the configuration that assumes the module's functions are never rebound asks
     // nothing at the call, which is the tradeoff it makes: a replacement reaches a call
     // made from python and not one the module's own compiled code makes
-    let Some(answers) = compiled_answers(
+    let Some((_dir, answers)) = compiled_answers(
         "reboundearly",
         REBOUND,
         Options {
@@ -2973,7 +3185,7 @@ fn a_rebound_function_handed_an_unboxed_buffer_is_refused_loudly() {
     // a list the caller holds as a buffer has no list object to hand a replacement, and
     // a copy would be a different list — so the call raises, as a rebound `len` on a
     // buffer does, rather than calling the replacement with a copy
-    let Some(answers) = compiled_answers(
+    let Some((_dir, answers)) = compiled_answers(
         "reboundbuffer",
         "\
 def total(xs: list[float]) -> float:
@@ -3234,8 +3446,7 @@ fn an_error_from_the_object_protocol_propagates() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_objerr");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_objerr");
     let source = "def add(a, b) -> object:\n    return a + b\n";
     if build_source(
         source,
@@ -3267,8 +3478,7 @@ fn boxed_values_do_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_objleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_objleak");
     let source = "\
 def chain(a, b) -> object:
     x = a + b
@@ -3308,8 +3518,7 @@ fn an_unboxed_buffer_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_bufleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_bufleak");
     let source = "\
 def built(n: int) -> float:
     out = []
@@ -3687,8 +3896,7 @@ def count(n: int) -> int:
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_fieldmove_pin");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_fieldmove_pin");
     let built = match build_source(
         SOURCE,
         "by_diff_fieldmove_pin",
@@ -3721,8 +3929,7 @@ fn a_temporary_object_argument_does_not_crash() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_argtemp");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_argtemp");
     let source = "def echo(x) -> object:\n    return x\n";
     if build_source(
         source,
@@ -3828,8 +4035,7 @@ fn a_borrowed_copy_does_not_over_release_its_source() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_widened_rc");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_widened_rc");
     if build_source(
         WIDENED_COPIES,
         "by_diff_widened_rc",
@@ -3951,8 +4157,7 @@ fn a_borrowed_copy_in_a_duplicated_loop_body_does_not_move_its_source_references
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_borrowed_copies_rc");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_borrowed_copies_rc");
     if build_source(
         BORROWED_COPIES,
         "by_diff_borrowed_copies_rc",
@@ -4016,8 +4221,7 @@ fn short_circuiting_really_short_circuits() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_shortcircuit");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_shortcircuit");
     // dividing by zero raises; `a or b` must not evaluate `b` when `a` is truthy
     let source = "\
 def guarded(a: int, b: int) -> object:
@@ -4616,8 +4820,7 @@ fn the_compiled_build_is_the_one_that_answers_for_a_nul_literal() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_nulstr_which");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_nulstr_which");
     let built = match build_source(
         NUL_LITERALS,
         "by_diff_nulstr_which",
@@ -4678,8 +4881,7 @@ fn a_call_out_checks_what_comes_back() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_callcheck");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_callcheck");
     // `abs` is a builtin the checker knows returns an int, so the call site
     // narrows with a checked unbox. shadowing it in the module namespace — which
     // `By_LookupGlobal` consults first, exactly as `LOAD_GLOBAL` does — makes it
@@ -4708,7 +4910,10 @@ fn a_call_out_checks_what_comes_back() {
          except TypeError as e:\n    print('TypeError:', e)\n\
          else:\n    print('no error')\n",
     );
-    assert_eq!(out, "TypeError: expected int, got str");
+    assert_eq!(
+        out,
+        "TypeError: type soundness violation: expected int, got str"
+    );
 }
 
 #[test]
@@ -4716,8 +4921,7 @@ fn a_missing_global_raises_a_name_error() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_nameerr");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_nameerr");
     let source = "def f() -> object:\n    return nowhere()\n";
     if build_source(
         source,
@@ -5443,8 +5647,7 @@ fn iterating_a_wrongly_typed_list_raises() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_iterchk");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_iterchk");
     // the annotation says int elements; the unbox per element is the
     // `iterations` soundness position and must catch a lie
     let source = "\
@@ -5474,7 +5677,211 @@ def total(xs: list[int]) -> int:
          except TypeError as e:\n    print('TypeError:', e)\n\
          else:\n    print('no error')\n",
     );
-    assert_eq!(out, "TypeError: expected int, got str");
+    assert_eq!(
+        out,
+        "TypeError: type soundness violation: expected int, got str"
+    );
+}
+
+/// the positions a value nothing verified meets a declared type at, each with a
+/// representation that cannot hold a wrong value — an `object`, a container, a class
+/// neither build lays out, an optional — so nothing but the soundness check itself stands
+/// between the value and the caller
+const UNVERIFIED_VALUES: &str = "\
+from typing import Any
+
+
+class Box:
+    def __init__(self, v: int):
+        self.v = v
+
+
+class Other:
+    pass
+
+
+def to_int(v: Any) -> int:
+    return v
+
+
+def to_dict(v: Any) -> dict[str, int]:
+    return v
+
+
+def to_box(v: Any) -> Box:
+    return v
+
+
+def to_optional(v: Any) -> int | None:
+    return v
+
+
+def power(a: int, b: int) -> int:
+    return a ** b
+
+
+def takes(x: dict[str, int], y: int | None) -> object:
+    return (x, y)
+
+
+def passes(x: Any, y: Any) -> object:
+    return takes(x, y)
+
+
+def held(v: Any) -> object:
+    a: int | None = v
+    return a
+
+
+def unboxed(v: Any) -> object:
+    a: int = v
+    return a
+
+
+def laid_out(v: Any) -> object:
+    a: Box = v
+    return a.v
+
+
+def got(d: dict[str, int]) -> object:
+    x = d.get('k')
+    return x
+
+
+def first(xs: list[dict[str, int]]) -> object:
+    y = xs[0]
+    return y
+
+
+def last(xs: list[int | None]) -> object:
+    out: object = None
+    for x in xs:
+        out = x
+    return out
+
+
+def kept(xs: list[Box | None]) -> object:
+    return [x for x in xs]
+";
+
+#[test]
+fn a_value_nothing_verified_is_checked_where_the_interpreted_build_checks_it() {
+    // the interpreted build checks a value whose type nothing verified — an `Any`, a
+    // generic call's result, an element read out of a container — where it meets a
+    // declared type, and raises `TypeError` when it is not what the type says. a compiled
+    // module makes the same check in the same place, whatever representation the value is
+    // held in: an `int` return handed back as an object, where `int ** int` can be a
+    // float, is checked as surely as one unboxed, and an unboxing refuses in the check's
+    // own words
+    agree(
+        "unverified",
+        UNVERIFIED_VALUES,
+        &[
+            "str(_capture(m.to_int, 0.5))",
+            "(m.to_int(3), m.to_int(True))",
+            "str(_capture(m.to_dict, [1]))",
+            "m.to_dict({'a': 1})",
+            "str(_capture(m.to_box, m.Other()))",
+            "m.to_box(m.Box(4)).v",
+            "str(_capture(m.to_optional, 'x'))",
+            "(m.to_optional(None), m.to_optional(2))",
+            "str(_capture(m.power, 2, -1))",
+            "m.power(2, 3)",
+            "str(_capture(m.passes, [1], None))",
+            "str(_capture(m.passes, {}, 'x'))",
+            "m.passes({}, None)",
+            "str(_capture(m.held, 'x'))",
+            "(m.held(None), m.held(5))",
+            "str(_capture(m.unboxed, 'x'))",
+            "str(_capture(m.laid_out, 3))",
+            "m.laid_out(m.Box(6))",
+            "str(_capture(m.got, {'k': 'x'}))",
+            "(m.got({}), m.got({'k': 1}))",
+            "str(_capture(m.first, [[1]]))",
+            "m.first([{'a': 1}])",
+            "str(_capture(m.last, [1, 'x']))",
+            "m.last([1, None])",
+            "str(_capture(m.kept, [None, 3]))",
+            "[type(x).__name__ for x in m.kept([m.Box(1), None])]",
+        ],
+    );
+}
+
+#[test]
+fn with_no_soundness_checks_neither_build_checks_a_value_nothing_verified() {
+    // `--soundness none` transpiles no checks, and a compiled module then makes none
+    // either: a value only a check would have refused reaches its caller in both builds
+    agree_with_soundness(
+        "unverifiednone",
+        UNVERIFIED_VALUES,
+        &[
+            "m.to_int(0.5)",
+            "m.to_dict([1])",
+            "type(m.to_box(m.Other())).__name__",
+            "m.to_optional('x')",
+            "m.power(2, -1)",
+            "m.passes([1], 'x')",
+            "m.held('x')",
+            "m.got({'k': 'x'})",
+            "m.first([[1]])",
+            "m.last([1, 'x'])",
+            "m.kept([3])",
+        ],
+        by_transforms::SoundnessPositions::none(),
+    );
+}
+
+#[test]
+fn a_parameter_is_checked_where_the_body_begins() {
+    // the opt-in `parameters` position checks a function's own parameters as its body
+    // starts: at the call for a plain function, and at the first step for a generator,
+    // whose body does not run until then
+    agree_with_soundness(
+        "unverifiedentry",
+        "\
+from collections.abc import Iterator
+
+
+def entry(x: dict[str, int], y: int | None) -> object:
+    return (x, y)
+
+
+def produce(x: dict[str, int]) -> Iterator[object]:
+    yield x
+",
+        &[
+            "str(_capture(m.entry, [1], None))",
+            "str(_capture(m.entry, {}, 'x'))",
+            "m.entry({}, None)",
+            "str(_capture(m.produce, [1]))",
+            "str(_capture(next, m.produce([1])))",
+            "next(m.produce({'a': 1}))",
+        ],
+        by_transforms::SoundnessPositions::all(),
+    );
+}
+
+#[test]
+fn an_element_check_reads_the_classes_it_names_once_where_the_loop_begins() {
+    // `_soundness_iter` is handed the class it tests against before the first element is
+    // drawn, so a loop that rebinds that name goes on testing against the class it began
+    // with
+    agree(
+        "unverifiedrebind",
+        "\
+class Box:
+    pass
+
+
+def rebinding(xs: list[Box | None]) -> int:
+    seen = 0
+    for x in xs:
+        globals()['Box'] = int
+        seen = seen + 1
+    return seen
+",
+        &["str(_capture(m.rebinding, [m.Box(), m.Box()]))"],
+    );
 }
 
 #[test]
@@ -5742,8 +6149,7 @@ fn a_missing_attribute_raises() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_attrerr");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_attrerr");
     let source = "def f(o) -> object:\n    return o.nope\n";
     if build_source(
         source,
@@ -5773,8 +6179,7 @@ fn list_displays_agree_and_do_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_listbuild");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_listbuild");
     let source = "\
 def pair(a, b) -> object:
     return [a, b]
@@ -6177,8 +6582,7 @@ fn a_rebound_global_is_observed() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_rebind");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_rebind");
     let source = "def size(o) -> object:\n    return helper(o)\n";
     if build_source(
         source,
@@ -6521,8 +6925,7 @@ fn a_decorated_method_is_the_interpreted_one_and_its_siblings_are_not() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_methoddecoratoronce_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_methoddecoratoronce_t");
     let built = match build_source(
         MARKED_METHODS,
         "by_diff_methoddecoratoronce_t",
@@ -6607,8 +7010,7 @@ fn a_decorated_class_is_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_classdecoratoronce_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_classdecoratoronce_t");
     let built = match build_source(
         MARKED_CLASSES,
         "by_diff_classdecoratoronce_t",
@@ -6684,8 +7086,7 @@ fn a_decorated_class_named_in_a_deferred_annotation_still_compiles() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_classdecoratorannotation");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_classdecoratorannotation");
     let source = "\
 from __future__ import annotations
 
@@ -6819,8 +7220,7 @@ fn a_path_decorated_definition_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_pathdecolive");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_pathdecolive");
     let source = "\
 from __future__ import annotations
 
@@ -6904,8 +7304,7 @@ fn a_decorator_that_is_a_call_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_calldeco");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_calldeco");
     let source = "\
 MADE = []
 
@@ -6972,8 +7371,7 @@ fn a_decorator_rooted_in_the_class_body_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_classrooteddeco");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_classrooteddeco");
     let source = "\
 class Box:
     def __init__(self, n: int) -> None:
@@ -7061,8 +7459,7 @@ fn a_class_decorator_over_a_partly_filled_slot_fills_it_in() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_partialslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_partialslot");
     let source = "\
 import functools
 
@@ -7122,8 +7519,7 @@ fn a_class_decorator_applied_from_another_module_refuses_at_decoration() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_outsideslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_outsideslot");
     let source = "\
 class Ordered:
     def __init__(self, n: int) -> None:
@@ -7183,8 +7579,7 @@ fn a_class_declining_for_its_decorator_leaves_no_layout_behind() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_decorlayout");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_decorlayout");
     // `Holder` names a base, so evaluating its header reaches the module — which is what
     // leaves `Held` visible, undecorated, in the window a moved decorator opens. the base is a
     // plain class: an `ABCMeta` one would decline `Holder` for its metaclass and say nothing
@@ -7415,15 +7810,14 @@ fn a_static_or_class_method_is_the_compiled_one() {
     // identically out of its interpreted definition. `type(C.__dict__['m'])` cannot
     // say either: it is `staticmethod` on both legs.
     //
-    // the *descriptor* is what differs. a compiled static or class method is reached
-    // through a `PyCFunction`, so `type(C.m)` is `builtin_function_or_method` where the
-    // interpreted leg has a plain `function` or a bound `method` — and the class
-    // method's dict entry is a `classmethod_descriptor` rather than a `classmethod`
+    // the *callable* is what differs. a compiled static or class method is published as
+    // a compiled method inside the `staticmethod` or `classmethod`, so `type(C.m)` and
+    // `type(C.c.__func__)` are `method_descriptor` where the interpreted leg has a plain
+    // `function`
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_staticmethod_which");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_staticmethod_which");
     let source = "\
 class Box:
     @staticmethod
@@ -7457,13 +7851,13 @@ class Box:
         &dir,
         "import by_diff_staticmethod_which as m\n\
          print(type(m.Box.make).__name__, type(m.Box.__dict__['make']).__name__)\n\
-         print(type(m.Box.named).__name__, type(m.Box.__dict__['named']).__name__)\n\
+         print(type(m.Box.named.__func__).__name__, type(m.Box.__dict__['named']).__name__)\n\
          print(m.Box.make(3), m.Box.named(2))\n",
     );
     assert_eq!(
         out,
-        "builtin_function_or_method staticmethod\n\
-         builtin_function_or_method classmethod_descriptor\n\
+        "method_descriptor staticmethod\n\
+         method_descriptor classmethod\n\
          10 Box2"
     );
 }
@@ -7567,8 +7961,7 @@ fn a_class_method_the_boundary_would_hand_over_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_classmethod_defer");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_classmethod_defer");
     let source = "\
 DEFAULT = [1, 2]
 
@@ -8167,8 +8560,7 @@ fn a_compiled_frame_is_what_reaches_the_module_namespace() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_globalidentity");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_globalidentity");
     let source = "\
 inited = False
 
@@ -8225,8 +8617,7 @@ fn a_declined_function_reads_the_global_a_compiled_one_wrote() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_globaltwin");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_globaltwin");
     let source = "\
 flag = 0
 
@@ -8299,8 +8690,7 @@ fn a_second_decorator_over_a_static_method_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_staticmethod_stacked");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_staticmethod_stacked");
     let source = "\
 def mark(fn):
     fn.marked = True
@@ -8355,8 +8745,7 @@ fn string_literals_do_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_strleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_strleak");
     let source = "\
 def classify(n: int) -> str:
     scratch = \"x\" + \"y\"
@@ -8396,8 +8785,7 @@ fn a_concatenated_operand_keeps_the_callers_reference() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_strhold");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_strhold");
     let source = "\
 def join(a: str, b: str) -> str:
     return a + b
@@ -8599,8 +8987,7 @@ fn a_native_constructor_checks_its_argument_types() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_ctorcheck");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_ctorcheck");
     let source = "data class Point:\n    x: int\n    y: int\n";
     if build_source(
         source,
@@ -8622,7 +9009,10 @@ fn a_native_constructor_checks_its_argument_types() {
          except TypeError as e:\n    print('TypeError:', e)\n\
          else:\n    print('accepted a str')\n",
     );
-    assert_eq!(out, "TypeError: expected int, got str");
+    assert_eq!(
+        out,
+        "TypeError: type soundness violation: expected int, got str"
+    );
 }
 
 #[test]
@@ -8638,8 +9028,7 @@ fn importing_a_compiled_module_again_hands_back_the_module_already_imported() {
     if !supports(&toolchain, (3, 13)) {
         return;
     }
-    let dir = diff_root().join("by_diff_reimport");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_reimport");
     let source = "\
 _step = 0
 _limit = 0
@@ -8718,8 +9107,7 @@ fn importing_a_compiled_module_again_allocates_nothing_that_stays() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_reimportleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_reimportleak");
     let source = "\
 def total(n: int) -> int:
     return n + 1
@@ -8760,8 +9148,7 @@ fn a_native_class_has_a_fixed_layout() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_layout");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_layout");
     let source = "\
 data class Point:
     x: int
@@ -8827,8 +9214,7 @@ fn a_class_takes_an_attribute_its_layout_never_had() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_instdict");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_instdict");
     let options = Options {
         language: by_irbuild::Language::Python,
         ..Options::default()
@@ -8930,8 +9316,7 @@ fn writing_into_an_instance_dict_runs_nothing_but_the_write() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_dictwrites_check");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_dictwrites_check");
     let options = Options {
         language: by_irbuild::Language::Python,
         ..Options::default()
@@ -9425,8 +9810,7 @@ fn a_defaulted_field_is_answered_by_a_descriptor_of_ours() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_clsdefaultdesc");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_clsdefaultdesc");
     let options = Options {
         language: by_irbuild::Language::Python,
         ..Options::default()
@@ -9620,8 +10004,7 @@ fn the_class_that_answered_the_dict_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_instdictlive");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_instdictlive");
     if build_source(
         A_CLASS_WHOSE_DICT_IS_READ,
         "by_diff_instdictlive",
@@ -9717,8 +10100,7 @@ fn a_native_class_instance_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_classleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_classleak");
     let source = "\
 data class Holder:
     label: str
@@ -9786,8 +10168,7 @@ fn a_float_module_imports_without_any_extra_runtime_module() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_floatimport");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_floatimport");
     let source = "def area(r: float) -> float:\n    return 3.0 * r * r\n";
     if build_source(
         source,
@@ -9818,8 +10199,7 @@ fn a_compiled_function_is_a_c_function_object() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_cfunc");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_cfunc");
     let source = "def f(a: int) -> int:\n    return a\n";
     if build_source(
         source,
@@ -9865,8 +10245,7 @@ fn no_any_turns_a_gradual_decline_into_an_error() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_noany");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_noany");
 
     let source = "\
 def precise(a: int) -> int:
@@ -9918,8 +10297,7 @@ fn require_native_rejects_any_decline_at_all() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_reqnative");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_reqnative");
     // precisely typed and still declines: `except*` has no lowering
     let source = "\
 def precise(a: int) -> int:
@@ -9973,8 +10351,7 @@ fn no_any_accepts_a_fully_typed_module() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_noany_ok");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_noany_ok");
     let source = "def f(a: int, b: int) -> int:\n    return a * b\n";
     match build_source(
         source,
@@ -10020,8 +10397,7 @@ fn a_declined_function_is_reported_with_a_reason() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir: PathBuf = diff_root().join("by_diff_declined");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_declined");
 
     let source = "\
 def fast(a: int) -> int:
@@ -10109,8 +10485,7 @@ fn a_field_setter_checks_its_value() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_setcheck");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_setcheck");
     let source = "\
 data class Point:
     x: int
@@ -10156,8 +10531,7 @@ fn a_class_typed_argument_is_checked_at_the_boundary() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_argcheck");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_argcheck");
     let source = "\
 data class Point:
     x: int
@@ -10189,9 +10563,9 @@ def read(p: Point) -> int:
     );
     assert_eq!(
         out,
-        "7\nexpected by_diff_argcheck.Point, got str\n\
-         expected by_diff_argcheck.Point, got int\n\
-         expected by_diff_argcheck.Point, got NoneType"
+        "7\ntype soundness violation: expected Point, got str\n\
+         type soundness violation: expected Point, got int\n\
+         type soundness violation: expected Point, got NoneType"
     );
 }
 
@@ -10200,8 +10574,7 @@ fn a_field_read_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_fieldleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_fieldleak");
     let source = "\
 data class Holder:
     label: str
@@ -10252,8 +10625,7 @@ fn a_literal_used_in_a_loop_neither_leaks_nor_is_released_twice() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_constborrow");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_constborrow");
     let source = "\
 def kept(line: str) -> int:
     total = 0
@@ -10427,8 +10799,7 @@ fn a_borrowed_narrowing_does_not_over_release_what_it_narrowed() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_narrowborrow");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_narrowborrow");
     if build_source(
         BORROWED_NARROWINGS,
         "by_diff_narrowborrow",
@@ -10854,8 +11225,7 @@ fn the_shadowed_calls_are_answered_by_compiled_bodies() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_aloneshadowkind");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_aloneshadowkind");
     if build_source(
         A_CLASS_NOTHING_DERIVES_FROM,
         "by_diff_aloneshadowkind",
@@ -10920,8 +11290,7 @@ fn a_direct_method_call_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_methleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_methleak");
     let source = "\
 data class Holder:
     label: str
@@ -10969,8 +11338,7 @@ fn a_borrowed_intermediate_does_not_leak_or_lose_a_reference() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_borrow");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_borrow");
     let source = "\
 data class Holder:
     label: str
@@ -11055,8 +11423,7 @@ fn a_borrow_survives_a_finalizer_that_runs_a_collection() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_finalizer");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_finalizer");
     let source = "\
 data class Inner:
     label: str
@@ -11227,6 +11594,577 @@ class Snapshots:
         &[
             "m.Holder().alive()",
             "(lambda s: s.report('is '))(m.Snapshots())",
+        ],
+    );
+}
+
+#[test]
+fn a_method_read_off_an_instance_is_a_bound_method() {
+    // python binds a class's function to the instance as a `method`, whose `__func__` is
+    // the function the class holds and whose `__self__` is the instance. `WeakMethod` takes
+    // one apart into those two and rebuilds it through `type(method)`, so the parts have to
+    // be there and rebuilding from them has to call the same body
+    agree_python(
+        "boundmethod",
+        "\
+import weakref
+
+
+class Node:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def ping(self) -> int:
+        return self.v
+
+    def add(self, k: int = 1) -> int:
+        return self.v + k
+
+
+def weakly(n: Node) -> int:
+    m = weakref.WeakMethod(n.ping)
+    got = m()
+    return got() if got is not None else -1
+",
+        &[
+            "m.weakly(m.Node(3))",
+            "(lambda n: __import__('weakref').WeakMethod(n.ping)()())(m.Node(4))",
+            // a weak method dies with its instance
+            "(lambda w: (gc.collect(), w())[1])(__import__('weakref').WeakMethod(m.Node(5).ping))",
+            "(lambda n: (n.ping.__func__ is m.Node.ping, n.ping.__self__ is n, n.ping == n.ping))(m.Node(6))",
+            "(lambda n: type(n.ping)(m.Node.add, n)(k=4))(m.Node(7))",
+            "(lambda n: (m.Node.ping(n), m.Node.add(n, 2), n.add(k=3)))(m.Node(8))",
+            "(lambda n: (__import__('inspect').ismethod(n.ping), n.ping.__name__, n.ping.__qualname__))(m.Node(9))",
+            "(lambda c: (c.copy(m.Node.ping) is m.Node.ping, c.deepcopy(m.Node.add) is m.Node.add))(__import__('copy'))",
+            "__import__('weakref').ref(m.Node.ping)() is m.Node.ping",
+        ],
+    );
+}
+
+#[test]
+fn a_class_method_and_a_static_method_bind_as_a_class_statement_s_do() {
+    // python holds a `classmethod` and a `staticmethod` over a function: reading the class
+    // method off the class binds the class as a `method` with `__func__` and `__self__`,
+    // and reading the static method hands back the callable itself. a compiled class holds
+    // them the same way, over the compiled method, so `WeakMethod` takes a class method
+    // apart as it does an instance's
+    agree_python(
+        "classstatic",
+        "\
+class Root:
+    pass
+
+
+class Box(Root):
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    @classmethod
+    def make(cls, v: int) -> object:
+        return cls(v)
+
+    @staticmethod
+    def twice(v: int) -> int:
+        return v * 2
+
+
+class Sub(Box):
+    pass
+
+
+class Sealed:
+    @classmethod
+    def name(cls) -> str:
+        return cls.__name__
+
+    @staticmethod
+    def twice(v: int) -> int:
+        return v * 2
+",
+        &[
+            "(m.Box.make(3).v, type(m.Sub.make(4)).__name__, m.Box(1).make(5).v)",
+            "(m.Box.twice(4), m.Box(1).twice(5), m.Sub.twice(6), m.Sealed.twice(7), m.Sealed().twice(8))",
+            "(m.Box.make.__self__ is m.Box, m.Sub.make.__self__ is m.Sub, m.Sealed.name.__self__ is m.Sealed)",
+            "(m.Box.make.__func__ is m.Box.__dict__['make'].__func__, m.Box.twice is m.Box.__dict__['twice'].__func__)",
+            "[type(m.Box.__dict__[name]).__name__ for name in ('make', 'twice')]",
+            "[type(m.Sealed.__dict__[name]).__name__ for name in ('name', 'twice')]",
+            "(lambda i: (i.ismethod(m.Box.make), i.ismethod(m.Box.twice), m.Box.make.__name__, m.Box.make.__qualname__))(__import__('inspect'))",
+            "__import__('weakref').WeakMethod(m.Box.make)()(2).v",
+            "__import__('weakref').WeakMethod(m.Sealed.name)()()",
+            "type(m.Box.make)(m.Box.__dict__['make'].__func__, m.Sub)(9).__class__.__name__",
+        ],
+    );
+}
+
+#[test]
+fn a_method_answers_for_the_annotations_the_class_statement_evaluated() {
+    // a method of a class answers `__annotations__` with what python evaluated for the
+    // interpreted definition — on 3.14 when first asked for — whether it is an instance
+    // method, a class method or a static method
+    agree_python(
+        "methodannotations",
+        "\
+class Root:
+    pass
+
+
+class Box(Root):
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def read(self, scale: int) -> int:
+        return self.v * scale
+
+    @classmethod
+    def make(cls, v: int) -> 'Box':
+        return cls(v)
+
+    @staticmethod
+    def twice(v: int) -> int:
+        return v * 2
+
+    def later(self) -> 'Later':
+        return Later()
+
+
+class Sealed:
+    def ident[T](self, x: T) -> T:
+        return x
+
+
+class Later:
+    pass
+",
+        &[
+            "m.Box.read.__annotations__",
+            "m.Box(1).read.__annotations__",
+            "(m.Box.make.__annotations__, m.Box.twice.__annotations__)",
+            "m.Box.later.__annotations__",
+            "m.Box.read.__annotations__ is m.Box.read.__annotations__",
+            "[param.__name__ for param in m.Sealed.ident.__type_params__]",
+            "str(__import__('typing').get_type_hints(m.Box.read))",
+        ],
+    );
+}
+
+#[test]
+fn a_method_answers_for_the_def_it_was_made_from() {
+    // a compiled method stands in for the function a class statement would hold, so what
+    // that function says about its `def` is the interpreted definition's to answer: where
+    // it was defined, its defaults and code, which `inspect.signature` reads, and the
+    // globals `typing.get_type_hints` resolves a forward reference in. `functools.wraps`
+    // copies `__module__` and skips it silently where it is missing. it prints itself as a
+    // function does, a static method included, and a class a metaclass built names its
+    // own class rather than `object`
+    let Some(compiled) = agree_python_built(
+        "methoddef",
+        "\
+import abc
+
+
+class Counter:
+    def get(self, k: int = 3, *, scale: int = 1) -> int:
+        \"\"\"get doc\"\"\"
+        return k * scale
+
+    def fwd(self, other: 'Counter') -> 'Counter':
+        return other
+
+    @staticmethod
+    def twice(v: int) -> int:
+        return v * 2
+
+    @classmethod
+    def make(cls, v: int) -> int:
+        return v
+
+
+class Abstract(abc.ABC):
+    @staticmethod
+    def still(v: int) -> int:
+        return v
+
+    def read(self, v: int = 1) -> int:
+        return v
+",
+        &[
+            "(m.Counter().get.__module__, m.Counter.__dict__['get'].__module__)",
+            "(m.Counter.twice.__module__, m.Counter.make.__module__)",
+            "(m.Counter.get.__defaults__, m.Counter.get.__kwdefaults__, m.Counter().get.__defaults__)",
+            "(m.Counter.get.__code__.co_varnames, m.Counter.get.__globals__ is vars(m))",
+            "[str(__import__('inspect').signature(f)) for f in (m.Counter.get, m.Counter().get, m.Counter.twice, m.Counter.make, m.Abstract.read)]",
+            "__import__('typing').get_type_hints(m.Counter().fwd)",
+            "(lambda wrapped: (wrapped.__module__, wrapped.__qualname__, wrapped.__doc__))(__import__('functools').wraps(m.Counter.get)(lambda: 0))",
+            "__import__('pickle').loads(__import__('pickle').dumps(m.Counter().get))(2)",
+            "[repr(f).split(' at ')[0] for f in (m.Counter.get, m.Counter.twice, m.Counter.__dict__['twice'], m.Abstract.still, m.Abstract.read)]",
+            "[f.__qualname__ for f in (m.Abstract.still, m.Abstract.read)]",
+        ],
+    ) else {
+        return;
+    };
+    // the interpreted leg holds functions, so the answers above only say something where
+    // the compiled leg holds its own methods
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_methoddef as m\n\
+         print(type(m.Counter.__dict__['get']).__name__, type(m.Counter.twice).__name__,\n\
+         \x20     type(m.Abstract.__dict__['read']).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor method_descriptor method_descriptor");
+}
+
+#[test]
+fn a_method_answers_nothing_its_def_has_no_answer_to() {
+    // the builtin a compiled method's call goes to answers `__self__`, `__objclass__` and
+    // `__text_signature__`, and a function raises for all three. a `staticmethod` or a
+    // `classmethod` copies its function's names, docstring and (on 3.13) annotations when
+    // it is made, which for a compiled one has to wait for the definition it answers from
+    let Some(compiled) = agree_python_built(
+        "methodnoanswer",
+        "\
+class Counter:
+    def get(self, k: int = 3) -> int:
+        \"\"\"get doc\"\"\"
+        return k
+
+    @staticmethod
+    def twice(v: int) -> int:
+        \"\"\"twice doc\"\"\"
+        return v * 2
+
+    @classmethod
+    def make(cls, v: int) -> int:
+        \"\"\"make doc\"\"\"
+        return v
+",
+        &[
+            "[[hasattr(f, n) for n in ('__self__', '__objclass__', '__text_signature__')] for f in (m.Counter.get, m.Counter.twice, m.Counter().twice, m.Counter.make.__func__, vars(m.Counter)['twice'].__func__)]",
+            "[(w.__name__, w.__qualname__, w.__module__, w.__doc__) for w in (vars(m.Counter)['twice'], vars(m.Counter)['make'])]",
+            "[sorted(vars(w)) for w in (vars(m.Counter)['twice'], vars(m.Counter)['make'])]",
+            "[w.__annotations__ for w in (vars(m.Counter)['twice'], vars(m.Counter)['make'])]",
+            "(m.Counter.twice(2), m.Counter.make(3), m.Counter().get())",
+        ],
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_methodnoanswer as m\n\
+         print(type(m.Counter.get).__name__, type(m.Counter.twice).__name__,\n\
+         \x20     type(m.Counter.make.__func__).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor method_descriptor method_descriptor");
+}
+
+#[test]
+fn a_nested_function_answers_for_its_annotations() {
+    // python evaluates a nested function's annotations over the frames it is written in:
+    // where the `def` stands on 3.13, and when they are first asked for from 3.14. either way
+    // they, the signature `inspect` reads and the hints `typing` resolves are what the
+    // interpreted definition answers, and on 3.14 so is every format `annotationlib` asks for
+    agree_python(
+        "nestedannotations",
+        "\
+from collections.abc import Callable
+
+
+def annotated(kind: type) -> Callable[..., object]:
+    def inner(y: kind, z: int = 1, *rest: str, k: kind | None = None, **kw: 'Later') -> list[kind]:  # type: ignore
+        return [y]
+    return inner
+
+
+def plain() -> Callable[[], int]:
+    def inner() -> int:
+        return 1
+    return inner
+
+
+def bare() -> Callable[[object], object]:
+    def inner(y, z=2, *, w=3):  # type: ignore
+        return y
+    return inner
+
+
+def rebound(kind: type) -> Callable[[int], object]:
+    def inner(y: kind) -> kind:  # type: ignore
+        return y
+    kind = str
+    return inner
+
+
+def later_bound() -> Callable[[int], object]:
+    def inner(y: Kind) -> None:  # type: ignore
+        return None
+    Kind = int
+    return inner
+
+
+def deep(kind: type) -> Callable[[], Callable[[int], object]]:
+    def middle() -> Callable[[int], object]:
+        def inner(y: kind) -> kind:  # type: ignore
+            return y
+        return inner
+    return middle
+
+
+def unresolved() -> Callable[[int], object]:
+    def inner(y: missing_name) -> None:  # type: ignore
+        return None
+    return inner
+
+
+def generic() -> Callable[[int], object]:
+    def ident[T: int](x: T) -> T:
+        return x
+    return ident
+
+
+def enclosing_generic[T](v: T) -> Callable[[T], T]:
+    def keep(x: T) -> T:
+        return x
+    return keep
+
+
+class Box:
+    def make(self, scale: int) -> Callable[..., object]:
+        def inner(y: int, z: int = scale) -> int:
+            return y * z
+        return inner
+
+
+class Later:
+    pass
+",
+        &[
+            "_annotation_report(m.annotated(int))",
+            "_annotation_report(m.plain())",
+            "_annotation_report(m.bare())",
+            "_annotation_report(m.rebound(int))",
+            "isinstance(_capture(m.later_bound), NameError)",
+            "_annotation_report(m.deep(float)())",
+            "_annotation_report(m.unresolved()) if __import__('sys').version_info >= (3, 14) else type(_capture(lambda: m.unresolved().__annotations__)).__name__",
+            "_annotation_report(m.generic())",
+            "(lambda f: f.__annotations__['x'] is f.__type_params__[0])(m.generic())",
+            // annotations a build cannot supply are refused where they are asked for, and
+            // making the closure is not asking
+            "m.enclosing_generic(1)(5)",
+            "_annotation_report(m.Box().make(4))",
+            // a function's annotations are its own to write over, and on 3.14 so is the
+            // function that evaluates them
+            "(lambda f: (setattr(f, '__annotations__', {'x': 1}), f.__annotations__)[1])(m.annotated(int))",
+            "(lambda f: (setattr(f, '__annotations__', None), f.__annotations__)[1])(m.annotated(int))",
+            "(lambda f: (setattr(f, '__annotate__', lambda format: {'q': format}), f.__annotations__, f.__annotate__(2))[1:] if __import__('sys').version_info >= (3, 14) else None)(m.annotated(int))",
+            "type(_capture(setattr, m.plain(), '__type_params__', [])).__name__",
+        ],
+    );
+}
+
+#[test]
+fn a_nested_function_s_annotations_are_evaluated_when_first_asked_for() {
+    // python 3.13 evaluates a nested function's annotations where the `def` stands, and a
+    // compiled one evaluates them when they are first asked for, as 3.14 does — over the
+    // values the enclosing names held at the `def`, which 3.14 does not keep. so an
+    // annotation's effect happens at the first read and not before, and not at all once
+    // something else has been written over the annotations. on 3.14 python answers the
+    // same
+    let Some((_dir, answers)) = compiled_answers(
+        "lazyannotations",
+        "\
+from collections.abc import Callable
+
+seen: list[str] = []
+
+
+def note(label: str) -> type:
+    seen.append(label)
+    return int
+
+
+def made() -> Callable[[int], object]:
+    def inner(y: note('y')) -> None:  # type: ignore
+        return None
+    return inner
+
+
+def rebound(kind: type) -> Callable[[int], object]:
+    def inner(y: kind) -> kind:  # type: ignore
+        return y
+    kind = str
+    return inner
+",
+        Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+        &[
+            "(lambda f: (list(m.seen), f.__annotations__, list(m.seen), f.__annotations__ is f.__annotations__, list(m.seen)))(m.made())",
+            "(lambda f: (setattr(f, '__annotations__', {}), f.__annotations__, list(m.seen)))(m.made())",
+            // 3.14 reads the names when asked, 3.13 when the `def` stood
+            "m.rebound(int).__annotations__['y'] is (str if __import__('sys').version_info >= (3, 14) else int)",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(
+        answers,
+        [
+            "([], {'y': <class 'int'>, 'return': None}, ['y'], True, ['y'])",
+            "(None, {}, [])",
+            "True",
+        ]
+    );
+}
+
+#[test]
+fn a_nested_function_in_a_by_module_answers_for_the_annotations_its_twin_evaluates() {
+    // a `.by` annotation can be written in syntax python does not have, so what python
+    // evaluates is the transpiler's spelling of it
+    agree(
+        "bynestedannotations",
+        "\
+from __future__ import annotations
+
+
+class Box:
+    def make(self, scale: int) -> object:
+        def inner(y: int, z: int = 1, *rest: str, k: str? = None, **kw: (int) -> str) -> list[int]:
+            return [y * scale + z]
+        return inner
+
+
+def generic() -> object:
+    def ident[T](x: T) -> T:
+        return x
+    return ident
+
+
+def forward() -> object:
+    def later(x: Later) -> Later?:
+        return None
+    return later
+
+
+class Later:
+    pass
+",
+        &[
+            "_annotation_report(m.Box().make(3))",
+            "_annotation_report(m.generic())",
+            "_annotation_report(m.forward())",
+        ],
+    );
+}
+
+#[test]
+fn a_closure_holds_only_the_names_it_reads() {
+    // python's closure holds a cell for each name the body reads from an enclosing frame
+    // and nothing else. a method's `self` is none of those unless the body reads it, so a
+    // closure a method made must not keep the instance alive, and must not see the
+    // instance's attributes as if they were names: `read` reads the module's `label`
+    agree_python(
+        "closureholds",
+        "\
+from weakref import ref
+
+label = 'module'
+
+
+class Snapshots:
+    def __init__(self):
+        def report(prefix, selfref=ref(self)):
+            return prefix + type(selfref()).__name__
+        self.report = report
+
+
+class Labelled:
+    def __init__(self):
+        self.label = 'field'
+
+    def reader(self):
+        def read():
+            return label
+        return read
+
+    def deep(self, n):
+        def middle():
+            def inner():
+                return n + len(label)
+            return inner
+        return middle
+
+
+class Cycle:
+    def __init__(self):
+        def mine():
+            return self
+        self.mine = mine
+",
+        &[
+            "(lambda out: (out[0], out[1]('x:')))(_outlives(m.Snapshots, lambda s: s.report))",
+            "m.Labelled().reader()()",
+            "(lambda out: (out[0], out[1]()))(_outlives(m.Labelled, lambda l: l.deep(1)()))",
+            "(lambda out: (out[0], out[1]()()))(_outlives(m.Labelled, lambda l: l.deep(2)))",
+            // the instance, its function and that function's environment are a cycle
+            // with nothing outside it, which the collector has to be able to see all of
+            "_outlives(m.Cycle, lambda c: None)",
+        ],
+    );
+}
+
+#[test]
+fn a_class_whose_slots_ask_for_weak_references_agrees() {
+    // `__slots__` without `__weakref__` gives an instance no weak-reference list, and naming
+    // it gives one back, down a chain that declares it once
+    agree_python(
+        "slotsweakref",
+        "\
+import weakref
+
+
+class Tight:
+    __slots__ = ('v', '__weakref__')
+
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def get(self) -> int:
+        return self.v
+
+
+class Tighter(Tight):
+    __slots__ = ('w',)
+
+    def __init__(self, v: int) -> None:
+        super().__init__(v)
+        self.w = v + 1
+
+
+class Bare:
+    __slots__ = ('v',)
+
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+
+def referenced(t: Tight) -> bool:
+    return weakref.ref(t)() is t
+",
+        &[
+            "m.referenced(m.Tight(3))",
+            "m.referenced(m.Tighter(3))",
+            "(lambda t: (t.get(), hasattr(t, '__dict__'), type(_capture(setattr, t, 'x', 1)).__name__))(m.Tight(4))",
+            "type(_capture(__import__('weakref').ref, m.Bare(1))).__name__",
+            "(lambda out: (out[0], out[1]() is None))(_outlives(lambda: m.Tight(5), __import__('weakref').ref))",
+            "(lambda t: len(__import__('weakref').WeakSet([t])))(m.Tighter(6))",
         ],
     );
 }
@@ -11477,8 +12415,7 @@ fn a_closure_does_not_leak_its_environment() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_closureleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_closureleak");
     let source = "\
 def make(label: str) -> object:
     def get(times: int) -> str:
@@ -11522,8 +12459,7 @@ fn a_closure_environment_is_not_visible_in_the_module() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_envhidden");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_envhidden");
     let source = "\
 def make(n: int) -> object:
     def get() -> int:
@@ -11833,8 +12769,7 @@ fn a_nested_function_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_nestedwhich");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_nestedwhich");
     let built = match build_source(
         DECORATING_CLOSURES,
         "by_diff_nestedwhich",
@@ -11870,8 +12805,7 @@ fn a_raise_out_of_a_try_body_does_not_leak_what_it_wrote() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_handlerleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_handlerleak");
     let source = "\
 def guarded(words: list[str], index: int) -> str:
     held = \"held\" + words[0]
@@ -12322,8 +13256,7 @@ fn a_shared_cell_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_cellleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_cellleak");
     let source = "\
 def holder(label: str) -> ((str) -> str):
     current = label
@@ -12447,8 +13380,7 @@ fn a_generator_is_a_real_iterator_to_python() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_geniter");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_geniter");
     let source = "\
 def counted(n: int) -> object:
     i = 0
@@ -12485,10 +13417,9 @@ def counted(n: int) -> object:
 /// `require_native` is what makes the answers the *compiled* generator's: a
 /// declined function would run from its interpreted definition and leak nothing,
 /// so the test would pass without exercising anything
-fn leak_module(tag: &'static str) -> Option<(String, std::path::PathBuf)> {
+fn leak_module(tag: &'static str) -> Option<(String, Scratch)> {
     let (python, toolchain) = environment()?;
-    let dir = diff_root().join(tag);
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new(tag);
     let source = "\
 class Boom(Exception):
     pass
@@ -12725,8 +13656,7 @@ fn a_re_raise_does_not_retain_the_exception() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_reraiseleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_reraiseleak");
     let source = "\
 class Boom(Exception):
     pass
@@ -14026,8 +14956,7 @@ fn a_for_over_a_compiled_generator_is_emitted_as_its_type_s_step() {
     let Some((_python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_stepped_pin");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_stepped_pin");
     let options = Options {
         require_native: true,
         language: by_irbuild::Language::Python,
@@ -14094,8 +15023,7 @@ fn a_compiled_state_object_answers_the_send_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_sendslot_pin");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_sendslot_pin");
     let source = "\
 def counting(n: int) -> object:
     i = 0
@@ -14420,8 +15348,7 @@ fn a_state_object_tells_the_runtime_which_surface_it_is() {
     let Some((_python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_framekind_pin");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_framekind_pin");
     let source = "\
 from typing import Any
 
@@ -14540,8 +15467,7 @@ fn a_finish_is_emitted_apart_from_a_written_stop_iteration() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_finish_pin");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_finish_pin");
     let source = "\
 def bare(n: int) -> object:
     yield n
@@ -14855,8 +15781,7 @@ fn a_parked_value_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_parkleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_parkleak");
     // `label + (yield i)` holds the label across the suspension, so the state object
     // owns it for as long as the frame is parked
     let source = "\
@@ -14925,8 +15850,7 @@ fn a_coroutine_is_awaitable_and_not_iterable() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_coro");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_coro");
     let source = "\
 async def plain(n: int) -> int:
     return n * 2
@@ -14964,8 +15888,7 @@ fn a_coroutine_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_coroleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_coroleak");
     let source = "\
 async def echo(label: str) -> str:
     return label
@@ -15525,8 +16448,7 @@ fn a_string_default_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_defaultleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_defaultleak");
     let source = "\
 def padded(a: str, fill: str = \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\") -> str:
     return a + fill
@@ -15714,8 +16636,7 @@ fn a_variadic_argument_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_varleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_varleak");
     let source = "\
 def joined(*parts: str) -> int:
     total = 0
@@ -16015,8 +16936,7 @@ fn a_property_is_published_as_a_property_object() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_propobject");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_propobject");
     let source = "\
 class Box:
     def __init__(self, n: int) -> None:
@@ -16090,8 +17010,7 @@ fn a_lone_property_getter_is_published_over_the_compiled_body() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_proplone");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_proplone");
     let source = "\
 class Box:
     def __init__(self, n: int) -> None:
@@ -16152,8 +17071,7 @@ fn a_published_property_carries_the_getters_docstring() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_propdoc");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_propdoc");
     let source = "\
 class Box:
     def __init__(self, n: int) -> None:
@@ -16235,8 +17153,7 @@ fn a_property_over_an_abstract_base_is_not_left_abstract() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_propabstract");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_propabstract");
     let source = "\
 import abc
 
@@ -16327,8 +17244,7 @@ fn a_lone_property_getter_over_an_emitted_base_is_published() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_propbase");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_propbase");
     let source = "\
 class Held:
     def held(self) -> int:
@@ -16463,8 +17379,7 @@ fn a_property_reaches_a_static_type_as_well() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_propstatic");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_propstatic");
     let source = "\
 class Holder:
     def __init__(self) -> None:
@@ -16639,8 +17554,7 @@ fn a_field_of_a_class_something_extends_is_read_by_name_where_the_name_is_taken_
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_extfield_check");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_extfield_check");
     let options = Options {
         language: by_irbuild::Language::Python,
         ..Options::default()
@@ -16795,8 +17709,7 @@ fn a_property_the_backend_cannot_fold_declines() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_propdecline");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_propdecline");
     let source = "\
 def marking(fn: object) -> object:
     return fn
@@ -16955,8 +17868,7 @@ fn an_accessor_blocks_halves_are_the_compiled_bodies() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_accessorhalves");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_accessorhalves");
     let source = "\
 class Cell:
     var v: int
@@ -17157,8 +18069,7 @@ fn an_initialised_accessor_blocks_halves_are_the_compiled_bodies() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_accessorinithalves");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_accessorinithalves");
     let source = "\
 class Cell:
     var v: int = 4
@@ -17436,8 +18347,7 @@ fn an_unboxed_array_does_not_leak_its_buffer() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_arrayleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_arrayleak");
     // the buffer is `PyMem_Malloc`, not a `PyObject` — so a leak of one is invisible
     // to `gc.get_objects()` and to a refcount check. the process's own footprint is
     // the only thing that sees it
@@ -17964,10 +18874,8 @@ def counters() -> list[object]:
         out.append(get)
     return [f() for f in out]
 ";
-    let dir = diff_root().join("by_diff_pyloop");
-    let interpreted = diff_root().join("by_diff_pyloop_i");
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&interpreted);
+    let dir = Scratch::new("by_diff_pyloop");
+    let interpreted = Scratch::new("by_diff_pyloop_i");
     std::fs::create_dir_all(&interpreted).expect("the directory is created");
     std::fs::write(interpreted.join("by_diff_pyloop.py"), source).expect("written");
 
@@ -18677,8 +19585,7 @@ fn a_subclass_that_appends_nothing_is_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_appendnothing_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_appendnothing_t");
     let built = match build_source(
         APPENDED_FAMILY,
         "by_diff_appendnothing_t",
@@ -18791,8 +19698,7 @@ fn a_subclass_write_to_a_base_s_field_keeps_the_rest_of_the_module() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_basefieldwrite_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_basefieldwrite_t");
     let built = match build_source(
         WRITES_A_BASE_S_FIELD,
         "by_diff_basefieldwrite_t",
@@ -18930,8 +19836,7 @@ fn only_the_class_no_spec_can_build_is_left_interpreted() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_perclassheld_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_perclassheld_t");
     let built = match build_source(
         REFUSED_BESIDE_KEPT,
         "by_diff_perclassheld_t",
@@ -18982,8 +19887,7 @@ fn the_classes_beside_a_refused_one_lay_out_and_deallocate() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_perclassheld_d");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_perclassheld_d");
     let built = match build_source(
         REFUSED_BESIDE_KEPT,
         "by_diff_perclassheld_d",
@@ -19108,8 +20012,7 @@ fn a_module_function_stands_where_the_whole_family_stood_down() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_refusedfamily_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_refusedfamily_t");
     let built = match build_source(
         REFUSED_FAMILY,
         "by_diff_refusedfamily_t",
@@ -19227,8 +20130,7 @@ fn a_chain_of_appended_storage_deallocates_without_growing() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_appendchain_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_appendchain_t");
     let built = match build_source(
         APPENDED_CHAIN,
         "by_diff_appendchain_t",
@@ -19382,8 +20284,7 @@ fn a_chain_over_a_base_that_holds_nothing_deallocates_without_growing() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_hollowchain_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_hollowchain_t");
     let built = match build_source(
         HOLLOW_CHAIN,
         "by_diff_hollowchain_t",
@@ -19543,8 +20444,7 @@ fn a_subclass_with_no_storage_stands_on_a_base_that_declined_later() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_lostbase");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_lostbase");
     let source = "\
 class TokenList(list):
 
@@ -19729,8 +20629,7 @@ fn a_base_beside_an_outside_one_is_built_by_calling_its_metaclass() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_mixedmeta");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_mixedmeta");
     let source = "\
 import abc
 import codecs
@@ -19955,8 +20854,7 @@ fn a_class_keyed_over_a_base_this_module_emits_is_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_keyedbase_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_keyedbase_t");
     let built = match build_source(
         KEYED_OVER_AN_EMITTED_BASE,
         "by_diff_keyedbase_t",
@@ -20082,8 +20980,7 @@ fn a_class_carrying_a_decorated_method_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_metadecolive");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_metadecolive");
     let source = "\
 from abc import ABCMeta, abstractmethod
 
@@ -20138,7 +21035,7 @@ class Marked(metaclass=ABCMeta):
     assert_eq!(
         out,
         // the plain method is the compiled entry, so this class is not the twin
-        "method_descriptor classmethod_descriptor\n\
+        "method_descriptor classmethod\n\
          function function\n\
          ['area'] ABCMeta"
     );
@@ -20167,8 +21064,7 @@ class Point:
     def total(self) -> int:
         return self.x + self.y
 ";
-    let base = diff_root().join("by_diff_pkgmodule");
-    let _ = std::fs::remove_dir_all(&base);
+    let base = Scratch::new("by_diff_pkgmodule");
     let compiled_root = base.join("c");
     let interpreted_root = base.join("i");
     let compiled = compiled_root.join("by_diff_pkg");
@@ -20297,8 +21193,7 @@ fn which_build_answers_for_a_metaclass_class() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_metafields");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_metafields");
     let source = "\
 from abc import ABC, ABCMeta
 
@@ -20419,8 +21314,7 @@ fn a_metaclass_that_remakes_a_class_level_constant_is_turned_down_after_the_call
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_metaconstant");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_metaconstant");
     let source = "\
 from enum import StrEnum, auto
 
@@ -20500,8 +21394,7 @@ fn a_dunder_the_module_body_hangs_on_a_class_keeps_it_off_the_compiled_surface()
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_hungdunder");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_hungdunder");
     let source = "\
 from abc import ABCMeta
 
@@ -20599,8 +21492,7 @@ fn a_constant_that_reads_back_differently_every_time_is_not_turned_down_for_it()
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_metaunstable");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_metaunstable");
     let source = "\
 from abc import ABCMeta
 
@@ -20673,8 +21565,7 @@ fn a_metaclass_that_raises_on_the_namespace_it_is_handed_leaves_the_import_stand
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_metaraise");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_metaraise");
     let source = "\
 from collections import namedtuple
 from enum import Enum
@@ -20758,8 +21649,7 @@ fn a_class_level_constant_beside_a_base_of_ours_reaches_the_metaclass_namespace(
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_metaconstant_base");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_metaconstant_base");
     let source = "\
 import codecs
 
@@ -20842,8 +21732,7 @@ fn a_conditional_in_a_class_body_carries_across_whichever_leg_ran() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_class_conditional");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_class_conditional");
     let source = "\
 class Box:
     n: int = 0
@@ -20939,8 +21828,7 @@ fn the_shapes_a_class_body_block_is_not_lowered_for_decline() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_class_conditional_declines");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_class_conditional_declines");
     let source = "\
 on = True
 
@@ -21083,8 +21971,7 @@ fn the_outer_class_is_compiled_and_the_class_written_in_it_is_not() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_nested_class_legs");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_nested_class_legs");
     let source = "\
 def tag(cls: type) -> type:
     cls.tagged = True
@@ -21156,8 +22043,7 @@ fn a_base_a_class_written_in_a_class_body_stands_on_gives_up_its_emission() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_nested_class_emitted_base");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_nested_class_emitted_base");
     let source = "\
 class Emitted:
     def __init__(self, v: int) -> None:
@@ -21246,8 +22132,7 @@ fn the_shapes_a_class_written_in_a_class_body_is_not_lowered_for_decline() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_nested_class_declines");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_nested_class_declines");
     let source = "\
 class Dunder:
     n = 0
@@ -21322,8 +22207,7 @@ fn a_slots_declaration_reaches_the_metaclass_rather_than_the_finished_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_metaslots");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_metaslots");
     let source = "\
 from abc import ABC
 
@@ -21386,8 +22270,7 @@ fn a_class_constant_naming_another_class_reaches_the_metaclass_namespace_remappe
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_metaconstant_remap");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_metaconstant_remap");
     let source = "\
 from abc import ABCMeta
 
@@ -21451,8 +22334,7 @@ fn a_class_the_module_pops_out_of_its_own_globals_stays_off_the_compiled_surface
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_poppedclass");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_poppedclass");
     let source = "\
 from abc import ABCMeta
 
@@ -21526,8 +22408,7 @@ fn a_class_the_module_pops_out_under_a_computed_name_takes_the_whole_module_with
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_computedpop");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_computedpop");
     let source = "\
 class Gone:
     def label(self) -> str:
@@ -21602,8 +22483,7 @@ fn an_annotated_class_attribute_reaches_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_annotatedconstant");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_annotatedconstant");
     let source = "\
 class Tagged:
     KIND: str = \"tagged\"
@@ -21763,8 +22643,7 @@ fn a_late_gift_that_could_hand_the_interpreted_class_back_is_moved_onto_the_type
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_twinshapes");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_twinshapes");
     let source = "\
 class Other:
     def tag(self) -> str:
@@ -21860,8 +22739,7 @@ fn an_instance_several_names_hold_is_moved_once() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_twinshared");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_twinshared");
     let source = "\
 class Leaf:
     def __init__(self, tag: str) -> None:
@@ -21939,8 +22817,7 @@ fn an_instance_the_layout_cannot_hold_is_left_where_the_body_built_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_twinunmoved");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_twinunmoved");
     let source = "\
 class Loose:
     def __init__(self) -> None:
@@ -22012,8 +22889,7 @@ fn a_global_holding_an_instance_the_move_left_behind_is_read_as_an_object() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_globaltwin");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_globaltwin");
     let source = "\
 class Form(Exception):
     def label(self) -> str:
@@ -22119,8 +22995,7 @@ fn an_instance_carrying_a_name_the_layout_never_had_moves_with_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_twinextra");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_twinextra");
     let built = match build_source(
         AN_INSTANCE_GIVEN_A_NAME_ITS_CLASS_NEVER_MENTIONED,
         "by_diff_twinextra",
@@ -22255,8 +23130,7 @@ fn a_frozen_instance_moves_only_where_it_has_no_field_to_fill() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_twinfrozen");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_twinfrozen");
     let source = "\
 frozen data class Fixed:
     n: int
@@ -22329,10 +23203,8 @@ fn a_move_that_fails_partway_does_not_leave_a_half_written_instance_standing() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let compiled = diff_root().join("by_diff_twinhalf_c");
-    let interpreted = diff_root().join("by_diff_twinhalf_i");
-    let _ = std::fs::remove_dir_all(&compiled);
-    let _ = std::fs::remove_dir_all(&interpreted);
+    let compiled = Scratch::new("by_diff_twinhalf_c");
+    let interpreted = Scratch::new("by_diff_twinhalf_i");
     let source = "\
 class Load:
     def __init__(self) -> None:
@@ -22521,8 +23393,7 @@ fn a_class_attribute_naming_a_module_function_keeps_the_definition_that_binds() 
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_fntwinbind");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_fntwinbind");
     let source = "\
 def _dump(this: object) -> str:
     return \"dumped\"
@@ -22590,8 +23461,7 @@ fn a_declined_class_keeps_the_dunder_slot_a_module_function_filled() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_fntwindunder");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_fntwindunder");
     // the late gift is the decline lever, and a *dunder* one is what turns the class down
     // rather than having its attributes adopted — see the twin-shapes test above. it is
     // here to put `Option` on the interpreted leg, which is where `optparse` has it
@@ -22668,8 +23538,7 @@ fn a_container_entry_a_decorator_later_installs_on_a_class_keeps_binding() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_fntwinconvert");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_fntwinconvert");
     // the late dunder gift turns `Ordered` down, which is the only state `total_ordering`
     // can act on at all: an emitted type is a *static* type and refuses `setattr`
     // outright with `cannot set '__gt__' attribute of immutable type`. so this is also
@@ -22848,8 +23717,7 @@ fn a_module_level_name_that_only_reaches_a_definition_keeps_what_the_body_put_th
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_fntwinhashed");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_fntwinhashed");
     let source = "\
 def proxy() -> int:
     return 7
@@ -22913,8 +23781,7 @@ fn a_module_function_installed_on_a_class_after_import_binds() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_fnnobind");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_fnnobind");
     let source = "\
 def _gt_from_lt(this: object, other: object) -> str:
     return \"gt\"
@@ -23018,6 +23885,174 @@ def made_bare(cls: type) -> object:
             "str(_capture(lambda: m.made_bare(type('S', (m.Made,), {}))._v))",
             "type('S', (m.Made,), {})()._v",
         ],
+    );
+}
+
+#[test]
+fn object_new_allocates_a_compiled_class() {
+    // `object.__new__(cls)` is how a written `__new__` in a subclass, and a good deal of
+    // library code, gets a bare instance. python refuses it only for a class whose
+    // allocation belongs to a base written in C, so a compiled class leaves its allocation to
+    // `object` the way a class statement does — and the block still starts with its `int`
+    // fields unset
+    agree_python(
+        "objectnew",
+        "\
+class Node:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def ping(self) -> int:
+        return self.v
+
+
+class Named:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class Leaf:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+
+class Sub(Node):
+    def twice(self) -> int:
+        return self.v * 2
+
+
+class Wrapped:
+    def __init__(self) -> None:
+        self.__wrapped__ = 1
+
+    @property
+    def value(self) -> int:
+        return self.__wrapped__ * 2
+
+
+def bare(cls: type) -> object:
+    return object.__new__(cls)
+",
+        &[
+            "type(object.__new__(m.Node)).__name__",
+            "str(_capture(lambda: object.__new__(m.Node).v))",
+            "str(_capture(lambda: object.__new__(m.Node).ping()))",
+            "(lambda n: (n.__init__(4), n.ping())[1])(object.__new__(m.Node))",
+            "str(_capture(lambda: object.__new__(m.Named).name))",
+            "(lambda n: (n.__init__('x'), n.name)[1])(object.__new__(m.Named))",
+            "str(_capture(lambda: object.__new__(m.Sub).twice()))",
+            // a class nothing extends is immutable, and publishes its allocation all the same
+            "str(_capture(lambda: object.__new__(m.Leaf).n))",
+            "(lambda n: (n.__init__(2), n.n)[1])(object.__new__(m.Leaf))",
+            "m.Leaf(3).n",
+            // and so does a class built as a static struct
+            "str(_capture(lambda: object.__new__(m.Wrapped).value))",
+            "(lambda w: (w.__init__(), w.value)[1])(object.__new__(m.Wrapped))",
+            "str(_capture(lambda: m.bare(m.Node).v))",
+            "type(m.bare(m.Sub)).__name__",
+            "(lambda n: (n.__init__(5), n.twice())[1])(m.bare(m.Sub))",
+            // a subclass whose own `__new__` asks `object` for the instance
+            "str(_capture(lambda: type('S', (m.Node,), {'__new__': lambda cls, v: object.__new__(cls)})(3).v))",
+            "str(_capture(lambda: type('S', (m.Node,), {'__new__': lambda cls, v: object.__new__(cls)})(3).ping()))",
+            "m.Node.__new__(m.Node).__class__.__name__",
+            "str(_capture(lambda: m.Node.__new__(m.Node).v))",
+            "(lambda c: c.copy(m.Node(6)).v)(__import__('copy'))",
+        ],
+    );
+}
+
+/// run a class statement's worth of python against the module and hand back what it bound
+/// to `result`
+const SUBCLASS_AGAINST: &str =
+    "(lambda source: (g := dict(globals(), m=m), exec(source, g), g['result'])[2])";
+
+#[test]
+fn a_subclass_is_handed_the_allocator_as_it_is_made() {
+    // an interpreted subclass gets python's generic allocator from `type.__new__`, and a
+    // compiled class's `int` field reads unset only from an allocation that writes the
+    // unset marker. the class's published `__new__` hands a subclass that allocator on the
+    // way to an instance, but `object.__new__(cls)` reaches the subclass's allocator without
+    // passing it — so a subclass is handed it as it is made, by an `__init_subclass__` that
+    // goes on up the chain with every argument the class statement passed. a subclass whose
+    // own `__init_subclass__` chains up with `super()` reaches it too
+    let hooked = format!(
+        "{SUBCLASS_AGAINST}(\"\"\"
+class Hooking(m.Made):
+    seen = []
+    def __init_subclass__(cls, **kw):
+        Hooking.seen.append(sorted(kw))
+        super().__init_subclass__()
+class Deeper(Hooking, flag=1):
+    pass
+result = (Hooking.seen, str(_capture(lambda: object.__new__(Deeper).count)))
+\"\"\")"
+    );
+    agree_python(
+        "subclasshook",
+        "\
+class Root:
+    pass
+
+
+class Made(Root):
+    def __init__(self) -> None:
+        self.count = 1
+
+    def read(self) -> int:
+        return self.count
+",
+        &[
+            "str(_capture(lambda: object.__new__(type('Plain', (m.Made,), {})).count))",
+            "str(_capture(lambda: object.__new__(type('Plain', (m.Made,), {})).read()))",
+            "(lambda S: (str(_capture(lambda: S.__new__(S).count)), S().count))(type('Own', (m.Made,), {'__new__': lambda cls: object.__new__(cls)}))",
+            &hooked,
+            "str(_capture(lambda: type('Keyword', (m.Made,), {}, flag=1)))",
+            "(m.Made().count, type('Plain', (m.Made,), {})().read())",
+        ],
+    );
+}
+
+#[test]
+fn a_subclass_hook_that_does_not_chain_up_keeps_the_allocator_from_what_extends_it() {
+    // the two things the published `__init_subclass__` leaves telling the builds apart,
+    // both documented: the entry is in the class's own dict, and a subclass whose own hook
+    // never calls `super().__init_subclass__()` keeps it from the classes made on top of it
+    // until one of them is constructed through the compiled `__new__`
+    let quiet = format!(
+        "{SUBCLASS_AGAINST}(\"\"\"
+class Quiet(m.Made):
+    def __init_subclass__(cls):
+        pass
+class Below(Quiet):
+    pass
+result = (object.__new__(Below).count, Below().count, str(_capture(lambda: object.__new__(Below).count)))
+\"\"\")"
+    );
+    let Some((_dir, answers)) = compiled_answers(
+        "subclassquiet",
+        "\
+class Root:
+    pass
+
+
+class Made(Root):
+    def __init__(self) -> None:
+        self.count = 1
+",
+        Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+        &["'__init_subclass__' in vars(m.Made)", &quiet],
+    ) else {
+        return;
+    };
+    assert_eq!(
+        answers,
+        [
+            "True",
+            "(0, 1, \"'Below' object has no attribute 'count'\")"
+        ]
     );
 }
 
@@ -23129,8 +24164,7 @@ fn a_class_keeps_what_a_factory_installed_on_it_after_the_class_statement() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_late_factory");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_late_factory");
     let source = "\
 class Other:
     def tag(self) -> str:
@@ -23293,8 +24327,7 @@ fn an_annotation_that_could_hand_the_interpreted_class_back_is_refused() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_annreach");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_annreach");
     let source = "\
 class Node:
     def tag(self) -> str:
@@ -23382,8 +24415,7 @@ fn an_annotation_that_never_resolves_is_refused_rather_than_emptied() {
     if !supports(&toolchain, (3, 14)) {
         return;
     }
-    let dir = diff_root().join("by_diff_annlost");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_annlost");
     let source = "\
 class Node:
     later: Never
@@ -23450,8 +24482,7 @@ fn a_class_that_keeps_a_dunder_of_its_own_stays_a_static_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_anndunder");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_anndunder");
     let source = "\
 class Keeps:
     held: int
@@ -23527,8 +24558,7 @@ fn a_subclass_of_a_class_the_metaclass_gate_turns_down_is_built_here() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_gatedbase");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_gatedbase");
     let source = "\
 from abc import ABCMeta
 
@@ -23622,8 +24652,7 @@ fn a_pair_the_body_cross_links_agrees_when_the_link_is_made_after_the_class_stat
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_gatedpair");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_gatedpair");
     let source = "\
 class Root:
     def kind(self) -> str:
@@ -23717,8 +24746,7 @@ fn a_private_name_in_a_class_body_is_mangled() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_privatemangle");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_privatemangle");
     let source = "\
 class _Printer:
     __LIMIT = 4
@@ -23782,8 +24810,7 @@ fn an_annotated_class_level_value_beside_a_field_is_the_same_fallback() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_constantfieldclash");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_constantfieldclash");
     let source = "\
 class Tagged:
     KIND: str = \"class-level\"
@@ -23850,8 +24877,7 @@ fn a_decorated_class_carries_the_body_its_own_decorator_was_handed() {
         return;
     };
     let one = |tag: &str, source: &str, script: &str| -> Option<String> {
-        let dir = diff_root().join(format!("by_diff_{tag}"));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = Scratch::new(format!("by_diff_{tag}"));
         let built = match build_source(
             source,
             tag,
@@ -23951,8 +24977,7 @@ fn the_class_body_capture_reaches_only_this_module_s_own_body() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_capturescope");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_capturescope");
     let source = "\
 class Held:
     kind = \"module\"
@@ -24030,8 +25055,7 @@ fn fields_past_a_python_base_leave_that_class_to_its_interpreted_definition() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_pythonbasestorage");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_pythonbasestorage");
     let source = "\
 import codecs
 
@@ -24115,8 +25139,7 @@ fn a_spec_that_cannot_place_the_dict_leaves_the_module_to_its_interpreted_defini
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_specdictplacement");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_specdictplacement");
     let source = "\
 import codecs
 
@@ -24183,8 +25206,7 @@ fn a_finalizer_over_fields_answers_for_a_construction_that_raised() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_finalizerfields");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_finalizerfields");
     let source = "\
 class Held:
     def __init__(self, path: str) -> None:
@@ -24263,8 +25285,7 @@ fn a_dict_offset_from_a_base_that_does_not_own_the_layout_keeps_the_interpreted_
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_borrowedoffset");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_borrowedoffset");
     let source = "\
 import codecs
 
@@ -24331,8 +25352,7 @@ fn a_class_whose_base_declined_declines_with_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_declinedbase");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_declinedbase");
     let source = "\
 class Outer:
     def __new__(cls):
@@ -24411,8 +25431,7 @@ fn a_base_an_interpreted_class_extends_declines_with_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_interpretedsub");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_interpretedsub");
     let source = "\
 class Container:
     def __init__(self, tag: str) -> None:
@@ -24518,8 +25537,7 @@ fn a_base_a_class_under_a_module_level_block_extends_declines_with_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_blockguard");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_blockguard");
     let source = "\
 class Base:
     def __init__(self, name: str) -> None:
@@ -24611,8 +25629,7 @@ fn a_zero_argument_super_is_lowered_to_the_two_argument_form() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_zerosuper");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_zerosuper");
     let source = "\
 class Holder(dict):
     def __init__(self) -> None:
@@ -24685,8 +25702,7 @@ fn a_zero_argument_super_follows_the_mro_of_the_instance() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_supermro");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_supermro");
     let source = "\
 class A:
     def go(self) -> str:
@@ -24749,8 +25765,7 @@ fn a_zero_argument_super_names_the_class_the_class_statement_made() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_superowner");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_superowner");
     let source = "\
 class Base:
     def lbl(self) -> str:
@@ -24815,8 +25830,7 @@ fn a_zero_argument_super_declines_where_slot_zero_is_not_the_receiver() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_supernoslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_supernoslot");
     let source = "\
 class A:
     def go(self) -> str:
@@ -24981,8 +25995,7 @@ fn a_shadowed_super_is_called_the_way_python_calls_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_supershadow");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_supershadow");
     let source = "\
 def super() -> str:
     return \"shadow\"
@@ -27448,7 +28461,7 @@ fn a_close_with_nothing_to_run_has_the_unwinding_s_effects() {
     let quiet = probe("one", "looped");
     let handled = probe("one_handled", "looped_handled");
     let calls: Vec<&str> = quiet.iter().chain(&handled).map(String::as_str).collect();
-    let Some(answers) = compiled_answers(
+    let Some((_dir, answers)) = compiled_answers(
         "quietcloseeffects",
         QUIET_CLOSES,
         Options {
@@ -28063,8 +29076,7 @@ fn python_cannot_make_or_remake_a_closure_environment() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_envforged");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_envforged");
     let source = "\
 from collections.abc import Callable
 
@@ -28750,6 +29762,96 @@ def nothing(v: object) -> str:
 }
 
 #[test]
+fn a_class_pattern_believes_the_class_an_object_claims() {
+    // a class pattern tests its subject with `isinstance`, which believes an object's
+    // `__class__`. so an object claiming to be a `Point` matches `case Point(...)` and has
+    // its attributes looked up, where one whose type really is `Point` has them read at
+    // their offsets — and an attribute the claimant lacks is no match, as it is for any
+    // subject
+    let Some(compiled) = agree_python_built(
+        "claimedclass",
+        "\
+class Point:
+    __match_args__ = ('x', 'y')
+
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+
+class Claims:
+    @property
+    def __class__(self) -> type:
+        return Point
+
+    x = 5
+    y = 7
+
+
+class ClaimsHalf:
+    @property
+    def __class__(self) -> type:
+        return Point
+
+    x = 5
+
+
+def keyword(v: object) -> str:
+    match v:
+        case Point(x=x):
+            return 'point ' + str(x)
+        case _:
+            return 'other'
+
+
+def positional(v: object) -> int:
+    match v:
+        case Point(a, b) if a > b:
+            return a - b
+        case Point(a, b):
+            return a + b
+        case _:
+            return -1
+
+
+def literal(v: object) -> str:
+    match v:
+        case Point(0, y):
+            return 'zero ' + str(y)
+        case Point(x, 7):
+            return 'seven ' + str(x)
+        case _:
+            return 'none'
+",
+        &[
+            "[f(v) for f in (m.keyword, m.positional, m.literal) for v in (m.Point(9, 2), m.Point(0, 7), m.Claims(), m.ClaimsHalf(), 3)]",
+        ],
+    ) else {
+        return;
+    };
+    // an object that claims the class but holds some other type under a field the class
+    // keeps unboxed cannot be bound into the name that field's reads bind — the edge
+    // `runtime.md` documents as a place laid out as `int` needing its representation
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_claimedclass as m\n\
+         class Text:\n\
+         \x20   __class__ = property(lambda self: m.Point)\n\
+         \x20   x = 'five'\n\
+         \x20   y = 7\n\
+         try:\n\
+         \x20   m.keyword(Text())\n\
+         except TypeError as e:\n\
+         \x20   print(e)\n",
+    );
+    assert_eq!(out, "type soundness violation: expected int, got str");
+}
+
+#[test]
 fn a_class_pattern_over_a_base_agrees() {
     // a class another one in the module extends is emitted as a mutable heap type:
     // python can write to it, and `__match_args__` is one of the names it could rebind.
@@ -29320,8 +30422,7 @@ fn a_constructor_that_defers_is_still_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_computedinitslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_computedinitslot");
     let source = "\
 _sentinel = object()
 
@@ -29755,8 +30856,7 @@ fn the_power_dunder_is_answered_by_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_powslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_powslot");
     let source = "\
 class Mod:
     def __init__(self, n: int) -> None:
@@ -30719,8 +31819,7 @@ fn a_complex_conversion_is_answered_by_the_compiled_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_complexslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_complexslot");
     let source = "\
 class Cell:
     def __init__(self, n: int) -> None:
@@ -30765,8 +31864,7 @@ fn an_await_method_fills_the_async_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_awaitslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_awaitslot");
     // the awaited iterator is a class of its own rather than a generator, so what
     // this exercises is `am_await` alone
     let source = "\
@@ -30835,8 +31933,7 @@ fn a_del_method_fills_the_finalizer_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_delslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_delslot");
     let source = "\
 class Closer:
     def __init__(self, log: list[str], tag: str) -> None:
@@ -30923,8 +32020,7 @@ fn a_getattr_hook_stands_behind_the_ordinary_lookup() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_getattrhook");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_getattrhook");
     let source = "\
 class Proxy:
     def __init__(self, tag: str) -> None:
@@ -30994,8 +32090,7 @@ fn a_descriptor_get_fills_its_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_descrget");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_descrget");
     let source = "\
 class Doubler:
     def __init__(self, base: int) -> None:
@@ -31485,10 +32580,8 @@ def total(xs: list[float]) -> float:
 def sliced(xs: list[int]) -> str:
     return str(xs[1:3])
 ";
-    let dir = diff_root().join("by_diff_plainpy");
-    let interpreted = diff_root().join("by_diff_plainpy_i");
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&interpreted);
+    let dir = Scratch::new("by_diff_plainpy");
+    let interpreted = Scratch::new("by_diff_plainpy_i");
     std::fs::create_dir_all(&interpreted).expect("the directory is created");
     std::fs::write(interpreted.join("by_diff_plainpy.py"), source).expect("written");
 
@@ -31768,8 +32861,7 @@ fn a_compiled_data_class_matches_positionally_from_python() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_dcmatchout");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_dcmatchout");
     if build_source(
         A_PAIR_AND_A_POINT,
         "by_diff_dcmatchout",
@@ -31846,8 +32938,7 @@ fn the_generated_dataclass_members_are_slots_of_the_emitted_type() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_dcslots");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_dcslots");
     if build_source(
         A_PAIR_AND_A_POINT,
         "by_diff_dcslots",
@@ -32248,8 +33339,7 @@ fn a_subscripted_receiver_of_the_wrong_class_still_raises() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_dispatchcheck");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_dispatchcheck");
     let source = "\
 class Shape:
     def __init__(self, size: int):
@@ -32295,10 +33385,10 @@ def first_area(shapes: list[Shape]) -> int:
     assert_eq!(
         out,
         "5 25\n\
-         TypeError: expected by_diff_dispatchcheck.Shape, got object\n\
-         TypeError: expected by_diff_dispatchcheck.Shape, got int\n\
-         TypeError: expected by_diff_dispatchcheck.Shape, got NoneType\n\
-         TypeError: expected by_diff_dispatchcheck.Shape, got Duck"
+         TypeError: type soundness violation: expected Shape, got object\n\
+         TypeError: type soundness violation: expected Shape, got int\n\
+         TypeError: type soundness violation: expected Shape, got NoneType\n\
+         TypeError: type soundness violation: expected Shape, got Duck"
     );
 }
 
@@ -32312,8 +33402,7 @@ fn a_dispatched_call_does_not_run_an_argument_before_checking_its_receiver() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_dispatchorder");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_dispatchorder");
     let source = "\
 LOG = []
 
@@ -32366,7 +33455,7 @@ def scale_first(shapes: list[Shape]) -> int:
     assert_eq!(
         out,
         "10 50\n\
-         TypeError: expected by_diff_dispatchorder.Shape, got object\n\
+         TypeError: type soundness violation: expected Shape, got object\n\
          argument ran: 0"
     );
 }
@@ -32441,8 +33530,7 @@ fn a_subclass_that_writes_no_init_inherits_the_slot() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_inheritedinitslot");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_inheritedinitslot");
     let source = "\
 LOG = []
 
@@ -32599,8 +33687,7 @@ fn a_slots_declaration_is_storage_the_emitted_type_owns() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_slotsowned");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_slotsowned");
     let built = match build_source(
         SLOTTED,
         "by_diff_slotsowned",
@@ -32806,8 +33893,7 @@ fn a_decorated_class_is_the_compiled_one_and_its_dict_is_collectable() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_decoratedlive");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_decoratedlive");
     // `from __future__ import annotations` is what keeps `through`'s parameter from
     // evaluating `Derived` where the `def` stands, which is inside the window every
     // decorated definition above it is in until module init closes it.
@@ -34837,8 +35923,7 @@ fn a_module_level_name_bound_to_a_class_follows_the_class_it_named() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_classalias");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_classalias");
     let source = "\
 class C:
     def hi(self) -> int:
@@ -34901,8 +35986,7 @@ fn a_class_constant_naming_another_class_is_the_type_that_replaced_it() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_classconst");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_classconst");
     let source = "\
 class C:
     def hi(self) -> int:
@@ -34997,8 +36081,7 @@ fn an_alias_reaches_the_compiled_type_rather_than_the_twin() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_aliasbase_type");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_aliasbase_type");
     let source = "\
 class Root:
     def root(self) -> str:
@@ -35056,8 +36139,7 @@ fn an_alias_does_not_carry_a_base_this_module_lays_out_past_the_gate() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_aliaslaid");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_aliaslaid");
     let source = "\
 import codecs
 
@@ -35500,8 +36582,7 @@ fn the_compiled_types_are_what_answer_for_every_write_shape() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_attrshapes_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_attrshapes_t");
     let built = match build_source(
         ATTRIBUTE_WRITE_SHAPES,
         "by_diff_attrshapes_t",
@@ -35585,8 +36666,7 @@ fn only_the_class_that_reads_its_own_dict_is_left_interpreted() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_attrdict_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_attrdict_t");
     let built = match build_source(
         READS_ITS_OWN_DICT,
         "by_diff_attrdict_t",
@@ -35689,8 +36769,7 @@ fn the_class_that_deletes_an_attribute_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_deleteattr_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_deleteattr_t");
     let built = match build_source(
         DELETES_AN_ATTRIBUTE,
         "by_diff_deleteattr_t",
@@ -35732,8 +36811,7 @@ fn deleting_an_attribute_releases_it_exactly_once() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_deleterefs_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_deleterefs_t");
     let built = match build_source(
         DELETES_AN_ATTRIBUTE,
         "by_diff_deleterefs_t",
@@ -35866,8 +36944,7 @@ fn the_nested_function_reaching_the_receiver_is_in_the_compiled_init() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_nestedself_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_nestedself_t");
     let built = match build_source(
         "\
 class Held:
@@ -35951,8 +37028,7 @@ fn the_class_a_classmethod_write_declines_is_the_interpreted_one() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_clswrite_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_clswrite_t");
     let built = match build_source(
         WRITES_ON_THE_CLASS,
         "by_diff_clswrite_t",
@@ -36124,8 +37200,7 @@ fn the_class_an_assigned_dunder_fills_a_slot_on_is_compiled() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_assigneddunder_t");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_assigneddunder_t");
     let built = match build_source(
         ASSIGNED_DUNDERS,
         "by_diff_assigneddunder_t",
@@ -36315,8 +37390,7 @@ fn a_borrowed_tuple_element_does_not_move_its_source_references() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_elements_rc");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_elements_rc");
     if build_source(
         BORROWED_ELEMENTS,
         "by_diff_elements_rc",
@@ -37339,8 +38413,7 @@ fn a_dispatch_table_holds_the_compiled_methods_the_type_publishes() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_dispatchtablekind");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_dispatchtablekind");
     let built = match build_source(
         A_DISPATCH_TABLE,
         "by_diff_dispatchtablekind",
@@ -37559,8 +38632,7 @@ fn the_str_of_an_int_boxes_nothing_and_still_resolves_the_name() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_strofint_shape");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_strofint_shape");
     // nothing is concatenated onto the digits, so this is the conversion on its own
     // — a prefix in front of it would be fused further still, into `By_StrConcatInt`
     let source = "\
@@ -37606,8 +38678,7 @@ fn the_str_of_an_int_in_a_loop_does_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_strofintleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_strofintleak");
     let source = "\
 def build(n: int, base: int) -> str:
     last = ''
@@ -37645,8 +38716,7 @@ fn a_prefix_and_the_digits_of_an_int_take_one_allocation() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_strconcatint_shape");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_strconcatint_shape");
     let source = "\
 def keys(n: int) -> str:
     last = 'k'
@@ -37719,8 +38789,7 @@ fn an_intermediate_the_program_can_still_see_is_not_fused_away() {
     let Some((_, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_strconcatint_shared");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_strconcatint_shared");
     let source = "\
 def twice(i: int) -> str:
     t = str(i)
@@ -37768,8 +38837,7 @@ fn fusing_a_prefix_onto_the_digits_raises_what_python_raises_for_a_bad_str() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_strconcatint_badstr");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_strconcatint_badstr");
     let source = "\
 from typing import Any
 
@@ -37822,7 +38890,7 @@ def unfused(n: int) -> str:
     assert_eq!(
         out,
         "TypeError: can only concatenate str (not \"int\") to str\n\
-         differs: TypeError: expected str, got int"
+         differs: TypeError: type soundness violation: expected str, got int"
     );
 }
 
@@ -37949,8 +39017,7 @@ fn a_prefix_and_the_digits_in_a_loop_do_not_leak() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_strconcatintleak");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_strconcatintleak");
     let source = "\
 def build(n: int, base: int) -> str:
     last = ''
@@ -38195,6 +39262,71 @@ def packed_at_the_top(n: int) -> int:
 }
 
 #[test]
+fn a_packed_buffer_refuses_an_index_in_the_words_a_list_does() {
+    // a list whose elements are stored unboxed checks its own bounds, so it owes the
+    // messages `list` raises: a store says `list assignment index out of range` where a
+    // read says `list index out of range`, and an index too big for `Py_ssize_t` is
+    // refused for that before it is ever compared with the length, on both sides. a
+    // counter the loop holds as a machine integer reaches the same check by another
+    // helper, so it is asked the same questions
+    let Some(compiled) = agree_in(
+        "packedindex",
+        "\
+def read_at(k: int) -> bool:
+    flags = []
+    i = 0
+    while i < 4:
+        flags.append(True)
+        i = i + 1
+    return flags[k]
+
+
+def write_at(k: int) -> int:
+    flags = []
+    i = 0
+    while i < 4:
+        flags.append(True)
+        i = i + 1
+    flags[k] = False
+    return len(flags)
+
+
+def write_counted(start: int, n: int) -> int:
+    flags = [True, True]
+    j = start
+    while j < n:
+        flags[j] = False
+        j = j + 1
+    return len(flags)
+",
+        &[
+            "[m.read_at(k) for k in (0, 3, -1, -4, True)]",
+            "[m.write_at(k) for k in (0, 3, -1, -4, True)]",
+            "[(type(e).__name__, str(e)) for k in (4, -5, 2**62 - 1, -2**62, 2**62, -2**62 - 1, 2**63 - 1, -2**63, 2**63, -2**63 - 1, 2**70) for e in [_capture(m.read_at, k)]]",
+            "[(type(e).__name__, str(e)) for k in (4, -5, 2**62 - 1, -2**62, 2**62, -2**62 - 1, 2**63 - 1, -2**63, 2**63, -2**63 - 1, 2**70) for e in [_capture(m.write_at, k)]]",
+            "m.write_counted(-2, 2)",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.write_counted, 0, 3)]]",
+            "[(type(e).__name__, str(e)) for e in [_capture(m.write_counted, -3, 0)]]",
+        ],
+        false,
+        by_irbuild::Language::Python,
+    ) else {
+        return;
+    };
+    // the answers only say the buffer's own check was asked if the buffer was built, so
+    // the helpers each access reaches are asserted too
+    let c = std::fs::read_to_string(compiled.join("by_diff_packedindex.c"))
+        .expect("the emitted C is kept");
+    for helper in [
+        "By_ArrayIndex(",
+        "By_ArrayStoreIndex(",
+        "By_ArrayStoreIndexI64(",
+    ] {
+        assert!(c.contains(helper), "no `{helper}` in the emitted C");
+    }
+}
+
+#[test]
 fn an_unboxed_counter_indexes_every_container_and_every_edge() {
     // a counter a loop steps by one gets a machine representation, and a subscript
     // now reads the element at that number directly rather than making it a tagged
@@ -38284,7 +39416,7 @@ fn a_value_a_name_held_is_dropped_when_the_name_is_rebound() {
     // or not anything reads the name again, whatever the name is annotated as, and
     // however the value reached the name — a constructor, a call, or an element of a
     // tuple a call answered
-    agree_python(
+    let compiled = agree_python_built(
         "namerebind",
         "\
 log: list[str] = []
@@ -38464,10 +39596,12 @@ def through_a_tuple(second: Linked) -> int:
         ],
     );
     // a class that fell back to its interpreted definition would agree as well
-    if let Some((python, _)) = environment() {
+    if let Some(compiled) = compiled
+        && let Some((python, _)) = environment()
+    {
         let out = run(
             &python,
-            &diff_root().join("by_diff_namerebind_c"),
+            &compiled,
             "import by_diff_namerebind as m\n\
              print(m.__file__.endswith(('.so', '.pyd')), type(m.Cell.__dict__['__del__']).__name__, \
              type(m.Slotted.__dict__['__del__']).__name__)\n",
@@ -38590,7 +39724,7 @@ fn a_builtin_the_module_rebinds_is_the_one_called() {
     // take a native path only while the name still resolves to the interpreter's own
     // builtin. a module attribute written from outside — which is what
     // `mock.patch('mod.len')` does — is what python calls instead
-    agree_python(
+    let compiled = agree_python_built(
         "rebuiltin",
         "\
 import sys
@@ -38691,10 +39825,12 @@ def patched(name: str, value: object, call: Callable[[], object]) -> object:
             "[m.Child().who(), m.patched('super', lambda *a: type('S', (), {'who': lambda self: 'fake' + str(len(a))})(), lambda: m.Child().who())]",
         ],
     );
-    if let Some((python, _)) = environment() {
+    if let Some(compiled) = compiled
+        && let Some((python, _)) = environment()
+    {
         let out = run(
             &python,
-            &diff_root().join("by_diff_rebuiltin_c"),
+            &compiled,
             "import by_diff_rebuiltin as m\n\
              print(m.__file__.endswith(('.so', '.pyd')), type(m.Child.__dict__['who']).__name__)\n\
              # a list held as a buffer has no list object to hand a rebound `len`, and a\n\
@@ -39136,7 +40272,7 @@ fn an_instance_made_without_init_has_no_fields_until_they_are_assigned() {
     // `AttributeError`, wherever it is read from, and the instance's `__dict__`,
     // `vars()` and `__getstate__` list only what it has. `copy` and `pickle` build their
     // copies exactly that way and then fill them in
-    agree_python(
+    let compiled = agree_python_built(
         "unsetfields",
         "\
 class Fields:
@@ -39269,10 +40405,12 @@ def by_keyword(value: object) -> int:
             "[m.by_keyword(m.Point(1, 2)), m.by_keyword(m.Point.__new__(m.Point)), m.by_keyword(0)]",
         ],
     );
-    if let Some((python, _)) = environment() {
+    if let Some(compiled) = compiled
+        && let Some((python, _)) = environment()
+    {
         let out = run(
             &python,
-            &diff_root().join("by_diff_unsetfields_c"),
+            &compiled,
             "import by_diff_unsetfields as m\n\
              print(m.__file__.endswith(('.so', '.pyd')), type(m.P.__dict__['size']).__name__, \
              type(m.Money.__dict__['__lt__']).__name__)\n",
@@ -39560,8 +40698,7 @@ fn a_written_new_is_the_one_the_compiled_type_runs() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_writtennewkind");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_writtennewkind");
     let built = match build_source(
         WRITTEN_NEW,
         "by_diff_writtennewkind",
@@ -39797,8 +40934,7 @@ fn the_docstrings_are_read_off_compiled_definitions() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_docstringkind");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_docstringkind");
     let built = match build_source(
         DOCUMENTED,
         "by_diff_docstringkind",
@@ -39889,8 +41025,7 @@ fn a_published_forwarder_answers_as_the_definition_it_stands_for() {
     let Some((python, toolchain)) = environment() else {
         return;
     };
-    let dir = diff_root().join("by_diff_forwardersurface");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_diff_forwardersurface");
     let source = "\
 import inspect
 
@@ -40543,8 +41678,7 @@ fn a_licensed_call_re_asks_its_lookup_under_the_mode() {
     let mut written = Vec::new();
     for recheck in [false, true] {
         let tag = format!("by_diff_licencerecheck_{}", u8::from(recheck));
-        let dir = diff_root().join(&tag);
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = Scratch::new(&tag);
         let built = match build_source(
             LICENSED_SHAPES,
             tag.as_str(),
@@ -40626,10 +41760,9 @@ fn a_licensed_call_re_asks_its_lookup_under_the_mode() {
 ///
 /// the tests below are not comparisons between two legs — there is only one leg's state
 /// to ask about — so they build directly rather than through [`agree_python`]
-fn built_python(tag: &str, source: &str) -> Option<(String, PathBuf, String)> {
+fn built_python(tag: &str, source: &str) -> Option<(String, Scratch, String)> {
     let (python, toolchain) = environment()?;
-    let dir = diff_root().join(format!("by_diff_{tag}_v"));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new(format!("by_diff_{tag}_v"));
     let options = Options {
         language: by_irbuild::Language::Python,
         annotate: true,
@@ -40770,11 +41903,11 @@ class Derived(Base):
     );
 }
 
-/// build `source` as python, import it, and hand back the message the import refused with
-fn refused_import(tag: &str, source: &str) -> Option<String> {
+/// build `source` as python, import it, and hand back the directory it was built into and
+/// the message the import refused with
+fn refused_import(tag: &str, source: &str) -> Option<(Scratch, String)> {
     let (python, toolchain) = environment()?;
-    let dir = diff_root().join(format!("by_diff_{tag}_r"));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new(format!("by_diff_{tag}_r"));
     let module = format!("by_diff_{tag}");
     let options = Options {
         language: by_irbuild::Language::Python,
@@ -40811,7 +41944,8 @@ fn refused_import(tag: &str, source: &str) -> Option<String> {
         "the snippet failed:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let message = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    Some((dir, message))
 }
 
 #[test]
@@ -40828,7 +41962,7 @@ fn a_mixture_left_on_a_base_the_module_replaced_refuses_the_import() {
     // unusable rather than quietly wrong until the compiler stands the whole family down
     // instead. `logging/config.py` is the shape in the standard library, where
     // `ConvertingDict(dict, ConvertingMixin)` is the same three lines
-    let Some(message) = refused_import(
+    let Some((_dir, message)) = refused_import(
         "orphanmix",
         "\
 class Ours:
@@ -40856,7 +41990,7 @@ fn a_class_on_two_bases_of_this_modules_own_refuses_the_import() {
     // the same failure without an outside base in sight: two emitted classes each own
     // their instances, so `type(\"Mixin\", (Root, Extra), ...)` cannot lay one out either,
     // and `Mixin` is left as the definition the body built on the two interpreted ones
-    let Some(message) = refused_import(
+    let Some((_dir, message)) = refused_import(
         "orphanpair",
         "\
 class Root:

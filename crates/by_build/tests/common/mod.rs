@@ -1,4 +1,5 @@
-//! the one place a python child's stdout is read
+//! what both test binaries share: the directory a test builds into, and the one place a
+//! python child's stdout is read
 //!
 //! both test binaries compare what an interpreter printed, so how those bytes
 //! travel has to be settled once. a pipe that picks its own encoding, or a
@@ -6,8 +7,66 @@
 //! either build decided — and a comparison that cannot tell the two apart is
 //! reading the platform rather than the compiler
 
-use std::path::Path;
+use std::fmt::Display;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// a directory a test builds into, which goes when the test passes
+///
+/// a failing test keeps it, so the C, the transpiled twin and whatever else the build
+/// wrote can still be read, and names it on stderr, which both test runners print with
+/// the failure. a test holds the directory for as long as it reads from it, so a helper
+/// that builds one and hands back an answer hands the directory back too: otherwise it
+/// would be gone before the assertion that fails on the answer
+///
+/// the name carries the process id. nextest gives each *test* a process of its own, so
+/// one run never collides with itself — but nothing stops two *runs* choosing the same
+/// path, and a 3.13 sweep beside a 3.14 one would then overwrite each other's sources
+/// between the build and the read. a collision during setup fails fast enough to look
+/// like a missing toolchain, and one after the build fails having genuinely compiled and
+/// compared, so it reads as a difference the compiler produced — twenty-nine of those were
+/// chased as a regression before the shared path was noticed
+pub(crate) struct Scratch(PathBuf);
+
+impl Scratch {
+    /// an empty place for `name` under the system temp directory
+    pub(crate) fn new(name: impl Display) -> Self {
+        let path = std::env::temp_dir().join(format!("{name}_p{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        Self(path)
+    }
+}
+
+impl Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            #[expect(
+                clippy::print_stderr,
+                reason = "the failure output is where a kept directory has to be named"
+            )]
+            {
+                eprintln!("kept the failing test's directory: {}", self.0.display());
+            }
+        } else {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
 
 /// run `body` with `dir` on `sys.path` and hand back what it printed
 pub(crate) fn python_output(python: &str, dir: &Path, body: &str) -> String {

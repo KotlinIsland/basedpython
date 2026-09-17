@@ -6,6 +6,7 @@ mod transforms;
 pub(crate) mod type_info;
 
 pub use config::{Config, FloatLiteralLowering, PythonVersion, SoundnessPositions};
+pub use transforms::soundness::{SoundnessSites, soundness_sites};
 
 /// A module's `main` as the program's command line — the reading the entry-point
 /// guard and its argument parser are generated from.

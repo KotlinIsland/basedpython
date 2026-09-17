@@ -398,6 +398,31 @@ pub struct NestedName {
     pub name: String,
     /// `__qualname__`: `counter.<locals>.step`
     pub qualname: String,
+    /// where the function's `__annotations__` come from, where it wrote any
+    pub annotations: Option<NestedAnnotations>,
+}
+
+/// how a nested function answers `__annotations__`, and `__annotate__` from 3.14
+///
+/// the annotations python evaluates are the *interpreted* definition's, which for a `.by`
+/// module is the transpiler's output: the source's own annotations may be written in syntax
+/// that does not run as python at all. so they are evaluated by python, from that text,
+/// over the values the enclosing frames hold for the names in them
+#[derive(Debug, Clone, PartialEq)]
+pub struct NestedAnnotations {
+    /// the enclosing names the annotations read, in the order the reader lists their values
+    pub names: Vec<String>,
+    /// the method of the same environment that lists the values of `names`, where there are
+    /// any
+    pub reader: Option<String>,
+    /// python source defining the function that evaluates the annotations, filled in once
+    /// the interpreted twin exists — see `by_irbuild::annotations`
+    pub factory: Option<String>,
+    /// whether the factory only raises, because the twin could not say what the annotations
+    /// are. such a function raises when its annotations are asked for, and never where its
+    /// `def` stands, so a build that cannot answer the question breaks nothing that does not
+    /// ask it
+    pub refused: bool,
 }
 
 impl Function {
@@ -838,6 +863,9 @@ pub struct ClassIr {
     /// the layout an emitted class has anyway, and one that does not is asking for a
     /// name it never mentioned to still have somewhere to go
     pub declares_slots: bool,
+    /// whether that `__slots__` names `__weakref__`, which asks for the weak-reference list
+    /// a class without `__slots__` is given anyway
+    pub slots_weak_references: bool,
     /// whether the class declares type parameters.
     ///
     /// they are erased in the *layout* — every `T` field is an object, whatever
@@ -1308,7 +1336,7 @@ impl ModuleIr {
             if current.dataclass {
                 return false;
             }
-            unslotted |= !current.declares_slots;
+            unslotted |= !current.declares_slots || current.slots_weak_references;
             match &current.base {
                 None => return unslotted,
                 Some(ClassBase::External(_)) => return false,

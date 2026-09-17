@@ -265,6 +265,8 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::MatchKey { .. } | Op::MatchRest { .. } => true,
         // a type flag, read straight off the type
         Op::IsMapping { .. } => false,
+        // a walk up the type's bases, which asks the object nothing
+        Op::HoldsLayout { .. } => false,
         // an object with no `__aiter__` is a `TypeError`, and the call may raise
         Op::AsyncIter { .. } | Op::AsyncContext { .. } => true,
         // a field the instance does not have is an `AttributeError`
@@ -296,6 +298,8 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::MatchSlice { .. } => true,
         // `isinstance` reaches `__instancecheck__`, which can raise
         Op::IsInstance { .. } => true,
+        // …and a soundness check raises when its answer is no
+        Op::CheckSound { .. } => true,
         Op::FloatBinary { op, .. } => op.can_fail(),
         // the object side may be anything, so any of them may raise
         Op::FloatObjectBinary { .. } | Op::FloatObjectCompare { .. } => true,

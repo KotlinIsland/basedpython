@@ -378,6 +378,7 @@ mod tests {
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,

@@ -26,12 +26,46 @@ use crate::types::visitor::any_over_type;
 use crate::types::{ClassLiteral, ClassType, FunctionType, KnownClass, Type};
 use ty_module_resolver::{KnownModule, file_to_module};
 
+/// The second argument of a shallow `isinstance` soundness check.
+///
+/// Structured rather than spelled, because the transpiler writes it as python source
+/// while the native backend resolves each class and tests against it directly; its
+/// [`Display`](std::fmt::Display) is the spelling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckTarget {
+    /// a class, by the name module scope reaches it through: a binding of the
+    /// module's own, or a builtin the module leaves unbound
+    Class(String),
+    /// `type(None)`
+    NoneType,
+    /// any one of several, which `isinstance` accepts as a tuple
+    AnyOf(Vec<CheckTarget>),
+}
+
+impl std::fmt::Display for CheckTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Class(name) => f.write_str(name),
+            Self::NoneType => f.write_str("type(None)"),
+            Self::AnyOf(parts) => {
+                f.write_str("(")?;
+                for (index, part) in parts.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{part}")?;
+                }
+                f.write_str(")")
+            }
+        }
+    }
+}
+
 /// How a runtime soundness check validates a value against a target type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckKind {
-    /// a shallow `isinstance(value, <target>)` check — the string is the
-    /// second `isinstance` argument (`str`, `(int, type(None))`)
-    Isinstance(String),
+    /// a shallow `isinstance(value, <target>)` check (`str`, `(int, type(None))`)
+    Isinstance(CheckTarget),
     /// a deep check that validates the base class *and*, when the value
     /// carries `__orig_class__`, its type arguments. `alias` is the runtime
     /// spelling of the specialization (`A[int]`); `variances` is one code per
@@ -264,7 +298,7 @@ pub(crate) fn runtime_check_target<'db>(
     file: File,
     ty: Type<'db>,
 ) -> Option<String> {
-    target(db, env, file, ty, 0)
+    target(db, env, file, ty, 0).map(|target| target.to_string())
 }
 
 /// The runtime soundness check for a value whose declared type is `ty`.
@@ -286,7 +320,7 @@ pub fn runtime_check_plan<'db>(
             variances: variances.iter().copied().map(variance_code).collect(),
         });
     }
-    runtime_check_target(db, env, file, ty).map(CheckKind::Isinstance)
+    target(db, env, file, ty, 0).map(CheckKind::Isinstance)
 }
 
 /// [`runtime_check_plan`] for a *parameter*, whose type may be a hole rather than
@@ -385,7 +419,7 @@ fn target<'db>(
     file: File,
     ty: Type<'db>,
     depth: u8,
-) -> Option<String> {
+) -> Option<CheckTarget> {
     if depth > 8 {
         return None;
     }
@@ -395,7 +429,7 @@ fn target<'db>(
     match ty {
         Type::NominalInstance(instance) => {
             if ty.is_none(db) {
-                return Some("type(None)".to_owned());
+                return Some(CheckTarget::NoneType);
             }
             let class = instance.class(db, env);
             let literal = class.class_literal(db);
@@ -406,7 +440,7 @@ fn target<'db>(
             class_target(db, file, literal)
         }
         Type::Union(union) => {
-            let mut parts: Vec<String> = Vec::new();
+            let mut parts: Vec<CheckTarget> = Vec::new();
             for element in union.elements(db) {
                 let part = target(db, env, file, *element, depth + 1)?;
                 if !parts.contains(&part) {
@@ -418,7 +452,7 @@ fn target<'db>(
                 1 => parts.pop(),
                 // isinstance accepts nested tuples, so union parts that are
                 // themselves rendered unions compose without flattening
-                _ => Some(format!("({})", parts.join(", "))),
+                _ => Some(CheckTarget::AnyOf(parts)),
             }
         }
         // a TypedDict inhabitant is a plain dict at runtime
@@ -437,13 +471,19 @@ fn target<'db>(
 /// `file`: either the module binds the class's name to this exact class
 /// (definition or import), or the name is unbound and the class is a
 /// builtin so the bare name reaches it
-fn class_target<'db>(db: &'db dyn Db, file: File, literal: ClassLiteral<'db>) -> Option<String> {
+fn class_target<'db>(
+    db: &'db dyn Db,
+    file: File,
+    literal: ClassLiteral<'db>,
+) -> Option<CheckTarget> {
     let name = literal.name(db).as_str();
     match explicit_global_symbol(db, db.program_file(file), name).place {
         Place::Defined(defined) if defined.ty == Type::ClassLiteral(literal) => {
-            Some(name.to_owned())
+            Some(CheckTarget::Class(name.to_owned()))
         }
-        Place::Undefined if class_is_builtin(db, literal) => Some(name.to_owned()),
+        Place::Undefined if class_is_builtin(db, literal) => {
+            Some(CheckTarget::Class(name.to_owned()))
+        }
         _ => None,
     }
 }
@@ -455,9 +495,9 @@ fn class_is_builtin<'db>(db: &'db dyn Db, literal: ClassLiteral<'db>) -> bool {
 
 /// a builtin referenced by bare name is only trustworthy when the module
 /// does not rebind that name
-fn builtin_target(db: &dyn Db, file: File, name: &str) -> Option<String> {
+fn builtin_target(db: &dyn Db, file: File, name: &str) -> Option<CheckTarget> {
     match explicit_global_symbol(db, db.program_file(file), name).place {
-        Place::Undefined => Some(name.to_owned()),
+        Place::Undefined => Some(CheckTarget::Class(name.to_owned())),
         Place::Defined(_) => None,
     }
 }
