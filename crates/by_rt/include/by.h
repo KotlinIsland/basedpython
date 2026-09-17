@@ -108,10 +108,16 @@ typedef size_t ByTagged;
 /* a tagged word of 1 is a pointer of 0 with the tag set, so it can never be a
  * real object and is free to mean "an exception is set" */
 #define BY_INT_ERROR ((ByTagged)1)
-/* what a register holds once its reference has been let go of. a short zero rather
- * than the error sentinel, because the sentinel is odd: releasing it again takes the
- * branch kept for a real PyLongObject, and the emptied register is released again on
- * every exit and wherever the next write lets go of what was there */
+/* a tagged word holding no reference, which a short zero is: releasing it takes the
+ * test the straight line already passes rather than the branch kept for a real
+ * PyLongObject.
+ *
+ * emitted code pointedly does *not* empty a register with this — it writes the error
+ * sentinel the register was declared with, so that one constant covers the register's
+ * whole lifetime and clang folds the later release away outright. see
+ * `RType::undefined` for the measurement. what is left here is the one place a "holds
+ * nothing" that is never compared against the sentinel is wanted: the initializer of
+ * an unboxed global's memo, which is cold until its generation is stamped */
 #define BY_INT_EMPTY ((ByTagged)0)
 /* a float error sentinel overlaps a valid value, so an error must be confirmed
  * with PyErr_Occurred() — see RType::error_overlaps */
@@ -276,6 +282,22 @@ static inline PyObject *By_BoxInt(ByTagged x) {
     return o;
 }
 
+/* the same, for a tagged value the caller owns and is done with
+ *
+ * a heap `int` is handed straight on: the word held one reference and the `PyObject *`
+ * that replaces it is that same reference, so there is nothing to take and nothing to
+ * give back. a short owns nothing, and the object is built exactly as above.
+ *
+ * boxing an owned tagged value with [`By_BoxInt`] instead is a retain the caller never
+ * releases — which is what made every compiled `-> int` entry leak one reference per
+ * call for a value too wide to be a short */
+static inline PyObject *By_BoxIntOwned(ByTagged x) {
+    if (By_IsShort(x)) {
+        return PyLong_FromSsize_t(By_ShortValue(x));
+    }
+    return By_LongOf(x);
+}
+
 /* an integer literal too wide to be a short, which the module built once at init
  *
  * the tag is added and no reference is taken: like a string literal, the module owns
@@ -339,6 +361,64 @@ static inline int By_OptionalAttr(PyObject *o, PyObject *name, PyObject **found)
  * checks it with `_soundness_check(value, target)`, and a compiled module makes the
  * same check in the same place. these are that function's two halves */
 
+#ifndef Py_GIL_DISABLED
+/* refusals worked out earlier: a type, the version its attributes and bases had, and a
+ * class it does not derive from. the lookup and the walk that reach that answer cost a
+ * hundred instructions between them, and are asked again on every read of an optional and
+ * at every arm of a `match` a subject falls past.
+ *
+ * a write to the type's dict, to a base's, or to its `__bases__` moves the version, so a
+ * match is the answer both would give. the class is not held: a class the type does not
+ * derive from is not in its mro, and one arriving at the same address can only enter the
+ * mro through `__bases__`, which moves the version too.
+ *
+ * there are many entries because one is not how the question is asked. a `match` ladder
+ * walks a subject past every arm before the one that takes it, so a single entry is
+ * overwritten by the next arm before the next subject reaches the first one again — and
+ * two subject types alternating do the same to each other. one entry held three pairs in
+ * the `match_` benchmark and answered two of every five questions; the entry a pair takes
+ * here is settled by the pair alone, so a pair asked twice with anything in between still
+ * finds its own answer, and only another pair landing on the same entry displaces it.
+ * that row goes 12.21M instructions to 10.44M, a seventh of the whole row.
+ *
+ * the count is what makes that steady rather than lucky. the table is direct-mapped, so
+ * two pairs of the moment can land on one entry and take it from each other, and which
+ * pairs those are is decided by where a run's allocator put two type objects rather than
+ * by anything the program did. sixteen entries measured *bimodally* on that row — 10.44M
+ * on a run where its three pairs fell apart and 11.66M on one where two met — and
+ * sixty-four measured 10.44M every time. the table costs its own size in a module's
+ * uninitialised data and nothing else, and being wider is the whole of what buys the
+ * steadiness: a mix that carries the pointers' high bits down instead was measured too,
+ * and its multiplies cost more than the spreading saved.
+ *
+ * this is a cache with a validity test rather than an assumption: a hit is checked
+ * against the type's current version, and a miss only costs the walk that would have
+ * happened anyway.
+ *
+ * the free-threaded build has none of this. the entries are read and written without
+ * synchronisation, which is sound only because the thread holding the GIL is the only
+ * one running */
+#define BY_REFUSED_SLOTS 64
+
+typedef struct {
+    PyTypeObject *type;
+    PyObject *class_;
+    unsigned int version;
+} ByRefusal;
+
+static ByRefusal by_refusals[BY_REFUSED_SLOTS];
+
+/* where a pair's answer lives
+ *
+ * both pointers are shifted past the bits an allocator's alignment holds fixed at zero,
+ * and by different amounts, so that neither a type asked about itself nor two pairs
+ * sharing a member folds to one entry */
+static inline size_t By_RefusalSlot(PyTypeObject *type, PyObject *cls) {
+    uintptr_t mixed = ((uintptr_t)type >> 4) ^ ((uintptr_t)cls >> 9);
+    return (size_t)(mixed & (BY_REFUSED_SLOTS - 1));
+}
+#endif
+
 /* `isinstance(o, cls)` for an object that is not exactly of class `cls`
  *
  * a class whose own class is `type` has no `__instancecheck__` to ask, and python's answer
@@ -350,26 +430,14 @@ static inline int By_OptionalAttr(PyObject *o, PyObject *name, PyObject **found)
 static int By_SoundIsOther(PyObject *o, PyObject *cls) {
     static PyObject *dunder_class = NULL;
     static PyObject *object_class = NULL;
-#ifndef Py_GIL_DISABLED
-    /* the last refusal worked out that way: a type, the version its attributes and bases
-     * had, and the class it does not derive from. the lookup and the walk cost a hundred
-     * instructions between them, and are asked again on every read of an optional.
-     *
-     * a write to the type's dict, to a base's, or to its `__bases__` moves the version, so
-     * a match is the answer both would give. the class is not held: a class the type does
-     * not derive from is not in its mro, and one arriving at the same address can only
-     * enter the mro through `__bases__`, which moves the version too */
-    static PyTypeObject *refused_type = NULL;
-    static unsigned int refused_version = 0;
-    static PyObject *refused_class = NULL;
-#endif
     PyTypeObject *type = Py_TYPE(o);
     if (!Py_IS_TYPE(cls, &PyType_Type) || type->tp_getattro != PyObject_GenericGetAttr) {
         return PyObject_IsInstance(o, cls);
     }
 #ifndef Py_GIL_DISABLED
-    if (type == refused_type && cls == refused_class && refused_version != 0
-        && type->tp_version_tag == refused_version) {
+    ByRefusal *refusal = &by_refusals[By_RefusalSlot(type, cls)];
+    if (refusal->type == type && refusal->class_ == cls && refusal->version != 0
+        && type->tp_version_tag == refusal->version) {
         return 0;
     }
 #endif
@@ -383,9 +451,9 @@ static int By_SoundIsOther(PyObject *o, PyObject *cls) {
         return PyObject_IsInstance(o, cls);
     }
 #ifndef Py_GIL_DISABLED
-    refused_type = type;
-    refused_version = type->tp_version_tag;
-    refused_class = cls;
+    refusal->type = type;
+    refusal->version = type->tp_version_tag;
+    refusal->class_ = cls;
 #endif
     return 0;
 }
@@ -1357,6 +1425,87 @@ static inline PyObject *By_ObjIShr(PyObject *a, PyObject *b) {
 static inline PyObject *By_ObjNeg(PyObject *o) { return PyNumber_Negative(o); }
 static inline PyObject *By_ObjInvert(PyObject *o) { return PyNumber_Invert(o); }
 
+/* ── the two questions python's comparison can be answered without asking ──────
+ *
+ * both forms of a compiled comparison ask these, and they are written once here so
+ * that the answer the two forms give can only be the same answer. what each form does
+ * with a yes differs — one wants a bit and the other the object python would have
+ * produced — and that is all that differs */
+
+/* whether both operands are `int`s of exactly that type holding a value python stores
+ * in the object's header
+ *
+ * python compares a pair of the same type without asking either side to yield to the
+ * other, so `int`'s own comparison is what it reaches — and for a value stored that way
+ * that comparison is a comparison of those values. a subclass is deliberately not here:
+ * it may have replaced the comparison, and `bool` reaches this from `x == 0` */
+static inline int By_BothInlineInts(PyObject *a, PyObject *b) {
+#if PY_VERSION_HEX >= 0x030C0000
+    return BY_LIKELY(PyLong_CheckExact(a) && PyLong_CheckExact(b))
+           && BY_LIKELY(PyUnstable_Long_IsCompact((PyLongObject *)a)
+                        && PyUnstable_Long_IsCompact((PyLongObject *)b));
+#else
+    (void)a;
+    (void)b;
+    return 0;
+#endif
+}
+
+/* `a <op> b` for a pair [`By_BothInlineInts`] answered yes for */
+static inline int By_InlineIntCompare(PyObject *a, PyObject *b, int op) {
+#if PY_VERSION_HEX >= 0x030C0000
+    Py_ssize_t x = PyUnstable_Long_CompactValue((PyLongObject *)a);
+    Py_ssize_t y = PyUnstable_Long_CompactValue((PyLongObject *)b);
+    switch (op) {
+        case Py_EQ: return x == y;
+        case Py_NE: return x != y;
+        case Py_LT: return x < y;
+        case Py_LE: return x <= y;
+        case Py_GT: return x > y;
+        default: return x >= y;
+    }
+#else
+    (void)a;
+    (void)b;
+    (void)op;
+    return 0;
+#endif
+}
+
+/* whether the whole of python's answer is what the *right* operand's type says
+ *
+ * a left operand whose type inherits `object`'s comparison has nothing to say about `==`
+ * or `!=` beyond identity, so python's answer is whatever the right operand's type says,
+ * and identity if that declines too. asking the right operand first is python's own order
+ * wherever it reaches an answer at all: it asks the right side first when that side's type
+ * derives from the left's, and otherwise asks it second, after a `NotImplemented` the
+ * inherited comparison gives for every pair but an identical one — which is why identity
+ * is left to the general path, along with the orderings, whose default is a `TypeError`
+ * rather than an answer.
+ *
+ * this is a ladder of `case` arms against literals, where the subject is an instance of
+ * some class and each literal is an `int` or a `str` that refuses it. it also skips the
+ * recursion guard `PyObject_RichCompare` enters, which costs one level of headroom once
+ * rather than a level per round of a recursion that goes through it — the call it makes
+ * next is counted either way. see runtime.md#how-deep-a-recursion-goes */
+static inline int By_RightOperandDecides(PyObject *a, PyObject *b, int op) {
+    (void)b;
+    return (op == Py_EQ || op == Py_NE) && a != b
+           && Py_TYPE(a)->tp_richcompare == PyBaseObject_Type.tp_richcompare;
+}
+
+/* what the right operand's type answers for a pair [`By_RightOperandDecides`] said yes
+ * for, or `Py_NotImplemented` where it has nothing to say — a new reference either way,
+ * or NULL with an exception set
+ *
+ * `==` and `!=` are each their own reflection, so the operands swap and the operator
+ * does not */
+static inline PyObject *By_AskRightOperand(PyObject *a, PyObject *b, int op) {
+    richcmpfunc other = Py_TYPE(b)->tp_richcompare;
+    if (other == NULL) return Py_NewRef(Py_NotImplemented);
+    return other(b, a, op);
+}
+
 /* `a <op> b` through the abstract protocol, as a bit — and 2 means an exception is set
  *
  * this is `PyObject_RichCompareBool` with its one shortcut removed. that function
@@ -1380,11 +1529,51 @@ static inline PyObject *By_ObjInvert(PyObject *o) { return PyNumber_Invert(o); }
  * would dereference it — [`By_StrCompare`] hands its own such pair straight here */
 static inline char By_ObjCompare(PyObject *a, PyObject *b, int op) {
     if (BY_UNLIKELY(a == NULL || b == NULL)) return 2;
+    /* the bit is reached without a `bool` ever being made */
+    if (By_BothInlineInts(a, b)) return (char)By_InlineIntCompare(a, b, op);
+    if (By_RightOperandDecides(a, b, op)) {
+        PyObject *answer = By_AskRightOperand(a, b, op);
+        if (answer == NULL) return 2;
+        if (answer != Py_NotImplemented) {
+            int truth = PyObject_IsTrue(answer);
+            Py_DECREF(answer);
+            return truth < 0 ? 2 : (char)truth;
+        }
+        Py_DECREF(answer);
+        /* the right operand declined too, so identity decides */
+        return (char)(op == Py_NE);
+    }
     PyObject *result = PyObject_RichCompare(a, b, op);
     if (result == NULL) return 2;
     int truth = PyObject_IsTrue(result);
     Py_DECREF(result);
     return truth < 0 ? 2 : (char)truth;
+}
+
+/* `a <op> b` through the abstract protocol, as the object python's comparison answered
+ * — which need not be a `bool`, since a `__eq__` may answer anything at all
+ *
+ * this is `PyObject_RichCompare` with the same two questions asked in front of it that
+ * [`By_ObjCompare`] asks, and each of them produces the very object that function would
+ * have produced: `int`'s own comparison answers `Py_True` or `Py_False`, and a right
+ * operand that answers is answering through the slot `do_richcompare` would have called.
+ * where the right operand declines, python's own fallthrough for `==` and `!=` is
+ * identity, and this pair is not identical
+ *
+ * a NULL operand carries an exception set by whatever produced it */
+static inline PyObject *By_ObjRichCompare(PyObject *a, PyObject *b, int op) {
+    if (BY_UNLIKELY(a == NULL || b == NULL)) return NULL;
+    if (By_BothInlineInts(a, b)) {
+        return Py_NewRef(By_InlineIntCompare(a, b, op) ? Py_True : Py_False);
+    }
+    if (By_RightOperandDecides(a, b, op)) {
+        PyObject *answer = By_AskRightOperand(a, b, op);
+        if (answer == NULL) return NULL;
+        if (answer != Py_NotImplemented) return answer;
+        Py_DECREF(answer);
+        return Py_NewRef(op == Py_NE ? Py_True : Py_False);
+    }
+    return PyObject_RichCompare(a, b, op);
 }
 
 /* the type python names in an `AttributeError`
@@ -2418,17 +2607,34 @@ typedef struct {
     int watcher;
 } ByGlobals;
 
-/* what this module's own sites read. NULL means this module memoises nothing */
-static ByGlobals *by_globals = NULL;
+/* what this module's own sites read
+ *
+ * it always names a struct, so that a site's test is the one compare it is about rather
+ * than that compare behind a test for whether there is anything to compare against. a
+ * module that memoises nothing is pointed at the struct below instead, which carries a
+ * generation nothing ever stamps: the counter starts at one and is moved by one write
+ * to a namespace at a time, so reaching this value would take more writes than a
+ * process can make, and a cold site's zero is no nearer it. so every site misses, on
+ * every read, which is what "memoises nothing" has to mean.
+ *
+ * its watcher is the identifier `PyDict_AddWatcher` never hands out, and nothing reads
+ * it: every path to the watcher asks [`BY_GLOBALS_FOUND`] first */
+static ByGlobals by_globals_off = { UINT64_MAX, -1 };
+
+static ByGlobals *by_globals = &by_globals_off;
+
+/* whether this module found a counter to share, which is the question the old spelling
+ * `by_globals != NULL` asked */
+#define BY_GLOBALS_FOUND (by_globals != &by_globals_off)
 
 /* what this module's callback bumps, if this is the module that registered the
  * watcher. it is deliberately *not* the same variable
  *
  * only one module in an interpreter registers, and every other module's sites are
  * invalidated by that one module's callback. so a module that gives up memoising —
- * by clearing `by_globals` — must not be able to take the invalidation of everyone
- * else's sites with it. this is set once, when the registration succeeds, and never
- * cleared */
+ * by pointing `by_globals` back at the off struct — must not be able to take the
+ * invalidation of everyone else's sites with it. this is set once, when the
+ * registration succeeds, and never cleared */
 static ByGlobals *by_globals_watched = NULL;
 
 static int By_GlobalsChanged(PyDict_WatchEvent event, PyObject *dict, PyObject *key,
@@ -2448,16 +2654,16 @@ static int By_GlobalsChanged(PyDict_WatchEvent event, PyObject *dict, PyObject *
  * freeing it while any of them could still run would turn a memo into a read of
  * freed memory. it is two words per interpreter.
  *
- * a failure at any step is answered by leaving `by_globals` NULL, which is what every
- * site tests before trusting itself — a build that cannot be told about writes makes
- * every lookup in full rather than making one it cannot invalidate */
+ * a failure at any step is answered by leaving `by_globals` at the off struct, whose
+ * generation no site can match — a build that cannot be told about writes makes every
+ * lookup in full rather than making one it cannot invalidate */
 static void By_FindGlobals(void) {
     static const char *key = "_by_global_memo";
     PyInterpreterState *interpreter;
     PyObject *state;
     PyObject *capsule;
     ByGlobals *shared;
-    if (by_globals != NULL) return;
+    if (BY_GLOBALS_FOUND) return;
     interpreter = PyInterpreterState_Get();
     if (interpreter == NULL) return;
     state = PyInterpreterState_GetDict(interpreter);
@@ -2465,7 +2671,10 @@ static void By_FindGlobals(void) {
     capsule = PyDict_GetItemString(state, key);
     if (capsule != NULL) {
         by_globals = (ByGlobals *)PyCapsule_GetPointer(capsule, key);
-        if (by_globals == NULL) PyErr_Clear();
+        if (by_globals == NULL) {
+            by_globals = &by_globals_off;
+            PyErr_Clear();
+        }
         return;
     }
     PyErr_Clear();
@@ -2499,7 +2708,7 @@ static void By_FindGlobals(void) {
  * every dict a site's answer can come from passes through here first, so a write
  * that this build would not hear about is a write no site was armed against */
 static int By_WatchGlobals(PyObject *dict) {
-    if (by_globals == NULL || dict == NULL || !PyDict_Check(dict)) return 0;
+    if (!BY_GLOBALS_FOUND || dict == NULL || !PyDict_Check(dict)) return 0;
     if (PyDict_Watch(by_globals->watcher, dict) < 0) {
         PyErr_Clear();
         return 0;
@@ -2514,10 +2723,14 @@ static int By_WatchGlobals(PyObject *dict) {
 static void By_WatchModule(PyObject *dict) {
     By_FindGlobals();
     if (!By_WatchGlobals(dict)) {
-        by_globals = NULL;
+        by_globals = &by_globals_off;
         return;
     }
-    by_globals->generation += 1;
+    /* asked again rather than inferred from the line above: the off struct's generation
+     * is one increment away from the zero a cold site carries, so a stamp that ever
+     * reached it would make every cold site in the module match at once. `By_WatchGlobals`
+     * already answers no for it, and this is that answer written where the write is */
+    if (BY_GLOBALS_FOUND) by_globals->generation += 1;
 }
 
 /* resolve the name in full and record what answered, or record nothing
@@ -2533,7 +2746,7 @@ static PyObject *By_ArmGlobalSite(ByGlobalSite *site, PyObject *dict, PyObject *
     PyObject *value;
     PyObject *answered;
     site->generation = 0u;
-    if (by_globals == NULL || dict == NULL || name == NULL) {
+    if (!BY_GLOBALS_FOUND || dict == NULL || name == NULL) {
         return By_LookupGlobal(dict, name);
     }
     generation = by_globals->generation;
@@ -2570,7 +2783,7 @@ static void By_WatchModule(PyObject *dict) { (void)dict; }
 static inline PyObject *By_LookupGlobalSite(ByGlobalSite *site, PyObject *dict,
                                             PyObject *name) {
 #ifdef BY_GLOBAL_SITES
-    if (BY_LIKELY(by_globals != NULL && site->generation == by_globals->generation)) {
+    if (BY_LIKELY(site->generation == by_globals->generation)) {
         return Py_NewRef(site->value);
     }
     return By_ArmGlobalSite(site, dict, name);
@@ -2578,6 +2791,148 @@ static inline PyObject *By_LookupGlobalSite(ByGlobalSite *site, PyObject *dict,
     (void)site;
     return By_LookupGlobal(dict, name);
 #endif
+}
+
+/* ── a global read whose only use is to unbox it ──────────────────────────────
+ *
+ * `while i < _limit` reads a name, is handed the object the namespace holds under it,
+ * narrows that object to an `int`, and lets the object go again — every trip. the memo
+ * above already spares the lookup, but not the reference it takes for an answer the
+ * caller wants only in order to take it apart.
+ *
+ * so the *unboxed* value is what is remembered, beside the same generation. what stays
+ * is the compare; what goes is a retain, a release and the narrowing.
+ *
+ * remembering the narrowed value is exactly as safe as remembering the object, because
+ * for these representations it either is not a reference at all or is the same borrow:
+ *
+ * - a `double` and a `char` are copied out of the object and have no lifetime of their
+ *   own — a later write to the object cannot exist, since `float` and `bool` are
+ *   immutable and a rebinding is a write to the namespace, which is what moves the
+ *   counter
+ * - a tagged `int` is either a short, which is a copy in the same sense, or a pointer
+ *   to the object the dict itself holds — borrowed on precisely the terms
+ *   [`ByGlobalSite::value`] is borrowed on, and let go of by the very same event
+ *
+ * what is remembered is therefore only ever read back under the generation the answer
+ * was found under, and a site is stamped only where the boxed site was: that is what
+ * says the namespace that answered is one this build hears about being written to */
+typedef struct {
+    uint64_t generation;
+    union {
+        ByTagged tagged;
+        double number;
+        char bit;
+    } value;
+} ByGlobalUnboxedSite;
+
+#define BY_GLOBAL_UNBOXED_SITE_INIT { 0u, { BY_INT_EMPTY } }
+
+/* whether the read that has just been made may be remembered in unboxed form, and under
+ * which generation — the boxed site's answer to both, since it is the one that decides
+ * what may be kept at all */
+static inline uint64_t By_UnboxedGlobalStamp(const ByGlobalSite *boxed) {
+#ifdef BY_GLOBAL_SITES
+    return boxed->generation;
+#else
+    (void)boxed;
+    return 0u;
+#endif
+}
+
+/* each of the three is the same shape: read the name in full, narrow it, stamp the memo
+ * where the boxed site was stamped, and hand the narrowed value back. they are apart
+ * only because each answers a different C type */
+
+static ByTagged By_ArmGlobalTaggedSite(ByGlobalUnboxedSite *site, ByGlobalSite *boxed,
+                                       PyObject *dict, PyObject *name) {
+    PyObject *value;
+    ByTagged unboxed;
+    site->generation = 0u;
+    value = By_LookupGlobalSite(boxed, dict, name);
+    if (value == NULL) return BY_INT_ERROR;
+    unboxed = By_UnboxInt(value);
+    if (unboxed == BY_INT_ERROR) {
+        Py_DECREF(value);
+        return BY_INT_ERROR;
+    }
+    /* the narrowing answers an owned tagged value, and that one reference is the
+     * caller's: what the site keeps beside it is a *borrow*, on the same terms as
+     * [`ByGlobalSite::value`]. taking a second here would be a reference the site never
+     * gives back, since a re-arm writes over what it holds rather than releasing it —
+     * which showed up as a heap `int` gaining two references per rebinding */
+    site->value.tagged = unboxed;
+    site->generation = By_UnboxedGlobalStamp(boxed);
+    Py_DECREF(value);
+    return unboxed;
+}
+
+static inline ByTagged By_LookupGlobalTaggedSite(ByGlobalUnboxedSite *site,
+                                                 ByGlobalSite *boxed, PyObject *dict,
+                                                 PyObject *name) {
+#ifdef BY_GLOBAL_SITES
+    if (BY_LIKELY(site->generation == by_globals->generation)) {
+        ByTagged held = site->value.tagged;
+        By_IncRefTagged(held);
+        return held;
+    }
+#endif
+    return By_ArmGlobalTaggedSite(site, boxed, dict, name);
+}
+
+/* a double has no value to spare for an error, so failure is reported the way every
+ * other float narrowing reports it: the answer is the sentinel and the caller confirms
+ * it against the thread's exception */
+static double By_ArmGlobalFloatSite(ByGlobalUnboxedSite *site, ByGlobalSite *boxed,
+                                    PyObject *dict, PyObject *name) {
+    PyObject *value;
+    double unboxed;
+    site->generation = 0u;
+    value = By_LookupGlobalSite(boxed, dict, name);
+    if (value == NULL) return BY_FLOAT_ERROR;
+    unboxed = By_UnboxFloat(value);
+    Py_DECREF(value);
+    if (unboxed == BY_FLOAT_ERROR && PyErr_Occurred()) return BY_FLOAT_ERROR;
+    site->value.number = unboxed;
+    site->generation = By_UnboxedGlobalStamp(boxed);
+    return unboxed;
+}
+
+static inline double By_LookupGlobalFloatSite(ByGlobalUnboxedSite *site,
+                                              ByGlobalSite *boxed, PyObject *dict,
+                                              PyObject *name) {
+#ifdef BY_GLOBAL_SITES
+    if (BY_LIKELY(site->generation == by_globals->generation)) {
+        return site->value.number;
+    }
+#endif
+    return By_ArmGlobalFloatSite(site, boxed, dict, name);
+}
+
+/* `bool` and `None` share this: both narrow to a byte, and both report failure as 2 */
+static char By_ArmGlobalBitSite(ByGlobalUnboxedSite *site, ByGlobalSite *boxed,
+                                PyObject *dict, PyObject *name, int is_none) {
+    PyObject *value;
+    char unboxed;
+    site->generation = 0u;
+    value = By_LookupGlobalSite(boxed, dict, name);
+    if (value == NULL) return 2;
+    unboxed = is_none ? By_UnboxNone(value) : By_UnboxBool(value);
+    Py_DECREF(value);
+    if (unboxed == 2) return 2;
+    site->value.bit = unboxed;
+    site->generation = By_UnboxedGlobalStamp(boxed);
+    return unboxed;
+}
+
+static inline char By_LookupGlobalBitSite(ByGlobalUnboxedSite *site, ByGlobalSite *boxed,
+                                          PyObject *dict, PyObject *name, int is_none) {
+#ifdef BY_GLOBAL_SITES
+    if (BY_LIKELY(site->generation == by_globals->generation)) {
+        return site->value.bit;
+    }
+#endif
+    return By_ArmGlobalBitSite(site, boxed, dict, name, is_none);
 }
 
 /* ── a module function a compiled caller reaches directly ─────────────────────
@@ -4377,11 +4732,40 @@ static inline void By_ArmMethod(ByMethodLicence *licence, PyObject *type, const 
     licence->version = owner->tp_version_tag;
 }
 
+/* a receiver an emitted site could not have had
+ *
+ * the two tests below read the receiver's type without asking first whether there is a
+ * receiver. they can, because an emitted site has no way to reach them without one:
+ *
+ * - every read of a register is on a path that has written it, which the IR verifier
+ *   proves, and a register a *name* may not have been bound in yet carries a byte that
+ *   every read of it tests — so the path this is about raises `UnboundLocalError`
+ * - an operation that can fail takes its error edge before it writes its destination,
+ *   so a written register holds what the operation answered and never the failure
+ * - a register a store or a display took the reference over from is one liveness has
+ *   already said nothing reads again, and a *parameter* can never be one of those at
+ *   all: handing over is refused for anything below the parameter count
+ *
+ * asking anyway cost 5.2 per cent of the `props_ext` benchmark and 1.5 of `inherit`,
+ * because the `&&` before the load is a sequence point the C compiler may not move the
+ * type read across: the whole chain stays a ladder of branches rather than folding into
+ * a run of straight-line loads and bitwise tests.
+ *
+ * the claim is not simply dropped, though: the re-check build is where a licence's
+ * claims are asked out loud, and this is one of them */
+#ifdef BY_LICENCE_RECHECK
+#define BY_LICENCE_RECEIVER(o, where) \
+    do { if ((o) == NULL) Py_FatalError("by: " where " was given no receiver"); } while (0)
+#else
+#define BY_LICENCE_RECEIVER(o, where) ((void)0)
+#endif
+
 /* whether `o` is exactly `type`, `type` still answers as [`By_ArmMethod`] found, and
  * `o` itself does not answer the name */
 static inline char By_MethodStands(PyObject *o, PyObject *type,
                                    const ByMethodLicence *licence) {
-    return (char)(licence->version != 0u && o != NULL && (PyObject *)Py_TYPE(o) == type
+    BY_LICENCE_RECEIVER(o, "By_MethodStands");
+    return (char)(licence->version != 0u && (PyObject *)Py_TYPE(o) == type
                   && ((PyTypeObject *)type)->tp_version_tag == licence->version
                   && !By_DictShadowsAt(o, licence->dict_offset, licence->name));
 }
@@ -4489,7 +4873,8 @@ static inline void By_JoinLicence(unsigned int *version, int *first, unsigned in
 /* whether `o` is exactly `type` and `type` still answers as [`By_ArmAccessor`] found */
 static inline char By_AccessorStands(PyObject *o, PyObject *type,
                                      const ByAccessorLicence *licence) {
-    return (char)(licence->version != 0u && o != NULL && (PyObject *)Py_TYPE(o) == type
+    BY_LICENCE_RECEIVER(o, "By_AccessorStands");
+    return (char)(licence->version != 0u && (PyObject *)Py_TYPE(o) == type
                   && ((PyTypeObject *)type)->tp_version_tag == licence->version);
 }
 
@@ -4941,8 +5326,14 @@ static inline PyObject *By_StrUpper(ByMethodSite *site, PyObject *receiver, PyOb
  * a type flagged as a sequence, which `str`, `bytes` and `bytearray` are not — so
  * `case [a, b]:` never takes a two-character string apart
  */
+/* a class pattern's own test is `isinstance`, and `By_SoundIs` is that function for one
+ * class. it matters most when the answer is no, which is the common answer in a ladder
+ * of cases: `PyObject_IsInstance` asks the subject for its `__class__` every time it
+ * decides against, and that question runs nothing at all for a subject whose type reads
+ * attributes the generic way and inherits `object`'s own `__class__` — the two facts
+ * `By_SoundIsOther` establishes before it skips the lookup */
 static inline char By_IsInstance(PyObject *o, PyObject *class_) {
-    int result = PyObject_IsInstance(o, class_);
+    int result = By_SoundIs(o, class_);
     return result < 0 ? 2 : (char)result;
 }
 
@@ -9129,20 +9520,18 @@ static inline PyObject *By_BuildList(PyObject **items, Py_ssize_t nargs) {
     return list;
 }
 
-/* build a dict from alternating key/value owned references */
+/* build a dict from alternating key/value *borrowed* references
+ *
+ * a tuple or a list takes a reference over, so an item goes into one by being handed
+ * the caller's. a dict and a set do not: `PyDict_SetItem` and `PySet_Add` take a
+ * reference of their own, so handing one over would be a reference made at the call
+ * site only to be dropped again here — two operations per key and two per value, for
+ * nothing. these two borrow instead, and the caller goes on owning what it passed */
 static inline PyObject *By_BuildDict(PyObject **pairs, Py_ssize_t count) {
     PyObject *dict = PyDict_New();
-    if (dict == NULL) {
-        for (Py_ssize_t i = 0; i < count * 2; i++) Py_XDECREF(pairs[i]);
-        return NULL;
-    }
+    if (dict == NULL) return NULL;
     for (Py_ssize_t i = 0; i < count; i++) {
-        int failed = PyDict_SetItem(dict, pairs[i * 2], pairs[i * 2 + 1]) < 0;
-        Py_XDECREF(pairs[i * 2]);
-        Py_XDECREF(pairs[i * 2 + 1]);
-        if (failed) {
-            /* release whatever is left, then the dict */
-            for (Py_ssize_t j = (i + 1) * 2; j < count * 2; j++) Py_XDECREF(pairs[j]);
+        if (PyDict_SetItem(dict, pairs[i * 2], pairs[i * 2 + 1]) < 0) {
             Py_DECREF(dict);
             return NULL;
         }
@@ -9152,15 +9541,9 @@ static inline PyObject *By_BuildDict(PyObject **pairs, Py_ssize_t count) {
 
 static inline PyObject *By_BuildSet(PyObject **items, Py_ssize_t count) {
     PyObject *set = PySet_New(NULL);
-    if (set == NULL) {
-        for (Py_ssize_t i = 0; i < count; i++) Py_XDECREF(items[i]);
-        return NULL;
-    }
+    if (set == NULL) return NULL;
     for (Py_ssize_t i = 0; i < count; i++) {
-        int failed = PySet_Add(set, items[i]) < 0;
-        Py_XDECREF(items[i]);
-        if (failed) {
-            for (Py_ssize_t j = i + 1; j < count; j++) Py_XDECREF(items[j]);
+        if (PySet_Add(set, items[i]) < 0) {
             Py_DECREF(set);
             return NULL;
         }
@@ -10561,7 +10944,7 @@ static char By_ArmBuiltinSite(ByBuiltinSite *site, PyObject *dict, const char *b
  * the answer is one comparison and a load: it is asked every trip round a loop */
 static inline char By_BuiltinStands(ByBuiltinSite *site, PyObject *dict, const char *builtin) {
 #ifdef BY_GLOBAL_SITES
-    if (BY_LIKELY(by_globals != NULL && site->lookup.generation == by_globals->generation)) {
+    if (BY_LIKELY(site->lookup.generation == by_globals->generation)) {
         return site->answer;
     }
 #endif

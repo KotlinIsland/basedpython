@@ -683,6 +683,7 @@ mod tests {
             dest: made,
             src: Value::Register(p),
             to: RType::INT,
+            proved: false,
         });
         builder.push(Op::IntBinary {
             dest: answer,

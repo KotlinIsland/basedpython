@@ -356,6 +356,7 @@ impl FunctionBuilder {
                 dest: written,
                 src,
                 to: RType::Instance { .. },
+                ..
             }) if *written == dest => src.clone(),
             _ => return None,
         };

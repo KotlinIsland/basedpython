@@ -325,9 +325,12 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
             function.value_type(src),
             Some(RType::Primitive(Primitive::Fixed(_)))
         ),
-        // boxing allocates, unboxing is a checked narrowing, a raise raises, and
-        // an integer with no float at all raises `OverflowError`
-        Op::Box { .. } | Op::Unbox { .. } | Op::RaiseStandard { .. } => true,
+        // a narrowing a test standing over it already made has nothing left to check —
+        // see [`crate::proved_narrowings`]
+        Op::Unbox { proved, .. } => !*proved,
+        // boxing allocates, a raise raises, and an integer with no float at all raises
+        // `OverflowError`
+        Op::Box { .. } | Op::RaiseStandard { .. } => true,
     }
 }
 

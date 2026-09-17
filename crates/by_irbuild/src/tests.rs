@@ -296,6 +296,11 @@ def condition(a: object, b: object) -> int:
 
 def ints(a: int, b: int) -> object:
     return a > b
+
+def equal(a: object, b: object) -> int:
+    if a == b:
+        return 1
+    return 0
 ",
         |db, env, model, suite| {
             let module = crate::build_module(db, env, model, suite, "app", crate::Language::Python);
@@ -327,6 +332,9 @@ def ints(a: int, b: int) -> object:
                 named("condition")
             );
             assert!(!rich("ints") && !bit("ints"), "{}", named("ints"));
+            // `==` as a condition takes the same bit-answering form, which is where the
+            // runtime decides an equality without asking both operands in turn
+            assert!(bit("equal") && !rich("equal"), "{}", named("equal"));
         },
     );
 }
