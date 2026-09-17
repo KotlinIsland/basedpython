@@ -4,13 +4,53 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use ty_static::EnvVars;
 
-/// a temp directory of this process's own
+/// a directory a test builds a project in, which goes when the test passes
 ///
-/// the same reason the `by_build` suites have one: a fixed path under the system temp
-/// directory is shared by two concurrent runs, which then overwrite each other between
-/// the build and the read
-fn cli_root() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("by_cli_p{}", std::process::id()))
+/// a failing test keeps it, so the project and whatever the command wrote into it can
+/// still be read, and names it on stderr, which the test runner prints with the failure
+///
+/// the name carries the process id, for the same reason the `by_build` suites' directories
+/// do: a fixed path under the system temp directory is shared by two concurrent runs,
+/// which then overwrite each other between the build and the read
+struct Scratch(PathBuf);
+
+impl Scratch {
+    /// an empty place for `name` under the system temp directory
+    fn new(name: impl std::fmt::Display) -> Self {
+        let path = std::env::temp_dir().join(format!("{name}_p{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        Self(path)
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for Scratch {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            #[expect(
+                clippy::print_stderr,
+                reason = "the failure output is where a kept directory has to be named"
+            )]
+            {
+                eprintln!("kept the failing test's directory: {}", self.0.display());
+            }
+        } else {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 }
 
 fn transpile(source: &str) -> String {
@@ -63,9 +103,8 @@ fn run_transpile(source: &str, extra_args: &[&str]) -> String {
 ///
 /// Written by each `compile` staging test, which then differ only in what they do
 /// to the tree afterwards.
-fn resource_project(name: &str) -> PathBuf {
-    let dir = cli_root().join(name);
-    let _ = fs::remove_dir_all(&dir);
+fn resource_project(name: &str) -> Scratch {
+    let dir = Scratch::new(name);
     fs::create_dir_all(dir.join("data")).unwrap();
     fs::write(
         dir.join("pyproject.toml"),
@@ -249,8 +288,7 @@ fn a_build_with_nothing_to_write_leaves_no_output_directory() {
     // `by build` created the output directory before it knew whether it had
     // anything to put in it, so a project with no `.by` files — one whose sources
     // are all python, say — was left holding an empty `build/` it never asked for
-    let dir = cli_root().join("by_cli_build_no_litter");
-    let _ = fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_cli_build_no_litter");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("pyproject.toml"),
@@ -283,8 +321,7 @@ fn a_second_output_directory_is_not_carried_into_the_first() {
     // be an output from its arguments; the other is recognised by the
     // `.by-manifest` it carries, and without that it is carried over as though it
     // were source, putting a whole copy of one tree inside the other
-    let dir = cli_root().join("by_cli_two_outputs");
-    let _ = fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_cli_two_outputs");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("pyproject.toml"),
@@ -463,8 +500,7 @@ fn compile_emits_only_the_files_it_was_given_and_still_resolves_the_others() {
     // the database still holds the whole project, because a type imported from a
     // sibling has to resolve. that is what `lib.py` is here to prove: it is never
     // compiled, and `wanted.py` still lowers `Point` rather than declining
-    let dir = cli_root().join("by_cli_only_named");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_cli_only_named");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("pyproject.toml"),
@@ -551,7 +587,7 @@ fn compile_writes_each_package_member_at_its_own_place_in_the_output_tree() {
     // then wrote the same file and the second silently won — and *no* package
     // member's artefact was importable under the name it had been compiled as,
     // because a flat `dup.so` can only ever be imported as `dup`
-    let dir = cli_root().join("by_cli_package_tree");
+    let dir = Scratch::new("by_cli_package_tree");
     write_package_project(&dir);
 
     let out = dir.join("o");
@@ -602,8 +638,7 @@ fn compile_refuses_two_sources_that_would_write_the_same_artifact() {
     // stem. one artefact would be written twice and only the second kept, which is
     // the silent loss the tree was meant to end — so it is refused before anything
     // is written rather than half-performed
-    let dir = cli_root().join("by_cli_artifact_clash");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_cli_artifact_clash");
     std::fs::create_dir_all(dir.join("a-one")).unwrap();
     std::fs::create_dir_all(dir.join("b-two")).unwrap();
     std::fs::write(
@@ -645,8 +680,7 @@ fn compile_declines_a_package_body_whose_package_has_no_importable_name() {
     // no package to be relative to and its submodules are bound to nothing. a
     // sibling that *is* nameable from its own directory still compiles, because
     // its stem really is the only name it could be imported under
-    let dir = cli_root().join("by_cli_unnameable_package");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_cli_unnameable_package");
     std::fs::create_dir_all(dir.join("a-one")).unwrap();
     std::fs::write(
         dir.join("pyproject.toml"),
@@ -690,8 +724,7 @@ fn compile_transpiles_the_fallback_with_the_lowering_options_it_was_given() {
 async def total(s: str, n: int) -> int:
     return len(s) + n
 ";
-    let dir = cli_root().join("by_cli_soundness");
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("by_cli_soundness");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("sound.by");
     std::fs::write(&file, source).unwrap();
@@ -737,8 +770,7 @@ fn compile_reads_whether_to_follow_the_recursion_limit_from_the_project() {
     // the option is only worth anything if the command a project actually runs reads
     // it: a module compiled with the count left out says so to the header it includes
     let emitted = |name: &str, table: &str| -> Option<String> {
-        let dir = cli_root().join(name);
-        let _ = fs::remove_dir_all(&dir);
+        let dir = Scratch::new(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("pyproject.toml"),
@@ -792,8 +824,7 @@ fn compile_reads_whether_to_bind_functions_early_from_the_project() {
     // a compiled call asks whether the name still holds the function unless the project
     // says the module's functions are never rebound, and then it asks nothing
     let emitted = |name: &str, table: &str| -> Option<String> {
-        let dir = cli_root().join(name);
-        let _ = fs::remove_dir_all(&dir);
+        let dir = Scratch::new(name);
         fs::create_dir_all(&dir).unwrap();
         fs::write(
             dir.join("pyproject.toml"),
@@ -6247,9 +6278,8 @@ fn init_refuses_to_write_over_a_project() {
 /// a project for the runtime tests: a package whose modules import one another
 /// relatively, a subpackage, a hoisted named tuple and a call to a helper, and a
 /// script in a folder that is no package at all
-fn runtime_project(name: &str) -> PathBuf {
-    let dir = cli_root().join(name);
-    let _ = fs::remove_dir_all(&dir);
+fn runtime_project(name: &str) -> Scratch {
+    let dir = Scratch::new(format!("by_cli_{name}"));
     let app = dir.join("src").join("app");
     fs::create_dir_all(app.join("sub")).unwrap();
     fs::create_dir_all(dir.join("scripts")).unwrap();

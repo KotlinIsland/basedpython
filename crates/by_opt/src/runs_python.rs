@@ -798,6 +798,7 @@ fn op_itself_runs_python(function: &Function, op: &Op, held: &Held) -> bool {
         | Op::Identity { .. }
         | Op::IsSequence { .. }
         | Op::IsMapping { .. }
+        | Op::HoldsLayout { .. }
         | Op::LoadEllipsis { .. }
         | Op::ModuleDict { .. }
         | Op::LoadClass { .. }
@@ -935,6 +936,7 @@ fn op_itself_runs_python(function: &Function, op: &Op, held: &Held) -> bool {
         | Op::FloatObjectBinary { .. }
         | Op::FloatObjectCompare { .. }
         | Op::IsInstance { .. }
+        | Op::CheckSound { .. }
         | Op::MatchAttr { .. }
         | Op::MatchSlice { .. }
         | Op::MatchKey { .. }
@@ -1076,6 +1078,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),

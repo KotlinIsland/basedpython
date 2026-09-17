@@ -649,7 +649,8 @@ fn is_inert(function: &Function, op: &Op) -> bool {
         Op::FloatBinary { .. }
         | Op::FloatCompare { .. }
         | Op::RequireField { .. }
-        | Op::FieldIsSet { .. } => true,
+        | Op::FieldIsSet { .. }
+        | Op::HoldsLayout { .. } => true,
         Op::Assign { dest, .. } | Op::TupleGet { dest, .. } | Op::GetField { dest, .. } => {
             plain(dest)
         }

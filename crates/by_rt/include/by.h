@@ -285,9 +285,154 @@ BY_HOT ByTagged By_TaggedLiteral(PyObject *o) {
     return ((ByTagged)(void *)o) | BY_INT_TAG;
 }
 
-static inline void By_TypeError(const char *expected, PyObject *got) {
-    PyErr_Format(PyExc_TypeError, "expected %s, got %s", expected,
-                 got == NULL ? "NULL" : Py_TYPE(got)->tp_name);
+/* `type(o).__name__` as an f-string writes it, which is how the transpiled build's
+ * soundness check names what it was handed. NULL with the error set where asking raised */
+BY_COLD PyObject *By_TypeNameOf(PyObject *o) {
+    PyObject *name = PyObject_GetAttrString((PyObject *)Py_TYPE(o), "__name__");
+    PyObject *text;
+    if (name == NULL) return NULL;
+    text = PyObject_Format(name, NULL);
+    Py_DECREF(name);
+    return text;
+}
+
+/* a refusal a hot narrowing reaches only when it fails
+ *
+ * `noinline` alone is not enough for these: a call to a static function inside an inline
+ * narrowing such as `By_UnboxInt` is priced as if it might run, and `globals_` took 5%
+ * more instructions for it. `cold` says it will not */
+#if defined(__GNUC__) || defined(__clang__)
+#define BY_REFUSAL __attribute__((cold)) BY_COLD
+#else
+#define BY_REFUSAL BY_COLD
+#endif
+
+/* the `TypeError` a narrowing raises for a value that is not the `expected` builtin,
+ * worded as the transpiled build's soundness check words the same refusal: the checks
+ * sit in the same places, so the two builds raise one error rather than two */
+BY_REFUSAL void By_TypeError(const char *expected, PyObject *got) {
+    PyObject *name;
+    if (got == NULL) {
+        PyErr_Format(PyExc_TypeError, "type soundness violation: expected %s, got NULL",
+                     expected);
+        return;
+    }
+    name = By_TypeNameOf(got);
+    if (name == NULL) return;
+    PyErr_Format(PyExc_TypeError, "type soundness violation: expected %s, got %U", expected,
+                 name);
+    Py_DECREF(name);
+}
+
+/* the attribute `name` of `o`, or NULL with nothing raised where it has none */
+static inline int By_OptionalAttr(PyObject *o, PyObject *name, PyObject **found) {
+#if PY_VERSION_HEX >= 0x030D0000
+    return PyObject_GetOptionalAttr(o, name, found);
+#else
+    return _PyObject_LookupAttr(o, name, found);
+#endif
+}
+
+/* ── soundness checks ──────────────────────────────────────────────────────────
+ *
+ * where a value whose type nothing verified meets a declared one, the transpiled build
+ * checks it with `_soundness_check(value, target)`, and a compiled module makes the
+ * same check in the same place. these are that function's two halves */
+
+/* `isinstance(o, cls)` for an object that is not exactly of class `cls`
+ *
+ * a class whose own class is `type` has no `__instancecheck__` to ask, and python's answer
+ * for it is whether `o`'s type derives from `cls`, or failing that whether `o.__class__`
+ * does. while `o`'s type reads attributes the generic way and its `__class__` is
+ * `object`'s own descriptor, that second question answers `type(o)` again and runs nothing,
+ * so the answer is the first one alone. this is the refusal an optional takes for `None`
+ * on every read, and the call it saves looks `__class__` up and calls its getter */
+static int By_SoundIsOther(PyObject *o, PyObject *cls) {
+    static PyObject *dunder_class = NULL;
+    static PyObject *object_class = NULL;
+#ifndef Py_GIL_DISABLED
+    /* the last refusal worked out that way: a type, the version its attributes and bases
+     * had, and the class it does not derive from. the lookup and the walk cost a hundred
+     * instructions between them, and are asked again on every read of an optional.
+     *
+     * a write to the type's dict, to a base's, or to its `__bases__` moves the version, so
+     * a match is the answer both would give. the class is not held: a class the type does
+     * not derive from is not in its mro, and one arriving at the same address can only
+     * enter the mro through `__bases__`, which moves the version too */
+    static PyTypeObject *refused_type = NULL;
+    static unsigned int refused_version = 0;
+    static PyObject *refused_class = NULL;
+#endif
+    PyTypeObject *type = Py_TYPE(o);
+    if (!Py_IS_TYPE(cls, &PyType_Type) || type->tp_getattro != PyObject_GenericGetAttr) {
+        return PyObject_IsInstance(o, cls);
+    }
+#ifndef Py_GIL_DISABLED
+    if (type == refused_type && cls == refused_class && refused_version != 0
+        && type->tp_version_tag == refused_version) {
+        return 0;
+    }
+#endif
+    if (PyType_IsSubtype(type, (PyTypeObject *)cls)) return 1;
+    if (dunder_class == NULL) {
+        dunder_class = PyUnicode_InternFromString("__class__");
+        if (dunder_class == NULL) return -1;
+        object_class = _PyType_Lookup(&PyBaseObject_Type, dunder_class);
+    }
+    if (object_class == NULL || _PyType_Lookup(type, dunder_class) != object_class) {
+        return PyObject_IsInstance(o, cls);
+    }
+#ifndef Py_GIL_DISABLED
+    refused_type = type;
+    refused_version = type->tp_version_tag;
+    refused_class = cls;
+#endif
+    return 0;
+}
+
+/* python's `isinstance(o, cls)` for one class, taking an object of exactly that class
+ * without a call. that is the first thing `PyObject_IsInstance` asks itself, so the
+ * answer and everything the call would run are unchanged. -1 is an error */
+static inline int By_SoundIs(PyObject *o, PyObject *cls) {
+    if (BY_LIKELY((PyObject *)Py_TYPE(o) == cls)) return 1;
+    return By_SoundIsOther(o, cls);
+}
+
+/* the `TypeError` `_soundness_check` raises when `o` is not an instance of `target`,
+ * which is whatever that check's `isinstance` was handed — a class or a tuple of them:
+ *
+ *     f"type soundness violation: expected {getattr(_t, '__name__', _t)}, "
+ *     f"got {type(_v).__name__}" */
+BY_REFUSAL void By_SoundViolation(PyObject *o, PyObject *target) {
+    static PyObject *dunder_name = NULL;
+    PyObject *name;
+    PyObject *expected;
+    PyObject *got;
+    if (dunder_name == NULL) {
+        dunder_name = PyUnicode_InternFromString("__name__");
+        if (dunder_name == NULL) return;
+    }
+    if (By_OptionalAttr(target, dunder_name, &name) < 0) return;
+    expected = PyObject_Format(name == NULL ? target : name, NULL);
+    Py_XDECREF(name);
+    if (expected == NULL) return;
+    got = By_TypeNameOf(o);
+    if (got == NULL) {
+        Py_DECREF(expected);
+        return;
+    }
+    PyErr_Format(PyExc_TypeError, "type soundness violation: expected %U, got %U", expected,
+                 got);
+    Py_DECREF(expected);
+    Py_DECREF(got);
+}
+
+/* [`By_SoundViolation`] for a target of several classes, handed the tuple it builds, or
+ * NULL where building it raised */
+BY_REFUSAL void By_SoundViolationOf(PyObject *o, PyObject *target) {
+    if (target == NULL) return;
+    By_SoundViolation(o, target);
+    Py_DECREF(target);
 }
 
 /* how many digits an `int` has to have before no value of that length is a short
@@ -1131,7 +1276,7 @@ static inline char By_UnboxBool(PyObject *o) {
 
 static inline char By_UnboxNone(PyObject *o) {
     if (o != Py_None) {
-        By_TypeError("None", o);
+        By_TypeError("NoneType", o);
         return 2;
     }
     return 0;
@@ -3362,6 +3507,387 @@ static inline int By_ConstantsHeldUp(PyObject *cls, PyObject *carried) {
     return 1;
 }
 
+/* ── a compiled method, as its class publishes it ─────────────────────────────
+ *
+ * python's class holds a `function` under a method's name, and reading it off an
+ * instance hands back a bound `method` whose `__func__` is that function and whose
+ * `__self__` is the instance. a `method_descriptor` binds to a
+ * `builtin_function_or_method` instead, which has no `__func__` — so anything that
+ * takes a bound method apart and puts it back together, `weakref.WeakMethod` among
+ * them, refuses what a compiled class hands out.
+ *
+ * so the class holds one of these under the name, over the `method_descriptor` the
+ * method table built. it binds the way a function does, through `PyMethod_New`, and a
+ * call goes straight to the descriptor's own vectorcall, which still checks the
+ * receiver's type before the compiled body is reached. like a function it can be
+ * referred to weakly and written to: a class body hands a decorator the function it
+ * defined, and `abc.abstractmethod` writes `__isabstractmethod__` onto the object it is
+ * given and hands that same object back. what a decorator did not write is read through
+ * to the descriptor, so apart from binding it answers as the descriptor did.
+ *
+ * the type is shared by every module in the interpreter, the way the function watcher
+ * is: a direct call is licensed by recognising the method standing under a name, and
+ * a method a class of another module published has to be recognised as well */
+typedef struct {
+    PyObject_HEAD
+    vectorcallfunc vectorcall;
+    /* what a call goes to: the `method_descriptor` the method table built, or whatever a
+     * decorated method's lookup answered where that was not one */
+    PyObject *fn;
+    PyObject *dict;
+    PyObject *weakrefs;
+    /* the interpreted definition's function, once the twin class has been read, which is
+     * where the annotations python evaluated for the method are — see
+     * `By_Method_getattro` */
+    PyObject *twin;
+} ByMethodObject;
+
+#define BY_METHOD_TYPE_KEY "_by_method_type_v2"
+
+/* the type every module in this interpreter publishes its methods as, once the first
+ * of them has published one — see `By_FindMethodType` */
+static PyTypeObject *by_method_type = NULL;
+
+static void By_Method_dealloc(ByMethodObject *self) {
+    PyObject_GC_UnTrack(self);
+    if (self->weakrefs != NULL) PyObject_ClearWeakRefs((PyObject *)self);
+    Py_CLEAR(self->fn);
+    Py_CLEAR(self->dict);
+    Py_CLEAR(self->twin);
+    PyObject_GC_Del(self);
+}
+
+static int By_Method_traverse(ByMethodObject *self, visitproc visit, void *arg) {
+    Py_VISIT(self->fn);
+    Py_VISIT(self->dict);
+    Py_VISIT(self->twin);
+    return 0;
+}
+
+/* only the `__dict__`, which is the only side a cycle can run through that the class's
+ * own dict does not break first. leaving `fn` in place is what keeps a call and an
+ * attribute read from meeting a cleared field */
+static int By_Method_clear(ByMethodObject *self) {
+    Py_CLEAR(self->dict);
+    Py_CLEAR(self->twin);
+    return 0;
+}
+
+/* a class method's descriptor has no vectorcall of its own: python calls it by packing the
+ * arguments into a tuple, binding the class and calling what that made. where the class is
+ * one the method is defined on, that is the table entry called with the class in front,
+ * under the recursion check the bound call would have made — and anything else takes
+ * python's own path, which raises in its own words */
+static PyObject *By_ClassMethodCall(PyObject *fn, PyObject *const *args, size_t nargsf,
+                                    PyObject *kwnames) {
+    PyMethodDescrObject *descriptor = (PyMethodDescrObject *)fn;
+    PyMethodDef *def = descriptor->d_method;
+    Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
+    PyObject *result;
+    if ((def->ml_flags & (METH_FASTCALL | METH_KEYWORDS | METH_METHOD))
+            != (METH_FASTCALL | METH_KEYWORDS)
+        || nargs < 1 || !PyType_Check(args[0])
+        || !PyType_IsSubtype((PyTypeObject *)args[0], PyDescr_TYPE(descriptor))) {
+        return PyObject_Vectorcall(fn, args, nargsf, kwnames);
+    }
+    if (Py_EnterRecursiveCall(" while calling a Python object")) return NULL;
+    result = ((PyCFunctionFastWithKeywords)(void (*)(void))def->ml_meth)(args[0], args + 1,
+                                                                         nargs - 1, kwnames);
+    Py_LeaveRecursiveCall();
+    return result;
+}
+
+static PyObject *By_Method_vectorcall(PyObject *callable, PyObject *const *args, size_t nargsf,
+                                      PyObject *kwnames) {
+    PyObject *fn = ((ByMethodObject *)callable)->fn;
+    if (BY_LIKELY(Py_IS_TYPE(fn, &PyMethodDescr_Type))) {
+        vectorcallfunc call = ((PyMethodDescrObject *)fn)->vectorcall;
+        if (BY_LIKELY(call != NULL)) return call(fn, args, nargsf, kwnames);
+    }
+    if (Py_IS_TYPE(fn, &PyClassMethodDescr_Type)) {
+        return By_ClassMethodCall(fn, args, nargsf, kwnames);
+    }
+    return PyObject_Vectorcall(fn, args, nargsf, kwnames);
+}
+
+static PyObject *By_Method_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
+    (void)type;
+    if (obj == NULL || obj == Py_None) return By_NewRef(self);
+    return PyMethod_New(self, obj);
+}
+
+/* as a function prints itself, under the qualified name it answers — which is what a
+ * decorator that wrote one sees too. the builtin the call goes to prints itself as a
+ * builtin: a static method's as a method of a type object */
+static PyObject *By_Method_repr(ByMethodObject *self) {
+    PyObject *qualname = PyObject_GetAttrString((PyObject *)self, "__qualname__");
+    PyObject *text;
+    if (qualname == NULL) {
+        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return NULL;
+        PyErr_Clear();
+        return PyObject_Repr(self->fn);
+    }
+    text = PyUnicode_Check(qualname) ? PyUnicode_FromFormat("<function %U at %p>", qualname, self)
+                                     : PyUnicode_FromFormat("<function %R at %p>", qualname, self);
+    Py_DECREF(qualname);
+    return text;
+}
+
+/* whether `name` is one of what a function answers about the `def` it was made from — where
+ * it was defined, its defaults, its code and what python evaluated its annotations into —
+ * none of which the builtin a call goes to has an answer to. `inspect.signature` and
+ * `typing.get_type_hints` read these, as `functools.wraps` copies `__module__`
+ *
+ * `__closure__` is not one: the interpreted definition's cells belong to the class it was
+ * defined in, which is not the type standing under the class's name */
+static int By_IsDefinitionName(PyObject *name) {
+    static const char *const names[] = {
+        "__annotations__", "__annotate__", "__type_params__", "__module__", "__defaults__",
+        "__kwdefaults__",  "__code__",     "__globals__",     "__builtins__",
+    };
+    size_t at;
+    if (!PyUnicode_Check(name)) return 0;
+    for (at = 0; at < sizeof(names) / sizeof(names[0]); at++) {
+        if (PyUnicode_CompareWithASCIIString(name, names[at]) == 0) return 1;
+    }
+    return 0;
+}
+
+/* what a decorator wrote is this object's own; everything else it reads off a function
+ * belongs to what the call goes to until the method has a definition — and then what
+ * describes the `def` is that definition's, since python made it for the interpreted
+ * definition and nothing compiled has a true answer to it. those are read when asked, so on
+ * 3.14 the annotations are evaluated no earlier than python evaluates them. a static
+ * method's builtin does answer `__module__`, with `None`, so the definition is asked first
+ * rather than on a miss */
+static PyObject *By_Method_getattro(PyObject *self, PyObject *name) {
+    PyObject *value = PyObject_GenericGetAttr(self, name);
+    PyObject *twin = ((ByMethodObject *)self)->twin;
+    if (value == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
+        if (twin != NULL && By_IsDefinitionName(name)) {
+            PyErr_Clear();
+            return PyObject_GetAttr(twin, name);
+        }
+        /* one with a definition stands in for that `function`, which answers nothing else
+         * this object does not: the builtin's `__self__`, `__objclass__` and
+         * `__text_signature__` are answers the definition would raise for */
+        if (twin != NULL) return NULL;
+        PyErr_Clear();
+        value = PyObject_GetAttr(((ByMethodObject *)self)->fn, name);
+    }
+    return value;
+}
+
+/* a name this type itself answers — `__doc__` is one on every type — read the same way:
+ * written onto the object, or else the definition's, or else read through. `closure` is
+ * the name. the definition comes before the builtin because a class a metaclass built
+ * holds builtins owned by `object`, whose `__qualname__` names `object` */
+static PyObject *By_Method_read_through(PyObject *self, void *closure) {
+    PyObject *dict = ((ByMethodObject *)self)->dict;
+    PyObject *twin = ((ByMethodObject *)self)->twin;
+    if (dict != NULL) {
+        PyObject *own = PyDict_GetItemString(dict, (const char *)closure); /* borrowed */
+        if (own != NULL) return By_NewRef(own);
+    }
+    if (twin != NULL) return PyObject_GetAttrString(twin, (const char *)closure);
+    return PyObject_GetAttrString(((ByMethodObject *)self)->fn, (const char *)closure);
+}
+
+static int By_Method_write_through(PyObject *self, PyObject *value, void *closure) {
+    PyObject *dict = PyObject_GenericGetDict(self, NULL);
+    int result;
+    if (dict == NULL) return -1;
+    if (value != NULL) {
+        result = PyDict_SetItemString(dict, (const char *)closure, value);
+    } else {
+        result = PyDict_DelItemString(dict, (const char *)closure);
+        if (result < 0 && PyErr_ExceptionMatches(PyExc_KeyError)) {
+            PyErr_Clear();
+            PyErr_SetString(PyExc_AttributeError, (const char *)closure);
+        }
+    }
+    Py_DECREF(dict);
+    return result;
+}
+
+/* `copy` and `pickle` both go through this, and the descriptor's answer is to be looked
+ * up again by name on its class — which finds this object */
+static PyObject *By_Method_reduce(PyObject *self, PyObject *unused) {
+    (void)unused;
+    return PyObject_CallMethod(((ByMethodObject *)self)->fn, "__reduce__", NULL);
+}
+
+static PyMethodDef By_Method_methods[] = {
+    {"__reduce__", By_Method_reduce, METH_NOARGS, NULL},
+    {NULL, NULL, 0, NULL},
+};
+
+static PyGetSetDef By_Method_getset[] = {
+    {"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},
+    {"__name__", By_Method_read_through, By_Method_write_through, NULL, "__name__"},
+    {"__qualname__", By_Method_read_through, By_Method_write_through, NULL, "__qualname__"},
+    {"__doc__", By_Method_read_through, By_Method_write_through, NULL, "__doc__"},
+    {NULL, NULL, NULL, NULL, NULL},
+};
+
+/* named as what it stands in for, which is also what says a compiled body answered: an
+ * interpreted class holds a `function` under the same name */
+static PyTypeObject By_MethodType = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name = "by.method_descriptor",
+    .tp_basicsize = sizeof(ByMethodObject),
+    .tp_itemsize = 0,
+    .tp_dealloc = (destructor)By_Method_dealloc,
+    .tp_vectorcall_offset = offsetof(ByMethodObject, vectorcall),
+    .tp_repr = (reprfunc)By_Method_repr,
+    .tp_call = PyVectorcall_Call,
+    .tp_getattro = By_Method_getattro,
+    .tp_setattro = PyObject_GenericSetAttr,
+    /* so `obj.method()` from python calls it with `obj` in front rather than building
+     * the bound method first, which is what binding it would have handed the call */
+    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_HAVE_VECTORCALL
+                | Py_TPFLAGS_METHOD_DESCRIPTOR,
+    .tp_traverse = (traverseproc)By_Method_traverse,
+    .tp_clear = (inquiry)By_Method_clear,
+    .tp_weaklistoffset = offsetof(ByMethodObject, weakrefs),
+    .tp_methods = By_Method_methods,
+    .tp_getset = By_Method_getset,
+    .tp_descr_get = By_Method_descr_get,
+    .tp_dictoffset = offsetof(ByMethodObject, dict),
+    .tp_free = PyObject_GC_Del,
+};
+
+/* settle `by_method_type`: the type an earlier module shared, or else this module's own,
+ * readied and shared. the key carries the layout's version, so two modules only ever
+ * share a type whose objects they both read the same way */
+static int By_FindMethodType(void) {
+    PyInterpreterState *interpreter;
+    PyObject *state, *found;
+    if (by_method_type != NULL) return 0;
+    interpreter = PyInterpreterState_Get();
+    state = interpreter == NULL ? NULL : PyInterpreterState_GetDict(interpreter);
+    if (state == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "no interpreter state to share compiled methods in");
+        return -1;
+    }
+    found = PyDict_GetItemString(state, BY_METHOD_TYPE_KEY); /* borrowed */
+    if (found != NULL && PyType_Check(found)) {
+        by_method_type = (PyTypeObject *)By_NewRef(found);
+        return 0;
+    }
+    if (PyType_Ready(&By_MethodType) < 0) return -1;
+    if (PyDict_SetItemString(state, BY_METHOD_TYPE_KEY, (PyObject *)&By_MethodType) < 0) return -1;
+    by_method_type = (PyTypeObject *)By_NewRef((PyObject *)&By_MethodType);
+    return 0;
+}
+
+/* `fn` as a method: itself where it already is one, or else one over it */
+static inline PyObject *By_Method(PyObject *fn) {
+    ByMethodObject *self;
+    if (fn == NULL) return NULL;
+    if (By_FindMethodType() < 0) return NULL;
+    if (Py_IS_TYPE(fn, by_method_type)) return By_NewRef(fn);
+    self = PyObject_GC_New(ByMethodObject, by_method_type);
+    if (self == NULL) return NULL;
+    self->vectorcall = By_Method_vectorcall;
+    self->fn = By_NewRef(fn);
+    self->dict = NULL;
+    self->weakrefs = NULL;
+    self->twin = NULL;
+    PyObject_GC_Track(self);
+    return (PyObject *)self;
+}
+
+/* the `method_descriptor` standing under a name, whether the class holds it as itself or
+ * as a compiled method over it; NULL, with nothing raised, for anything else */
+static inline PyObject *By_MethodDescriptorOf(PyObject *found) {
+    if (found == NULL) return NULL;
+    if (by_method_type != NULL && Py_IS_TYPE(found, by_method_type)) {
+        found = ((ByMethodObject *)found)->fn;
+    }
+    return Py_IS_TYPE(found, &PyMethodDescr_Type) ? found : NULL;
+}
+
+/* publish each plain method among the `count` entries of `table` that `type` holds as
+ * the descriptor the table built as a compiled method over that descriptor
+ *
+ * the caller names the entries a `class` statement wrote. the rest of a table is what
+ * the runtime adds — a generator's `send`, a `__getstate__` — and python's own of those
+ * are builtins that bind as builtins
+ *
+ * an entry is replaced only where the class's own dict holds the descriptor of that very
+ * table entry. a name a slot backs holds the slot's wrapper instead, and a class the
+ * interpreted definition stands for holds functions, and both are left as they are.
+ *
+ * a class method and a static method are published the way a class statement holds them,
+ * as a `classmethod` or a `staticmethod` over the method, rather than as the descriptor and
+ * the builtin the table built. the class method binds the class through `PyMethod_New`,
+ * so what `C.make` hands back has a `__func__` and a `__self__`, and a call still goes to
+ * the table's own descriptor, which checks the class */
+static PyObject *By_PublishedMethod(PyObject *found, PyMethodDef *def) {
+    PyObject *method, *published;
+    if (def->ml_flags & METH_CLASS) {
+        if (!Py_IS_TYPE(found, &PyClassMethodDescr_Type)
+            || ((PyMethodDescrObject *)found)->d_method != def) {
+            return By_NewRef(Py_None);
+        }
+        method = By_Method(found);
+        if (method == NULL) return NULL;
+        published = PyClassMethod_New(method);
+        Py_DECREF(method);
+        return published;
+    }
+    if (def->ml_flags & METH_STATIC) {
+        PyObject *function;
+        int ours;
+        if (!Py_IS_TYPE(found, &PyStaticMethod_Type)) return By_NewRef(Py_None);
+        function = PyObject_GetAttrString(found, "__func__");
+        if (function == NULL) return NULL;
+        ours = PyCFunction_Check(function) && ((PyCFunctionObject *)function)->m_ml == def;
+        method = ours ? By_Method(function) : NULL;
+        Py_DECREF(function);
+        if (!ours) return By_NewRef(Py_None);
+        if (method == NULL) return NULL;
+        published = PyStaticMethod_New(method);
+        Py_DECREF(method);
+        return published;
+    }
+    if (!Py_IS_TYPE(found, &PyMethodDescr_Type) || ((PyMethodDescrObject *)found)->d_method != def) {
+        return By_NewRef(Py_None);
+    }
+    return By_Method(found);
+}
+
+static int By_PublishMethods(PyObject *type, PyMethodDef *table, Py_ssize_t count) {
+    PyObject *dict;
+    Py_ssize_t at;
+    int replaced = 0;
+    if (type == NULL || !PyType_Check(type)) return 0;
+    dict = ((PyTypeObject *)type)->tp_dict;
+    if (dict == NULL) return 0;
+    if (By_FindMethodType() < 0) return -1;
+    for (at = 0; at < count; at++) {
+        PyMethodDef *def = &table[at];
+        PyObject *found, *method;
+        int failed;
+        found = PyDict_GetItemString(dict, def->ml_name); /* borrowed */
+        if (found == NULL) continue;
+        /* `None` for an entry the dict does not hold as the table built it */
+        method = By_PublishedMethod(found, def);
+        if (method == NULL) return -1;
+        if (method == Py_None) {
+            Py_DECREF(method);
+            continue;
+        }
+        failed = PyDict_SetItemString(dict, def->ml_name, method) < 0;
+        Py_DECREF(method);
+        if (failed) return -1;
+        replaced = 1;
+    }
+    if (replaced) PyType_Modified((PyTypeObject *)type);
+    return 0;
+}
+
 /* one entry of a method table, as the descriptor a class namespace holds
  *
  * the three cases `type_add_methods` distinguishes: a class method and a static method
@@ -3809,9 +4335,10 @@ static inline void By_ArmMethod(ByMethodLicence *licence, PyObject *type, const 
     }
     /* reading the type's own attribute hands back the descriptor rather than a bound
      * method, so the compiled entry point is reachable through it */
-    int compiled = Py_IS_TYPE(found, &PyMethodDescr_Type)
-                   && ((PyMethodDescrObject *)found)->d_method != NULL
-                   && ((PyMethodDescrObject *)found)->d_method->ml_meth == body;
+    PyObject *descriptor = By_MethodDescriptorOf(found);
+    int compiled = descriptor != NULL
+                   && ((PyMethodDescrObject *)descriptor)->d_method != NULL
+                   && ((PyMethodDescrObject *)descriptor)->d_method->ml_meth == body;
     Py_DECREF(found);
     if (!compiled) return;
 #if PY_VERSION_HEX >= 0x030C0000
@@ -4030,11 +4557,20 @@ static void By_RecheckMethod(PyObject *o, PyObject *type, const char *class_name
     }
     /* the lookup hands back a *bound* method, so both halves are asked about: the
      * definition it carries has to be the compiled body, and it has to be bound to this
-     * receiver rather than to something the lookup found on the way */
-    int compiled = (Py_IS_TYPE(found, &PyCFunction_Type) || Py_IS_TYPE(found, &PyCMethod_Type))
+     * receiver rather than to something the lookup found on the way. a compiled method
+     * binds as a function does, and a table entry nothing replaced binds as a builtin */
+    int compiled;
+    if (PyMethod_Check(found)) {
+        PyObject *descriptor = By_MethodDescriptorOf(PyMethod_GET_FUNCTION(found));
+        compiled = descriptor != NULL
+                   && ((PyMethodDescrObject *)descriptor)->d_method->ml_meth == body
+                   && PyMethod_GET_SELF(found) == o;
+    } else {
+        compiled = (Py_IS_TYPE(found, &PyCFunction_Type) || Py_IS_TYPE(found, &PyCMethod_Type))
                    && ((PyCFunctionObject *)found)->m_ml != NULL
                    && ((PyCFunctionObject *)found)->m_ml->ml_meth == body
                    && ((PyCFunctionObject *)found)->m_self == o;
+    }
     /* the name of a type outlives the reference the lookup took: a bound builtin's type
      * is one of the interpreter's own statics */
     const char *reached = Py_TYPE(found)->tp_name;
@@ -4202,8 +4738,8 @@ static void By_ArmMethodSite(ByMethodSite *site, PyTypeObject *tp, PyObject *nam
      * run to find it. reading the attribute off the class instead runs a `__get__` of
      * the entry's own, and what that hands back for the class need not be what it hands
      * back for an instance */
-    PyObject *found = _PyType_Lookup(tp, name);
-    if (found == NULL || !Py_IS_TYPE(found, &PyMethodDescr_Type)) return;
+    PyObject *found = By_MethodDescriptorOf(_PyType_Lookup(tp, name));
+    if (found == NULL) return;
     /* a method descriptor serves the instances of the type that defined it, and refuses
      * anything else with a `TypeError`. `pop = list.pop` in a class of its own is that
      * refusal, and calling the entry point directly would hand `list_pop` a receiver
@@ -5204,6 +5740,12 @@ static PyObject *By_SettledValue(PyObject *value, const By_Twins *twins, int dep
         return By_SettleFunction(value, twins, depth - 1) ? By_NewRef(value)
                                                                        : NULL;
     }
+    /* a compiled method is settled as what its calls go to */
+    if (by_method_type != NULL && Py_IS_TYPE(value, by_method_type)) {
+        return By_SettlesInPlace(((ByMethodObject *)value)->fn, twins, depth - 1)
+                   ? By_NewRef(value)
+                   : NULL;
+    }
     /* a function written in C. the only thing it can hand back that python chose is
      * `__self__` — the module it was defined in, or the object a method of a built-in type
      * is bound to. its body resolves no names through a closure and none through a
@@ -5230,7 +5772,7 @@ static PyObject *By_SettledValue(PyObject *value, const By_Twins *twins, int dep
      *
      * `pprint` is why this is here: `_dispatch[dict.__repr__] = _pprint_dict` keys the
      * table on a slot wrapper, and refusing the *key* left all 18 values where they were */
-    if (Py_TYPE(value) == &PyMethodDescr_Type || Py_TYPE(value) == &PyWrapperDescr_Type
+    if (By_MethodDescriptorOf(value) != NULL || Py_TYPE(value) == &PyWrapperDescr_Type
         || Py_TYPE(value) == &PyClassMethodDescr_Type
         || Py_TYPE(value) == &PyGetSetDescr_Type || Py_TYPE(value) == &PyMemberDescr_Type) {
         PyObject *owner = PyObject_GetAttrString(value, "__objclass__");
@@ -5411,6 +5953,63 @@ static inline int By_AdoptAbcRegistry(PyObject *source, PyObject *target) {
     return PyDict_SetItemString(target, "_abc_impl", held);
 }
 
+/* `value` as a class holds it, or the callable inside the `classmethod` or `staticmethod`
+ * it is, as a new reference */
+static PyObject *By_UnwrappedMethod(PyObject *value) {
+    if (Py_IS_TYPE(value, &PyClassMethod_Type) || Py_IS_TYPE(value, &PyStaticMethod_Type)) {
+        return PyObject_GetAttrString(value, "__func__");
+    }
+    return By_NewRef(value);
+}
+
+/* hand each compiled method in `target`, a type's dict, the function the twin class holds
+ * under its name in `source`, which is where the method's annotations are — see
+ * `By_Method_getattro`
+ *
+ * a `classmethod` or `staticmethod` copies its callable's `__name__`, `__qualname__`,
+ * `__module__`, `__doc__` (and on 3.13 its `__annotations__`) when it is made, which was
+ * before the method had a definition to answer them from. so each one over a method given
+ * its definition here is made again, in place, the way python makes it. that is left until
+ * the dict has been walked, because making one reads attributes */
+static int By_AdoptMethodTwins(PyObject *source, PyObject *target) {
+    PyObject *key, *value, *remade;
+    Py_ssize_t position = 0, at;
+    int failed = 0;
+    if (by_method_type == NULL) return 0;
+    remade = PyList_New(0);
+    if (remade == NULL) return -1;
+    while (!failed && PyDict_Next(target, &position, &key, &value)) {
+        PyObject *method = By_UnwrappedMethod(value);
+        if (method == NULL) {
+            failed = 1;
+            break;
+        }
+        if (Py_IS_TYPE(method, by_method_type)) {
+            PyObject *twin = PyDict_GetItemWithError(source, key); /* borrowed */
+            PyObject *function = twin == NULL ? NULL : By_UnwrappedMethod(twin);
+            if (function == NULL && PyErr_Occurred()) {
+                failed = 1;
+            } else if (function != NULL && PyFunction_Check(function)) {
+                Py_XSETREF(((ByMethodObject *)method)->twin, function);
+                if (value != method && PyList_Append(remade, value) < 0) failed = 1;
+            } else {
+                Py_XDECREF(function);
+            }
+        }
+        Py_DECREF(method);
+    }
+    for (at = 0; !failed && at < PyList_GET_SIZE(remade); at++) {
+        PyObject *wrapper = PyList_GET_ITEM(remade, at); /* borrowed */
+        PyObject *method = PyObject_GetAttrString(wrapper, "__func__");
+        PyObject *arguments = method == NULL ? NULL : PyTuple_Pack(1, method);
+        failed = arguments == NULL || Py_TYPE(wrapper)->tp_init(wrapper, arguments, NULL) < 0;
+        Py_XDECREF(arguments);
+        Py_XDECREF(method);
+    }
+    Py_DECREF(remade);
+    return failed ? -1 : 0;
+}
+
 /* what the module body gave a class *after* its `class` statement, carried onto the
  * type that takes its place
  *
@@ -5448,6 +6047,7 @@ static inline int By_AdoptTwinAttributes(const By_Twins *twins) {
         target = ((PyTypeObject *)type)->tp_dict;
         if (source == NULL || target == NULL) continue;
         if (By_CarryAnnotations(source, target, twins) < 0) return -1;
+        if (By_AdoptMethodTwins(source, target) < 0) return -1;
         /* ahead of the walk below, which leaves a name the target already holds alone —
          * and the target holds an `_abc_impl` of its own, the empty one it was built with */
         if (By_AdoptAbcRegistry(source, target) < 0) return -1;
@@ -8039,6 +8639,54 @@ static inline int By_PublishNew(PyObject *type, PyMethodDef *def) {
     return stored;
 }
 
+/* publish the `__new__` that hands an interpreted subclass the allocator of the layout it
+ * extends, while the class itself keeps `object`'s `tp_new`
+ *
+ * the class's own construction needs nothing from it: `object`'s `tp_new` allocates through
+ * the class's own `tp_alloc`, which is the one that marks the fields absent — and keeping
+ * `object`'s is what lets `object.__new__(cls)` allocate the class at all, since python
+ * refuses that for a class whose `tp_new` is a C function of its own. the entry goes
+ * straight into the dict rather than through an assignment, which would install the
+ * dispatcher on the class itself.
+ *
+ * a subclass is what the entry is for. the `class` statement that makes one finds a
+ * `__new__` among its bases and installs the dispatcher that looks the name up, so every
+ * construction of the subclass comes through here and is handed the allocator first */
+static inline int By_PublishAllocatingNew(PyObject *type, PyMethodDef *def) {
+    PyTypeObject *owner = (PyTypeObject *)type;
+    PyObject *function = PyCFunction_NewEx(def, NULL, NULL);
+    if (function == NULL) return -1;
+    PyObject *published = PyStaticMethod_New(function);
+    Py_DECREF(function);
+    if (published == NULL) return -1;
+    int stored = PyDict_SetItemString(owner->tp_dict, "__new__", published);
+    Py_DECREF(published);
+    if (stored == 0) PyType_Modified(owner);
+    return stored;
+}
+
+/* the class a published `__new__` is asked to allocate, refused where python's own
+ * `__new__` refuses it: missing, not a class, or not built on `owner` */
+static inline PyTypeObject *By_NewTarget(PyObject *owner, PyObject *const *args, Py_ssize_t nargs) {
+    const char *name = ((PyTypeObject *)owner)->tp_name;
+    if (nargs < 1) {
+        PyErr_Format(PyExc_TypeError, "%s.__new__(): not enough arguments", name);
+        return NULL;
+    }
+    if (!PyType_Check(args[0])) {
+        PyErr_Format(PyExc_TypeError, "%s.__new__(X): X is not a type object (%s)", name,
+                     Py_TYPE(args[0])->tp_name);
+        return NULL;
+    }
+    PyTypeObject *subtype = (PyTypeObject *)args[0];
+    if (!PyType_IsSubtype(subtype, (PyTypeObject *)owner)) {
+        PyErr_Format(PyExc_TypeError, "%s.__new__(%s): %s is not a subtype of %s", name,
+                     subtype->tp_name, subtype->tp_name, name);
+        return NULL;
+    }
+    return subtype;
+}
+
 /* `obj.__weakref__`: the head of the weak references made of the object, or `None`
  *
  * what python's own descriptor answers, reached through the offset the type was built
@@ -8068,6 +8716,58 @@ static inline void By_AdoptAllocator(PyTypeObject *type, PyObject *owner, allocf
         && PyType_IsSubtype(type, (PyTypeObject *)owner)) {
         type->tp_alloc = alloc;
     }
+}
+
+/* publish the `__init_subclass__` that hands every interpreted subclass the allocator of
+ * the layout it extends, the moment the subclass is made
+ *
+ * the published `__new__` does that for an instance made through the class, but
+ * `object.__new__(cls)` reaches the subclass's own allocator without passing it, and until
+ * the subclass had been constructed once that allocator was the generic one: an unset `int`
+ * field read as `0`. `type.__new__` asks the bases for `__init_subclass__` whenever it makes
+ * a class, and the answer is looked up through the mro, so a subclass that writes one of
+ * its own and chains up with `super()` still reaches this.
+ *
+ * it is wrapped as the `classmethod` a class statement makes of an `__init_subclass__`, and
+ * fills no slot, so nothing else about the type changes by its being there */
+static inline int By_PublishInitSubclass(PyObject *type, PyMethodDef *def) {
+    PyTypeObject *owner = (PyTypeObject *)type;
+    PyObject *function = PyCFunction_NewEx(def, NULL, NULL);
+    if (function == NULL) return -1;
+    PyObject *published = PyClassMethod_New(function);
+    Py_DECREF(function);
+    if (published == NULL) return -1;
+    int stored = PyDict_SetItemString(owner->tp_dict, "__init_subclass__", published);
+    Py_DECREF(published);
+    if (stored == 0) PyType_Modified(owner);
+    return stored;
+}
+
+/* the body of a published `__init_subclass__`: hand `cls` the allocator, then go on up the
+ * chain exactly as a written one calling `super().__init_subclass__(...)` would, with every
+ * argument it was given — so a keyword no class takes is refused in python's own words */
+static PyObject *By_InitSubclass(PyObject *owner, allocfunc alloc, PyObject *const *args,
+                                 Py_ssize_t nargsf, PyObject *kwnames) {
+    Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
+    PyObject *cls;
+    PyObject *above;
+    PyObject *next;
+    PyObject *result;
+    if (nargs < 1 || !PyType_Check(args[0])) {
+        PyErr_Format(PyExc_TypeError, "%s.__init_subclass__() needs the class it is made for",
+                     ((PyTypeObject *)owner)->tp_name);
+        return NULL;
+    }
+    cls = args[0];
+    By_AdoptAllocator((PyTypeObject *)cls, owner, alloc);
+    above = PyObject_CallFunctionObjArgs((PyObject *)&PySuper_Type, owner, cls, NULL);
+    if (above == NULL) return NULL;
+    next = PyObject_GetAttrString(above, "__init_subclass__");
+    Py_DECREF(above);
+    if (next == NULL) return NULL;
+    result = PyObject_Vectorcall(next, args + 1, nargs - 1, kwnames);
+    Py_DECREF(next);
+    return result;
 }
 
 /* publish a `@property` as the object python builds out of its halves
@@ -8936,33 +9636,67 @@ static inline ByArrayHeader *By_ArrayNew(Py_ssize_t cap, size_t width) {
 static inline void *By_ArrayItems(ByArrayHeader *array) { return (void *)(array + 1); }
 
 /* the index a `list` would use, normalized and bounds-checked the same way — a
- * negative index counts from the end, and out of range is `IndexError` */
-/* the same, for an index a counter holds as a machine integer. no index past the short
+ * negative index counts from the end, and out of range is `IndexError`. a read and a
+ * store refuse in different words, as `list` does, so `out_of_range` is the one this
+ * access raises
+ *
+ * this form takes an index a counter holds as a machine integer. no index past the short
  * range fits a buffer, so this answers exactly as the tagged form does for every value
  * the counter can hold */
-static inline Py_ssize_t By_ArrayIndexI64(ByArrayHeader *array, int64_t at) {
+static inline Py_ssize_t By_ArrayIndexIn(ByArrayHeader *array, int64_t at,
+                                         const char *out_of_range) {
     if (array == NULL) return -1;
     if (BY_UNLIKELY(at < PY_SSIZE_T_MIN || at > PY_SSIZE_T_MAX)) {
-        PyErr_SetString(PyExc_IndexError, "list index out of range");
+        PyErr_SetString(PyExc_IndexError, "cannot fit 'int' into an index-sized integer");
         return -1;
     }
     Py_ssize_t index = (Py_ssize_t)at;
     if (index < 0) index += array->len;
     if (index < 0 || index >= array->len) {
-        PyErr_SetString(PyExc_IndexError, "list index out of range");
+        PyErr_SetString(PyExc_IndexError, out_of_range);
         return -1;
     }
     return index;
 }
 
-static inline Py_ssize_t By_ArrayIndex(ByArrayHeader *array, ByTagged tagged) {
-    if (array == NULL) return -1;
-    if (BY_UNLIKELY(!By_IsShort(tagged))) {
-        // a big integer cannot be a valid index into a buffer this size
-        PyErr_SetString(PyExc_IndexError, "list index out of range");
+/* an index held tagged. a big integer cannot be a valid index into a buffer, but which
+ * error it raises depends on whether it fits `Py_ssize_t`: python converts the index
+ * before it compares it with the length */
+BY_COLD Py_ssize_t By_ArrayIndexBig(ByTagged tagged, const char *out_of_range) {
+    PyObject *big = By_LongOf(tagged);
+    Py_ssize_t value = PyLong_AsSsize_t(big);
+    if (value == -1 && PyErr_Occurred()) {
+        if (!PyErr_ExceptionMatches(PyExc_OverflowError)) return -1;
+        PyErr_Clear();
+        PyErr_Format(PyExc_IndexError, "cannot fit '%.200s' into an index-sized integer",
+                     Py_TYPE(big)->tp_name);
         return -1;
     }
-    return By_ArrayIndexI64(array, By_ShortValue(tagged));
+    PyErr_SetString(PyExc_IndexError, out_of_range);
+    return -1;
+}
+
+static inline Py_ssize_t By_ArrayIndexTaggedIn(ByArrayHeader *array, ByTagged tagged,
+                                               const char *out_of_range) {
+    if (array == NULL) return -1;
+    if (BY_UNLIKELY(!By_IsShort(tagged))) return By_ArrayIndexBig(tagged, out_of_range);
+    return By_ArrayIndexIn(array, By_ShortValue(tagged), out_of_range);
+}
+
+static inline Py_ssize_t By_ArrayIndexI64(ByArrayHeader *array, int64_t at) {
+    return By_ArrayIndexIn(array, at, "list index out of range");
+}
+
+static inline Py_ssize_t By_ArrayIndex(ByArrayHeader *array, ByTagged tagged) {
+    return By_ArrayIndexTaggedIn(array, tagged, "list index out of range");
+}
+
+static inline Py_ssize_t By_ArrayStoreIndexI64(ByArrayHeader *array, int64_t at) {
+    return By_ArrayIndexIn(array, at, "list assignment index out of range");
+}
+
+static inline Py_ssize_t By_ArrayStoreIndex(ByArrayHeader *array, ByTagged tagged) {
+    return By_ArrayIndexTaggedIn(array, tagged, "list assignment index out of range");
 }
 
 /* grow a full buffer, doubling so a run of appends stays amortized constant */
@@ -9336,104 +10070,6 @@ static inline void By_Reraise(PyObject *value) {
     PyErr_Restore(By_NewRef((PyObject *)Py_TYPE(value)), By_NewRef(value),
                   PyException_GetTraceback(value));
 #endif
-}
-
-/* ── a compiled method, as a decorator sees it ────────────────────────────────
- *
- * a class body hands a decorator the *function* it defined, and a python function
- * carries a `__dict__`: `abc.abstractmethod` writes `__isabstractmethod__` onto the
- * object it is given and hands that same object back. compiling the method
- * substitutes a method descriptor, which takes no attributes at all — so the
- * substitution, and not the decorator, is what would turn that into an import
- * failure.
- *
- * this is the descriptor with a `__dict__` on it: callable, binding, and writable,
- * which is the whole of what a decorator asks of a function. only a *decorated*
- * method is wrapped, so an ordinary one keeps the descriptor and the direct call
- */
-typedef struct {
-    PyObject_HEAD
-    PyObject *fn;
-    PyObject *dict;
-} ByMethodObject;
-
-static void By_Method_dealloc(ByMethodObject *self) {
-    PyObject_GC_UnTrack(self);
-    Py_CLEAR(self->fn);
-    Py_CLEAR(self->dict);
-    Py_TYPE(self)->tp_free((PyObject *)self);
-}
-
-static int By_Method_traverse(ByMethodObject *self, visitproc visit, void *arg) {
-    Py_VISIT(self->fn);
-    Py_VISIT(self->dict);
-    return 0;
-}
-
-/* only the `__dict__`, which is the only side a cycle can run through: the method
- * itself is a descriptor owned by the type and has no way back here. leaving it in
- * place is what keeps a call and an attribute read from meeting a cleared field */
-static int By_Method_clear(ByMethodObject *self) {
-    Py_CLEAR(self->dict);
-    return 0;
-}
-
-static PyObject *By_Method_call(ByMethodObject *self, PyObject *args, PyObject *kwds) {
-    return PyObject_Call(self->fn, args, kwds);
-}
-
-/* bound the way a plain function is: reached through the type it is itself, reached
- * through an instance it is a method of that instance */
-static PyObject *By_Method_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
-    (void)type;
-    if (obj == NULL || obj == Py_None) return By_NewRef(self);
-    return PyMethod_New(self, obj);
-}
-
-/* what a decorator *wrote* is ours; everything else it reads off a function —
- * `__name__`, `__qualname__`, `__doc__` — still belongs to the method */
-static PyObject *By_Method_getattro(PyObject *self, PyObject *name) {
-    PyObject *value = PyObject_GenericGetAttr(self, name);
-    if (value == NULL && PyErr_ExceptionMatches(PyExc_AttributeError)) {
-        PyErr_Clear();
-        value = PyObject_GetAttr(((ByMethodObject *)self)->fn, name);
-    }
-    return value;
-}
-
-static PyGetSetDef By_Method_getset[] = {
-    {"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},
-    {NULL, NULL, NULL, NULL, NULL},
-};
-
-static PyTypeObject By_MethodType = {
-    PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "by.method",
-    .tp_basicsize = sizeof(ByMethodObject),
-    .tp_itemsize = 0,
-    .tp_dealloc = (destructor)By_Method_dealloc,
-    .tp_call = (ternaryfunc)By_Method_call,
-    .tp_getattro = By_Method_getattro,
-    .tp_setattro = PyObject_GenericSetAttr,
-    .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
-    .tp_traverse = (traverseproc)By_Method_traverse,
-    .tp_clear = (inquiry)By_Method_clear,
-    .tp_getset = By_Method_getset,
-    .tp_descr_get = By_Method_descr_get,
-    .tp_dictoffset = offsetof(ByMethodObject, dict),
-    .tp_free = PyObject_GC_Del,
-};
-
-static inline PyObject *By_Method(PyObject *fn) {
-    ByMethodObject *self;
-    if (fn == NULL) return NULL;
-    if (PyType_Ready(&By_MethodType) < 0) return NULL;
-    self = PyObject_GC_New(ByMethodObject, &By_MethodType);
-    if (self == NULL) return NULL;
-    self->fn = By_NewRef(fn);
-    self->dict = NULL;
-    PyObject_GC_Track(self);
-    return (PyObject *)self;
 }
 
 /* apply a method's decorators, innermost first, to the finished type — which is the
@@ -10484,14 +11120,6 @@ static inline PyObject *By_ResumeRaising(PyObject *self, PyObject **sent, PyObje
     return By_StepGenerator(self, sent, returned, state, frame, Py_None, resume);
 }
 
-/* the attribute `name` of `o`, or NULL with nothing raised where it has none */
-static inline int By_OptionalAttr(PyObject *o, PyObject *name, PyObject **found) {
-#if PY_VERSION_HEX >= 0x030D0000
-    return PyObject_GetOptionalAttr(o, name, found);
-#else
-    return _PyObject_LookupAttr(o, name, found);
-#endif
-}
 
 /* python's `gen_close_iter`: close the iterator a frame is delegating to, before the frame
  * itself is unwound. an iterator with no `close` has nothing to close, and one whose
@@ -11317,7 +11945,7 @@ static void By_ArmProtocolSite(ByProtocolSite *site, PyTypeObject *tp, PyObject 
     /* the two that bind to the manager by taking it as their first argument, so calling
      * the entry with the manager in front is what binding it would have done. anything
      * else binds some other way, or not at all, and is looked up in full every time */
-    if (!PyFunction_Check(found) && !Py_IS_TYPE(found, &PyMethodDescr_Type)) return;
+    if (!PyFunction_Check(found) && By_MethodDescriptorOf(found) == NULL) return;
 #if PY_VERSION_HEX >= 0x030C0000
     /* from 3.12 the tag is handed out on request rather than by whoever reads an
      * attribute, and a request is the only thing that reliably produces one */
@@ -11344,7 +11972,7 @@ static inline PyObject *By_LookupSpecial(PyObject *self, PyObject *name, int *pr
     PyObject *found = _PyType_Lookup(Py_TYPE(self), name);
     *prepend = 0;
     if (found == NULL) return NULL;
-    if (PyFunction_Check(found) || Py_IS_TYPE(found, &PyMethodDescr_Type)) {
+    if (PyFunction_Check(found) || By_MethodDescriptorOf(found) != NULL) {
         *prepend = 1;
         return Py_NewRef(found);
     }
@@ -12012,6 +12640,24 @@ typedef struct {
     const char *doc;
     /* the module's namespace, where `__module__` is read from */
     PyObject **globals;
+    /* where the definition wrote annotations, the python source of the function that
+     * evaluates them — see `by_irbuild::annotations` — and NULL where it wrote none */
+    const char *annotations;
+    /* whether `annotations` only raises, because the build could not say what they are:
+     * then it raises where they are asked for, and not where the `def` stands */
+    int annotations_refused;
+    /* the values of the enclosing names the annotations read, as a list, from the
+     * environment; NULL where they read none */
+    PyObject *(*annotation_values)(PyObject *env);
+    /* the function `annotations` defines, once it has been compiled */
+    PyObject **annotation_factory;
+    /* `(__defaults__, __kwdefaults__)` as the boundary fills them in, from the environment;
+     * NULL where the definition has no defaults */
+    PyObject *(*defaults)(PyObject *env);
+    /* the interpreted module, whose code objects hold this definition's own */
+    const By_Fallback *fallback;
+    /* that code object, once it has been found */
+    PyObject **code;
 } ByFunctionSpec;
 
 typedef struct {
@@ -12024,6 +12670,20 @@ typedef struct {
     PyObject *module;
     PyObject *doc;
     PyObject *dict;
+    /* the evaluated `__annotations__`, once there are some */
+    PyObject *annotations;
+    /* an `__annotate__` written over the definition's, `None` included, and `None` once
+     * `__annotations__` has been written; NULL where neither was */
+    PyObject *annotate;
+    /* `__type_params__`, once it has been made or written */
+    PyObject *type_params;
+    /* the type parameters the definition made, which its annotations name whatever
+     * `__type_params__` is written over with */
+    PyObject *made_type_params;
+    /* before 3.14, the values the enclosing names the annotations read held where the
+     * `def` stood, kept until the annotations are first asked for — see
+     * `By_AnnotateAtDefinition` */
+    PyObject *annotation_values;
 } ByFunctionObject;
 
 static void By_Function_dealloc(ByFunctionObject *self) {
@@ -12034,6 +12694,11 @@ static void By_Function_dealloc(ByFunctionObject *self) {
     Py_CLEAR(self->module);
     Py_CLEAR(self->doc);
     Py_CLEAR(self->dict);
+    Py_CLEAR(self->annotations);
+    Py_CLEAR(self->annotate);
+    Py_CLEAR(self->type_params);
+    Py_CLEAR(self->made_type_params);
+    Py_CLEAR(self->annotation_values);
     PyObject_GC_Del(self);
 }
 
@@ -12042,6 +12707,11 @@ static int By_Function_traverse(ByFunctionObject *self, visitproc visit, void *a
     Py_VISIT(self->module);
     Py_VISIT(self->doc);
     Py_VISIT(self->dict);
+    Py_VISIT(self->annotations);
+    Py_VISIT(self->annotate);
+    Py_VISIT(self->type_params);
+    Py_VISIT(self->made_type_params);
+    Py_VISIT(self->annotation_values);
     return 0;
 }
 
@@ -12049,6 +12719,11 @@ static int By_Function_clear(ByFunctionObject *self) {
     Py_CLEAR(self->module);
     Py_CLEAR(self->doc);
     Py_CLEAR(self->dict);
+    Py_CLEAR(self->annotations);
+    Py_CLEAR(self->annotate);
+    Py_CLEAR(self->type_params);
+    Py_CLEAR(self->made_type_params);
+    Py_CLEAR(self->annotation_values);
     return 0;
 }
 
@@ -12148,6 +12823,319 @@ static int By_Function_set_doc(PyObject *self, PyObject *value, void *closure) {
     return 0;
 }
 
+/* python's own `__globals__`: the namespace of the module the `def` was written in, which
+ * is what `typing.get_type_hints` evaluates a string annotation against */
+static PyObject *By_Function_get_globals(PyObject *self, void *closure) {
+    (void)closure;
+    PyObject *globals = *((ByFunctionObject *)self)->spec->globals;
+    if (globals == NULL) {
+        PyErr_SetString(PyExc_AttributeError, "__globals__");
+        return NULL;
+    }
+    return By_NewRef(globals);
+}
+
+/* the definition python would have made where the `def` stands, with its annotations and no
+ * body, over the values the enclosing names held where the `def` stood where those were
+ * kept, and over the values they hold now otherwise — see `by_irbuild::annotations` */
+static PyObject *By_AnnotatedDefinition(PyObject *self) {
+    const ByFunctionSpec *spec = ((ByFunctionObject *)self)->spec;
+    PyObject *factory = *spec->annotation_factory;
+    if (factory == NULL) {
+        PyObject *globals = *spec->globals;
+        PyObject *code, *ran, *locals;
+        if (globals == NULL) {
+            PyErr_SetString(PyExc_RuntimeError, "the module's namespace is gone");
+            return NULL;
+        }
+        code = Py_CompileString(spec->annotations, "<by annotations>", Py_file_input);
+        if (code == NULL) return NULL;
+        locals = PyDict_New();
+        if (locals == NULL) {
+            Py_DECREF(code);
+            return NULL;
+        }
+        ran = PyEval_EvalCode(code, globals, locals);
+        Py_DECREF(code);
+        if (ran == NULL) {
+            Py_DECREF(locals);
+            return NULL;
+        }
+        Py_DECREF(ran);
+        factory = PyDict_GetItemString(locals, "_by_annotations"); /* borrowed */
+        if (factory == NULL) {
+            Py_DECREF(locals);
+            PyErr_SetString(PyExc_RuntimeError, "the annotation factory defines no function");
+            return NULL;
+        }
+        *spec->annotation_factory = By_NewRef(factory);
+        Py_DECREF(locals);
+    }
+    PyObject *values = ((ByFunctionObject *)self)->annotation_values;
+    if (values != NULL) {
+        values = By_NewRef(values);
+    } else if (spec->annotation_values == NULL) {
+        values = By_NewRef(Py_None);
+    } else {
+        values = spec->annotation_values(((ByFunctionObject *)self)->env);
+    }
+    if (values == NULL) return NULL;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    PyObject *made = function->made_type_params == NULL ? Py_None : function->made_type_params;
+    PyObject *definition = PyObject_CallFunctionObjArgs(factory, values, made, NULL);
+    Py_DECREF(values);
+    if (definition != NULL && function->made_type_params == NULL) {
+        function->made_type_params = PyObject_GetAttrString(definition, "__type_params__");
+        if (function->made_type_params == NULL) Py_CLEAR(definition);
+    }
+    return definition;
+}
+
+/* 3.13 evaluates a function's annotations where its `def` stands, and a closure made there
+ * is handed them. evaluating them is a python call that makes a whole definition, which
+ * cost a closure four thousand instructions more to make than one without annotations, so
+ * what is taken where the `def` stands is only the values the enclosing names hold, and
+ * the annotations are evaluated over those when they are first asked for. the reference is
+ * taken over, and let go of where reading the values raises */
+static inline PyObject *By_AnnotateAtDefinition(PyObject *self) {
+#if PY_VERSION_HEX < 0x030E0000
+    if (self == NULL || ((ByFunctionObject *)self)->spec->annotations == NULL
+        || ((ByFunctionObject *)self)->spec->annotations_refused
+        || ((ByFunctionObject *)self)->spec->annotation_values == NULL) {
+        return self;
+    }
+    PyObject *values =
+        ((ByFunctionObject *)self)->spec->annotation_values(((ByFunctionObject *)self)->env);
+    if (values == NULL) {
+        Py_DECREF(self);
+        return NULL;
+    }
+    ((ByFunctionObject *)self)->annotation_values = values;
+#endif
+    return self;
+}
+
+/* python makes a function's type parameters with the function, so they are made once for
+ * each closure and kept */
+static PyObject *By_Function_get_type_params(PyObject *self, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    if (function->type_params == NULL) {
+        if (function->spec->annotations == NULL) {
+            function->type_params = PyTuple_New(0);
+        } else {
+            if (function->made_type_params == NULL) {
+                PyObject *definition = By_AnnotatedDefinition(self);
+                if (definition == NULL) return NULL;
+                Py_DECREF(definition);
+            }
+            function->type_params = By_NewRef(function->made_type_params);
+        }
+        if (function->type_params == NULL) return NULL;
+    }
+    return By_NewRef(function->type_params);
+}
+
+static int By_Function_set_type_params(PyObject *self, PyObject *value, void *closure) {
+    (void)closure;
+    if (value == NULL || !PyTuple_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "__type_params__ must be set to a tuple");
+        return -1;
+    }
+    Py_XSETREF(((ByFunctionObject *)self)->type_params, By_NewRef(value));
+    return 0;
+}
+
+#if PY_VERSION_HEX >= 0x030E0000
+/* from 3.14 python evaluates annotations when they are first asked for, through an
+ * `__annotate__` over the enclosing frames' cells. this one is python's own, made for the
+ * definition from the values the enclosing names hold when it is asked for */
+static PyObject *By_Function_get_annotate(PyObject *self, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    if (function->annotate != NULL) return By_NewRef(function->annotate);
+    if (function->spec->annotations == NULL) return By_NewRef(Py_None);
+    PyObject *definition = By_AnnotatedDefinition(self);
+    if (definition == NULL) return NULL;
+    PyObject *annotate = PyObject_GetAttrString(definition, "__annotate__");
+    Py_DECREF(definition);
+    if (annotate == NULL || annotate == Py_None) return annotate;
+    PyObject *qualname = PyUnicode_FromFormat("%s.__annotate__", function->spec->qualname);
+    int named = qualname == NULL ? -1 : PyObject_SetAttrString(annotate, "__qualname__", qualname);
+    Py_XDECREF(qualname);
+    if (named < 0) {
+        Py_DECREF(annotate);
+        return NULL;
+    }
+    return annotate;
+}
+
+static int By_Function_set_annotate(PyObject *self, PyObject *value, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    if (value == NULL) {
+        PyErr_SetString(PyExc_TypeError, "__annotate__ cannot be deleted");
+        return -1;
+    }
+    if (value != Py_None && !PyCallable_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "__annotate__ must be callable or None");
+        return -1;
+    }
+    Py_XSETREF(function->annotate, By_NewRef(value));
+    if (value != Py_None) Py_CLEAR(function->annotations);
+    return 0;
+}
+#endif
+
+static PyObject *By_Function_get_annotations(PyObject *self, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    if (function->annotations == NULL) {
+#if PY_VERSION_HEX >= 0x030E0000
+        PyObject *annotate = By_Function_get_annotate(self, NULL);
+        if (annotate == NULL) return NULL;
+        if (annotate != Py_None && PyCallable_Check(annotate)) {
+            PyObject *value_format = PyLong_FromLong(1);
+            PyObject *annotations =
+                value_format == NULL ? NULL : PyObject_CallOneArg(annotate, value_format);
+            Py_XDECREF(value_format);
+            Py_DECREF(annotate);
+            if (annotations == NULL) return NULL;
+            if (!PyDict_Check(annotations)) {
+                PyErr_Format(PyExc_TypeError, "__annotate__ returned non-dict of type '%.100s'",
+                             Py_TYPE(annotations)->tp_name);
+                Py_DECREF(annotations);
+                return NULL;
+            }
+            function->annotations = annotations;
+        } else {
+            Py_DECREF(annotate);
+        }
+#else
+        /* evaluated the first time they are asked for, unless something has been written
+         * over them since, and the values kept for it are let go of once they have been.
+         * annotations the build could not supply raise here instead */
+        if (function->spec->annotations != NULL && function->annotate == NULL) {
+            PyObject *definition = By_AnnotatedDefinition(self);
+            if (definition == NULL) return NULL;
+            PyObject *annotations = PyObject_GetAttrString(definition, "__annotations__");
+            Py_DECREF(definition);
+            if (annotations == NULL) return NULL;
+            function->annotations = annotations;
+            Py_CLEAR(function->annotation_values);
+        }
+#endif
+        if (function->annotations == NULL) {
+            function->annotations = PyDict_New();
+            if (function->annotations == NULL) return NULL;
+        }
+    }
+    return By_NewRef(function->annotations);
+}
+
+static int By_Function_set_annotations(PyObject *self, PyObject *value, void *closure) {
+    (void)closure;
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    if (value == Py_None) value = NULL;
+    if (value != NULL && !PyDict_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "__annotations__ must be set to a dict object");
+        return -1;
+    }
+    Py_XSETREF(function->annotations, Py_XNewRef(value));
+    Py_XSETREF(function->annotate, By_NewRef(Py_None));
+    return 0;
+}
+
+/* the code object python compiled for this definition in the interpreted module, found by
+ * its qualified name among the constants of every code object the module holds
+ *
+ * `count` is how many answer to the name: a module whose body defines the same qualified
+ * name twice — a `def` under each arm of an `if` — does not say which is this one */
+static void By_FindCode(PyObject *code, PyObject *qualname, PyObject **found, int *count) {
+    PyObject *consts = PyObject_GetAttrString(code, "co_consts");
+    if (consts == NULL) {
+        PyErr_Clear();
+        return;
+    }
+    if (PyTuple_Check(consts)) {
+        for (Py_ssize_t at = 0; at < PyTuple_GET_SIZE(consts); at++) {
+            PyObject *item = PyTuple_GET_ITEM(consts, at);
+            if (!PyCode_Check(item)) continue;
+            PyObject *named = PyObject_GetAttrString(item, "co_qualname");
+            if (named == NULL) {
+                PyErr_Clear();
+            } else {
+                int same = PyUnicode_Check(named) && PyUnicode_Compare(named, qualname) == 0;
+                Py_DECREF(named);
+                if (same) {
+                    (*count)++;
+                    Py_XSETREF(*found, By_NewRef(item));
+                }
+            }
+            By_FindCode(item, qualname, found, count);
+        }
+    }
+    Py_DECREF(consts);
+}
+
+/* python's `__code__`: the one the interpreted definition runs, which is what says what
+ * parameters the function takes — `inspect.signature` reads them off it, as it does off a
+ * cython function */
+static PyObject *By_Function_get_code(PyObject *self, void *closure) {
+    (void)closure;
+    const ByFunctionSpec *spec = ((ByFunctionObject *)self)->spec;
+    if (spec->fallback == NULL || spec->code == NULL) {
+        PyErr_SetString(PyExc_AttributeError, "__code__");
+        return NULL;
+    }
+    if (*spec->code == NULL) {
+        PyObject *module = By_FallbackCode(spec->fallback);
+        if (module == NULL) {
+            if (PyErr_Occurred()) return NULL;
+            module = Py_CompileString(spec->fallback->source, "<string>", Py_file_input);
+            if (module == NULL) return NULL;
+        }
+        PyObject *qualname = PyUnicode_FromString(spec->qualname);
+        PyObject *found = NULL;
+        int count = 0;
+        if (qualname != NULL) By_FindCode(module, qualname, &found, &count);
+        Py_XDECREF(qualname);
+        Py_DECREF(module);
+        if (qualname == NULL) return NULL;
+        if (count != 1) {
+            Py_XDECREF(found);
+            PyErr_Format(PyExc_AttributeError,
+                         "the interpreted module does not define `%s` exactly once, so this "
+                         "compiled function has no `__code__`",
+                         spec->qualname);
+            return NULL;
+        }
+        *spec->code = found;
+    }
+    return By_NewRef(*spec->code);
+}
+
+/* one half of what `spec->defaults` hands back */
+static PyObject *By_Function_default_half(PyObject *self, Py_ssize_t half) {
+    ByFunctionObject *function = (ByFunctionObject *)self;
+    if (function->spec->defaults == NULL) return By_NewRef(Py_None);
+    PyObject *both = function->spec->defaults(function->env);
+    if (both == NULL) return NULL;
+    PyObject *answer = By_NewRef(PyTuple_GET_ITEM(both, half));
+    Py_DECREF(both);
+    return answer;
+}
+
+static PyObject *By_Function_get_defaults(PyObject *self, void *closure) {
+    (void)closure;
+    return By_Function_default_half(self, 0);
+}
+
+static PyObject *By_Function_get_kwdefaults(PyObject *self, void *closure) {
+    (void)closure;
+    return By_Function_default_half(self, 1);
+}
+
 static PyObject *By_Function_self(PyObject *self, PyObject *unused) {
     (void)unused;
     return By_NewRef(self);
@@ -12173,6 +13161,15 @@ static PyGetSetDef By_Function_getset[] = {
     {"__module__", By_Function_get_module, By_Function_set_module, NULL, NULL},
     {"__doc__", By_Function_get_doc, By_Function_set_doc, NULL, NULL},
     {"__dict__", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},
+    {"__globals__", By_Function_get_globals, NULL, NULL, NULL},
+    {"__code__", By_Function_get_code, NULL, NULL, NULL},
+    {"__type_params__", By_Function_get_type_params, By_Function_set_type_params, NULL, NULL},
+    {"__defaults__", By_Function_get_defaults, NULL, NULL, NULL},
+    {"__kwdefaults__", By_Function_get_kwdefaults, NULL, NULL, NULL},
+    {"__annotations__", By_Function_get_annotations, By_Function_set_annotations, NULL, NULL},
+#if PY_VERSION_HEX >= 0x030E0000
+    {"__annotate__", By_Function_get_annotate, By_Function_set_annotate, NULL, NULL},
+#endif
     {NULL, NULL, NULL, NULL, NULL},
 };
 
@@ -12214,6 +13211,11 @@ static inline PyObject *By_MakeFunction(const ByFunctionSpec *spec, PyObject *en
     self->module = NULL;
     self->doc = NULL;
     self->dict = NULL;
+    self->annotations = NULL;
+    self->annotate = NULL;
+    self->type_params = NULL;
+    self->made_type_params = NULL;
+    self->annotation_values = NULL;
     PyObject_GC_Track(self);
     return (PyObject *)self;
 }
@@ -12236,8 +13238,7 @@ static inline PyObject *By_FunctionEnvironment(PyObject *callable) {
    follow a wild pointer */
 static inline PyObject *By_CheckInstance(PyObject *o, PyTypeObject *type) {
     if (!PyObject_TypeCheck(o, type)) {
-        PyErr_Format(PyExc_TypeError, "expected %s, got %s", type->tp_name,
-                     Py_TYPE(o)->tp_name);
+        By_SoundViolation(o, (PyObject *)type);
         return NULL;
     }
     return o;

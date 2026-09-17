@@ -8,6 +8,7 @@
 //! interpreted definition. so coverage of the language is total from the first
 //! milestone and only the speed varies.
 
+pub mod annotations;
 mod closures;
 mod comprehension_scopes;
 mod generators;
@@ -35,9 +36,14 @@ pub enum Language {
 ///
 /// a [`Language`] converts into one, so every caller with nothing more to say goes on
 /// passing the language it always passed
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LowerOptions {
     pub language: Language,
+    /// which of the runtime soundness checks the interpreted build makes a compiled
+    /// module makes too — the positions the fallback is transpiled with, so that both
+    /// builds check the same values in the same places. a `.py` source is its own
+    /// fallback and makes none
+    pub soundness: by_transforms::SoundnessPositions,
     /// have each licensed direct call re-ask, at runtime, the lookup it skips — and
     /// abort where the two disagree. see [`by_ir::ops::Op::LicenceHolds`]
     ///
@@ -58,9 +64,19 @@ impl From<Language> for LowerOptions {
     fn from(language: Language) -> Self {
         Self {
             language,
+            soundness: match language {
+                Language::BasedPython => by_transforms::Config::default().soundness,
+                Language::Python => by_transforms::SoundnessPositions::none(),
+            },
             recheck_licences: false,
             bind_functions_early: false,
         }
+    }
+}
+
+impl Default for LowerOptions {
+    fn default() -> Self {
+        Language::default().into()
     }
 }
 
@@ -115,7 +131,7 @@ use by_ir::function::{
 };
 use by_ir::ops::{
     BinOp, BlockId, CmpOp, Concatenation, Conversion, LicenceKind, Mutation, Op, RegisterId,
-    StandardError, Terminator, UnaryOp, Value,
+    SoundTarget, StandardError, Terminator, UnaryOp, Value,
 };
 use by_ir::rtype::{Primitive, RType};
 use mapper::{Decline, Layouts, Lowered, map_fixed_tuple, map_type, map_type_with};
@@ -126,6 +142,7 @@ use ruff_python_ast::{
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::ProgramEnvironment;
+use ty_python_semantic::types::soundness::{CheckKind, CheckTarget};
 use ty_python_semantic::types::{KnownClass, SpecialFormType, Type, TypeDefinition, TypeQualifier};
 use ty_python_semantic::{HasType, SemanticModel};
 
@@ -144,10 +161,14 @@ pub fn build_module(
 ) -> ModuleIr {
     let LowerOptions {
         language,
+        soundness,
         recheck_licences,
         bind_functions_early,
     } = options.into();
     let mut module = ModuleIr::new(module_name);
+    // where the interpreted build checks a value it cannot trust, decided once for the
+    // whole module, so every frame lowered below makes the same checks in the same places
+    let soundness = by_transforms::soundness_sites(model, suite, soundness);
 
     // a call is only lowered natively when the callee is a module-level function
     // in this same unit, so the set has to be known before any body is lowered
@@ -602,6 +623,7 @@ pub fn build_module(
         method_names: &method_names,
         accessors: &accessors,
         language,
+        soundness: &soundness,
         recheck_licences,
         bind_functions_early,
         db,
@@ -1523,6 +1545,7 @@ fn lower_generator(
         vec![by_ir::function::ClassIr {
             exported: false,
             declares_slots: false,
+            slots_weak_references: false,
             name: class,
             // the machine is the same; only the surface differs. a coroutine answers
             // `__await__` and is deliberately *not* iterable
@@ -1773,6 +1796,7 @@ fn lower_resume(
         comprehensions: 0,
         unnarrowed: None,
         language: unit.language,
+        soundness: unit.soundness,
         recheck_licences: unit.recheck_licences,
         bind_functions_early: unit.bind_functions_early,
         environment,
@@ -1810,6 +1834,8 @@ fn lower_resume(
         cleanups: Vec::new(),
         drained_prelude: None,
     };
+    // a generator's body, and the checks at its head, run at the first resumption
+    lowering.check_parameters(function)?;
     lowering.block(&function.body)?;
 
     // falling off the end exhausts the generator
@@ -3105,6 +3131,7 @@ fn lower_class<'a>(
             decorators: class_decorators,
             generic: class.type_params.is_some(),
             declares_slots: declared_slots(class).is_some(),
+            slots_weak_references: slots_ask_for_weak_references(class)?,
             constants,
             slot_aliases,
             methods: lowered,
@@ -3786,6 +3813,14 @@ fn declared_slots(class: &ast::StmtClassDef) -> Option<&Expr> {
         })
 }
 
+/// whether a class's `__slots__` names `__weakref__`
+fn slots_ask_for_weak_references(class: &ast::StmtClassDef) -> Lowered<bool> {
+    let Some(value) = declared_slots(class) else {
+        return Ok(false);
+    };
+    Ok(slot_names(value)?.contains(&"__weakref__"))
+}
+
 /// the attribute names a `__slots__` value declares
 ///
 /// a bare string declares one, and an iterable of strings declares each. python accepts
@@ -3825,12 +3860,17 @@ fn slot_fields(
         return Ok(fields);
     };
     for name in slot_names(value)? {
-        // neither is storage of the instance's own: they ask the *type* for a dict and
-        // for weakref support, and a spec adds neither
-        if matches!(name, "__dict__" | "__weakref__") {
-            return Err(Decline::new(format!(
-                "`__slots__` asks for `{name}`, which a type spec cannot add"
-            )));
+        // neither is storage of the instance's own: they ask the *type* for a dict and for
+        // a weak-reference list. the list is the word every emitted instance whose layout
+        // asks for one already keeps — see `ModuleIr::keeps_weak_references` — and a dict
+        // is what a `__slots__` is written to refuse
+        if name == "__weakref__" {
+            continue;
+        }
+        if name == "__dict__" {
+            return Err(Decline::new(
+                "`__slots__` asks for `__dict__`, which a type spec cannot add",
+            ));
         }
         if !is_identifier(name) {
             return Err(Decline::new("a `__slots__` entry is not an identifier"));
@@ -7342,6 +7382,7 @@ fn lower_function_with_receiver(
             constructor.nested = Some(by_ir::function::NestedName {
                 name: python_name,
                 qualname,
+                annotations: nested_annotations(captures),
             });
         }
         return Ok((constructor, classes));
@@ -7466,6 +7507,14 @@ fn lower_function_with_receiver(
             unit.environment_suffix.unwrap_or_default()
         ),
     );
+    // the environment holds the frame's receiver only for a name some nested function
+    // reads from further up. python's closure holds a cell for each name it reads and
+    // nothing more, so a method's `self` is not held unless a body reads it — and the
+    // receiver of a method is an instance, whose fields are not names at all
+    let reads_further_up = nested
+        .iter()
+        .flat_map(|entry| entry.captures.iter())
+        .any(|name| !owned.contains(name));
     let frame_owned: HashSet<String> = if split {
         owned.difference(&bindings_here).cloned().collect()
     } else {
@@ -7498,7 +7547,7 @@ fn lower_function_with_receiver(
     };
     let outer_environment = closures::environment(
         &frame_name,
-        enclosing,
+        enclosing.filter(|_| reads_further_up),
         &nested,
         &representation,
         &cell,
@@ -7836,6 +7885,7 @@ fn lower_function_with_receiver(
         owner: unit.owner.map(str::to_string),
         zero_super,
         language: unit.language,
+        soundness: unit.soundness,
         recheck_licences: unit.recheck_licences,
         bind_functions_early: unit.bind_functions_early,
         unwound: Vec::new(),
@@ -7866,6 +7916,7 @@ fn lower_function_with_receiver(
             per_closure,
         }),
     };
+    lowering.check_parameters(function)?;
     lowering.block(&function.body)?;
 
     // a body that falls off the end returns `None` — python's implicit return. what it
@@ -7888,6 +7939,7 @@ fn lower_function_with_receiver(
         lowered.nested = Some(by_ir::function::NestedName {
             name: python_name,
             qualname: qualname.clone(),
+            annotations: nested_annotations(captures),
         });
     }
     // the environment's methods are the nested bodies, lowered with the environment
@@ -7936,6 +7988,7 @@ fn lower_function_with_receiver(
                     keywords: Vec::new(),
                     exported: false,
                     declares_slots: false,
+                    slots_weak_references: false,
                     decorators: Vec::new(),
                     constants: Vec::new(),
                     slot_aliases: Vec::new(),
@@ -7957,6 +8010,7 @@ fn lower_function_with_receiver(
                 keywords: Vec::new(),
                 exported: false,
                 declares_slots: false,
+                slots_weak_references: false,
                 decorators: Vec::new(),
                 constants: Vec::new(),
                 slot_aliases: Vec::new(),
@@ -8015,6 +8069,9 @@ struct Unit<'a> {
     /// about: whether a captured loop target is a shared cell or a per-closure copy,
     /// and whether a computed parameter default is snapshotted at the `def`
     language: Language,
+    /// the runtime soundness checks the interpreted build makes — see
+    /// [`LowerOptions::soundness`]
+    soundness: &'a by_transforms::SoundnessSites,
     /// whether each licensed direct call re-asks the lookup it skips — see
     /// [`LowerOptions::recheck_licences`]
     recheck_licences: bool,
@@ -9069,8 +9126,13 @@ fn return_type(
     let mut found: Option<RType> = None;
     for stmt in walk(body) {
         let Stmt::Return(ret) = stmt else { continue };
-        let rtype = match &ret.value {
+        let rtype = match ret.value.as_deref() {
             None => RType::NONE,
+            // a display the lowering wrote itself was never seen by the checker, and a list
+            // display is a `list` whatever it holds — see `closures::ANNOTATION_READER`
+            Some(Expr::List(display)) if display.node_index.load().as_u32().is_none() => {
+                RType::LIST
+            }
             Some(value) => {
                 let ty = value
                     .inferred_type(model)
@@ -9144,18 +9206,22 @@ fn covering(left: &RType, right: &RType) -> RType {
 /// out is held in the field's own representation — which is what lets
 /// `case Point(a, b)` bind two machine integers instead of two boxed objects.
 ///
-/// three things have to hold for that, and any one of them missing leaves the position
+/// four things have to hold for that, and any one of them missing leaves the position
 /// reading a boxed attribute like every other pattern:
 ///
 /// - the pattern names a class **this module emits**, as the checker sees it. that is
-///   the same identity [`Lowering::attribute`] reads a field on, and it is what says the
-///   `isinstance` the pattern runs is a test against the emitted layout
+///   the same identity [`Lowering::attribute`] reads a field on. the `isinstance` the
+///   pattern runs is python's and believes `__class__`, so the offsets are only read
+///   where the subject's type holds the layout, and a subject it does not reads every
+///   position by lookup
 /// - the class is not a mutable heap type. python can write to one of those, and
 ///   `__match_args__` is a name it could rebind — so which attribute a *position* names
 ///   is only settled for a class that is sealed
 /// - the position resolves to a field the layout always has. an optional field may be
 ///   absent, and python answers an absent attribute in a class pattern by moving to the
 ///   next case rather than by raising, which a field read has no way to say
+/// - the field is held in a representation a looked-up object narrows to, since the
+///   lookup binds the same names the load does
 fn class_pattern_reads(
     db: &dyn ty_python_semantic::Db,
     model: &SemanticModel<'_>,
@@ -9188,10 +9254,21 @@ fn class_pattern_reads(
     // by the written name rather than the mangled one: a private name a class body
     // writes is stored under `_Owner__name`, and matching the raw name exactly is what
     // says no mangling stands between the pattern and the field
+    //
+    // a subject `isinstance` accepts without the layout is read by lookup instead, into
+    // whatever the field's reads bind, so a field is only read at its offset where a
+    // looked-up object can be narrowed to the representation it is held in
     let read = |name: &str| {
         fields
             .iter()
-            .find(|field| field.name == name && !field.optional)
+            .find(|field| {
+                field.name == name
+                    && !field.optional
+                    && match &field.ty {
+                        RType::Instance { class, .. } => layouts.contains_key(class),
+                        other => *other == RType::OBJECT || narrowable(other),
+                    }
+            })
             .map(|field| (class.clone(), field.name.clone(), field.ty.clone()))
     };
 
@@ -9476,9 +9553,16 @@ fn local_representations(
                     }
                 }
             }
+            // what the name is given is the operation's result, which the right-hand operand
+            // alone does not say: `x **= 0.5` on a float can be complex, `x /= 2` on an int is
+            // a float
             Stmt::AugAssign(node) => {
                 if let Expr::Name(name) = node.target.as_ref() {
-                    record(name.id.as_str(), peek(&node.value), &mut found);
+                    let rtype =
+                        ty_python_semantic::basedpython_augmented_assignment_type(model, node)
+                            .and_then(|ty| map_type_with(db, env, ty, layouts).ok())
+                            .unwrap_or(RType::OBJECT);
+                    record(name.id.as_str(), rtype, &mut found);
                 }
             }
             Stmt::For(node) => {
@@ -9672,6 +9756,20 @@ fn buffer_safe(body: &[Stmt], name: &str, arrays: &ArrayEditions) -> bool {
         }
     }
     mentions.iter().all(|mention| safe.contains(mention))
+}
+
+/// how a nested function answers for its annotations, where it wrote any — the factory
+/// that evaluates them is written once the interpreted twin exists
+fn nested_annotations(
+    captures: Option<&closures::Nested>,
+) -> Option<by_ir::function::NestedAnnotations> {
+    let annotations = captures?.annotations.as_ref()?;
+    Some(by_ir::function::NestedAnnotations {
+        names: annotations.names.clone(),
+        reader: annotations.reader.clone(),
+        factory: None,
+        refused: false,
+    })
 }
 
 /// every name any frame in this module declares `global`, at any depth
@@ -9870,6 +9968,9 @@ struct Lowering<'a, 'db> {
     owned_cells: Option<Captured>,
     /// the language the body is written in, for the lowerings whose answer it decides
     language: Language,
+    /// the runtime soundness checks the interpreted build makes — see
+    /// [`LowerOptions::soundness`]
+    soundness: &'a by_transforms::SoundnessSites,
     /// whether each licensed direct call re-asks the lookup it skips — see
     /// [`LowerOptions::recheck_licences`]
     recheck_licences: bool,
@@ -11155,139 +11256,55 @@ impl Lowering<'_, '_> {
                 // [`class_pattern_reads`]
                 let reads =
                     class_pattern_reads(self.db, self.model, self.layouts, self.sealed, node);
-                // the subject as the layout the pattern named. the `isinstance` above has
-                // already said it is one, so this narrowing never fails — but it is a
-                // *checked* one all the same, which is what keeps a namespace entry that
-                // is no longer the emitted class a `TypeError` rather than a struct read
-                // through the wrong pointer
-                let held = match reads.iter().flatten().next() {
-                    Some((layout, _, _)) => {
-                        let layout = RType::Instance {
-                            class: layout.clone(),
-                            exact: false,
-                        };
-                        let narrowed = self.coerce(subject.clone(), &RType::OBJECT, &layout)?;
-                        Some(narrowed)
-                    }
-                    None => None,
-                };
-
-                // a positional sub-pattern names its attribute through the
-                // class's `__match_args__`, which only exists at runtime
-                //
-                // basedpython's `case Cls(a, *_, b)` leaves the star out of the
-                // count — it names no attribute of its own — and reads what
-                // follows it from the end of `__match_args__` instead, which is
-                // the negative index `By_MatchPositional` resolves
-                let star = node
-                    .arguments
-                    .patterns
+                let Some(layout) = reads
                     .iter()
-                    .position(ast::Pattern::is_match_star);
-                let positional: Vec<&ast::Pattern> = node
-                    .arguments
-                    .patterns
-                    .iter()
-                    .filter(|pattern| !pattern.is_match_star())
-                    .collect();
-                let keywords = &node.arguments.keywords;
-                let count = i64::try_from(positional.len())
-                    .map_err(|_| Decline::new("a class pattern with too many sub-patterns"))?;
-                let before_star = star.unwrap_or(positional.len());
-                let total = positional.len() + keywords.len();
-                let mut done = 0;
-                let branch_to_sub = |lowering: &mut Self,
-                                     read: Value,
-                                     read_ty: &RType,
-                                     sub: &ast::Pattern,
-                                     done: &mut usize| {
-                    *done += 1;
-                    let next = if *done == total {
-                        matched
-                    } else {
-                        lowering.builder.new_block()
-                    };
-                    lowering.pattern_branch(sub, &read, read_ty, next, unmatched)?;
-                    if next != matched {
-                        lowering.builder.switch_to(next);
-                    }
-                    Ok::<(), Decline>(())
+                    .flatten()
+                    .next()
+                    .map(|(layout, _, _)| layout.clone())
+                else {
+                    return self.class_pattern_attributes(
+                        node, subject, &class, &reads, None, matched, unmatched,
+                    );
                 };
-                // a field the layout always has is read at a compile-time offset, in the
-                // representation the field holds it in. an attribute the pattern names
-                // any other way still goes out through the lookup, where *absent* is an
-                // answer rather than an error
-                // an instance without the field does not match, the way python's lookup
-                // failing with `AttributeError` does not
-                let field_read = |lowering: &mut Self, index: usize| {
-                    let receiver = held.clone()?;
-                    let (class, field, rtype) = reads.get(index)?.clone()?;
-                    let has = lowering.builder.temp(RType::BIT);
-                    lowering.builder.push(Op::FieldIsSet {
-                        dest: has,
-                        receiver: receiver.clone(),
-                        class: class.clone(),
-                        field: field.clone(),
-                    });
-                    let present = lowering.builder.new_block();
-                    lowering.builder.terminate(Terminator::Branch {
-                        cond: Value::Register(has),
-                        then_block: present,
-                        else_block: unmatched,
-                    });
-                    lowering.builder.switch_to(present);
-                    let dest = lowering.builder.temp(rtype.clone());
-                    lowering.builder.push(Op::GetField {
-                        dest,
-                        receiver,
-                        class,
-                        field,
-                    });
-                    Some((Value::Register(dest), rtype))
-                };
-                for (index, sub) in positional.iter().enumerate() {
-                    let (read, read_ty) = match field_read(self, index) {
-                        Some(field) => field,
-                        None => {
-                            let position = i64::try_from(index).unwrap_or(0);
-                            let read = self.read_match_attr(
-                                &subject.clone(),
-                                None,
-                                Some(class.clone()),
-                                if index < before_star {
-                                    position
-                                } else {
-                                    position - count
-                                },
-                                count,
-                                unmatched,
-                            );
-                            (Value::Register(read), RType::OBJECT)
-                        }
-                    };
-                    branch_to_sub(self, read, &read_ty, sub, &mut done)?;
-                }
-                for (index, keyword) in keywords.iter().enumerate() {
-                    let (read, read_ty) = match field_read(self, positional.len() + index) {
-                        Some(field) => field,
-                        None => {
-                            let read = self.read_match_attr(
-                                &subject.clone(),
-                                Some(self.attribute_name(&keyword.attr)),
-                                None,
-                                0,
-                                0,
-                                unmatched,
-                            );
-                            (Value::Register(read), RType::OBJECT)
-                        }
-                    };
-                    branch_to_sub(self, read, &read_ty, &keyword.pattern, &mut done)?;
-                }
-                if total == 0 {
-                    self.builder.terminate(Terminator::Goto(matched));
-                }
-                Ok(())
+                // `isinstance` believes an object's `__class__`, and an abstract base's
+                // `register` besides, so what it said yes to need not be laid out as the
+                // class is. the offsets are read only where the type itself says so, and
+                // everything else takes the lookups python makes
+                let holds = self.builder.temp(RType::BIT);
+                self.builder.push(Op::HoldsLayout {
+                    dest: holds,
+                    src: subject.clone(),
+                    class: layout.clone(),
+                });
+                let native = self.builder.new_block();
+                let generic = self.builder.new_block();
+                self.builder.terminate(Terminator::Branch {
+                    cond: Value::Register(holds),
+                    then_block: native,
+                    else_block: generic,
+                });
+                self.builder.switch_to(native);
+                let held = self.coerce(
+                    subject.clone(),
+                    &RType::OBJECT,
+                    &RType::Instance {
+                        class: layout,
+                        exact: false,
+                    },
+                )?;
+                self.class_pattern_attributes(
+                    node,
+                    subject,
+                    &class,
+                    &reads,
+                    Some(&held),
+                    matched,
+                    unmatched,
+                )?;
+                self.builder.switch_to(generic);
+                self.class_pattern_attributes(
+                    node, subject, &class, &reads, None, matched, unmatched,
+                )
             }
             // basedpython: `case P and Q:` — every one has to match the *same*
             // subject, which is the mirror of `P | Q` and needs no restriction on
@@ -11330,6 +11347,140 @@ impl Lowering<'_, '_> {
                 Err(Decline::new("a star pattern outside a sequence pattern"))
             }
         }
+    }
+
+    /// the attributes a class pattern names, each tested against its sub-pattern
+    ///
+    /// with `held`, the subject as the layout [`class_pattern_reads`] resolved, and an
+    /// attribute a field always holds is read at its offset. without it every attribute
+    /// is looked up, which is what python does for all of them
+    #[expect(clippy::too_many_arguments)]
+    fn class_pattern_attributes(
+        &mut self,
+        node: &ast::PatternMatchClass,
+        subject: &Value,
+        class: &Value,
+        reads: &[Option<(String, String, RType)>],
+        held: Option<&Value>,
+        matched: by_ir::ops::BlockId,
+        unmatched: by_ir::ops::BlockId,
+    ) -> Lowered<()> {
+        // a positional sub-pattern names its attribute through the
+        // class's `__match_args__`, which only exists at runtime
+        //
+        // basedpython's `case Cls(a, *_, b)` leaves the star out of the
+        // count — it names no attribute of its own — and reads what
+        // follows it from the end of `__match_args__` instead, which is
+        // the negative index `By_MatchPositional` resolves
+        let star = node
+            .arguments
+            .patterns
+            .iter()
+            .position(ast::Pattern::is_match_star);
+        let positional: Vec<&ast::Pattern> = node
+            .arguments
+            .patterns
+            .iter()
+            .filter(|pattern| !pattern.is_match_star())
+            .collect();
+        let keywords = &node.arguments.keywords;
+        let count = i64::try_from(positional.len())
+            .map_err(|_| Decline::new("a class pattern with too many sub-patterns"))?;
+        let before_star = star.unwrap_or(positional.len());
+        let total = positional.len() + keywords.len();
+        let mut done = 0;
+        let branch_to_sub = |lowering: &mut Self,
+                             read: Value,
+                             read_ty: &RType,
+                             sub: &ast::Pattern,
+                             done: &mut usize| {
+            *done += 1;
+            let next = if *done == total {
+                matched
+            } else {
+                lowering.builder.new_block()
+            };
+            lowering.pattern_branch(sub, &read, read_ty, next, unmatched)?;
+            if next != matched {
+                lowering.builder.switch_to(next);
+            }
+            Ok::<(), Decline>(())
+        };
+        // a field the layout always has is read at a compile-time offset, in the
+        // representation the field holds it in. an attribute the pattern names
+        // any other way still goes out through the lookup, where *absent* is an
+        // answer rather than an error
+        // an instance without the field does not match, the way python's lookup
+        // failing with `AttributeError` does not
+        let field_read = |lowering: &mut Self, index: usize| {
+            let receiver = held.cloned()?;
+            let (class, field, rtype) = reads.get(index)?.clone()?;
+            let has = lowering.builder.temp(RType::BIT);
+            lowering.builder.push(Op::FieldIsSet {
+                dest: has,
+                receiver: receiver.clone(),
+                class: class.clone(),
+                field: field.clone(),
+            });
+            let present = lowering.builder.new_block();
+            lowering.builder.terminate(Terminator::Branch {
+                cond: Value::Register(has),
+                then_block: present,
+                else_block: unmatched,
+            });
+            lowering.builder.switch_to(present);
+            let dest = lowering.builder.temp(rtype.clone());
+            lowering.builder.push(Op::GetField {
+                dest,
+                receiver,
+                class,
+                field,
+            });
+            Some((Value::Register(dest), rtype))
+        };
+        for (index, sub) in positional.iter().enumerate() {
+            let (read, read_ty) = match field_read(self, index) {
+                Some(field) => field,
+                None => {
+                    let position = i64::try_from(index).unwrap_or(0);
+                    let read = self.read_match_attr(
+                        subject,
+                        None,
+                        Some(class.clone()),
+                        if index < before_star {
+                            position
+                        } else {
+                            position - count
+                        },
+                        count,
+                        unmatched,
+                    );
+                    (Value::Register(read), RType::OBJECT)
+                }
+            };
+            branch_to_sub(self, read, &read_ty, sub, &mut done)?;
+        }
+        for (index, keyword) in keywords.iter().enumerate() {
+            let (read, read_ty) = match field_read(self, positional.len() + index) {
+                Some(field) => field,
+                None => {
+                    let read = self.read_match_attr(
+                        subject,
+                        Some(self.attribute_name(&keyword.attr)),
+                        None,
+                        0,
+                        0,
+                        unmatched,
+                    );
+                    (Value::Register(read), RType::OBJECT)
+                }
+            };
+            branch_to_sub(self, read, &read_ty, &keyword.pattern, &mut done)?;
+        }
+        if total == 0 {
+            self.builder.terminate(Terminator::Goto(matched));
+        }
+        Ok(())
     }
 
     /// read the attribute a class pattern names, jumping to `unmatched` when the
@@ -12638,6 +12789,13 @@ impl Lowering<'_, '_> {
             return Err(Decline::new("a for over an array needs an array"));
         };
         let element = (**element).clone();
+        // a buffer's elements were checked on their way in, as the element type they are
+        // held in — so a check that representation does not prove has nothing to test
+        if self.element_check(&node.iter, &element)?.is_some() {
+            return Err(Decline::new(
+                "a soundness check an unboxed list's element type does not prove",
+            ));
+        }
         let width = RType::fixed(by_ir::rtype::IntWidth::I64);
 
         // the array is read again every trip, so it lives in a register of its own
@@ -12731,6 +12889,8 @@ impl Lowering<'_, '_> {
         }
         let (iterable, iterable_ty) = self.expression(&node.iter)?;
         let iterable = self.widen_to_object(iterable, &iterable_ty);
+        let narrowed = self.element_narrowing(&node.target)?;
+        let checked = self.element_check(&node.iter, &narrowed)?;
         let iterator = self.builder.temp(RType::OBJECT);
         self.builder.push(Op::AsyncIter {
             dest: iterator,
@@ -12768,6 +12928,9 @@ impl Lowering<'_, '_> {
         self.builder.set_error_target(previous);
         let (stepped, stepped_ty) = stepped?;
         let stepped = self.widen_to_object(stepped, &stepped_ty);
+        if let Some(checked) = &checked {
+            self.check_sound(&stepped, &RType::OBJECT, checked.clone());
+        }
 
         // the target binds what the await produced, checked against the type the
         // checker gave it — the same narrowing the synchronous loop does
@@ -12861,6 +13024,8 @@ impl Lowering<'_, '_> {
     ) -> Lowered<()> {
         let target = node.target.as_ref();
         let boxed = self.widen_to_object(iterable, iterable_ty);
+        let narrowed = self.element_narrowing(target)?;
+        let checked = self.element_check(&node.iter, &narrowed)?;
         let iterator = self.builder.temp(RType::OBJECT);
         // the two halves are built together and share one decision, because a `GetIter`
         // that handed back a list to an `IterNext` with no cursor would step it through
@@ -12920,6 +13085,9 @@ impl Lowering<'_, '_> {
         });
 
         self.builder.switch_to(body);
+        if let Some(checked) = &checked {
+            self.check_sound(&Value::Register(raw), &RType::OBJECT, checked.clone());
+        }
         // the null test has run, so the item is a real object by here. narrowing
         // to the element type is a *checked* unbox even when the target is itself
         // boxed — a `str` element still has to be proven a str
@@ -15095,9 +15263,148 @@ impl Lowering<'_, '_> {
     /// raises on the line the call starts on, not the line its last argument was on
     fn expression(&mut self, expr: &Expr) -> Lowered<(Value, RType)> {
         let enclosing = self.locate(expr.range());
-        let lowered = self.expression_here(expr);
+        let sites = self.soundness;
+        let lowered = self.expression_here(expr).and_then(|(value, ty)| {
+            // the interpreted build checks this value where it is produced, before
+            // anything evaluated after it runs
+            if let Some(plan) = sites.value(expr)
+                && let Some(target) = self.sound_target(&ty, plan)?
+            {
+                self.check_sound(&value, &ty, target);
+            }
+            Ok((value, ty))
+        });
         self.builder.relocate(enclosing);
         lowered
+    }
+
+    /// the classes a soundness check names, read where the check stands, or `None`
+    /// where the representation `ty` already proves the answer
+    ///
+    /// a representation proves it where holding it took a check `isinstance` agrees
+    /// with: an unboxed `int` came through `PyLong_Check`, and an emitted class's
+    /// instance through a type test. the narrowing that made the value raised the
+    /// check's own `TypeError` if it failed, so nothing is left to ask
+    fn sound_target(&mut self, ty: &RType, plan: &CheckKind) -> Lowered<Option<SoundTarget>> {
+        let CheckKind::Isinstance(target) = plan else {
+            return Err(Decline::new(
+                "a soundness check against a generic class's type arguments is not lowered",
+            ));
+        };
+        if self.proves(ty, target) {
+            return Ok(None);
+        }
+        self.resolve_sound_target(target).map(Some)
+    }
+
+    /// whether a value held as `ty` is always an instance of `target`
+    fn proves(&self, ty: &RType, target: &CheckTarget) -> bool {
+        match target {
+            CheckTarget::AnyOf(parts) => parts.iter().any(|part| self.proves(ty, part)),
+            CheckTarget::NoneType => *ty == RType::NONE,
+            CheckTarget::Class(name) => match ty {
+                RType::Primitive(primitive) => {
+                    let builtin = match primitive {
+                        Primitive::Int | Primitive::Fixed(_) => "int",
+                        Primitive::Float => "float",
+                        Primitive::Bool | Primitive::Bit => "bool",
+                        Primitive::Str => "str",
+                        Primitive::List => "list",
+                        Primitive::None
+                        | Primitive::Object
+                        | Primitive::Bytes
+                        | Primitive::Dict
+                        | Primitive::Tuple => return false,
+                    };
+                    name == builtin
+                }
+                RType::Instance { class, .. } => self.extends(class, name),
+                RType::Tuple(_) => name == "tuple",
+                RType::Array(_) => false,
+            },
+        }
+    }
+
+    /// each class `target` names, read as the check's own spelling of it reads: a
+    /// name this frame binds, or a global
+    fn resolve_sound_target(&mut self, target: &CheckTarget) -> Lowered<SoundTarget> {
+        Ok(match target {
+            CheckTarget::Class(name) => {
+                let class = match self.place(name) {
+                    Some(Place::Global { .. }) | None => {
+                        let dest = self.builder.temp(RType::OBJECT);
+                        self.builder.push(Op::LoadGlobal {
+                            dest,
+                            name: name.clone(),
+                        });
+                        Value::Register(dest)
+                    }
+                    Some(place) => {
+                        let (value, ty) = self.read_place(&place)?;
+                        self.widen_to_object(value, &ty)
+                    }
+                };
+                SoundTarget::Class(class)
+            }
+            CheckTarget::NoneType => SoundTarget::NoneType,
+            CheckTarget::AnyOf(parts) => SoundTarget::AnyOf(
+                parts
+                    .iter()
+                    .map(|part| self.resolve_sound_target(part))
+                    .collect::<Lowered<_>>()?,
+            ),
+        })
+    }
+
+    /// make a resolved soundness check on `value`, held as `ty`, handing nothing on:
+    /// the value itself is what the program goes on with
+    fn check_sound(&mut self, value: &Value, ty: &RType, target: SoundTarget) {
+        let src = self.widen_to_object(value.clone(), ty);
+        self.builder.push(Op::CheckSound { src, target });
+    }
+
+    /// the check the interpreted build makes on each element drawn from `iterable`,
+    /// with the classes it names read once, where the loop begins — `_soundness_iter`
+    /// is handed them before the first element is drawn. `None` where no check is made,
+    /// or where `narrowed`, what each element goes on to be narrowed to, proves it
+    fn element_check(&mut self, iterable: &Expr, narrowed: &RType) -> Lowered<Option<SoundTarget>> {
+        let sites = self.soundness;
+        let Some(plan) = sites.elements(iterable) else {
+            return Ok(None);
+        };
+        self.sound_target(narrowed, plan)
+    }
+
+    /// what an element drawn as an object is narrowed to on its way to `target`: a
+    /// checked narrowing where there is one, and the object itself otherwise
+    fn element_narrowing(&mut self, target: &Expr) -> Lowered<RType> {
+        let Expr::Name(_) = target else {
+            return Ok(RType::OBJECT);
+        };
+        let element_ty = self.peek_type(target)?;
+        Ok(if self.narrowable_here(&element_ty) {
+            element_ty
+        } else {
+            RType::OBJECT
+        })
+    }
+
+    /// the entry checks the interpreted build makes on `function`'s own parameters,
+    /// where its body begins
+    fn check_parameters(&mut self, function: &ast::StmtFunctionDef) -> Lowered<()> {
+        let sites = self.soundness;
+        for (name, plan) in sites.parameters(function) {
+            let Some(place) = self.place(name) else {
+                return Err(Decline::new(format!(
+                    "the parameter `{name}` a soundness check names has no place in the frame"
+                )));
+            };
+            let (value, ty) = self.read_place(&place)?;
+            if let Some(target) = self.sound_target(&ty, plan)? {
+                self.check_sound(&value, &ty, target);
+            }
+        }
+        Ok(())
     }
 
     fn expression_here(&mut self, expr: &Expr) -> Lowered<(Value, RType)> {
@@ -15475,7 +15782,9 @@ impl Lowering<'_, '_> {
     ) {
         let ((lhs, lhs_ty), (rhs, rhs_ty)) = (lhs, rhs);
         match (lhs_ty, rhs_ty) {
-            (RType::Primitive(Primitive::Int), RType::Primitive(Primitive::Int)) => {
+            (RType::Primitive(Primitive::Int), RType::Primitive(Primitive::Int))
+                if !power_may_be_fractional(op, (&lhs, lhs_ty), (&rhs, rhs_ty)) =>
+            {
                 self.builder.push(Op::IntBinary { dest, op, lhs, rhs });
             }
             (RType::Primitive(Primitive::Str), RType::Primitive(Primitive::Str))
@@ -16483,6 +16792,8 @@ impl Lowering<'_, '_> {
         let target = &generator.target;
         let (iterable, iterable_ty) = self.expression(&generator.iter)?;
         let iterable = self.widen_to_object(iterable, &iterable_ty);
+        let narrowed = self.element_narrowing(target)?;
+        let checked = self.element_check(&generator.iter, &narrowed)?;
         let iterator = self.builder.temp(RType::OBJECT);
         self.builder.push(Op::AsyncIter {
             dest: iterator,
@@ -16517,6 +16828,9 @@ impl Lowering<'_, '_> {
         let (stepped, stepped_ty) = stepped?;
         let stepped = self.widen_to_object(stepped, &stepped_ty);
         self.restore_accumulator(&parked_accumulator, accumulator, accumulator_ty)?;
+        if let Some(checked) = &checked {
+            self.check_sound(&stepped, &RType::OBJECT, checked.clone());
+        }
 
         match target {
             Expr::Name(name) => {
@@ -16643,6 +16957,8 @@ impl Lowering<'_, '_> {
 
         let (iterable, iterable_ty) = self.expression(&generator.iter)?;
         let boxed = self.widen_to_object(iterable, &iterable_ty);
+        let narrowed = self.element_narrowing(target)?;
+        let checked = self.element_check(&generator.iter, &narrowed)?;
         let iterator = self.builder.temp(RType::OBJECT);
         let cursor = Some(self.loop_cursor());
         self.builder.push(Op::GetIter {
@@ -16691,6 +17007,9 @@ impl Lowering<'_, '_> {
         });
 
         self.builder.switch_to(body);
+        if let Some(checked) = &checked {
+            self.check_sound(&Value::Register(raw), &RType::OBJECT, checked.clone());
+        }
         match &item_place {
             Some(place) => {
                 if self.narrowable_here(&element_ty) {
@@ -18915,7 +19234,7 @@ fn narrowable(rtype: &RType) -> bool {
 /// `/` between two ints is a float, and anything that is not a matched pair of
 /// unboxed numbers goes through the object protocol and yields an object
 fn binary_result(op: BinOp, lhs: (&Value, &RType), rhs: (&Value, &RType)) -> RType {
-    if power_may_be_complex(op, lhs, rhs) {
+    if power_may_be_complex(op, lhs, rhs) || power_may_be_fractional(op, lhs, rhs) {
         return RType::OBJECT;
     }
     let ((_, lhs), (_, rhs)) = (lhs, rhs);
@@ -18968,6 +19287,18 @@ fn power_may_be_complex(op: BinOp, lhs: (&Value, &RType), rhs: (&Value, &RType))
         _ => false,
     };
     !(integral_exponent || real_base)
+}
+
+/// whether `**` over two ints could answer with a float, which an `int` cannot hold
+///
+/// python gives one for any negative exponent, so only an exponent written as a literal
+/// that is not negative is known to leave the integers alone
+fn power_may_be_fractional(op: BinOp, lhs: (&Value, &RType), rhs: (&Value, &RType)) -> bool {
+    let ((_, lhs_ty), (rhs, rhs_ty)) = (lhs, rhs);
+    op == BinOp::Pow
+        && *lhs_ty == RType::INT
+        && *rhs_ty == RType::INT
+        && !matches!(rhs, Value::Int(exponent) if *exponent >= 0)
 }
 
 fn compare_op(op: AstCmpOp) -> Lowered<CmpOp> {

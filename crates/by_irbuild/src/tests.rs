@@ -359,6 +359,90 @@ fn comparisons_produce_a_bit_register() {
 // interpreted definition and the rest of the module still compiles
 
 #[test]
+fn annotations_that_read_no_enclosing_name_keep_no_values() {
+    // a module compiling its annotations as strings evaluates none of the names in them, so
+    // a factory has no values to be handed and none are kept where the `def` stands
+    for (future, keeps) in [("", true), ("from __future__ import annotations\n", false)] {
+        let source = format!(
+            "{future}def outer(kind: type) -> object:\n    def inner(y: kind) -> kind:\n        return y\n    return inner\n"
+        );
+        with_source(&source, |db, env, model, suite| {
+            let mut module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::Python);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            crate::annotations::write_factories(&mut module, &source);
+            let readers: Vec<bool> = module
+                .classes
+                .iter()
+                .flat_map(|class| class.methods.iter())
+                .filter_map(|method| method.nested.as_ref()?.annotations.as_ref())
+                .map(|annotations| annotations.reader.is_some())
+                .collect();
+            assert_eq!(readers, [keeps], "{future}");
+        });
+    }
+}
+
+#[test]
+fn a_gradual_value_meeting_a_declared_type_is_checked_where_the_interpreted_build_checks_it() {
+    // `to_int` hands its value back as an object, so nothing but the check stands between
+    // the `Any` and a caller told `int`; `to_optional` has no unboxed form to narrow to
+    let ir = ir("\
+from typing import Any
+
+def to_int(v: Any) -> int:
+    return v
+
+def to_optional(v: Any) -> int | None:
+    return v
+");
+    let to_int =
+        &ir[ir.find("def to_int").unwrap_or(0)..ir.find("def to_optional").unwrap_or(ir.len())];
+    let to_optional = &ir[ir.find("def to_optional").unwrap_or(0)..];
+    assert!(to_int.contains("check sound v r"), "{ir}");
+    assert!(to_optional.contains("check sound v (r"), "{ir}");
+    assert!(to_optional.contains(", NoneType)"), "{ir}");
+}
+
+#[test]
+fn a_check_the_representation_already_proves_is_not_made() {
+    // an element read out of a `list[int]` is unboxed on its way out, and the unbox raises
+    // the check's own `TypeError` — so there is nothing left for the check to ask, and the
+    // class it names is not even looked up
+    let ir = ir("\
+def first(xs: list[int]) -> int:
+    return xs[0]
+
+def total(xs: list[int]) -> int:
+    out = 0
+    for x in xs:
+        out = out + x
+    return out
+");
+    assert!(ir.contains("unbox"), "{ir}");
+    assert!(!ir.contains("check sound"), "{ir}");
+}
+
+#[test]
+fn a_soundness_check_against_type_arguments_declines() {
+    // `_soundness_parametric` tests a reified instance's type arguments, which a compiled
+    // module has no lowering for, so the function is left to its interpreted definition
+    let reason = decline(
+        "\
+from typing import Any
+
+class Cell[T]:
+    def __init__(self, value: T):
+        self.value = value
+
+def unwrap(v: Any) -> Cell[int]:
+    return v
+",
+    );
+    assert!(reason.contains("type arguments"), "{reason}");
+}
+
+#[test]
 fn a_gradual_parameter_is_an_object() {
     // `object` assumes nothing, so no check is needed and nothing declines
     let ir = ir("def f(a) -> None:\n    pass\n");
@@ -3483,11 +3567,11 @@ class Private:
 
 #[test]
 fn a_slots_declaration_the_layout_cannot_answer_declines() {
-    // neither `__dict__` nor `__weakref__` is storage of the instance's own: they ask the
-    // *type* for a dict and for weakref support, which a spec adds to neither. and the
-    // names are the layout, so a declaration nothing here can read is one nothing here
-    // can lay out — python takes any iterable, including one built at class definition
-    // time. `Fine` is the boundary: a literal declaration of ordinary names
+    // `__dict__` is not storage of the instance's own: it asks the *type* for a dict, which
+    // a spec does not add. and the names are the layout, so a declaration nothing here can
+    // read is one nothing here can lay out — python takes any iterable, including one built
+    // at class definition time. `Fine` is the boundary: a literal declaration of ordinary
+    // names, and `__weakref__` among them asks only for the list an emitted instance keeps
     let reasons = declines(
         "\
 class Weak:
@@ -3513,10 +3597,6 @@ class Fine:
     assert_eq!(
         reasons,
         [
-            (
-                "Weak".to_string(),
-                "`__slots__` asks for `__weakref__`, which a type spec cannot add".to_string()
-            ),
             (
                 "Dicted".to_string(),
                 "`__slots__` asks for `__dict__`, which a type spec cannot add".to_string()
@@ -11528,9 +11608,8 @@ fn lowered_with_recheck(source: &str, recheck_licences: bool) -> by_ir::function
             suite,
             "app",
             crate::LowerOptions {
-                language: crate::Language::BasedPython,
                 recheck_licences,
-                bind_functions_early: false,
+                ..crate::Language::BasedPython.into()
             },
         )
     })
@@ -11652,18 +11731,20 @@ def classify(v: object) -> int:
 
 #[test]
 fn a_class_pattern_over_an_emitted_layout_reads_fields() {
-    // the pattern's `isinstance` has already said the subject is a `Point`, and a
-    // `Point` is a sealed static type — python can neither write to it nor derive from
-    // it — so what passed that test is exactly this layout. the two positions
-    // `__match_args__` names are then loads at compile-time offsets, and each carries
-    // the field's own representation, which is what makes `a - b` integer arithmetic
-    // rather than a call into the object protocol
+    // a `Point` is a sealed static type — python can neither write to it nor derive from
+    // it — so a subject whose type holds that layout has the two fields `__match_args__`
+    // names at compile-time offsets, and each carries the field's own representation,
+    // which is what makes `a - b` integer arithmetic rather than a call into the object
+    // protocol. the pattern's `isinstance` believes `__class__`, so what passed it need
+    // not be laid out as a `Point`: the layout is asked, and a subject that does not hold
+    // it reads each position by lookup into the same two names
     let rendered = ir(&format!("{A_MATCHABLE_POINT}{A_POSITIONAL_CLASSIFIER}"));
     assert!(rendered.contains("let a: int"), "{rendered}");
     assert!(rendered.contains("let b: int"), "{rendered}");
+    assert!(rendered.contains("= holds-layout "), "{rendered}");
     assert!(rendered.contains("<Point.x>"), "{rendered}");
     assert!(rendered.contains("<Point.y>"), "{rendered}");
-    assert!(!rendered.contains("<positional>"), "{rendered}");
+    assert!(rendered.contains("<positional>"), "{rendered}");
     // nothing runs past a `match` whose last case takes anything and whose every body
     // returns, so the return is the `int` all four of them agree on rather than the
     // `object` a body that might also fall out of its end would need
@@ -11687,6 +11768,7 @@ class Corner(Point):
     ));
     assert!(rendered.contains("<positional>"), "{rendered}");
     assert!(!rendered.contains("<Point.x>"), "{rendered}");
+    assert!(!rendered.contains("holds-layout"), "{rendered}");
 }
 
 #[test]

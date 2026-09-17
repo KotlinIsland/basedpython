@@ -228,6 +228,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),

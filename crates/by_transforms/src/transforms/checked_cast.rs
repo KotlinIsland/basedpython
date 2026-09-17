@@ -163,7 +163,7 @@ impl<'a> CastLower<'a> {
         // `isinstance` target, or the written type when ty offers no faithful one
         match self.types.cast_check_plan(type_arg) {
             Some(CastCheck::Kind(SoundnessCheck::Isinstance(target))) => {
-                (helper, vec![Fragment::Lit(target)])
+                (helper, vec![Fragment::Lit(target.to_string())])
             }
             // a `Literal` is a set of values, not a class: `isinstance` against
             // one raises, and testing the values' class would accept every other

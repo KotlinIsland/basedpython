@@ -383,8 +383,10 @@ name = "by_irbuild"
 version = "0.0.0"
 dependencies = [
  "by_ir",
+ "by_transforms",
  "ruff_db",
  "ruff_python_ast",
+ "ruff_python_codegen",
  "ruff_python_parser",
  "ruff_python_stdlib",
  "ruff_source_file",

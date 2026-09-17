@@ -258,6 +258,14 @@ impl Options {
     pub fn lowering(&self) -> by_irbuild::LowerOptions {
         by_irbuild::LowerOptions {
             language: self.language,
+            // the checks the interpreted fallback is transpiled with, and a `.py` source
+            // is its own fallback
+            soundness: match self.language {
+                by_irbuild::Language::BasedPython => {
+                    self.fallback.clone().unwrap_or_default().soundness
+                }
+                by_irbuild::Language::Python => by_transforms::SoundnessPositions::none(),
+            },
             recheck_licences: self.recheck_licences,
             bind_functions_early: self.bind_functions_early,
         }
@@ -383,6 +391,9 @@ fn finish(
     // too, over the twin's — once for each definition rather than once for the name
     let twin = by_irbuild::without_init_decorators(&twin, &module)
         .map_err(|error| anyhow::anyhow!("could not prepare the interpreted fallback: {error}"))?;
+    // a nested function's annotations are the twin's, evaluated by python, so they are
+    // written from the twin's text
+    by_irbuild::annotations::write_factories(&mut module, &twin);
     // and the same program compiled, so that importing the artefact does not have to
     // parse it all over again. it is asked for after every rewrite above, because what
     // gets compiled has to be exactly what would otherwise be run

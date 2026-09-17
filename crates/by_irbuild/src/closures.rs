@@ -61,7 +61,27 @@ pub(crate) struct Nested {
     pub(crate) captures: Vec<String>,
     /// the captures that either frame *writes*, so both must see one cell
     pub(crate) shared: Vec<String>,
+    /// the enclosing names a written `def`'s annotations read, and the sibling that lists
+    /// their values — see [`ANNOTATION_READER`]
+    pub(crate) annotations: Option<AnnotationNames>,
 }
+
+/// the enclosing names a nested function's annotations read
+pub(crate) struct AnnotationNames {
+    pub(crate) names: Vec<String>,
+    /// the name of the sibling nested function that lists their values, where there are any
+    pub(crate) reader: Option<String>,
+}
+
+/// the prefix of the name of the function that lists the values of the enclosing names a
+/// nested function's annotations read
+///
+/// python evaluates annotations over the enclosing frames, and from 3.14 it does so when
+/// they are first asked for rather than where the `def` stands. either way it is the
+/// enclosing frame's names they read, so their values are listed by a function nested
+/// beside the annotated one: it captures exactly those names, and it shares the environment
+/// the annotated function holds. it is not a python identifier, so no source can name it
+pub(crate) const ANNOTATION_READER: &str = "$annotations";
 
 /// the nested functions of a body, with their captures
 ///
@@ -102,6 +122,30 @@ pub(crate) fn nested_functions(
             ));
         }
     }
+
+    // a written `def` whose annotations read enclosing names has a reader listing them
+    let mut annotations: HashMap<String, AnnotationNames> = HashMap::new();
+    let mut readers = Vec::new();
+    for (def, synthesized) in &definitions {
+        if !matches!(synthesized, Synthesized::Written) || !is_annotated(def) {
+            continue;
+        }
+        let names: Vec<String> = annotation_names(def)
+            .into_iter()
+            .filter(|name| bound.contains(*name))
+            .map(str::to_string)
+            .collect();
+        let reader = (!names.is_empty()).then(|| {
+            let name = format!("{ANNOTATION_READER}{}", definitions.len() + readers.len());
+            readers.push((
+                synthesize_annotation_reader(def, &names, &name),
+                Synthesized::AnnotationReader,
+            ));
+            name
+        });
+        annotations.insert(def.name.to_string(), AnnotationNames { names, reader });
+    }
+    definitions.extend(readers);
 
     // two `def`s of one name in a scope — the `try` / `except` pair is the common
     // shape — bind whichever one *ran*, so a direct call cannot know which function it
@@ -169,9 +213,108 @@ pub(crate) fn nested_functions(
             },
             captures,
             shared,
+            annotations: match synthesized {
+                Synthesized::Written => annotations.remove(def.name.as_str()),
+                _ => None,
+            },
         });
     }
     Ok(out)
+}
+
+/// whether a `def` wrote any annotation, on a parameter or on its return, or declares type
+/// parameters — which python makes with the definition, and whose bounds it evaluates over
+/// the enclosing frames the way it does an annotation
+fn is_annotated(def: &ast::StmtFunctionDef) -> bool {
+    def.type_params.is_some()
+        || def.returns.is_some()
+        || def
+            .parameters
+            .iter()
+            .any(|parameter| parameter.annotation().is_some())
+}
+
+/// every name a `def`'s annotations read, once each and in the order they are written
+///
+/// a type parameter the `def` declares is bound where its annotations are evaluated, so
+/// it is not one of them
+fn annotation_names(def: &ast::StmtFunctionDef) -> Vec<&str> {
+    let declared: HashSet<&str> = def
+        .type_params
+        .iter()
+        .flat_map(|params| params.iter())
+        .map(|param| param.name().as_str())
+        .collect();
+    let mut read = Vec::new();
+    for parameter in &*def.parameters {
+        if let Some(annotation) = parameter.annotation() {
+            collect_reads(annotation, &mut read);
+        }
+    }
+    if let Some(returns) = &def.returns {
+        collect_reads(returns, &mut read);
+    }
+    if let Some(type_params) = &def.type_params {
+        struct Reads<'a, 'r> {
+            read: &'r mut Vec<&'a str>,
+        }
+        impl<'a> Visitor<'a> for Reads<'a, '_> {
+            fn visit_expr(&mut self, expr: &'a Expr) {
+                collect_reads(expr, self.read);
+            }
+        }
+        visitor::walk_type_params(&mut Reads { read: &mut read }, type_params);
+    }
+    let mut seen = HashSet::new();
+    read.into_iter()
+        .filter(|name| !declared.contains(name) && seen.insert(*name))
+        .collect()
+}
+
+/// the function listing the values of `names`, nested beside `def` — see
+/// [`ANNOTATION_READER`]
+fn synthesize_annotation_reader(
+    def: &ast::StmtFunctionDef,
+    names: &[String],
+    name: &str,
+) -> ast::StmtFunctionDef {
+    let range = def.range;
+    // fresh nodes rather than clones of the annotations: an annotation is a type expression
+    // to the checker, and a read of the value is what this is
+    let elts = names
+        .iter()
+        .map(|read| {
+            Expr::Name(ast::ExprName {
+                node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+                range,
+                id: read.as_str().into(),
+                ctx: ast::ExprContext::Load,
+            })
+        })
+        .collect();
+    ast::StmtFunctionDef {
+        node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+        range,
+        is_async: false,
+        decorator_list: thin_vec::ThinVec::new(),
+        name: ast::Identifier::new(name, range),
+        type_params: None,
+        parameters: Box::new(ast::Parameters::default()),
+        returns: None,
+        raises: None,
+        is_asserts_return: false,
+        body: thin_vec::thin_vec![Stmt::Return(ast::StmtReturn {
+            node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+            range,
+            value: Some(Box::new(Expr::List(ast::ExprList {
+                node_index: ruff_python_ast::AtomicNodeIndex::NONE,
+                range,
+                elts,
+                ctx: ast::ExprContext::Load,
+            }))),
+        })],
+        is_trailing_lambda: false,
+    }
 }
 
 /// the nested functions in `body` that nothing binds except their own `def`
@@ -290,6 +433,7 @@ enum Synthesized {
     Written,
     Lambda(ruff_text_size::TextRange),
     GeneratorExpression(ruff_text_size::TextRange),
+    AnnotationReader,
 }
 
 /// the prefix of the name a generator expression's function is lowered under
@@ -649,6 +793,8 @@ fn read_names(body: &[Stmt]) -> Vec<&str> {
             for decorator in &nested.decorator_list {
                 collect_reads(&decorator.expression, &mut out);
             }
+            // and so are its annotations, which python evaluates over this frame too
+            out.extend(annotation_names(nested));
             let own = own_names(nested);
             out.extend(
                 read_names(&nested.body)

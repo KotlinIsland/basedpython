@@ -31,8 +31,8 @@ use by_ir::function::{
     SlotAlias, Surface, cleaned_doc,
 };
 use by_ir::ops::{
-    BinOp, BlockId, CmpOp, Concatenation, LicenceKind, Mutation, Op, RegisterId, Terminator,
-    UnaryOp, Value,
+    BinOp, BlockId, CmpOp, Concatenation, LicenceKind, Mutation, Op, RegisterId, SoundTarget,
+    Terminator, UnaryOp, Value,
 };
 use by_ir::rtype::{Primitive, RType, tuple_mangle};
 
@@ -386,13 +386,29 @@ pub fn emit_module(module: &ModuleIr) -> String {
             );
         }
     }
+    // a nested function's spec names the interpreted module, defined further down
+    if module
+        .classes
+        .iter()
+        .any(|class| class.methods.iter().any(|method| method.nested.is_some()))
+    {
+        out.push_str("static const By_Fallback by_fallback;\n");
+    }
     for class in &module.classes {
         for method in &class.methods {
             if let Some(nested) = &method.nested {
                 let wrapper = method.wrapper_symbol(module.name.dotted());
+                let annotations = match &nested.annotations {
+                    Some(annotations) => {
+                        emit_annotation_values(&mut out, module, class, method, annotations)
+                    }
+                    None => "NULL, 0, NULL, NULL".to_string(),
+                };
+                let defaults = emit_function_defaults(&mut out, module, method);
+                let _ = writeln!(out, "static PyObject *{wrapper}_code = NULL;");
                 let _ = writeln!(
                     out,
-                    "static const ByFunctionSpec {wrapper}_spec = {{ {wrapper}, {}, {}, {}, &by_module_dict }};",
+                    "static const ByFunctionSpec {wrapper}_spec = {{ {wrapper}, {}, {}, {}, &by_module_dict, {annotations}, {defaults}, &by_fallback, &{wrapper}_code }};",
                     c_string(&nested.name),
                     c_string(&nested.qualname),
                     method_doc(method)
@@ -1000,14 +1016,71 @@ fn absent_values_owner<'a>(module: &'a ModuleIr, class: &'a ClassIr) -> Option<&
     None
 }
 
-/// the `tp_new` of a class whose layout starts with fields absent by value
+/// whether a class with no `__new__` of its own publishes one, so that an interpreted
+/// subclass is handed the allocator of the layout it extends
 ///
-/// the allocation writes those values, but only the allocation this module emits. python
-/// gives a class made by a `class` statement or `type(...)` the generic allocator rather
-/// than inheriting its base's, so an interpreted subclass's instance arrived zeroed — and a
-/// zeroed `int` field is the `int` zero. such an instance comes through the `tp_new` it
-/// inherits, so this is where its type is handed the allocator of the layout it extends —
-/// see `By_AdoptAllocator`
+/// the allocation writes the values that mark a field absent, but only the allocation this
+/// module emits. python gives a class made by a `class` statement or `type(...)` the generic
+/// allocator rather than inheriting its base's, so an interpreted subclass's instance
+/// arrived zeroed — and a zeroed `int` field is the `int` zero. such an instance comes
+/// through the `__new__` it inherits, so that is where its type is handed the allocator —
+/// see `By_AdoptAllocator`.
+///
+/// it is not a `tp_new` filled from the spec, for the reason [`publishes_new`] gives: python
+/// reads a C function there as a base that owns the allocation, and refuses
+/// `object.__new__(cls)` on the class outright. see `By_PublishAllocatingNew`
+fn publishes_absent_values_new(module: &ModuleIr, class: &ClassIr) -> bool {
+    heap_type(module, class)
+        && !external_storage(module, class)
+        && !inherits_layout(module, class)
+        && initializes(module, class)
+        && !constructs_through_a_written_new(module, class)
+        && absent_values_owner(module, class).is_some()
+}
+
+/// whether a class publishes an `__init_subclass__` that hands every interpreted subclass
+/// the allocator of the layout it extends, the moment the subclass is made
+///
+/// the `__new__` a class publishes does that for each instance made through it, but
+/// `object.__new__(cls)` on a subclass reaches the subclass's own allocator without passing
+/// that `__new__` — see `By_PublishInitSubclass`. only the class whose allocation writes the
+/// absent values publishes one: a class that inherits that layout reaches its base's through
+/// the mro, which is the allocator it needs
+fn publishes_init_subclass(module: &ModuleIr, class: &ClassIr) -> bool {
+    heap_type(module, class) && writes_absent_values(module, class)
+}
+
+/// the `__init_subclass__` [`publishes_init_subclass`] describes, and its method definition
+fn emit_init_subclass(module: &ModuleIr, class: &ClassIr) -> String {
+    let type_name = class.type_name(module.name.dotted());
+    // a class that recycles its instances defines its allocator further on
+    format!(
+        "static PyObject *{type_name}_alloc(PyTypeObject *by_type, Py_ssize_t by_items);\n\
+         static PyObject *{type_name}_init_subclass(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames) {{\n\
+         \x20   (void)self;\n\
+         \x20   return By_InitSubclass({type_name}_OBJ, {type_name}_alloc, args, nargs, kwnames);\n}}\n\n\
+         static PyMethodDef {type_name}_init_subclass_def =\n\
+         \x20   {{\"__init_subclass__\", (PyCFunction)(void(*)(void)){type_name}_init_subclass, METH_FASTCALL | METH_KEYWORDS, NULL}};\n\n"
+    )
+}
+
+/// readying a class built as a static struct
+///
+/// one a python name reaches is constructed, and it takes `object`'s `tp_new` as a class
+/// statement's class does, so that `object.__new__(cls)` allocates it. a static struct
+/// cannot name that function, and one left without a `tp_new` on `object` is made
+/// uninstantiable by `PyType_Ready`, so it is written in first. nothing subclasses a static
+/// struct, so no allocator has to be handed on — see [`publishes_absent_values_new`]
+fn static_type_ready(module: &ModuleIr, class: &ClassIr, type_name: &str) -> String {
+    let new = if made_only_by_its_frame(module, class) {
+        String::new()
+    } else {
+        format!("    {type_name}.tp_new = PyBaseObject_Type.tp_new;\n")
+    };
+    format!("{new}    if (PyType_Ready(&{type_name}) < 0) return -1;")
+}
+
+/// the `__new__` [`publishes_absent_values_new`] describes, and its method definition
 fn emit_absent_values_new(module: &ModuleIr, class: &ClassIr) -> String {
     let Some(owner) = absent_values_owner(module, class) else {
         return String::new();
@@ -1016,9 +1089,14 @@ fn emit_absent_values_new(module: &ModuleIr, class: &ClassIr) -> String {
     let owner_name = owner.type_name(module.name.dotted());
     format!(
         "static PyObject *{owner_name}_alloc(PyTypeObject *by_type, Py_ssize_t by_items);\n\
-         static PyObject *{type_name}_new(PyTypeObject *by_type, PyObject *by_args, PyObject *by_kwds) {{\n\
+         static PyObject *{type_name}_new(PyObject *self, PyObject *const *args, Py_ssize_t nargs, PyObject *kwnames) {{\n\
+         \x20   (void)self; (void)kwnames;\n\
+         \x20   PyTypeObject *by_type = By_NewTarget({type_name}_OBJ, args, PyVectorcall_NARGS(nargs));\n\
+         \x20   if (by_type == NULL) return NULL;\n\
          \x20   By_AdoptAllocator(by_type, {type_name}_OBJ, {owner_name}_alloc);\n\
-         \x20   return PyType_GenericNew(by_type, by_args, by_kwds);\n}}\n\n"
+         \x20   return PyType_GenericNew(by_type, NULL, NULL);\n}}\n\n\
+         static PyMethodDef {type_name}_new_def =\n\
+         \x20   {{\"__new__\", (PyCFunction)(void(*)(void)){type_name}_new, METH_FASTCALL | METH_KEYWORDS, NULL}};\n\n"
     )
 }
 
@@ -1272,6 +1350,9 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
 
     let keeps_a_dict = instance_dict(module, class);
     out.push_str(&emit_absent_values(module, class));
+    if publishes_init_subclass(module, class) {
+        out.push_str(&emit_init_subclass(module, class));
+    }
     if frees_its_instances(module, class) {
         out.push_str(&emit_appended_storage(module, class));
     } else {
@@ -2205,7 +2286,15 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // out and writes it into `tp_dictoffset`, which is the only way a type built from a
     // spec can say where its instances keep a dict
     // `__weaklistoffset__` is lifted out the same way, into `tp_weaklistoffset`
-    if instance_dict(module, class) {
+    if publishes_offsets(module, class) {
+        let dict = if instance_dict(module, class) {
+            format!(
+                "\x20   {{\"__dictoffset__\", BY_DICT_OFFSET_MEMBER,\n\
+                 \x20    offsetof({struct_name}, {BY_DICT_MEMBER}), BY_DICT_OFFSET_FLAGS}},\n"
+            )
+        } else {
+            String::new()
+        };
         let weak_list = if module.keeps_weak_references(class) {
             format!(
                 "\x20   {{\"__weaklistoffset__\", BY_DICT_OFFSET_MEMBER,\n\
@@ -2217,8 +2306,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         let _ = write!(
             out,
             "static PyMemberDef {type_name}_members[] = {{\n\
-             \x20   {{\"__dictoffset__\", BY_DICT_OFFSET_MEMBER,\n\
-             \x20    offsetof({struct_name}, {BY_DICT_MEMBER}), BY_DICT_OFFSET_FLAGS}},\n\
+             {dict}\
              {weak_list}\
              \x20   {{NULL, 0, 0, 0}}\n}};\n\n"
         );
@@ -2920,9 +3008,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         } else {
             (
                 "",
-                format!(
-                    "             .tp_init = {type_name}_init,\n             .tp_new = PyType_GenericNew,\n"
-                ),
+                // `tp_new` is `object`'s, set at module init — see [`static_type_ready`]
+                format!("             .tp_init = {type_name}_init,\n"),
             )
         };
         let weakrefs = if class.resume.is_some() || module.keeps_weak_references(class) {
@@ -3052,14 +3139,15 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         // is what installs python's own dispatcher — see [`publishes_new`]. the pair is
         // then what the *source* wrote, and `object.__init__` lifts its refusal for the
         // same reason it does there: the class overrode the allocator
-        let construction = if init.is_empty() || constructs_through_a_written_new(module, class) {
-            init
-        } else if absent_values_owner(module, class).is_some() {
+        //
+        // a class that initializes leaves `tp_new` to be inherited from `object`, as a class
+        // statement does, so `object.__new__(cls)` allocates it. where its fields start
+        // absent by value it publishes a `__new__` as well, for its subclasses — see
+        // [`publishes_absent_values_new`]
+        if publishes_absent_values_new(module, class) {
             out.push_str(&emit_absent_values_new(module, class));
-            format!("{init}\x20   {{Py_tp_new, (void *){type_name}_new}},\n")
-        } else {
-            format!("{init}\x20   {{Py_tp_new, (void *)PyType_GenericNew}},\n")
-        };
+        }
+        let construction = init;
         // a collected type has to hand the collector both halves, or an instance in a
         // cycle is never reached at all. a class without a dict has nothing extra to
         // reach, so it is not a collected type and has no pair to hand over. the members
@@ -3071,6 +3159,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
                  \x20   {{Py_tp_clear, (void *){type_name}_clear}},\n\
                  \x20   {{Py_tp_members, (void *){type_name}_members}},\n"
             )
+        } else if publishes_offsets(module, class) {
+            format!("\x20   {{Py_tp_members, (void *){type_name}_members}},\n")
         } else {
             String::new()
         };
@@ -3176,6 +3266,18 @@ fn instance_dict(module: &ModuleIr, class: &ClassIr) -> bool {
         && heap_type(module, class)
         && !inherits_layout(module, class)
         && (decorated_chain(module, class) || !slots_declared_throughout(module, class))
+}
+
+/// whether this class's spec tells the type where an instance keeps its dict or its
+/// weak-reference list, which `PyType_Spec` can only say through the members table
+///
+/// a class `__slots__` refuses a dict can still ask for the list, by naming `__weakref__`
+fn publishes_offsets(module: &ModuleIr, class: &ClassIr) -> bool {
+    instance_dict(module, class)
+        || (class.exported
+            && heap_type(module, class)
+            && !inherits_layout(module, class)
+            && module.keeps_weak_references(class))
 }
 
 /// whether this class answers `__dict__` with a view over its layout as well as its dict
@@ -6825,6 +6927,167 @@ fn synthetic_table_entries(class: &by_ir::function::ClassIr, type_name: &str) ->
     out
 }
 
+/// what a nested function's spec says about its annotations, written after its first
+/// fields, and the function listing the values the annotations read from the environment
+///
+/// the listing is the reader's native body, called on the environment the function holds,
+/// which is the environment the reader is a method of too
+fn emit_annotation_values(
+    out: &mut String,
+    module: &ModuleIr,
+    class: &by_ir::function::ClassIr,
+    method: &Function,
+    annotations: &by_ir::function::NestedAnnotations,
+) -> String {
+    let wrapper = method.wrapper_symbol(module.name.dotted());
+    let _ = writeln!(out, "static PyObject *{wrapper}_annotation_factory = NULL;");
+    let reader = annotations.reader.as_ref().and_then(|name| {
+        class
+            .methods
+            .iter()
+            .find(|candidate| candidate.name == *name)
+    });
+    let values = match reader {
+        Some(reader)
+            if matches!(reader.ret, RType::LIST | RType::OBJECT) && reader.param_count == 1 =>
+        {
+            let receiver = ctype(module, &reader.params()[0].ty);
+            let call = if is_recursive(reader) {
+                format!(
+                    "{}(By_DepthHere(), ({receiver})env)",
+                    depth_symbol(module, reader)
+                )
+            } else {
+                format!(
+                    "{}(({receiver})env)",
+                    reader.native_symbol(module.name.dotted())
+                )
+            };
+            let _ = writeln!(
+                out,
+                "static PyObject *{wrapper}_annotation_values(PyObject *env) {{ return {call}; }}"
+            );
+            format!("{wrapper}_annotation_values")
+        }
+        _ => "NULL".to_string(),
+    };
+    // a factory that is missing is one the build never wrote, which the runtime refuses in
+    // the same words as one the twin could not supply
+    let source = annotations.factory.clone().unwrap_or_else(|| {
+        "def _by_annotations(values, type_params):\n    raise RuntimeError('the annotations of this compiled function were not written')\n".to_string()
+    });
+    let refused = annotations.refused || annotations.factory.is_none();
+    format!(
+        "{}, {}, {values}, &{wrapper}_annotation_factory",
+        c_string(&source),
+        i32::from(refused)
+    )
+}
+
+/// the function a nested function's spec hands `__defaults__` and `__kwdefaults__` out
+/// through, or `NULL` where the definition has no defaults
+///
+/// each value is the one the boundary fills a missing argument with: an immediate as it
+/// is written, and a default the frame evaluated where the `def` stood out of the
+/// environment it parked it in
+fn emit_function_defaults(out: &mut String, module: &ModuleIr, method: &Function) -> String {
+    let params = method.params();
+    // the receiver is the environment, which python never sees
+    let written = params.len().saturating_sub(1);
+    let packed = usize::from(method.vararg) + usize::from(method.kwarg);
+    let named = written.saturating_sub(packed);
+    let positional_end = 1 + named.saturating_sub(method.kwonly);
+    let value = |index: usize| -> Option<String> {
+        let decl = params.get(index)?;
+        let computed = method.defaults_held_by == by_ir::function::DefaultsHeldBy::Receiver
+            && method.computed_defaults.contains(&index);
+        if computed {
+            let field = method.receiver_default_field(index)?;
+            let receiver = ctype(module, &params.first()?.ty);
+            return Some(format!(
+                "By_ReadCell((({receiver})env)->{}, {}, 0)",
+                mangle_member(&field),
+                c_string(decl.name.as_deref().unwrap_or(""))
+            ));
+        }
+        method
+            .defaults
+            .get(index)
+            .and_then(Option::as_ref)
+            .map(|default| default_expr(&RType::OBJECT, default))
+    };
+    let positional: Vec<String> = (1..positional_end)
+        .skip_while(|index| value(*index).is_none())
+        // python has no positional parameter without a default after one with a default
+        .map(|index| {
+            value(index).unwrap_or_else(|| {
+                "(PyErr_SetString(PyExc_SystemError, \"a positional default is missing\"), NULL)"
+                    .to_string()
+            })
+        })
+        .collect();
+    let keyword: Vec<(String, String)> = (positional_end..=named)
+        .filter_map(|index| {
+            let name = params.get(index)?.name.clone()?;
+            Some((name, value(index)?))
+        })
+        .collect();
+    if positional.is_empty() && keyword.is_empty() {
+        return "NULL".to_string();
+    }
+    let symbol = format!("{}_defaults", method.wrapper_symbol(module.name.dotted()));
+    let _ = writeln!(out, "static PyObject *{symbol}(PyObject *env) {{");
+    let _ = writeln!(out, "    (void)env;");
+    let _ = writeln!(
+        out,
+        "    PyObject *by_positional = {};",
+        if positional.is_empty() {
+            "By_NewRef(Py_None)".to_string()
+        } else {
+            format!("PyTuple_New({})", positional.len())
+        }
+    );
+    let _ = writeln!(
+        out,
+        "    PyObject *by_keyword = {};",
+        if keyword.is_empty() {
+            "By_NewRef(Py_None)"
+        } else {
+            "PyDict_New()"
+        }
+    );
+    out.push_str("    if (by_positional == NULL || by_keyword == NULL) goto by_failed;\n");
+    for (at, expr) in positional.iter().enumerate() {
+        let _ = writeln!(
+            out,
+            "    {{ PyObject *by_value = {expr};\n\
+             \x20     if (by_value == NULL) goto by_failed;\n\
+             \x20     PyTuple_SET_ITEM(by_positional, {at}, by_value); }}"
+        );
+    }
+    for (name, expr) in &keyword {
+        let _ = writeln!(
+            out,
+            "    {{ PyObject *by_value = {expr};\n\
+             \x20     int by_set = by_value == NULL ? -1 : PyDict_SetItemString(by_keyword, {}, by_value);\n\
+             \x20     Py_XDECREF(by_value);\n\
+             \x20     if (by_set < 0) goto by_failed; }}",
+            c_string(name)
+        );
+    }
+    out.push_str(
+        "    PyObject *by_both = PyTuple_Pack(2, by_positional, by_keyword);\n\
+         \x20   Py_DECREF(by_positional);\n\
+         \x20   Py_DECREF(by_keyword);\n\
+         \x20   return by_both;\n\
+         by_failed:\n\
+         \x20   Py_XDECREF(by_positional);\n\
+         \x20   Py_XDECREF(by_keyword);\n\
+         \x20   return NULL;\n}\n",
+    );
+    symbol
+}
+
 fn c_string(text: &str) -> String {
     c_byte_string(text.as_bytes())
 }
@@ -7206,6 +7469,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             let expr = format!("{call}({}, {})", value_expr(lhs), value_expr(rhs));
             assign_checked(module, function, *dest, &expr, error_target)
         }
+        Op::CheckSound { src, target } => emit_check_sound(src, target, error_target),
         Op::IsInstance { dest, src, class } => {
             let expr = format!("By_IsInstance({}, {})", value_expr(src), value_expr(class));
             assign_checked(module, function, *dest, &expr, error_target)
@@ -7257,6 +7521,20 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             local(*dest),
             value_expr(src)
         ),
+        Op::HoldsLayout { dest, src, class } => match module
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == *class)
+        {
+            Some(owner) => format!(
+                "    {} = PyObject_TypeCheck({}, (PyTypeObject *){}_OBJ);\n",
+                local(*dest),
+                value_expr(src),
+                owner.type_name(module.name.dotted())
+            ),
+            // a class with no emitted layout has no offsets to read at
+            None => format!("    {} = 0;\n", local(*dest)),
+        },
         Op::MatchAttr {
             dest,
             subject,
@@ -8134,7 +8412,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             let _ = writeln!(
                 out,
                 "    {{ Py_ssize_t by_i = {}((ByArrayHeader *){}, {});",
-                array_index_helper(function, index),
+                array_index_helper(function, index, false),
                 value_expr(array),
                 value_expr(index)
             );
@@ -8162,7 +8440,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             let _ = writeln!(
                 out,
                 "    {{ Py_ssize_t by_i = {}((ByArrayHeader *){}, {});",
-                array_index_helper(function, index),
+                array_index_helper(function, index, true),
                 value_expr(array),
                 value_expr(index)
             );
@@ -8594,11 +8872,20 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             else {
                 return String::new();
             };
-            let call = format!(
+            let made = format!(
                 "By_MakeFunction(&{}_spec, (PyObject *)({}))",
                 nested.wrapper_symbol(module.name.dotted()),
                 value_expr(env)
             );
+            let call = if nested
+                .nested
+                .as_ref()
+                .is_some_and(|name| name.annotations.is_some())
+            {
+                format!("By_AnnotateAtDefinition({made})")
+            } else {
+                made
+            };
             assign_checked(module, function, *dest, &call, error_target)
         }
         Op::LoadGlobal { dest, name } => {
@@ -9706,6 +9993,67 @@ impl ErrorEdge {
     }
 }
 
+/// [`Op::CheckSound`]: each class tried in the order `isinstance` tries a tuple's, the
+/// first answer that is not no deciding, and the refusal built only once the answer is no
+fn emit_check_sound(src: &Value, target: &SoundTarget, error_target: ErrorEdge) -> String {
+    /// each class in order, as a C expression for the class object
+    fn leaves(target: &SoundTarget, out: &mut Vec<String>) {
+        match target {
+            SoundTarget::Class(class) => out.push(value_expr(class)),
+            SoundTarget::NoneType => out.push("(PyObject *)Py_TYPE(Py_None)".to_string()),
+            SoundTarget::AnyOf(parts) => {
+                for part in parts {
+                    leaves(part, out);
+                }
+            }
+        }
+    }
+    /// the `Py_BuildValue` format that rebuilds the tuple the target is spelled as
+    fn shape(target: &SoundTarget, out: &mut String) {
+        match target {
+            SoundTarget::Class(_) | SoundTarget::NoneType => out.push('O'),
+            SoundTarget::AnyOf(parts) => {
+                out.push('(');
+                for part in parts {
+                    shape(part, out);
+                }
+                out.push(')');
+            }
+        }
+    }
+    let object = value_expr(src);
+    let mut classes = Vec::new();
+    leaves(target, &mut classes);
+    let mut out = String::from(
+        "    { int by_s = 0;
+",
+    );
+    for (index, class) in classes.iter().enumerate() {
+        let guard = if index == 0 { "" } else { "if (by_s == 0) " };
+        let _ = writeln!(out, "      {guard}by_s = By_SoundIs({object}, {class});");
+    }
+    let refusal = match target {
+        SoundTarget::AnyOf(_) => {
+            let mut format = String::new();
+            shape(target, &mut format);
+            format!(
+                "By_SoundViolationOf({object}, Py_BuildValue({}, {}))",
+                c_string(&format),
+                classes.join(", ")
+            )
+        }
+        SoundTarget::Class(_) | SoundTarget::NoneType => {
+            format!("By_SoundViolation({object}, {})", classes.join(", "))
+        }
+    };
+    let _ = writeln!(
+        out,
+        "      if (BY_UNLIKELY(by_s != 1)) {{ if (by_s == 0) {refusal}; goto {}; }} }}",
+        error_label(error_target)
+    );
+    out
+}
+
 fn error_label(error_target: ErrorEdge) -> String {
     match error_target {
         ErrorEdge {
@@ -9983,11 +10331,14 @@ fn borrowed_element_unbox(
 }
 
 /// the helper that normalizes and bounds-checks an index into a packed buffer, for the
-/// representation the index is in
-fn array_index_helper(function: &Function, index: &Value) -> &'static str {
-    match function.value_type(index) {
-        Some(RType::Primitive(Primitive::Fixed(_))) => "By_ArrayIndexI64",
-        _ => "By_ArrayIndex",
+/// representation the index is in and for whether the access is a store, which `list`
+/// refuses in words of its own
+fn array_index_helper(function: &Function, index: &Value, store: bool) -> &'static str {
+    match (function.value_type(index), store) {
+        (Some(RType::Primitive(Primitive::Fixed(_))), false) => "By_ArrayIndexI64",
+        (Some(RType::Primitive(Primitive::Fixed(_))), true) => "By_ArrayStoreIndexI64",
+        (_, false) => "By_ArrayIndex",
+        (_, true) => "By_ArrayStoreIndex",
     }
 }
 
@@ -11213,7 +11564,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
             // already built, by the one construction open to it
             String::new()
         } else if !heap_type(module, class) {
-            format!("    if (PyType_Ready(&{type_name}) < 0) return -1;")
+            static_type_ready(module, class, &type_name)
         } else if let Some(base) =
             class
                 .base
@@ -11303,6 +11654,16 @@ fn emit_module_init(module: &ModuleIr) -> String {
         if !ready.is_empty() {
             let _ = writeln!(installed, "{ready}");
         }
+        // a method the class wrote binds as a function does, before anything below can
+        // read the type's dict or hand the class to a decorator
+        let written = class.table_methods().count();
+        if written > 0 {
+            let _ = writeln!(
+                installed,
+                "    if (By_PublishMethods({type_name}_OBJ, &{type_name}_methods[{}], {written}) < 0) return -1;",
+                synthetic_table_entries(class, &type_name).len()
+            );
+        }
         // the wrappers python published for the *rest* of a shared slot's group come off
         // first, so everything below — a decorator above all — is handed a class whose
         // surface is the body the `class` statement wrote
@@ -11344,6 +11705,18 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // before anything else asks the type to build an instance: the assignment is what
         // gives the class its `tp_new`, and until it has run the type still allocates the
         // way `object` does
+        if publishes_absent_values_new(module, class) {
+            let _ = writeln!(
+                installed,
+                "    if (By_PublishAllocatingNew({type_name}_OBJ, &{type_name}_new_def) < 0) return -1;"
+            );
+        }
+        if publishes_init_subclass(module, class) {
+            let _ = writeln!(
+                installed,
+                "    if (By_PublishInitSubclass({type_name}_OBJ, &{type_name}_init_subclass_def) < 0) return -1;"
+            );
+        }
         if publishes_new(class).is_some() {
             let _ = writeln!(
                 installed,
@@ -11999,6 +12372,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -12265,6 +12639,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -13143,6 +13518,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -13782,6 +14158,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -14582,6 +14959,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -14674,6 +15052,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -14751,6 +15130,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -14875,6 +15255,7 @@ mod tests {
         nested.nested = Some(by_ir::function::NestedName {
             name: "call".to_string(),
             qualname: "make.<locals>.call".to_string(),
+            annotations: None,
         });
         let mut class = appending_class();
         class.name = "Env".to_string();
@@ -14902,7 +15283,7 @@ mod tests {
         );
         assert!(
             c.contains(
-                "static const ByFunctionSpec byw_app_Env_call_spec = { byw_app_Env_call, \"call\", \"make.<locals>.call\", NULL, &by_module_dict };"
+                "static const ByFunctionSpec byw_app_Env_call_spec = { byw_app_Env_call, \"call\", \"make.<locals>.call\", NULL, &by_module_dict, NULL, 0, NULL, NULL, NULL, &by_fallback, &byw_app_Env_call_code };"
             ),
             "{c}"
         );
@@ -15107,6 +15488,7 @@ mod tests {
             dataclass: false,
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
