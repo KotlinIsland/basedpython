@@ -331,8 +331,10 @@ base's emitted type took the base's name is standing on an orphaned copy of it, 
 reported — so a whole inheritance family goes in or out together.
 
 a generator method's state object and a nested function's closure environment are
-each a class of their own, and each captures the `self` it was made from — so each
-names the class exactly as any other reader would. neither is in the namespace
+each a class of their own. a state object holds the `self` it was made from, and an
+environment holds it where a function nested in the method reads a name from further up
+than the method — and holding it names the class exactly as any other reader would.
+neither is in the namespace
 under any name and neither is built by anything but the methods of the class it
 belongs to, so where that class has no type they are never constructed: they are
 part of the family rather than a reason to refuse.
@@ -827,6 +829,67 @@ edits it. a function compiled from a module is also published as a closure over 
 native entry, so a `__code__` it is given has to close over as many names:
 `mod.scaled.__code__ = (lambda a: a).__code__` raises `ValueError` where python takes it
 
+what tells the function is a function watcher, and cpython hands a watcher every function
+in the process rather than the ones it cares about. so once a compiled module that watches
+its functions has been imported, each function python makes and frees anywhere — a lambda
+or a nested `def` made on every pass of a loop, in any module — costs about 70 more
+instructions on 3.13 and about 140 more on 3.14, whether or not it is ever edited
+
+### a method is not a `function`
+
+a class holds each method it compiled as a `by.method_descriptor` rather than a
+`function`, so `isinstance(C.read, types.FunctionType)` is `False`, and its type is named
+`method_descriptor` where python's is named `function`. it binds as a function does, and
+what a function says about its `def` — `__module__`, `__qualname__`, `__doc__`,
+`__defaults__`, `__kwdefaults__`, `__code__`, `__globals__` and the annotations — is the
+interpreted definition's, so `inspect.signature`, `typing.get_type_hints` and
+`functools.wraps` read the answers python gives. what it does not answer is
+`__closure__`, whose cells would belong to the interpreted definition's class rather than
+the compiled one, and an attribute written onto it is kept without changing what a call
+runs:
+
+```python
+class Scale:
+    def get(self, k: int = 3) -> int:
+        return k
+
+
+# from another module
+mod.Scale.get.__closure__  # python: None; compiled: AttributeError
+mod.Scale.get.__defaults__ = (10,)
+mod.Scale().get()  # python: 10; compiled: 3
+```
+
+### a dunder a slot answers
+
+a dunder python calls through a type slot — `__init__`, `__eq__`, `__len__` and the rest
+— is not one of those methods. the class holds the `wrapper_descriptor` cpython makes for
+the slot, which is what `object.__init__` is too, so it says nothing about the `def` it was
+compiled from: it has no `__annotations__`, `__defaults__` or `__code__`, and what reads
+those reads the slot's own description instead. `inspect.signature` of the class itself
+finds no signature at all:
+
+```python
+class Point:
+    def __init__(self, x: int, y: int = 0) -> None:
+        self.x = x
+        self.y = y
+
+
+# from another module
+mod.Point.__init__.__annotations__  # python: {'x': int, 'y': int, 'return': None}; compiled: AttributeError
+typing.get_type_hints(mod.Point.__init__)  # python: {'x': int, 'y': int, 'return': NoneType}; compiled: {}
+inspect.signature(mod.Point.__init__)  # python: (self, x: int, y: int = 0) -> None; compiled: (self, /, *args, **kwargs)
+inspect.signature(mod.Point)  # python: (x: int, y: int = 0) -> None; compiled: ValueError
+```
+
+publishing a method in the slot's place would answer the first three, but cpython then
+stops giving the slot to an interpreted subclass, which makes every construction through
+one slower, and `inspect.signature(mod.Point)` would answer `(*args, **kwargs)` rather
+than raise. answering the class's signature through a `__signature__` of its own would ignore
+what the caller asked for: `inspect.signature(mod.Point, eval_str=True)` would hand back
+the annotations a `from __future__ import annotations` module left as strings
+
 ### one module object for the whole process
 
 a compiled module keeps its namespace, and every memo of a name in it, in state
@@ -950,38 +1013,139 @@ except ValueError as e:
     traceback.print_exception(e)  # python underlines the failing call; compiled does not
 ```
 
-### an interpreted subclass that allocates its first instance itself
+### writing onto a class nothing extends
+
+a class the module neither extends nor decorates, with no base and no written `__new__`,
+is emitted as an immutable type, which is what lets a call reach its compiled methods
+directly. python writes to a class through its type, and an immutable type refuses a
+write, a replacement or a `del` of an attribute with `TypeError` — so a class written to
+once the module has been imported, from a function of its own or from another module,
+raises where python's class takes the write. what the module body writes after the
+`class` statement lands on the interpreted definition while the module is still being
+built, and the compiled class carries it:
+
+```python
+class Sealed:
+    def read(self) -> int:
+        return 1
+
+
+Sealed.early = lambda self: 2  # both: carried onto the compiled class
+
+
+def patch() -> None:
+    Sealed.late = lambda self: 3
+
+
+patch()  # python: None; compiled: TypeError: cannot set 'late' attribute of immutable type
+
+
+# from another module
+mod.Sealed.other = 5  # python: stored; compiled: TypeError
+del mod.Sealed.read  # python: deleted; compiled: TypeError
+```
+
+a class the module extends, or one the source decorates, is a mutable type and takes the
+write as python's does
+
+### an interpreted subclass whose `__init_subclass__` does not chain up
 
 a compiled class keeps an `int` field unboxed, and a field no `__init__` has set holds a
 value no `int` can have. the class's allocator writes that value, and a class made by a
 `class` statement or `type(...)` is given python's generic allocator instead of its
-base's, so the first instance the subclass builds through the compiled class — its
-inherited `__new__`, or a written `__new__` the compiled class publishes — hands the
-subclass that allocator. a subclass whose own `__new__` calls `object.__new__(cls)`
-directly, over a compiled base that wrote a `__new__` of its own, reaches the generic
-allocator without passing the compiled class, and until an instance has come through the
-compiled class an unset `int` field on what it built reads as `0`:
+base's. so the compiled class publishes an `__init_subclass__` that hands every subclass
+its allocator as the subclass is made, and then goes on up the chain as a written one
+calling `super().__init_subclass__(**kwargs)` does. that entry is in the class's own
+dict, where python's class has none:
 
 ```python
-class Made:
-    def __new__(cls) -> "Made":
-        return object.__new__(cls)
+class Root:
+    pass
 
+
+class Made(Root):
     def __init__(self) -> None:
         self.count = 1
 
 
 # from another module
-class Own(mod.Made):
-    def __new__(cls):
-        return object.__new__(cls)
-
-
-Own.__new__(Own).count  # python: AttributeError; compiled: 0
+"__init_subclass__" in vars(mod.Made)  # python: False; compiled: True
 ```
 
-a subclass is not reached by anything the compiled class can run when it is made, so
-closing this would mean a test on every read of such a field
+a subclass that writes an `__init_subclass__` of its own and does not call
+`super().__init_subclass__()` keeps the hook from its own subclasses. one of those gets
+the allocator from the first instance built through the compiled class's `__new__`, and
+until then an unset `int` field on an instance `object.__new__(cls)` built reads as `0`:
+
+```python
+# from another module
+class Quiet(mod.Made):
+    def __init_subclass__(cls) -> None:
+        pass
+
+
+class Below(Quiet):
+    pass
+
+
+object.__new__(Below).count  # python: AttributeError; compiled: 0
+```
+
+### a value nothing verified, with its soundness check turned off
+
+the interpreted build checks a value whose type nothing verified where it meets a
+declared type — an `Any`, a generic call's result, an element read out of a container —
+and a compiled module makes each of those [soundness checks](../../features/soundness.md)
+in the same place, against the same classes, raising the same `TypeError`. a check the
+value's own representation already proves is not made again: an element unboxed out of a
+`list[int]` passed the unbox's own test, which raises that `TypeError` itself.
+`--soundness` turns positions off for both builds, and a value held as an `object` — a
+return handed back as one, an optional, a container, an instance of a class the module
+does not lay out — then goes unchecked in both.
+
+what no position turns off is the test a compiled module needs to hold a value at all. a
+local, a parameter or a field declared `int`, `float`, `bool` or `str`, or as an instance
+of a class the module lays out, holds that representation, so a value that is not one
+raises `TypeError` there where the interpreted build goes on holding it:
+
+```python
+# built with `--soundness none`
+from typing import Any
+
+
+def held(v: Any) -> object:
+    a: int = v
+    return a
+
+
+held("x")  # python: "x"; compiled: TypeError
+```
+
+a name a class pattern binds from such a field is held the same way. `isinstance` believes
+an object's `__class__`, so an object claiming a class it was not made by matches that
+class's pattern and has its attributes looked up, and one holding something else under
+a field the class keeps as an `int` raises where python binds it:
+
+```python
+class Point:
+    def __init__(self, x: int) -> None:
+        self.x = x
+
+
+class Claims:
+    __class__ = property(lambda self: Point)
+    x = "five"
+
+
+def read(v: object) -> object:
+    match v:
+        case Point(x=x):
+            return x
+    return None
+
+
+read(Claims())  # python: "five"; compiled: TypeError
+```
 
 ### a complex power held where a `float` is declared
 
@@ -993,12 +1157,120 @@ stores it:
 
 ```python
 def root(a: float) -> float:
-    x = a  # `x: float` in a `.by` module
-    x **= 0.5
+    x: float = a**0.5
     return x
 
 
 root(-4.0)  # python: (1.2246467991473532e-16+2j); compiled: TypeError
+```
+
+an augmented assignment is not one of these: `x **= 0.5` binds the power's result, and the
+local is chosen to hold whatever that can be
+
+### what a closure keeps alive
+
+python gives each name a closure captures a cell of its own, so a closure keeps alive the
+values of the names it reads and nothing else. a compiled frame keeps every name its
+closures capture in one environment they all share, so a closure keeps alive what its
+siblings captured too, and a lambda made inside a generator holds the generator's whole
+state. no value changes; what can tell is a finalizer or a weak reference, which sees the
+release later:
+
+```python
+class Big:
+    pass
+
+
+def pair(big: Big):
+    small = 1
+
+    def a() -> int:
+        return small
+
+    def b() -> Big:
+        return big
+
+    return a
+
+
+def gen(big: Big):
+    small = 1
+    yield lambda: small
+
+
+# from another module
+import gc, weakref
+
+big = Big()
+alive = weakref.ref(big)
+kept = pair(big)  # or `next(gen(big))`
+del big
+gc.collect()
+alive() is not None  # python: False; compiled: True, for as long as `kept` lives
+```
+
+a cell for each captured name would close this, and that is a different shape for every
+closure a compiled frame makes
+
+### a nested function's annotations
+
+a compiled nested function answers `__annotations__`, `__type_params__` and, from 3.14,
+`__annotate__` with what python evaluates from the interpreted definition's annotations,
+over the values the enclosing frames hold for the names in them. `inspect.signature` and
+`typing.get_type_hints` read those, `__code__`, `__defaults__` and `__kwdefaults__`, and
+answer as they do for the interpreted definition. what can still tell the two apart:
+
+```python
+def outer(kind: type):
+    def inner(y: kind) -> kind:
+        return y
+
+    return inner
+
+
+f = outer(int)
+```
+
+- on 3.13 the annotations are evaluated when they are first asked for, as 3.14 does, over
+    the values the enclosing names held where the `def` stood. an annotation that raises or
+    has an effect does so at that first read rather than at the `def`, and never where
+    `__annotations__` is written before it is read — see below
+- on 3.13 a name the annotations read from an enclosing frame that nothing has bound yet
+    raises `NameError` naming a free variable, where python raises `UnboundLocalError`
+- the closure holds the enclosing names its annotations read, as a 3.14 `__annotate__`
+    does, so on 3.13 a value the enclosing frame binds to one of them after the `def` lives
+    as long as the closure, and the value each held at the `def` lives until the annotations
+    are first read
+- on 3.14 `f.__annotate__` is made from the values the enclosing names hold when it is
+    read, and is a new function each time: a name rebound between reading it and calling it
+    is seen with its earlier value, and `f.__annotate__ is f.__annotate__` is `False`
+- an annotation that reads a type parameter of an enclosing function
+    (`def outer[T](): def inner(x: T)`) where the module does not compile annotations as
+    strings, or that names a private name inside a class, raises `RuntimeError` when the
+    annotations are asked for
+- `__defaults__` and `__kwdefaults__` can be read and not written, and `__code__` is the
+    interpreted definition's code object, which the compiled function does not run
+
+evaluating the annotations where the `def` stands is a python call, which made a closure
+with annotations cost about 3,400 more instructions to make on 3.13 than one without —
+the price of a `def` inside a loop. what the `def` takes now is the values alone, so an
+annotation with an effect shows when it runs:
+
+```python
+def note(label: str) -> type:
+    print(label)
+    return int
+
+
+def outer():
+    def inner(y: note("y")) -> None:
+        pass
+
+    return inner
+
+
+f = outer()  # python 3.13: prints `y`; compiled: prints nothing
+f.__annotations__  # compiled: prints `y`
 ```
 
 ## debugging and inspection

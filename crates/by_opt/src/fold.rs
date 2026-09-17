@@ -1020,6 +1020,7 @@ mod tests {
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -1089,6 +1090,7 @@ mod tests {
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -1149,6 +1151,7 @@ mod tests {
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -1211,6 +1214,7 @@ mod tests {
             slot_aliases: Vec::new(),
             generic: false,
             declares_slots: false,
+            slots_weak_references: false,
             methods: Vec::new(),
         });
         run(&mut m);

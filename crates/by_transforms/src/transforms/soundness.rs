@@ -62,11 +62,15 @@
 //! defined later in the module can raise `NameError` if the checked line runs
 //! at import time before the class body.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Comprehension, Expr, ExprCall, Parameter, Stmt, StmtFunctionDef, UnaryOp};
+use ruff_python_ast::{
+    Comprehension, Expr, ExprCall, HasNodeIndex, Parameter, Stmt, StmtFunctionDef, UnaryOp,
+};
 use ruff_text_size::{Ranged, TextRange, TextSize};
+use ty_python_semantic::types::soundness::CheckTarget;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::parametric_is::variance_tuple;
@@ -88,19 +92,32 @@ enum ArgSlot<'a> {
     Keyword(&'a str),
 }
 
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent runtime-helper usage flags, not a state machine"
-)]
-struct Soundness<'a> {
+/// one check the pass decided on, before anything is written for it
+enum Site<'ast> {
+    /// the value `expr` produces is checked as it is produced
+    Value {
+        expr: &'ast Expr,
+        plan: SoundnessCheck,
+    },
+    /// each element drawn from `iterable` is checked as it is drawn
+    Elements {
+        iterable: &'ast Expr,
+        is_async: bool,
+        plan: SoundnessCheck,
+    },
+    /// `function`'s own parameters are checked where its body begins
+    Parameters {
+        function: &'ast StmtFunctionDef,
+        guards: Vec<(&'ast str, SoundnessCheck)>,
+    },
+}
+
+/// where the checks go, decided once over a syntax tree, and what is not a place
+/// for one
+struct Soundness<'a, 'ast> {
     types: &'a dyn TypeInfo,
     positions: SoundnessPositions,
-    /// the working source — needed to read a function body's indentation when
-    /// inserting `parameters` entry guards
-    source: &'a str,
-    edits: Vec<(TextRange, Vec<Fragment>)>,
-    /// the entry-guard suites, anchored at the body statement they precede
-    guards: Vec<(TextSize, Vec<Fragment>)>,
+    sites: Vec<Site<'ast>>,
     /// gated expressions already covered by a wrap on an enclosing `!`
     /// force-unwrap — wrapping them directly would splice the check's second
     /// argument into `_force_unwrap`'s call parens
@@ -112,31 +129,17 @@ struct Soundness<'a> {
     /// declared-return-type check plans of the enclosing functions (innermost
     /// last); `None` when a function has no annotation or an uncheckable one
     return_targets: Vec<Option<SoundnessCheck>>,
-    used_iter: bool,
-    used_aiter: bool,
-    used_iter_p: bool,
-    used_aiter_p: bool,
-    /// any deep parametric check emitted — pulls in `_soundness_parametric`
-    /// and the `_parametric_is` probe it reuses
-    used_parametric: bool,
 }
 
-impl<'a> Soundness<'a> {
-    fn new(types: &'a dyn TypeInfo, positions: SoundnessPositions, source: &'a str) -> Self {
+impl<'a, 'ast> Soundness<'a, 'ast> {
+    fn new(types: &'a dyn TypeInfo, positions: SoundnessPositions) -> Self {
         Self {
             types,
             positions,
-            source,
-            edits: Vec::new(),
-            guards: Vec::new(),
+            sites: Vec::new(),
             consumed: Vec::new(),
             verbatim: Vec::new(),
             return_targets: Vec::new(),
-            used_iter: false,
-            used_aiter: false,
-            used_iter_p: false,
-            used_aiter_p: false,
-            used_parametric: false,
         }
     }
 
@@ -179,7 +182,7 @@ impl<'a> Soundness<'a> {
     fn check_plan(&self, expr: &Expr) -> Option<SoundnessCheck> {
         self.types
             .soundness_check_plan(expr)
-            .filter(|plan| !matches!(plan, SoundnessCheck::Isinstance(t) if t == "type(None)"))
+            .filter(|plan| !matches!(plan, SoundnessCheck::Isinstance(CheckTarget::NoneType)))
     }
 
     /// [`Self::check_plan`] for a parameter, read off the parameter rather than off
@@ -188,97 +191,51 @@ impl<'a> Soundness<'a> {
     fn parameter_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck> {
         self.types
             .parameter_check_plan(parameter)
-            .filter(|plan| !matches!(plan, SoundnessCheck::Isinstance(t) if t == "type(None)"))
+            .filter(|plan| !matches!(plan, SoundnessCheck::Isinstance(CheckTarget::NoneType)))
     }
 
-    /// wrap `source[range]` in `helper(<source>, <trailing-args>)`. `trailing`
-    /// carries its own leading `, ` (e.g. `", str"` or `", A[int], (0,)"`)
-    fn wrap_call(&mut self, range: TextRange, helper: &str, trailing: &str) {
-        self.edits.push((
-            range,
-            vec![
-                Fragment::Lit(format!("{helper}(")),
-                Fragment::Src(range),
-                Fragment::Lit(format!("{trailing})")),
-            ],
-        ));
+    /// check the value `expr` produces against `plan`
+    fn check_value(&mut self, expr: &'ast Expr, plan: SoundnessCheck) {
+        self.sites.push(Site::Value { expr, plan });
     }
 
-    /// wrap `range` in the scalar check (`_soundness_check` /
-    /// `_soundness_parametric`) named by `plan`
-    fn wrap_check(&mut self, range: TextRange, plan: &SoundnessCheck) {
-        match plan {
-            SoundnessCheck::Isinstance(target) => {
-                self.wrap_call(range, "_soundness_check", &format!(", {target}"));
-            }
-            SoundnessCheck::Parametric { alias, variances } => {
-                self.used_parametric = true;
-                self.wrap_call(
-                    range,
-                    "_soundness_parametric",
-                    &format!(", {alias}, {}", variance_tuple(variances)),
-                );
-            }
-        }
-    }
-
-    /// wrap the iterable of a `for` / comprehension clause when the iterable
-    /// carries a generic specialization and the element (loop target) type is
-    /// checkable. the iterable is wrapped in a validating generator whose form
-    /// (shallow vs parametric) follows the element's check plan
-    fn wrap_iteration(&mut self, iterable: &Expr, target_expr: &Expr, is_async: bool) {
+    /// check each element drawn from the iterable of a `for` / comprehension
+    /// clause when the iterable carries a generic specialization and the element
+    /// (loop target) type is checkable
+    fn check_iteration(&mut self, iterable: &'ast Expr, target_expr: &Expr, is_async: bool) {
         if !self.types.is_specialized_generic_instance(iterable) {
             return;
         }
         let Some(plan) = self.check_plan(target_expr) else {
             return;
         };
-        let (helper, trailing) = match &plan {
-            SoundnessCheck::Isinstance(target) => {
-                let helper = if is_async {
-                    self.used_aiter = true;
-                    "_soundness_aiter"
-                } else {
-                    self.used_iter = true;
-                    "_soundness_iter"
-                };
-                (helper, format!(", {target}"))
-            }
-            SoundnessCheck::Parametric { alias, variances } => {
-                self.used_parametric = true;
-                let helper = if is_async {
-                    self.used_aiter_p = true;
-                    "_soundness_aiter_p"
-                } else {
-                    self.used_iter_p = true;
-                    "_soundness_iter_p"
-                };
-                (helper, format!(", {alias}, {}", variance_tuple(variances)))
-            }
-        };
-        self.wrap_call(iterable.range(), helper, &trailing);
+        self.sites.push(Site::Elements {
+            iterable,
+            is_async,
+            plan,
+        });
     }
 
-    /// wrap each argument of `call` whose own type is unhelpful against its
+    /// check each argument of `call` whose own type is unhelpful against its
     /// matched parameter's annotation. positional mapping stops at the first
     /// starred spread (positions past it are unknown); `**kwargs` spreads are
     /// skipped
-    fn wrap_call_arguments(&mut self, call: &ExprCall) {
+    fn check_call_arguments(&mut self, call: &'ast ExprCall) {
         let callee = call.func.as_ref();
         for (index, arg) in call.arguments.args.iter().enumerate() {
             if arg.is_starred_expr() {
                 break;
             }
-            self.maybe_wrap_argument(callee, arg, &ArgSlot::Positional(index));
+            self.maybe_check_argument(callee, arg, &ArgSlot::Positional(index));
         }
         for keyword in &call.arguments.keywords {
             if let Some(name) = &keyword.arg {
-                self.maybe_wrap_argument(callee, &keyword.value, &ArgSlot::Keyword(name.as_str()));
+                self.maybe_check_argument(callee, &keyword.value, &ArgSlot::Keyword(name.as_str()));
             }
         }
     }
 
-    fn maybe_wrap_argument(&mut self, callee: &Expr, arg: &Expr, slot: &ArgSlot<'_>) {
+    fn maybe_check_argument(&mut self, callee: &Expr, arg: &'ast Expr, slot: &ArgSlot<'_>) {
         if self.consumed.contains(&arg.range()) || !self.value_needs_context_target(arg) {
             return;
         }
@@ -287,47 +244,33 @@ impl<'a> Soundness<'a> {
             ArgSlot::Keyword(name) => self.types.call_keyword_param_plan(callee, name),
         };
         if let Some(plan) = plan {
-            self.wrap_check(arg.range(), &plan);
+            self.check_value(arg, plan);
         }
     }
 
     /// the plan to validate a returned `value` against — the enclosing
     /// function's declared return plan — but only when `value`'s own type
     /// is unhelpful (else `generic_calls`/`projections` already covers it)
-    fn return_wrap_plan(&self, value: &Expr) -> Option<SoundnessCheck> {
+    fn return_plan(&self, value: &Expr) -> Option<SoundnessCheck> {
         let plan = self.return_targets.last()?.clone()?;
         self.value_needs_context_target(value).then_some(plan)
     }
 
-    /// the guard statement that validates parameter `name` against `plan`
-    fn guard_stmt(&mut self, name: &str, plan: &SoundnessCheck) -> String {
-        match plan {
-            SoundnessCheck::Isinstance(target) => format!("_soundness_check({name}, {target})"),
-            SoundnessCheck::Parametric { alias, variances } => {
-                self.used_parametric = true;
-                format!(
-                    "_soundness_parametric({name}, {alias}, {})",
-                    variance_tuple(variances)
-                )
-            }
-        }
-    }
-
-    /// insert entry guards validating each checkable parameter of `func` at the
-    /// top of its body — the `parameters` position, defending the contract
-    /// against callers the checker never saw. variadic (`*args` / `**kwargs`)
-    /// parameters are skipped, and so is any parameter whose source states no
-    /// type: an unannotated one with no default states nothing, and `x=None`
-    /// says the argument may be left out rather than that `None` belongs there
+    /// check each checkable parameter of `func` where its body begins — the
+    /// `parameters` position, defending the contract against callers the checker
+    /// never saw. variadic (`*args` / `**kwargs`) parameters are skipped, and so is
+    /// any parameter whose source states no type: an unannotated one with no
+    /// default states nothing, and `x=None` says the argument may be left out rather
+    /// than that `None` belongs there
     ///
     /// the plan is read off the *parameter*, not off its annotation, because a
     /// default is a written type too. `def f(safe='/')` says `safe` is a `str`
     /// — the native backend lays the parameter out at that bound and checks it
     /// at the boundary, and asking the annotation node left the interpreted twin
     /// silently more permissive than its own compiled form
-    fn insert_param_guards(&mut self, func: &StmtFunctionDef) {
+    fn check_parameters(&mut self, func: &'ast StmtFunctionDef) {
         let params = &func.parameters;
-        let mut guards: Vec<String> = Vec::new();
+        let mut guards = Vec::new();
         for pwd in params
             .posonlyargs
             .iter()
@@ -336,58 +279,24 @@ impl<'a> Soundness<'a> {
         {
             let parameter = &pwd.parameter;
             if let Some(plan) = self.parameter_plan(parameter) {
-                let guard = self.guard_stmt(parameter.name.as_str(), &plan);
-                guards.push(guard);
+                guards.push((parameter.name.as_str(), plan));
             }
         }
-        if guards.is_empty() {
-            return;
+        if !guards.is_empty() {
+            self.sites.push(Site::Parameters {
+                function: func,
+                guards,
+            });
         }
-
-        // insert after a leading docstring (which must stay the first
-        // statement); mirrors `mutable_defaults`' body-prologue insertion
-        let docstring_count = usize::from(matches!(
-            func.body.first(),
-            Some(Stmt::Expr(e)) if matches!(e.value.as_ref(), Expr::StringLiteral(_))
-        ));
-        let mut text = String::new();
-        let insert_at = if let Some(stmt) = func.body.get(docstring_count) {
-            let at = stmt.range().start();
-            let prefix = &self.source[usize::from(line_start(self.source, at))..usize::from(at)];
-            if prefix.trim().is_empty() {
-                // multi-line body: each guard sits at the body indent and
-                // re-establishes it for the statement that follows
-                for guard in &guards {
-                    let _ = write!(text, "{guard}\n{prefix}");
-                }
-            } else {
-                // single-line body (`def f(a: A[int]): ...`) — break the body
-                // onto its own indented line after the guards
-                let base = format!("{}    ", line_indent(self.source, func.range().start()));
-                for guard in &guards {
-                    let _ = write!(text, "\n{base}{guard}");
-                }
-                let _ = write!(text, "\n{base}");
-            }
-            at
-        } else {
-            // docstring-only body: append the guards after it
-            let base = format!("{}    ", line_indent(self.source, func.range().start()));
-            for guard in &guards {
-                let _ = write!(text, "\n{base}{guard}");
-            }
-            func.body[docstring_count - 1].range().end()
-        };
-        self.guards.push((insert_at, vec![Fragment::Lit(text)]));
     }
 }
 
-impl<'ast> Visitor<'ast> for Soundness<'_> {
+impl<'ast> Visitor<'ast> for Soundness<'_, 'ast> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match stmt {
             Stmt::FunctionDef(func) => {
                 if self.positions.parameters {
-                    self.insert_param_guards(func);
+                    self.check_parameters(func);
                 }
                 // track the declared return plan so nested `return`s validate
                 // against the right function's annotation
@@ -402,7 +311,7 @@ impl<'ast> Visitor<'ast> for Soundness<'_> {
             }
             Stmt::For(for_stmt) => {
                 if self.positions.iterations {
-                    self.wrap_iteration(&for_stmt.iter, &for_stmt.target, for_stmt.is_async);
+                    self.check_iteration(&for_stmt.iter, &for_stmt.target, for_stmt.is_async);
                 }
             }
             Stmt::AnnAssign(ann) => {
@@ -421,15 +330,15 @@ impl<'ast> Visitor<'ast> for Soundness<'_> {
                     && !self.types.is_field_specifier(value)
                     && let Some(plan) = self.check_plan(&ann.annotation)
                 {
-                    self.wrap_check(value.range(), &plan);
+                    self.check_value(value, plan);
                 }
             }
             Stmt::Return(ret) => {
                 if self.positions.returns
                     && let Some(value) = &ret.value
-                    && let Some(plan) = self.return_wrap_plan(value)
+                    && let Some(plan) = self.return_plan(value)
                 {
-                    self.wrap_check(value.range(), &plan);
+                    self.check_value(value, plan);
                 }
             }
             // a type-alias value is a type expression; nothing in it executes
@@ -444,7 +353,7 @@ impl<'ast> Visitor<'ast> for Soundness<'_> {
 
     fn visit_comprehension(&mut self, comprehension: &'ast Comprehension) {
         if self.positions.iterations {
-            self.wrap_iteration(
+            self.check_iteration(
                 &comprehension.iter,
                 &comprehension.target,
                 comprehension.is_async,
@@ -493,21 +402,257 @@ impl<'ast> Visitor<'ast> for Soundness<'_> {
             if self.gated_enabled(operand) {
                 self.consumed.push(operand.range());
                 if !already_consumed && let Some(plan) = self.check_plan(expr) {
-                    self.wrap_check(expr.range(), &plan);
+                    self.check_value(expr, plan);
                 }
             }
         } else if self.gated_enabled(expr)
             && !self.consumed.contains(&expr.range())
             && let Some(plan) = self.check_plan(expr)
         {
-            self.wrap_check(expr.range(), &plan);
+            self.check_value(expr, plan);
         }
         if self.positions.arguments
             && let Expr::Call(call) = expr
         {
-            self.wrap_call_arguments(call);
+            self.check_call_arguments(call);
         }
         walk_expr(self, expr);
+    }
+}
+
+/// a syntax node, as the checks a module makes are looked up by
+///
+/// the range alone is not enough: a node the lowering synthesised carries a range
+/// it borrowed and no index, and must never be mistaken for the source node it
+/// stands in for
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SiteKey {
+    range: TextRange,
+    index: u32,
+}
+
+impl SiteKey {
+    fn of(node: &(impl Ranged + HasNodeIndex)) -> Option<Self> {
+        let index = node.node_index().load().as_u32()?;
+        Some(Self {
+            range: node.range(),
+            index,
+        })
+    }
+}
+
+/// every runtime soundness check a module's transpiled form makes, keyed by the
+/// syntax node it is made at
+///
+/// the transpiler writes each one into the program it emits, and a native build of
+/// the same module asks this for the same answers — so the two builds check the
+/// same values against the same types, under the same `--soundness` positions
+#[derive(Debug, Default)]
+pub struct SoundnessSites {
+    values: HashMap<SiteKey, SoundnessCheck>,
+    elements: HashMap<SiteKey, SoundnessCheck>,
+    parameters: HashMap<SiteKey, Vec<(String, SoundnessCheck)>>,
+}
+
+impl SoundnessSites {
+    /// the check made on the value `expr` produces, as it is produced
+    pub fn value(&self, expr: &Expr) -> Option<&SoundnessCheck> {
+        self.values.get(&SiteKey::of(expr)?)
+    }
+
+    /// the check made on each element drawn from `iterable`, as it is drawn
+    pub fn elements(&self, iterable: &Expr) -> Option<&SoundnessCheck> {
+        self.elements.get(&SiteKey::of(iterable)?)
+    }
+
+    /// the checks made on `function`'s own parameters where its body begins, by
+    /// parameter name, in the order the parameters are written
+    pub fn parameters(&self, function: &StmtFunctionDef) -> &[(String, SoundnessCheck)] {
+        SiteKey::of(function)
+            .and_then(|key| self.parameters.get(&key))
+            .map_or(&[], Vec::as_slice)
+    }
+}
+
+/// decide every soundness check `suite` makes under `positions`
+pub fn soundness_sites(
+    model: &ty_python_semantic::SemanticModel<'_>,
+    suite: &[Stmt],
+    positions: SoundnessPositions,
+) -> SoundnessSites {
+    let mut sites = SoundnessSites::default();
+    if !positions.any() {
+        return sites;
+    }
+    let mut walker = Soundness::new(model, positions);
+    walker.visit_body(suite);
+    for site in walker.sites {
+        match site {
+            Site::Value { expr, plan } => {
+                if let Some(key) = SiteKey::of(expr) {
+                    sites.values.insert(key, plan);
+                }
+            }
+            Site::Elements { iterable, plan, .. } => {
+                if let Some(key) = SiteKey::of(iterable) {
+                    sites.elements.insert(key, plan);
+                }
+            }
+            Site::Parameters { function, guards } => {
+                if let Some(key) = SiteKey::of(function) {
+                    let guards = guards
+                        .into_iter()
+                        .map(|(name, plan)| (name.to_owned(), plan))
+                        .collect();
+                    sites.parameters.insert(key, guards);
+                }
+            }
+        }
+    }
+    sites
+}
+
+/// what the checks a pass decided on are written as
+#[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent runtime-helper usage flags, not a state machine"
+)]
+struct Rendered {
+    edits: Vec<(TextRange, Vec<Fragment>)>,
+    /// the entry-guard suites, anchored at the body statement they precede
+    guards: Vec<(TextSize, Vec<Fragment>)>,
+    used_iter: bool,
+    used_aiter: bool,
+    used_iter_p: bool,
+    used_aiter_p: bool,
+    /// any deep parametric check emitted — pulls in `_soundness_parametric`
+    /// and the `_parametric_is` probe it reuses
+    used_parametric: bool,
+}
+
+impl Rendered {
+    /// wrap `source[range]` in `helper(<source>, <trailing-args>)`. `trailing`
+    /// carries its own leading `, ` (e.g. `", str"` or `", A[int], (0,)"`)
+    fn wrap_call(&mut self, range: TextRange, helper: &str, trailing: &str) {
+        self.edits.push((
+            range,
+            vec![
+                Fragment::Lit(format!("{helper}(")),
+                Fragment::Src(range),
+                Fragment::Lit(format!("{trailing})")),
+            ],
+        ));
+    }
+
+    /// wrap `range` in the scalar check (`_soundness_check` /
+    /// `_soundness_parametric`) named by `plan`
+    fn wrap_check(&mut self, range: TextRange, plan: &SoundnessCheck) {
+        match plan {
+            SoundnessCheck::Isinstance(target) => {
+                self.wrap_call(range, "_soundness_check", &format!(", {target}"));
+            }
+            SoundnessCheck::Parametric { alias, variances } => {
+                self.used_parametric = true;
+                self.wrap_call(
+                    range,
+                    "_soundness_parametric",
+                    &format!(", {alias}, {}", variance_tuple(variances)),
+                );
+            }
+        }
+    }
+
+    /// wrap an iterable in a validating generator whose form (shallow vs
+    /// parametric) follows the element's check plan
+    fn wrap_iteration(&mut self, iterable: &Expr, is_async: bool, plan: &SoundnessCheck) {
+        let (helper, trailing) = match plan {
+            SoundnessCheck::Isinstance(target) => {
+                let helper = if is_async {
+                    self.used_aiter = true;
+                    "_soundness_aiter"
+                } else {
+                    self.used_iter = true;
+                    "_soundness_iter"
+                };
+                (helper, format!(", {target}"))
+            }
+            SoundnessCheck::Parametric { alias, variances } => {
+                self.used_parametric = true;
+                let helper = if is_async {
+                    self.used_aiter_p = true;
+                    "_soundness_aiter_p"
+                } else {
+                    self.used_iter_p = true;
+                    "_soundness_iter_p"
+                };
+                (helper, format!(", {alias}, {}", variance_tuple(variances)))
+            }
+        };
+        self.wrap_call(iterable.range(), helper, &trailing);
+    }
+
+    /// the guard statement that validates parameter `name` against `plan`
+    fn guard_stmt(&mut self, name: &str, plan: &SoundnessCheck) -> String {
+        match plan {
+            SoundnessCheck::Isinstance(target) => format!("_soundness_check({name}, {target})"),
+            SoundnessCheck::Parametric { alias, variances } => {
+                self.used_parametric = true;
+                format!(
+                    "_soundness_parametric({name}, {alias}, {})",
+                    variance_tuple(variances)
+                )
+            }
+        }
+    }
+
+    /// insert the entry guards at the top of `func`'s body, after any docstring
+    fn insert_param_guards(
+        &mut self,
+        source: &str,
+        func: &StmtFunctionDef,
+        checks: &[(&str, SoundnessCheck)],
+    ) {
+        let guards: Vec<String> = checks
+            .iter()
+            .map(|(name, plan)| self.guard_stmt(name, plan))
+            .collect();
+
+        // insert after a leading docstring (which must stay the first
+        // statement); mirrors `mutable_defaults`' body-prologue insertion
+        let docstring_count = usize::from(matches!(
+            func.body.first(),
+            Some(Stmt::Expr(e)) if matches!(e.value.as_ref(), Expr::StringLiteral(_))
+        ));
+        let mut text = String::new();
+        let insert_at = if let Some(stmt) = func.body.get(docstring_count) {
+            let at = stmt.range().start();
+            let prefix = &source[usize::from(line_start(source, at))..usize::from(at)];
+            if prefix.trim().is_empty() {
+                // multi-line body: each guard sits at the body indent and
+                // re-establishes it for the statement that follows
+                for guard in &guards {
+                    let _ = write!(text, "{guard}\n{prefix}");
+                }
+            } else {
+                // single-line body (`def f(a: A[int]): ...`) — break the body
+                // onto its own indented line after the guards
+                let base = format!("{}    ", line_indent(source, func.range().start()));
+                for guard in &guards {
+                    let _ = write!(text, "\n{base}{guard}");
+                }
+                let _ = write!(text, "\n{base}");
+            }
+            at
+        } else {
+            // docstring-only body: append the guards after it
+            let base = format!("{}    ", line_indent(source, func.range().start()));
+            for guard in &guards {
+                let _ = write!(text, "\n{base}{guard}");
+            }
+            func.body[docstring_count - 1].range().end()
+        };
+        self.guards.push((insert_at, vec![Fragment::Lit(text)]));
     }
 }
 
@@ -535,14 +680,28 @@ impl TypeAwarePass for SoundnessPass<'_> {
         if !self.positions.any() {
             return;
         }
-        let mut inner = Soundness::new(types, self.positions, self.source);
+        let mut walker = Soundness::new(types, self.positions);
         for (idx, stmt) in stmts.iter().enumerate() {
             // an AST-mutation pass re-rendered this statement; edits into its
             // original source range would be dropped and flagged as leaks
             if ctx.changed.contains(&idx) {
                 continue;
             }
-            inner.visit_stmt(stmt);
+            walker.visit_stmt(stmt);
+        }
+        let mut inner = Rendered::default();
+        for site in &walker.sites {
+            match site {
+                Site::Value { expr, plan } => inner.wrap_check(expr.range(), plan),
+                Site::Elements {
+                    iterable,
+                    is_async,
+                    plan,
+                } => inner.wrap_iteration(iterable, *is_async, plan),
+                Site::Parameters { function, guards } => {
+                    inner.insert_param_guards(self.source, function, guards);
+                }
+            }
         }
         if inner.edits.is_empty() && inner.guards.is_empty() {
             return;

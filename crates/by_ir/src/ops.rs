@@ -395,6 +395,11 @@ pub enum Op {
         src: Value,
         class: Value,
     },
+    /// the soundness check the transpiled build makes where a value whose type
+    /// nothing verified meets a declared one: python's `isinstance(src, target)`,
+    /// raising `TypeError: type soundness violation: expected …, got …` when the
+    /// answer is no. `src` is handed on untouched either way
+    CheckSound { src: Value, target: SoundTarget },
     /// the attribute a class pattern names, or the *missing* answer
     ///
     /// a missing attribute is no match rather than an error, so this has a third
@@ -627,6 +632,16 @@ pub enum Op {
     },
     /// whether `src` has the shape a mapping pattern matches
     IsMapping { dest: RegisterId, src: Value },
+    /// whether `src` is laid out as `class` is, which a read at one of its offsets needs
+    ///
+    /// the type itself answers, never `__class__`: an object may claim a class it was not
+    /// made by, and `isinstance` believes it. so where python's own test has already said
+    /// yes, this is what says which way the attributes can be read
+    HoldsLayout {
+        dest: RegisterId,
+        src: Value,
+        class: String,
+    },
     /// whether `src` has the shape a sequence pattern matches
     ///
     /// the interpreter's own test: a type flagged as a sequence, which `str`,
@@ -1404,6 +1419,7 @@ impl Op {
             | Self::GetField { class, .. }
             | Self::RequireField { class, .. }
             | Self::FieldIsSet { class, .. }
+            | Self::HoldsLayout { class, .. }
             | Self::SetField { class, .. } => vec![class.as_str()],
             // a method reached directly rather than through the type, which only a
             // class the emitter laid out has
@@ -1425,6 +1441,7 @@ impl Op {
             | Self::Box { .. }
             | Self::FloatObjectBinary { .. }
             | Self::IsInstance { .. }
+            | Self::CheckSound { .. }
             | Self::MatchAttr { .. }
             | Self::MethodStands { .. }
             | Self::BuiltinStands { .. }
@@ -1570,6 +1587,7 @@ impl Op {
             | Self::MatchKey { dest, .. }
             | Self::MatchRest { dest, .. }
             | Self::IsMapping { dest, .. }
+            | Self::HoldsLayout { dest, .. }
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
             | Self::BuiltinStands { dest, .. }
@@ -1678,6 +1696,7 @@ impl Op {
             | Self::LeaveGenerator { .. }
             | Self::LicenceHolds { .. }
             | Self::RequireField { .. }
+            | Self::CheckSound { .. }
             | Self::Line { .. }
             | Self::SetField { .. } => None,
         }
@@ -1699,6 +1718,7 @@ impl Op {
             | Self::MatchKey { dest, .. }
             | Self::MatchRest { dest, .. }
             | Self::IsMapping { dest, .. }
+            | Self::HoldsLayout { dest, .. }
             | Self::MatchAttr { dest, .. }
             | Self::MethodStands { dest, .. }
             | Self::BuiltinStands { dest, .. }
@@ -1807,6 +1827,7 @@ impl Op {
             | Self::LeaveGenerator { .. }
             | Self::LicenceHolds { .. }
             | Self::RequireField { .. }
+            | Self::CheckSound { .. }
             | Self::Line { .. }
             | Self::SetField { .. } => None,
         }
@@ -1816,6 +1837,9 @@ impl Op {
     pub fn operands(&self) -> Vec<&Value> {
         match self {
             Self::LoopGuardsHold { exact, .. } => exact.iter().collect(),
+            Self::CheckSound { src, target } => {
+                std::iter::once(src).chain(target.classes()).collect()
+            }
             Self::AsyncContext {
                 manager,
                 exit: Some(exit),
@@ -1834,6 +1858,7 @@ impl Op {
             | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
+            | Self::HoldsLayout { src, .. }
             | Self::AsyncIter { src, .. }
             | Self::AsyncContext {
                 manager: src,
@@ -2061,6 +2086,9 @@ impl Op {
     pub fn operands_mut(&mut self) -> Vec<&mut Value> {
         match self {
             Self::LoopGuardsHold { exact, .. } => exact.iter_mut().collect(),
+            Self::CheckSound { src, target } => {
+                std::iter::once(src).chain(target.classes_mut()).collect()
+            }
             Self::AsyncContext {
                 manager,
                 exit: Some(exit),
@@ -2079,6 +2107,7 @@ impl Op {
             | Self::DictShadows { src, .. }
             | Self::IsMissing { src, .. }
             | Self::IsMapping { src, .. }
+            | Self::HoldsLayout { src, .. }
             | Self::AsyncIter { src, .. }
             | Self::AsyncContext {
                 manager: src,
@@ -2297,6 +2326,38 @@ impl Op {
             | Self::Release { value, .. }
             | Self::FinishFrame { value }
             | Self::RaiseWith { value, .. } => vec![value],
+        }
+    }
+}
+
+/// what an [`Op::CheckSound`] tests its value against: the second argument of the
+/// `isinstance` the transpiled build makes
+#[derive(Debug, Clone, PartialEq)]
+pub enum SoundTarget {
+    /// a class, already resolved the way the transpiled build's name for it resolves
+    Class(Value),
+    /// `type(None)`
+    NoneType,
+    /// any one of several, tried in order, as `isinstance` tries a tuple's
+    AnyOf(Vec<SoundTarget>),
+}
+
+impl SoundTarget {
+    /// every class this target reads, in the order `isinstance` tries them
+    pub(crate) fn classes(&self) -> Vec<&Value> {
+        match self {
+            Self::Class(class) => vec![class],
+            Self::NoneType => Vec::new(),
+            Self::AnyOf(parts) => parts.iter().flat_map(Self::classes).collect(),
+        }
+    }
+
+    /// [`Self::classes`], mutably
+    fn classes_mut(&mut self) -> Vec<&mut Value> {
+        match self {
+            Self::Class(class) => vec![class],
+            Self::NoneType => Vec::new(),
+            Self::AnyOf(parts) => parts.iter_mut().flat_map(Self::classes_mut).collect(),
         }
     }
 }

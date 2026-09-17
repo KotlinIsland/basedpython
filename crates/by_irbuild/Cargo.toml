@@ -12,8 +12,10 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 by_ir = { workspace = true }
+by_transforms = { workspace = true }
 ruff_db = { workspace = true }
 ruff_python_ast = { workspace = true }
+ruff_python_codegen = { workspace = true }
 ruff_python_parser = { workspace = true }
 ruff_python_stdlib = { workspace = true }
 ruff_source_file = { workspace = true }

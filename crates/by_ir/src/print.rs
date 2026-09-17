@@ -8,7 +8,7 @@ use std::fmt::Write;
 
 use crate::function::{Function, ModuleIr};
 use crate::ops::{
-    Concatenation, LicenceKind, Mutation, Op, RegisterId, Terminator, UnaryOp, Value,
+    Concatenation, LicenceKind, Mutation, Op, RegisterId, SoundTarget, Terminator, UnaryOp, Value,
 };
 
 /// render a whole module
@@ -98,12 +98,35 @@ fn print_value(function: &Function, value: &Value) -> String {
     }
 }
 
+/// a soundness check's target, spelled as the tuple `isinstance` is handed
+fn sound_target(function: &Function, target: &SoundTarget) -> String {
+    match target {
+        SoundTarget::Class(class) => print_value(function, class),
+        SoundTarget::NoneType => "NoneType".to_string(),
+        SoundTarget::AnyOf(parts) => format!(
+            "({})",
+            parts
+                .iter()
+                .map(|part| sound_target(function, part))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 fn print_op(function: &Function, op: &Op) -> String {
     let value = |v: &Value| print_value(function, v);
     let name = |id: RegisterId| register_name(function, id);
     match op {
         Op::Assign { dest, src } => format!("{} = {}", name(*dest), value(src)),
         Op::Truthy { dest, src } => format!("{} = truthy {}", name(*dest), value(src)),
+        Op::CheckSound { src, target } => {
+            format!(
+                "check sound {} {}",
+                value(src),
+                sound_target(function, target)
+            )
+        }
         Op::IsInstance { dest, src, class } => format!(
             "{} = isinstance {} {}",
             name(*dest),
@@ -139,6 +162,9 @@ fn print_op(function: &Function, op: &Op) -> String {
         ),
         Op::IsMapping { dest, src } => {
             format!("{} = is-mapping {}", name(*dest), value(src))
+        }
+        Op::HoldsLayout { dest, src, class } => {
+            format!("{} = holds-layout {} <{class}>", name(*dest), value(src))
         }
         Op::MatchAttr {
             dest,

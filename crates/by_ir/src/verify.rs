@@ -722,6 +722,12 @@ impl Verifier<'_> {
                 self.expect(block, rhs, &RType::FLOAT, op.symbol());
                 self.expect_dest(block, *dest, &RType::FLOAT, op.symbol());
             }
+            Op::CheckSound { src, target } => {
+                self.expect(block, src, &RType::OBJECT, "a soundness check");
+                for class in target.classes() {
+                    self.expect(block, class, &RType::OBJECT, "a soundness check");
+                }
+            }
             Op::IsInstance { dest, src, class } => {
                 self.expect(block, src, &RType::OBJECT, "an isinstance test");
                 self.expect(block, class, &RType::OBJECT, "an isinstance test");
@@ -765,6 +771,10 @@ impl Verifier<'_> {
             Op::IsMapping { dest, src } => {
                 self.expect(block, src, &RType::OBJECT, "a mapping-shape test");
                 self.expect_dest(block, *dest, &RType::BIT, "a mapping-shape test");
+            }
+            Op::HoldsLayout { dest, src, .. } => {
+                self.expect(block, src, &RType::OBJECT, "a layout test");
+                self.expect_dest(block, *dest, &RType::BIT, "a layout test");
             }
             Op::MatchAttr {
                 dest,
