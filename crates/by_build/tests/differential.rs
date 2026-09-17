@@ -1006,6 +1006,16 @@ def _reimported_under_builtins(name, call, **overrides):
     exec('import ' + name + ' as m\\nout = ' + call, frame)
     return frame['out']
 
+# rebind `name` in `module` from a module of its own, rather than from the test's frame:
+# a namespace is written to the same way whoever holds the module writes to it, and a memo
+# of what that name means has to hear about this one too
+def _rebind_from_another_module(module, name, value):
+    import types
+    writer = types.ModuleType('_by_writer')
+    writer.__dict__['target'] = module
+    writer.__dict__['value'] = value
+    exec('setattr(target, ' + repr(name) + ', value)', writer.__dict__)
+
 # raising an exception and catching it again, which is the only way an exception class
 # is asked for the traceback and the frames a `raise` hangs on the instance
 def _raised_and_caught(kind, *args):
@@ -2847,6 +2857,61 @@ fn a_native_recursion_follows_the_recursion_limit() {
             // interpreter answers differently from itself on 3.13
             "_deepest(lambda n: len(m.Chain(n)), 100)",
         ],
+    );
+}
+
+#[test]
+fn a_recursive_body_keeps_the_copy_it_is_versioned_against_in_a_function_of_its_own() {
+    // a function versioned at its entry holds two copies of itself: the one the test says
+    // yes to, which knows its parameters are exactly `int`s and that the names it calls
+    // still stand, and the body as written beside it for when the test says no.
+    //
+    // a C function's prologue saves every register the whole body needs, and a recursion
+    // runs that prologue once for every level, so the copy that no recursion runs twice
+    // was making every level save the registers only its slow paths use: `fib` saved ten
+    // callee-saved registers and 128 bytes of frame where the fast copy alone needs six
+    // and 64. it goes in a C function of its own, which the test reaches by a call the
+    // recursion limit does not count — the frame making that call has been counted
+    // already, and no new one is pushed
+    //
+    // both copies still have to answer: an `int` subclass is one the exactness test says
+    // no to, and a rebound `fib` is a name that no longer stands
+    let Some(compiled) = agree_in(
+        "recsplit",
+        "\
+class Odd(int):
+    pass
+
+
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+
+def outer(n: int) -> int:
+    return fib(n)
+",
+        &[
+            "m.fib(10)",
+            "m.fib(m.Odd(10))",
+            "[m.outer(k) for k in (0, 2, 6)]",
+            "(setattr(m, 'fib', lambda k: 100 + k), m.outer(4))[1]",
+        ],
+        false,
+        by_irbuild::Language::Python,
+    ) else {
+        return;
+    };
+    let c = std::fs::read_to_string(compiled.join("by_diff_recsplit.c"))
+        .expect("the emitted C is kept");
+    assert!(
+        c.contains("__attribute__((noinline)) static ByTagged byu_by_diff_recsplit_fib(ByDepth by_depth, ByTagged r0) {"),
+        "the copy the test says no to is not a C function of its own:\n{c}"
+    );
+    assert!(
+        c.contains("else return byu_by_diff_recsplit_fib(by_depth, r0);"),
+        "the test does not reach it by an uncounted call:\n{c}"
     );
 }
 
@@ -4960,6 +5025,358 @@ def twice(flip: object) -> object:
             "(setattr(__import__('builtins'), 'picked', lambda: 'builtins'), \
              m.__dict__.__setitem__('picked', lambda: 'module'), \
              m.twice(lambda: m.__dict__.pop('picked', None)))[2]",
+        ],
+    );
+}
+
+/// a global whose only use is to be narrowed answers the narrowed value the *name*
+/// means, on every read
+///
+/// such a read keeps the narrowed value beside the site rather than the object, so what
+/// it remembers is one step further from the namespace than the memo of the object is —
+/// and every way the name can come to mean something else has to reach it just the same.
+/// each call below moves the binding underneath a site that has already run
+#[test]
+fn a_global_read_only_to_be_narrowed_follows_every_rebinding() {
+    agree_python(
+        "globalnarrowed",
+        "\
+_step = 1
+
+def stepped(flip: object) -> int:
+    total = 0
+    i = 0
+    while i < 3:
+        total = total + _step
+        flip()
+        i = i + 1
+    return total
+
+def once() -> int:
+    return _step
+",
+        &[
+            // rebound between two reads of the one site
+            "m.stepped(lambda: m.__dict__.__setitem__('_step', m._step * 10))",
+            // rebound from outside the module, which is the same write to the namespace
+            "(_rebind_from_another_module(m, '_step', 7), m.once())[1]",
+            // deleted: the site has to stop answering rather than go on holding
+            "(m.__dict__.__setitem__('_step', 4), m.once(), m.__dict__.pop('_step'), \
+             repr(_capture(m.once)))[3]",
+            // and bound again afterwards
+            "(m.__dict__.__setitem__('_step', 9), m.once())[1]",
+            // a big int is the case where what is remembered is a pointer into the
+            // namespace rather than a value copied out of it
+            "(m.__dict__.__setitem__('_step', 2 ** 80), [m.once(), m.once()])[1]",
+            // and back to a short one, so the two representations follow each other
+            "(m.__dict__.__setitem__('_step', 2 ** 80), m.once(), \
+             m.__dict__.__setitem__('_step', 6), [m.once(), m.once()])[3]",
+        ],
+    );
+}
+
+/// a global rebound to a value the narrowing does not accept is *reported*, by the very
+/// site that was answering the old one
+///
+/// this is the shape a memo of the narrowed value could get silently wrong: the site
+/// holds a perfectly good `int` from the trip before, and the name now means something
+/// that is not one. the generation moved, so the memo is not consulted and the read is
+/// made in full — which is what reports it.
+///
+/// there is only one leg's behaviour to ask about here. the interpreted twin *returns*
+/// the string, because trusting the annotation is what the compiled leg does and does
+/// not depend on this memo at all — the same program refuses the same way with the
+/// narrowing memo taken out
+#[test]
+fn a_narrowed_global_rebound_out_of_its_type_is_reported_and_not_answered_stale() {
+    let Some((python, dir, _)) = built_python(
+        "globalnarrowedwrong",
+        "\
+_step = 1
+
+def once() -> int:
+    return _step
+",
+    ) else {
+        return;
+    };
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_globalnarrowedwrong as m\n\
+         first = m.once()\n\
+         m.__dict__['_step'] = 'no'\n\
+         try:\n\
+        \x20   after = repr(m.once())\n\
+         except TypeError as e:\n\
+        \x20   after = type(e).__name__\n\
+         m.__dict__['_step'] = 4\n\
+         print(first, after, m.once())\n",
+    );
+    assert_eq!(out, "1 TypeError 4");
+}
+
+/// reading and returning a global holds nothing once the value is no longer bound
+///
+/// this is the one thing about it that no comparison of answers can see: a build that
+/// keeps a reference it never gives back answers correctly for as long as the process
+/// lasts, and only the reference count says otherwise. a heap `int` is the case that
+/// has a reference to keep at all — a short is a value copied out of the object, and a
+/// `double` and a byte likewise.
+///
+/// the numbers are *growth over the count before the loop*. while the name is bound,
+/// the one reference that stands is the namespace's own entry: the memo of the narrowed
+/// global keeps a borrow, and neither the read nor the boxing that hands the value back
+/// to python adds anything to it. unbinding the name gives that last one back too.
+///
+/// both numbers were wrong when this was first written — 50 rebindings left 51 — and
+/// the leak was one reference per *call* rather than per rebinding, in the boxing that
+/// ends every compiled `-> int` entry
+#[test]
+fn reading_a_global_and_handing_it_back_keeps_no_reference() {
+    let Some((python, dir, _)) = built_python(
+        "globalnarrowedrefs",
+        "\
+_step = 1
+
+def once() -> int:
+    return _step
+",
+    ) else {
+        return;
+    };
+    let out = run(
+        &python,
+        &dir,
+        "import sys\n\
+         import by_diff_globalnarrowedrefs as m\n\
+         big = 2 ** 80\n\
+         before = sys.getrefcount(big)\n\
+         for _ in range(50):\n\
+        \x20   m.__dict__['_step'] = 0\n\
+        \x20   m.once()\n\
+        \x20   m.__dict__['_step'] = big\n\
+        \x20   m.once()\n\
+         print('bound', sys.getrefcount(big) - before)\n\
+         for _ in range(50):\n\
+        \x20   m.once()\n\
+         print('read again', sys.getrefcount(big) - before)\n\
+         del m.__dict__['_step']\n\
+         print('unbound', sys.getrefcount(big) - before)\n",
+    );
+    assert_eq!(out, "bound 1\nread again 1\nunbound 0");
+}
+
+/// every way a compiled `-> int` hands a value to python, asked the same question
+///
+/// the boxing that ends a wrapper is shared by all of them, so a retain it makes that
+/// nothing releases is a leak on a module function, on a method, through a `@property`,
+/// through the descriptors a `staticmethod` and a `classmethod` publish, and in the
+/// slots python reaches `__hash__` and `__index__` through. it was: every line here
+/// read 50 before the boxing was made to take the caller's reference over.
+///
+/// a field read is in the list as the case that is *not* one of these — it borrows out
+/// of the instance and boxes a fresh reference, which is correct there and is what the
+/// entries above were doing wrongly.
+///
+/// the other representations a return can carry are asked the same question at the end,
+/// because they share that boxing's one decision about who owns what: a `str`, a `list`
+/// and a plain object are handed on as they stand, and a `float` and a `bool` are copied
+/// out of the object and carry no reference at all
+#[test]
+fn handing_an_int_back_to_python_keeps_no_reference_on_any_entry() {
+    let Some((python, dir, _)) = built_python(
+        "intreturnrefs",
+        "\
+_name = 'held'
+_items = [1]
+
+
+class Marker:
+    pass
+
+
+_marker = Marker()
+_ratio = 1.5
+
+
+def as_str() -> str:
+    return _name
+
+
+def as_list() -> list:
+    return _items
+
+
+def as_object() -> object:
+    return _marker
+
+
+def as_float() -> float:
+    return _ratio
+
+
+class Holder:
+    count: int
+
+    def __init__(self, count: int) -> None:
+        self.count = count
+
+    def method(self) -> int:
+        return self.count
+
+    @property
+    def doubled(self) -> int:
+        return self.count
+
+    @staticmethod
+    def stat(v: int) -> int:
+        return v
+
+    @classmethod
+    def klass(cls, v: int) -> int:
+        return v
+
+    def __hash__(self) -> int:
+        return self.count
+
+    def __index__(self) -> int:
+        return self.count
+
+
+def plain(v: int) -> int:
+    return v
+",
+    ) else {
+        return;
+    };
+    let out = run(
+        &python,
+        &dir,
+        "import sys\n\
+         import by_diff_intreturnrefs as m\n\
+         big = 2 ** 80\n\
+         h = m.Holder(big)\n\
+         def drift(call, watched=big):\n\
+        \x20   before = sys.getrefcount(watched)\n\
+        \x20   for _ in range(50):\n\
+        \x20       call()\n\
+        \x20   return sys.getrefcount(watched) - before\n\
+         for name, call in [\n\
+        \x20   ('function', lambda: m.plain(big)),\n\
+        \x20   ('method', h.method),\n\
+        \x20   ('property', lambda: h.doubled),\n\
+        \x20   ('staticmethod', lambda: m.Holder.stat(big)),\n\
+        \x20   ('classmethod', lambda: m.Holder.klass(big)),\n\
+        \x20   ('hash slot', lambda: hash(h)),\n\
+        \x20   ('index slot', lambda: h.__index__()),\n\
+        \x20   ('field read', lambda: h.count),\n\
+         ]:\n\
+        \x20   print(name, drift(call))\n\
+         for name, call, watched in [\n\
+        \x20   ('str', m.as_str, m._name),\n\
+        \x20   ('list', m.as_list, m._items),\n\
+        \x20   ('object', m.as_object, m._marker),\n\
+        \x20   ('float', m.as_float, m._ratio),\n\
+         ]:\n\
+        \x20   print(name, drift(call, watched))\n",
+    );
+    assert_eq!(
+        out,
+        "function 0\n\
+         method 0\n\
+         property 0\n\
+         staticmethod 0\n\
+         classmethod 0\n\
+         hash slot 0\n\
+         index slot 0\n\
+         field read 0\n\
+         str 0\n\
+         list 0\n\
+         object 0\n\
+         float 0"
+    );
+}
+
+/// the same, for the representations that are copied out of the object outright
+#[test]
+fn a_global_narrowed_to_a_float_or_a_bool_follows_every_rebinding() {
+    agree_python(
+        "globalnarrowedother",
+        "\
+_scale = 1.5
+_on = True
+
+def scaled() -> float:
+    return _scale * 2.0
+
+def switched() -> bool:
+    return _on
+",
+        &[
+            "[m.scaled(), m.scaled()]",
+            "(m.__dict__.__setitem__('_scale', 4.25), [m.scaled(), m.scaled()])[1]",
+            // twice over, so a site re-armed after one rebinding is asked again
+            "(m.__dict__.__setitem__('_scale', 4.25), m.scaled(), \
+             m.__dict__.__setitem__('_scale', -0.5), [m.scaled(), m.scaled()])[3]",
+            "[m.switched(), m.switched()]",
+            "(m.__dict__.__setitem__('_on', False), [m.switched(), m.switched()])[1]",
+        ],
+    );
+}
+
+/// a local of the same name is the local, and a global read before its assignment is
+/// unbound — neither is a namespace read that a site could answer
+#[test]
+fn a_name_a_function_binds_is_never_the_narrowed_global_of_that_name() {
+    agree_python(
+        "globalnarrowedshadow",
+        "\
+_step = 100
+
+def shadowed() -> int:
+    _step = 1
+    return _step
+
+def read_before_assigned() -> int:
+    total = _step
+    _step = 2
+    return total
+
+def declared(flip: object) -> int:
+    global _step
+    first = _step
+    flip()
+    return first + _step
+",
+        &[
+            "m.shadowed()",
+            "repr(_capture(m.read_before_assigned))",
+            // a site the module's own write moves, read either side of it
+            "m.declared(lambda: m.__dict__.__setitem__('_step', 5))",
+        ],
+    );
+}
+
+/// a generator resumed after a rebinding reads the binding it is resumed under
+///
+/// the narrowed value lives beside the site rather than in the generator's state, so a
+/// suspension cannot carry a stale one across: the compare is made again on the resume
+#[test]
+fn a_generator_resumed_after_a_rebinding_reads_the_new_narrowed_global() {
+    agree_python(
+        "globalnarrowedresume",
+        "\
+_step = 1
+
+def steps() -> object:
+    yield _step
+    yield _step
+    yield _step
+",
+        &[
+            "(lambda g: [next(g), m.__dict__.__setitem__('_step', 20), next(g), \
+             m.__dict__.__setitem__('_step', 300), next(g)])(m.steps())",
         ],
     );
 }
@@ -29836,6 +30253,159 @@ def literal(v: object) -> str:
 }
 
 #[test]
+fn a_class_pattern_asks_for_the_claimed_class_wherever_the_answer_could_differ() {
+    // `isinstance` decides *against* a subject only after asking it for its `__class__`,
+    // and a subject whose answer is the pattern's class matches after all. skipping that
+    // question is sound exactly while the subject's type reads attributes the generic way
+    // and inherits `object`'s own `__class__`, which answers `type(subject)` and runs
+    // nothing — so a class pattern that skipped it for every subject would stop matching
+    // either of these. `Attribute` puts a plain class attribute where the inherited
+    // descriptor would be, and `Gate`'s metaclass answers `isinstance` for itself
+    let Some(compiled) = agree_python_built(
+        "askedclass",
+        "\
+class Point:
+    __match_args__ = ('x', 'y')
+
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+
+class Attribute:
+    __class__ = Point
+    x = 1
+    y = 2
+
+
+class Meta(type):
+    def __instancecheck__(cls, instance: object) -> bool:
+        return True
+
+
+class Gate(metaclass=Meta):
+    __match_args__ = ()
+
+
+def point(v: object) -> str:
+    match v:
+        case Point(a, b):
+            return 'point ' + str(a) + ' ' + str(b)
+        case _:
+            return 'other'
+
+
+def gate(v: object) -> str:
+    match v:
+        case Gate():
+            return 'gate'
+        case _:
+            return 'other'
+",
+        &[
+            "[m.point(v) for v in (m.Point(8, 9), m.Attribute(), m.Gate(), 5, 'text')]",
+            "[m.gate(v) for v in (m.Gate(), 5, 'text', m.Point(1, 2))]",
+        ],
+    ) else {
+        return;
+    };
+    // the two halves no compiled subject can show. a type that replaces
+    // `__getattribute__` answers `__class__` however it likes, and python believes it —
+    // a class that replaces that slot is not one we compile, so the subject is written
+    // here. and an entry in the *instance* dict does not displace `object.__class__`,
+    // because that is a data descriptor and the generic lookup takes one of those before
+    // it reads the dict: a subject carrying `__class__` there is not a `Point`, for
+    // python and for the skipped question alike
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_askedclass as m\n\
+         class Overrides:\n\
+         \x20   x = 3\n\
+         \x20   y = 4\n\
+         \x20   def __getattribute__(self, name):\n\
+         \x20       if name == '__class__':\n\
+         \x20           return m.Point\n\
+         \x20       return object.__getattribute__(self, name)\n\
+         class Shadows:\n\
+         \x20   x = 6\n\
+         \x20   y = 7\n\
+         s = Shadows()\n\
+         s.__dict__['__class__'] = m.Point\n\
+         print(m.point(Overrides()))\n\
+         print(isinstance(s, m.Point), m.point(s))\n",
+    );
+    assert_eq!(out, "point 3 4\nFalse other");
+}
+
+#[test]
+fn a_class_pattern_tests_the_layout_once() {
+    // the layout test decides whether the attributes are read at their offsets, and the
+    // subject is then narrowed to that layout so that they can be — which used to ask the
+    // very question the test above it had just answered. nothing between the two can run
+    // python, so the narrowing is the static type and nothing else
+    let Some(compiled) = agree_python_built(
+        "onelayouttest",
+        "\
+class Point:
+    __match_args__ = ('x', 'y')
+
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+
+def classify(v: object) -> int:
+    match v:
+        case Point(a, b):
+            return a + b
+        case _:
+            return -1
+",
+        &["[m.classify(v) for v in (m.Point(4, 5), 3, 'x')]"],
+    ) else {
+        return;
+    };
+    let c = std::fs::read_to_string(compiled.join("by_diff_onelayouttest.c"))
+        .expect("the emitted C is kept");
+    let body = one_function(&c, "_classify(");
+    assert!(
+        body.contains("PyObject_TypeCheck("),
+        "the layout test is gone:\n{body}"
+    );
+    for again in ["By_CheckInstance(", "By_UnboxInstance("] {
+        assert!(
+            !body.contains(again),
+            "`{again}` asks the layout test again:\n{body}"
+        );
+    }
+}
+
+/// the C of the one function whose symbol ends `tail`, from its signature to the brace
+/// that closes it
+///
+/// a whole-module `contains` says nothing about *which* function a text is in, and every
+/// emitted module has several
+fn one_function<'a>(c: &'a str, tail: &str) -> &'a str {
+    // the module declares every function before it defines any, so the definition is
+    // the occurrence whose line opens a body
+    let at = c
+        .match_indices(tail)
+        .map(|(at, _)| at)
+        .find(|at| {
+            let line = c[*at..].lines().next().unwrap_or_default();
+            line.trim_end().ends_with('{')
+        })
+        .unwrap_or_else(|| panic!("no definition of `{tail}` in:\n{c}"));
+    let start = c[..at].rfind('\n').map_or(0, |line| line + 1);
+    let end = c[start..].find("\n}\n").expect("the closing brace") + start;
+    &c[start..end]
+}
+
+#[test]
 fn a_class_pattern_over_a_base_agrees() {
     // a class another one in the module extends is emitted as a mutable heap type:
     // python can write to it, and `__match_args__` is one of the names it could rebind.
@@ -31716,6 +32286,425 @@ def unequal(a: object, b: object) -> bool:
 }
 
 #[test]
+fn an_equality_whose_left_operand_has_no_comparison_of_its_own_asks_the_right_one() {
+    // a class that writes no `__eq__` inherits `object`'s, which answers nothing but
+    // identity — so for every other pair python's answer comes from the *right* operand's
+    // type, and is identity when that side declines too. `Eager` answers, `Refuses` hands
+    // back `NotImplemented`, and `SameInt` is the shape that makes the rule about the
+    // right operand rather than about the left: it inherits `object`'s comparison and is
+    // still an `int`, so `int`'s comparison — reached from the right — compares the two
+    // by value and says they are equal.
+    //
+    // the orderings are not part of this: python's answer where neither side has one is a
+    // `TypeError`, not a verdict
+    agree_python(
+        "rightcompares",
+        "\
+class Plain:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+
+class Eager:
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return 0
+
+
+class Refuses:
+    def __eq__(self, other: object) -> object:
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return 0
+
+
+class SameInt(int):
+    __eq__ = object.__eq__
+    __hash__ = object.__hash__
+
+
+class SameStr(str):
+    __eq__ = object.__eq__
+    __hash__ = object.__hash__
+
+
+class OddInt(int):
+    def __eq__(self, other: object) -> bool:
+        return True
+
+    def __hash__(self) -> int:
+        return 0
+
+
+def equal(a: object, b: object) -> int:
+    if a == b:
+        return 1
+    return 0
+
+
+def unequal(a: object, b: object) -> int:
+    if a != b:
+        return 1
+    return 0
+
+
+def below(a: object, b: object) -> int:
+    if a < b:
+        return 1
+    return 0
+
+
+def below_says(a: object, b: object) -> str:
+    try:
+        return str(below(a, b))
+    except TypeError:
+        # the wording names the type, and a compiled type carries its module in that
+        # name — what is being asserted here is that the ordering refuses at all
+        return 'refused'
+
+
+# the same comparisons again as *values*, where what a comparison answered is handed
+# on rather than collapsed to a bit
+
+
+def equal_value(a: object, b: object) -> object:
+    return a == b
+
+
+def unequal_value(a: object, b: object) -> object:
+    return a != b
+
+
+def below_value(a: object, b: object) -> object:
+    return a < b
+
+
+def below_value_says(a: object, b: object) -> str:
+    try:
+        return repr(below_value(a, b))
+    except TypeError:
+        return 'refused'
+",
+        &[
+            // the left operand has only identity to offer and the right refuses it
+            "[m.equal(m.Plain(1), v) for v in (0, 'a', 1.5, (), m.Plain(1))]",
+            "[m.unequal(m.Plain(1), v) for v in (0, 'a', 1.5, (), m.Plain(1))]",
+            // the same instance on both sides, which identity does answer
+            "(lambda o: [m.equal(o, o), m.unequal(o, o)])(m.Plain(1))",
+            // the right operand answers, or declines and leaves identity to decide
+            "[m.equal(m.Plain(1), m.Eager()), m.unequal(m.Plain(1), m.Eager())]",
+            "[m.equal(m.Plain(1), m.Refuses()), m.unequal(m.Plain(1), m.Refuses())]",
+            // a subclass that gave its own comparison away and is still an int, or a str
+            "[m.equal(m.SameInt(3), 3), m.unequal(m.SameInt(3), 3), m.equal(m.SameInt(3), 4)]",
+            "[m.equal(m.SameStr('a'), 'a'), m.unequal(m.SameStr('a'), 'a')]",
+            // and a subclass that kept a comparison of its own, on either side: an `int`
+            // it is not the exact type of has replaced what `int` would have answered
+            "[m.equal(m.OddInt(3), 4), m.equal(4, m.OddInt(3)), m.unequal(m.OddInt(3), 4)]",
+            // `bool` is an `int`, and a float compares equal to one
+            "[m.equal(v, 0) for v in (True, False, 0.0, 1.0, 0)]",
+            "[m.equal(v, 1) for v in (True, False, 1.0, 1)]",
+            // ints of exactly that type, at and past the width one is stored inline at
+            "[m.equal(3, 3), m.unequal(3, 4), m.below(3, 4), m.below(4, 3)]",
+            "[m.equal(2 ** 70, 2 ** 70), m.equal(2 ** 70 + 1, 2 ** 70), m.below(2 ** 70, 2 ** 71)]",
+            "[m.equal(2 ** 70, 3), m.below(3, 2 ** 70), m.below(2 ** 70, 3)]",
+            // a NaN is not equal to itself, however it is reached
+            "(lambda x: [m.equal(x, x), m.unequal(x, x)])(float('nan'))",
+            // an ordering with nothing on either side to answer it is python's refusal
+            "[m.below_says(m.Plain(1), 0), m.below_says(m.Plain(1), m.Plain(2)), m.below_says(1, 2)]",
+            // every one of those again as a value, where the answer is the object rather
+            // than the truth of it
+            "[m.equal_value(m.Plain(1), v) for v in (0, 'a', 1.5, (), m.Plain(1))]",
+            "[m.unequal_value(m.Plain(1), v) for v in (0, 'a', 1.5, (), m.Plain(1))]",
+            "(lambda o: [m.equal_value(o, o), m.unequal_value(o, o)])(m.Plain(1))",
+            "[m.equal_value(m.Plain(1), m.Eager()), m.unequal_value(m.Plain(1), m.Eager())]",
+            "[m.equal_value(m.Plain(1), m.Refuses()), m.unequal_value(m.Plain(1), m.Refuses())]",
+            "[m.equal_value(m.SameInt(3), 3), m.unequal_value(m.SameInt(3), 3), m.equal_value(m.SameInt(3), 4)]",
+            "[m.equal_value(m.SameStr('a'), 'a'), m.unequal_value(m.SameStr('a'), 'a')]",
+            "[m.equal_value(m.OddInt(3), 4), m.equal_value(4, m.OddInt(3)), m.unequal_value(m.OddInt(3), 4)]",
+            "[m.equal_value(v, 0) for v in (True, False, 0.0, 1.0, 0)]",
+            "[m.equal_value(v, 1) for v in (True, False, 1.0, 1)]",
+            "[m.equal_value(3, 3), m.unequal_value(3, 4), m.below_value(3, 4), m.below_value(4, 3)]",
+            "[m.equal_value(2 ** 70, 2 ** 70), m.equal_value(2 ** 70 + 1, 2 ** 70), m.below_value(2 ** 70, 2 ** 71)]",
+            "[m.equal_value(2 ** 70, 3), m.below_value(3, 2 ** 70), m.below_value(2 ** 70, 3)]",
+            "(lambda x: [m.equal_value(x, x), m.unequal_value(x, x)])(float('nan'))",
+            "[m.below_value_says(m.Plain(1), 0), m.below_value_says(m.Plain(1), m.Plain(2)), m.below_value_says(1, 2)]",
+            // `is` against the singletons python answers with, so an answer built rather
+            // than handed on would be caught: a pair of ints, the identity python falls
+            // through to when the right operand declines, and the very object the right
+            // operand answered with when it does not
+            "[m.equal_value(3, 3) is True, m.equal_value(3, 4) is False, m.unequal_value(3, 4) is True]",
+            "[m.equal_value(m.Plain(1), m.Refuses()) is False, m.unequal_value(m.Plain(1), m.Refuses()) is True]",
+            "m.equal_value(m.Plain(1), m.Eager()) is True",
+        ],
+    );
+}
+
+#[test]
+fn a_recursion_through_equality_stops_where_python_stops_it() {
+    // asking the right operand's type directly is one call python makes that a compiled
+    // module does not, and `PyObject_RichCompare` enters a recursion of its own before it
+    // makes that call. so a recursion that goes round through `==` is counted a level
+    // differently from the interpreter's — and a comparison that reaches python again is
+    // exactly the shape where that could show.
+    //
+    // it does not, because the entry that is skipped is against the C stack and what stops
+    // a recursion at the limit is the frame count, which a compiled module takes and gives
+    // back for the same frames python does. both legs therefore stop at the same depth
+    // with the same message. what the skipped entry costs is one level of headroom, once,
+    // in a program that has raised the limit far enough for the stack to run out first —
+    // and that is written down in
+    // docs/basedpython/development/compilation/runtime.md#how-deep-a-recursion-goes
+    agree_python(
+        "eqrecursion",
+        "\
+import sys
+
+_depth = 0
+
+
+class Plain:
+    pass
+
+
+class Chain:
+    # `Plain` has no comparison of its own, so each round is answered by asking this
+    # type — which compares again
+    def __eq__(self, other: object) -> bool:
+        global _depth
+        _depth += 1
+        return Plain() == self
+
+    def __hash__(self) -> int:
+        return 0
+
+
+def as_condition(limit: int) -> object:
+    global _depth
+    sys.setrecursionlimit(limit)
+    _depth = 0
+    try:
+        if Plain() == Chain():
+            return ('true', _depth)
+        return ('false', _depth)
+    except RecursionError as e:
+        return ('RecursionError', _depth, str(e))
+
+
+def as_value(limit: int) -> object:
+    global _depth
+    sys.setrecursionlimit(limit)
+    _depth = 0
+    try:
+        return ('answer', _depth, repr(Plain() == Chain()))
+    except RecursionError as e:
+        return ('RecursionError', _depth, str(e))
+",
+        &[
+            // the depth and the wording, at the limit a program that sets none has
+            "m.as_condition(1000)",
+            "m.as_value(1000)",
+            // and at a lower one, where the count runs out sooner and the stack is
+            // nowhere near
+            "m.as_condition(200)",
+            "m.as_value(200)",
+        ],
+    );
+}
+
+#[test]
+fn a_display_holds_exactly_one_reference_to_each_thing_it_was_given() {
+    // a `list` and a `tuple` write their elements with a store that takes a reference
+    // over, and a `set` and a `dict` insert through a call that takes a reference of its
+    // own — two ways of arriving at one reference held per element. how many the display
+    // takes is not otherwise observable, so it is asked directly: the count before the
+    // display is built against the count after.
+    //
+    // an element that is a *temporary*, built into the display and read nowhere else,
+    // hands its own reference to the slot rather than having a second one taken. that is
+    // the same one reference, reached without making and dropping one — and getting it
+    // wrong either leaks the element or frees it while the display still names it
+    agree_python(
+        "displayrefs",
+        "\
+import sys
+
+
+class Tag:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __hash__(self) -> int:
+        return self.n
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Tag) and other.n == self.n
+
+    def __repr__(self) -> str:
+        return 'Tag(' + str(self.n) + ')'
+
+
+# each answer is the references the display took, then the length it was built to, so
+# the display is read rather than left for a pass to decide nobody wanted it
+
+
+def dict_takes(value: object) -> str:
+    before = sys.getrefcount(value)
+    held = {'key': value, value: 'value'}
+    return str(sys.getrefcount(value) - before) + '/' + str(len(held))
+
+
+def set_takes(value: object) -> str:
+    before = sys.getrefcount(value)
+    held = {value}
+    return str(sys.getrefcount(value) - before) + '/' + str(len(held))
+
+
+def tuple_takes(value: object) -> str:
+    before = sys.getrefcount(value)
+    held = (value, value)
+    return str(sys.getrefcount(value) - before) + '/' + str(len(held))
+
+
+def list_takes(value: object) -> str:
+    before = sys.getrefcount(value)
+    held = [value]
+    return str(sys.getrefcount(value) - before) + '/' + str(len(held))
+
+
+def fresh_dict(n: int) -> object:
+    return {Tag(n): Tag(n + 1)}
+
+
+def fresh_set(n: int) -> object:
+    return {Tag(n), Tag(n + 1)}
+
+
+def fresh_tuple(n: int) -> object:
+    return (Tag(n), Tag(n + 1))
+
+
+def fresh_list(n: int) -> object:
+    return [Tag(n), Tag(n + 1)]
+
+
+def pair(value: object) -> object:
+    return (value, value)
+
+
+def keyed(value: object) -> object:
+    return {'key': value}
+
+
+_gone: list[int] = []
+
+
+class Watched:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def __del__(self) -> None:
+        _gone.append(self.n)
+
+
+def build_and_drop(n: int) -> int:
+    held = (Watched(n), [Watched(n + 1)], {Watched(n + 2): 1}, {Watched(n + 3)})
+    return len(held)
+",
+        &[
+            // an object named twice in one display is held twice, once once
+            "[m.dict_takes(m.Tag(1)), m.set_takes(m.Tag(1)), m.tuple_takes(m.Tag(1)), m.list_takes(m.Tag(1))]",
+            // each display built entirely from temporaries, read back after the frame
+            // that made them has gone
+            "sorted((k.n, v.n) for k, v in m.fresh_dict(3).items())",
+            "sorted(t.n for t in m.fresh_set(3))",
+            "[t.n for t in m.fresh_tuple(3)]",
+            "[t.n for t in m.fresh_list(3)]",
+            // and a display outliving every other reference to what it holds
+            "(lambda out: (out[0], out[1][0].n))(_outlives(lambda: m.Tag(9), m.pair))",
+            "(lambda out: (out[0], out[1]['key'].n))(_outlives(lambda: m.Tag(9), m.keyed))",
+            // the other direction, which counting the references a *parameter* gains
+            // cannot show: a display built from temporaries and then let go of releases
+            // each of them exactly once, so each element's `__del__` runs, and runs once
+            "(m.build_and_drop(1), sorted(m._gone))",
+        ],
+    );
+}
+
+#[test]
+fn a_display_that_took_a_temporary_over_leaves_nothing_for_the_error_exit() {
+    // a display that takes an element's reference over leaves the register that held it
+    // empty, and the reason is the *failure* path rather than the ordinary one. a frame
+    // that fails releases every register some path to its error exit could have written
+    // — not only the ones still live — so a register the display already handed on is
+    // released a second time there, and the element is freed while the display goes on
+    // naming it.
+    //
+    // the success path cannot show this: a temporary's last use is the display, so
+    // nothing releases it again and a register left naming the element is harmless. the
+    // difference only appears once the frame goes on to fail with the display still
+    // reachable from somewhere the caller can read — which is what `box` is for
+    agree_python(
+        "displayerrorexit",
+        "\
+import sys
+
+
+def held(value: object) -> object:
+    return value
+
+
+# each of these leaves the display in `box` and then fails, by the two ways a frame
+# reaches its error exit: a `raise` it wrote, and an operation that failed on its own
+
+
+def list_then_raises(box: list, value: object) -> None:
+    box.append([held(value)])
+    raise ValueError('boom')
+
+
+def tuple_then_raises(box: list, value: object) -> None:
+    box.append((held(value),))
+    raise ValueError('boom')
+
+
+def list_then_divides(box: list, value: object, d: int) -> int:
+    box.append([held(value)])
+    return 1 // d
+
+
+def nested_then_raises(box: list, value: object) -> None:
+    box.append([[held(value)], (held(value),)])
+    raise ValueError('boom')
+
+
+# the references `value` gained once the call has failed and its traceback has gone:
+# one for every slot of a surviving display that names it
+def kept_through(fn, value: object, *rest: object) -> int:
+    box: list = []
+    before = sys.getrefcount(value)
+    try:
+        fn(box, value, *rest)
+    except (ValueError, ZeroDivisionError):
+        pass
+    return sys.getrefcount(value) - before
+",
+        &[
+            "m.kept_through(m.list_then_raises, ['seed'])",
+            "m.kept_through(m.tuple_then_raises, ['seed'])",
+            "m.kept_through(m.list_then_divides, ['seed'], 0)",
+            "m.kept_through(m.nested_then_raises, ['seed'])",
+            // and the element is still the object the display was built from, rather
+            // than whatever came to stand at a freed address
+            "(lambda box, v: (_capture(m.list_then_raises, box, v), box[0][0] is v))([], ['seed'])",
+            "(lambda box, v: (_capture(m.nested_then_raises, box, v), box[0][0][0] is v, box[0][1][0] is v))([], ['seed'])",
+        ],
+    );
+}
+
+#[test]
 fn membership_and_index_keep_the_identity_shortcut() {
     // `x in xs` and `xs.index(x)` are not comparisons. python answers the first with
     // `PySequence_Contains` and the second with `list.index`, and *both* of those
@@ -33251,6 +34240,80 @@ def label_of(shape: Shape) -> str:
             "(delattr(m.Square, 'area'), m.area_of(m.Square(5)))",
         ],
     );
+}
+
+#[test]
+fn a_dispatch_that_matched_tests_the_receiver_once() {
+    // `By_MethodStands` compares the receiver's type with the class's, which is the
+    // exact question the narrowing behind it used to ask again before handing the
+    // receiver to the body. the licence test stays; the second one is the static type.
+    //
+    // under the licence re-check mode there is an attribute lookup in between, and a
+    // lookup compares keys with whatever `__eq__` they have — so the answer from a
+    // moment before is no longer an answer, and the narrowing checks for itself again.
+    // the mode is not what a build ships, and this says what it costs where it is on
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    for recheck in [false, true] {
+        let tag = format!("by_diff_onedispatch_{}", u8::from(recheck));
+        let dir = Scratch::new(&tag);
+        let built = match build_source(
+            "\
+class Shape:
+    def __init__(self, size: int):
+        self.size = size
+
+    def area(self) -> int:
+        return self.size
+
+
+class Square(Shape):
+    def area(self) -> int:
+        return self.size * self.size
+
+
+def area_of(shape: Shape) -> int:
+    return shape.area()
+",
+            tag.as_str(),
+            &toolchain,
+            &dir,
+            &Options {
+                language: by_irbuild::Language::Python,
+                recheck_licences: recheck,
+                ..Options::default()
+            },
+        ) {
+            Ok(built) => built,
+            Err(error) => {
+                assert!(missing_toolchain(&error), "failed to build: {error:#}");
+                eprintln!("skipping: no working C toolchain ({error})");
+                return;
+            }
+        };
+        assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+        let c = std::fs::read_to_string(&built.artifact.source).expect("the generated C is read");
+        let body = one_function(&c, "_area_of(");
+        assert!(
+            body.contains("By_MethodStands("),
+            "the licence test is gone:\n{body}"
+        );
+        assert_eq!(
+            body.contains("By_CheckInstance("),
+            recheck,
+            "the receiver behind the licence, re-check {recheck}:\n{body}"
+        );
+        // and the answers are the same either way
+        let out = run(
+            &python,
+            &dir,
+            &format!(
+                "import {tag} as m\nprint([m.area_of(s) for s in (m.Shape(5), m.Square(5))])\n"
+            ),
+        );
+        assert_eq!(out, "[5, 25]");
+    }
 }
 
 #[test]

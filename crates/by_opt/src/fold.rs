@@ -191,7 +191,7 @@ fn fold(function: &mut Function, frozen: &HashSet<String>) {
                 read.retain(|(_, owner, name), _| *owner != class || *name != field);
             }
             match op {
-                Op::BuildTuple { dest, items } | Op::TupleBuild { dest, items, .. } => {
+                Op::BuildTuple { dest, items, .. } | Op::TupleBuild { dest, items, .. } => {
                     built.insert(*dest, items.clone());
                 }
                 Op::GetField {
@@ -339,7 +339,7 @@ fn fold_box_round_trip(
     boxed_from: &HashMap<RegisterId, Value>,
     op: &Op,
 ) -> Option<Op> {
-    let Op::Unbox { dest, src, to } = op else {
+    let Op::Unbox { dest, src, to, .. } = op else {
         return None;
     };
     if matches!(to, RType::Instance { .. }) {
@@ -360,7 +360,7 @@ fn fold_box_round_trip(
 }
 
 fn fold_unbox(types: &[RType], op: &Op) -> Option<Op> {
-    let Op::Unbox { dest, src, to } = op else {
+    let Op::Unbox { dest, src, to, .. } = op else {
         return None;
     };
     if matches!(to, RType::Instance { .. }) {
@@ -837,6 +837,7 @@ mod tests {
             dest: back,
             src: Value::Register(boxed),
             to: RType::STR,
+            proved: false,
         });
         builder.terminate(Terminator::Return(Value::Register(back)));
         let mut m = module(builder.finish());
@@ -865,6 +866,7 @@ mod tests {
             dest: out,
             src: Value::Register(any),
             to: RType::STR,
+            proved: false,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut m = module(builder.finish());
@@ -894,6 +896,7 @@ mod tests {
         builder.push(Op::BuildTuple {
             dest: pair,
             items: vec![Value::Register(b), Value::Register(a)],
+            moves: BTreeSet::new(),
         });
         builder.push(Op::Unpack {
             dest: slots,

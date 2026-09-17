@@ -366,13 +366,22 @@ pub enum Op {
     /// give an unboxed value an object representation
     Box { dest: RegisterId, src: Value },
     /// take an object apart into an unboxed representation. this is a *narrowing*
-    /// and so is always checked — it raises `TypeError` if the object does not
-    /// have the expected type
+    /// and so is checked — it raises `TypeError` if the object does not have the
+    /// expected type
     Unbox {
         dest: RegisterId,
         src: Value,
         /// the type being unboxed to, which is the destination register's type
         to: RType,
+        /// whether a test standing over this operation has already asked the very
+        /// question the check would ask, so that the narrowing is a change of static
+        /// type and nothing else
+        ///
+        /// nothing that *lowers* an unbox ever claims this: a lowering can see the
+        /// test it wrote a line ago and not the pass that moved it. it is set by
+        /// `by_opt`'s `proved_narrowings`, which finds the test for itself and gives
+        /// the proof up again at the first operation that could run python
+        proved: bool,
     },
     /// `lhs <op> rhs` where `lhs` is a double and `rhs` is any object, for the
     /// case where the checker has said the result is a `float`
@@ -1142,11 +1151,26 @@ pub enum Op {
         value: Value,
     },
     /// a list display, from already-boxed elements
-    BuildList { dest: RegisterId, items: Vec<Value> },
+    ///
+    /// `moves` names the items that hand their register's reference over rather than
+    /// having one taken for them, by index — see [`Self::TupleBuild`], whose `moves`
+    /// means the same thing. a list and a tuple write their elements with a store that
+    /// takes a reference over, which is what makes the handover possible; a set and a
+    /// dict insert through a call that takes a reference of its own, so there is nothing
+    /// for them to be handed
+    BuildList {
+        dest: RegisterId,
+        items: Vec<Value>,
+        moves: BTreeSet<usize>,
+    },
     /// a set display
     BuildSet { dest: RegisterId, items: Vec<Value> },
     /// a tuple display
-    BuildTuple { dest: RegisterId, items: Vec<Value> },
+    BuildTuple {
+        dest: RegisterId,
+        items: Vec<Value>,
+        moves: BTreeSet<usize>,
+    },
     /// a dict display, as alternating keys and values
     BuildDict { dest: RegisterId, pairs: Vec<Value> },
     /// `container[index]`
@@ -2578,6 +2602,7 @@ mod tests {
                     class: "Held".to_string(),
                     exact: true,
                 },
+                proved: false,
             },
         ];
         for op in reaching {

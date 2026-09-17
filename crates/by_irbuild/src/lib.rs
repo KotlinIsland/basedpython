@@ -8353,9 +8353,17 @@ impl Display {
 
     fn build(self, dest: RegisterId, items: Vec<Value>) -> Op {
         match self {
-            Self::List => Op::BuildList { dest, items },
+            Self::List => Op::BuildList {
+                dest,
+                items,
+                moves: BTreeSet::new(),
+            },
             Self::Set => Op::BuildSet { dest, items },
-            Self::Tuple => Op::BuildTuple { dest, items },
+            Self::Tuple => Op::BuildTuple {
+                dest,
+                items,
+                moves: BTreeSet::new(),
+            },
             Self::Dict => Op::BuildDict { dest, pairs: items },
         }
     }
@@ -10219,6 +10227,7 @@ impl Lowering<'_, '_> {
                 dest,
                 src: Value::Register(answer),
                 to: ty.clone(),
+                proved: false,
             });
         }
     }
@@ -11217,6 +11226,7 @@ impl Lowering<'_, '_> {
                     self.builder.push(Op::BuildTuple {
                         dest: named,
                         items: keys,
+                        moves: BTreeSet::new(),
                     });
                     let read = self.builder.temp(RType::OBJECT);
                     self.builder.push(Op::MatchRest {
@@ -11801,6 +11811,7 @@ impl Lowering<'_, '_> {
             dest: narrowed,
             src: manager,
             to: ty,
+            proved: false,
         });
         Value::Register(narrowed)
     }
@@ -12744,6 +12755,7 @@ impl Lowering<'_, '_> {
             dest: item,
             src: Value::Register(raw),
             to: RType::INT,
+            proved: false,
         });
         self.builder.assign(index, Value::Register(item));
         self.builder.terminate(Terminator::Goto(body));
@@ -13098,6 +13110,7 @@ impl Lowering<'_, '_> {
                         dest: item,
                         src: Value::Register(raw),
                         to: element_ty.clone(),
+                        proved: false,
                     });
                 } else {
                     self.builder.assign(item, Value::Register(raw));
@@ -14204,6 +14217,7 @@ impl Lowering<'_, '_> {
                 dest,
                 src: value,
                 to: to.clone(),
+                proved: false,
             });
             return Ok(Value::Register(dest));
         }
@@ -15065,7 +15079,11 @@ impl Lowering<'_, '_> {
                 items.push(self.widen_to_object(Value::Register(item), slot));
             }
             let dest = self.builder.temp(RType::OBJECT);
-            self.builder.push(Op::BuildTuple { dest, items });
+            self.builder.push(Op::BuildTuple {
+                dest,
+                items,
+                moves: BTreeSet::new(),
+            });
             return Value::Register(dest);
         }
         // a machine integer's *object* representation is the tagged `int`, which is one
@@ -16461,6 +16479,7 @@ impl Lowering<'_, '_> {
                             class: candidate.clone(),
                             exact: false,
                         },
+                        proved: false,
                     });
                     Value::Register(narrowed)
                 }
@@ -16513,6 +16532,7 @@ impl Lowering<'_, '_> {
                 dest,
                 src: Value::Register(answer),
                 to: ret.clone(),
+                proved: false,
             });
         }
         self.builder.terminate(Terminator::Goto(join));
@@ -16562,6 +16582,7 @@ impl Lowering<'_, '_> {
                 dest: narrowed,
                 src: Value::Register(boxed),
                 to: declared.clone(),
+                proved: false,
             });
             return Ok((Value::Register(narrowed), declared));
         }
@@ -16739,6 +16760,7 @@ impl Lowering<'_, '_> {
             Comprehension::List(_) => self.builder.push(Op::BuildList {
                 dest: accumulator,
                 items: Vec::new(),
+                moves: BTreeSet::new(),
             }),
             Comprehension::Set(_) => self.builder.push(Op::BuildSet {
                 dest: accumulator,
@@ -17017,6 +17039,7 @@ impl Lowering<'_, '_> {
                         dest: item,
                         src: Value::Register(raw),
                         to: element_ty.clone(),
+                        proved: false,
                     });
                 } else {
                     self.builder.assign(item, Value::Register(raw));
@@ -17205,6 +17228,7 @@ impl Lowering<'_, '_> {
             dest: item,
             src: Value::Register(raw),
             to: RType::INT,
+            proved: false,
         });
         self.store(counter, Value::Register(item), &RType::INT)?;
         self.builder.terminate(Terminator::Goto(body));
@@ -19059,6 +19083,7 @@ impl Lowering<'_, '_> {
             self.builder.push(Op::BuildTuple {
                 dest,
                 items: extra_positional,
+                moves: BTreeSet::new(),
             });
             args.push(Value::Register(dest));
         }

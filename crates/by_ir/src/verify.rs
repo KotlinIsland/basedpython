@@ -8,7 +8,7 @@
 //! this is the guard on the representation invariant. a pass that produces
 //! ill-typed BIR is a bug that would otherwise surface as miscompiled C.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 
 use crate::function::{Function, ModuleIr};
@@ -661,6 +661,39 @@ impl Verifier<'_> {
         }
     }
 
+    /// the items a container build hands its own reference to rather than having one
+    /// taken for them
+    ///
+    /// the same rule `Op::Move` follows: only a temporary the frame owns has a reference
+    /// of its own to give away. a parameter's belongs to the caller, a borrowed register
+    /// has none, and a name goes on holding what it holds until it is rebound
+    fn expect_moves(
+        &mut self,
+        block: BlockId,
+        items: &[Value],
+        moves: &BTreeSet<usize>,
+        what: &str,
+    ) {
+        for index in moves {
+            let hands_over = matches!(
+                items.get(*index),
+                Some(Value::Register(id))
+                    if id.index() >= self.function.param_count
+                        && self.function.register(*id).is_some_and(|decl| {
+                            !decl.borrowed
+                                && decl.name.is_none()
+                                && decl.ty.owns_one_reference()
+                        })
+            );
+            if !hands_over {
+                self.error(
+                    Some(block),
+                    format!("{what} moving item {index}, which owns no reference to hand over"),
+                );
+            }
+        }
+    }
+
     /// a register an op reads *and* writes, so it is neither an operand nor a dest
     fn expect_cursor(&mut self, block: BlockId, cursor: RegisterId) {
         let expected = RType::fixed(IntWidth::I64);
@@ -1094,7 +1127,7 @@ impl Verifier<'_> {
                     _ => self.expect_dest(block, *dest, &RType::OBJECT, "box"),
                 }
             }
-            Op::Unbox { dest, src, to } => {
+            Op::Unbox { dest, src, to, .. } => {
                 // unbox *narrows from* `object` — to an unboxed representation, or
                 // to a boxed one whose class is known. narrowing to `object` would
                 // be a no-op the frontend should not have emitted
@@ -1108,28 +1141,7 @@ impl Verifier<'_> {
                 self.expect_dest(block, *dest, to, "unbox");
             }
             Op::TupleBuild { dest, items, moves } => {
-                for index in moves {
-                    // the same rule `Op::Move` follows: only a temporary the frame owns
-                    // has a reference of its own to hand to the slot
-                    let hands_over = matches!(
-                        items.get(*index),
-                        Some(Value::Register(id))
-                            if id.index() >= self.function.param_count
-                                && self.function.register(*id).is_some_and(|decl| {
-                                    !decl.borrowed
-                                        && decl.name.is_none()
-                                        && decl.ty.owns_one_reference()
-                                })
-                    );
-                    if !hands_over {
-                        self.error(
-                            Some(block),
-                            format!(
-                                "a tuple build moving item {index}, which owns no reference to hand over"
-                            ),
-                        );
-                    }
-                }
+                self.expect_moves(block, items, moves, "a tuple build");
                 let declared = self
                     .function
                     .register(*dest)
@@ -1626,7 +1638,8 @@ impl Verifier<'_> {
                 self.expect(block, value, &RType::OBJECT, "attribute assignment");
                 self.expect_dest(block, *dest, &RType::BIT, "attribute assignment");
             }
-            Op::BuildList { dest, items } => {
+            Op::BuildList { dest, items, moves } => {
+                self.expect_moves(block, items, moves, "a list display");
                 for item in items {
                     self.expect(block, item, &RType::OBJECT, "a list element");
                 }
@@ -1638,7 +1651,8 @@ impl Verifier<'_> {
                 }
                 self.expect_dest(block, *dest, &RType::OBJECT, "a set display");
             }
-            Op::BuildTuple { dest, items } => {
+            Op::BuildTuple { dest, items, moves } => {
+                self.expect_moves(block, items, moves, "a tuple display");
                 for item in items {
                     self.expect(block, item, &RType::OBJECT, "a tuple element");
                 }
@@ -2900,6 +2914,7 @@ mod tests {
             dest: part,
             src: Value::Register(whole),
             to: RType::STR,
+            proved: false,
         });
         builder.terminate(Terminator::Return(Value::None));
         let mut function = builder.finish();
@@ -2912,6 +2927,7 @@ mod tests {
             dest: part,
             src: Value::Register(whole),
             to: RType::INT,
+            proved: false,
         };
         let errors = verify(&function).unwrap_err();
         assert!(errors[0].message.contains("is borrowed"), "{errors:?}");

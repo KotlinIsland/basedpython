@@ -788,6 +788,17 @@ sys.setrecursionlimit(100)
 mod.nested_depth(98)  # python: RecursionError; compiled: 98
 ```
 
+`==` and `!=` are one more such call. where the left operand's type has no comparison of
+its own, python's answer is whatever the right operand's type says, and a compiled module
+asks that type directly instead of going through `PyObject_RichCompare` — which leaves out
+the recursion entry that function makes. that entry is against the C stack rather than the
+frame count, so it is not what stops a recursion at the limit: a recursion through `__eq__`
+stops at the same depth with the same message either way. what it costs is one level of
+headroom, once, in a program that has raised the limit far enough for the stack to be the
+thing that runs out. measured on 3.13 and 3.14, a recursion through `__eq__` reaches within
+one level of the depth the same recursion reaches when the comparison is made to go the
+long way round.
+
 counting costs most on a body that does little but recurse — half again the
 instructions of a plain `fib` — so `follow-recursion-limit = false` in the project's
 `[tool.ty.compile]` table leaves the count out and watches the stack alone. a compiled

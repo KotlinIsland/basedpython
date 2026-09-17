@@ -266,6 +266,7 @@ mod tests {
         builder.push(Op::BuildTuple {
             dest: pair,
             items: vec![Value::Register(first), Value::Register(second)],
+            moves: BTreeSet::new(),
         });
         builder.terminate(Terminator::Return(Value::Register(whole)));
 
