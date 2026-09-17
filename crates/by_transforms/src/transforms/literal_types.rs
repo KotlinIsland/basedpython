@@ -225,6 +225,10 @@ impl<'src> LiteralTypePass<'src> {
 }
 
 impl TypeAwarePass for LiteralTypePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::LiteralType)
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = LiteralType::new(self.source, types, self.float_literals);
         walk_type_positions_skipping(stmts, Some(types), &ctx.claimed_type_op_ranges, &mut inner);

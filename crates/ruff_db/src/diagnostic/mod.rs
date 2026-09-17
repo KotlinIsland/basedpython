@@ -1147,6 +1147,25 @@ pub enum DiagnosticId {
     ///
     /// This indicates a bug in the program rather than a user error.
     InternalError,
+
+    /// A module the transpiler declined to lower.
+    ///
+    /// ## Why is this bad?
+    /// Some basedpython is well-formed but has no correct python to lower it to — a module
+    /// that binds one of the names its own runtime helpers are provided under, say. The
+    /// transpiler reports the module rather than emitting python that would do the wrong
+    /// thing, and the report names what to change.
+    ///
+    /// ## Example
+    /// ```python
+    /// def go() -> str:
+    ///     _soundness_check = "mine"
+    ///     return pick(xs, 0)
+    /// ```
+    ///
+    /// The checked `return` lowers to a `_soundness_check(...)` call, which in this scope
+    /// finds the local string. Rename the local.
+    TranspileRefused,
 }
 
 impl DiagnosticId {
@@ -1202,6 +1221,7 @@ impl DiagnosticId {
             DiagnosticId::InvalidCliOption => "invalid-cli-option",
             DiagnosticId::PreviewFeature => "preview-feature",
             DiagnosticId::InternalError => "internal-error",
+            DiagnosticId::TranspileRefused => "transpile-refused",
         }
     }
 

@@ -105,26 +105,20 @@ impl super::ast_driver::TypeAwarePass for RaisesGuardPass<'_> {
             return;
         }
 
+        // a `def` another pass rewrote is printed from the syntax tree, where the guard
+        // — on the `def` line, inside the statement whenever it is decorated — has no
+        // source to land in. the driver refuses that loss rather than build without
+        // the check
         let mut guards = Vec::new();
-        let mut conflicts = Vec::new();
-        for (index, stmt) in stmts.iter().enumerate() {
-            // an AST pass that re-rendered this top-level statement rebuilds it
-            // from the AST, which discards any insertion inside its range — and
-            // the guard sits on the `def` line, inside it whenever the function
-            // is decorated. a runtime check that silently disappears is worse
-            // than one that refuses to build
-            let rerendered = ctx.changed.contains(&index);
+        for stmt in stmts {
             let mut collector = GuardCollector {
                 source: self.source,
                 types,
-                rerendered,
                 guards: &mut guards,
-                conflicts: &mut conflicts,
             };
             collector.visit_stmt(stmt);
         }
 
-        ctx.errors.extend(conflicts);
         if guards.is_empty() {
             return;
         }
@@ -142,9 +136,7 @@ impl super::ast_driver::TypeAwarePass for RaisesGuardPass<'_> {
 struct GuardCollector<'a> {
     source: &'a str,
     types: &'a dyn TypeInfo,
-    rerendered: bool,
     guards: &'a mut Vec<(TextRange, String)>,
-    conflicts: &'a mut Vec<String>,
 }
 
 impl<'ast> Visitor<'ast> for GuardCollector<'_> {
@@ -152,15 +144,7 @@ impl<'ast> Visitor<'ast> for GuardCollector<'_> {
         if let Stmt::FunctionDef(function) = stmt
             && let Some(guard) = guard_for(self.source, function, self.types)
         {
-            if self.rerendered && !function.decorator_list.is_empty() {
-                self.conflicts.push(format!(
-                    "`{}` declares `raises`, but another lowering re-rendered its \
-                     statement, which would drop the runtime guard",
-                    function.name
-                ));
-            } else {
-                self.guards.push(guard);
-            }
+            self.guards.push(guard);
         }
 
         walk_stmt(self, stmt);
@@ -331,9 +315,8 @@ mod tests {
 
     #[test]
     fn clause_survives_body_rerender() {
-        // a body construct that forces the whole statement to be re-rendered
-        // must still drop the clause — codegen emits python, which has no
-        // spelling for it
+        // a body construct an AST pass rewrites must still leave the clause
+        // dropped
         let out = transpile(
             "def f(x: int | None) -> int raises TypeError:\n    return x ?? 0\n",
             &Config::test_default(),
@@ -345,17 +328,15 @@ mod tests {
 
     #[test]
     fn clause_survives_a_whole_statement_rerender() {
-        // `typeof` in a parameter annotation makes an AST-mutation pass re-render
-        // the whole `def`, dropping this pass's deletion. the generator emits
-        // python, so the clause has to be erased there too — otherwise the
-        // construct leaks and the pipeline reports a transform conflict
+        // numbering a repeated `_` renames a parameter of the `def`, and the new
+        // name is emitted beside this pass's deletion rather than instead of it
         let out = transpile(
-            "def f(x: typeof(1)) raises TypeError:\n    raise TypeError\n",
+            "def f(_: int, _: int) raises TypeError:\n    raise TypeError\n",
             &Config::test_default(),
         )
         .unwrap();
         assert!(!out.contains("raises"), "clause leaked:\n{out}");
-        assert!(out.contains("def f(x: TypeOf[1]):"), "got:\n{out}");
+        assert!(out.contains("def f(_: int, _2: int, /):"), "got:\n{out}");
     }
 
     #[test]
@@ -507,19 +488,51 @@ mod tests {
     }
 
     #[test]
-    fn guard_that_would_be_dropped_is_an_error() {
-        // `typeof` makes an AST pass re-render the whole statement, discarding an
-        // insertion inside its range — and a decorated `def` puts the guard there.
-        // a runtime check that silently vanishes is worse than one that refuses
-        let error = transpile(
+    fn guard_on_a_decorated_def_with_a_repeated_underscore() {
+        // numbering a repeated `_` renames a parameter, and a decorated `def` puts the
+        // guard between the decorator and the `def` keyword, in the same statement.
+        // the name is all the numbering re-emits, so the guard keeps its place
+        let out = transpile(
+            "class C:\n    @staticmethod\n    def m(_: int, _: int) raises TypeError:\n        raise TypeError\n",
+            &guarded(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "    @staticmethod\n    @_by_raises(TypeError, \"m\")\n    def m(_: int, _2: int, /):"
+            ),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn guard_on_a_decorated_def_whose_body_a_pass_rewrote() {
+        // a `sentinel` in the body becomes an assignment, and the `def` holding it is
+        // printed from the tree. the text between the decorator and the parameter list
+        // is the same there as in the source, so the source is kept, and the guard
+        // inserted in it with it
+        let out = transpile(
+            "class C:\n    @staticmethod\n    def m() raises TypeError:\n        sentinel A\n        raise TypeError\n",
+            &guarded(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("    @staticmethod\n    @_by_raises(TypeError, \"m\")\n    def m():"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn guard_beside_a_rewritten_annotation_is_kept() {
+        // `typeof` rewrites only the annotation, so the rest of the decorated `def`
+        // keeps its source and the guard its place in it
+        let out = transpile(
             "class C:\n    @staticmethod\n    def m(x: typeof(1)) raises TypeError:\n        raise TypeError\n",
             &guarded(),
         )
-        .unwrap_err();
-        assert!(
-            error.contains("would drop the runtime guard"),
-            "got: {error}"
-        );
+        .unwrap();
+        assert!(out.contains("def m(x: TypeOf[1]):"), "got:\n{out}");
+        assert!(out.contains("_by_raises("), "got:\n{out}");
     }
 
     #[test]

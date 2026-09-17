@@ -220,6 +220,10 @@ pub(crate) fn rewrite_type_expr(
 }
 
 impl TypeAwarePass for OptionalTypePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::OptionalType)
+    }
+
     fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut lower = OptionalLower::new(self.source, self.min_version);
         for stmt in stmts {

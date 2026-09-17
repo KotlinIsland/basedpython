@@ -1,0 +1,48 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{\n    call_argument_names: true, inherited_parameter_defaults: true,\n    inherited_parameter_types: true, ..InlayHintSettings::none()\n})"
+---
+
+class A:
+    def f(self, x: int = 1, y: str = 'a') -> None: ...
+
+class B(A):
+    override def f(self, _[=1][: int], _[="a"][: str]) -> None: ...
+
+def g(_: int, _: int) -> None: ...
+
+B().f([x=]1, [y=]'b')
+g(1, 2)
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:6:26
+  |
+6 |     override def f(self, _, _) -> None: ...
+  |                          ^
+info: Source
+  --> main2.py:10:8
+   |
+10 | B().f([x=]1, [y=]'b')
+   |        ^
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:6:29
+  |
+6 |     override def f(self, _, _) -> None: ...
+  |                             ^
+info: Source
+  --> main2.py:10:15
+   |
+10 | B().f([x=]1, [y=]'b')
+   |               ^
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+   |
+9  |
+   - B().f(1, 'b')
+10 + B().f(1, y='b')
+11 | g(1, 2)
+   |

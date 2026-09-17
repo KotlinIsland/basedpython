@@ -14,21 +14,29 @@
 //!     return _v
 //! ```
 //!
-//! The rewrite uses narrow edits — a `_force_unwrap(` insertion at the operand
-//! start and a `)` replacement of the trailing `!` — so the operand's bytes
-//! are left untouched and any sibling operator lowering inside it (e.g. `?.`
-//! or `??`) still applies. Nested `expr!!` composes: the two insertions at the
-//! same offset concatenate, yielding `_force_unwrap(_force_unwrap(expr))`.
+//! The rewrite is one template edit over the whole `expr!`, passing the operand
+//! through: `_force_unwrap(` + everything but the trailing `!` + `)`. The
+//! passthrough leaves the operand's bytes untouched — its own parentheses
+//! included — so any sibling operator lowering inside it (`?.`, `??`, a grapheme
+//! accessor) materializes within the wrap, and nested `expr!!` nests the
+//! templates: `_force_unwrap(_force_unwrap(expr))`.
+//!
+//! One edit and not two. The wrap used to be an insertion at the operand's start
+//! plus a `)` over the `!`, and a template edit on the operand — `s.first`
+//! becoming `(Character(_by_graphemes(s)[0]) if s else None)` — separated them:
+//! the insertion was absorbed into the template and re-emitted once per
+//! passthrough of the receiver, while the `)` stayed outside, so `s.first!`
+//! produced `_force_unwrap(s` twice and no matching close.
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use super::ast_driver::{PassContext, TypeAwarePass};
+use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
 struct ForceUnwrap {
-    edits: Vec<(TextRange, String)>,
+    edits: Vec<(TextRange, Vec<Fragment>)>,
     used: bool,
 }
 
@@ -50,19 +58,18 @@ impl<'ast> Visitor<'ast> for ForceUnwrap {
         if let Expr::UnaryOp(unary) = expr
             && unary.op == UnaryOp::Force
         {
-            // `_force_unwrap(` before the operand (a zero-width insertion; nested
-            // forces at the same offset concatenate in push order)
+            // everything but the trailing `!`, which is the operand as written —
+            // a parenthesised operand keeps its own parens, and the bytes inside
+            // are left for the sibling lowerings that key edits on them
+            let operand =
+                TextRange::new(expr.range().start(), expr.range().end() - TextSize::from(1));
             self.edits.push((
-                TextRange::empty(expr.range().start()),
-                "_force_unwrap(".to_owned(),
-            ));
-            // `)` in place of the trailing `!` only — replacing the whole gap
-            // between the operand and `!` would swallow a parenthesised
-            // operand's own closing paren (`(a?.v)!` → unbalanced), and the
-            // operand's interior bytes are left for sibling lowerings (`?.`/`??`)
-            self.edits.push((
-                TextRange::new(expr.range().end() - TextSize::from(1), expr.range().end()),
-                ")".to_owned(),
+                expr.range(),
+                vec![
+                    Fragment::Lit("_force_unwrap(".to_owned()),
+                    Fragment::Src(operand),
+                    Fragment::Lit(")".to_owned()),
+                ],
             ));
             self.used = true;
         }
@@ -93,7 +100,7 @@ impl TypeAwarePass for ForceUnwrapPass<'_> {
             ctx.runtime.insert(crate::runtime::OPTIONAL);
             ctx.runtime.insert(crate::runtime::FORCE_UNWRAP);
         }
-        ctx.text_edits.extend(inner.edits);
+        ctx.template_edits.extend(inner.edits);
     }
 }
 
@@ -236,6 +243,85 @@ mod tests {
                 x = _force_unwrap(a)
                 y = _force_unwrap(b)
             "},
+        );
+    }
+
+    /// the last line of the output, which is the statement the source's last line lowered to
+    fn lowered(source: &str) -> String {
+        let out = transpile(source, &Config::test_default())
+            .unwrap_or_else(|error| panic!("{source:?}: {error}"));
+        out.lines().last().expect("some output").to_owned()
+    }
+
+    /// `!` wraps whatever the operand lowered to, whether that lowering replaces the
+    /// operand with something wider (a grapheme accessor, an optional chain) or leaves
+    /// it alone. the wrap is one edit, so the operand's own rewrite materializes inside
+    /// it exactly once
+    #[test]
+    fn force_unwrap_wraps_a_lowered_operand() {
+        // a grapheme accessor, which re-emits its receiver twice: the reported shape
+        // (`Expected ',', found 'else'`) was the `_force_unwrap(` landing on both
+        assert_eq!(
+            lowered("def go(s: str) -> None:\n    print(s.first!)\n"),
+            "    print(_force_unwrap((Character(_by_graphemes(s)[0]) if s else None)))"
+        );
+        // an optional chain
+        assert_eq!(
+            lowered("def go(a: int?) -> None:\n    print(a?.bit_length()!)\n"),
+            "    print(_force_unwrap((None if a is None else a.bit_length())))"
+        );
+        // a subscript, a call and a comparison, none of which the operand rewrites
+        assert_eq!(
+            lowered("def go(xs: list[int?]) -> None:\n    print(xs[0]!)\n"),
+            "    print(_force_unwrap(xs[0]))"
+        );
+        assert_eq!(
+            lowered("def f() -> int?:\n    return 1\n\nprint(f()!)\n"),
+            "print(_force_unwrap(f()))"
+        );
+        assert_eq!(
+            lowered("def go(a: int?) -> None:\n    print(a! > 1)\n"),
+            "    print(_force_unwrap(a) > 1)"
+        );
+    }
+
+    /// and inside an f-string replacement field, where the `!` may be bare: it is read as
+    /// the start of a conversion (`!r`) only where a conversion could follow it
+    #[test]
+    fn force_unwrap_inside_an_f_string() {
+        assert_eq!(
+            lowered("def go(s: str) -> None:\n    print(f\"{(s.first!)}\")\n"),
+            "    print(f\"{(_force_unwrap((Character(_by_graphemes(s)[0]) if s else None)))}\")"
+        );
+        assert_eq!(
+            lowered("def go(a: int?) -> None:\n    print(f\"{a!}\")\n"),
+            "    print(f\"{_force_unwrap(a)}\")"
+        );
+        // before the `:` of a format spec, and before the conversion's own `!`
+        assert_eq!(
+            lowered("def go(a: int?) -> None:\n    print(f\"{a!:>4}\")\n"),
+            "    print(f\"{_force_unwrap(a):>4}\")"
+        );
+        assert_eq!(
+            lowered("def go(a: int?) -> None:\n    print(f\"{a!!r}\")\n"),
+            "    print(f\"{_force_unwrap(a)!r}\")"
+        );
+        // a nested f-string, and a field inside a format spec
+        assert_eq!(
+            lowered("def go(a: int?) -> None:\n    print(f\"{f'{a!}'}\")\n"),
+            "    print(f\"{f'{_force_unwrap(a)}'}\")"
+        );
+        assert_eq!(
+            lowered("def go(a: int?, b: int) -> None:\n    print(f\"{b:{a!}}\")\n"),
+            "    print(f\"{b:{_force_unwrap(a)}}\")"
+        );
+        // the conversion the `!` is usually reaching for is untouched, and a `!` glued to
+        // `=` is still the comparison operator
+        assert_eq!(
+            lowered(
+                "def go(a: int, b: int) -> None:\n    print(f\"{a!r} {a!s:>10} {a=!r} {a!=b}\")\n"
+            ),
+            "    print(f\"{a!r} {a!s:>10} {a=!r} {a!=b}\")"
         );
     }
 

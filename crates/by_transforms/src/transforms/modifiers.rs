@@ -751,6 +751,16 @@ impl<'src> ModifiersPass<'src> {
 }
 
 impl AstPass for ModifiersPass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::Modifiers)
+    }
+
+    /// a declaration whose value a statement expression moves below its suite is re-written
+    /// from its `let` prefix, which carries the separator the move normalises
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::StatementExpression]
+    }
+
     fn run(&self, module: &mut ruff_python_ast::ModModule, ctx: &mut PassContext) {
         let mut inner = Modifiers::new(self.source);
         for stmt in &module.body {
@@ -1067,9 +1077,8 @@ mod tests {
                     registry: ClassVar[list[str]] = []
             "},
             indoc! {"
-                from dataclasses import dataclass
                 from typing import ClassVar
-                from dataclasses import field
+                from dataclasses import field, dataclass
 
                 @dataclass(frozen=True, slots=True)
                 class Config:

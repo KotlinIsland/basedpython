@@ -168,7 +168,13 @@ pub fn build_module(
     let mut module = ModuleIr::new(module_name);
     // where the interpreted build checks a value it cannot trust, decided once for the
     // whole module, so every frame lowered below makes the same checks in the same places
-    let soundness = by_transforms::soundness_sites(model, suite, soundness);
+    let source = ruff_db::source::source_text(db, model.file());
+    let soundness = by_transforms::soundness_sites(
+        model,
+        by_transforms::WrittenNames::new(source.as_str()),
+        suite,
+        soundness,
+    );
 
     // a call is only lowered natively when the callee is a module-level function
     // in this same unit, so the set has to be known before any body is lowered
@@ -1315,7 +1321,9 @@ fn lower_generator(
         .map(|(name, _)| name.clone())
         .collect();
     // the constructor seeds every one of them, so they are as assigned as a parameter
-    let mut assigned = generators::definitely_assigned(function);
+    let source = ruff_db::source::source_text(db, model.file());
+    let written = by_transforms::WrittenNames::new(source.as_str());
+    let mut assigned = generators::definitely_assigned(function, written);
     assigned.extend(captured.iter().cloned());
     let mut signed = signature(db, env, model, function, layouts, receiver, &[])?;
     takes_the_first_iterator(captures, &mut signed);
@@ -1328,7 +1336,7 @@ fn lower_generator(
             .map(|(_, rtype)| rtype.clone())
     };
     let names = {
-        let mut names = generators::state_names(function, &locals);
+        let mut names = generators::state_names(function, written, &locals);
         if captures.is_some_and(|nested| nested.generator_expression.is_some()) {
             assigned.insert(closures::GENERATOR_ITERATOR.to_string());
             names.push(closures::GENERATOR_ITERATOR.to_string());
@@ -8621,6 +8629,8 @@ fn signature(
     arrays: &[(usize, RType)],
 ) -> Lowered<Signature> {
     let parameters = &function.parameters;
+    let source = ruff_db::source::source_text(db, model.file());
+    let written = by_transforms::WrittenNames::new(source.as_str());
 
     let mut params = Vec::with_capacity(parameters.args.len() + 1);
     let mut defaults: Vec<Option<Value>> = Vec::with_capacity(parameters.args.len() + 1);
@@ -8736,8 +8746,8 @@ fn signature(
                 }
             }
         };
-        let name = parameter.parameter.name.as_str();
-        let rtype = match rebound.get(name) {
+        let name = by_transforms::python_parameter_name(parameters, &parameter.parameter, written);
+        let rtype = match rebound.get(name.as_str()) {
             // an unboxed edition's parameter *is* the caller's buffer, and a buffer is
             // not a value that widens: handing one out means copying it, and a copy is
             // a different list. the store in the body declines instead, as it already
@@ -8769,11 +8779,17 @@ fn signature(
     // `*args` and `**kwargs` are ordinary parameters holding an ordinary tuple and
     // dict — packing them is the boundary's job, not the body's
     if let Some(vararg) = &parameters.vararg {
-        params.push((vararg.name.to_string(), RType::OBJECT));
+        params.push((
+            by_transforms::python_parameter_name(parameters, vararg, written).to_string(),
+            RType::OBJECT,
+        ));
         defaults.push(None);
     }
     if let Some(kwarg) = &parameters.kwarg {
-        params.push((kwarg.name.to_string(), RType::OBJECT));
+        params.push((
+            by_transforms::python_parameter_name(parameters, kwarg, written).to_string(),
+            RType::OBJECT,
+        ));
         defaults.push(None);
     }
 

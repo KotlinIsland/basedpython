@@ -24,8 +24,9 @@ use crate::types::list_members::all_end_of_scope_members;
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::overrides::is_constructor_like_method;
 use crate::types::receivers;
+use crate::types::repeated_underscore::{UnderscoreLowering, UnderscoreRefusal};
 use crate::types::signatures::{
-    ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
+    Parameter, ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
 };
 use crate::types::{
     CallDunderError, CallableTypes, ClassBase, ClassLiteral, KnownClass, KnownFunction, KnownUnion,
@@ -3178,10 +3179,7 @@ pub fn inherited_parameter_annotation<'db>(
     let function = nearest_enclosing_function(db, index, definition.scope(db))?;
 
     let signature = function.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public);
-    let matched = signature
-        .parameters()
-        .iter()
-        .find(|candidate| candidate.name() == Some(&parameter.name.id))?;
+    let matched = declared_parameter(model, definition, signature, parameter)?;
 
     // an annotation the source wrote is displayed by the source; an implicit receiver and an
     // anonymous hole are the two types a signature holds that were never written anywhere
@@ -3213,12 +3211,51 @@ pub fn inherited_parameter_default(
     let function = nearest_enclosing_function(db, index, definition.scope(db))?;
 
     let signature = function.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public);
+    declared_parameter(model, definition, signature, &parameter.parameter)?
+        .default_type(db)?
+        .display_default_value(db, &model.program_environment())
+}
+
+/// the parameter of `signature`, the signature of the function whose parameter `definition`
+/// defines, that `parameter` declares
+///
+/// it is found by where it stands in the function's own list rather than by its name, which
+/// the signature need not share: a parameter list that repeats `_` names its parameters as the
+/// lowering writes them
+fn declared_parameter<'s, 'db>(
+    model: &SemanticModel<'db>,
+    definition: Definition<'db>,
+    signature: &'s Signature<'db>,
+    parameter: &ast::Parameter,
+) -> Option<&'s Parameter<'db>> {
+    let db = model.db();
+    let module = parsed_module(db, db.program_file(model.file()).python_file(db)).load(db);
+    let function = definition.scope(db).node(db).as_function()?.node(&module);
+    let position = function
+        .parameters
+        .iter()
+        .position(|candidate| candidate.as_parameter().range == parameter.range)?;
     signature
         .parameters()
         .iter()
-        .find(|candidate| candidate.name() == Some(&parameter.parameter.name.id))?
-        .default_type(db)?
-        .display_default_value(db, &model.program_environment())
+        .find(|candidate| candidate.source_parameter_index() == Some(position))
+}
+
+/// basedpython: how the lowering writes `function`'s parameters when they repeat `_` — the
+/// answer ty's signature of the definition is built from. `None` when they do not
+pub fn repeated_underscore_lowering(
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> Option<Result<UnderscoreLowering, UnderscoreRefusal>> {
+    let db = model.db();
+    let index = semantic_index(db, db.program_file(model.file()));
+    let definition = index.try_definition(function)?;
+    infer_definition_types(db, definition)
+        .function_type(definition)?
+        .literal(db)
+        .last_definition
+        .repeated_underscores(db)
+        .clone()
 }
 
 /// basedpython: the return type recovered for a `def` that leaves its annotation out.

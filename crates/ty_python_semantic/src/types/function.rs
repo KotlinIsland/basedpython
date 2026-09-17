@@ -61,7 +61,7 @@ use ruff_db::source::source_text;
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::helpers::{last_bound_parameter, parameter_modifiers};
-use ruff_python_ast::{self as ast, ParameterWithDefault};
+use ruff_python_ast::{self as ast, ParameterWithDefault, PythonVersion};
 use ruff_python_edits::unwrapped_call_argument;
 use ruff_text_size::Ranged;
 use salsa::plumbing::AsId;
@@ -97,6 +97,10 @@ use crate::types::known_instance::DeprecatedInstance;
 use crate::types::list_members::all_members;
 use crate::types::narrow::ClassInfoConstraintFunction;
 use crate::types::relation::TypeRelationChecker;
+use crate::types::repeated_underscore::{
+    BaseParameter, LoweredParameters, ParameterSlot, UnderscoreLowering, UnderscoreRefusal,
+    WrittenNames, lower_repeated_underscores, parameter_slots, reads_from_enclosing_scope,
+};
 use crate::types::signatures::{
     CallableSignature, DeferredAssertions, NarrowingGuard, NarrowingGuardKind, Parameters,
     ReturnCallableTypeVarScope, Signature,
@@ -634,6 +638,76 @@ impl<'db> OverloadLiteral<'db> {
         false
     }
 
+    /// basedpython: how the lowering writes this definition's parameters when it spells `_`
+    /// more than once — see [`lower_repeated_underscores`]. `None` when it does not, and
+    /// outside basedpython files, where a repeated parameter is a syntax error
+    ///
+    /// ty's signature of the definition and the transpiler's output are both built from this
+    /// answer, so a call ty accepts is one the emitted python accepts
+    #[salsa::tracked(
+        returns(ref),
+        cycle_initial=|_, _, _| None,
+        heap_size=ruff_memory_usage::heap_size,
+    )]
+    pub(crate) fn repeated_underscores(
+        self,
+        db: &'db dyn Db,
+    ) -> Option<Result<UnderscoreLowering, UnderscoreRefusal>> {
+        if !self.file(db).source_type(db).is_basedpython() {
+            return None;
+        }
+        let module = parsed_module(db, self.python_file(db)).load(db);
+        let node = self.body_scope(db).node(db).expect_function().node(&module);
+        let mut slots = parameter_slots(&node.parameters);
+        if slots.iter().filter(|(_, name)| *name == "_").count() < 2 {
+            return None;
+        }
+        // a `decorator def` is passed its options as `@d(option=...)`, so the python it
+        // lowers to declares every parameter after the decorated one keyword-only
+        let is_decorator_keyword = node.decorator_list.iter().any(|decorator| {
+            matches!(&decorator.expression, ast::Expr::Name(name)
+                if name.ctx.is_invalid() && name.id == "decorator_keyword")
+        });
+        if is_decorator_keyword {
+            for (slot, _) in slots.iter_mut().skip(1) {
+                if matches!(
+                    slot,
+                    ParameterSlot::PositionalOnly | ParameterSlot::PositionalOrKeyword
+                ) {
+                    *slot = ParameterSlot::KeywordOnly;
+                }
+            }
+        }
+
+        let env = ProgramEnvironment::from_scope(self.body_scope(db));
+        let base: Option<Vec<Option<BaseParameter>>> = self
+            .overridden_method(db, &env)
+            .filter(|base| base.signature(db).overloads.len() == 1)
+            .map(|base| {
+                base_raw_signature(db, base)
+                    .parameters()
+                    .iter()
+                    .take_while(|parameter| parameter.is_positional())
+                    .map(|parameter| {
+                        Some(BaseParameter {
+                            name: parameter.name()?.clone(),
+                            positional_only: parameter.is_positional_only(),
+                        })
+                    })
+                    .collect()
+            });
+
+        let index = semantic_index(db, self.program_file(db));
+        let body_scope = self.body_scope(db).file_scope_id(db);
+        lower_repeated_underscores(
+            &slots,
+            self.binds_first_parameter(db),
+            base.as_deref(),
+            |name| reads_from_enclosing_scope(index, body_scope, name),
+            env.python_version(db) >= PythonVersion::PY38,
+        )
+    }
+
     /// basedpython: names of the pep 695 type parameters this definition
     /// reifies (declared `reified`, or referenced in a value position in the
     /// body), in declaration order. always empty outside basedpython files
@@ -966,6 +1040,43 @@ impl<'db> OverloadLiteral<'db> {
         signature
     }
 
+    /// basedpython: the signatures a `decorator def` is called with, if this is one.
+    ///
+    /// A `decorator def` declares one function and is applied in two shapes — `@d`, which hands it
+    /// the decorated function, and `@d(option=...)`, which hands it the options and decorates with
+    /// what it returns. The lowering writes an overload for each, and this is the same pair.
+    ///
+    /// `None` for a `decorator def` the lowering refuses: one inside a class body, or one whose
+    /// parameters are not a decorated function followed by options with defaults. Its declared
+    /// signature stands there, as it did before.
+    fn decorator_keyword_signatures(self, db: &'db dyn Db) -> Option<[Signature<'db>; 2]> {
+        let scope = self.body_scope(db);
+        let program_file = self.program_file(db);
+        let module = parsed_module(db, program_file.python_file(db)).load(db);
+        let function_node = scope.node(db).expect_function().node(&module);
+        let is_decorator_keyword = function_node.decorator_list.iter().any(|decorator| {
+            matches!(&decorator.expression, ast::Expr::Name(name)
+                if name.ctx.is_invalid() && name.id == "decorator_keyword")
+        });
+        if !is_decorator_keyword {
+            return None;
+        }
+        let index = semantic_index(db, program_file);
+        if index
+            .ancestor_scopes(scope.file_scope_id(db))
+            .skip(1)
+            .any(|(_, ancestor)| ancestor.kind().is_class())
+        {
+            return None;
+        }
+        Signature::decorator_keyword_overloads(
+            db,
+            &self.signature(db),
+            &self.raw_signature(db, ReturnCallableTypeVarScope::Lexical),
+            self.definition(db),
+        )
+    }
+
     /// Returns the effective signatures of this overload after applying decorators.
     fn decorated_signatures(
         self,
@@ -1071,6 +1182,19 @@ impl<'db> OverloadLiteral<'db> {
             index,
         );
 
+        let lowered_parameters = match self.repeated_underscores(db) {
+            Some(Ok(lowering)) => {
+                let source = source_text(db, self.file(db));
+                let slots = parameter_slots(&function_stmt_node.parameters);
+                Some(LoweredParameters::new(
+                    lowering,
+                    &slots,
+                    WrittenNames::new(source.as_str()),
+                ))
+            }
+            _ => None,
+        };
+
         let mut raw_signature = Signature::from_function(
             db,
             env,
@@ -1079,6 +1203,7 @@ impl<'db> OverloadLiteral<'db> {
             function_stmt_node,
             has_implicitly_positional_first_parameter,
             return_callable_typevar_scope,
+            lowered_parameters.as_ref(),
         );
 
         let generic_context = raw_signature.generic_context;
@@ -1388,12 +1513,20 @@ impl<'db> OverloadLiteral<'db> {
     ) -> Option<Signature<'db>> {
         let decorator = self.innermost_applied_decorator(db, function_stmt_node)?;
         let decorator_callable = decorator.try_upcast_to_callable(db, env)?.exactly_one()?;
-        // an overloaded decorator would take the function as a different parameter depending on
-        // how it is called, and which overload a call picks is decided by the very type this is
-        // trying to fill in
-        let [decorator_signature] = decorator_callable.signatures(db).overloads.as_slice() else {
+        // a decoration calls the decorator with the function as its one positional argument, so an
+        // overload that cannot be called that way is never the one it picks. when more than one
+        // can be, which of them a decoration picks is decided by the types — that is, by the very
+        // type this is trying to fill in
+        let decoration = CallArguments::positional([Type::unknown()]);
+        let bindings = Type::Callable(decorator_callable)
+            .bindings(db, env)
+            .match_parameters(db, env, &decoration);
+        let mut matching = bindings.single_element()?.matching_overloads();
+        let (Some((index, _)), None) = (matching.next(), matching.next()) else {
             return None;
         };
+        let signatures = decorator_callable.signatures(db);
+        let decorator_signature = signatures.overloads.get(index)?;
         let decorated = decorator_signature.parameters().iter().next()?;
         if !decorated.is_positional() {
             return None;
@@ -1953,6 +2086,11 @@ impl<'db> FunctionLiteral<'db> {
         if let Some(implementation) = implementation
             && overloads.is_empty()
         {
+            // basedpython: a `decorator def` is written once and called in two shapes, so it is
+            // overloaded even though the source spells no `@overload`
+            if let Some(signatures) = implementation.decorator_keyword_signatures(db) {
+                return CallableSignature::from_overloads(signatures);
+            }
             return CallableSignature::single(implementation.signature(db));
         }
 
@@ -4455,6 +4593,20 @@ fn revealed_declared_type<'db>(
         ast::ExprRef::from(argument),
         revealed_type,
     )
+}
+
+/// The return type `function` declares — the annotation it wrote, or what its body returns
+/// when it wrote none.
+///
+/// This is the function's own signature, before a `decorator def` is expanded into the two
+/// shapes it is applied in (`Signature::decorator_keyword_overloads`): both of those state
+/// this same type, and the transpiler writes them out, so it has to be able to ask for it.
+/// `None` when `function` is not a function literal.
+pub fn declared_return_type<'db>(db: &'db dyn Db, function: Type<'db>) -> Option<Type<'db>> {
+    let Type::FunctionLiteral(function) = function else {
+        return None;
+    };
+    Some(function.literal(db).last_definition.signature(db).return_ty)
 }
 
 #[cfg(test)]

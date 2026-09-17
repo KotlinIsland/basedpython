@@ -93,6 +93,16 @@ writes a note saying which file no longer matches. a frame pointing at
 `build/main.py` is a worse answer, but a frame quoting a `.by` that has been
 rewritten since is a false one
 
+`by run` also reads the map when it loads a staged module: python's own loader
+would compile the `.py`, so the shim compiles it instead, under the `.by` path and
+with each line the `.by` line it came from (a generated line is line 0). every
+location the running program reads back — a traceback it formats, the place a
+warning is attributed to, `co_filename`, `inspect` — is then the author's. the
+digests are checked then, and a mismatch leaves the module to python's loader. a
+`.by` saved over during the run is caught when a frame is reported: the frame
+names the one generated line that `.by` line was written as, or no line when
+there was more than one
+
 both tables are keyed by the generated path exactly as the map spells it. the
 shim resolves symlinks before matching a frame's filename against it — a
 temporary tree under `/tmp` on macOS is reached by a different path than the one

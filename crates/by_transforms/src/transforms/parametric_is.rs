@@ -692,6 +692,15 @@ impl<'src> ParametricIsPass<'src> {
 }
 
 impl TypeAwarePass for ParametricIsPass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::ParametricIs)
+    }
+
+    /// the type it tests against is printed as the runtime probe it builds, literals included
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::LiteralType]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = ParametricIs {
             source: self.source,

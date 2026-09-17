@@ -44,6 +44,7 @@ use crate::type_info::TypeInfo;
 
 use super::ast_driver::{PassContext, TypeAwarePass};
 use super::callable::CallableSyntax;
+use super::repeated_underscore::{WrittenNames, protocol_method_receiver};
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping};
 
 /// One inline protocol shape: the rendered class-body lines, in source order.
@@ -79,12 +80,21 @@ impl Shape {
 
 pub(crate) struct ProtocolTypePass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     config: crate::Config,
 }
 
 impl<'src> ProtocolTypePass<'src> {
-    pub(crate) fn new(source: &'src str, config: crate::Config) -> Self {
-        Self { source, config }
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        config: crate::Config,
+    ) -> Self {
+        Self {
+            source,
+            written,
+            config,
+        }
     }
 }
 
@@ -110,13 +120,14 @@ struct ProtocolTypeLowering<'src> {
 impl<'src> ProtocolTypeLowering<'src> {
     fn new(
         source: &'src str,
+        written: WrittenNames<'src>,
         types: &'src dyn TypeInfo,
         claimed: &'src [TextRange],
         float_literals: FloatLiteralLowering,
     ) -> Self {
         Self {
             source,
-            callable: CallableSyntax::new(source, float_literals)
+            callable: CallableSyntax::new(source, written, float_literals)
                 .with_types(types)
                 .with_claimed_ranges(claimed),
             edits: Vec::new(),
@@ -169,17 +180,10 @@ impl<'src> ProtocolTypeLowering<'src> {
         let Expr::CallableType(signature) = method.signature.as_ref() else {
             return None;
         };
-        let receiver = signature.args.first().and_then(|first| match first {
-            Expr::Name(name) if name.ctx.is_invalid() => Some(name.id.as_str()),
-            _ => None,
-        });
-        let offset = usize::from(receiver.is_some());
-        let shift = |index: Option<u32>| index.map(|i| (i as usize).saturating_sub(offset));
-
+        let receiver = protocol_method_receiver(signature).map(|name| name.id.as_str());
         let params = self.callable.render_protocol_params(
-            &signature.args[offset..],
-            shift(signature.parameter_slash()),
-            shift(signature.parameter_star()),
+            signature,
+            true,
             receiver.unwrap_or("self"),
             // a protocol method's receiver is its `self` parameter, never an implicit one
             None,
@@ -378,12 +382,14 @@ impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for TypevarScopeWalker<'_> {
 /// knows about and any inline protocol left in a value position.
 fn lower<'src>(
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     claimed: &'src [TextRange],
     stmts: &[Stmt],
     config: &crate::Config,
 ) -> ProtocolTypeLowering<'src> {
-    let mut inner = ProtocolTypeLowering::new(source, types, claimed, config.float_literals);
+    let mut inner =
+        ProtocolTypeLowering::new(source, written, types, claimed, config.float_literals);
     {
         let mut walker = TypevarScopeWalker {
             config: config.clone(),
@@ -404,17 +410,18 @@ fn lower<'src>(
 /// The preamble and edits needed to lower every inline protocol still present in
 /// post-transform output.
 ///
-/// A pass that re-renders a whole statement from the AST re-emits the surface
-/// `protocol(...)` syntax, after this pass's own text edits were computed — so
-/// the driver runs the lowering again over the spliced output to catch them.
+/// A node an AST pass rewrote is printed from the AST, which can re-emit the
+/// surface `protocol(...)` syntax after this pass's own text edits were computed
+/// — so the driver runs the lowering again over the spliced output to catch them.
 /// Returns `None` when nothing is left to lower.
 pub(crate) fn cleanup(
     source: &str,
+    written: WrittenNames,
     types: &dyn TypeInfo,
     stmts: &[Stmt],
     config: &crate::Config,
 ) -> Result<Option<(Vec<Fix>, String)>, String> {
-    let mut inner = lower(source, types, &[], stmts, config);
+    let mut inner = lower(source, written, types, &[], stmts, config);
     if let Some(error) = inner.errors.first() {
         return Err(error.clone());
     }
@@ -456,9 +463,34 @@ pub(crate) fn cleanup(
 }
 
 impl TypeAwarePass for ProtocolTypePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::ProtocolType)
+    }
+
+    /// an inline protocol it replaces moves into a class, whose member types the shared
+    /// type-expression lowerer prints, a `typeof` among them
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[
+            super::ast_driver::Lowering::Callable,
+            super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::LiteralType,
+            super::ast_driver::Lowering::JustFloat,
+            super::ast_driver::Lowering::DynamicKeyword,
+            super::ast_driver::Lowering::FloatConst,
+            super::ast_driver::Lowering::Typeof,
+        ]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let claimed = ctx.claimed_type_op_ranges.clone();
-        let mut inner = lower(self.source, types, &claimed, stmts, &self.config);
+        let mut inner = lower(
+            self.source,
+            self.written,
+            types,
+            &claimed,
+            stmts,
+            &self.config,
+        );
 
         if inner.needs_import {
             ctx.required_imports
@@ -524,6 +556,44 @@ mod tests {
                     def m(self) -> "str": ...
                 def f(x: _Protocol_66269af6) -> None: ...
             "#},
+        );
+    }
+
+    /// the synthesized class is written into the preamble and names `Protocol` as it is
+    /// defined, so that import stays above it even when the module imports `Protocol` itself —
+    /// folding it into the module's own line would leave the class with no such name
+    #[test]
+    fn a_module_importing_protocol_itself_still_gets_the_name_above_the_class() {
+        check(
+            indoc! {"
+                from typing import Protocol
+
+                def f(x: protocol(a: int)) -> None: ...
+            "},
+            indoc! {r#"
+                from typing import Protocol
+                class _Protocol_2abdf9ec(Protocol):
+                    a: "int"
+                from typing import Protocol
+
+                def f(x: _Protocol_2abdf9ec) -> None: ...
+            "#},
+        );
+    }
+
+    /// a member is declared as a `def` in the synthesized class, where a repeated `_` is
+    /// numbered and made positional-only as it is in any other `def`, and the receiver is
+    /// the first of them
+    #[test]
+    fn a_repeated_underscore_in_a_method_member_is_numbered() {
+        let out = transpile(
+            "def f(x: protocol(def m(_, _: int, _: str) -> int)) -> None: ...\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("def m(_, _2: \"int\", _3: \"str\", /) -> \"int\": ..."),
+            "got:\n{out}"
         );
     }
 
@@ -668,9 +738,9 @@ mod tests {
         );
     }
 
-    /// a pass that re-renders a whole statement from the AST re-emits the
-    /// surface `protocol(...)` syntax after this pass computed its edits — the
-    /// driver's cleanup loop catches what is left, without duplicating the class
+    /// an AST pass rewriting a node inside the `protocol(...)` this pass replaces
+    /// whole — the driver's cleanup loop catches what is left, without duplicating
+    /// the class
     #[test]
     fn survives_a_statement_re_rendered_by_another_pass() {
         check(

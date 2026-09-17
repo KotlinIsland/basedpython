@@ -103,6 +103,10 @@ impl FloatConstPass {
 }
 
 impl TypeAwarePass for FloatConstPass {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::FloatConst)
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = FloatConst::new(types);
         walk_type_positions(stmts, Some(types), &mut inner);

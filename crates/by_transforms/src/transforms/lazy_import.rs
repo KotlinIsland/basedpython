@@ -26,7 +26,7 @@
 //! A stub defers nothing — see [`Deferral::Never`].
 
 use ruff_diagnostics::{Edit, Fix};
-use ruff_python_ast::visitor::{Visitor, walk_stmt};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
@@ -60,7 +60,9 @@ pub(crate) struct LazyImport<'src> {
     /// bindings that must be bound to the real object rather than to a proxy.
     /// cpython's `except` checks that what it catches is a class inheriting
     /// `BaseException` and never consults `__instancecheck__`, so an exception
-    /// class reached through the proxy raises `TypeError` from the handler
+    /// class reached through the proxy raises `TypeError` from the handler; a
+    /// special form, and a name an annotation reads, are told apart by identity
+    /// by whatever reads them — see [`annotation_names`]
     eager_names: Vec<String>,
     deferral: Deferral,
     pub(crate) edits: Vec<Fix>,
@@ -307,6 +309,10 @@ impl<'src> LazyImport<'src> {
         // generation), so bind them to the builtin instead
         let is_ty_ext = !is_relative && module_part == "ty_extensions";
         let mut lines: Vec<String> = Vec::new();
+        // the names of this statement the pass leaves eager, and the slot in
+        // `lines` the one import line they share is written into
+        let mut eager_spellings: Vec<String> = Vec::new();
+        let mut eager_line: Option<usize> = None;
         // whether the statement imported a bare `Character` that contributed no
         // binding line — the import must still be *removed* (the preamble class
         // defines `Character`), so force an empty replacement below
@@ -351,7 +357,14 @@ impl<'src> LazyImport<'src> {
                 } else {
                     format!("{name} as {bind}")
                 };
-                lines.push(format!("from {dots}{module_part} import {spelling}"));
+                // names that shared one import statement go on writing one line
+                // between them. the line is held at the position of the first of
+                // them, so it keeps its place among the lazy bindings around it
+                if eager_line.is_none() {
+                    eager_line = Some(lines.len());
+                    lines.push(String::new());
+                }
+                eager_spellings.push(spelling);
             } else if is_relative && module_part.is_empty() {
                 // `from . import x` — `x` is a submodule of the current
                 // package. Resolve the relative target at runtime
@@ -373,6 +386,12 @@ impl<'src> LazyImport<'src> {
                 ));
             }
         }
+        if let Some(index) = eager_line {
+            lines[index] = format!(
+                "from {dots}{module_part} import {}",
+                eager_spellings.join(", ")
+            );
+        }
         // `character_only` means a bare `Character` import produced no lines but
         // must still be dropped (the preamble class defines `Character`) so it
         // doesn't survive as a runtime `from ty_extensions import Character`
@@ -392,6 +411,160 @@ impl<'src> LazyImport<'src> {
             node.range(),
         )));
     }
+}
+
+/// every name the annotations python keeps for introspection read, strings included
+///
+/// under the polyfill a `from` import is a proxy, and whatever reads an annotation back is
+/// handed that proxy rather than the object: `dataclasses` tells a `KW_ONLY` pseudo-field
+/// apart by asking whether the annotation *is* `dataclasses.KW_ONLY`, and
+/// `typing.get_type_hints` answers with the proxy, which is not the class to anything
+/// comparing by identity. a name read here is therefore bound eagerly
+///
+/// the annotations are the ones python evaluates, or keeps as a string to evaluate on
+/// request: a parameter's and a return's, of a `def` at any depth, and a variable's in a
+/// module or class body, a class nested in a function included. a variable annotated
+/// inside a function body is never evaluated nor kept, so nothing can read it back. the
+/// value of a type alias is not an annotation, and neither is a type parameter's bound:
+/// both are ordinary runtime values nothing tells apart by identity
+///
+/// a string annotation is read as the expression it spells, because `typing.get_type_hints`
+/// evaluates it against the module's globals — and under `from __future__ import
+/// annotations` every annotation is one, which `dataclasses` resolves the same way. a
+/// string that is not an expression names nothing
+pub(crate) fn annotation_names(suite: &[Stmt], source: &str) -> Vec<String> {
+    struct Names<'src> {
+        source: &'src str,
+        in_function: bool,
+        read: Vec<String>,
+    }
+
+    impl Names<'_> {
+        fn annotation(&mut self, annotation: &ruff_python_ast::Expr) {
+            struct Reads<'n> {
+                source: &'n str,
+                names: &'n mut Vec<String>,
+            }
+            impl<'a> Visitor<'a> for Reads<'_> {
+                fn visit_expr(&mut self, expr: &'a ruff_python_ast::Expr) {
+                    match expr {
+                        ruff_python_ast::Expr::Name(name) => {
+                            self.names.push(name.id.to_string());
+                        }
+                        ruff_python_ast::Expr::StringLiteral(string) => {
+                            if let Ok(parsed) = ruff_python_parser::typing::parse_type_annotation(
+                                string,
+                                self.source,
+                            ) {
+                                self.visit_expr(parsed.expression());
+                            }
+                        }
+                        _ => walk_expr(self, expr),
+                    }
+                }
+            }
+            Reads {
+                source: self.source,
+                names: &mut self.read,
+            }
+            .visit_expr(annotation);
+        }
+    }
+
+    impl<'a> Visitor<'a> for Names<'_> {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            match stmt {
+                Stmt::FunctionDef(function) => {
+                    for parameter in &*function.parameters {
+                        if let Some(annotation) = parameter.annotation() {
+                            self.annotation(annotation);
+                        }
+                    }
+                    if let Some(returns) = &function.returns {
+                        self.annotation(returns);
+                    }
+                    let outer = std::mem::replace(&mut self.in_function, true);
+                    self.visit_body(&function.body);
+                    self.in_function = outer;
+                }
+                Stmt::ClassDef(class) => {
+                    let outer = std::mem::replace(&mut self.in_function, false);
+                    self.visit_body(&class.body);
+                    self.in_function = outer;
+                }
+                Stmt::AnnAssign(assign) if !self.in_function => {
+                    self.annotation(&assign.annotation);
+                }
+                _ => walk_stmt(self, stmt),
+            }
+        }
+
+        // an annotation is only ever found on a statement, so no expression needs a look
+        fn visit_expr(&mut self, _expr: &'a ruff_python_ast::Expr) {}
+    }
+
+    let mut names = Names {
+        source,
+        in_function: false,
+        read: Vec::new(),
+    };
+    names.visit_body(suite);
+    names.read
+}
+
+/// The names every decorator in `suite` reads, which are bound eagerly.
+///
+/// A decorator is the other thing read by identity rather than by value. `typing.overload`
+/// says the `def` under it is one arm of an overload set — but only while it *is*
+/// `typing.overload`; reached through the polyfill's proxy it is an unknown callable, and a
+/// checker reading the emitted python sees two ordinary functions with `...` bodies instead
+/// of the overloads the source declared. The same goes for `final`, `abstractmethod`,
+/// `dataclass` and everything else whose whole meaning is which object it is.
+///
+/// Binding these eagerly costs no laziness at all: a decorator is applied while the module
+/// is executing, so a proxy standing in for one resolves at import time anyway — the defer
+/// buys nothing and loses the declaration.
+pub(crate) fn decorator_names(suite: &[Stmt]) -> Vec<String> {
+    struct Reads<'n> {
+        names: &'n mut Vec<String>,
+    }
+
+    impl<'a> Visitor<'a> for Reads<'_> {
+        fn visit_expr(&mut self, expr: &'a ruff_python_ast::Expr) {
+            if let ruff_python_ast::Expr::Name(name) = expr {
+                self.names.push(name.id.to_string());
+            }
+            walk_expr(self, expr);
+        }
+    }
+
+    struct Names {
+        read: Vec<String>,
+    }
+
+    impl<'a> Visitor<'a> for Names {
+        fn visit_stmt(&mut self, stmt: &'a Stmt) {
+            let decorators = match stmt {
+                Stmt::FunctionDef(function) => function.decorator_list.as_slice(),
+                Stmt::ClassDef(class) => class.decorator_list.as_slice(),
+                _ => &[],
+            };
+            for decorator in decorators {
+                Reads {
+                    names: &mut self.read,
+                }
+                .visit_expr(&decorator.expression);
+            }
+            walk_stmt(self, stmt);
+        }
+
+        // a decorator is only ever found on a statement, so no expression needs a look
+        fn visit_expr(&mut self, _expr: &'a ruff_python_ast::Expr) {}
+    }
+
+    let mut names = Names { read: Vec::new() };
+    names.visit_body(suite);
+    names.read
 }
 
 /// whether `test` is the `TYPE_CHECKING` flag, spelled bare or through the module it
@@ -857,6 +1030,227 @@ mod tests {
             out.ends_with("from json import JSONDecodeError as JDE\n"),
             "got:\n{out}"
         );
+    }
+
+    #[test]
+    fn polyfill_special_forms_stay_eager() {
+        // a special form is recognised by what it *is*: a checker reading the output
+        // rejects `ClassVar[int]` once `ClassVar` names a variable, and `dataclasses`
+        // tells a bare `ClassVar` or `Final` annotation from a field by identity, which
+        // a proxy does not have. an ordinary function beside them is still deferred
+        let out = transpile_polyfill(indoc! {"
+            from typing import ClassVar, Final, Literal, Annotated as Note, cast
+        "});
+        assert!(
+            out.ends_with(indoc! {"
+                from typing import ClassVar, Final, Literal, Annotated as Note
+                cast = _lazy_attr(\"typing\", \"cast\")
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn polyfill_special_form_the_lowering_imported_stays_eager() {
+        // an enum with payloads lowers to classes whose members are annotated
+        // `ClassVar[...]`, and the import of `ClassVar` is the lowering's own — not in
+        // the source the transpile started from, so it is the output that is asked
+        let out = transpile_polyfill(indoc! {"
+            enum class Shape:
+                case Circle(radius: int)
+                case Empty
+        "});
+        assert!(
+            out.contains("ClassVar[type[_Shape_Circle]]"),
+            "the enum no longer lowers through ClassVar, got:\n{out}"
+        );
+        assert!(
+            !out.contains("ClassVar = _lazy_attr"),
+            "a special form was deferred, got:\n{out}"
+        );
+        assert!(
+            out.contains("from typing import final, ClassVar\n"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn polyfill_names_an_annotation_reads_stay_eager() {
+        // `dataclasses` tells a `KW_ONLY` annotation from a field by identity, and a
+        // type hint read back is compared by identity, so a name any annotation reads is
+        // bound to the real object. the decorator beside them is read by identity too —
+        // see `polyfill_a_decorator_stays_eager`
+        let out = transpile_polyfill(indoc! {"
+            from dataclasses import dataclass, KW_ONLY, InitVar
+            from fractions import Fraction
+
+            @dataclass
+            class Row:
+                name: str
+                _: KW_ONLY
+                seed: InitVar[int] = 0
+
+            def half(value: Fraction) -> None:
+                pass
+        "});
+        assert!(
+            out.contains(indoc! {"
+                from dataclasses import dataclass, KW_ONLY, InitVar
+                from fractions import Fraction
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    /// and the same rule is what keeps a `decorator def`'s own declaration readable: the
+    /// `overload` it imports is the whole reason the two stubs it emits are an overload set.
+    /// deferred, a checker read them as two ordinary functions and reported `empty-body` on
+    /// each, plus `invalid-parameter-default` on the `= ...` an overload stub writes
+    #[test]
+    fn polyfill_the_overload_a_decorator_def_imports_stays_eager() {
+        let out = transpile_polyfill(indoc! {"
+            decorator def d(fn: (...) -> object) -> int:
+                return 1
+        "});
+        assert!(
+            out.contains("from typing import Callable, overload\n"),
+            "got:\n{out}"
+        );
+        assert!(
+            !out.contains("overload = _lazy_attr"),
+            "the overload declaration was deferred, got:\n{out}"
+        );
+    }
+
+    /// a decorator says what the definition under it *is*, and it says so by identity.
+    /// deferred, `@dataclass` is a proxy a checker reading the emitted python cannot
+    /// recognize: it read `Row` as an ordinary class and reported `Row("x")` as too many
+    /// positional arguments, where the source declares a one-field dataclass. deferring one
+    /// buys nothing either — a decorator is applied while the module executes, so the proxy
+    /// standing in for it resolves at import time regardless
+    #[test]
+    fn polyfill_a_decorator_stays_eager() {
+        let out = transpile_polyfill(indoc! {"
+            from functools import cache, reduce
+
+            @cache
+            def f() -> int:
+                return reduce(lambda a, b: a + b, [1, 2], 0)
+        "});
+        assert!(out.contains("from functools import cache\n"), "got:\n{out}");
+        assert!(
+            out.contains("reduce = _lazy_attr(\"functools\", \"reduce\")"),
+            "a name only called stopped being deferred, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn polyfill_a_name_read_at_runtime_and_in_an_annotation_stays_eager() {
+        let out = transpile_polyfill(indoc! {"
+            from fractions import Fraction
+
+            def half(value: Fraction) -> Fraction:
+                return value / Fraction(2)
+        "});
+        assert!(
+            out.starts_with("from fractions import Fraction\n"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn polyfill_a_name_an_annotation_the_lowering_wrote_reads_stays_eager() {
+        // a class-body assignment is given the annotation its value's type spells, so the
+        // source reads `Fraction` only at runtime and the output reads it in an annotation
+        let out = transpile_polyfill(indoc! {"
+            from fractions import Fraction
+
+            class Price:
+                amount = Fraction(1, 2)
+        "});
+        assert!(
+            out.contains("amount: Fraction = Fraction(1, 2)"),
+            "the class-body assignment is no longer annotated, got:\n{out}"
+        );
+        assert!(
+            out.starts_with("from fractions import Fraction\n"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn polyfill_a_name_only_read_at_runtime_stays_deferred() {
+        check_polyfill_body(
+            indoc! {"
+                from json import dumps
+
+                def show(value: int) -> str:
+                    return dumps(value)
+            "},
+            indoc! {"
+                dumps = _lazy_attr(\"json\", \"dumps\")
+
+                def show(value: int) -> str:
+                    return dumps(value)
+            "},
+        );
+    }
+
+    #[test]
+    fn polyfill_a_name_only_a_local_variable_annotation_reads_stays_deferred() {
+        // a local variable's annotation is never evaluated, and nothing can read it back
+        let out = transpile_polyfill(indoc! {"
+            from fractions import Fraction
+
+            def half() -> None:
+                value: Fraction = 1
+        "});
+        assert!(
+            out.contains("Fraction = _lazy_attr(\"fractions\", \"Fraction\")"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn polyfill_an_annotation_under_future_annotations_stays_eager() {
+        // every annotation is a string at runtime, and `typing.get_type_hints` evaluates
+        // it against the module's globals, where a proxy would be what it finds
+        let out = transpile_polyfill(indoc! {"
+            from __future__ import annotations
+            from fractions import Fraction
+
+            def half(value: Fraction) -> None:
+                pass
+        "});
+        assert!(
+            out.contains("from fractions import Fraction\n"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn annotation_names_reads_the_annotations_python_keeps() {
+        use ruff_python_parser::parse_module;
+
+        let source = indoc! {"
+            a: A = 1
+            type Alias = NotAnAnnotation
+
+            class C[T: NotABound]:
+                b: B
+                def method(self, c: C, *d: D, **e: E) -> F:
+                    local: NotKept = 1
+                    class Nested:
+                        g: G
+
+            def quoted(h: \"list[H]\", i: \"not an expression(\") -> None:
+                pass
+        "};
+        let parsed = parse_module(source).unwrap();
+        let mut names = super::annotation_names(parsed.suite(), source);
+        names.sort();
+        names.dedup();
+        assert_eq!(names, ["A", "B", "C", "D", "E", "F", "G", "H", "list"]);
     }
 
     #[test]

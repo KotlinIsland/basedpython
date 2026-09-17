@@ -183,8 +183,7 @@ mod tests {
             "},
             indoc! {"
                 from ty_extensions import TypeOf
-                def f(x: TypeOf[y]) -> TypeOf[z]:
-                    ...
+                def f(x: TypeOf[y]) -> TypeOf[z]: ...
             "},
         );
     }

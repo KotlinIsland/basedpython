@@ -133,22 +133,63 @@ pass the argument themselves
 ## diagnostics
 
 - `missing-context-argument` — a `context` parameter is unmatched and nothing
-    in scope fits it
+    in scope fits it, what fits it is a `_` parameter its function repeats, the
+    parameter is itself a `_` its function repeats, or the call is a decoration,
+    which has no argument list to write the value in
 - `ambiguous-context-argument` — several declarations in the winning scope fit
     it
 
 ## limitations
 
 - resolution happens only at direct call expressions (`f(...)`) whose callee
-    is a plain function or bound method with a single signature. constructors,
-    `__call__` instances, overloaded functions, union-typed callees, dunder
-    dispatch, and calls with `*` / `**` unpacking all keep the plain
-    missing-argument behaviour — pass the argument explicitly there
+    is a plain function or bound method. constructors, `__call__` instances,
+    union-typed callees, dunder dispatch, and calls with `*` / `**` unpacking
+    all keep the plain missing-argument behaviour — pass the argument
+    explicitly there
+
+- an **overloaded** callee is filled only where its overloads agree. which
+    overload a call selects is decided by the arguments it is given, so the
+    parameter has to mean the same thing in every overload — the same name,
+    resolving to the same value, and keyword-only in all of them, so that
+    whether the call already supplies it cannot depend on which one is chosen.
+    a `decorator def`'s options are keyword-only in both of its overloads, so
+    they are filled; anything the overloads disagree on keeps the plain
+    missing-argument behaviour
+
+- a **decoration** cannot supply one. `@deco` is a call, but it is the one call
+    the source writes no argument list for, so there is nowhere to put the
+    implicit argument. a `context` parameter left unfilled there is reported
+    rather than quietly taking its default:
+
+    ```by
+    def deco(fn: (...) -> object, context b: str = "default") -> object: ...
+
+    context t: str = "hello"
+
+    @deco               # error: `b` cannot be filled at a decoration
+    def g(): ...
+
+    g = deco(g)         # ok — `t` is passed implicitly
+    ```
+
+    the decorated definition is the decorator's first positional argument, so a
+    `context` parameter standing in that slot is filled by it like any other
+
 - candidates are typed at their declaration site: reassigning a context
     variable to a different (assignable) type between declaration and call is
     not tracked
+
 - a declaration inside a conditional branch counts lexically; whether the
     branch executed is not tracked
+
+- a function that repeats `_` as a parameter name cannot supply a `context`
+    argument from any of those parameters: python binds only one of them to
+    `_`, and which one is not decided yet. give the parameter a name of its own
+
+- a `context` parameter named `_` whose function repeats `_` as a parameter
+    name is not filled implicitly either: which of those parameters a keyword
+    `_` names is not decided yet. pass the argument positionally, or give the
+    parameter a name of its own
 
 ## inlay hints
 

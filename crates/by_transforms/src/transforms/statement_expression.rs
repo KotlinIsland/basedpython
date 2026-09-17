@@ -54,6 +54,7 @@ use ruff_text_size::{Ranged, TextRange};
 use std::collections::HashSet;
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
+use super::repeated_underscore::WrittenNames;
 use super::source_util::{
     line_indent, line_start, parenthesized_value_range, temporary_name, value_separator_start,
 };
@@ -69,6 +70,16 @@ impl<'src> StatementExpressionPass<'src> {
 }
 
 impl AstPass for StatementExpressionPass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::StatementExpression)
+    }
+
+    /// a `??` whose fallback is a statement (`?? break`, `?? raise …`) is written as the
+    /// suite that runs it
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::NoneCoalesce]
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut misplaced = Vec::new();
         let mut lower = Lower {
@@ -135,7 +146,7 @@ impl<'ast> Visitor<'ast> for Lower<'_> {
 
 impl Lower<'_> {
     fn next_temp(&mut self) -> String {
-        let name = temporary_name("stmt_expr", self.counter);
+        let name = temporary_name(WrittenNames::new(self.source), "stmt_expr", self.counter);
         self.counter += 1;
         name
     }
@@ -955,6 +966,28 @@ mod tests {
             spaced.contains("a: Final = __by_stmt_expr_0__"),
             "got:\n{spaced}"
         );
+    }
+
+    /// the temporary is written in the function the statement expression stands in, so a
+    /// module that binds the same name has its own binding turned into a local of that
+    /// function — and the read the branch was written to make raises `UnboundLocalError`
+    #[test]
+    fn a_temporary_goes_past_a_name_the_module_binds() {
+        let out = check(indoc! {"
+            __by_stmt_expr_0__ = 7
+
+            def f(x: int) -> int:
+                a = if x > 0:
+                    __by_stmt_expr_0__
+                else:
+                    0
+                return a
+        "});
+        assert!(
+            out.contains("__by_stmt_expr_0__2 = __by_stmt_expr_0__"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("a = __by_stmt_expr_0__2"), "got:\n{out}");
     }
 
     #[test]

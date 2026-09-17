@@ -28,11 +28,23 @@ use ruff_python_ast::helpers::{is_classvar_marker_id, is_final_marker_id, is_let
 use ruff_python_ast::{Expr, ExprCallableType, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
-use super::ast_driver::{PassContext, TypeAwarePass};
+use super::ast_driver::{Lowering, PassContext, TypeAwarePass};
 use super::intersection::{collect_intersect, collect_union, is_intersection_node};
 use super::just_float::rewrite_type_expr_with_imports;
+use super::repeated_underscore::{WrittenNames, lowered_callable_parameters};
 use crate::config::FloatLiteralLowering;
 use crate::type_info::{TypeInfo, UnpackedKwargsLowering};
+
+/// the lowerings [`CallableSyntax::lower_type_expr`] writes itself, wherever it prints a type
+/// expression. a pass that prints one through it in place of the source writes these too
+pub(crate) const TYPE_EXPRESSION: &[Lowering] = &[
+    Lowering::Callable,
+    Lowering::OptionalType,
+    Lowering::LiteralType,
+    Lowering::JustFloat,
+    Lowering::DynamicKeyword,
+    Lowering::FloatConst,
+];
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -40,12 +52,17 @@ use crate::type_info::{TypeInfo, UnpackedKwargsLowering};
 )]
 pub(crate) struct CallableSyntax<'src> {
     source: &'src str,
+    /// the module as written, whose names a repeated `_` is numbered around
+    written: WrittenNames<'src>,
     types: Option<&'src (dyn TypeInfo + 'src)>,
     /// ranges already folded by `symbolic_type_op` (e.g. `1 + typeof d` →
     /// `Literal[3]`). a claimed sub-expression is opaque here: descending into
     /// it would re-render its `typeof`/operator surface and the wider edit
     /// would clobber the fold, so `rewrite` leaves it for the fold's own edit
     claimed_ranges: &'src [TextRange],
+    /// the `typeof` nodes a type position may hold that this lowerer owns, when the
+    /// `typeof` fold lowers the rest in the syntax tree. `None` owns every one
+    owned_typeof: Option<&'src [TextRange]>,
     float_literals: FloatLiteralLowering,
     edits: Vec<Fix>,
     needs_import: bool,
@@ -83,11 +100,17 @@ struct ProtocolShape {
 }
 
 impl<'src> CallableSyntax<'src> {
-    pub(crate) fn new(source: &'src str, float_literals: FloatLiteralLowering) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        float_literals: FloatLiteralLowering,
+    ) -> Self {
         Self {
             source,
+            written,
             types: None,
             claimed_ranges: &[],
+            owned_typeof: None,
             float_literals,
             edits: Vec::new(),
             needs_import: false,
@@ -127,6 +150,12 @@ impl<'src> CallableSyntax<'src> {
 
     pub(crate) fn with_claimed_ranges(mut self, claimed: &'src [TextRange]) -> Self {
         self.claimed_ranges = claimed;
+        self
+    }
+
+    /// leave to the `typeof` fold every `typeof` a type position holds outside `owned`
+    pub(crate) fn with_owned_typeof(mut self, owned: &'src [TextRange]) -> Self {
+        self.owned_typeof = Some(owned);
         self
     }
 
@@ -324,21 +353,30 @@ impl<'src> CallableSyntax<'src> {
     /// top, ahead of any user class its annotations mention, and an unquoted
     /// annotation would be evaluated at class-body time and `NameError`
     ///
-    /// `args` / `slash` / `star` are passed separately rather than read off a
-    /// node so a protocol method member can hand over the parameters that
-    /// follow its receiver, which is a name rather than a type.
+    /// `method` says `ct` is the signature of a protocol method member, whose
+    /// first argument is its receiver: a name rather than a type, emitted as
+    /// `receiver`. a plain callable type is given the synthesized `receiver`.
     ///
     /// `implicit_receiver` is the rendered leading parameter of a basedpython
     /// implicit receiver (`int.() -> str`), which is a type rather than a name and
     /// so is spelled by a synthesized parameter.
+    ///
+    /// a labelled parameter is declared under the name the lowering gives it,
+    /// and a repeated `_` makes the parameters up to the last of them
+    /// positional-only, as it does in a `def` — both ty's answer too
     pub(crate) fn render_protocol_params(
         &mut self,
-        args: &[Expr],
-        explicit_slash: Option<usize>,
-        star: Option<usize>,
+        ct: &ExprCallableType,
+        method: bool,
         receiver: &str,
         implicit_receiver: Option<String>,
     ) -> String {
+        let lowered = lowered_callable_parameters(ct, method, self.written);
+        let offset = ct.args.len() - lowered.names.len();
+        let args = &ct.args[offset..];
+        let shift = |index: Option<u32>| index.map(|i| (i as usize).saturating_sub(offset));
+        let explicit_slash = shift(ct.parameter_slash());
+        let star = shift(ct.parameter_star());
         let mut parts: Vec<String> = vec![receiver.to_owned()];
         // implicit `/` after the last bare positional (no label) when followed
         // by a named/labelled parameter. bare positionals are positional-only
@@ -359,7 +397,10 @@ impl<'src> CallableSyntax<'src> {
                 }
             })
         };
-        let slash = explicit_slash.or(implicit_slash);
+        let slash = [explicit_slash.or(implicit_slash), lowered.slash]
+            .into_iter()
+            .flatten()
+            .max();
         // an implicit receiver leads the parameter list, positional-only. any `/`
         // the arguments themselves emit comes after the receiver and so already
         // closes it off — a second one is a `SyntaxError`
@@ -369,6 +410,7 @@ impl<'src> CallableSyntax<'src> {
                 parts.push("/".to_owned());
             }
         }
+        let names = lowered.names;
         let mut star_emitted = false;
         for (i, arg) in args.iter().enumerate() {
             if Some(i) == slash {
@@ -384,31 +426,16 @@ impl<'src> CallableSyntax<'src> {
             }
             match arg {
                 Expr::Named(named) => {
+                    let name = &names[i];
                     let name = match named.target.as_ref() {
-                        Expr::Name(n) => n.id.as_str().to_owned(),
                         Expr::Starred(s) => match s.value.as_ref() {
-                            Expr::Starred(inner_inner) => {
-                                let n = inner_inner
-                                    .value
-                                    .as_name_expr()
-                                    .map(|n| n.id.as_str())
-                                    .unwrap_or("kwargs");
-                                format!("**{n}")
-                            }
+                            Expr::Starred(_) => format!("**{name}"),
                             _ => {
-                                // the anonymous `*: *Ts` carries the empty name
-                                // marker, and needs a name of its own in python
-                                let n = s
-                                    .value
-                                    .as_name_expr()
-                                    .map(|n| n.id.as_str())
-                                    .filter(|n| !n.is_empty())
-                                    .unwrap_or("args");
                                 star_emitted = true;
-                                format!("*{n}")
+                                format!("*{name}")
                             }
                         },
-                        _ => "_".to_owned(),
+                        _ => name.to_string(),
                     };
                     let ty = quote_forward_ref(&self.rewrite_or_leaf(&named.value));
                     parts.push(format!("{name}: {ty}"));
@@ -457,12 +484,8 @@ impl<'src> CallableSyntax<'src> {
                     }
                 },
                 _ => {
-                    // bare positional type — Protocol's `__call__` needs a
-                    // parameter NAME, so we synthesize one. Use an
-                    // unused-prefixed name so static checkers don't flag
-                    // it as a missing arg
                     let ty = quote_forward_ref(&self.rewrite_or_leaf(arg));
-                    parts.push(format!("_{i}: {ty}"));
+                    parts.push(format!("{}: {ty}", names[i]));
                 }
             }
         }
@@ -546,13 +569,7 @@ impl<'src> CallableSyntax<'src> {
                         quote_forward_ref(&rendered)
                     )
                 });
-                let params = self.render_protocol_params(
-                    &ct.args,
-                    ct.parameter_slash().map(|i| i as usize),
-                    ct.parameter_star().map(|i| i as usize),
-                    "self",
-                    implicit_receiver,
-                );
+                let params = self.render_protocol_params(ct, false, "self", implicit_receiver);
                 let returns = quote_forward_ref(&self.rewrite_or_leaf(&ct.returns));
                 let shape = ProtocolShape { params, returns };
                 Some(self.class_name_for(shape))
@@ -826,12 +843,13 @@ fn is_named(expr: &Expr, ident: &str) -> bool {
 /// rendering path, which is what lets one wide edit carry rewrites it subsumes.
 pub(crate) fn lower_type_expr_full(
     source: &str,
+    written: WrittenNames,
     types: &dyn TypeInfo,
     expr: &Expr,
     substitutions: &[(TextRange, String)],
     float_literals: FloatLiteralLowering,
 ) -> Option<String> {
-    let mut inner = CallableSyntax::new(source, float_literals).with_types(types);
+    let mut inner = CallableSyntax::new(source, written, float_literals).with_types(types);
     for (range, name) in substitutions {
         inner.add_substitution(*range, name.clone());
     }
@@ -904,6 +922,17 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
         if matches!(expr, Expr::UnaryOp(u) if u.op == UnaryOp::Optional) {
             return crate::transforms::type_expr_walker::Recurse::Descend;
         }
+        // a `typeof` the fold rewrites in the syntax tree is re-emitted from there, and
+        // an edit of our own at the same node would be a second lowering of it that
+        // nothing emits
+        if let Expr::Subscript(s) = expr
+            && s.is_typeof
+            && self
+                .owned_typeof
+                .is_some_and(|owned| !owned.contains(&s.range))
+        {
+            return crate::transforms::type_expr_walker::Recurse::Stop;
+        }
         // `rewrite` is the single type-expression lowerer — it owns every
         // structural type-form (callable arrows, `&` / `and`, `or`, `not`,
         // `typeof`, subscripts) and composes leaves through `lower_leaf`. it
@@ -920,13 +949,19 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
 
 pub(crate) struct CallableSyntaxPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     float_literals: FloatLiteralLowering,
 }
 
 impl<'src> CallableSyntaxPass<'src> {
-    pub(crate) fn new(source: &'src str, float_literals: FloatLiteralLowering) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        float_literals: FloatLiteralLowering,
+    ) -> Self {
         Self {
             source,
+            written,
             float_literals,
         }
     }
@@ -963,13 +998,33 @@ impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for ValueCallableWalker<'_, '
 }
 
 impl TypeAwarePass for CallableSyntaxPass<'_> {
+    fn lowering(&self) -> Option<Lowering> {
+        Some(Lowering::Callable)
+    }
+
+    /// a type expression it replaces is printed by the shared lowerer, which writes every
+    /// leaf inside it too, an inline protocol as the name of the class it hoists to
+    fn subsumes(&self) -> &'static [Lowering] {
+        &[
+            Lowering::Callable,
+            Lowering::OptionalType,
+            Lowering::LiteralType,
+            Lowering::JustFloat,
+            Lowering::DynamicKeyword,
+            Lowering::FloatConst,
+            Lowering::ProtocolType,
+        ]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         // owned copy so `inner`'s borrow doesn't pin `ctx` against the mutable
         // `required_imports` / `edits` uses below
         let claimed = ctx.claimed_type_op_ranges.clone();
-        let mut inner = CallableSyntax::new(self.source, self.float_literals)
+        let structural_typeof = ctx.structural_typeof_ranges.clone();
+        let mut inner = CallableSyntax::new(self.source, self.written, self.float_literals)
             .with_types(types)
-            .with_claimed_ranges(&claimed);
+            .with_claimed_ranges(&claimed)
+            .with_owned_typeof(&structural_typeof);
         crate::transforms::type_expr_walker::walk_type_positions_skipping(
             stmts,
             Some(types),
@@ -1019,6 +1074,55 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// a callable type naming its parameters is declared as a `__call__` in the
+    /// synthesized protocol, where a repeated `_` is numbered and made positional-only as
+    /// it is in any `def`
+    #[test]
+    fn a_repeated_underscore_is_numbered_in_the_synthesized_call() {
+        let out = transpile(
+            "a: (_: int, _: str, name: bytes) -> None\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "def __call__(self, _: \"int\", _2: \"str\", /, name: \"bytes\") -> \"None\": ..."
+            ),
+            "got:\n{out}"
+        );
+    }
+
+    /// the name a bare positional is given is taken, and numbering skips it
+    #[test]
+    fn a_numbered_underscore_skips_a_bare_positional_name() {
+        let out = transpile(
+            "a: (int, int, int, _: int, _: str) -> None\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "def __call__(self, _0: \"int\", _1: \"int\", _2: \"int\", _: \"int\", _3: \"str\", /) -> \"None\": ..."
+            ),
+            "got:\n{out}"
+        );
+    }
+
+    /// a numbered `_` after the `*` would be reachable by its number alone, a name the
+    /// author never wrote, so the callable type is refused as a `def` would be
+    #[test]
+    fn a_keyword_only_repeated_underscore_is_refused() {
+        let error = transpile(
+            "a: (int, /, _: int, *args: int, _: str) -> None\n",
+            &Config::test_default(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("a repeated `_` parameter cannot be keyword-only in a callable type"),
+            "got:\n{error}"
         );
     }
 

@@ -20,8 +20,9 @@ source (.by)
   │     │  sentinel, mutable-defaults, …)
   │     ├─ run TypeAwarePasses: read the SemanticModel and emit text edits
   │     │  (intersection, callable, generics, literal-types, anon-NT, …)
-  │     └─ splice it together: re-render changed statements, apply text edits
-  │        (ruff-style first-wins overlap skip), emit hoisted class defs, prepend
+  │     └─ splice it together: re-emit the nodes the AST passes changed, apply
+  │        text edits (ruff-style first-wins overlap skip, composed inside the
+  │        nodes both touch), emit hoisted class defs, prepend
   │        required imports and the runtime helpers the emitted code calls
   │        (see "the runtime" below), append `__all__` epilogue
   │
@@ -140,8 +141,10 @@ and gets the single-file db: correct, just blind past the file
 
 - **`AstPass`** — mutates the AST in place via the
     [`Transformer`](https://docs.rs/ruff_python_ast) protocol. the driver tracks
-    which top-level statements changed and re-renders them through
-    `ruff_python_codegen` (basedpython mode)
+    which top-level statements changed, and re-emits only the nodes in them the
+    pass changed, through `ruff_python_codegen` (basedpython mode). a node it made
+    carries no source range; a node it kept carries its own, and that is how the
+    two are told apart
 - **`TypeAwarePass`** — reads the shared `SemanticModel` and emits sub-statement
     text edits keyed by `TextRange`. it never mutates the AST, because
     `inferred_type` binds to the exact parsed node identities
@@ -170,11 +173,43 @@ keeps a mutable default without its guard
 
 after the passes run, the driver assembles the output in one pass:
 
-1. whole-statement replacements for mutated statements (re-rendered) and hoisted
-    statements (synthesized class defs inserted before the statement that needs
-    them)
+1. hoisted statements (synthesized class defs inserted before the statement that
+    needs them)
+1. a template for each node an AST pass changed. it is printed from the syntax
+    tree with every node below it that kept its source range as a placeholder,
+    and each placeholder passes that node's source through — so a conversion, a
+    quoted forward reference or an extension call a `TypeAwarePass` lowered inside
+    it is applied there, where printing the statement whole would have dropped it.
+    whether a node changed is read by printing it the same way from the parse and
+    comparing, with the names it spells as the source spelled them: a node whose
+    one change is a name, a parameter a repeated `_` numbered, re-emits only that
+    name, and a compound statement whose one change is the statements of a suite
+    re-emits only that suite — its header keeps its source, where the parser
+    stands up what python has no spelling for (a modifier as a decorator,
+    `init(...)` as a `def __init__`, a `raises` clause) and the passes that lower
+    it edit that source. a suite written on the line of its clause (`def f(): x`)
+    is re-emitted as a block below it, since it has no line of its own to keep. a node a pass builds by parsing text of its own has to forget the
+    ranges into that text, or they would name source they did not come from.
+    between two nodes it passes through, a template keeps the source wherever it
+    prints the same tokens there — the comments, the blank lines, the layout of a
+    signature, and the edits other passes made in that text — and elsewhere keeps
+    the comments ahead of the first token it prints differently and after the
+    last, where it breaks the line too. a comment between two tokens it prints
+    differently has no line of its own in the output, and is not kept. what a
+    template prints is indented by the step its node's own source indents its
+    blocks by, since a file may indent one block by two spaces and another by four
 1. sub-statement text edits, applied with ruff-style first-wins overlap skip —
-    a wider edit wins over a narrower one nested inside it
+    a wider edit wins over a narrower one nested inside it, and a template
+    applies the edits inside the source it passes through. the splice records
+    every edit it writes out, and one it leaves out has been lost — whatever the
+    wider edit prints there stands in for that source, however it spells it —
+    and is a transpile error, unless the wider edit accounts for it: it deletes
+    what it covers, it writes the same thing at the same span, one pass wrote
+    both, or its pass declares that it writes the lost edit's lowering itself
+    (`TypeAwarePass::subsumes`, a list of `Lowering`s). a changed node accounts
+    for nothing, and a lowering no pass declares is refused wherever another
+    edit covers it, so a new lowering that lands inside a construct some pass
+    writes itself fails the transpile until that pass takes it on
 1. `required_imports` prepended (deduped, `from`-imports merged)
 1. `__all__` epilogue appended for `export`/`public` modifiers
 

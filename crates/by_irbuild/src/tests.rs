@@ -1132,6 +1132,40 @@ def outer(xs: list[list[int]], y: list[int]) -> object:
 }
 
 #[test]
+fn a_body_reading_a_repeated_underscore_parameter_declines() {
+    // python's `_` is the first of the parameters, the transpiler numbering the rest,
+    // where ty takes a read of it for the last one. a body that ignores them all is
+    // lowered, and a nested frame reading the name counts as a read
+    assert_eq!(
+        declines(
+            "\
+def ignores(_: int, _: str) -> int:
+    return 1
+
+def reads(_: int, _: str) -> object:
+    return _
+
+def adds(_: int, _: int) -> int:
+    _ += 1
+    return 0
+
+def captures(_: int, _: str) -> int:
+    def inner() -> object:
+        return _
+    return 0
+"
+        ),
+        ["reads", "adds", "captures"]
+            .map(|name| (
+                name.to_string(),
+                "a body reading a repeated `_` parameter reads the first of them, where ty reads the last"
+                    .to_string()
+            ))
+            .to_vec()
+    );
+}
+
+#[test]
 fn a_target_list_unpacks_into_a_fixed_tuple() {
     // one op with one destination, read back element by element — a second
     // destination would be invisible to liveness

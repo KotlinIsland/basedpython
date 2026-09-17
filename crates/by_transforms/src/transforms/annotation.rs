@@ -9,6 +9,7 @@ use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::callable::CallableSyntax;
 use crate::transforms::optional_type;
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 use crate::type_info::TypeInfo;
 
@@ -61,12 +62,13 @@ pub(crate) struct TupleLiteralType<'src> {
 impl<'src> TupleLiteralType<'src> {
     fn new(
         source: &'src str,
+        written: WrittenNames<'src>,
         types: &'src dyn TypeInfo,
         min_version: PythonVersion,
         float_literals: FloatLiteralLowering,
         symbolic_substitutions: &'src [(TextRange, String)],
     ) -> Self {
-        let mut leaves = CallableSyntax::new(source, float_literals).with_types(types);
+        let mut leaves = CallableSyntax::new(source, written, float_literals).with_types(types);
         for (range, rendered) in symbolic_substitutions {
             leaves.add_substitution(*range, rendered.clone());
         }
@@ -376,20 +378,36 @@ impl TypeExprVisitor for TupleLiteralType<'_> {
 
 pub(crate) struct TupleLiteralTypePass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     config: Config,
 }
 
 impl<'src> TupleLiteralTypePass<'src> {
-    pub(crate) fn new(source: &'src str, config: Config) -> Self {
-        Self { source, config }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: Config) -> Self {
+        Self {
+            source,
+            written,
+            config,
+        }
     }
 }
 
 impl TypeAwarePass for TupleLiteralTypePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::TupleLiteralType)
+    }
+
+    /// each element of a tuple type it replaces is printed by the shared type-expression
+    /// lowerer
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        super::callable::TYPE_EXPRESSION
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let symbolic_substitutions = ctx.symbolic_substitutions.clone();
         let mut inner = TupleLiteralType::new(
             self.source,
+            self.written,
             types,
             self.config.min_version,
             self.config.float_literals,

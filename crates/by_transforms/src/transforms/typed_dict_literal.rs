@@ -448,6 +448,12 @@ fn flatten_bitand(expr: &Expr) -> Vec<&Expr> {
 }
 
 impl AstPass for TypedDictLiteralPass<'_> {
+    /// a typed dict type it replaces moves into a class, whose field types the shared
+    /// type-expression lowerer prints
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        super::callable::TYPE_EXPRESSION
+    }
+
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut inner = TypedDictLiteral::new(self.source);
         let body: &[Stmt] = &module.body;

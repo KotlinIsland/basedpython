@@ -19,13 +19,17 @@ use crate::types::diagnostic::{
     self, EXPERIMENTAL_SYNTAX, INVALID_PARAMSPEC, INVALID_TYPE_FORM, NOT_SUBSCRIPTABLE,
     UNBOUND_TYPE_VARIABLE, UNRESOLVED_ATTRIBUTE, UNSUPPORTED_OPERATOR,
     report_invalid_argument_number_to_special_form, report_invalid_arguments_to_callable,
-    report_invalid_concatenate_last_arg, report_missing_type_arguments,
-    report_unsupported_binary_operation,
+    report_invalid_concatenate_last_arg, report_invalid_repeated_underscore,
+    report_missing_type_arguments, report_unsupported_binary_operation,
 };
 use crate::types::function::{FunctionDecorators, FunctionType};
 use crate::types::infer::builder::binary_expressions::BinaryInferenceState;
 use crate::types::infer::builder::subscript::AnnotatedExprContext;
 use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
+use crate::types::repeated_underscore::{
+    LoweredParameters, ParameterSlot, WrittenNames, callable_parameter_slots,
+    lower_repeated_underscores,
+};
 use crate::types::signatures::{ConcatenateTail, Signature};
 use crate::types::special_form::{AliasSpec, LegacyStdlibAlias};
 use crate::types::string_annotation::parse_string_annotation;
@@ -1989,6 +1993,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 |index| callable.parameter_borrow(index + receiver_offset),
             ))
             .collect();
+        let params = self.lower_callable_repeated_underscores(callable, receiver.is_some(), params);
         let parameters = Parameters::from_annotation(db, env, params);
         let return_type = self.infer_type_expression(&callable.returns);
         let previous = self
@@ -1998,6 +2003,48 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         self.inference_flags()
             .set(InferenceFlags::CHECK_UNBOUND_TYPEVARS, previous);
         result
+    }
+
+    /// basedpython: `params`, the parameters of `callable`, under the names and kinds the
+    /// lowering writes them with when they repeat `_` — the rule a `def`'s parameter list
+    /// follows, so a call is checked against the `__call__` or method the transpiler
+    /// declares. a shape the lowering refuses is reported, and its parameters are left
+    /// as written
+    fn lower_callable_repeated_underscores(
+        &mut self,
+        callable: &ast::ExprCallableType,
+        method_receiver: bool,
+        params: Vec<Parameter<'db>>,
+    ) -> Vec<Parameter<'db>> {
+        let slots = callable_parameter_slots(callable, method_receiver);
+        let spelled: Vec<(ParameterSlot, &str)> = slots
+            .iter()
+            .map(|(slot, name)| (*slot, name.as_str()))
+            .collect();
+        let slash = self.program_environment().python_version(self.db()) >= PythonVersion::PY38;
+        match lower_repeated_underscores(&spelled, method_receiver, None, |_| false, slash) {
+            Some(Ok(lowering)) if spelled.len() == params.len() => {
+                let source = source_text(self.db(), self.file());
+                LoweredParameters::new(&lowering, &spelled, WrittenNames::new(source.as_str()))
+                    .apply(params)
+            }
+            Some(Err(refusal)) => {
+                // the slots are the receiver, then the written parameters. a method's
+                // receiver is written as the first of them, an implicit one apart
+                let written = refusal
+                    .index()
+                    .checked_sub(usize::from(callable.receiver.is_some()));
+                let node = match written {
+                    Some(index) => callable.args.get(index).map(ast::AnyNodeRef::from),
+                    None => callable.receiver.as_deref().map(ast::AnyNodeRef::from),
+                };
+                if let Some(node) = node {
+                    report_invalid_repeated_underscore(&self.context, node, &refusal);
+                }
+                params
+            }
+            Some(Ok(_)) | None => params,
+        }
     }
 
     /// basedpython: the leading parameter an implicit receiver contributes — the

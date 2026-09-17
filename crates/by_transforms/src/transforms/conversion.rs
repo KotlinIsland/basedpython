@@ -68,6 +68,10 @@ fn shave_first_char(source: &str, start: TextSize, limit: TextSize) -> (String, 
 }
 
 impl TypeAwarePass for ConversionPass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::Conversion)
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut collector = ConversionCollector {
             types,
@@ -241,8 +245,9 @@ impl TypeAwarePass for ConversionPass<'_> {
 /// the conversions one site needs, and whether that site runs at import time
 struct SiteConversions {
     /// the span the edit claims: wide enough to strictly contain any peer edit
-    /// over one of the wrapped values — a call's whole argument list, or an
-    /// annotated assignment's value together with the `=` before it
+    /// over one of the wrapped values — a call's argument list from its `(`, or an
+    /// annotated assignment's value together with the `=` before it — and ending at
+    /// the last of them
     claim_range: TextRange,
     /// `(value range, conversion)` in source order
     wraps: Vec<(TextRange, ConversionInfo)>,
@@ -325,8 +330,16 @@ impl<'ast> ast::visitor::Visitor<'ast> for ConversionCollector<'_> {
             let mut wraps = self.types.call_conversions(call);
             if !wraps.is_empty() {
                 wraps.sort_by_key(|(range, _)| range.start());
+                // from the `(` to the last converted argument. what follows it is left
+                // out: an argument a lowering adds before the `)` — a filled `context`
+                // parameter, a trailing lambda's block — goes after the conversion, not
+                // into it, and a rewrite of the call around the argument list still
+                // passes the claim through whole
+                let claim_end = wraps
+                    .last()
+                    .map_or(call.arguments.range().end(), |(range, _)| range.end());
                 self.sites.push(SiteConversions {
-                    claim_range: call.arguments.range(),
+                    claim_range: TextRange::new(call.arguments.range().start(), claim_end),
                     wraps,
                     runs_at_import: self.function_depth == 0,
                 });
@@ -367,6 +380,34 @@ class Fahrenheit:
         ));
         assert!(
             out.contains("report(Fahrenheit.__from__(Celsius(1.0)))"),
+            "got:\n{out}"
+        );
+    }
+
+    /// a filled `context` parameter is an argument the lowering adds before the `)`, so
+    /// it follows the converted argument rather than joining the conversion's call
+    #[test]
+    fn a_filled_context_argument_follows_a_converted_one() {
+        let out = check(&format!(
+            "{TEMPERATURES}def report(t: Fahrenheit, context unit: str): ...\n\n\
+             context unit = \"F\"\nreport(Celsius(1.0))\n"
+        ));
+        assert!(
+            out.contains("report(Fahrenheit.__from__(Celsius(1.0)), unit=unit)"),
+            "got:\n{out}"
+        );
+    }
+
+    /// a trailing lambda re-writes the call around its arguments to pass the block, and
+    /// the arguments it passes through keep their conversions
+    #[test]
+    fn a_trailing_lambda_call_converts_its_arguments() {
+        let out = check(&format!(
+            "{TEMPERATURES}def report(t: Fahrenheit, then: () -> None): ...\n\n\
+             report(Celsius(1.0)):\n    pass\n"
+        ));
+        assert!(
+            out.contains("report(Fahrenheit.__from__(Celsius(1.0)), then=_trailing_lambda_0)"),
             "got:\n{out}"
         );
     }

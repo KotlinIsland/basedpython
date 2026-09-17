@@ -42,6 +42,7 @@ use crate::types::instance::ProtocolInstanceType;
 use crate::types::relation::{
     HasRelationToVisitor, IsDisjointVisitor, TypeRelation, TypeRelationChecker, TypeVarEvaluation,
 };
+use crate::types::repeated_underscore::LoweredParameters;
 use crate::types::tuple::{Tuple, TupleSpec, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::typed_dict::extract_unpacked_typed_dict_keys_from_kwargs_annotation;
 use crate::types::typevar::{
@@ -1018,6 +1019,7 @@ impl<'db> Signature<'db> {
     }
 
     /// Return a typed signature from a function definition.
+    #[expect(clippy::too_many_arguments)]
     pub(super) fn from_function(
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -1026,12 +1028,14 @@ impl<'db> Signature<'db> {
         function_node: &ast::StmtFunctionDef,
         has_implicitly_positional_first_parameter: bool,
         return_callable_typevar_scope: ReturnCallableTypeVarScope,
+        lowered: Option<&LoweredParameters>,
     ) -> Self {
         let parameters = Parameters::from_parameters(
             db,
             definition,
             function_node.parameters.as_ref(),
             has_implicitly_positional_first_parameter,
+            lowered,
         );
         let return_ty = if function_node.is_asserts_return {
             // basedpython: `-> asserts x` names a place, not a type. such a function
@@ -2706,6 +2710,77 @@ impl<'db> Signature<'db> {
     /// Create a new signature with the given return type.
     pub(crate) fn with_return_type(self, return_ty: Type<'db>) -> Self {
         Self { return_ty, ..self }
+    }
+
+    /// basedpython: the two ways a `decorator def` declared by this signature is called.
+    ///
+    /// `decorator def d(fn: (int) -> None, option: bool = False) -> str` is applied as `@d`, which
+    /// calls it with the decorated function, and as `@d(option=True)`, which calls it with the
+    /// options alone and decorates with what that returns. So it is called as
+    ///
+    /// ```text
+    /// (fn: (int) -> None, *, option: bool = False) -> str
+    /// (*, option: bool = False) -> ((int) -> None) -> str
+    /// ```
+    ///
+    /// The options are keyword-only in both: the lowering writes one dispatcher for the two
+    /// shapes, and it can only tell them apart by whether it was given the function positionally.
+    ///
+    /// `self` is the signature as callers see it and `lexical` the same signature with the type
+    /// variables of a returned callable still bound to the function — the form the second shape's
+    /// returned callable is built from, since its parameter and return type move into it.
+    ///
+    /// `None` when the declaration is not one the lowering can write a dispatcher for: it must
+    /// take the decorated function as its first parameter, positionally and without a default, and
+    /// every other parameter must be one a keyword can name and must have a default.
+    pub(super) fn decorator_keyword_overloads(
+        db: &'db dyn Db,
+        public: &Self,
+        lexical: &Self,
+        definition: Definition<'db>,
+    ) -> Option<[Self; 2]> {
+        let shape = |signature: &Self| {
+            let mut parameters = signature.parameters().iter();
+            let decorated = parameters.next()?;
+            if !decorated.is_positional() || decorated.has_default() {
+                return None;
+            }
+            let options = parameters
+                .map(|option| {
+                    option
+                        .has_default()
+                        .then(|| option.clone().into_keyword_only())
+                        .flatten()
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some((decorated.clone(), options))
+        };
+
+        let (decorated, options) = shape(public)?;
+        let called_with_the_function = public.clone().with_parameters(Parameters::standard(
+            std::iter::once(decorated).chain(options.clone()),
+        ));
+
+        let (decorated, options) = shape(lexical)?;
+        let decorating = Type::Callable(CallableType::single(
+            db,
+            Self::new(
+                Parameters::standard([decorated.into_positional_only()?]),
+                lexical.return_ty,
+            ),
+        ));
+        let options = Parameters::standard(options);
+        let (generic_context, decorating) = GenericContext::remove_callable_only_typevars(
+            db,
+            lexical.generic_context,
+            &options,
+            decorating,
+            definition,
+        );
+        let called_with_the_options = Self::new_generic(generic_context, options, decorating)
+            .with_definition(Some(definition));
+
+        Some([called_with_the_function, called_with_the_options])
     }
 }
 
@@ -5721,6 +5796,7 @@ impl<'db> Parameters<'db> {
         definition: Definition<'db>,
         parameters: &ast::Parameters,
         has_implicitly_positional_first_parameter: bool,
+        lowered: Option<&LoweredParameters>,
     ) -> Self {
         let ast::Parameters {
             posonlyargs,
@@ -5853,18 +5929,24 @@ impl<'db> Parameters<'db> {
             )
         });
 
-        Self::from_annotation(
-            db,
-            &env,
-            positional_only
-                .into_iter()
-                .chain(positional_or_keyword)
-                .chain(variadic)
-                .chain(keyword_only)
-                .chain(keywords)
-                .enumerate()
-                .map(|(index, parameter)| parameter.with_source_parameter_index(Some(index))),
-        )
+        let parameters: Vec<Parameter<'db>> = positional_only
+            .into_iter()
+            .chain(positional_or_keyword)
+            .chain(variadic)
+            .chain(keyword_only)
+            .chain(keywords)
+            .enumerate()
+            .map(|(index, parameter)| parameter.with_source_parameter_index(Some(index)))
+            .collect();
+
+        // basedpython: a parameter list that repeats `_` takes the names and kinds the
+        // lowering writes it with, so a call is checked against the python it runs as
+        let parameters = match lowered {
+            Some(lowered) => lowered.apply(parameters),
+            None => parameters,
+        };
+
+        Self::from_annotation(db, &env, parameters)
     }
 
     fn apply_type_mapping_impl<'a>(
@@ -6269,10 +6351,9 @@ pub(crate) struct Parameter<'db> {
     /// declarations in scope at the call site
     is_context: bool,
 
-    /// basedpython: the parameter is the implicit receiver of a
-    /// `T.() -> R` callable — it is bound by an `x.fn()` call and supplies the
-    /// implicit member scope of a trailing lambda block
-    is_receiver: bool,
+    /// basedpython: whether the parameter is the implicit receiver of a
+    /// `T.() -> R` callable, or one of a list's repeated `_`s
+    role: ParameterRole,
 
     /// basedpython: the `local` / `once` modifier the parameter was declared
     /// with in a callable type — the `local` of `(local int) -> None`.
@@ -6292,6 +6373,19 @@ pub(crate) struct Parameter<'db> {
     source_parameter_index: Option<NonZeroU32>,
 
     kind: ParameterKind<'db>,
+}
+
+/// basedpython: what a parameter is, beyond its kind, that a signature shows or a
+/// diagnostic says about it
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, get_size2::GetSize)]
+enum ParameterRole {
+    Plain,
+    /// the implicit receiver of a `T.() -> R` callable — it is bound by an `x.fn()` call and
+    /// supplies the implicit member scope of a trailing lambda block
+    Receiver,
+    /// one of a parameter list's repeated `_`s. every one after the first has a name the
+    /// lowering gave it, which the author never wrote
+    RepeatedUnderscore,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, get_size2::GetSize)]
@@ -6323,7 +6417,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
-            is_receiver: false,
+            role: ParameterRole::Plain,
             borrow: ParameterBorrow::None,
             source_parameter_index: None,
             kind: ParameterKind::PositionalOnly {
@@ -6340,7 +6434,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
-            is_receiver: false,
+            role: ParameterRole::Plain,
             borrow: ParameterBorrow::None,
             source_parameter_index: None,
             kind: ParameterKind::PositionalOrKeyword {
@@ -6357,7 +6451,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
-            is_receiver: false,
+            role: ParameterRole::Plain,
             borrow: ParameterBorrow::None,
             source_parameter_index: None,
             kind: ParameterKind::Variadic { name },
@@ -6371,7 +6465,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
-            is_receiver: false,
+            role: ParameterRole::Plain,
             borrow: ParameterBorrow::None,
             source_parameter_index: None,
             kind: ParameterKind::KeywordOnly {
@@ -6388,7 +6482,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
-            is_receiver: false,
+            role: ParameterRole::Plain,
             borrow: ParameterBorrow::None,
             source_parameter_index: None,
             kind: ParameterKind::KeywordVariadic { name },
@@ -6449,6 +6543,44 @@ impl<'db> Parameter<'db> {
                 .as_protocol_instance()
         })
         .flatten()
+    }
+
+    /// basedpython: this parameter made keyword-only, keeping its name, annotation and default.
+    ///
+    /// `None` for a parameter no keyword can name: a variadic one, or a positional-only one that
+    /// a `Callable` annotation left unnamed.
+    pub(crate) fn into_keyword_only(self) -> Option<Self> {
+        let (name, default_type) = match self.kind {
+            ParameterKind::PositionalOnly {
+                name: Some(name),
+                default_type,
+            }
+            | ParameterKind::PositionalOrKeyword { name, default_type }
+            | ParameterKind::KeywordOnly { name, default_type } => (name, default_type),
+            ParameterKind::PositionalOnly { name: None, .. }
+            | ParameterKind::Variadic { .. }
+            | ParameterKind::KeywordVariadic { .. } => return None,
+        };
+        Some(Self {
+            kind: ParameterKind::KeywordOnly { name, default_type },
+            ..self
+        })
+    }
+
+    /// basedpython: this parameter made positional-only, keeping its name, annotation and default.
+    ///
+    /// `None` for a variadic parameter, which stands for a run of arguments rather than one.
+    pub(crate) fn into_positional_only(self) -> Option<Self> {
+        let (name, default_type) = match self.kind {
+            ParameterKind::PositionalOnly { name, default_type } => (name, default_type),
+            ParameterKind::PositionalOrKeyword { name, default_type }
+            | ParameterKind::KeywordOnly { name, default_type } => (Some(name), default_type),
+            ParameterKind::Variadic { .. } | ParameterKind::KeywordVariadic { .. } => return None,
+        };
+        Some(Self {
+            kind: ParameterKind::PositionalOnly { name, default_type },
+            ..self
+        })
     }
 
     pub(crate) fn with_default_type(mut self, default: Type<'db>) -> Self {
@@ -6528,7 +6660,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: self.inferred_annotation,
             annotation_kind: self.annotation_kind,
             is_context: self.is_context,
-            is_receiver: self.is_receiver,
+            role: self.role,
             borrow: self.borrow,
             source_parameter_index: self.source_parameter_index,
         }
@@ -6553,7 +6685,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: self.inferred_annotation,
             annotation_kind: self.annotation_kind,
             is_context: self.is_context,
-            is_receiver: self.is_receiver,
+            role: self.role,
             borrow: self.borrow,
             source_parameter_index: self.source_parameter_index,
             kind,
@@ -6573,7 +6705,7 @@ impl<'db> Parameter<'db> {
             annotation_kind,
             inferred_annotation,
             is_context,
-            is_receiver,
+            role,
             borrow,
             source_parameter_index,
             kind,
@@ -6607,7 +6739,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: *inferred_annotation,
             annotation_kind: *annotation_kind,
             is_context: *is_context,
-            is_receiver: *is_receiver,
+            role: *role,
             borrow: *borrow,
             source_parameter_index: *source_parameter_index,
             kind,
@@ -6661,7 +6793,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation,
             annotation_kind,
             is_context: parameter.is_context,
-            is_receiver: false,
+            role: ParameterRole::Plain,
             // a `def`'s own `local` / `once` prefix is recovered from the source
             // span, not carried on the signature — only a callable type records
             // the modifier here
@@ -6669,6 +6801,50 @@ impl<'db> Parameter<'db> {
             source_parameter_index: None,
             kind,
         }
+    }
+
+    /// basedpython: this parameter under `name`, the one the lowering writes it with, and
+    /// positional-only when the lowering puts it before a `/`. `underscore` says it is one of
+    /// the list's repeated `_`s
+    pub(crate) fn lowered_as(
+        mut self,
+        name: Name,
+        positional_only: bool,
+        underscore: bool,
+    ) -> Self {
+        if underscore {
+            self.role = ParameterRole::RepeatedUnderscore;
+        }
+        self.kind = match self.kind {
+            ParameterKind::PositionalOnly {
+                name: written,
+                default_type,
+            } => ParameterKind::PositionalOnly {
+                name: written.map(|_| name),
+                default_type,
+            },
+            ParameterKind::PositionalOrKeyword { default_type, .. } if positional_only => {
+                ParameterKind::PositionalOnly {
+                    name: Some(name),
+                    default_type,
+                }
+            }
+            ParameterKind::PositionalOrKeyword { default_type, .. } => {
+                ParameterKind::PositionalOrKeyword { name, default_type }
+            }
+            ParameterKind::Variadic { .. } => ParameterKind::Variadic { name },
+            ParameterKind::KeywordOnly { default_type, .. } => {
+                ParameterKind::KeywordOnly { name, default_type }
+            }
+            ParameterKind::KeywordVariadic { .. } => ParameterKind::KeywordVariadic { name },
+        };
+        self
+    }
+
+    /// basedpython: whether this parameter is one of a list's repeated `_`s. every one after
+    /// the first has a name the lowering gave it, which the author never wrote
+    pub(crate) fn is_repeated_underscore(&self) -> bool {
+        self.role == ParameterRole::RepeatedUnderscore
     }
 
     /// Returns `true` if this is a keyword-only parameter.
@@ -6745,7 +6921,7 @@ impl<'db> Parameter<'db> {
     /// basedpython: whether this is the implicit receiver parameter of a
     /// `T.() -> R` callable
     pub(crate) fn is_receiver(&self) -> bool {
-        self.is_receiver
+        self.role == ParameterRole::Receiver
     }
 
     /// basedpython: mark this parameter as the implicit receiver of a
@@ -6763,7 +6939,7 @@ impl<'db> Parameter<'db> {
     }
 
     pub(crate) fn with_receiver(mut self) -> Self {
-        self.is_receiver = true;
+        self.role = ParameterRole::Receiver;
         self
     }
 
@@ -6802,13 +6978,19 @@ impl<'db> Parameter<'db> {
 
     /// Display name of the parameter, if it has one.
     pub(crate) fn display_name(&self) -> Option<ParameterDisplayName<&Name>> {
+        // basedpython: a repeated `_` is shown as the `_` the author wrote
+        static UNDERSCORE: Name = Name::new_static("_");
         let prefix = match self.kind {
             ParameterKind::Variadic { .. } => ParameterNamePrefix::Variadic,
             ParameterKind::KeywordVariadic { .. } => ParameterNamePrefix::KeywordVariadic,
             _ => ParameterNamePrefix::None,
         };
-        self.name()
-            .map(|name| ParameterDisplayName { name, prefix })
+        let name = if self.is_repeated_underscore() {
+            Some(&UNDERSCORE)
+        } else {
+            self.name()
+        };
+        name.map(|name| ParameterDisplayName { name, prefix })
     }
 
     /// Returns whether this parameter has a default without inferring its type.

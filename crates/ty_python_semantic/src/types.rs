@@ -98,6 +98,7 @@ pub use crate::types::display::{DisplaySettings, SourceSpelling, TypeDetail, Typ
 pub(crate) use crate::types::enums::basedpython_is_plain_value;
 pub(crate) use crate::types::enums::{EnumClassLiteral, EnumComplementType, enum_metadata};
 pub(crate) use crate::types::equality::{ComparisonSoundnessPolicy, equality_truthiness};
+pub use crate::types::function::declared_return_type;
 use crate::types::function::{
     DataclassTransformerFlags, DataclassTransformerParams, FunctionDecorators, FunctionSpans,
     FunctionType, KnownFunction, OverloadLiteral,
@@ -229,6 +230,7 @@ mod regex;
 pub(crate) mod reified_infer;
 pub(crate) mod relation;
 mod relation_error;
+pub mod repeated_underscore;
 mod restricted;
 mod safe_variance;
 mod set_theoretic;

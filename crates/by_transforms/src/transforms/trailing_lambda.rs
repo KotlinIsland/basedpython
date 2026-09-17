@@ -382,7 +382,12 @@ impl TrailingLambdaLower<'_, '_> {
                     // separate from. so a call that writes no arguments but
                     // fills a `context` parameter still needs one here, or the
                     // two insertions run together: `f(theme=themeblock=...)`
-                    let fills_context = !self.types.implicit_context_arguments(call).is_empty();
+                    // a refused `context` argument is reported by the `context` lowering,
+                    // which writes nothing for it
+                    let fills_context = self
+                        .types
+                        .implicit_context_arguments(call)
+                        .is_ok_and(|implicit| !implicit.is_empty());
                     let separator = match last_argument_end {
                         None if fills_context => ", ",
                         None => "",
@@ -842,10 +847,10 @@ mod tests {
     }
 
     #[test]
-    fn ast_pass_inside_body_falls_back_to_rendered_lowering() {
-        // `typeof` is rewritten in the AST, so the driver re-renders the whole
-        // statement through the generator, which has no type info — the
-        // rendered lowering appends the function positionally
+    fn an_ast_pass_inside_the_body_keeps_the_template_lowering() {
+        // `typeof` is rewritten in the syntax tree, and only the node it rewrote is
+        // printed from there, so the block keeps the template lowering and its
+        // keyword binding
         let out = check(indoc! {"
             def f(a: (int) -> None):
                 a(1)
@@ -854,14 +859,17 @@ mod tests {
                 x: typeof(1) = 1
                 print(x, it)
         "});
-        assert!(out.contains("def __trailing_lambda__(it):"), "got:\n{out}");
-        assert!(out.contains("f(__trailing_lambda__)"), "got:\n{out}");
+        assert!(
+            out.contains("def _trailing_lambda_0(it=None):"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("f(a=_trailing_lambda_0)"), "got:\n{out}");
+        assert!(out.contains("x: TypeOf[1] = 1"), "got:\n{out}");
     }
 
-    /// a typed lambda used to force that fallback too. it lowers by deleting
-    /// its basedpython surface now (see [`typed_lambda`](super::typed_lambda)),
-    /// leaving the statement un-re-rendered, so the block keeps the template
-    /// lowering and its keyword binding
+    /// a typed lambda lowers by deleting its basedpython surface (see
+    /// [`typed_lambda`](super::typed_lambda)), leaving the statement's source in
+    /// place, so the block keeps the template lowering and its keyword binding
     #[test]
     fn typed_lambda_inside_body_keeps_the_template_lowering() {
         let out = check(indoc! {"
