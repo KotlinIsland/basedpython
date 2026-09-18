@@ -11,7 +11,7 @@ use ruff_db::system::SystemPathBuf;
 /// A client and a server that disagree on it stop talking, which matters because the two
 /// are separate builds of separate binaries: the server in the editor may be months older
 /// than the `by` on the `PATH`.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// A project's merged configuration, in the one shape both sides will produce for it.
 ///
@@ -220,6 +220,14 @@ pub struct Answer {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Response {
+    /// The request has reached the server's main loop, and an answer is coming.
+    ///
+    /// Sent before the main loop does anything with the request, and followed by exactly one
+    /// further response. It is what separates a server that is working from a server that is
+    /// not going to answer at all: everything a caller asks for here it can do itself, so the
+    /// only wait worth having is one it knows something is at the other end of.
+    Accepted,
+
     Check(CheckResponse),
 
     /// The server will not answer, and the caller should check for itself.

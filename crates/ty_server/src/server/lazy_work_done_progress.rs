@@ -63,28 +63,20 @@ impl LazyWorkDoneProgress {
                 percentage: Some(0),
             },
             capabilities,
-            ProgressCreation::Queue,
         )
     }
 
-    /// Returns a progress reporter that displays an indicator if the main-loop action queue has
-    /// capacity.
+    /// Returns a progress reporter for work that starts on the main loop itself.
     ///
-    /// Server-initiated progress requires sending a request to the client through the main loop.
-    /// If the queue is full, the progress indicator is not shown. Waiting for capacity would
-    /// deadlock because the main loop cannot drain its own queue until this call returns.
+    /// Server-initiated progress asks the client to create the indicator, and that request goes
+    /// out through the main loop's own queue — which this is called from. The queue takes it
+    /// without waiting, so the request is simply there when the loop comes round again.
     pub(crate) fn new_on_main_loop(
         client: &Client,
         begin: WorkDoneProgressBegin,
         capabilities: ResolvedClientCapabilities,
     ) -> Self {
-        Self::new_inner(
-            client,
-            None,
-            begin,
-            capabilities,
-            ProgressCreation::TryQueue,
-        )
+        Self::new_inner(client, None, begin, capabilities)
     }
 
     fn new_inner(
@@ -92,7 +84,6 @@ impl LazyWorkDoneProgress {
         request_token: Option<ProgressToken>,
         begin: WorkDoneProgressBegin,
         capabilities: ResolvedClientCapabilities,
-        creation: ProgressCreation,
     ) -> Self {
         let work_done = Self {
             inner: Arc::new(Inner {
@@ -131,19 +122,7 @@ impl LazyWorkDoneProgress {
                 }
             };
 
-            match creation {
-                ProgressCreation::Queue => client
-                    .send_deferred_request::<WorkDoneProgressCreateRequest>(
-                        params,
-                        response_handler,
-                    ),
-                ProgressCreation::TryQueue => {
-                    client.try_send_deferred_request::<WorkDoneProgressCreateRequest>(
-                        params,
-                        response_handler,
-                    );
-                }
-            }
+            client.send_deferred_request::<WorkDoneProgressCreateRequest>(params, response_handler);
         }
 
         work_done
@@ -183,12 +162,6 @@ impl LazyWorkDoneProgress {
                 .expect("Failed to serialize work done progress begin"),
         })
     }
-}
-
-#[derive(Clone, Copy)]
-enum ProgressCreation {
-    Queue,
-    TryQueue,
 }
 
 impl ty_project::UvSyncProgress for LazyWorkDoneProgress {}

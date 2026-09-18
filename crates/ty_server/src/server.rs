@@ -30,6 +30,7 @@ pub(crate) use api::{
 pub(crate) use lazy_work_done_progress::LazyWorkDoneProgress;
 pub(crate) use main_loop::{
     Action, ConnectionSender, Event, MainLoopReceiver, MainLoopSender, SendRequest,
+    main_loop_channel,
 };
 pub(crate) use script_progress::ScriptProgress;
 pub(crate) type Result<T> = std::result::Result<T, api::Error>;
@@ -117,9 +118,7 @@ impl Server {
             }),
         )?;
 
-        // The number 32 was chosen arbitrarily. The main goal was to have enough capacity to queue
-        // some responses before blocking.
-        let (main_loop_sender, main_loop_receiver) = crossbeam::channel::bounded(32);
+        let (main_loop_sender, main_loop_receiver) = main_loop_channel();
         let client = Client::new(main_loop_sender.clone(), connection.sender.clone());
 
         let unknown_options = &initialization_options.options.unknown;

@@ -22,13 +22,23 @@ use super::protocol::{
 /// process that has died. There is no third case worth waiting on.
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 
-/// How long the server has to answer once it has accepted.
+/// How long the server has to say it has the request.
+///
+/// A server accepts connections on a thread of its own, so a connection being accepted says
+/// nothing about the state of the loop that would answer. What says something is the loop
+/// itself, which sends [`Response::Accepted`] before it does anything else with the request —
+/// so this is the time one turn of a main loop is allowed to take, not the time a check is.
+///
+/// Short, because every moment spent here is a moment not spent on the check this caller can
+/// always run itself.
+const ACCEPT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long the server has to answer once it has said it has the request.
 ///
 /// Long, because the answer is a real check: the usual case is a database that has the result
 /// already, but a server that has just started, or one whose project changed under it, does
-/// the same work the caller would have done. Not unbounded, because a server whose main loop
-/// has wedged would otherwise leave the caller waiting for something that is never coming,
-/// with a check it could have run itself sitting there the whole time.
+/// the same work the caller would have done. Not unbounded, because a check that was accepted
+/// and then never came back is still a caller waiting on nothing.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(120);
 
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -66,7 +76,9 @@ pub fn check(
                     tracing::debug!("It resolved: {server}");
                 }
             }
-            None => {}
+            // an acceptance is not an answer, and [`round_trip`] does not return one: it reads
+            // it and goes on waiting for what follows. this arm is the same nothing as `None`
+            Some(Response::Accepted) | None => {}
         }
     }
 
@@ -130,7 +142,7 @@ fn round_trip(
     request: &Request,
     token: &str,
 ) -> anyhow::Result<Response> {
-    connection.set_read_timeout(Some(RESPONSE_TIMEOUT))?;
+    connection.set_read_timeout(Some(ACCEPT_TIMEOUT))?;
     connection.set_write_timeout(Some(SEND_TIMEOUT))?;
 
     let mut line = serde_json::to_vec(request)?;
@@ -138,15 +150,33 @@ fn round_trip(
     connection.write_all(&line)?;
     connection.flush()?;
 
-    let mut response = String::new();
-    BufReader::new(connection)
-        .take(MAX_RESPONSE)
-        .read_line(&mut response)?;
-    if response.is_empty() {
+    // reading through a second descriptor for the same socket, so that the timeout can be
+    // changed between the two lines: it is the socket that carries it, not the descriptor
+    let mut answers = BufReader::new(connection.try_clone()?).take(MAX_RESPONSE);
+
+    match read_answer(&mut answers, token)? {
+        // the request is in the hands of a main loop that was running a moment ago, so what
+        // is being waited on from here is a check rather than a question of whether anybody
+        // is there
+        Response::Accepted => connection.set_read_timeout(Some(RESPONSE_TIMEOUT))?,
+        answered => return Ok(answered),
+    }
+
+    match read_answer(&mut answers, token)? {
+        Response::Accepted => anyhow::bail!("the server took the request twice"),
+        answered => Ok(answered),
+    }
+}
+
+/// Reads one line, and checks that a server wrote it.
+fn read_answer(answers: &mut impl BufRead, token: &str) -> anyhow::Result<Response> {
+    let mut line = String::new();
+    answers.read_line(&mut line)?;
+    if line.is_empty() {
         anyhow::bail!("the server closed the connection without answering");
     }
 
-    let answer: Answer = serde_json::from_str(&response)?;
+    let answer: Answer = serde_json::from_str(&line)?;
 
     // the record's port was free to be taken by anything once the server that published it
     // died, so an answer only counts if it came from something that had read the record

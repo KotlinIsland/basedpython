@@ -37,6 +37,10 @@ configuration, when they resolved different environments, when a file open in th
 unsaved changes, and when the session is being typed into so fast that the check keeps being
 cancelled
 
+a server that says nothing at all is given up on rather than waited for. it takes your request
+before it starts on it, so one that is stuck, or busy enough that it has not reached you, costs
+a few seconds and then the check runs the way it always did
+
 **any flag that changes the check is a different check.** `--python-version`,
 `--error-on-warning`, `--output-format` and the rest all land in the configuration the two
 compare, so a `by check` carrying one of them is always run in full. so is a `-v` check, whose

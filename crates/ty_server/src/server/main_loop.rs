@@ -24,6 +24,28 @@ pub(crate) type ConnectionSender = crossbeam::channel::Sender<Message>;
 pub(crate) type MainLoopSender = crossbeam::channel::Sender<Event>;
 pub(crate) type MainLoopReceiver = crossbeam::channel::Receiver<Event>;
 
+/// The queue every event reaches the main loop through.
+///
+/// Unbounded, and it has to be. The main loop is the only thing that takes events out of it,
+/// and it is also — through everything it hands a [`Client`] to — one of the things that puts
+/// them in: a worker answers a request by queueing the response here, a command-line request
+/// arrives here, and a task the main loop runs on its own thread queues from here too.
+///
+/// A bounded queue turns that into a cycle. Workers fill it and block; the main loop is by
+/// then waiting to hand its next task to those same workers, whose own queue is full; and the
+/// one thread that would have drained the events is the thread that is waiting. Nothing after
+/// that makes progress — not the editor's requests, not a `by check` asking for the project's
+/// diagnostics, not the shutdown that would have ended it.
+///
+/// What a bound would have bought is backpressure on work that is already done: an event is a
+/// response to hand back or a note to act on, never a unit of work to schedule. Holding one
+/// back does not make less of it. What limits how many can be in flight is the number of
+/// requests the editor has outstanding, which is what the worker pool's own bounded queue is
+/// there to pace.
+pub(crate) fn main_loop_channel() -> (MainLoopSender, MainLoopReceiver) {
+    crossbeam::channel::unbounded()
+}
+
 impl Server {
     pub(super) fn main_loop(&mut self) -> crate::Result<()> {
         self.initialize(&Client::new(
@@ -234,6 +256,23 @@ impl Server {
         scheduler: &mut Scheduler,
         client: Client,
     ) {
+        // said here, before the re-read and before the check, because what it tells the caller
+        // is that this loop is running: a connection was accepted by a thread that would have
+        // accepted it just the same had this loop been wedged, and the caller is sitting on a
+        // check it could be running instead of waiting
+        if !incoming.accepted {
+            incoming.accepted = true;
+            let token = incoming.token.clone();
+            if let Err(error) = project_server::respond(
+                &mut incoming.connection,
+                &token,
+                &project_server::protocol::Response::Accepted,
+            ) {
+                tracing::debug!("Failed to take a command-line request: {error}");
+                return;
+            }
+        }
+
         if incoming.rescanned {
             api::changes::apply(&mut self.session, &client, &[ChangeEvent::Rescan]);
         }
