@@ -4,12 +4,12 @@ use compact_str::CompactString;
 use ruff_python_ast::name::Name;
 
 use crate::Db;
-use crate::types::enums::EnumClassLiteral;
+use crate::types::enums::{EnumClassLiteral, enum_metadata};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::template::TemplateLiteralType;
 use crate::types::{ClassLiteral, KnownClass, Type};
 use ty_python_core::definition::Definition;
-use ty_python_core::{place_table, use_def_map};
+use ty_python_core::{Truthiness, place_table, use_def_map};
 
 /// A literal value. See [`LiteralValueTypeKind`] for details.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
@@ -588,6 +588,19 @@ impl<'db> EnumLiteralType<'db> {
         env: &ProgramEnvironment<'db>,
     ) -> Type<'db> {
         self.enum_class(db).to_non_generic_instance(db, env)
+    }
+
+    /// What `bool()` says about this member, where the value it holds decides that.
+    ///
+    /// `None` leaves the question to the enum's instance type, which is where it belongs for an
+    /// enum that has no data type to read a value out of or that answers `bool()` itself. See
+    /// [`EnumMetadata::member_truthiness`](crate::types::enums::EnumMetadata::member_truthiness).
+    pub(crate) fn member_truthiness(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Truthiness> {
+        enum_metadata(db, self.enum_class(db))?.member_truthiness(db, env, self.name(db))
     }
 
     pub(crate) fn definition(self, db: &'db dyn Db) -> Option<Definition<'db>> {

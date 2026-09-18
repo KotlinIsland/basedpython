@@ -391,9 +391,18 @@ impl<'db> Type<'db> {
                         Truthiness::Ambiguous
                     }
                 }
-                LiteralValueTypeKind::Enum(enum_type) => enum_type
-                    .enum_class_instance(db, env)
-                    .try_bool_impl(db, env, allow_short_circuit, visitor)?,
+                // A member of an enum with a built-in data type is the `int` or the `str` it
+                // was declared with as far as `bool()` is concerned, and asking the enum's
+                // instance type instead loses that: `int.__bool__` returns `bool`, so every
+                // member of a `class Priority(IntEnum)` would read as ambiguously truthy
+                LiteralValueTypeKind::Enum(enum_type) => {
+                    match enum_type.member_truthiness(db, env) {
+                        Some(truthiness) => truthiness,
+                        None => enum_type
+                            .enum_class_instance(db, env)
+                            .try_bool_impl(db, env, allow_short_circuit, visitor)?,
+                    }
+                }
 
                 LiteralValueTypeKind::Int(num) => Truthiness::from(num.as_i64() != 0),
                 LiteralValueTypeKind::Bool(bool) => Truthiness::from(bool),

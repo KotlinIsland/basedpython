@@ -24,7 +24,9 @@ use crate::{
         },
     },
 };
-use ty_python_core::{definition::DefinitionKind, place_table, scope::ScopeId, use_def_map};
+use ty_python_core::{
+    Truthiness, definition::DefinitionKind, place_table, scope::ScopeId, use_def_map,
+};
 
 /// A resolved enum method, retaining both whether it is analyzable and who defines it.
 ///
@@ -307,6 +309,19 @@ pub(crate) struct EnumMetadata<'db> {
 
     /// How enum construction may transform declared member values.
     pub(super) value_construction: EnumValueConstruction<'db>,
+
+    /// Whether `bool()` on a member of this enum reads the value it was declared with.
+    ///
+    /// A member is an instance of its enum class, so `bool()` finds whatever that class's MRO
+    /// offers — and an enum with a built-in data type has no `__bool__` of its own, so what it
+    /// finds is the data type's. `class Colour(int, Enum)` reads the `int` a member was declared
+    /// with, which makes `Colour.NONE = 0` falsy exactly as `0` is, and a `StrEnum` member
+    /// declared `""` falsy exactly as `""` is.
+    ///
+    /// False for an enum that writes its own `__bool__` or `__len__`, which decides for itself,
+    /// and for one with no data type at all, whose members are truthy the way any other object
+    /// with neither method is.
+    truthiness_reads_the_value: bool,
 }
 
 impl get_size2::GetSize for EnumMetadata<'_> {}
@@ -583,6 +598,7 @@ impl<'db> EnumMetadata<'db> {
             auto_members: FxHashSet::default(),
             value_annotation: None,
             value_construction: EnumValueConstruction::default(),
+            truthiness_reads_the_value: false,
         }
     }
 
@@ -616,6 +632,29 @@ impl<'db> EnumMetadata<'db> {
             Some(annotation)
         } else {
             Some(value)
+        }
+    }
+
+    /// What `bool()` says about `member_name`, or `None` where the value does not decide it.
+    ///
+    /// `None` covers everything this cannot answer: an enum whose truthiness is its own business
+    /// (see [`Self::truthiness_reads_the_value`]), a member whose value construction may have
+    /// rewritten what it holds, and a value that is known only by its type — `int` rather than
+    /// `Literal[3]` — which says no more about `bool()` than the enum instance already did.
+    pub(super) fn member_truthiness(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        member_name: &Name,
+    ) -> Option<Truthiness> {
+        if !self.truthiness_reads_the_value {
+            return None;
+        }
+
+        let value = self.concrete_value_type(db, env, member_name)?;
+        match value.bool(db, env) {
+            Truthiness::Ambiguous => None,
+            definite => Some(definite),
         }
     }
 
@@ -1089,6 +1128,11 @@ pub(crate) fn enum_metadata<'db>(
                 auto_members: FxHashSet::default(),
                 value_annotation: None,
                 value_construction,
+                // an enum built by calling `Enum` has no class body, and the base it was given
+                // is reached from here without one to read: whether anything in it writes its
+                // own `__bool__` is not a question this can answer, so it is left to the
+                // instance type the way it was before
+                truthiness_reads_the_value: false,
             });
         }
     };
@@ -1125,6 +1169,7 @@ pub(crate) fn enum_metadata<'db>(
             auto_members,
             value_annotation: None,
             value_construction: EnumValueConstruction::default(),
+            truthiness_reads_the_value: false,
         });
     }
 
@@ -1193,6 +1238,15 @@ pub(crate) fn enum_metadata<'db>(
         data_type,
         metaclass_may_transform_values,
     };
+
+    // A data type this models is `int` or `str`, and neither the enum nor anything it inherits
+    // from has taken the decision away from it. `__len__` counts alongside `__bool__` because
+    // `bool()` falls back to it, which is how a `str`-backed member is falsy when it is empty.
+    let truthiness_reads_the_value = matches!(data_type, InheritedEnumDataType::Known(_))
+        && ["__bool__", "__len__"].into_iter().all(|name| {
+            custom_enum_method(db, scope_id, name).is_none()
+                && inherited_user_defined_enum_method(db, &env, class, name).is_none()
+        });
 
     let mut aliases = FxHashMap::default();
 
@@ -1419,6 +1473,7 @@ pub(crate) fn enum_metadata<'db>(
         auto_members,
         value_annotation,
         value_construction,
+        truthiness_reads_the_value,
     })
 }
 
