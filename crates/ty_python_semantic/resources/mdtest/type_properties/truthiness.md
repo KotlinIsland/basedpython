@@ -231,6 +231,84 @@ reveal_type(bool(CustomLenEnum.NO))  # revealed: Literal[False]
 reveal_type(bool(CustomLenEnum.YES))  # revealed: Literal[False]
 ```
 
+## Enums with a data type
+
+An enum can be given a data type — `IntEnum`, `StrEnum`, or a built-in written out as a base. Its
+members are instances of that data type as well, and the enum defines no `__bool__` of its own, so
+the one `bool()` finds is the data type's: it reads the value the member was declared with, and a
+member declared `0` or `""` is falsy for the same reason `0` and `""` are.
+
+```toml
+[environment]
+python-version = "3.11"
+```
+
+```py
+from enum import Enum, IntEnum, StrEnum
+
+class Priority(IntEnum):
+    NONE = 0
+    LOW = 1
+
+class Name(StrEnum):
+    ANONYMOUS = ""
+    KNOWN = "ada"
+
+class Colour(int, Enum):
+    BLACK = 0
+    WHITE = 0xFFFFFF
+
+reveal_type(bool(Priority.NONE))  # revealed: Literal[False]
+reveal_type(bool(Priority.LOW))  # revealed: Literal[True]
+reveal_type(bool(Name.ANONYMOUS))  # revealed: Literal[False]
+reveal_type(bool(Name.KNOWN))  # revealed: Literal[True]
+reveal_type(bool(Colour.BLACK))  # revealed: Literal[False]
+reveal_type(bool(Colour.WHITE))  # revealed: Literal[True]
+```
+
+An enum that writes its own `__bool__` has taken the decision away from its data type, whatever its
+members were declared with — and so has one that inherits that method from an enum class it extends.
+
+```py
+from typing import Literal
+
+class Decides(int, Enum):
+    ZERO = 0
+    ONE = 1
+
+    def __bool__(self) -> Literal[False]:
+        return False
+
+class DecidingBase(int, Enum):
+    def __bool__(self) -> Literal[False]:
+        return False
+
+class Inherits(DecidingBase):
+    ZERO = 0
+    ONE = 1
+
+reveal_type(bool(Decides.ZERO))  # revealed: Literal[False]
+reveal_type(bool(Decides.ONE))  # revealed: Literal[False]
+reveal_type(bool(Inherits.ZERO))  # revealed: Literal[False]
+reveal_type(bool(Inherits.ONE))  # revealed: Literal[False]
+```
+
+A `__new__` that replaces the value means the member does not hold what its declaration says, so
+there is nothing to read and `bool()` says what it says about any other instance.
+
+```py
+class Doubled(int, Enum):
+    ZERO = 0
+    ONE = 1
+
+    def __new__(cls, value: int) -> "Doubled":
+        member = int.__new__(cls, value + 1)
+        member._value_ = value + 1
+        return member
+
+reveal_type(bool(Doubled.ZERO))  # revealed: bool
+```
+
 ## TypedDict
 
 It may be feasible to infer `Literal[True]` for some `TypedDict` types, if `{}` can definitely be

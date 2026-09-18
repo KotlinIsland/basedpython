@@ -1434,6 +1434,30 @@ def test(x: Status | int):
         reveal_type(x)  # revealed: Literal[Status.REJECTED] | int
 ```
 
+## Membership of an enum whose members have a known truthiness
+
+A member of an enum with a data type is falsy or truthy according to the value it was declared with,
+so a value already known to be truthy cannot be the member declared `0`. Narrowing a truthy `int` by
+membership of an `IntEnum` leaves the members it could still be, rather than each member paired with
+an exclusion that only one of them needed.
+
+```py
+from enum import IntEnum
+
+class Priority(IntEnum):
+    NONE = 0
+    LOW = 1
+    HIGH = 2
+
+def _(x: int, priorities: tuple[Priority, ...]):
+    if x and x in priorities:
+        reveal_type(x)  # revealed: Literal[Priority.LOW, Priority.HIGH]
+
+def _(x: int, priorities: tuple[Priority, ...]):
+    if x in priorities:
+        reveal_type(x)  # revealed: Priority
+```
+
 ## Union with tuple and `Literal`
 
 A built-in tuple cannot compare equal to a string literal, so the tuple alternative is excluded from
