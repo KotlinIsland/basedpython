@@ -14,9 +14,9 @@
 //! own, so that a `by check` running elsewhere on this machine never finds it.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ruff_db::diagnostic::{DisplayDiagnosticConfig, DisplayDiagnostics};
@@ -28,7 +28,7 @@ use ty_server::project_server::protocol;
 use ty_server::project_server::protocol::{
     Answer, Build, CheckRequest, PROTOCOL, Payload, Refusal, Request, Response,
 };
-use ty_server::project_server::{discovery, environment};
+use ty_server::project_server::{client, discovery, environment};
 use ty_server::{ClientOptions, DiagnosticMode};
 
 use crate::{TestServer, TestServerBuilder};
@@ -115,11 +115,28 @@ fn request_for(db: &ProjectDatabase) -> Result<CheckRequest> {
 
 /// One round trip on the side channel, bypassing the client so that a test can send something
 /// a client never would.
+///
+/// Every response the main loop reaches is preceded by an acceptance, and this reads past it:
+/// what these tests are about is the answer. [`takes_the_request_before_answering_it`] is where
+/// the acceptance itself is asserted.
 fn ask(
     directory: &TempDir,
     project_root: &SystemPath,
     request: impl FnOnce(&discovery::Record) -> Result<Request>,
 ) -> Result<Option<Response>> {
+    match responses(directory, project_root, request)?.as_slice() {
+        [] => Ok(None),
+        [Response::Accepted, answered] | [answered] => Ok(Some(answered.clone())),
+        several => anyhow::bail!("the server said {several:?}"),
+    }
+}
+
+/// Everything one request is answered with, in order.
+fn responses(
+    directory: &TempDir,
+    project_root: &SystemPath,
+    request: impl FnOnce(&discovery::Record) -> Result<Request>,
+) -> Result<Vec<Response>> {
     let candidates = discovery::candidates(published(directory), project_root);
     let Some(record) = candidates.first().map(|candidate| &candidate.record) else {
         anyhow::bail!("the server published no record covering `{project_root}`");
@@ -134,17 +151,26 @@ fn ask(
     connection.write_all(&line)?;
     connection.flush()?;
 
-    let mut response = String::new();
-    BufReader::new(&connection).read_line(&mut response)?;
-    if response.is_empty() {
-        return Ok(None);
-    }
+    let mut answers = BufReader::new(&connection);
+    let mut responses = Vec::new();
+    loop {
+        let mut response = String::new();
+        answers.read_line(&mut response)?;
+        if response.is_empty() {
+            return Ok(responses);
+        }
 
-    let answer: Answer = serde_json::from_str(&response)?;
-    // the caller has no way to know it is talking to the server unless the server proves it
-    // read the record, so every test asserts it along the way
-    assert_eq!(answer.token, record.token);
-    Ok(Some(answer.response))
+        let answer: Answer = serde_json::from_str(&response)?;
+        // the caller has no way to know it is talking to the server unless the server proves
+        // it read the record, so every test asserts it along the way
+        assert_eq!(answer.token, record.token);
+
+        let accepted = matches!(answer.response, Response::Accepted);
+        responses.push(answer.response);
+        if !accepted {
+            return Ok(responses);
+        }
+    }
 }
 
 /// A well-formed request, which the tests below then spoil one field at a time.
@@ -196,6 +222,118 @@ fn answers_what_a_cold_check_would_have() -> Result<()> {
     assert_eq!(response.diagnostics, diagnostics.len());
     assert!(response.human_readable);
     assert!(!response.empty_project);
+
+    Ok(())
+}
+
+/// A caller waits on this channel instead of running the check itself, so it has to be able to
+/// tell a server that is working from one that is never going to answer. Accepting a connection
+/// cannot tell it — that happens on a thread of its own, and would happen just the same with the
+/// main loop wedged. So the main loop says so itself, before it re-reads the file system and
+/// before it checks anything.
+#[test]
+fn takes_the_request_before_answering_it() -> Result<()> {
+    let directory = TempDir::new()?;
+    let server = server(&directory, &[(SystemPath::new("src/main.py"), MAIN)])?;
+    let db = cold(&server.file_path(SystemPath::new("src")))?;
+
+    let said = responses(&directory, db.project().root(&db), |record| {
+        check_request(record, &db)
+    })?;
+
+    assert!(
+        matches!(said.as_slice(), [Response::Accepted, Response::Check(_)]),
+        "the server said {said:?}"
+    );
+
+    Ok(())
+}
+
+/// A request the main loop never sees is answered without one: a listener that has already
+/// decided it will not be answered has nothing to promise.
+#[test]
+fn does_not_take_a_request_it_refuses_out_of_hand() -> Result<()> {
+    let directory = TempDir::new()?;
+    let server = server(&directory, &[(SystemPath::new("src/main.py"), MAIN)])?;
+    let db = cold(&server.file_path(SystemPath::new("src")))?;
+
+    let said = responses(&directory, db.project().root(&db), |record| {
+        Ok(Request {
+            protocol: PROTOCOL + 1,
+            ..check_request(record, &db)?
+        })
+    })?;
+
+    assert!(
+        matches!(
+            said.as_slice(),
+            [Response::Refused {
+                reason: Refusal::Protocol { .. }
+            }]
+        ),
+        "the server said {said:?}"
+    );
+
+    Ok(())
+}
+
+/// The whole point of asking is to be quicker than checking, so a server that has taken the
+/// connection and then gone quiet has to be walked away from — and quickly. It is what a wedged
+/// main loop looks like from the outside, and the caller cannot tell it apart from a busy one
+/// except by being told.
+///
+/// Slow enough to notice if this stops working: what it used to cost was two minutes on a
+/// project that checks cold in fifteen seconds.
+#[test]
+fn walks_away_from_a_server_that_does_not_take_the_request() -> Result<()> {
+    let directory = TempDir::new()?;
+    let project = TempDir::new()?;
+    let project_root = SystemPath::from_std_path(project.path())
+        .expect("a temporary directory to be utf-8")
+        .to_path_buf();
+
+    // accepted and then never read from, which is a listener thread that is doing its job
+    // above a main loop that is not doing its own
+    let silent = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
+    let port = silent.local_addr()?.port();
+    std::thread::spawn(move || {
+        let _held: Vec<_> = silent.incoming().filter_map(Result::ok).collect();
+    });
+
+    let build = Build::current("a build both sides are");
+    let record = discovery::Record {
+        protocol: PROTOCOL,
+        build: build.clone(),
+        port,
+        token: "0".repeat(64),
+        roots: vec![project_root.clone()],
+    };
+    std::fs::write(
+        directory.path().join("silent.json"),
+        serde_json::to_vec(&record)?,
+    )?;
+
+    let asked = Instant::now();
+    let answered = client::check(
+        published(&directory),
+        CheckRequest {
+            project_root,
+            working_directory: SystemPath::new(".").to_path_buf(),
+            options: serde_json::Value::Null,
+            environment: String::new(),
+            force_exclude: false,
+            verbose: false,
+            color: false,
+        },
+        &build,
+    );
+
+    assert!(answered.is_none(), "a silent server answered");
+    assert!(
+        asked.elapsed() < TIMEOUT,
+        "waited {:?} on a server that said nothing",
+        asked.elapsed()
+    );
 
     Ok(())
 }

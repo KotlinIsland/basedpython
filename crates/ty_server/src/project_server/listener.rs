@@ -60,6 +60,12 @@ pub(crate) struct Incoming {
     /// fresh snapshot, which is the only way to retry; giving up after a few is what keeps a
     /// caller from waiting on a session that is being typed into.
     pub(crate) attempts: u8,
+
+    /// Whether the caller has been told that the main loop has this request.
+    ///
+    /// Exactly one such message crosses, however many passes the request takes: it says that
+    /// there is a main loop running, which is answered once and does not become more true.
+    pub(crate) accepted: bool,
 }
 
 /// Everything the server holds open for as long as it accepts command-line requests.
@@ -206,6 +212,7 @@ fn accept(
             token: request.token,
             rescanned: false,
             attempts: 0,
+            accepted: false,
         })))
         .map_err(|_| anyhow::anyhow!("the main loop is gone"))
 }
