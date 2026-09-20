@@ -125,11 +125,11 @@ A store into an attribute of a `global` name outlives the call just as a bare st
 class Box:
     fn: object = None
 
-_box: Box = Box()
+box: Box = Box()
 
 def f(local fn: () -> None):
-    global _box
-    _box.fn = fn  # error: [escaping-local]
+    global box
+    box.fn = fn  # error: [escaping-local]
 ```
 
 ## storing a local on `self` escapes
@@ -360,14 +360,14 @@ def f(local xs: list[int]) -> None:
 Anything that could keep it still escapes, including a callee of the user's own.
 
 ```by
-_registry: list[object] = []
+registry: list[object] = []
 
 def keeps(x: object) -> None:
-    _registry.append(x)
+    registry.append(x)
 
 def g(local xs: list[int]) -> None:
     # error: [escaping-local]
     keeps(xs)
     # error: [escaping-local]
-    _registry.append(xs)
+    registry.append(xs)
 ```

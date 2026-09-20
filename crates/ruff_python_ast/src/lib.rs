@@ -14,6 +14,7 @@ pub mod docstrings;
 mod expression;
 pub mod find_node;
 mod generated;
+pub mod generated_names;
 pub mod helpers;
 pub mod identifier;
 mod int;

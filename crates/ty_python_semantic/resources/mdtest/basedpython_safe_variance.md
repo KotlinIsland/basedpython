@@ -217,6 +217,21 @@ def f(a: A[object]):
     reveal_type(a._t)  # revealed: object
 ```
 
+## the underscore spelling is private in a `.by` file too
+
+A `.by` file spells privacy with `private`, so a leading underscore there says the name is unused
+and a use of one is `used-underscore-name`. What the name means to variance is unchanged: `_t` is
+private, and a private member constrains nothing.
+
+```by
+class A[T]:
+    _t: T
+
+def f(a: A[object]):
+    # error: [used-underscore-name]
+    reveal_type(a._t)  # revealed: object
+```
+
 ## a dunder is not private
 
 A dunder is part of the public protocol surface, so it constrains variance in the usual way and

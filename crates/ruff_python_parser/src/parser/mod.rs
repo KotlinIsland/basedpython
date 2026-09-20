@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::str::FromStr;
 
 use bitflags::bitflags;
+use ruff_python_ast::generated_names::{GeneratedName, GeneratedNames};
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{
@@ -117,6 +118,10 @@ pub(crate) struct Parser<'src> {
     /// by `class_body_depth > 0`), empty everywhere else.
     pending_members: Vec<Stmt>,
 
+    /// basedpython: the name nodes this parse wrote rather than the author —
+    /// see [`GeneratedNames`]
+    generated_names: GeneratedNames,
+
     /// basedpython: `(property, backing field)` pairs declared in the class body
     /// currently being parsed whose getter is a pure field read. In-class *reads*
     /// of those properties are retargeted at the backing field once the body is
@@ -194,6 +199,7 @@ impl<'src> Parser<'src> {
             current_token_id: TokenId::default(),
             class_body_depth: 0,
             function_body_depth: 0,
+            generated_names: GeneratedNames::default(),
             pending_members: Vec::new(),
             pending_narrow_props: Vec::new(),
             expr_consumed_suite: false,
@@ -316,6 +322,7 @@ impl<'src> Parser<'src> {
                 tokens: Tokens::new(tokens),
                 errors: parse_errors,
                 unsupported_syntax_errors: self.unsupported_syntax_errors,
+                generated_names: self.generated_names,
             };
         }
 
@@ -348,7 +355,15 @@ impl<'src> Parser<'src> {
             tokens: Tokens::new(tokens),
             errors: merged,
             unsupported_syntax_errors: self.unsupported_syntax_errors,
+            generated_names: self.generated_names,
         }
+    }
+
+    /// basedpython: records that this parse, rather than the author, wrote the
+    /// name `name` at `range` — see [`GeneratedNames`] for why a range is not
+    /// enough to tell the two apart
+    fn record_generated_name(&mut self, range: TextRange, name: Name, generated: GeneratedName) {
+        self.generated_names.insert(range, name, generated);
     }
 
     /// Returns the start position for a node that starts at the current token.

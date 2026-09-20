@@ -2217,13 +2217,13 @@ it produces the instance rather than writing through an existing one:
 
 ```by
 class Frozen[out T]:
-    _value: T
+    let value: T
 
     init(self, value: T):
-        self._value = value
+        self.value = value
 
     def get(self) -> T:
-        return self._value
+        return self.value
 ```
 
 #### a private member is off the observable surface

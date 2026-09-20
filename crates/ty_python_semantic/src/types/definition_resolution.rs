@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 
 use indexmap::IndexSet;
 use itertools::Either;
-use ruff_db::files::FileRange;
+use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
 use ruff_text_size::TextRange;
@@ -25,6 +25,8 @@ use ty_python_core::{
 };
 
 use crate::place::implicit_builtins_symbol_scope;
+use crate::types::extensions::resolve_extension_members;
+use crate::types::receivers;
 use crate::types::{ClassBase, ClassLiteral, ClassType, SubclassOfInner, Type, binding_type};
 use crate::{Db, FxIndexSet, ProgramEnvironment, module_docstring};
 
@@ -444,6 +446,206 @@ pub(crate) fn definitions_for_attribute<'db>(
     }
 
     resolved
+}
+
+/// The annotation a definition was declared with, for the two forms that can
+/// carry an inline protocol.
+fn declared_annotation<'a>(
+    db: &dyn Db,
+    parsed: &'a ruff_db::parsed::ParsedModuleRef,
+    definition: Definition<'_>,
+) -> Option<&'a ast::Expr> {
+    match definition.kind(db) {
+        DefinitionKind::Parameter(parameter) => match parameter {
+            ty_python_core::definition::ParameterDefinitionNodeKind::VariadicPositionalParameter(
+                parameter,
+            )
+            | ty_python_core::definition::ParameterDefinitionNodeKind::VariadicKeywordParameter(
+                parameter,
+            ) => parameter.node(parsed).annotation.as_deref(),
+            ty_python_core::definition::ParameterDefinitionNodeKind::Parameter(parameter) => {
+                parameter.node(parsed).parameter.annotation.as_deref()
+            }
+        },
+        DefinitionKind::AnnotatedAssignment(assignment) => Some(assignment.annotation(parsed)),
+        _ => None,
+    }
+}
+
+/// The range of the member `name` declares itself at, anywhere inside an
+/// annotation that writes an inline protocol.
+///
+/// The search is over the whole annotation because a protocol can be written
+/// nested — `list[protocol(a: int)]` — and the member is spelled the same way
+/// wherever it sits.
+fn inline_protocol_member_range(annotation: &ast::Expr, name: &str) -> Option<TextRange> {
+    match annotation {
+        ast::Expr::ProtocolType(protocol) => protocol.members.iter().find_map(|member| {
+            match member {
+                // `def g(self) -> int`
+                ast::Expr::ProtocolMethod(method) if method.name.as_str() == name => {
+                    Some(method.name.range)
+                }
+                // `a: int`
+                ast::Expr::Named(named) => named
+                    .target
+                    .as_name_expr()
+                    .filter(|target| target.id.as_str() == name)
+                    .map(ruff_text_size::Ranged::range),
+                _ => None,
+            }
+        }),
+        ast::Expr::Subscript(subscript) => inline_protocol_member_range(&subscript.slice, name),
+        ast::Expr::Tuple(tuple) => tuple
+            .elts
+            .iter()
+            .find_map(|element| inline_protocol_member_range(element, name)),
+        ast::Expr::BinOp(binop) => inline_protocol_member_range(&binop.left, name)
+            .or_else(|| inline_protocol_member_range(&binop.right, name)),
+        _ => None,
+    }
+}
+
+/// basedpython: where an attribute is read, which is everything a lookup that
+/// falls back the way inference does needs beyond the member's own name
+#[derive(Clone, Copy)]
+pub(crate) struct AttributeRead<'db, 'ast> {
+    /// the file the read is written in
+    pub(crate) file: File,
+    /// the scope it is written in
+    pub(crate) scope: ScopeId<'db>,
+    /// the type the member is read off
+    pub(crate) receiver: Type<'db>,
+    /// the expression the member is read off, where the read is written as one
+    pub(crate) receiver_expr: Option<&'ast ast::Expr>,
+    /// whether the read was written `a?.x`
+    pub(crate) optional: bool,
+}
+
+/// basedpython: the declarations of an attribute that no *declared* member
+/// answers for — an `extension` member, a member of the inline protocol the
+/// receiver was declared with, or an implicit-receiver callable.
+///
+/// None of the three is a member of the receiver's class. An extension declares
+/// its members in its own body, an inline protocol is structural and declares
+/// its members in the annotation the receiver was written with, and a receiver
+/// callable is an ordinary name in an enclosing scope, so the class-hierarchy
+/// walk [`definitions_for_attribute`] does cannot reach any of them. Inference
+/// reaches them through these fallbacks, in this order, once member lookup comes
+/// up undefined — and everything that answers "where is this member declared"
+/// has to take the same steps in the same order, or it answers differently than
+/// the checker resolved.
+///
+///
+/// Worth saying which access the extension fallback is for, because the bug it
+/// fixes was subtle: `xs.second()` already worked, since a *call* resolves
+/// through the call's own dispatch target and lands on the extension's function
+/// that way. A bare `xs.second` has no call to go through, and neither does a
+/// property — which can never be a callee — so those answered nothing at all.
+pub(crate) fn fallback_attribute_definitions<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    access: &AttributeRead<'db, '_>,
+    name: &str,
+) -> Vec<ResolvedDefinition<'db>> {
+    let AttributeRead {
+        file,
+        scope,
+        receiver,
+        receiver_expr,
+        optional,
+    } = *access;
+    // an optional-chain link resolves against the chain's *present* type — the
+    // `None` it short-circuits with is not part of the receiver
+    let receiver_ty = if optional || receiver_expr.is_some_and(receivers::spine_has_optional) {
+        receivers::strip_none(db, env, receiver)
+    } else {
+        receiver
+    };
+
+    let extensions = resolve_extension_members(db, env, file, receiver_ty, name);
+    if !extensions.is_empty() {
+        // every applicable extension is offered: when two supply the same name
+        // the checker reports the ambiguity at the access site, and an editor
+        // that lists both is telling the reader the same thing
+        return extensions
+            .iter()
+            .flat_map(|resolution| {
+                definitions_for_attribute_in_class_hierarchy(
+                    db,
+                    env,
+                    &ClassLiteral::Static(resolution.extension),
+                    name,
+                )
+            })
+            .collect();
+    }
+
+    let protocol = inline_protocol_member_definitions(db, scope, receiver_expr, name);
+    if !protocol.is_empty() {
+        return protocol;
+    }
+
+    let Some((declaring_scope, _)) =
+        receivers::resolve_receiver_attribute_in_scope(db, env, file, scope, receiver_ty, name)
+    else {
+        return Vec::new();
+    };
+    find_symbol_in_scope(db, declaring_scope, name)
+        .into_iter()
+        .flat_map(|definition| {
+            resolve_definition(
+                db,
+                env,
+                definition,
+                Some(name),
+                ImportAliasResolution::ResolveAliases,
+            )
+        })
+        .collect()
+}
+
+/// basedpython: the member declaration inside the [inline protocol] annotation
+/// the receiver was declared with — the `a: int` of
+/// `def f(x: protocol(a: int; def g(self) -> int))`, reached from `x.a`.
+///
+/// An inline protocol is *structural*: two written the same way anywhere are the
+/// same type, deliberately, so the type itself cannot say where any one of them
+/// was written and there is no declaration for the ordinary member walk to find.
+/// The annotation the receiver was declared with is the one place that can be
+/// pointed at honestly, so that is what this answers with.
+///
+/// [inline protocol]: https://docs.basedpython.org/features/inline-protocol
+fn inline_protocol_member_definitions<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+    receiver_expr: Option<&ast::Expr>,
+    name: &str,
+) -> Vec<ResolvedDefinition<'db>> {
+    let Some(ast::Expr::Name(receiver)) = receiver_expr else {
+        return Vec::new();
+    };
+    definitions_for_name(
+        db,
+        scope,
+        receiver.id.as_str(),
+        ImportAliasResolution::ResolveAliases,
+    )
+    .into_iter()
+    .filter_map(|resolved| match resolved {
+        ResolvedDefinition::Definition(definition) => Some(definition),
+        _ => None,
+    })
+    .filter_map(|definition| {
+        let parsed = parsed_module(db, definition.python_file(db)).load(db);
+        let annotation = declared_annotation(db, &parsed, definition)?;
+        let range = inline_protocol_member_range(annotation, name)?;
+        Some(ResolvedDefinition::FileWithRange(FileRange::new(
+            definition.file(db),
+            range,
+        )))
+    })
+    .collect()
 }
 
 pub(crate) fn definitions_for_attribute_in_class_hierarchy<'db>(

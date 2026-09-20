@@ -250,6 +250,7 @@ pub(crate) mod type_fn;
 mod type_form;
 mod typed_dict;
 mod typevar;
+pub(crate) mod underscore_names;
 mod unpacker;
 mod unsafe_union;
 mod variance;

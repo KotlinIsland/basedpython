@@ -2870,6 +2870,16 @@
             }
           ]
         },
+        "used-underscore-name": {
+          "title": "detects a use of a name a leading underscore marks as unused",
+          "description": "## What it does\nChecks for a use of a name that a `.by` file spelled with a leading\nunderscore: a variable, a parameter, a function, a class, an import, or a\nmember of a class declared in a `.by` file.\n\n## Why is this bad?\nbasedpython spells privacy with `private` and `protected`, so a leading\nunderscore says one thing only: the name is unused. A use contradicts it,\nand a reader who trusts the underscore skips over code that matters.\n\nA name spelled by python or a stub is not reported — a library's\n`_internal`, `_asdict`, an override of a python base class's `_hook` — and\nneither is `_` or a dunder, which python gives meanings of their own.\n\n## Example\n\n```by\ndef _parse(text: str) -> int:\n    return int(text)\n\n_parse(\"1\")  # warning: `_parse` is used\n```\n\nDrop the underscore, or declare the name `private`:\n\n```by\nprivate def parse(text: str) -> int:\n    return int(text)\n\nparse(\"1\")\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "useless-overload-body": {
           "title": "detects `@overload`-decorated functions with non-stub bodies",
           "description": "## What it does\n\nChecks for various `@overload`-decorated functions that have non-stub bodies.\n\n## Why is this bad?\n\nFunctions decorated with `@overload` are ignored at runtime; they are overridden by the\nimplementation function that follows the series of overloads. While it is not illegal to provide a\nbody for an `@overload`-decorated function, it may indicate a misunderstanding of how the\n`@overload` decorator works.\n\n## Example\n\n```toml\n[environment]\npython-version = \"3.11\"\n```\n\n```py\nfrom typing import overload\n\n\n@overload\ndef foo(x: int) -> int:\n    # will never be executed\n    return x + 1  # error\n\n\n@overload\ndef foo(x: str) -> str:\n    # will never be executed\n    return \"Oh no, got a string\"  # error\n\n\ndef foo(x: int | str) -> int | str:\n    raise Exception(\"unexpected type encountered\")\n```\n\nUse instead:\n\n```py\nfrom typing import assert_never, overload\n\n\n@overload\ndef foo(x: int) -> int: ...\n\n\n@overload\ndef foo(x: str) -> str: ...\n\n\ndef foo(x: int | str) -> int | str:\n    if isinstance(x, int):\n        return x + 1\n    elif isinstance(x, str):\n        return \"Oh no, got a string\"\n    else:\n        assert_never(x)\n```\n\n## References\n\n- [Python documentation: `@overload`](https://docs.python.org/3/library/typing.html#typing.overload)",

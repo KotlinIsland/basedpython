@@ -362,6 +362,61 @@ a visibility keyword says who may reach a class member, or marks a module-level
 declaration as the module's own. a declaration inside a function body is a local,
 which nothing outside the function reaches anyway, so a keyword on one is an error
 
+### a leading underscore means unused
+
+privacy is spelled with `private` and `protected`, so in a `.by` file a leading
+underscore says only that a name is unused. using one is `used-underscore-name`, a
+warning:
+
+```by
+def _parse(text: str) -> int:
+    return int(text)
+
+_parse("1")  # warning: `_parse` is used, but its leading underscore marks it unused
+```
+
+drop the underscore, or say what the underscore stood for:
+
+```by
+private def parse(text: str) -> int:
+    return int(text)
+
+parse("1")
+```
+
+on a class member the keyword to reach for is `protected`, not `private`: both draw
+a boundary, but `private` is emitted as `__name`, which python mangles, while
+`protected` is emitted as `_name` — the name python code already reads it by
+
+every use of a name the `.by` source spelled is reported: a variable, a parameter,
+a function or class, a module of a `.by` package, an import from another `.by`
+module, a keyword argument naming a parameter or a dataclass field, the target of a
+`del`, and a member of a `.by` class — whether it is read through `self`,
+`super()`, an instance, the class, a class pattern keyword, an `extension`, an
+[inline protocol](inline-protocol.md), or a [trailing lambda
+block](trailing-lambdas.md)
+
+a name someone else spelled is left alone, because it is not yours to rename:
+
+- a name declared in python or a stub — a library's `_internal`, a named tuple's
+    `_asdict`, `sys._getframe`
+- an override of a member a python or stub base class declares — `_missing_` on
+    an enum keeps the name `Enum` gave it
+- a member of a class whose bases cannot all be resolved, which may declare it
+- a name basedpython spells for you — a property's `field` storage, the `_0`
+    fields of an [enum](enums.md) variant, the `self._x = _x` an
+    [`init(let _x: int)`](init-method.md) stands for
+- `_` and dunders, which python gives meanings of their own
+
+an import alias spells a name of its own: `from lib import helper as _helper` is
+reported where `_helper` is used, and `from helpers import _parse as parse` only
+at the import. a `.py` file keeps python's convention and is never reported
+
+python converted with [`by transpile --reverse`](../cli-reference.md) keeps the
+names it was written with, underscores included, so a converted file reports every
+use of one. that is the question worth answering once per name: rename it, or say
+`protected` or `private` and keep the python spelling the keyword emits
+
 ## inlay hints
 
 a method that overrides a superclass member without saying so gets an
