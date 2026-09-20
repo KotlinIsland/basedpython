@@ -139,7 +139,7 @@ use crate::types::receivers;
 use crate::types::regex;
 use crate::types::reified_infer::{self, ErasedTargetReason, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
-use crate::types::signatures::{CallableSignature, NarrowingGuard, ReturnCallableTypeVarScope};
+use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
 use crate::types::soundness::{
     cast_is_redundant, cast_target_is_unverifiable_protocol, erases_type_arguments,
     runtime_check_target,
@@ -6607,7 +6607,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
         // a returned expression is a standalone one when the function leaves its return type to
         // be recovered, so that what it narrows can be read off it — see
-        // `inferred_narrowing_guards`
+        // `inferred_predicate_guards`
         if let Some(ty) = ret
             .value
             .as_deref()
@@ -13164,13 +13164,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let asserts = bindings
             .single_element()
             .and_then(|binding| binding.matching_overloads().next())
-            .is_some_and(|(_, overload)| {
-                overload
-                    .signature
-                    .narrowing_guards
-                    .iter()
-                    .any(NarrowingGuard::is_assertion)
-            });
+            .is_some_and(|(_, overload)| overload.signature.carries_written_assertion(self.db()));
         if !asserts {
             return;
         }

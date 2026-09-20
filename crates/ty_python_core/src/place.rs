@@ -316,6 +316,19 @@ impl PlaceTable {
     pub fn member_id_by_instance_attribute_name(&self, name: &str) -> Option<ScopedMemberId> {
         self.members.place_id_by_instance_attribute_name(name)
     }
+
+    /// basedpython: the member places reached through the symbol `name`: `a.b` and `a.b.c` for
+    /// `a`.
+    pub fn members_of_symbol<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> impl Iterator<Item = ScopedPlaceId> + 'a {
+        self.members
+            .iter()
+            .filter(move |member| member.expression().symbol_name() == name)
+            .filter_map(|member| self.members.member_id(member.expression()))
+            .map(ScopedPlaceId::from)
+    }
 }
 
 #[derive(Default)]

@@ -12,6 +12,8 @@ use ty_python_core::place_table;
 use ty_python_core::scope::ScopeId;
 
 use crate::Db;
+use crate::types::Type;
+use crate::types::function::FunctionDecorators;
 use crate::types::signatures::{NarrowingGuard, Parameters};
 
 /// What a guard's root name refers to at a call site.
@@ -23,6 +25,21 @@ pub(crate) enum GuardRoot<'ast> {
     Receiver(&'ast ast::Expr),
     /// Not a parameter of the callee: a place of that name in the calling scope.
     Scope,
+}
+
+/// Whether a bound call passes the expression it is called on as the parameter the signature
+/// dropped.
+///
+/// A bound method does: `h.ensure()` passes `h` as `self`. A `classmethod` does not — it passes
+/// the class, so a guard on `cls` says nothing about the value `h` holds, and the place `h.data`
+/// is not the place `cls.data` names.
+pub(crate) fn receiver_is_first_parameter<'db>(db: &'db dyn Db, callee_ty: Type<'db>) -> bool {
+    match callee_ty {
+        Type::BoundMethod(method) => !method
+            .function(db)
+            .has_known_decorator(db, FunctionDecorators::CLASSMETHOD),
+        _ => true,
+    }
 }
 
 /// Resolve what `guard`'s root name refers to for this call.

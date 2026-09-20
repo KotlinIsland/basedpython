@@ -666,6 +666,33 @@ struct UseDefMapExtra {
 
     /// Completed loop headers in this scope.
     loop_headers: FrozenIndexVec<LoopHeaderId, LoopHeader>,
+
+    /// basedpython: the state of a function's parameter places at each `return` of a written
+    /// `-> asserts` function.
+    return_exits: Box<[ReturnExit]>,
+
+    /// basedpython: the state of a function's parameter places over every way out of its body,
+    /// merged.
+    normal_exit: Box<[PlaceBindings]>,
+}
+
+/// basedpython: the state of a function's parameter places where a `return` leaves the body.
+///
+/// Falling off the end of a body is the other way it can return, and that state is the
+/// end-of-scope state every scope already has. Together they are what a call that returns has
+/// established about its arguments — see `ty_python_semantic::types::inferred_narrowing`.
+/// A body whose assertion is recovered rather than written uses the merged state instead.
+#[derive(Debug, PartialEq, Eq, get_size2::GetSize)]
+struct ReturnExit {
+    /// The range of the `return` statement.
+    range: TextRange,
+    /// Whether the `return` can be reached at all.
+    reachability: ScopedReachabilityConstraintId,
+    /// Whether a `finally` suite can run after this `return`, so that what the caller sees is
+    /// not the state recorded here.
+    through_finally: bool,
+    /// The bindings of each parameter place, and of each place below one, at the `return`.
+    places: Box<[PlaceBindings]>,
 }
 
 static EMPTY_CONSTRAINT_TABLES: LazyLock<ConstraintTables<'static>> =
@@ -914,6 +941,10 @@ impl<'db> UseDefMap<'db> {
         &self.constraint_tables().reachability_constraints
     }
 
+    pub fn predicate_narrowing_targets(&self) -> &PredicateNarrowingTargets {
+        &self.constraint_tables().predicate_narrowing_targets
+    }
+
     pub fn predicates(&self) -> &Predicates<'db> {
         &self.constraint_tables().predicates
     }
@@ -977,6 +1008,73 @@ impl<'db> UseDefMap<'db> {
             })
             .into_iter()
             .flatten()
+    }
+
+    /// basedpython: each `return` recorded in this scope, with its range, whether it is reachable,
+    /// and whether a `finally` suite can run after it, in the order
+    /// [`Self::return_exit_bindings`] indexes them.
+    pub fn return_exits(
+        &self,
+    ) -> impl Iterator<Item = (TextRange, ScopedReachabilityConstraintId, bool)> + '_ {
+        self.return_exit_records()
+            .iter()
+            .map(|exit| (exit.range, exit.reachability, exit.through_finally))
+    }
+
+    /// basedpython: whether this scope is a function body whose assertion is recovered from it.
+    ///
+    /// The index records the merged state only for a body that returns nothing and cannot return
+    /// through a `finally` suite — the bodies an assertion is read from.
+    pub fn records_normal_exit(&self) -> bool {
+        self.extra
+            .as_deref()
+            .is_some_and(|extra| !extra.normal_exit.is_empty())
+    }
+
+    /// basedpython: the bindings `place` has where the body returns, over every way out of it.
+    ///
+    /// `None` when this scope is not a function body whose assertion is recovered from it, or
+    /// when the place was not recorded.
+    pub fn normal_exit_bindings(
+        &self,
+        place: ScopedPlaceId,
+    ) -> Option<BindingWithConstraintsIterator<'_, 'db>> {
+        let (_, bindings) = self
+            .extra
+            .as_deref()?
+            .normal_exit
+            .iter()
+            .find(|(recorded, _)| *recorded == place)?;
+        Some(self.bindings_iterator(
+            bindings.as_slice(),
+            BoundnessAnalysis::BasedOnUnboundVisibility,
+        ))
+    }
+
+    /// basedpython: the bindings `place` has at the `return` at `index`, or `None` when the place
+    /// was not recorded there.
+    pub fn return_exit_bindings(
+        &self,
+        index: usize,
+        place: ScopedPlaceId,
+    ) -> Option<BindingWithConstraintsIterator<'_, 'db>> {
+        let (_, bindings) = self
+            .return_exit_records()
+            .get(index)?
+            .places
+            .iter()
+            .find(|(recorded, _)| *recorded == place)?;
+        Some(self.bindings_iterator(
+            bindings.as_slice(),
+            BoundnessAnalysis::BasedOnUnboundVisibility,
+        ))
+    }
+
+    fn return_exit_records(&self) -> &[ReturnExit] {
+        self.extra
+            .as_deref()
+            .map(|extra| extra.return_exits.as_ref())
+            .unwrap_or_default()
     }
 
     pub fn applicable_constraints(
@@ -1850,6 +1948,12 @@ pub(super) struct UseDefMapBuilder<'db> {
     /// it hands back, beside that place's ordinary entry.
     multi_bindings_by_use: FxHashMap<ScopedUseId, Vec<PlaceBindings>>,
 
+    /// basedpython: the state of the parameter places at each `return` recorded so far.
+    return_exits: Vec<ReturnExit>,
+
+    /// basedpython: the state of the parameter places over every way out of the body, merged.
+    normal_exit: Vec<PlaceBindings>,
+
     /// Tracks whether or not the current point in control flow is reachable from the
     /// start of the scope.
     pub(super) reachability: ScopedReachabilityConstraintId,
@@ -1910,6 +2014,8 @@ impl<'db> UseDefMapBuilder<'db> {
             narrowing_constraints: NarrowingConstraintsBuilder::default(),
             bindings_by_use: IndexVec::new(),
             multi_bindings_by_use: FxHashMap::default(),
+            return_exits: Vec::new(),
+            normal_exit: Vec::new(),
             reachability: ScopedReachabilityConstraintId::ALWAYS_TRUE,
             range_reachability: Vec::new(),
             checkpoint_flow: ScopedReachabilityConstraintId::ALWAYS_TRUE,
@@ -2568,6 +2674,58 @@ impl<'db> UseDefMapBuilder<'db> {
         }
     }
 
+    /// basedpython: record the state of `places` where the `return` at `range` leaves the body.
+    ///
+    /// Unlike a use, this is the state a caller sees once the call has returned, so pending
+    /// narrowing gates are materialized along with reachability.
+    pub(super) fn record_return_exit(
+        &mut self,
+        range: TextRange,
+        through_finally: bool,
+        places: impl Iterator<Item = ScopedPlaceId>,
+    ) {
+        let places = self.current_place_bindings(places);
+        self.return_exits.push(ReturnExit {
+            range,
+            reachability: self.reachability,
+            through_finally,
+            places,
+        });
+    }
+
+    /// basedpython: record the state of `places` where the body returns, with every way out of it
+    /// already merged into the current state.
+    pub(super) fn record_normal_exit(&mut self, places: impl Iterator<Item = ScopedPlaceId>) {
+        self.normal_exit = self.current_place_bindings(places).into_vec();
+    }
+
+    fn current_place_bindings(
+        &mut self,
+        places: impl Iterator<Item = ScopedPlaceId>,
+    ) -> Box<[PlaceBindings]> {
+        let pending = self.pending_reachability.current;
+        places
+            .map(|place| {
+                let place_state = pending_place_state_mut(
+                    place,
+                    &mut self.symbol_states,
+                    &mut self.member_states,
+                );
+                let bindings = self
+                    .pending_reachability
+                    .materialize_ref(
+                        place_state,
+                        pending,
+                        &mut self.narrowing_constraints,
+                        &mut self.reachability_constraints,
+                    )
+                    .bindings()
+                    .clone();
+                (place, bindings)
+            })
+            .collect()
+    }
+
     fn record_use_bindings(&mut self, bindings: Bindings, use_id: ScopedUseId) {
         let binding_definition_ids = bindings.iter().map(LiveBinding::binding);
         self.mark_definition_ids_used(binding_definition_ids);
@@ -2956,6 +3114,21 @@ impl<'db> UseDefMapBuilder<'db> {
                 &mut self.reachability_constraints,
             );
         }
+        for exit in &mut self.return_exits {
+            self.reachability_constraints.mark_used(exit.reachability);
+            for (_, bindings) in &mut exit.places {
+                bindings.finish(
+                    &mut self.narrowing_constraints,
+                    &mut self.reachability_constraints,
+                );
+            }
+        }
+        for (_, bindings) in &mut self.normal_exit {
+            bindings.finish(
+                &mut self.narrowing_constraints,
+                &mut self.reachability_constraints,
+            );
+        }
         // Keep default entries while building so they remain barriers between non-contiguous
         // ranges with the same metadata. Once construction is complete, absence represents the
         // default of reachable code outside a `TYPE_CHECKING` block.
@@ -2977,10 +3150,14 @@ impl<'db> UseDefMapBuilder<'db> {
             Self::zip_place_states(end_of_scope_members, reachable_definitions_by_member);
         let multi_bindings_by_use = MultiBindingsByUse::from_map(self.multi_bindings_by_use);
         let loop_headers = self.loop_headers;
+        let return_exits = self.return_exits.into_boxed_slice();
+        let normal_exit = self.normal_exit.into_boxed_slice();
         let extra = (!bindings_by_use.is_empty()
             || !member_states.is_empty()
             || !enclosing_snapshots.is_empty()
-            || !loop_headers.is_empty())
+            || !loop_headers.is_empty()
+            || !return_exits.is_empty()
+            || !normal_exit.is_empty())
         .then(|| {
             Box::new(UseDefMapExtra {
                 bindings_by_use: bindings_by_use.into(),
@@ -2988,6 +3165,8 @@ impl<'db> UseDefMapBuilder<'db> {
                 member_states,
                 enclosing_snapshots: enclosing_snapshots.into(),
                 loop_headers: loop_headers.into(),
+                return_exits,
+                normal_exit,
             })
         });
         let predicates = self.predicates.build();

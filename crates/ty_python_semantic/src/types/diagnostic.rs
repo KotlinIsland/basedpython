@@ -191,6 +191,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&TRAILING_LAMBDA_RETURN_TYPE);
     registry.register_lint(&UNRESOLVED_NARROWING_GUARD);
     registry.register_lint(&NARROWING_GUARD_AS_VALUE);
+    registry.register_lint(&UNESTABLISHED_ASSERTION_GUARD);
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&MUTABLE_STATE_VALUE);
     registry.register_lint(&SILENT_MUTATION);
@@ -2107,8 +2108,7 @@ declare_lint! {
     ///
     /// ```by
     /// def check(value: int | None) -> asserts values:  # error: `values` is nothing
-    ///     if value is None:
-    ///         raise ValueError
+    ///     assert value
     /// ```
     pub(crate) static UNRESOLVED_NARROWING_GUARD = {
         summary: "detects a narrowing return annotation that names no place",
@@ -2132,8 +2132,7 @@ declare_lint! {
     ///
     /// ```by
     /// def check(x: int | None) -> asserts x:
-    ///     if x is None:
-    ///         raise ValueError
+    ///     assert x
     ///
     /// def f(a: int | None):
     ///     if check(a):  # error: the guard narrows as a statement, not as a test
@@ -2142,6 +2141,39 @@ declare_lint! {
     pub(crate) static NARROWING_GUARD_AS_VALUE = {
         summary: "detects an assertion guard whose result is used as a value",
         status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that a function with a basedpython assertion guard establishes what it asserts
+    /// wherever it returns.
+    ///
+    /// ## Why is this bad?
+    /// `-> asserts x` tells every caller that `x` is truthy once the call has returned, and each
+    /// call narrows its argument on the strength of that. A body that can return without having
+    /// established it — by falling off its end, or through a `return` — narrows the caller's
+    /// argument to something it may not be.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def check(x: int | None) -> asserts x:  # error: `x` can still be `0` here
+    ///     if x is None:
+    ///         raise ValueError
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```by
+    /// def check(x: int | None) -> asserts x:
+    ///     assert x
+    /// ```
+    pub(crate) static UNESTABLISHED_ASSERTION_GUARD = {
+        summary: "detects an assertion guard its function can return without establishing",
+        status: LintStatus::stable("0.0.1-alpha.40"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
     }

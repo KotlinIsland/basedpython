@@ -11,7 +11,9 @@ use crate::types::callable::CallableTypes;
 use crate::types::context_sensitive::case_name_pattern_type;
 use crate::types::function::KnownFunction;
 use crate::types::infer::{ExpressionInference, infer_same_file_expression_type};
-use crate::types::narrowing_guards::{GuardRoot, guard_root, narrowed_place, narrowed_scope_place};
+use crate::types::narrowing_guards::{
+    GuardRoot, guard_root, narrowed_place, narrowed_scope_place, receiver_is_first_parameter,
+};
 use crate::types::signatures::NarrowingGuardKind;
 use crate::types::special_form::TypeQualifier;
 use crate::types::tuple::{TupleElement, TupleLength, TupleSpec, TupleSpecBuilder, TupleType};
@@ -206,11 +208,11 @@ fn asserts_guard_targets<'db>(
         return Box::default();
     }
 
-    let callable_ty = infer_same_file_expression_type(db, callable, TypeContext::default());
-    if matches!(callable_ty, Type::Dynamic(_)) {
+    let callee_ty = infer_same_file_expression_type(db, callable, TypeContext::default());
+    if matches!(callee_ty, Type::Dynamic(_)) {
         return Box::default();
     }
-    let Some(callable_ty) = callable_ty
+    let Some(callable_ty) = callee_ty
         .try_upcast_to_callable(db, env)
         .and_then(CallableTypes::exactly_one)
     else {
@@ -219,7 +221,10 @@ fn asserts_guard_targets<'db>(
     let [signature] = callable_ty.signatures(db).overloads.as_slice() else {
         return Box::default();
     };
-    if signature.narrowing_guards.is_empty() {
+    // a statement is the one place an assertion narrows, so this is where one recovered from a
+    // body or taken on from an overridden method is worked out
+    let guards = signature.all_narrowing_guards(db);
+    if guards.is_empty() {
         return Box::default();
     }
 
@@ -232,39 +237,32 @@ fn asserts_guard_targets<'db>(
         return Box::default();
     };
 
-    signature
-        .narrowing_guards
+    guards
         .iter()
         .filter_map(|guard| {
-            let narrowed_to = match guard.kind {
-                NarrowingGuardKind::Asserts { is_positive } => {
-                    if is_positive {
-                        Type::AlwaysFalsy.negate(db, env)
-                    } else {
-                        Type::AlwaysTruthy.negate(db, env)
-                    }
-                }
-                // a guard type that still mentions a type variable isn't resolved against the
-                // call's specialization here, so it says nothing about the argument
-                NarrowingGuardKind::AssertsType { ty, .. } if ty.has_typevar(db, env) => {
-                    return None;
-                }
-                NarrowingGuardKind::AssertsType { is_positive, ty } => {
-                    ty.negate_if(db, env, !is_positive)
-                }
-                // a predicate narrows where the call evaluates truthy, which is the reach of
-                // the call expression itself rather than of the statement it is in
-                NarrowingGuardKind::Predicate | NarrowingGuardKind::InferredPredicate { .. } => {
-                    return None;
-                }
-            };
+            // a predicate has no asserted type: it narrows where the call evaluates truthy, which
+            // is the reach of the call expression itself rather than of the statement it is in
+            let narrowed_to = guard.kind.asserted_type(db, env)?;
+            // a guard type that still mentions a type variable isn't resolved against the call's
+            // specialization here, so it says nothing about the argument
+            if narrowed_to.has_typevar(db, env) {
+                return None;
+            }
 
             let target = match guard_root(guard, signature.parameters(), call) {
                 GuardRoot::Parameter(parameter_index) => {
-                    let argument = asserted_argument(call, parameter_index, &guard.name)?;
+                    let argument = asserted_argument(
+                        call,
+                        signature.parameters(),
+                        parameter_index,
+                        &guard.name,
+                    )?;
                     narrowed_place(db, scope, guard, argument)?
                 }
-                GuardRoot::Receiver(receiver) => narrowed_place(db, scope, guard, receiver)?,
+                GuardRoot::Receiver(receiver) if receiver_is_first_parameter(db, callee_ty) => {
+                    narrowed_place(db, scope, guard, receiver)?
+                }
+                GuardRoot::Receiver(_) => return None,
                 GuardRoot::Scope => narrowed_scope_place(db, scope, guard)?,
             };
 
@@ -276,11 +274,20 @@ fn asserts_guard_targets<'db>(
 /// The argument `call` supplies for the parameter at `parameter_index`, named `name`.
 fn asserted_argument<'ast>(
     call: &'ast ast::ExprCall,
+    parameters: &Parameters<'_>,
     parameter_index: usize,
     name: &Name,
 ) -> Option<&'ast ast::Expr> {
-    if let Some(keyword) = call.arguments.find_keyword(name.as_str()) {
+    let parameter = parameters.iter().nth(parameter_index)?;
+    // a positional-only parameter cannot be the one a keyword of its name reaches: that keyword
+    // is collected by a `**kwargs` instead, and narrowing it would narrow the wrong argument
+    if !parameter.is_positional_only()
+        && let Some(keyword) = call.arguments.find_keyword(name.as_str())
+    {
         return Some(&keyword.value);
+    }
+    if parameter.is_keyword_only() {
+        return None;
     }
     if call
         .arguments
@@ -4959,11 +4966,17 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                 continue;
             };
             let target = match guard_root(guard, signature.parameters(), expr_call) {
-                GuardRoot::Parameter(parameter_index) => {
-                    asserted_argument(expr_call, parameter_index, &guard.name)
-                        .and_then(|argument| narrowed_place(db, scope, guard, argument))
+                GuardRoot::Parameter(parameter_index) => asserted_argument(
+                    expr_call,
+                    signature.parameters(),
+                    parameter_index,
+                    &guard.name,
+                )
+                .and_then(|argument| narrowed_place(db, scope, guard, argument)),
+                GuardRoot::Receiver(receiver) if receiver_is_first_parameter(db, callee_ty) => {
+                    narrowed_place(db, scope, guard, receiver)
                 }
-                GuardRoot::Receiver(receiver) => narrowed_place(db, scope, guard, receiver),
+                GuardRoot::Receiver(_) => None,
                 GuardRoot::Scope => narrowed_scope_place(db, scope, guard),
             };
             let Some(target) = target else {
