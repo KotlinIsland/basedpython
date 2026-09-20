@@ -162,6 +162,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_OVERRIDE_VISIBILITY);
     registry.register_lint(&INVALID_VISIBILITY);
     registry.register_lint(&PRIVATE_EXPORT);
+    registry.register_lint(&USED_UNDERSCORE_NAME);
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&INVALID_CONFORMANCE);
@@ -1231,6 +1232,46 @@ declare_lint! {
         summary: "detects a visibility keyword where it cannot do what it says",
         status: LintStatus::stable("0.0.80"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a use of a name that a `.by` file spelled with a leading
+    /// underscore: a variable, a parameter, a function, a class, an import, or a
+    /// member of a class declared in a `.by` file.
+    ///
+    /// ## Why is this bad?
+    /// basedpython spells privacy with `private` and `protected`, so a leading
+    /// underscore says one thing only: the name is unused. A use contradicts it,
+    /// and a reader who trusts the underscore skips over code that matters.
+    ///
+    /// A name spelled by python or a stub is not reported — a library's
+    /// `_internal`, `_asdict`, an override of a python base class's `_hook` — and
+    /// neither is `_` or a dunder, which python gives meanings of their own.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def _parse(text: str) -> int:
+    ///     return int(text)
+    ///
+    /// _parse("1")  # warning: `_parse` is used
+    /// ```
+    ///
+    /// Drop the underscore, or declare the name `private`:
+    ///
+    /// ```by
+    /// private def parse(text: str) -> int:
+    ///     return int(text)
+    ///
+    /// parse("1")
+    /// ```
+    pub(crate) static USED_UNDERSCORE_NAME = {
+        summary: "detects a use of a name a leading underscore marks as unused",
+        status: LintStatus::stable("0.0.81"),
+        default_level: Level::Warn,
         ty_compat: TyCompat::BasedPython,
     }
 }

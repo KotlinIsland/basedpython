@@ -1,5 +1,5 @@
 use ruff_python_ast as ast;
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use ty_module_resolver::{
     DistributionName, ImportingFile, KnownModule, Module, ModuleName, ModuleNameResolutionError,
     ModuleResolveMode, resolve_module, search_paths,
@@ -25,7 +25,7 @@ use crate::{
             hint_if_stdlib_submodule_exists_on_other_versions,
         },
         infer::{TypeInferenceBuilder, builder::DeclaredAndInferredType},
-        infer_definition_types, static_resource,
+        infer_definition_types, static_resource, underscore_names,
         visibility::private_symbols,
     },
 };
@@ -264,6 +264,30 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 "a dotted import binds its top-level package, which no alias can keep under \
                  `_{top}`: write `import {name} as ...` instead"
             ));
+        }
+
+        // basedpython: every segment of a dotted import names a module, and an
+        // underscore segment is a use of the name that module's file was given
+        let mut segment_start = name.range.start();
+        let mut prefix = String::new();
+        for segment in name.split('.') {
+            let segment_range = TextRange::at(segment_start, segment.text_len());
+            segment_start = segment_range.end() + TextSize::from(1);
+            if !prefix.is_empty() {
+                prefix.push('.');
+            }
+            prefix.push_str(segment);
+            let Some(module_name) = ModuleName::new(&prefix) else {
+                break;
+            };
+            self.check_underscore_name_use(segment_range, segment, |builder| {
+                underscore_names::imported_module_is_chosen(
+                    builder.db(),
+                    builder.program_environment(),
+                    builder.file(),
+                    &module_name,
+                )
+            });
         }
 
         // The name of the module being imported
@@ -809,6 +833,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         self.check_private_import(module, &module_name, alias, name);
+        if &alias.name != "*" {
+            self.check_underscore_name_use(&alias.name, name, |builder| {
+                underscore_names::imported_name_is_chosen(
+                    builder.db(),
+                    env,
+                    importing_file,
+                    import_from,
+                    name,
+                )
+            });
+        }
 
         // Avoid looking up attributes on a module if a module imports from itself
         // at the module-global scope, where the import definition itself is one of the

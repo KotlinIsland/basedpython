@@ -419,17 +419,19 @@ def bump(b: Base) -> None:
     b.count = 1  # error: [inaccessible-member]
 ```
 
-## a plain underscore name is left to convention
+## a plain underscore name is no `inaccessible-member`
 
 `_name` and `__name` written out are what python itself offers, and they mean whatever the author
-meant by them. only a visibility keyword makes the boundary something to enforce.
+meant by them. only a visibility keyword makes the boundary something to enforce, so reading one
+from outside the class is not `inaccessible-member`. in a `.by` file the underscore says the name is
+unused, so the read is `used-underscore-name` instead
 
 ```by
 class Base:
     _step: int = 2
 
 def read(b: Base) -> int:
-    return b._step
+    return b._step  # error: [used-underscore-name]
 ```
 
 ## declaring a member less visible than the one it inherits

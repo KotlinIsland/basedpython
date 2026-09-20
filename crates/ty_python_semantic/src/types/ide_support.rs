@@ -14,7 +14,7 @@ use crate::types::context_sensitive::for_each_candidate;
 use crate::types::dedicated::django;
 use crate::types::enums::enum_metadata;
 use crate::types::extensions::{
-    applicable_extensions, extension_can_apply, resolve_extension_member, resolve_extension_members,
+    applicable_extensions, extension_can_apply, resolve_extension_member,
 };
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
@@ -271,85 +271,31 @@ pub fn definitions_for_attribute<'db>(
 }
 
 /// basedpython: the declarations of an attribute that no *declared* member
-/// answers for — an `extension` member, or an implicit-receiver callable.
-///
-/// Neither is a member of the receiver's class. An extension declares its
-/// members in its own body, and a receiver callable is an ordinary name in an
-/// enclosing scope, so the class-hierarchy walk `definitions_for_member` does
-/// cannot reach either. Inference reaches them through two fallbacks that run
-/// after member lookup comes up undefined, and goto has to take the same two
-/// steps in the same order or the editor answers nothing about code the checker
-/// resolved.
-///
-/// Worth saying which access this is for, because the bug it fixes was subtle:
-/// `xs.second()` already worked, since a *call* resolves through the call's own
-/// dispatch target and lands on the extension's function that way. A bare
-/// `xs.second` has no call to go through, and neither does a property — which
-/// can never be a callee — so those answered nothing at all
+/// answers for, inferring the receiver's scope through the IDE model — see
+/// [`definition_resolution::fallback_attribute_definitions`], which is the order
+/// inference itself takes
 fn definitions_for_fallback_attribute<'db>(
     model: &SemanticModel<'db>,
     attribute: &ast::ExprAttribute,
     lhs_ty: Type<'db>,
 ) -> Vec<ResolvedDefinition<'db>> {
     let db = model.db();
-    let env = model.program_environment();
-    let name = attribute.attr.as_str();
-    // an optional-chain link resolves against the chain's *present* type — the
-    // `None` it short-circuits with is not part of the receiver
-    let receiver_ty = if attribute.optional || receivers::spine_has_optional(&attribute.value) {
-        receivers::strip_none(db, &env, lhs_ty)
-    } else {
-        lhs_ty
-    };
-
-    let extensions = resolve_extension_members(db, &env, model.file(), receiver_ty, name);
-    if !extensions.is_empty() {
-        // every applicable extension is offered: when two supply the same name
-        // the checker reports the ambiguity at the access site, and an editor
-        // that lists both is telling the reader the same thing
-        return extensions
-            .iter()
-            .flat_map(|resolution| {
-                definitions_for_attribute_in_class_hierarchy(
-                    &ClassLiteral::Static(resolution.extension),
-                    model,
-                    name,
-                )
-            })
-            .collect();
-    }
-
-    let protocol = definitions_for_inline_protocol_member(model, attribute);
-    if !protocol.is_empty() {
-        return protocol;
-    }
-
     let Some(scope) = model.scope(ast::AnyNodeRef::from(attribute)) else {
         return Vec::new();
     };
-    let scope = scope.to_scope_id(db, model.program_file());
-    let Some((declaring_scope, _)) = receivers::resolve_receiver_attribute_in_scope(
-        db,
-        &env,
-        model.file(),
-        scope,
-        receiver_ty,
-        name,
-    ) else {
-        return Vec::new();
+    let access = definition_resolution::AttributeRead {
+        file: model.file(),
+        scope: scope.to_scope_id(db, model.program_file()),
+        receiver: lhs_ty,
+        receiver_expr: Some(&attribute.value),
+        optional: attribute.optional,
     };
-    find_symbol_in_scope(db, declaring_scope, name)
-        .into_iter()
-        .flat_map(|definition| {
-            resolve_definition(
-                db,
-                &env,
-                definition,
-                Some(name),
-                ImportAliasResolution::ResolveAliases,
-            )
-        })
-        .collect()
+    definition_resolution::fallback_attribute_definitions(
+        db,
+        &model.program_environment(),
+        &access,
+        attribute.attr.as_str(),
+    )
 }
 
 /// Returns all resolved definitions for the member `name_str` of `lhs_ty`, the
@@ -392,108 +338,6 @@ fn definitions_for_attribute_in_class_hierarchy<'db>(
         class_literal,
         attribute_name,
     )
-}
-
-/// basedpython: the member declaration inside the [inline protocol] annotation
-/// the receiver was declared with — the `a: int` of
-/// `def f(x: protocol(a: int; def g(self) -> int))`, reached from `x.a`.
-///
-/// An inline protocol is *structural*: two written the same way anywhere are the
-/// same type, deliberately, so the type itself cannot say where any one of them
-/// was written and there is no declaration for the ordinary member walk to find.
-/// The annotation the receiver was declared with is the one place an editor can
-/// honestly point at, so that is what this answers with.
-///
-/// [inline protocol]: https://docs.basedpython.org/features/inline-protocol
-fn definitions_for_inline_protocol_member<'db>(
-    model: &SemanticModel<'db>,
-    attribute: &ast::ExprAttribute,
-) -> Vec<ResolvedDefinition<'db>> {
-    let db = model.db();
-    let ast::Expr::Name(receiver) = attribute.value.as_ref() else {
-        return Vec::new();
-    };
-    let name = attribute.attr.as_str();
-    let parsed = parsed_module(db, model.python_file()).load(db);
-    let mut found = Vec::new();
-    for definition in definitions_for_name(
-        model,
-        receiver.id.as_str(),
-        ast::AnyNodeRef::from(receiver),
-        ImportAliasResolution::ResolveAliases,
-    ) {
-        let ResolvedDefinition::Definition(definition) = definition else {
-            continue;
-        };
-        let Some(annotation) = declared_annotation(db, &parsed, definition) else {
-            continue;
-        };
-        if let Some(range) = inline_protocol_member_range(annotation, name) {
-            found.push(ResolvedDefinition::FileWithRange(FileRange::new(
-                definition.file(db),
-                range,
-            )));
-        }
-    }
-    found
-}
-
-/// The annotation a definition was declared with, for the two forms that can
-/// carry an inline protocol.
-fn declared_annotation<'a>(
-    db: &dyn Db,
-    parsed: &'a ruff_db::parsed::ParsedModuleRef,
-    definition: Definition<'_>,
-) -> Option<&'a ast::Expr> {
-    match definition.kind(db) {
-        DefinitionKind::Parameter(parameter) => match parameter {
-            ty_python_core::definition::ParameterDefinitionNodeKind::VariadicPositionalParameter(
-                parameter,
-            )
-            | ty_python_core::definition::ParameterDefinitionNodeKind::VariadicKeywordParameter(
-                parameter,
-            ) => parameter.node(parsed).annotation.as_deref(),
-            ty_python_core::definition::ParameterDefinitionNodeKind::Parameter(parameter) => {
-                parameter.node(parsed).parameter.annotation.as_deref()
-            }
-        },
-        DefinitionKind::AnnotatedAssignment(assignment) => Some(assignment.annotation(parsed)),
-        _ => None,
-    }
-}
-
-/// The range of the member `name` declares itself at, anywhere inside an
-/// annotation that writes an inline protocol.
-///
-/// The search is over the whole annotation because a protocol can be written
-/// nested — `list[protocol(a: int)]` — and the member is spelled the same way
-/// wherever it sits.
-fn inline_protocol_member_range(annotation: &ast::Expr, name: &str) -> Option<TextRange> {
-    match annotation {
-        ast::Expr::ProtocolType(protocol) => protocol.members.iter().find_map(|member| {
-            match member {
-                // `def g(self) -> int`
-                ast::Expr::ProtocolMethod(method) if method.name.as_str() == name => {
-                    Some(method.name.range())
-                }
-                // `a: int`
-                ast::Expr::Named(named) => named
-                    .target
-                    .as_name_expr()
-                    .filter(|target| target.id.as_str() == name)
-                    .map(ruff_text_size::Ranged::range),
-                _ => None,
-            }
-        }),
-        ast::Expr::Subscript(subscript) => inline_protocol_member_range(&subscript.slice, name),
-        ast::Expr::Tuple(tuple) => tuple
-            .elts
-            .iter()
-            .find_map(|element| inline_protocol_member_range(element, name)),
-        ast::Expr::BinOp(binop) => inline_protocol_member_range(&binop.left, name)
-            .or_else(|| inline_protocol_member_range(&binop.right, name)),
-        _ => None,
-    }
 }
 
 /// basedpython: the declaration of the enum member a bare name resolves to

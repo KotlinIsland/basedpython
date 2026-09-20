@@ -2,6 +2,7 @@ use std::fmt::{Display, Write};
 
 use thin_vec::ThinVec;
 
+use ruff_python_ast::generated_names::GeneratedName;
 use ruff_python_ast::helpers::{
     DeclarationMarker, DeclarationMarkerKind, MemberVisibility, declaration_annotation_type,
     is_compound_statement, property_backing_name, written_annotation_type,
@@ -282,6 +283,10 @@ fn synthetic_variant_decorator(marker: &'static str, range: TextRange) -> ast::D
 struct FieldRewriter {
     backing: Name,
     seen: std::cell::Cell<bool>,
+    /// where the rewrite wrote the backing name. the author wrote `field` at each
+    /// of these ranges, not `__x` — see
+    /// [`ruff_python_ast::generated_names::GeneratedNames`]
+    rewritten: std::cell::RefCell<Vec<TextRange>>,
 }
 
 /// Whether an accessor body is exactly a read of the backing field — the shape an
@@ -327,6 +332,10 @@ struct RetargetPropertyAccess<'a> {
     properties: &'a [PropertyRetarget],
     /// the enclosing method's first parameter, i.e. what `self` is called here
     receiver: &'a str,
+    /// what each retarget wrote. the author wrote the property's own name at each
+    /// of these ranges, not the name it was pointed at — see
+    /// [`ruff_python_ast::generated_names::GeneratedNames`]
+    retargeted: std::cell::RefCell<Vec<(TextRange, Name)>>,
 }
 
 impl ruff_python_ast::visitor::transformer::Transformer for RetargetPropertyAccess<'_> {
@@ -351,14 +360,21 @@ impl ruff_python_ast::visitor::transformer::Transformer for RetargetPropertyAcce
             } else {
                 property.write.clone()
             };
+            self.retargeted
+                .borrow_mut()
+                .push((attr.attr.range, attr.attr.id.clone()));
         }
         ruff_python_ast::visitor::transformer::walk_expr(self, expr);
     }
 }
 
 /// Applies [`RetargetPropertyAccess`] to every method in a class body.
-fn narrow_property_reads(body: &mut [Stmt], properties: &[PropertyRetarget]) {
+fn narrow_property_reads(
+    body: &mut [Stmt],
+    properties: &[PropertyRetarget],
+) -> Vec<(TextRange, Name)> {
     use ruff_python_ast::visitor::transformer::Transformer;
+    let mut retargeted = Vec::new();
     for member in body {
         let Stmt::FunctionDef(func) = member else {
             continue;
@@ -377,11 +393,14 @@ fn narrow_property_reads(body: &mut [Stmt], properties: &[PropertyRetarget]) {
         let rewriter = RetargetPropertyAccess {
             properties,
             receiver: receiver.as_str(),
+            retargeted: std::cell::RefCell::new(Vec::new()),
         };
         for stmt in &mut func.body {
             rewriter.visit_stmt(stmt);
         }
+        retargeted.extend(rewriter.retargeted.take());
     }
+    retargeted
 }
 
 /// A zero-width synthetic parameter for a synthesised accessor signature.
@@ -454,6 +473,9 @@ fn build_property_fn(
 
 /// An attribute access on the implicit `self`, used to reach a property's
 /// backing storage (`self._<name>`) from a synthesised accessor body.
+///
+/// The caller records the name at its range, because the author did not write it
+/// — see [`ruff_python_ast::generated_names::GeneratedNames`].
 fn synth_backing_attr(backing: &Name, ctx: ExprContext, at: TextSize) -> Expr {
     let range = TextRange::empty(at);
     Expr::Attribute(ast::ExprAttribute {
@@ -532,6 +554,7 @@ impl ruff_python_ast::visitor::transformer::Transformer for FieldRewriter {
         {
             self.seen.set(true);
             let range = name.range;
+            self.rewritten.borrow_mut().push(range);
             let ctx = name.ctx;
             *expr = Expr::Attribute(ast::ExprAttribute {
                 value: Box::new(Expr::Name(ast::ExprName {
@@ -2608,10 +2631,11 @@ impl<'src> Parser<'src> {
                     self.bump(TokenKind::Colon);
                     (ident.id, ident.range)
                 } else {
-                    (
-                        Name::from(format!("_{index}").as_str()),
-                        TextRange::empty(self.current_token_range().start()),
-                    )
+                    // the parser counts the anonymous fields out; nobody wrote `_0`
+                    let name = Name::from(format!("_{index}").as_str());
+                    let range = TextRange::empty(self.current_token_range().start());
+                    self.record_generated_name(range, name.clone(), GeneratedName::ParserName);
+                    (name, range)
                 };
             let annotation = self.parse_conditional_expression_or_higher().expr;
             let value = if self.eat(TokenKind::Equal) {
@@ -5522,7 +5546,7 @@ impl<'src> Parser<'src> {
     /// and its name — the parser consumes the modifier keywords but does not
     /// record them on the `Parameter` node. A `private` prefix name-mangles the
     /// synthesised attribute to `self.__name`
-    fn synthesize_let_assignments(&self, params: &ast::Parameters) -> Vec<Stmt> {
+    fn synthesize_let_assignments(&mut self, params: &ast::Parameters) -> Vec<Stmt> {
         let mut out = Vec::new();
         for p in &params.posonlyargs {
             self.maybe_synth_let_assign(&p.parameter, &mut out);
@@ -5542,7 +5566,7 @@ impl<'src> Parser<'src> {
         out
     }
 
-    fn maybe_synth_let_assign(&self, param: &ast::Parameter, out: &mut Vec<Stmt>) {
+    fn maybe_synth_let_assign(&mut self, param: &ast::Parameter, out: &mut Vec<Stmt>) {
         let prefix_start = usize::from(param.range.start());
         let prefix_end = usize::from(param.name.range.start());
         let prefix = &self.source[prefix_start..prefix_end];
@@ -5557,6 +5581,11 @@ impl<'src> Parser<'src> {
         // the visibility is the annotation marker's job, below
         let visibility = prefix_visibility(prefix);
         let attr_id = name_id.clone();
+        // the parser writes the assignment, but the author wrote the name: both
+        // nodes carry the parameter's own name, so the attribute it declares is
+        // the author's to rename and the read of the parameter is not a use
+        self.record_generated_name(param.range, attr_id.clone(), GeneratedName::AuthorName);
+        self.record_generated_name(name_range, name_id.clone(), GeneratedName::AuthorName);
         let self_expr = Expr::Name(ast::ExprName {
             id: Name::new_static("self"),
             ctx: ExprContext::Load,
@@ -5979,6 +6008,7 @@ impl<'src> Parser<'src> {
         let rewriter = FieldRewriter {
             backing: backing.clone(),
             seen: std::cell::Cell::new(false),
+            rewritten: std::cell::RefCell::new(Vec::new()),
         };
         {
             use ruff_python_ast::visitor::transformer::Transformer;
@@ -5992,6 +6022,9 @@ impl<'src> Parser<'src> {
                     rewriter.visit_stmt(stmt);
                 }
             }
+        }
+        for range in rewriter.rewritten.take() {
+            self.record_generated_name(range, backing.clone(), GeneratedName::ParserName);
         }
         let references_field = rewriter.seen.get();
 
@@ -6168,6 +6201,11 @@ impl<'src> Parser<'src> {
                 range: TextRange::empty(field_range.start()),
                 node_index: AtomicNodeIndex::NONE,
             });
+            self.record_generated_name(
+                TextRange::empty(field_range.start()),
+                backing.clone(),
+                GeneratedName::ParserName,
+            );
             match (backing_type, backing_init) {
                 (Some(annotation), value) => {
                     backing_stmt = Some(Stmt::AnnAssign(ast::StmtAnnAssign {
@@ -6243,6 +6281,13 @@ impl<'src> Parser<'src> {
             range: construct_range,
             node_index: AtomicNodeIndex::NONE,
         };
+        if getter.is_none() {
+            self.record_generated_name(
+                TextRange::empty(start),
+                backing.clone(),
+                GeneratedName::ParserName,
+            );
+        }
         let (getter_body, getter_range) = match getter {
             Some((body, range)) => (body, range),
             // `var` with only a setter gets a pass-through getter
@@ -6295,6 +6340,11 @@ impl<'src> Parser<'src> {
                 None => {
                     let target =
                         synth_backing_attr(&backing, ExprContext::Store, construct_range.end());
+                    self.record_generated_name(
+                        TextRange::empty(construct_range.end()),
+                        backing,
+                        GeneratedName::ParserName,
+                    );
                     (
                         vec![Stmt::Assign(ast::StmtAssign {
                             targets: vec![target],
@@ -7714,7 +7764,9 @@ impl<'src> Parser<'src> {
             let mut body = self.parse_body_inner(parent_clause);
             let properties = std::mem::replace(&mut self.pending_narrow_props, saved);
             if !properties.is_empty() {
-                narrow_property_reads(&mut body, &properties);
+                for (range, name) in narrow_property_reads(&mut body, &properties) {
+                    self.record_generated_name(range, name, GeneratedName::ParserName);
+                }
             }
             body
         } else {

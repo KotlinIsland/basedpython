@@ -74,6 +74,7 @@ use crate::types::context::InferContext;
 use crate::types::context_sensitive::{self, case_name_pattern_type};
 use crate::types::dedicated::{django, pydantic};
 use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
+use crate::types::definition_resolution::AttributeRead;
 use crate::types::diagnostic::{
     self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
     CYCLIC_TYPE_ALIAS_DEFINITION, DYNAMIC_FUNCTION_DECORATOR_RETURN, ERASED_CAST_ARGUMENT,
@@ -89,8 +90,8 @@ use crate::types::diagnostic::{
     TRAILING_LAMBDA_PARAMETERS, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
     UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
     UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_ASSIGNMENT, UNSOUND_CAST, UNSOUND_YIELD,
-    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, YieldKind,
-    autofix_with_notimplementederror, display_required_elements,
+    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, USED_UNDERSCORE_NAME,
+    YieldKind, autofix_with_notimplementederror, display_required_elements,
     hint_if_stdlib_attribute_exists_on_other_versions, refutable_unpacking_applies,
     report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
     report_bad_dunder_delete_call, report_bool_as_int, report_bool_as_int_assignment,
@@ -156,6 +157,7 @@ use crate::types::typed_dict::{TypedDictAssignmentKind, TypedDictKeyAssignment};
 use crate::types::typevar::{
     BoundTypeVarIdentity, TypeVarConstraints, TypeVarIdentity, TypeVarInstance, TypeVarSet,
 };
+use crate::types::underscore_names::{self, Spelled};
 use crate::types::unpacker::{
     UnpackResult, fixed_sequence_elements, sequence_from_literal_elements,
     tuple_literal_needs_promotion,
@@ -166,15 +168,16 @@ use crate::types::visibility::{
 use crate::types::{
     BindingContext, BoundTypeVarInstance, CallDunderError, CallableBinding, CallableType,
     CallableTypes, ClassType, DeferredOperation, DeferredType, DynamicType, GeneratorTypeMode,
-    InferenceFlags, InternedConstraintSet, InternedType, IntersectionBuilder, IntersectionType,
-    KnownBoundMethodType, KnownClass, KnownInstanceType, KnownUnion, LiteralValueType,
-    LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter, Parameters,
-    ProgramEnvironment, PropertyDeprecations, RestrictedType, SentinelInstance, Signature,
-    SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers, TypeContext,
-    TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, TypedDictType,
-    TypingModule, UnionAccumulator, UnionBuilder, UnionType, any_over_type, binding_type,
-    extract_fixed_length_iterable_element_types, infer_complete_scope_types, infer_scope_types,
-    is_discarded_dict_key_assignment, report_iteration_over_character, todo_type,
+    InferenceFlags, InstanceProjection, InternedConstraintSet, InternedType, IntersectionBuilder,
+    IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType, KnownUnion,
+    LiteralValueType, LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter,
+    Parameters, ProgramEnvironment, PropertyDeprecations, RestrictedType, SentinelInstance,
+    Signature, SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers,
+    TypeContext, TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
+    TypedDictType, TypingModule, UnionAccumulator, UnionBuilder, UnionType, any_over_type,
+    binding_type, extract_fixed_length_iterable_element_types, infer_complete_scope_types,
+    infer_scope_types, is_discarded_dict_key_assignment, report_iteration_over_character,
+    todo_type,
 };
 use crate::{AnalysisSettings, Db, DisplaySettings, FxIndexSet, FxOrderSet, SemanticModel};
 use fluid::FluidTimeline;
@@ -623,6 +626,16 @@ fn transparent_callable_decorator_result<'db>(
         Type::Callable(_) => Some(decorated_ty),
         _ => None,
     }
+}
+
+/// basedpython: what an underscore name names, which decides the keyword that
+/// would say what the underscore was standing in for — see [`USED_UNDERSCORE_NAME`]
+#[derive(Clone, Copy)]
+enum UnderscoreName {
+    /// a member of a class
+    Member,
+    /// anything else: a variable, a parameter, a module-level declaration
+    Symbol,
 }
 
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
@@ -3464,10 +3477,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
         let env = self.program_environment();
         // basedpython: `case A(x=...)` reads `x` off the subject exactly as `a.x` does
-        if self.context.is_lint_enabled(&INACCESSIBLE_MEMBER) {
-            for keyword in &pattern.arguments.keywords {
+        // basedpython: a keyword names a member of the *subject*, so an underscore
+        // name is read exactly as `a.x` reads one
+        let subject_ty = cls_ty
+            .to_instance(db, env)
+            .map_or_else(Type::unknown, InstanceProjection::into_inner);
+        for keyword in &pattern.arguments.keywords {
+            if self.context.is_lint_enabled(&INACCESSIBLE_MEMBER) {
                 self.check_member_reach(&keyword.attr, cls_ty, keyword.attr.as_str());
             }
+            self.check_underscore_member_use(&keyword.attr, subject_ty, None, false);
         }
         // basedpython `case A(x, *_, y)`: the starred wildcard is not a subpattern of its own,
         // it only says that what follows it is counted back from the end of `__match_args__`
@@ -6272,12 +6291,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let target_result = match &**target {
             ast::Expr::Name(name) => {
                 let previous_value = self.infer_name_load(name, TypeContext::default());
+                self.check_underscore_name_load(name);
                 self.store_expression_type(target, previous_value);
                 Ok(previous_value)
             }
             ast::Expr::Attribute(attr) => {
                 let result = self.infer_attribute_load(attr);
                 let previous_value = result.unwrap_or_else(|recovery_ty| recovery_ty);
+                self.check_underscore_member_use(
+                    &attr.attr,
+                    self.expression_type(&attr.value),
+                    Some(&attr.value),
+                    attr.optional,
+                );
                 self.store_expression_type(target, previous_value);
                 result
             }
@@ -12735,6 +12761,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         }
 
+        // basedpython: a keyword argument names a parameter, so an underscore name
+        // is read here exactly as a member is read off an attribute access
+        for keyword in &*arguments.keywords {
+            let Some(name) = keyword.arg.as_ref() else {
+                continue;
+            };
+            self.check_underscore_name_use(name, name.as_str(), |builder| {
+                underscore_names::definitions_are_chosen(
+                    builder.db(),
+                    bindings
+                        .keyword_parameters(name.as_str())
+                        .filter_map(Parameter::definition),
+                    name.as_str(),
+                )
+            });
+        }
+
         let mut bindings = match bindings_result {
             Ok(()) => bindings,
             Err(_) => {
@@ -14463,6 +14506,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         match name.ctx {
             ExprContext::Load => {
                 let ty = self.infer_name_load(name, tcx);
+                self.check_underscore_name_load(name);
                 // basedpython: a `type def` has no runtime existence — the
                 // declaration is erased when transpiling — so naming one in a value
                 // position would emit python that raises `NameError`
@@ -14487,6 +14531,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             ExprContext::Store => Type::Never,
             ExprContext::Del => {
                 self.infer_name_load(name, TypeContext::default());
+                self.check_underscore_name_load(name);
                 Type::Never
             }
             ExprContext::Invalid => Type::unknown(),
@@ -15306,6 +15351,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     .infer_attribute_load(attribute)
                     .unwrap_or_else(|recovery_ty| recovery_ty);
                 self.validate_member_visibility(attribute, self.expression_type(value));
+                self.check_underscore_member_use(
+                    attr,
+                    self.expression_type(value),
+                    Some(value),
+                    attribute.optional,
+                );
                 member_type
             }
             ExprContext::Store => {
@@ -15322,12 +15373,127 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     true,
                 );
                 self.validate_member_visibility(attribute, self.expression_type(value));
+                self.check_underscore_member_use(
+                    attr,
+                    self.expression_type(value),
+                    Some(value),
+                    attribute.optional,
+                );
                 Type::Never
             }
             ExprContext::Invalid => {
                 self.infer_expression(value, TypeContext::default());
                 Type::unknown()
             }
+        }
+    }
+
+    /// basedpython: reports a read of the member `attr` off `receiver` when a `.by`
+    /// file spelled it with a leading underscore — see [`USED_UNDERSCORE_NAME`]
+    fn check_underscore_member_use(
+        &self,
+        attr: &ast::Identifier,
+        receiver: Type<'db>,
+        receiver_expr: Option<&ast::Expr>,
+        optional: bool,
+    ) {
+        self.check_underscore_name_use_of(attr, attr.as_str(), UnderscoreName::Member, |builder| {
+            let access = AttributeRead {
+                file: builder.file(),
+                scope: builder.scope(),
+                receiver,
+                receiver_expr,
+                optional,
+            };
+            underscore_names::member_is_chosen(
+                builder.db(),
+                builder.program_environment(),
+                &access,
+                attr.as_str(),
+            )
+        });
+    }
+
+    /// basedpython: reports a read of the name `name` when a leading underscore
+    /// marks it unused — see [`USED_UNDERSCORE_NAME`]
+    fn check_underscore_name_load(&self, name: &ast::ExprName) {
+        self.check_underscore_name_use(name, &name.id, |builder| {
+            underscore_names::name_is_chosen(
+                builder.db(),
+                builder.program_environment(),
+                builder.file(),
+                builder.scope(),
+                name,
+            )
+        });
+    }
+
+    /// basedpython: reports a read of `name` at `node` when a leading underscore
+    /// marks it unused and `is_chosen` says a `.by` file picked that spelling. the
+    /// cheap questions are asked first: the resolution runs only for an underscore
+    /// name read in a `.by` source file
+    ///
+    /// a read the parser wrote is not a use. `init(let x: int)` stands for a
+    /// `self.x = x` and a property accessor's `field` for a read of the property's
+    /// backing storage, and the author has nothing to rename at either
+    fn check_underscore_name_use(
+        &self,
+        node: impl Ranged,
+        name: &str,
+        is_chosen: impl FnOnce(&Self) -> Option<Spelled>,
+    ) {
+        self.check_underscore_name_use_of(node, name, UnderscoreName::Symbol, is_chosen);
+    }
+
+    /// basedpython: [`Self::check_underscore_name_use`], for a name whose advice
+    /// differs — a class member is spelled `protected`, not `private`
+    fn check_underscore_name_use_of(
+        &self,
+        node: impl Ranged,
+        name: &str,
+        kind: UnderscoreName,
+        is_chosen: impl FnOnce(&Self) -> Option<Spelled>,
+    ) {
+        if self.source_type() != ast::PySourceType::BasedPython
+            || !underscore_names::is_underscore_name(name)
+            || !self.context.is_lint_enabled(&USED_UNDERSCORE_NAME)
+            || self
+                .module()
+                .generated_names()
+                .get(node.range(), ast::name::Name::new(name))
+                .is_some()
+        {
+            return;
+        }
+        let Some(spelled) = is_chosen(self) else {
+            return;
+        };
+        if let Some(builder) = self.context.report_lint(&USED_UNDERSCORE_NAME, node) {
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`{name}` is used, but its leading underscore marks it unused"
+            ));
+            // where the name was spelled is most of the answer when it was
+            // spelled somewhere else — an import, or a base class in another file
+            if let Some(declaration) = spelled.declaration
+                && declaration.file() != self.file()
+            {
+                diagnostic.annotate(
+                    Annotation::secondary(Span::from(declaration))
+                        .message(format_args!("`{name}` is declared here")),
+                );
+            }
+            diagnostic.info(match kind {
+                // `private` on a member emits `__name`, which python mangles, so a
+                // member python code still reads by its underscored name says
+                // `protected`: that is the keyword the lowering emits as `_name`
+                UnderscoreName::Member => {
+                    "drop the underscore, or declare the member `protected` if it is meant to be \
+                     reached only by this class and its subclasses"
+                }
+                UnderscoreName::Symbol => {
+                    "drop the underscore, or declare it `private` if it is meant to be private"
+                }
+            });
         }
     }
 

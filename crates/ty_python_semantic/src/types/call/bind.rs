@@ -1544,6 +1544,25 @@ impl<'db> Bindings<'db> {
     }
 
     /// Returns the single `CallableBinding` if this is not a union or intersection.
+    /// basedpython: every parameter a matching overload declares under `name`,
+    /// which is what a keyword argument written `name=...` names
+    pub(crate) fn keyword_parameters<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> impl Iterator<Item = &'a Parameter<'db>> + 'a {
+        self.elements
+            .iter()
+            .flat_map(|element| element.items.iter().map(CallableItem::callable))
+            .flat_map(CallableBinding::matching_overloads)
+            .filter_map(move |(_, overload)| {
+                overload
+                    .signature
+                    .parameters()
+                    .keyword_by_name(name)
+                    .map(|(_, parameter)| parameter)
+            })
+    }
+
     pub(crate) fn single_element(&self) -> Option<&CallableBinding<'db>> {
         if self.is_single() {
             self.elements

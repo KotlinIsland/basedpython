@@ -45,11 +45,11 @@ reveal_type(xs.pair("a"))  # revealed: (int, "a")
 ```by
 class Stack[T]:
     def __init__(self, items: list[T]) -> None:
-        self._items = items
+        self.items = items
 
 extension Stack:
     def peek(self) -> T:
-        return self._items[-1]
+        return self.items[-1]
 
 s = Stack([1, 2, 3])
 reveal_type(s.peek())  # revealed: int

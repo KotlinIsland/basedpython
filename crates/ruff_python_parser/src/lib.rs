@@ -71,6 +71,7 @@ pub use crate::parser::ParseOptions;
 
 use crate::parser::Parser;
 
+use ruff_python_ast::generated_names::GeneratedNames;
 use ruff_python_ast::token::{Token, TokenFlags, TokenKind, Tokens};
 use ruff_python_ast::{
     AtomicNodeIndex, Expr, Mod, ModExpression, ModModule, PySourceType, StringFlags, StringLiteral,
@@ -320,6 +321,7 @@ pub fn parse_cells_unchecked(
     let mut tokens = Vec::new();
     let mut errors = Vec::new();
     let mut unsupported_syntax_errors = Vec::new();
+    let mut generated_names = GeneratedNames::default();
     let mut module_range: Option<TextRange> = None;
 
     while let Some(range) = ranges.next() {
@@ -335,6 +337,7 @@ pub fn parse_cells_unchecked(
             tokens: cell_tokens,
             errors: cell_errors,
             unsupported_syntax_errors: cell_unsupported_syntax_errors,
+            generated_names: cell_generated_names,
         } = Parser::new_starts_at(cell_source, range.start(), options.clone())
             .parse()
             .try_into_module()
@@ -344,6 +347,7 @@ pub fn parse_cells_unchecked(
         tokens.extend(cell_tokens);
         errors.extend(cell_errors);
         unsupported_syntax_errors.extend(cell_unsupported_syntax_errors);
+        generated_names.extend(cell_generated_names);
 
         // Each range excludes its trailing `\n` separator (see the doc comment above), leaving a
         // one-byte gap in the token stream. Cover it with a `NonLogicalNewline` so token-based
@@ -369,6 +373,7 @@ pub fn parse_cells_unchecked(
     tokens.shrink_to_fit();
     errors.shrink_to_fit();
     unsupported_syntax_errors.shrink_to_fit();
+    generated_names.shrink_to_fit();
 
     Parsed {
         syntax: ModModule {
@@ -377,6 +382,7 @@ pub fn parse_cells_unchecked(
             body,
         },
         tokens: Tokens::new(tokens),
+        generated_names,
         errors,
         unsupported_syntax_errors,
     }
@@ -389,6 +395,7 @@ pub struct Parsed<T> {
     tokens: Tokens,
     errors: Vec<ParseError>,
     unsupported_syntax_errors: Vec<UnsupportedSyntaxError>,
+    generated_names: GeneratedNames,
 }
 
 impl<T> Parsed<T> {
@@ -410,6 +417,11 @@ impl<T> Parsed<T> {
     /// Returns a list of version-related syntax errors found during parsing.
     pub fn unsupported_syntax_errors(&self) -> &[UnsupportedSyntaxError] {
         &self.unsupported_syntax_errors
+    }
+
+    /// basedpython: the name nodes the parser wrote rather than the author
+    pub fn generated_names(&self) -> &GeneratedNames {
+        &self.generated_names
     }
 
     /// Consumes the [`Parsed`] output and returns the contained syntax node.
@@ -498,6 +510,7 @@ impl Parsed<Mod> {
                 tokens: self.tokens,
                 errors: self.errors,
                 unsupported_syntax_errors: self.unsupported_syntax_errors,
+                generated_names: self.generated_names,
             }),
             Mod::Expression(_) => None,
         }
@@ -518,6 +531,7 @@ impl Parsed<Mod> {
                 tokens: self.tokens,
                 errors: self.errors,
                 unsupported_syntax_errors: self.unsupported_syntax_errors,
+                generated_names: self.generated_names,
             }),
         }
     }
