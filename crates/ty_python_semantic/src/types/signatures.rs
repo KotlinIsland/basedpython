@@ -29,6 +29,7 @@ use crate::types::constraints::{
     PathBounds, Solutions,
 };
 use crate::types::cyclic::ActiveRecursionDetector;
+use crate::types::function::{OverloadLiteral, deferred_assertion_guards};
 use crate::types::generics::{
     ApplySpecialization, GenericContext, Specialization, SpecializationBuilder, TypeVarInference,
     walk_generic_context,
@@ -378,6 +379,7 @@ impl<'db> CallableSignature<'db> {
                             visitor,
                         ),
                         narrowing_guards: self_signature.narrowing_guards.clone(),
+                        deferred_assertions: self_signature.deferred_assertions,
                     }))
                 }
                 Type::Callable(callable)
@@ -431,6 +433,7 @@ impl<'db> CallableSignature<'db> {
                                 visitor,
                             ),
                             narrowing_guards: signature.narrowing_guards.clone(),
+                            deferred_assertions: signature.deferred_assertions,
                         }),
                     ))
                 }
@@ -651,8 +654,33 @@ pub struct Signature<'db> {
     /// Return type. If no annotation was provided, this is `Unknown`.
     pub(crate) return_ty: Type<'db>,
 
-    /// basedpython: the places a call to this narrows.
+    /// basedpython: the places a call to this narrows, besides the ones in
+    /// [`Self::deferred_assertions`].
     pub(crate) narrowing_guards: Box<[NarrowingGuard<'db>]>,
+
+    /// basedpython: whose assertions a call to this also makes, when it may make any that are not
+    /// in [`Self::narrowing_guards`]. [`Self::all_narrowing_guards`] resolves them.
+    pub(crate) deferred_assertions: Option<DeferredAssertions<'db>>,
+}
+
+/// basedpython: the assertions a signature carries without having worked them out: the ones
+/// recovered from a body that returns nothing, and the ones an override takes on from the method
+/// it overrides.
+///
+/// Neither changes the signature's type — an assertion's return type is the `None` the body hands
+/// back — and working them out means inferring what a body leaves behind wherever it returns. A
+/// signature is built far more often than anyone asks what a call to it establishes: to type a
+/// parameter while the body itself is being inferred, to recover a return type, to decide whether
+/// a call can return at all. Working the assertions out there would nest one body's inference
+/// inside the next along every chain of calls. So the signature records whose assertions they
+/// are, and the ones that act on an assertion resolve them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) struct DeferredAssertions<'db> {
+    /// the function whose assertions they are
+    pub(crate) function: OverloadLiteral<'db>,
+    /// whether the function's body is read for assertions of its own. that is decided while its
+    /// signature is built, by whatever decides whether the body is read for a return type
+    pub(crate) from_body: bool,
 }
 
 /// basedpython: a place a call narrows, whether the function named it or not.
@@ -697,11 +725,51 @@ pub(crate) enum NarrowingGuardKind<'db> {
         /// what it is where the call evaluates falsy
         negative: Option<Type<'db>>,
     },
+    /// basedpython: the assertion a `def` that wrote no return type makes anyway, recovered from
+    /// what every way out of its body establishes — see [`crate::types::inferred_narrowing`].
+    ///
+    /// It narrows with the same reach as [`Self::AssertsType`], but nothing was written, so a
+    /// call using its value is not a misuse of an annotation.
+    InferredAssertion { ty: Type<'db> },
+}
+
+impl<'db> NarrowingGuardKind<'db> {
+    /// Whether this guard narrows once the call returns, rather than where it evaluates truthy.
+    pub(crate) fn is_assertion(self) -> bool {
+        matches!(
+            self,
+            NarrowingGuardKind::Asserts { .. }
+                | NarrowingGuardKind::AssertsType { .. }
+                | NarrowingGuardKind::InferredAssertion { .. }
+        )
+    }
+
+    /// What an assertion guard establishes about its place once the call returns.
+    pub(crate) fn asserted_type(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
+        match self {
+            NarrowingGuardKind::Asserts { is_positive: true } => {
+                Some(Type::AlwaysFalsy.negate(db, env))
+            }
+            NarrowingGuardKind::Asserts { is_positive: false } => {
+                Some(Type::AlwaysTruthy.negate(db, env))
+            }
+            NarrowingGuardKind::AssertsType { is_positive, ty } => {
+                Some(ty.negate_if(db, env, !is_positive))
+            }
+            NarrowingGuardKind::InferredAssertion { ty } => Some(ty),
+            NarrowingGuardKind::Predicate | NarrowingGuardKind::InferredPredicate { .. } => None,
+        }
+    }
 }
 
 impl<'db> NarrowingGuard<'db> {
-    /// Whether this guard narrows once the call returns, rather than when it evaluates truthy.
-    pub(crate) fn is_assertion(&self) -> bool {
+    /// Whether this guard is a *written* assertion: one a return annotation declares, rather than
+    /// one recovered from a body.
+    pub(crate) fn is_written_assertion(&self) -> bool {
         matches!(
             self.kind,
             NarrowingGuardKind::Asserts { .. } | NarrowingGuardKind::AssertsType { .. }
@@ -914,6 +982,7 @@ impl<'db> Signature<'db> {
             parameters,
             return_ty,
             narrowing_guards: Box::default(),
+            deferred_assertions: None,
         }
     }
 
@@ -930,6 +999,7 @@ impl<'db> Signature<'db> {
             parameters,
             return_ty,
             narrowing_guards: Box::default(),
+            deferred_assertions: None,
         }
     }
 
@@ -943,6 +1013,7 @@ impl<'db> Signature<'db> {
             parameters: Parameters::gradual_form(),
             return_ty: signature_type,
             narrowing_guards: Box::default(),
+            deferred_assertions: None,
         }
     }
 
@@ -1007,6 +1078,7 @@ impl<'db> Signature<'db> {
             parameters,
             return_ty,
             narrowing_guards,
+            deferred_assertions: None,
         }
     }
 
@@ -1115,6 +1187,7 @@ impl<'db> Signature<'db> {
             parameters,
             return_ty,
             narrowing_guards: self.narrowing_guards.clone(),
+            deferred_assertions: self.deferred_assertions,
         }
     }
 
@@ -1148,6 +1221,7 @@ impl<'db> Signature<'db> {
             parameters,
             return_ty,
             narrowing_guards: self.narrowing_guards.clone(),
+            deferred_assertions: self.deferred_assertions,
         })
     }
 
@@ -1183,6 +1257,7 @@ impl<'db> Signature<'db> {
                 .return_ty
                 .apply_type_mapping_impl(db, env, type_mapping, tcx, visitor),
             narrowing_guards: self.narrowing_guards.clone(),
+            deferred_assertions: self.deferred_assertions,
         }
     }
 
@@ -1589,6 +1664,61 @@ impl<'db> Signature<'db> {
         self.definition
     }
 
+    /// basedpython: every place a call to this narrows: [`Self::narrowing_guards`], followed by
+    /// the assertions [`Self::deferred_assertions`] names.
+    pub(crate) fn all_narrowing_guards(&self, db: &'db dyn Db) -> Cow<'_, [NarrowingGuard<'db>]> {
+        let deferred: &[NarrowingGuard<'db>] = match self.deferred_assertions {
+            Some(deferred) => deferred_assertion_guards(db, deferred.function, deferred.from_body),
+            None => &[],
+        };
+        if deferred.is_empty() {
+            Cow::Borrowed(&self.narrowing_guards)
+        } else {
+            Cow::Owned(
+                self.narrowing_guards
+                    .iter()
+                    .chain(deferred)
+                    .cloned()
+                    .collect(),
+            )
+        }
+    }
+
+    /// basedpython: whether a call to this makes an assertion someone wrote down: its own
+    /// `-> asserts`, or one it takes on from a method it overrides.
+    ///
+    /// A recovered assertion is never a written one, so the deferred assertions are only
+    /// resolved when some method this one overrides writes an `asserts` of its own.
+    pub(crate) fn carries_written_assertion(&self, db: &'db dyn Db) -> bool {
+        if self
+            .narrowing_guards
+            .iter()
+            .any(NarrowingGuard::is_written_assertion)
+        {
+            return true;
+        }
+        self.deferred_assertions.is_some_and(|deferred| {
+            deferred.function.overrides_a_written_assertion(db)
+                && self
+                    .all_narrowing_guards(db)
+                    .iter()
+                    .any(NarrowingGuard::is_written_assertion)
+        })
+    }
+
+    /// basedpython: this signature with every guard it carries in [`Self::narrowing_guards`],
+    /// for comparing signatures by what they say rather than by whose they are.
+    pub(crate) fn with_resolved_narrowing_guards(mut self, db: &'db dyn Db) -> Self {
+        if self.deferred_assertions.is_some() {
+            self.narrowing_guards = self
+                .all_narrowing_guards(db)
+                .into_owned()
+                .into_boxed_slice();
+            self.deferred_assertions = None;
+        }
+        self
+    }
+
     pub(crate) fn bind_self(
         &self,
         db: &'db dyn Db,
@@ -1694,6 +1824,7 @@ impl<'db> Signature<'db> {
             parameters,
             return_ty,
             narrowing_guards: self.narrowing_guards.clone(),
+            deferred_assertions: self.deferred_assertions,
         }
     }
 
@@ -2108,6 +2239,7 @@ impl<'db> Signature<'db> {
             parameters,
             return_ty,
             narrowing_guards: self.narrowing_guards.clone(),
+            deferred_assertions: self.deferred_assertions,
         }
     }
 

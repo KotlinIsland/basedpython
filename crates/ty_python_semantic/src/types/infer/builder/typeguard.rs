@@ -39,7 +39,7 @@ pub(super) fn bind_type_guard_return_type<'db>(
     let guard = || {
         let binding = bindings.single_element()?;
         let (_, overload) = binding.matching_overloads().next()?;
-        overload.signature.narrowing_guards.first()
+        overload.signature.all_narrowing_guards(db).first().cloned()
     };
 
     // the receiver of a bound call is not among its arguments; it is the callee's own value
@@ -53,17 +53,17 @@ pub(super) fn bind_type_guard_return_type<'db>(
             let binding = bindings.single_element()?;
             let (_, overload) = binding.matching_overloads().next()?;
             let bound_argument_offset = usize::from(binding.bound_type.is_some());
-            match guard_root(guard, overload.signature.parameters(), call) {
+            match guard_root(&guard, overload.signature.parameters(), call) {
                 // a bound call's signature keeps the receiver parameter, but the call has
                 // no argument for it
                 GuardRoot::Parameter(index) if index < bound_argument_offset => {
-                    return narrowed_place(db, scope, guard, receiver()?);
+                    return narrowed_place(db, scope, &guard, receiver()?);
                 }
                 GuardRoot::Parameter(_) => {}
                 GuardRoot::Receiver(receiver) => {
-                    return narrowed_place(db, scope, guard, receiver);
+                    return narrowed_place(db, scope, &guard, receiver);
                 }
-                GuardRoot::Scope => return narrowed_scope_place(db, scope, guard),
+                GuardRoot::Scope => return narrowed_scope_place(db, scope, &guard),
             }
         }
 
@@ -77,8 +77,9 @@ pub(super) fn bind_type_guard_return_type<'db>(
                 .or_else(|| binding.callable_type.as_function_literal())
                 .is_some_and(|function| function.has_implicit_receiver(db));
             let bound_argument_offset = usize::from(binding.bound_type.is_some());
-            let narrowed_parameter_index =
-                |overload: &Binding<'db>| match overload.signature.narrowing_guards.first() {
+            let narrowed_parameter_index = |overload: &Binding<'db>| {
+                let guards = overload.signature.all_narrowing_guards(db);
+                match guards.first() {
                     Some(guard) => match guard_root(guard, overload.signature.parameters(), call) {
                         GuardRoot::Parameter(index) => Some(index),
                         GuardRoot::Receiver(_) | GuardRoot::Scope => None,
@@ -86,7 +87,8 @@ pub(super) fn bind_type_guard_return_type<'db>(
                     None => Some(usize::from(
                         bound_argument_offset > 0 || has_implicit_receiver,
                     )),
-                };
+                }
+            };
             let narrowed_argument_index = |overload: &Binding<'db>| {
                 let narrowed_parameter_index = narrowed_parameter_index(overload)?;
                 overload
@@ -134,7 +136,7 @@ pub(super) fn bind_type_guard_return_type<'db>(
 
         match guard() {
             // the guard may name a member of the argument: `-> x.data is str`
-            Some(guard) => narrowed_place(db, scope, guard, argument.value()),
+            Some(guard) => narrowed_place(db, scope, &guard, argument.value()),
             None => {
                 let place_expr = PlaceExpr::try_from_expr(argument.value())?;
                 place_table(db, scope).place_id(&place_expr)

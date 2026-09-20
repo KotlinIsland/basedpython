@@ -1082,7 +1082,8 @@ impl<'db> CallableTypes<'db> {
                 let dedup_key = signature
                     .clone()
                     .with_definition(None)
-                    .with_source_overload_index(None);
+                    .with_source_overload_index(None)
+                    .with_resolved_narrowing_guards(db);
                 if seen_overloads.insert(dedup_key) {
                     overloads.push(signature);
                 }

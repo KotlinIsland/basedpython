@@ -179,8 +179,7 @@ whose result is tested:
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(a: int | None):
     check(a)
@@ -202,17 +201,59 @@ an assertion guard returns `None` — it raises when the assertion doesn't hold
 
 ```python
 def check(x: int | None) -> None:
-    if x is None:
-        raise ValueError
+    assert x
 ```
 
 `and` asserts every place it names:
 
 ```by
 def check(a: int | None, b: str | None) -> asserts a is int and b:
-    if a is None or not b:
+    assert a is not None and b
+```
+
+every call narrows on the strength of the annotation, so the body has to
+establish what it asserts wherever it returns — at each `return`, and at the
+end of the body. ruling out `None` is not the same as truthiness, since `0` is
+still falsy:
+
+```by
+def check(x: int | None) -> asserts x:  # error: `x` is `int` where the body ends
+    if x is None:
         raise ValueError
 ```
+
+a parameter is the argument the caller passed, so a body that assigns to it
+establishes nothing about the argument. the same goes for a place: a local of
+that name is a different place from the one a call narrows. a member is read
+back by the caller, so assigning to one is how a body establishes it:
+
+```by
+class Holder:
+    data: int | None = None
+
+    def load(self) -> asserts self.data is not None:
+        self.data = 1
+```
+
+an assertion an overridden method makes is one its callers rely on whatever the
+value they hold turns out to be, so an override makes the same assertion — its
+callers narrow by it too — and has to establish it in its own body. the guard
+follows the parameter by position, so an override may rename a positional-only
+parameter
+
+some ways out of a body are left alone rather than checked: a `return` a
+`finally` suite can follow hands control back only once that suite has run, and
+what the suite leaves behind is not modelled. such a body is neither read as
+establishing an assertion nor reported for failing to. a `...` body declares a
+function without implementing one — in a stub, an `@overload`, an
+`@abstractmethod`, or a `Protocol` — so the claim is for whatever implements it
+
+what a body establishes is read the same way narrowing is, and rests on the
+same thing: a call that mutates what was narrowed, or an alias that writes to
+it, leaves the claim standing where it no longer holds. an argument a
+[conversion](conversions.md) rewrites is another such case — the callee is
+handed the converted value, while the narrowing lands on the place the call
+was written with
 
 an assertion narrows when it is called as a *statement*, which is where an
 assertion is written. its value is the `None` it returns, so testing that value
@@ -220,6 +261,31 @@ assertion is written. its value is the `None` it returns, so testing that value
 narrowing, and the test is always false. a call whose arguments are unpacked
 (`check(*args)`) doesn't say which argument reached the parameter, so it
 narrows nothing
+
+## an assertion that was never written down
+
+a `def` that leaves its return type out and returns nothing asserts what its
+body establishes, and callers narrow by that too:
+
+```by
+def check(x: int | None):
+    assert x
+
+def f(a: int | None):
+    check(a)
+    a  # int, and truthy
+```
+
+what is asserted is what every way out of the body agrees on — each `return`
+it can reach, and the end of the body — so an early `return` before the
+assertion leaves nothing asserted, and so does a body that catches its own
+failure. as with a predicate, a parameter the body rebinds asserts nothing, and
+neither does an `async def`, whose call does not run the body. a body that
+hands back a value is not an assertion, since the narrowing only reaches a call
+written as a statement
+
+an override is handed what the method it overrides asserts, recovered or
+written, and is checked against it
 
 ## asserting a type
 
@@ -255,8 +321,7 @@ nothing at every call site, which is almost always a typo:
 
 ```by
 def check(value: int | None) -> asserts values:  # error: `values` is nothing
-    if value is None:
-        raise ValueError
+    assert value
 ```
 
 ## scope

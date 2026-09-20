@@ -191,7 +191,7 @@ impl MemberExpr {
     /// Returns the left most part of the member expression, e.g. `x` in `x.y.z`.
     ///
     /// This is the symbol on which the member access is performed.
-    fn symbol_name(&self) -> &str {
+    pub(crate) fn symbol_name(&self) -> &str {
         self.as_ref().symbol_name()
     }
 

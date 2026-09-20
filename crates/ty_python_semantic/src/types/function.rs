@@ -89,14 +89,17 @@ use crate::types::generics::{ApplySpecialization, GenericContext, Specialization
 use crate::types::infer::{
     function_known_decorators, infer_definition_types, nearest_enclosing_class, original_class_type,
 };
-use crate::types::inferred_narrowing::inferred_narrowing_guards;
+use crate::types::inferred_narrowing::{
+    inferred_predicate_guards, may_recover_assertions, recovered_assertion_guards,
+};
 use crate::types::inferred_signature::inferred_return_type;
 use crate::types::known_instance::DeprecatedInstance;
 use crate::types::list_members::all_members;
 use crate::types::narrow::ClassInfoConstraintFunction;
 use crate::types::relation::TypeRelationChecker;
 use crate::types::signatures::{
-    CallableSignature, NarrowingGuard, NarrowingGuardKind, ReturnCallableTypeVarScope, Signature,
+    CallableSignature, DeferredAssertions, NarrowingGuard, NarrowingGuardKind, Parameters,
+    ReturnCallableTypeVarScope, Signature,
 };
 use crate::types::tuple::TupleSpec;
 use crate::types::variance::{VarianceInferable, VarianceOrigin, VarianceTerm};
@@ -1299,6 +1302,7 @@ impl<'db> OverloadLiteral<'db> {
         // the three blocks above plus this one are the sources a `def` that leaves its return
         // type out draws on; [`OverloadLiteral::return_type_without_annotation`] mirrors them in
         // this order, so a change here belongs there too
+        let mut reads_body_for_guards = false;
         if infers_unannotated_signatures(db, self.file(db))
             && !returns_written
             && !function_stmt_node.is_asserts_return
@@ -1312,13 +1316,25 @@ impl<'db> OverloadLiteral<'db> {
             // That reading is recovered beside the return type and only where it is: a base's
             // return type stands for its overrides, so a body that answered nothing about the
             // return type answers nothing about the narrowing either
-            let guards = inferred_narrowing_guards(db, self);
+            let guards = inferred_predicate_guards(db, self);
             if !guards.is_empty() {
                 if let Some(narrowed) = Self::symmetric_guard_type(db, env, guards) {
                     raw_signature.return_ty = TypeIsType::from_type_expression(db, narrowed);
                 }
                 raw_signature.narrowing_guards.clone_from(guards);
             }
+            reads_body_for_guards = true;
+        }
+
+        // basedpython: a body that hands back nothing makes assertions instead of predicates, and
+        // an override makes the assertions of the method it overrides. neither is worked out
+        // here — see [`DeferredAssertions`]
+        let from_body = reads_body_for_guards && may_recover_assertions(db, self);
+        if from_body || self.may_inherit_assertions(db) {
+            raw_signature.deferred_assertions = Some(DeferredAssertions {
+                function: self,
+                from_body,
+            });
         }
 
         raw_signature
@@ -1543,6 +1559,105 @@ impl<'db> OverloadLiteral<'db> {
             return OverriddenReturnType::Inexpressible;
         }
         OverriddenReturnType::Declared(return_ty)
+    }
+
+    /// basedpython: how to name the method this one overrides, for a diagnostic about it.
+    pub(crate) fn overridden_method_display(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<String> {
+        let base = self.overridden_method(db, env)?;
+        let base = base.literal(db).last_definition;
+        let definition = base.definition(db);
+        let index = semantic_index(db, db.program_file(definition.file(db)));
+        let class = index
+            .scope(definition.scope(db).file_scope_id(db))
+            .node()
+            .as_class()
+            .map(|class| {
+                class
+                    .node(&parsed_module(db, base.python_file(db)).load(db))
+                    .name
+                    .to_string()
+            });
+        Some(match class {
+            Some(class) => format!("{class}.{name}", name = base.name(db)),
+            None => base.name(db).to_string(),
+        })
+    }
+
+    /// basedpython: the assertions the method this one overrides makes about its parameters.
+    ///
+    /// A call through the base narrows on the strength of what the base asserts, and the value it
+    /// is called on may be an instance of this class, so an override has to make the same
+    /// assertion. It carries here — a caller of the override narrows by it too — and the
+    /// override's body is checked against it, which is where an override that does not establish
+    /// it is reported.
+    ///
+    /// The guard names a parameter of the base by name, and an override is free to rename its
+    /// parameters, so it is matched by position instead. A base guard on a place that is not a
+    /// parameter names a place of the base's own module, which is not this one's, and an override
+    /// with no parameter in that position has nothing for the guard to name; neither is inherited.
+    pub(crate) fn inherited_assertion_guards(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        parameters: &Parameters<'db>,
+    ) -> Box<[NarrowingGuard<'db>]> {
+        let Some(base) = self.overridden_method(db, env) else {
+            return Box::default();
+        };
+        let base_signature = base_raw_signature(db, base);
+        base_signature
+            .all_narrowing_guards(db)
+            .iter()
+            .filter(|guard| guard.kind.is_assertion())
+            .filter_map(|guard| {
+                let index = base_signature
+                    .parameters()
+                    .iter()
+                    .position(|parameter| parameter.name() == Some(&guard.name))?;
+                let name = parameters.iter().nth(index)?.name()?;
+                Some(NarrowingGuard {
+                    name: name.clone(),
+                    members: guard.members.clone(),
+                    root_is_first_parameter: index == 0,
+                    kind: guard.kind,
+                })
+            })
+            .collect()
+    }
+
+    /// basedpython: whether an assertion can reach this method from one it overrides: written by
+    /// a method up the chain, or recovered from one's body. It resolves no signature, so a
+    /// signature being built can ask it.
+    fn may_inherit_assertions(self, db: &'db dyn Db) -> bool {
+        self.overridden_chain(db)
+            .any(|base| base.declares_assertion(db) || may_recover_assertions(db, base))
+    }
+
+    /// basedpython: whether a method this one overrides, however far up, writes an `asserts`.
+    pub(crate) fn overrides_a_written_assertion(self, db: &'db dyn Db) -> bool {
+        self.overridden_chain(db)
+            .any(|base| base.declares_assertion(db))
+    }
+
+    /// basedpython: the methods this one overrides, nearest first.
+    fn overridden_chain(self, db: &'db dyn Db) -> impl Iterator<Item = OverloadLiteral<'db>> {
+        std::iter::successors(Some(self), move |method| {
+            let env = ProgramEnvironment::from_scope(method.body_scope(db));
+            method
+                .overridden_method(db, &env)
+                .map(|base| base.literal(db).last_definition)
+        })
+        .skip(1)
+    }
+
+    /// basedpython: whether this function's return annotation is an `asserts`.
+    fn declares_assertion(self, db: &'db dyn Db) -> bool {
+        let module = parsed_module(db, self.python_file(db)).load(db);
+        self.node(db, self.file(db), &module).is_asserts_return
     }
 
     /// basedpython: whether a return type nobody wrote is read off the body.
@@ -1978,6 +2093,44 @@ impl<'db> FunctionLiteral<'db> {
 ///
 /// An unannotated override copies into its own raw signature, which `FunctionType::signature`
 /// then wraps. Copying the already-wrapped form would wrap a coroutine in a coroutine.
+/// basedpython: the assertions a call to `function` makes beyond the guards its signature carries:
+/// the ones recovered from its body, when `from_body`, then the ones it takes on from the method it
+/// overrides — see [`DeferredAssertions`].
+///
+/// A guard `function` makes itself about a place is the whole of what it says about it, so an
+/// inherited guard about the same place is left out. A cycle starts at "no assertions", for the
+/// reason [`inferred_predicate_guards`] gives.
+#[salsa::tracked(
+    returns(ref),
+    cycle_initial = |_, _, _, _| Box::default(),
+    heap_size = ruff_memory_usage::heap_size,
+)]
+pub(crate) fn deferred_assertion_guards<'db>(
+    db: &'db dyn Db,
+    function: OverloadLiteral<'db>,
+    from_body: bool,
+) -> Box<[NarrowingGuard<'db>]> {
+    let mut guards = if from_body {
+        recovered_assertion_guards(db, function).to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let signature = function.raw_signature(db, ReturnCallableTypeVarScope::Public);
+    let env = ProgramEnvironment::from_scope(function.body_scope(db));
+    for inherited in function.inherited_assertion_guards(db, &env, signature.parameters()) {
+        let made = signature
+            .narrowing_guards
+            .iter()
+            .chain(&guards)
+            .any(|guard| guard.name == inherited.name && guard.members == inherited.members);
+        if !made {
+            guards.push(inherited);
+        }
+    }
+    guards.into_boxed_slice()
+}
+
 fn base_raw_signature<'db>(db: &'db dyn Db, base: FunctionType<'db>) -> &'db Signature<'db> {
     base.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public)
 }

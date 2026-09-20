@@ -113,8 +113,7 @@ def f() -> a is int:
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(a: int | None):
     reveal_type(a)  # revealed: int | None
@@ -128,8 +127,7 @@ It raises when the assertion doesn't hold, which is why using its value gets no 
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(a: int | None):
     # error: [narrowing-guard-as-value] "an assertion guard narrows when it is called as a statement, and its value is only the `None` it returns"
@@ -198,6 +196,277 @@ def check(x: int) -> asserts x is not str:
     return None
 ```
 
+## the body has to establish what it asserts
+
+Every call narrows its argument once it returns, so a body that can return without having
+established the assertion narrows an argument to something it may not be.
+
+```by
+# error: [unestablished-assertion-guard] "`x` is `int | None` where the body ends, but this function asserts it is truthy"
+def check(x: int | None) -> asserts x:
+    pass
+```
+
+Ruling out `None` does not establish truthiness: `0` is still falsy.
+
+```by
+# error: [unestablished-assertion-guard] "`x` is `int` where the body ends, but this function asserts it is truthy"
+def check(x: int | None) -> asserts x:
+    if x is None:
+        raise ValueError
+```
+
+## each `return` has to establish it too
+
+A `return` is reported where it is.
+
+```by
+def check(x: int | None) -> asserts x:
+    if x is None:
+        # error: [unestablished-assertion-guard] "`x` is `None` where this returns, but this function asserts it is truthy"
+        return
+    if not x:
+        raise ValueError
+```
+
+A `return` after the assertion holds is fine, and so is a body that never returns at all.
+
+```by
+def check(x: int | None) -> asserts x:
+    if x:
+        return
+    raise ValueError
+
+def never(x: int | None) -> asserts x:
+    raise ValueError
+```
+
+## a failure the body catches establishes nothing
+
+```by
+# error: [unestablished-assertion-guard] "`x` is `int | None` where the body ends, but this function asserts it is truthy"
+def check(x: int | None) -> asserts x:
+    try:
+        assert x
+    except AssertionError:
+        pass
+```
+
+## the declared type is part of what the body establishes
+
+Ruling out `None` leaves only `1`, which is truthy, so the assertion holds — where the same body
+under `int | None` would leave `0`.
+
+```by
+from typing import Literal
+
+def check(x: Literal[1] | None) -> asserts x:
+    if x is None:
+        raise ValueError
+```
+
+## removing a type has to be established too
+
+```by
+# error: [unestablished-assertion-guard] "`x` is `object` where the body ends, but this function asserts it is not `str`"
+def require(x: object) -> asserts x is not str:
+    pass
+```
+
+## a body that rebinds the parameter asserts nothing about the argument
+
+The caller's argument is whatever it was; only the parameter holds what the body assigned.
+
+```by
+# error: [unestablished-assertion-guard] "the body puts another value in `x`, so what it establishes is not about the argument this guard narrows"
+def check(x: int | None, y: int | None) -> asserts x:
+    x = y
+    assert x
+```
+
+## a member the body assigns is established
+
+Unlike a parameter, a member is read back by the caller after the call, so an assignment is what it
+reads.
+
+```by
+class Holder:
+    data: int | None = None
+
+    def load(self) -> asserts self.data is not None:
+        self.data = 1
+
+    # error: [unestablished-assertion-guard] "`self.data` is `int | None` where the body ends, but this function asserts it is not `None`"
+    def forget(self) -> asserts self.data is not None:
+        pass
+```
+
+## an assertion about a place is checked too
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+def check() -> asserts a is not None:
+    assert a is not None
+
+# error: [unestablished-assertion-guard] "`a` is `int | None` where the body ends, but this function asserts it is not `None`"
+def forget() -> asserts a is not None:
+    pass
+```
+
+## a `def` that only declares one has no body to establish it
+
+A `...` body says the function is declared elsewhere — in a stub file, as an `@overload`, or as a
+member of a `Protocol` — so there is nothing there to establish the assertion. A `pass` body is an
+implementation, and an empty one establishes nothing.
+
+```by
+from typing import Protocol
+
+class Reader(Protocol):
+    def ensure(self, x: int | None) -> asserts x: ...
+```
+
+## a `return` a `finally` suite can follow is left alone
+
+A `finally` suite runs before the `return` hands control back, and can swallow the exception that
+was on its way out or change what the caller reads. What a caller sees is the state after that
+suite, which is not the state at the `return`, so such a body is neither read as establishing the
+assertion nor reported for failing to.
+
+```by
+def check(x: int | None) -> asserts x:
+    try:
+        assert x
+    finally:
+        return
+```
+
+## an unannotated parameter is not an established one
+
+`Any` fits every assertion, which is the reason it says nothing about one.
+
+```by
+from typing import Any
+
+# error: [unestablished-assertion-guard] "`x` is `Any` where the body ends, but this function asserts it is truthy"
+def check(x: Any) -> asserts x:
+    pass
+```
+
+## ruling out every value of a type establishes the assertion
+
+`bool` is `True` and `False` and nothing else, so ruling both out rules out `bool` itself.
+
+```by
+def check(x: object) -> asserts x is not bool:
+    if x is True or x is False:
+        raise ValueError
+```
+
+## a body that binds the place asserts nothing about the caller's
+
+A local of the place's name is a different place from the one a call narrows.
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+# error: [unestablished-assertion-guard] "the body puts another value in `a`, so what it establishes is not about the place this guard narrows"
+def check() -> asserts a is not None:
+    a = 1
+```
+
+Writing to the place itself is another matter: `global` names the place the caller reads.
+
+```by
+def src() -> int | None:
+    return 1
+
+b = src()
+
+def check() -> asserts b is not None:
+    global b
+    b = 1
+```
+
+## rebinding what a member is read off ends what was established about it
+
+`a.c` is read off `a`, so replacing it leaves what the body established about `a.c.b` describing a
+value the caller never sees.
+
+```by
+class Inner:
+    b: int | None = None
+
+class Outer:
+    c: Inner = Inner()
+
+# error: [unestablished-assertion-guard] "`a.c.b` is `int | None` where the body ends, but this function asserts it is not `None`"
+def check(a: Outer) -> asserts a.c.b is not None:
+    assert a.c.b is not None
+    a.c = Inner()
+```
+
+## an override has to establish what the method it overrides asserts
+
+A call through the base narrows on the strength of the base's assertion, and what it is called on
+may be an instance of the subclass, so the override makes the same assertion — and has to establish
+it.
+
+```by
+from typing import override
+
+class Base:
+    def ensure(self, x: int | None) -> asserts x:
+        assert x
+
+class Silent(Base):
+    @override
+    # error: [unestablished-assertion-guard] "`x` is `int | None` where the body ends, but `Base.ensure`, which this overrides, asserts it is truthy"
+    def ensure(self, x: int | None):
+        pass
+
+class Loud(Base):
+    @override
+    def ensure(self, x: int | None):
+        assert x
+
+def f(base: Base, loud: Loud, a: int | None, b: int | None):
+    base.ensure(a)
+    reveal_type(a)  # revealed: int & not AlwaysFalsy
+    # the override carries the assertion for its own callers too
+    loud.ensure(b)
+    reveal_type(b)  # revealed: int & not AlwaysFalsy
+```
+
+## an override is free to rename a positional-only parameter
+
+The guard names a parameter of the base by name, and follows it by position into the override, which
+is what lets a positional-only parameter be renamed.
+
+```by
+from typing import override
+
+class Base:
+    def ensure(self, x: int | None, /) -> asserts x:
+        assert x
+
+class Renamed(Base):
+    @override
+    def ensure(self, value: int | None, /):
+        assert value
+
+def f(r: Renamed, a: int | None):
+    r.ensure(a)
+    reveal_type(a)  # revealed: int & not AlwaysFalsy
+```
+
 ## `asserts` can name a place with a type too
 
 ```by
@@ -219,8 +488,7 @@ def m():
 
 ```by
 def check(first: object, second: int | None) -> asserts second:
-    if second is None:
-        raise ValueError
+    assert second
 
 def f(a: object, b: int | None):
     check(a, b)
@@ -232,12 +500,45 @@ def f(a: object, b: int | None):
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(a: int | None):
     check(x=a)
     reveal_type(a)  # revealed: int & not AlwaysFalsy
+```
+
+## a keyword of a positional-only parameter's name reaches a different parameter
+
+`check(x, a=y)` passes `x` for `a` and collects `a=y` into `**kw`, so `x` is the argument the
+assertion is about.
+
+```by
+def check(a: int | None = 1, /, **kw: str) -> asserts a:
+    assert a
+
+def f(x: int | None, y: str):
+    check(x, a=y)
+    reveal_type(x)  # revealed: int & not AlwaysFalsy
+    reveal_type(y)  # revealed: str
+```
+
+## a `classmethod` is called on the class, not on the receiver
+
+A bound method takes the value it was called on as its first parameter, so a guard on that
+parameter's member narrows the receiver's. A `classmethod` takes the class instead, so `cls.value`
+is not the place `c.value` names.
+
+```by
+class C:
+    value: int | None = None
+
+    @classmethod
+    def ensure(cls) -> asserts cls.value is not None:
+        assert cls.value is not None
+
+def f(c: C):
+    c.ensure()
+    reveal_type(c.value)  # revealed: int | None
 ```
 
 ## a method asserts its own parameter
@@ -245,8 +546,7 @@ def f(a: int | None):
 ```by
 class C:
     def check(self, y: int | None) -> asserts y:
-        if y is None:
-            raise ValueError
+        assert y
 
 def f(c: C, a: int | None):
     c.check(a)
@@ -262,8 +562,7 @@ def src() -> int | None:
 a = src()
 
 def check() -> asserts a:
-    if a is None:
-        raise ValueError
+    assert a
 
 def m():
     check()
@@ -274,8 +573,7 @@ def m():
 
 ```by
 async def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 async def f(a: int | None):
     await check(a)
@@ -289,8 +587,7 @@ class Holder:
     value: int | None = None
 
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(h: Holder):
     check(h.value)
@@ -301,8 +598,7 @@ def f(h: Holder):
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(a: int | None, flag: bool):
     if flag:
@@ -315,8 +611,7 @@ def f(a: int | None, flag: bool):
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(a: int | None, b: int | None):
     check(a)
@@ -328,8 +623,7 @@ def f(a: int | None, b: int | None):
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(args: list[int | None]):
     check(*args)  # error: [refutable-unpacking]
@@ -461,8 +755,7 @@ def outer():
     a = src()
 
     def check() -> asserts a:
-        if a is None:
-            raise ValueError
+        assert a
 
     check()
     reveal_type(a)  # revealed: int & not AlwaysFalsy
@@ -474,8 +767,7 @@ Testing its value gets no narrowing — the value is `None`, so the test is alwa
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(a: int | None):
     if check(a):  # error: [narrowing-guard-as-value]
@@ -486,8 +778,7 @@ def f(a: int | None):
 
 ```by
 def check(x: int | None) -> asserts x:
-    if x is None:
-        raise ValueError
+    assert x
 
 def f(a: int | None):
     ok = check(a)  # error: [narrowing-guard-as-value]
@@ -518,6 +809,5 @@ def check(x: int) -> asserts 1 + 1:  # error: [invalid-type-form] "`asserts` mus
 
 ```py
 def check(x: int | None) -> asserts x:  # error: [invalid-syntax] "`asserts` return annotations are not valid in .py files"
-    if x is None:
-        raise ValueError
+    assert x
 ```

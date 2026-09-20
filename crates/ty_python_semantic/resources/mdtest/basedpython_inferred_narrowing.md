@@ -572,6 +572,206 @@ def f(x: A | None):
     reveal_type(checked)  # revealed: def checked(a: A | None) -> A & protocol(b: int)
 ```
 
+## a body that returns nothing asserts what it establishes
+
+`def check(a) -> asserts a` tells every caller that `a` is truthy once the call has returned. A
+`def` that leaves its return type out and returns nothing says the same thing by asserting it, and
+the call narrows its argument for the rest of the flow.
+
+```by
+def check(a: int | None):
+    assert a
+
+def f(x: int | None):
+    check(x)
+    reveal_type(x)  # revealed: int & not AlwaysFalsy
+```
+
+What is recovered is only what the body established, so a call intersects it with the argument it
+actually passed.
+
+```by
+def require(a: int | None):
+    if a is None:
+        raise ValueError
+
+def f(x: int | None):
+    require(x)
+    reveal_type(x)  # revealed: int
+```
+
+## every way out of the body has to agree
+
+A call returns through any `return` it reaches as well as by falling off the end of the body, so
+what is asserted is what all of them establish.
+
+```by
+def check(a: int | None):
+    if a:
+        return
+    raise ValueError
+
+def f(x: int | None):
+    check(x)
+    reveal_type(x)  # revealed: int & not AlwaysFalsy
+```
+
+A `return` the body reaches before establishing anything leaves nothing asserted.
+
+```by
+def check_unless(a: int | None, flag: bool):
+    if flag:
+        return
+    assert a
+
+def g(x: int | None):
+    check_unless(x, True)
+    reveal_type(x)  # revealed: int | None
+```
+
+## a failure the body catches establishes nothing
+
+The body returns normally after an `AssertionError` it handles, whatever the argument was.
+
+```by
+def check(a: int | None):
+    try:
+        assert a
+    except AssertionError:
+        pass
+
+def f(x: int | None):
+    check(x)
+    reveal_type(x)  # revealed: int | None
+```
+
+## a member the body establishes narrows the argument's
+
+```by
+class A:
+    b: int | None = None
+
+def check(a: A):
+    assert a.b is not None
+
+def f(x: A):
+    check(x)
+    reveal_type(x.b)  # revealed: int
+```
+
+## a parameter the body puts something else in asserts nothing
+
+The body establishes something about what it assigned, not about the argument.
+
+```by
+def check(a: int | None, b: int | None):
+    a = b
+    assert a
+
+def f(x: int | None, y: int | None):
+    check(x, y)
+    reveal_type(x)  # revealed: int | None
+```
+
+## a body that returns a value asserts nothing
+
+The narrowing only reaches the code after a call written as a statement, and a call whose value is
+used would lose it. So only a body with nothing to hand back is read as an assertion, the same as a
+written `-> asserts`.
+
+```by
+def check(a: int | None):
+    assert a
+    return a
+
+def f(x: int | None):
+    check(x)
+    reveal_type(x)  # revealed: int | None
+```
+
+`return None` hands back nothing, the same as a bare `return`.
+
+```by
+def check_nothing(a: int | None):
+    assert a
+    return None
+
+def g(x: int | None):
+    check_nothing(x)
+    reveal_type(x)  # revealed: int & not AlwaysFalsy
+```
+
+## a coroutine asserts nothing until it is awaited
+
+Calling an `async def` without awaiting it never runs the body.
+
+```by
+async def check(a: int | None):
+    assert a
+
+async def f(x: int | None):
+    check(x)  # error: [unused-awaitable]
+    reveal_type(x)  # revealed: int | None
+```
+
+## a `return` a `finally` suite can follow asserts nothing
+
+The suite runs before the `return` hands control back: it can swallow the exception that was on its
+way out, as here, and it can change what the caller reads. What a caller sees is the state after
+that suite, so nothing is recovered from a body that returns through one.
+
+```by
+def check(a: int | None):
+    try:
+        assert a
+    finally:
+        return
+
+def f(x: int | None):
+    check(x)
+    reveal_type(x)  # revealed: int | None
+```
+
+## a member the body asserts narrows the argument's member
+
+```by
+class A:
+    b: int | None = None
+
+def check(a: A):
+    assert a.b is not None
+
+def f(x: A):
+    check(x)
+    reveal_type(x.b)  # revealed: int
+```
+
+## an override is handed the assertion its base makes
+
+A call through the base narrows on the strength of what the base's body established, and what it is
+called on may be an instance of the subclass. So the assertion carries to the override, whose own
+body has to establish it — an override that does not is reported where it is written.
+
+```by
+from typing import override
+
+class Base:
+    def ensure(self, x: int | None):
+        assert x
+
+class Silent(Base):
+    @override
+    # error: [unestablished-assertion-guard] "`x` is `int | None` where the body ends, but `Base.ensure`, which this overrides, asserts it is `not AlwaysFalsy`"
+    def ensure(self, x: int | None):
+        pass
+
+def f(base: Base, silent: Silent, a: int | None, b: int | None):
+    base.ensure(a)
+    reveal_type(a)  # revealed: int & not AlwaysFalsy
+    silent.ensure(b)
+    reveal_type(b)  # revealed: int & not AlwaysFalsy
+```
+
 ## the same holds in a plain python file
 
 `sound-types` recovers a signature in a `.py` file too, and the narrowing it recovers is the same.

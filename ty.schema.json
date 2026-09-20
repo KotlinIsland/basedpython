@@ -1942,7 +1942,7 @@
         },
         "narrowing-guard-as-value": {
           "title": "detects an assertion guard whose result is used as a value",
-          "description": "## What it does\nChecks for a call to a basedpython assertion guard whose result is used as a value.\n\n## Why is this bad?\nAn assertion guard narrows once it *returns*, so it is written as a statement:\n`check(x)`. Its value is `None` — it raises when the assertion doesn't hold — so\ntesting that value (`if check(x):`) or binding it (`ok = check(x)`) never gets the\nnarrowing, and the test is always false.\n\n## Example\n\n```by\ndef check(x: int | None) -> asserts x:\n    if x is None:\n        raise ValueError\n\ndef f(a: int | None):\n    if check(a):  # error: the guard narrows as a statement, not as a test\n        ...\n```",
+          "description": "## What it does\nChecks for a call to a basedpython assertion guard whose result is used as a value.\n\n## Why is this bad?\nAn assertion guard narrows once it *returns*, so it is written as a statement:\n`check(x)`. Its value is `None` — it raises when the assertion doesn't hold — so\ntesting that value (`if check(x):`) or binding it (`ok = check(x)`) never gets the\nnarrowing, and the test is always false.\n\n## Example\n\n```by\ndef check(x: int | None) -> asserts x:\n    assert x\n\ndef f(a: int | None):\n    if check(a):  # error: the guard narrows as a statement, not as a test\n        ...\n```",
           "default": "error",
           "oneOf": [
             {
@@ -2530,6 +2530,16 @@
             }
           ]
         },
+        "unestablished-assertion-guard": {
+          "title": "detects an assertion guard its function can return without establishing",
+          "description": "## What it does\nChecks that a function with a basedpython assertion guard establishes what it asserts\nwherever it returns.\n\n## Why is this bad?\n`-> asserts x` tells every caller that `x` is truthy once the call has returned, and each\ncall narrows its argument on the strength of that. A body that can return without having\nestablished it — by falling off its end, or through a `return` — narrows the caller's\nargument to something it may not be.\n\n## Example\n\n```by\ndef check(x: int | None) -> asserts x:  # error: `x` can still be `0` here\n    if x is None:\n        raise ValueError\n```\n\nUse instead:\n\n```by\ndef check(x: int | None) -> asserts x:\n    assert x\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "unhandled-exception": {
           "title": "detects an exception escaping the `main` entry point",
           "description": "## What it does\nChecks for an exception that can escape a basedpython `main` function.\n\n## Why is this bad?\n`main` is the program's entry point, so it has no caller to handle what\nit raises. An exception escaping it terminates the program with a\ntraceback rather than an error the program chose to report.\n\n## Example\n\n```by\ndef read() raises OSError: ...\n\ndef main():\n    read()  # error: `OSError` can escape `main`\n```",
@@ -2672,7 +2682,7 @@
         },
         "unresolved-narrowing-guard": {
           "title": "detects a narrowing return annotation that names no place",
-          "description": "## What it does\nChecks for a basedpython narrowing return annotation whose place doesn't exist.\n\n## Why is this bad?\n`-> asserts x` and `-> x is T` name the place a call narrows. The name is\nresolved against the function's parameters, and otherwise against the places\nvisible where the guard is written. A name that is neither — a typo, or a\nparameter that was later renamed — silently narrows nothing at every call site.\n\n## Example\n\n```by\ndef check(value: int | None) -> asserts values:  # error: `values` is nothing\n    if value is None:\n        raise ValueError\n```",
+          "description": "## What it does\nChecks for a basedpython narrowing return annotation whose place doesn't exist.\n\n## Why is this bad?\n`-> asserts x` and `-> x is T` name the place a call narrows. The name is\nresolved against the function's parameters, and otherwise against the places\nvisible where the guard is written. A name that is neither — a typo, or a\nparameter that was later renamed — silently narrows nothing at every call site.\n\n## Example\n\n```by\ndef check(value: int | None) -> asserts values:  # error: `values` is nothing\n    assert value\n```",
           "default": "error",
           "oneOf": [
             {

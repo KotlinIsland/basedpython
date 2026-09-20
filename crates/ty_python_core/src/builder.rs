@@ -321,6 +321,11 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     /// Whether the current statement is inside a `try` statement, including its `except`, `else`,
     /// and `finally` suites. Used for semantic syntax checks independently of handler activity.
     in_try_statement: bool,
+    /// basedpython: whether the current statement is inside a `try` statement that has a
+    /// `finally` suite, including the suite itself. See [`Self::record_return_exit`].
+    in_finally_statement: bool,
+    /// basedpython: where the function scopes currently being built return, innermost last.
+    function_exits: Vec<FunctionExits>,
 
     // Semantic Index fields
     scopes: IndexVec<FileScopeId, Scope>,
@@ -489,6 +494,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             source_text: OnceCell::new(),
             semantic_checker: SemanticSyntaxChecker::default(),
             in_try_statement: false,
+            in_finally_statement: false,
+            function_exits: Vec::new(),
             semantic_syntax_errors: RefCell::default(),
             narrowing_aliases: FxHashMap::default(),
             alias_predicates: FxHashMap::default(),
@@ -647,6 +654,23 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
     fn push_scope(&mut self, node: NodeWithScopeRef) {
         self.push_scope_with_parent(node, Some(self.current_scope()));
+    }
+
+    /// basedpython: start collecting where this function returns, if it is one whose body is read
+    /// as an assertion about its parameters. See [`Self::record_merged_normal_exit`].
+    fn push_function_exits(&mut self, node: NodeWithScopeRef) {
+        let NodeWithScopeRef::Function(function) = node else {
+            return;
+        };
+        if function.returns.is_some() || function.is_asserts_return || function.is_async {
+            return;
+        }
+        self.function_exits.push(FunctionExits {
+            scope: self.current_scope(),
+            snapshots: Vec::new(),
+            returns_value: false,
+            through_finally: false,
+        });
     }
 
     fn push_scope_with_parent(&mut self, node: NodeWithScopeRef, parent: Option<FileScopeId>) {
@@ -1609,6 +1633,68 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             return;
         }
         self.use_def_maps[scope].record_places_at_use(members.into_iter(), use_id);
+    }
+
+    /// basedpython: note where `stmt` returns, for the assertion its function makes.
+    ///
+    /// A call's arguments are narrowed by what the body established wherever it hands control
+    /// back, so every `return` is part of the answer alongside falling off the end of the body.
+    /// A `def` that wrote no return type has its snapshots merged into one state at
+    /// [`Self::record_merged_normal_exit`]; a written `-> asserts` keeps each `return` on its own,
+    /// so that the one that fails the assertion is the one reported.
+    /// See `ty_python_semantic::types::inferred_narrowing`.
+    fn record_return_exit(&mut self, stmt: &'ast ast::Stmt) {
+        let scope = self.current_scope();
+        let NodeWithScopeKind::Function(function) = self.scopes[scope].node() else {
+            return;
+        };
+        let function = function.node(self.module);
+        let is_asserts_return = function.is_asserts_return;
+        if function.returns.is_some() && !is_asserts_return {
+            return;
+        }
+        // `return None` hands back exactly what a bare `return` does
+        let returns_value = matches!(
+            stmt,
+            ast::Stmt::Return(ast::StmtReturn {
+                value: Some(value), ..
+            }) if !value.is_none_literal_expr()
+        );
+        let in_finally_statement = self.in_finally_statement;
+
+        // nothing is recovered from a body that hands back a value or returns through a
+        // `finally`, so once one of those is seen its states cost nothing
+        let collects_snapshots = self.function_exits.last().is_some_and(|exits| {
+            exits.scope == scope
+                && !exits.returns_value
+                && !exits.through_finally
+                && !returns_value
+                && !in_finally_statement
+        });
+        let snapshot = collects_snapshots.then(|| self.flow_snapshot());
+        if let Some(exits) = self.function_exits.last_mut()
+            && exits.scope == scope
+        {
+            exits.returns_value |= returns_value;
+            exits.through_finally |= in_finally_statement;
+            match snapshot {
+                Some(snapshot) => exits.snapshots.push(snapshot),
+                None => exits.snapshots = Vec::new(),
+            }
+        }
+
+        if !is_asserts_return {
+            return;
+        }
+        let places = self.parameter_places(scope, function);
+        if places.is_empty() {
+            return;
+        }
+        self.use_def_maps[scope].record_return_exit(
+            stmt.range(),
+            in_finally_statement,
+            places.into_iter(),
+        );
     }
 
     /// basedpython: records `expr` as a value of the statement expression whose
@@ -2820,6 +2906,90 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
     ) {
         self.current_use_def_map_mut()
             .record_narrowing_constraint_for_places(predicate, places);
+    }
+
+    /// basedpython: record the state the places of `scope`'s parameters are in wherever the
+    /// function returns, merged over every way out of it.
+    ///
+    /// A `return` hands its state to the caller just as falling off the end of the body does, so
+    /// what a call has established about its arguments is the two together. Merging them here
+    /// costs one state per place, where reading each way out separately would cost one per place
+    /// and exit. See `ty_python_semantic::types::inferred_narrowing`.
+    fn record_merged_normal_exit(&mut self, scope: FileScopeId) {
+        // only a function whose body is read as an assertion collects them, so the innermost
+        // entry belongs to this scope or to one further out
+        if self
+            .function_exits
+            .last()
+            .is_none_or(|exits| exits.scope != scope)
+        {
+            return;
+        }
+        let Some(exits) = self.function_exits.pop() else {
+            return;
+        };
+        // a body that hands back a value is not read as an assertion, and a `return` a `finally`
+        // suite can follow leaves a state this model does not have: what a caller sees is the
+        // state after that suite has run
+        if exits.returns_value || exits.through_finally {
+            return;
+        }
+        let NodeWithScopeKind::Function(function) = self.scopes[scope].node() else {
+            return;
+        };
+        let function = function.node(self.module);
+        if function.returns.is_some() || function.is_asserts_return {
+            return;
+        }
+        let places = self.parameter_places(scope, function);
+        if places.is_empty() {
+            return;
+        }
+
+        let after_body = self.flow_snapshot();
+        for snapshot in exits.snapshots {
+            self.flow_merge(snapshot);
+        }
+        self.use_def_maps[scope].record_normal_exit(places.into_iter());
+        self.flow_restore(after_body);
+    }
+
+    /// basedpython: the places of `function`'s parameters, and the places below them.
+    fn parameter_places(
+        &self,
+        scope: FileScopeId,
+        function: &ast::StmtFunctionDef,
+    ) -> Vec<ScopedPlaceId> {
+        let place_table = &self.place_tables[scope];
+        // a written assertion can also name a place that is not a parameter, and checking it
+        // needs that place's state too
+        let guard_roots: Vec<&Name> = return_guards(function)
+            .into_iter()
+            .flatten()
+            .map(|guard| guard.place_parts().0)
+            .collect();
+        let mut roots: Vec<ScopedSymbolId> = function
+            .parameters
+            .iter_non_variadic_params()
+            .map(|parameter| &parameter.parameter.name.id)
+            .chain(guard_roots)
+            .filter_map(|name| place_table.symbol_id(name))
+            .collect();
+        roots.sort_unstable();
+        roots.dedup();
+        roots
+            .into_iter()
+            .flat_map(|symbol| {
+                let place = ScopedPlaceId::Symbol(symbol);
+                std::iter::once(place).chain(
+                    place_table
+                        .associated_place_ids(place)
+                        .iter()
+                        .copied()
+                        .map(ScopedPlaceId::from),
+                )
+            })
+            .collect()
     }
 
     /// basedpython: the places this file's narrowing return annotations name.
@@ -5057,6 +5227,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         }
 
                         builder.push_scope(NodeWithScopeRef::Function(function_def));
+                        builder.push_function_exits(NodeWithScopeRef::Function(function_def));
                         let block_scope = builder.current_scope();
 
                         builder.declare_parameters(parameters);
@@ -5071,6 +5242,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         );
 
                         builder.visit_body(body);
+                        builder.record_merged_normal_exit(block_scope);
 
                         builder.current_first_parameter_name = first_parameter_name;
                         (builder.pop_scope(), block_scope)
@@ -6312,6 +6484,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 node_index: _,
             }) => {
                 let was_in_try_statement = std::mem::replace(&mut self.in_try_statement, true);
+                let was_in_finally_statement = self.in_finally_statement;
+                self.in_finally_statement |= !finalbody.is_empty();
                 self.record_ambiguous_reachability();
 
                 let exception_handlers = if handlers.is_empty() {
@@ -6560,6 +6734,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     }
                 }
                 self.in_try_statement = was_in_try_statement;
+                self.in_finally_statement = was_in_finally_statement;
             }
 
             ast::Stmt::Raise(_) => {
@@ -6594,6 +6769,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 {
                     self.record_returned_place_members(value);
                 }
+                self.record_return_exit(stmt);
                 self.record_terminal_finally_entry();
                 // Everything in the current block after a terminal statement is unreachable.
                 self.mark_unreachable();
@@ -7922,15 +8098,29 @@ impl<'ast> Visitor<'ast> for GuardTargetCollector<'_> {
                 }
             } else if function.returns.is_none() && !function.is_asserts_return {
                 // a `def` that wrote no return type has its guards recovered from what it
-                // returns, so the chains those returns name below a parameter are targets too
+                // returns, so the chains those returns name below a parameter are targets too.
+                // one that returns nothing asserts what its whole body establishes, so there
+                // every chain the body names below a parameter is
                 let mut chains = Vec::new();
-                walk_body(
-                    &mut ReturnedExpressionCollector {
-                        parameters: &function.parameters,
-                        chains: &mut chains,
-                    },
-                    &function.body,
-                );
+                let mut returns_value = ReturnsValue::default();
+                walk_body(&mut returns_value, &function.body);
+                if returns_value.0 {
+                    walk_body(
+                        &mut ReturnedExpressionCollector {
+                            parameters: &function.parameters,
+                            chains: &mut chains,
+                        },
+                        &function.body,
+                    );
+                } else {
+                    walk_body(
+                        &mut MemberChainCollector {
+                            parameters: &function.parameters,
+                            chains: &mut chains,
+                        },
+                        &function.body,
+                    );
+                }
                 if !chains.is_empty() {
                     let recovered = self
                         .targets
@@ -7985,6 +8175,41 @@ impl<'ast> Visitor<'ast> for ReturnedExpressionCollector<'_, 'ast> {
     }
 }
 
+/// basedpython: where a function scope being built returns.
+///
+/// See [`SemanticIndexBuilder::record_merged_normal_exit`].
+struct FunctionExits {
+    scope: FileScopeId,
+    /// The state at each `return`, to be merged into one once the body has been visited.
+    snapshots: Vec<FlowSnapshot>,
+    /// Whether any `return` hands back a value, which is not read as an assertion.
+    returns_value: bool,
+    /// Whether any `return` can be followed by a `finally` suite, whose effect on what the caller
+    /// sees this model does not have.
+    through_finally: bool,
+}
+
+/// basedpython: whether a function body hands back a value, rather than returning nothing.
+///
+/// `return None` hands back exactly what a bare `return` does. The recovered guards read the same
+/// thing — see `ty_python_semantic::types::inferred_narrowing`.
+#[derive(Default)]
+struct ReturnsValue(bool);
+
+impl<'ast> Visitor<'ast> for ReturnsValue {
+    fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        match stmt {
+            ast::Stmt::FunctionDef(_) | ast::Stmt::ClassDef(_) => {}
+            ast::Stmt::Return(ast::StmtReturn {
+                value: Some(value), ..
+            }) if !value.is_none_literal_expr() => self.0 = true,
+            _ => walk_stmt(self, stmt),
+        }
+    }
+
+    fn visit_expr(&mut self, _expr: &'ast ast::Expr) {}
+}
+
 /// basedpython: collects the attribute chains an expression names below a parameter.
 struct MemberChainCollector<'a, 'ast> {
     parameters: &'ast ast::Parameters,
@@ -7992,6 +8217,13 @@ struct MemberChainCollector<'a, 'ast> {
 }
 
 impl<'ast> Visitor<'ast> for MemberChainCollector<'_, 'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        // a nested `def` or `class` names its own places, not the function's around it
+        if !matches!(stmt, ast::Stmt::FunctionDef(_) | ast::Stmt::ClassDef(_)) {
+            walk_stmt(self, stmt);
+        }
+    }
+
     fn visit_expr(&mut self, expr: &'ast ast::Expr) {
         if expr.is_attribute_expr()
             && let Some(path) = UnqualifiedName::from_expr(expr)

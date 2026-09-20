@@ -13,10 +13,18 @@
 //! side is the same with the returns that can hand back a falsy value, and falling off the end of
 //! the body is one of those.
 //!
+//! A body that returns nothing makes the other kind of claim: `def check(a): assert a` tells
+//! every caller that `a` is truthy once the call has returned, just as `-> asserts a` would. What
+//! is recovered there is what every way out of the body agrees on — each reachable `return`, and
+//! falling off the end — and a body with no way out at all asserts nothing, since no call to it
+//! ever returns. The semantic index merges those ways out into one state per place, which is what
+//! `recovered_assertion_guards` reads. The same reading checks a written `-> asserts`, against each
+//! way out on its own, so that the `return` which fails the assertion is the one reported.
+//!
 //! Two things are asked of the body beyond that, and both are about the value a caller actually
-//! holds: that testing the call really does test what the body returned — which rules out a
-//! coroutine and a generator — and that the place the guard names still holds what the caller
-//! passed, which rules out a body that rebinds it.
+//! holds: that calling it really does run the body — which rules out a coroutine and a
+//! generator — and that the place the guard names still holds what the caller passed, which
+//! rules out a body that rebinds it.
 //!
 //! See `docs/basedpython/features/type-is.md`.
 
@@ -24,15 +32,19 @@ use ruff_db::parsed::parsed_module;
 use ruff_python_ast::name::{Name, UnqualifiedName};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, Expr, Stmt};
+use ruff_text_size::TextRange;
 use rustc_hash::FxHashSet;
 use ty_python_core::ast_ids::try_scoped_use_id;
-use ty_python_core::definition::{DefinitionKind, DefinitionState};
+use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
 use ty_python_core::place::{PlaceExpr, PlaceExprRef, ScopedPlaceId};
 use ty_python_core::predicate::{Predicate, PredicateNode};
 use ty_python_core::scope::ScopeId;
-use ty_python_core::{FileScopeId, SemanticIndex, semantic_index};
+use ty_python_core::{
+    BindingWithConstraintsIterator, FileScopeId, SemanticIndex, UseDefMap, semantic_index,
+};
 
 use crate::Db;
+use crate::reachability::ReachabilityConstraintsExtension;
 use crate::types::function::OverloadLiteral;
 use crate::types::infer::ScopeInference;
 use crate::types::inferred_signature::can_implicitly_return_none;
@@ -46,7 +58,31 @@ use crate::types::{
     UnionType, infer_scope_types,
 };
 
-/// The narrowing guards `overload`'s body establishes, for a `def` that wrote no return type.
+/// Whether a `def`'s body is where its guards are stated: it wrote no return type, and calling
+/// it runs the body.
+fn states_guards_in_body<'db>(db: &'db dyn Db, overload: OverloadLiteral<'db>) -> bool {
+    let program_file = overload.program_file(db);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let node = overload.node(db, overload.file(db), &module);
+
+    // a written return type is the whole of what the function declares; a body is only read
+    // where nothing was written down
+    if node.returns.is_some() || node.is_asserts_return {
+        return false;
+    }
+
+    // a guard is a claim about the value a call produces, and neither a generator nor a coroutine
+    // produces what its `return`s say: `if is_int(x)` on an `async def` tests the coroutine
+    // object, which is truthy without the body having run at all
+    let index = semantic_index(db, program_file);
+    !(node.is_async
+        || overload
+            .body_scope(db)
+            .file_scope_id(db)
+            .is_generator_function(index))
+}
+
+/// The predicate guards `overload`'s body establishes, for a `def` that wrote no return type.
 ///
 /// Resolving what the body returns infers types, and inferring them can reach this very
 /// function's signature — a recursive predicate is the ordinary case, not a pathological one. So
@@ -58,29 +94,24 @@ use crate::types::{
     cycle_initial = |_, _, _| Box::default(),
     heap_size = ruff_memory_usage::heap_size,
 )]
-pub(crate) fn inferred_narrowing_guards<'db>(
+pub(crate) fn inferred_predicate_guards<'db>(
     db: &'db dyn Db,
     overload: OverloadLiteral<'db>,
 ) -> Box<[NarrowingGuard<'db>]> {
-    let program_file = overload.program_file(db);
-    let file = overload.file(db);
-    let module = parsed_module(db, program_file.python_file(db)).load(db);
-    let node = overload.node(db, file, &module);
-
-    // a written return type is the whole of what the function declares; a body is only read
-    // where nothing was written down
-    if node.returns.is_some() || node.is_asserts_return {
+    if !states_guards_in_body(db, overload) {
         return Box::default();
     }
 
+    let program_file = overload.program_file(db);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let node = overload.node(db, overload.file(db), &module);
     let index = semantic_index(db, program_file);
     let body_scope = overload.body_scope(db);
     let file_scope_id = body_scope.file_scope_id(db);
 
-    // a guard is a claim about the value a call produces, and neither a generator nor a coroutine
-    // produces what its `return`s say: `if is_int(x)` on an `async def` tests the coroutine
-    // object, which is truthy without the body having run at all
-    if node.is_async || file_scope_id.is_generator_function(index) {
+    // a body that hands back nothing gives a caller no value to test. what it establishes is an
+    // assertion instead — see [`recovered_assertion_guards`]
+    if index.use_def_map(file_scope_id).records_normal_exit() {
         return Box::default();
     }
 
@@ -169,8 +200,204 @@ pub(crate) fn inferred_narrowing_guards<'db>(
         .collect()
 }
 
-/// Whether the place `name` and `members` describe still holds what the caller passed for the
-/// parameter, everywhere in the body.
+/// Whether [`recovered_assertion_guards`] can find anything for `overload`, from what the semantic
+/// index alone says: the body records a merged exit state, and a predicate in it narrows a
+/// parameter or a place below one. It infers nothing, so a signature can ask it while it is being
+/// built.
+pub(crate) fn may_recover_assertions<'db>(db: &'db dyn Db, overload: OverloadLiteral<'db>) -> bool {
+    if !states_guards_in_body(db, overload) {
+        return false;
+    }
+
+    let program_file = overload.program_file(db);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let node = overload.node(db, overload.file(db), &module);
+    let index = semantic_index(db, program_file);
+    let file_scope_id = overload.body_scope(db).file_scope_id(db);
+
+    // the index records a merged exit state for exactly the bodies an assertion is read from:
+    // those that hand back nothing, and that cannot return through a `finally` suite
+    let use_def = index.use_def_map(file_scope_id);
+    if !use_def.records_normal_exit() {
+        return false;
+    }
+
+    let place_table = index.place_table(file_scope_id);
+    let targets = use_def.predicate_narrowing_targets();
+    node.parameters.iter_non_variadic_params().any(|parameter| {
+        let name = &parameter.parameter.name.id;
+        place_table.symbol_id(name).is_some_and(|symbol| {
+            std::iter::once(ScopedPlaceId::Symbol(symbol))
+                .chain(place_table.members_of_symbol(name))
+                .any(|place| targets.contains_place(place))
+        })
+    })
+}
+
+/// The assertions `overload`'s body establishes, for a `def` that wrote no return type and hands
+/// back nothing.
+///
+/// A place is asserted to be what the merged state of every way out of the body says it is,
+/// narrowing `object` so that a call site intersects the assertion with the argument it actually
+/// passed. A body the index recorded no such state for — one that hands back a value, or that can
+/// return through a `finally` suite — asserts nothing.
+///
+/// These are not part of the function's signature, which only records whose they are — see
+/// [`DeferredAssertions`](crate::types::signatures::DeferredAssertions). A cycle starts at "this
+/// function asserts nothing", for the reason [`inferred_predicate_guards`] gives.
+#[salsa::tracked(
+    returns(ref),
+    cycle_initial = |_, _, _| Box::default(),
+    heap_size = ruff_memory_usage::heap_size,
+)]
+pub(crate) fn recovered_assertion_guards<'db>(
+    db: &'db dyn Db,
+    overload: OverloadLiteral<'db>,
+) -> Box<[NarrowingGuard<'db>]> {
+    if !may_recover_assertions(db, overload) {
+        return Box::default();
+    }
+
+    let program_file = overload.program_file(db);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let node = overload.node(db, overload.file(db), &module);
+    let index = semantic_index(db, program_file);
+    let file_scope_id = overload.body_scope(db).file_scope_id(db);
+    let place_table = index.place_table(file_scope_id);
+    let use_def = index.use_def_map(file_scope_id);
+    let first_parameter = node
+        .parameters
+        .iter()
+        .next()
+        .map(ast::AnyParameterRef::name);
+    let env = &ProgramEnvironment::from_file(program_file);
+
+    let mut guards = Vec::new();
+    for parameter in node.parameters.iter_non_variadic_params() {
+        let name = &parameter.parameter.name.id;
+        let Some(symbol) = place_table.symbol_id(name) else {
+            continue;
+        };
+        let places = std::iter::once(ScopedPlaceId::Symbol(symbol))
+            .chain(place_table.members_of_symbol(name));
+        for place in places {
+            // a place no predicate narrows is `object` wherever the body returns, which is no
+            // assertion at all, and answering that costs nothing
+            if !use_def.predicate_narrowing_targets().contains_place(place) {
+                continue;
+            }
+            let Some(members) = place_table.place(place).attribute_chain() else {
+                continue;
+            };
+            let members: Vec<Name> = members.into_iter().map(Name::new).collect();
+            if !holds_the_argument(db, index, file_scope_id, name, &members) {
+                continue;
+            }
+            let Some(bindings) = use_def.normal_exit_bindings(place) else {
+                continue;
+            };
+            let established = narrowed_over(db, env, use_def, bindings, place, &|_| Type::object());
+            let Some(ty) = agreed_constraint(db, env, vec![established]) else {
+                continue;
+            };
+            guards.push(NarrowingGuard {
+                root_is_first_parameter: first_parameter.is_some_and(|first| first.id == *name),
+                name: name.clone(),
+                members: members.into_boxed_slice(),
+                kind: NarrowingGuardKind::InferredAssertion { ty },
+            });
+        }
+    }
+    guards.into_boxed_slice()
+}
+
+/// A way out of a function body that hands control back to the caller.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum NormalExit {
+    /// The `return` statement at this position among those recorded for the body, and its range.
+    Return { index: usize, range: TextRange },
+    /// Falling off the end of the body.
+    EndOfBody,
+}
+
+/// Every way out of a function body that can be reached, and whose state says what a caller sees.
+///
+/// A `return` a `finally` suite can run after is left out: what the caller sees is the state after
+/// that suite, which this model does not have. So it is neither read as establishing something nor
+/// reported as failing to.
+pub(crate) fn normal_exits<'db>(db: &'db dyn Db, use_def: &UseDefMap<'db>) -> Vec<NormalExit> {
+    let is_reachable = |reachability| {
+        !use_def
+            .reachability_constraints()
+            .evaluate(db, use_def.predicates(), reachability)
+            .is_always_false()
+    };
+    use_def
+        .return_exits()
+        .enumerate()
+        .filter(|(_, (_, reachability, through_finally))| {
+            !through_finally && is_reachable(*reachability)
+        })
+        .map(|(index, (range, _, _))| NormalExit::Return { index, range })
+        .chain(can_implicitly_return_none(db, use_def).then_some(NormalExit::EndOfBody))
+        .collect()
+}
+
+/// What `place` is where `exit` leaves the body.
+///
+/// Each binding that reaches the exit is narrowed by what the flow established on the way there.
+/// `start` gives the type narrowing starts from for a binding: `None` for the state the place was
+/// in when the body began, which the body did not put there.
+pub(crate) fn narrowed_at_exit<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    use_def: &UseDefMap<'db>,
+    exit: NormalExit,
+    place: ScopedPlaceId,
+    start: &dyn Fn(Option<Definition<'db>>) -> Type<'db>,
+) -> Type<'db> {
+    let narrow = |bindings| narrowed_over(db, env, use_def, bindings, place, start);
+    match exit {
+        // a place first named after the `return` had nothing established about it there
+        NormalExit::Return { index, .. } => use_def
+            .return_exit_bindings(index, place)
+            .map_or_else(|| start(None), narrow),
+        NormalExit::EndOfBody => narrow(use_def.end_of_scope_bindings(place)),
+    }
+}
+
+/// What `bindings` leave `place` as, each narrowed by what the flow established on the way to it.
+fn narrowed_over<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    use_def: &UseDefMap<'db>,
+    bindings: BindingWithConstraintsIterator<'_, 'db>,
+    place: ScopedPlaceId,
+    start: &dyn Fn(Option<Definition<'db>>) -> Type<'db>,
+) -> Type<'db> {
+    let mut narrowed = UnionBuilder::new(db, env);
+    for binding in bindings {
+        if use_def
+            .reachability_constraints()
+            .evaluate(db, use_def.predicates(), binding.reachability_constraint)
+            .is_always_false()
+        {
+            continue;
+        }
+        let start = match binding.binding {
+            DefinitionState::Undefined => start(None),
+            DefinitionState::Defined(definition) => start(Some(definition)),
+            // a deleted place holds nothing a caller could read back
+            DefinitionState::Deleted => continue,
+        };
+        narrowed.add_in_place(binding.narrowing_constraint.narrow(db, env, start, place));
+    }
+    narrowed.build()
+}
+
+/// Whether the place `name` and `members` describe still holds the caller's value — the argument
+/// passed for a parameter, or what the place held where the guard is written — everywhere in the
+/// body.
 ///
 /// A guard names the argument a call passed, so it says nothing once the body puts something else
 /// where that argument was. `def f(a): a = 1; return a is int` hands back `True` whatever it was
@@ -181,7 +408,7 @@ pub(crate) fn inferred_narrowing_guards<'db>(
 /// Any binding at all is enough to give up on, wherever in the body it is. Deciding which
 /// bindings reach which `return` is what the flow analysis of the body is for, and this is a
 /// claim about every call — one that has to hold for all of them or not be made.
-fn holds_the_argument<'db>(
+pub(crate) fn holds_the_argument<'db>(
     db: &'db dyn Db,
     index: &SemanticIndex<'db>,
     file_scope_id: FileScopeId,
@@ -191,10 +418,16 @@ fn holds_the_argument<'db>(
     let place_table = index.place_table(file_scope_id);
     let use_def = index.use_def_map(file_scope_id);
 
-    // the parameter itself is a binding of its own name, and the only one there may be
+    // a name the body never mentions is one it cannot have put anything in
     let Some(symbol_id) = place_table.symbol_id(name) else {
-        return false;
+        return true;
     };
+    // a `global` or `nonlocal` name is bound where the caller reads it, so writing to it writes
+    // what the caller goes on to see
+    let symbol = place_table.symbol(symbol_id);
+    if symbol.is_global() || symbol.is_nonlocal() {
+        return true;
+    }
     if !use_def
         .reachable_symbol_bindings(symbol_id)
         .all(|binding| match binding.binding {
