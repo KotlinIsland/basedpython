@@ -512,7 +512,7 @@ pub(crate) fn server_capabilities(
                     std::iter::once(CodeActionKind::QuickFix)
                         .chain(
                             ty_ide::RefactorKind::ALL
-                                .into_iter()
+                                .iter()
                                 .map(|kind| CodeActionKind::new(kind.code_action_kind())),
                         )
                         .collect(),

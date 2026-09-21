@@ -6,6 +6,14 @@
 //! the rewrite leaves the program meaning what it meant. A refusal is part of
 //! the answer: a client that asked for a refactoring explicitly shows why it is
 //! unavailable.
+//!
+//! Each of them answers both questions at once — whether it applies here, and
+//! what it would rewrite — because the second *is* the first: a refactoring
+//! applies exactly when a rewrite that preserves meaning can be spelled, and
+//! there is no cheaper test that does not amount to a second implementation of
+//! the same reasoning, which could then disagree with it. So [`refactors`]
+//! hands its edits back rather than throwing them away, and the caller tells it
+//! which refactorings to consider rather than being given all of them.
 
 mod data_class;
 mod evaluation;
@@ -43,7 +51,7 @@ pub enum RefactorKind {
 }
 
 impl RefactorKind {
-    pub const ALL: [RefactorKind; 7] = [
+    pub const ALL: &'static [RefactorKind] = &[
         RefactorKind::InlineVariable,
         RefactorKind::ExtractVariable,
         RefactorKind::IntroduceConstant,
@@ -81,7 +89,7 @@ impl RefactorKind {
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|kind| kind.id() == id)
+        Self::ALL.iter().copied().find(|kind| kind.id() == id)
     }
 }
 
@@ -90,8 +98,12 @@ impl RefactorKind {
 pub struct RefactorOffer {
     pub kind: RefactorKind,
     pub title: String,
-    /// `Err` holds why the refactoring cannot be applied here.
-    pub availability: Result<(), String>,
+    /// `Ok` holds the rewrite and `Err` why there is none.
+    ///
+    /// The edits come with the offer because working them out is how the question was answered:
+    /// a refactoring applies exactly when its rewrite can be spelled, so there is no cheaper
+    /// test to run first. A caller that only needs to know *whether* to offer it may drop them.
+    pub availability: Result<Vec<FileEdit>, String>,
 }
 
 /// A refactoring worked out in full.
@@ -162,6 +174,15 @@ impl<'db> RefactorContext<'db> {
         self.file().source_type(self.db).is_basedpython()
     }
 
+    /// A plan's edits, each carrying the file it applies to.
+    fn file_edits(&self, edits: Vec<Edit>) -> Vec<FileEdit> {
+        let file = self.file();
+        edits
+            .into_iter()
+            .map(|edit| FileEdit { file, edit })
+            .collect()
+    }
+
     fn plan(&self, kind: RefactorKind, range: TextRange) -> Result<Plan, Refusal> {
         match kind {
             RefactorKind::InlineVariable => inline_variable::plan(self, range),
@@ -183,10 +204,19 @@ impl<'db> RefactorContext<'db> {
     }
 }
 
-/// The refactorings that are about what is at `range` in `file`, each with
-/// whether it can be applied.
-pub fn refactors(db: &dyn Db, file: ProgramFile<'_>, range: TextRange) -> Vec<RefactorOffer> {
-    if !is_refactorable(db, file) {
+/// Those of `kinds` that are about what is at `range` in `file`, each with its rewrite or the
+/// reason there is none.
+///
+/// `kinds` is asked for rather than assumed because answering for one costs working its rewrite
+/// out, so a caller that will not offer a refactoring should not name it — a client narrowing a
+/// `textDocument/codeAction` with `only` then pays for nothing it asked no question about.
+pub fn refactors(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    range: TextRange,
+    kinds: &[RefactorKind],
+) -> Vec<RefactorOffer> {
+    if kinds.is_empty() || !is_refactorable(db, file) {
         return Vec::new();
     }
     let context = RefactorContext::new(db, file);
@@ -194,13 +224,14 @@ pub fn refactors(db: &dyn Db, file: ProgramFile<'_>, range: TextRange) -> Vec<Re
         return Vec::new();
     }
 
-    RefactorKind::ALL
-        .into_iter()
+    kinds
+        .iter()
+        .copied()
         .filter_map(|kind| match context.plan(kind, range) {
             Ok(plan) => Some(RefactorOffer {
                 kind,
                 title: plan.title,
-                availability: Ok(()),
+                availability: Ok(context.file_edits(plan.edits)),
             }),
             Err(Refusal::NotApplicable) => None,
             Err(Refusal::Refused { title, reason }) => Some(RefactorOffer {
@@ -231,14 +262,7 @@ pub fn refactor(
         Ok(plan) => Ok(Refactor {
             kind,
             title: plan.title,
-            edits: plan
-                .edits
-                .into_iter()
-                .map(|edit| FileEdit {
-                    file: file.file(db),
-                    edit,
-                })
-                .collect(),
+            edits: context.file_edits(plan.edits),
         }),
         Err(Refusal::NotApplicable) => Err(NOT_HERE.to_string()),
         Err(Refusal::Refused { reason, .. }) => Err(reason),
@@ -309,18 +333,28 @@ pub(crate) mod test_support {
         /// The file after applying `kind`, or why it was not offered or refused.
         pub(crate) fn apply(&self, kind: RefactorKind) -> String {
             let program_file = self.db.program_file(self.file);
-            let offers = refactors(&self.db, program_file, self.range);
+            let offers = refactors(&self.db, program_file, self.range, RefactorKind::ALL);
             let Some(offer) = offers.iter().find(|offer| offer.kind == kind) else {
                 return "not offered".to_string();
             };
             match refactor(&self.db, program_file, kind, self.range) {
                 Ok(result) => {
-                    assert_eq!(
-                        offer.availability,
-                        Ok(()),
-                        "a refactoring that applies must be offered as available"
-                    );
+                    let offered = offer
+                        .availability
+                        .as_ref()
+                        .expect("a refactoring that applies must be offered as available");
                     assert_eq!(offer.title, result.title);
+                    // the offer and the resolve are two computations of one rewrite, and a
+                    // client applies whichever it was handed
+                    assert_eq!(
+                        offered.iter().map(|edit| &edit.edit).collect::<Vec<_>>(),
+                        result
+                            .edits
+                            .iter()
+                            .map(|edit| &edit.edit)
+                            .collect::<Vec<_>>(),
+                        "the offered edits and the resolved edits must be the same rewrite"
+                    );
                     let source = ruff_db::source::source_text(&self.db, self.file);
                     let mut text = source.as_str().to_string();
                     let mut edits: Vec<_> =
@@ -335,7 +369,7 @@ pub(crate) mod test_support {
                     format!("{}\n---\n{text}", offer.title)
                 }
                 Err(reason) => {
-                    assert_eq!(offer.availability, Err(reason.clone()));
+                    assert_eq!(offer.availability.as_ref().err(), Some(&reason));
                     format!("refused: {} ({reason})", offer.title)
                 }
             }
