@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use lsp_types::{self as types, Code, CodeActionRequest, CodeActionResponse, TextEdit, Uri};
 use ruff_text_size::Ranged;
-use ty_ide::{FileEdit, RefactorOffer, code_actions, refactors};
+use ty_ide::{FileEdit, RefactorKind, code_actions, refactors};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 use types::CodeActionKind;
 
@@ -46,10 +46,18 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
         let program_file = db.program_file(file);
         let mut actions = Vec::new();
 
-        for mut diagnostic in diagnostics.into_iter().filter(|diagnostic| {
-            diagnostic.source.as_deref() == Some(DIAGNOSTIC_NAME)
-                && range_intersect(&diagnostic.range, &params.range)
-        }) {
+        // a client that narrowed the request to kinds a quick fix is not one of is asking for no
+        // quick fixes, and the same holds of the refactorings below
+        let quick_fixes_wanted = is_requested(only.as_deref(), &CodeActionKind::QuickFix);
+
+        for mut diagnostic in diagnostics
+            .into_iter()
+            .filter(|_| quick_fixes_wanted)
+            .filter(|diagnostic| {
+                diagnostic.source.as_deref() == Some(DIAGNOSTIC_NAME)
+                    && range_intersect(&diagnostic.range, &params.range)
+            })
+        {
             let mut diagnostic_id = match &diagnostic.code {
                 Some(Code::String(diagnostic_id)) => Some(Cow::Borrowed(diagnostic_id)),
                 _ => None,
@@ -161,21 +169,36 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
             }
         }
 
-        if !snapshot.is_django_template()
+        // asked for before anything is worked out, because answering for one refactoring costs
+        // computing its rewrite: a client narrowing to `quickfix` must not pay for seven
+        let wanted: Vec<ty_ide::RefactorKind> = RefactorKind::ALL
+            .iter()
+            .copied()
+            .filter(|kind| {
+                is_requested(
+                    only.as_deref(),
+                    &CodeActionKind::new(kind.code_action_kind()),
+                )
+            })
+            .collect();
+        if !wanted.is_empty()
+            && !snapshot.is_django_template()
             && let Some(range) =
                 params
                     .range
                     .to_text_range(db, file, snapshot.uri(), snapshot.encoding())
         {
-            for offer in refactors(db, program_file, range) {
+            for offer in refactors(db, program_file, range, &wanted) {
                 let kind = CodeActionKind::new(offer.kind.code_action_kind());
-                if !is_requested(only.as_deref(), &kind) {
-                    continue;
-                }
                 let action = match offer.availability {
-                    Ok(()) => {
-                        refactor_action(db, snapshot, program_file, &offer, params.range, range)
-                    }
+                    Ok(edits) => Some(refactor_action(
+                        db,
+                        snapshot,
+                        offer.kind,
+                        offer.title,
+                        edits,
+                        params.range,
+                    )),
                     // a refactoring that cannot be applied is only worth showing to a
                     // user who asked for refactorings, who is owed the reason
                     Err(reason) if invoked => Some(lsp_types::CodeAction {
@@ -228,18 +251,21 @@ pub(crate) fn to_lsp_edits(
     (!lsp_edits.is_empty()).then_some(lsp_edits)
 }
 
-/// The code action for a refactoring that applies. A client that can resolve an
-/// action's edit gets it on request, carrying what is needed to compute it again;
-/// any other client gets the edit up front.
+/// The code action for a refactoring that applies.
+///
+/// A client that can resolve an action's edit is sent the action without one, carrying what
+/// `codeAction/resolve` needs to spell it again; any other client is sent `edits` up front. That
+/// saves serialising a rewrite nobody chose, not working it out — the rewrite in hand is how this
+/// refactoring was known to apply at all.
 fn refactor_action(
     db: &ProjectDatabase,
     snapshot: &DocumentSnapshot,
-    program_file: ty_python_core::ProgramFile<'_>,
-    offer: &RefactorOffer,
+    kind: ty_ide::RefactorKind,
+    title: String,
+    edits: Vec<FileEdit>,
     lsp_range: types::Range,
-    range: ruff_text_size::TextRange,
-) -> Option<lsp_types::CodeAction> {
-    let kind = CodeActionKind::new(offer.kind.code_action_kind());
+) -> lsp_types::CodeAction {
+    let action_kind = CodeActionKind::new(kind.code_action_kind());
     if snapshot
         .resolved_client_capabilities()
         .supports_code_action_edit_resolve()
@@ -247,26 +273,25 @@ fn refactor_action(
         let data = RefactorData {
             uri: snapshot.uri().clone(),
             version: snapshot.document().version(),
-            refactor: offer.kind.id().to_string(),
+            refactor: kind.id().to_string(),
             range: lsp_range,
         };
-        return Some(lsp_types::CodeAction {
-            title: offer.title.clone(),
-            kind: Some(kind),
+        return lsp_types::CodeAction {
+            title,
+            kind: Some(action_kind),
             data: serde_json::to_value(data).ok(),
             ..lsp_types::CodeAction::default()
-        });
+        };
     }
-    let refactor = ty_ide::refactor(db, program_file, offer.kind, range).ok()?;
-    Some(lsp_types::CodeAction {
-        title: refactor.title,
-        kind: Some(kind),
+    lsp_types::CodeAction {
+        title,
+        kind: Some(action_kind),
         edit: Some(lsp_types::WorkspaceEdit {
-            changes: to_lsp_edits(db, snapshot.encoding(), refactor.edits),
+            changes: to_lsp_edits(db, snapshot.encoding(), edits),
             ..lsp_types::WorkspaceEdit::default()
         }),
         ..lsp_types::CodeAction::default()
-    })
+    }
 }
 
 /// What a refactoring's code action carries for `codeAction/resolve` to compute
@@ -301,3 +326,73 @@ fn range_intersect(range: &lsp_types::Range, other: &lsp_types::Range) -> bool {
 }
 
 impl RetriableRequestHandler for CodeActionRequestHandler {}
+
+#[cfg(test)]
+mod tests {
+    use super::is_requested;
+    use lsp_types::CodeActionKind;
+    use ty_ide::RefactorKind;
+
+    fn only(kinds: &[&'static str]) -> Vec<CodeActionKind> {
+        kinds.iter().map(|kind| CodeActionKind::new(kind)).collect()
+    }
+
+    /// A client that sent no `only` asked for everything.
+    #[test]
+    fn without_only_every_kind_is_wanted() {
+        assert!(is_requested(None, &CodeActionKind::QuickFix));
+        for kind in RefactorKind::ALL {
+            assert!(is_requested(
+                None,
+                &CodeActionKind::new(kind.code_action_kind())
+            ));
+        }
+    }
+
+    /// A requested kind covers the kinds nested under it, which is how a client asks for every
+    /// refactoring without naming each one.
+    #[test]
+    fn a_requested_kind_covers_what_is_nested_under_it() {
+        let refactor = only(&["refactor"]);
+        for kind in RefactorKind::ALL {
+            assert!(is_requested(
+                Some(&refactor),
+                &CodeActionKind::new(kind.code_action_kind())
+            ));
+        }
+        assert!(is_requested(
+            Some(&only(&["refactor.extract"])),
+            &CodeActionKind::new(RefactorKind::ExtractVariable.code_action_kind())
+        ));
+    }
+
+    /// The narrowing runs both ways: the quick fixes are skipped for a client that asked only for
+    /// refactorings, and every refactoring for one that asked only for quick fixes.
+    #[test]
+    fn a_narrowed_request_excludes_the_other_kinds() {
+        assert!(!is_requested(
+            Some(&only(&["refactor"])),
+            &CodeActionKind::QuickFix
+        ));
+        let quick_fix = only(&["quickfix"]);
+        for kind in RefactorKind::ALL {
+            assert!(!is_requested(
+                Some(&quick_fix),
+                &CodeActionKind::new(kind.code_action_kind())
+            ));
+        }
+    }
+
+    /// A kind is not covered by one nested *under* it: `quickfix` is not a `quickfix.foo`.
+    #[test]
+    fn a_kind_is_not_covered_by_a_narrower_one() {
+        assert!(!is_requested(
+            Some(&only(&["quickfix.foo"])),
+            &CodeActionKind::QuickFix
+        ));
+        assert!(!is_requested(
+            Some(&only(&["refactor.extract"])),
+            &CodeActionKind::new(RefactorKind::InlineVariable.code_action_kind())
+        ));
+    }
+}

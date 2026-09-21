@@ -351,9 +351,20 @@ extracting statements from a method makes a method of the same class, called
 through the receiver. what the statements read from the function becomes a
 parameter, and what they assign that is read afterwards is returned
 
+a constant goes further than a variable: it is bound at the top of the module, so
+it is evaluated as the module loads whether or not the expression would have been
+evaluated at all. only an expression made of literals that cannot raise is
+hoisted, and whether an operation over literals raises is asked of the checker
+rather than read off its spelling — `60 * 60 * 24` is offered because ty folds it
+to `86400`, while `1 / 0` and `1 + "a"` are not offered at all
+
 a client that can resolve a code action's edit gets the action without one, and the
 edit is computed when the action is chosen — against the document version it was
-offered for, and refused as content modified if the document changed since
+offered for, and refused as content modified if the document changed since. this
+defers sending the edit, not working it out: whether a refactoring applies is
+decided by working out the rewrite, so the actions a `textDocument/codeAction`
+reply offers have each been computed to answer it. send `only` to narrow that —
+a request that does not ask for `refactor` kinds does no refactoring work at all
 
 ## debugger facts
 
