@@ -366,6 +366,46 @@ decided by working out the rewrite, so the actions a `textDocument/codeAction`
 reply offers have each been computed to answer it. send `only` to narrow that —
 a request that does not ask for `refactor` kinds does no refactoring work at all
 
+## keyword highlighting
+
+`textDocument/documentHighlight` on a keyword answers the keywords that belong
+with it rather than the occurrences of a symbol: the `elif`s and `else` of an
+`if`, the `except`, `else` and `finally` of a `try`, the `return`s of a `def`.
+the pairing is read off the parse tree, so `match = 1` is an assignment and
+nothing lights up on it. a position that is not a keyword is answered the way it
+always was
+
+## the program model
+
+a run configuration, a test list and a "go to generated file" are all questions
+about the project rather than about a position in a file, and each used to be an
+editor's own guess at a layout the build decides. the server answers them
+instead, from the same reading the transpiler and the checker use:
+
+| request            | answers                                                                     |
+| ------------------ | --------------------------------------------------------------------------- |
+| `by/entryPoint`    | whether a module has a `main`, and the command line the transpiler gives it |
+| `by/testItems`     | the tests pytest collects from a document, with their node ids              |
+| `by/runModules`    | the modules `by run` can be given, and the one `run.main` names             |
+| `by/buildOutput`   | where a project's build writes, and which output came from which source     |
+| `by/syntaxOutline` | a document's suites, clause keywords, call statements and string parts      |
+
+`by/buildOutput` maps both ways: given a `.by` it names the file the build writes
+it to, given a file in the build directory it names the source. the path inside
+the build follows the *module* tree, not the directory tree, so a src-layout
+project's `src/pkg/main.by` is `build/pkg/main.py` — which is why this is the
+build's answer rather than a path an editor can assemble
+
+`by/syntaxOutline` answers one document whole, on every revision the client wants
+to serve features from: it is what an editor needs to type in an
+indentation-delimited language — which line opens a suite, where a compound
+statement ends, what a string literal's escapes and interpolations are, and how
+much indentation a triple-quoted string has stripped
+
+`.by` test files are collected under the same names as python ones — `test_*.by`
+and `*_test.by` — because a `.by` transpiles to the `.py` of the same stem, and
+that is the file pytest sees
+
 ## debugger facts
 
 while a program is stopped, an editor knows something no checker does: what the
