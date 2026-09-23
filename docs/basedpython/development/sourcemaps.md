@@ -97,9 +97,13 @@ rewritten since is a false one
 would compile the `.py`, so the shim compiles it instead, under the `.by` path and
 with each line the `.by` line it came from (a generated line is line 0). every
 location the running program reads back — a traceback it formats, the place a
-warning is attributed to, `co_filename`, `inspect` — is then the author's. the
-digests are checked then, and a mismatch leaves the module to python's loader. a
-`.by` saved over during the run is caught when a frame is reported: the frame
+warning is attributed to, `co_filename`, `inspect` — is then the author's, and so is
+the line of a warning python raises while compiling it, and of the `SyntaxError` it raises
+instead when the warning filters make that warning an error (`-W error`). the `.py` is compiled from its
+text, as python's loader would, and its code objects are then moved to the `.by` lines:
+python 3.9 to 3.11 refuse a syntax tree nested deeper than their recursion limit, even
+one whose source they compile. the digests are checked then, and a mismatch leaves
+the module to python's loader. a `.by` saved over during the run is caught when a frame is reported: the frame
 names the one generated line that `.by` line was written as, or no line when
 there was more than one
 

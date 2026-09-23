@@ -773,7 +773,7 @@ pub(crate) fn is_basedpython_implicit_typing_name(name: &str) -> bool {
 }
 
 /// The Python version in which `name` was added to the `typing` module, or
-/// `None` if it has been available since before 3.10.
+/// `None` if python 3.9 already has it.
 ///
 /// basedpython makes these names available regardless of the target Python
 /// version. This is the single source of truth for that set: `by_transforms`'
@@ -783,6 +783,9 @@ pub(crate) fn is_basedpython_implicit_typing_name(name: &str) -> bool {
 /// (see `infer_import_from_definition`).
 pub fn basedpython_typing_added_in(name: &str) -> Option<PythonVersion> {
     match name {
+        // 3.10
+        "ParamSpec" | "ParamSpecArgs" | "ParamSpecKwargs" | "Concatenate" | "TypeAlias"
+        | "TypeGuard" | "is_typeddict" => Some(PythonVersion::PY310),
         // 3.11
         "Never"
         | "assert_never"

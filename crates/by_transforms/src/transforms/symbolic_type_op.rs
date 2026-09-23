@@ -24,14 +24,17 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use ruff_python_ast::visitor::transformer::{Transformer, walk_expr};
+use ruff_python_ast::visitor::{self, Visitor};
 use ruff_python_ast::{CmpOp, Expr, ModModule, Operator, Stmt, UnaryOp};
 use ruff_python_parser::parse_expression;
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::literal_types::float_literal_spelling;
 use super::type_expr_walker::{
     Recurse, TypeExprVisitor, TypePos, walk_one_type_expr, walk_type_positions,
 };
+use crate::config::FloatLiteralLowering;
 use crate::type_info::TypeInfo;
 
 /// One resolved operation: the replacement node (spliced into the working AST)
@@ -76,9 +79,14 @@ impl SymbolicFolds {
 
 /// Walk every type position and resolve each non-union/non-intersection binary
 /// operation to the type ty inferred for it, parsed into a replacement node.
-pub(crate) fn collect_symbolic_folds(stmts: &[Stmt], types: &dyn TypeInfo) -> SymbolicFolds {
+pub(crate) fn collect_symbolic_folds(
+    stmts: &[Stmt],
+    types: &dyn TypeInfo,
+    float_literals: FloatLiteralLowering,
+) -> SymbolicFolds {
     let mut collector = FoldCollector {
         types,
+        float_literals,
         folds: HashMap::new(),
         needs_literal_import: false,
         needs_any_import: false,
@@ -93,6 +101,7 @@ pub(crate) fn collect_symbolic_folds(stmts: &[Stmt], types: &dyn TypeInfo) -> Sy
 
 struct FoldCollector<'a> {
     types: &'a dyn TypeInfo,
+    float_literals: FloatLiteralLowering,
     folds: HashMap<TextRange, Fold>,
     needs_literal_import: bool,
     needs_any_import: bool,
@@ -200,6 +209,16 @@ impl TypeExprVisitor for FoldCollector<'_> {
                 ("Any".to_string(), parsed)
             }
         };
+        // ty spells a float or complex literal type as the bare number, which python reads
+        // as no type at all. it is written the way the same literal written in the source is
+        let (rendered, parsed) =
+            match spell_float_literals(&rendered, parsed.expr(), self.float_literals) {
+                Some(spelled) => match parse_expression(&spelled) {
+                    Ok(parsed) => (spelled, parsed),
+                    Err(_) => return Recurse::Descend,
+                },
+                None => (rendered, parsed),
+            };
         if rendered.contains("Literal[") {
             self.needs_literal_import = true;
         }
@@ -212,6 +231,54 @@ impl TypeExprVisitor for FoldCollector<'_> {
         // the whole operation is replaced; its operands are gone from the output
         Recurse::Stop
     }
+}
+
+/// `rendered` with each float or complex literal type in `parsed` (its parse) spelled as
+/// [`float_literal_spelling`] spells a written one, or `None` when it holds none
+fn spell_float_literals(
+    rendered: &str,
+    parsed: &Expr,
+    float_literals: FloatLiteralLowering,
+) -> Option<String> {
+    struct Spellings<'a> {
+        rendered: &'a str,
+        float_literals: FloatLiteralLowering,
+        edits: Vec<(TextRange, String)>,
+    }
+    impl<'a> Visitor<'a> for Spellings<'_> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            // what `Literal[...]` holds is already a python literal
+            if let Expr::Subscript(subscript) = expr
+                && matches!(subscript.value.as_ref(), Expr::Name(name) if name.id.as_str() == "Literal")
+            {
+                return;
+            }
+            let text = &self.rendered[expr.range()];
+            if let Some(spelling) = float_literal_spelling(expr, text, self.float_literals) {
+                self.edits.push((expr.range(), spelling));
+                return;
+            }
+            visitor::walk_expr(self, expr);
+        }
+    }
+    let mut spellings = Spellings {
+        rendered,
+        float_literals,
+        edits: Vec::new(),
+    };
+    spellings.visit_expr(parsed);
+    if spellings.edits.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    let mut cursor = 0;
+    for (range, spelling) in spellings.edits {
+        out.push_str(&rendered[cursor..usize::from(range.start())]);
+        out.push_str(&spelling);
+        cursor = usize::from(range.end());
+    }
+    out.push_str(&rendered[cursor..]);
+    Some(out)
 }
 
 pub(crate) struct SymbolicTypeOp {
@@ -306,6 +373,39 @@ mod tests {
                 from typing import Literal
                 c: Literal[2]
             "},
+        );
+    }
+
+    /// a fold to a float literal type is written as the same literal written in the source
+    /// is: `float` by default, since python has no spelling for the literal itself
+    #[test]
+    fn a_float_fold_is_written_as_a_written_float() {
+        check(
+            "a: 1.0 + 1.5\nb: 2.5\nc: list[0.5 * 3]\nd: 1 + 1 | 0.5 + 0.5\n",
+            indoc! {"
+                from typing import Literal
+                a: float
+                b: float
+                c: list[float]
+                d: Literal[2] | float
+            "},
+        );
+    }
+
+    /// the project that keeps a float literal's precision keeps a folded one's too
+    #[test]
+    fn a_float_fold_kept_as_a_literal() {
+        let config = Config {
+            float_literals: crate::config::FloatLiteralLowering::Literal,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile("a: 1.0 + 1.5\nb: -(1.0 + 1.5)\n", &config).unwrap(),
+            crate::python_passthrough::lazify_expected(indoc! {"
+                from typing import Literal
+                a: Literal[2.5]
+                b: Literal[-2.5]
+            "})
         );
     }
 

@@ -42,7 +42,7 @@ type Decision = Result<UnderscoreLowering, UnderscoreRefusal>;
 /// list — read off ty before any pass rewrites the syntax tree, so the passes that walk a
 /// tree of their own can still ask
 #[derive(Debug)]
-pub(crate) struct UnderscoreLowerings {
+pub struct UnderscoreLowerings {
     decisions: HashMap<TextRange, Decision>,
     /// whether the python the module targets has the `/` a repeated `_` needs
     slash: bool,
@@ -89,6 +89,20 @@ pub(crate) fn collect(suite: &[Stmt], types: &dyn TypeInfo, slash: bool) -> Unde
     collector.lowerings
 }
 
+/// ty's answer for every parameter list in `suite` that repeats `_`, for a native build of
+/// the module `model` is of. that build runs on the interpreter it is compiled for, which
+/// has the `/`
+///
+/// the native build publishes the same definitions the transpiled module does, so it
+/// reads the same answer: [`WrittenNames::with_lowerings`] these, and every name and `/`
+/// it writes is the transpiler's
+pub fn repeated_underscore_lowerings(
+    model: &ty_python_semantic::SemanticModel<'_>,
+    suite: &[Stmt],
+) -> UnderscoreLowerings {
+    collect(suite, model, true)
+}
+
 /// how `parameters` is lowered read on its own, with no method it overrides and no receiver
 /// to consult. a lambda has neither, so this is the answer ty gives a lambda too
 fn standalone_lowering(parameters: &Parameters, slash: bool) -> Option<Decision> {
@@ -116,8 +130,8 @@ fn repeats_underscore(parameters: &Parameters) -> bool {
 ///     return _2  # the module's `_2`, so the second parameter is `_3`
 /// ```
 ///
-/// without the lowerings ty decided — the native compiler reads a module on its own —
-/// a repeated `_` is numbered and nothing takes a name from an overridden method
+/// without the lowerings ty decided, a repeated `_` is numbered and nothing takes a name
+/// from an overridden method
 #[derive(Clone, Copy, Debug)]
 pub struct WrittenNames<'src> {
     names: decision::WrittenNames<'src>,
@@ -135,7 +149,7 @@ impl<'src> WrittenNames<'src> {
 
     /// these names, with `lowerings` saying how each parameter list that repeats `_` is
     /// lowered
-    pub(crate) fn with_lowerings<'a>(self, lowerings: &'a UnderscoreLowerings) -> WrittenNames<'a>
+    pub fn with_lowerings<'a>(self, lowerings: &'a UnderscoreLowerings) -> WrittenNames<'a>
     where
         'src: 'a,
     {
@@ -155,10 +169,15 @@ impl<'src> WrittenNames<'src> {
         self.names.fresh(stem)
     }
 
+    /// whether the module spells `name` anywhere
+    pub(crate) fn spells(self, name: &str) -> bool {
+        self.names.spells(name)
+    }
+
     /// how `parameters` is lowered when it repeats `_`. without ty's answer, the list is
     /// read on its own, as a lambda's is: it takes no name from a method it overrides
     /// whether the python the module targets has the `/` a repeated `_` needs. without ty's
-    /// answers, as for a native build, it is assumed to
+    /// answers it is assumed to
     fn slash(self) -> bool {
         self.lowerings.is_none_or(|lowerings| lowerings.slash)
     }
@@ -249,7 +268,7 @@ pub(crate) fn lowered_callable_parameters(
 }
 
 /// how many of the leading positional `parameters` the python takes by position alone
-pub(crate) fn positional_only_count(parameters: &Parameters, written: WrittenNames) -> usize {
+pub fn positional_only_count(parameters: &Parameters, written: WrittenNames) -> usize {
     match written.lowering(parameters) {
         Some(Ok(lowering)) => lowering.positional_only(),
         _ => parameters.posonlyargs.len(),
@@ -257,8 +276,8 @@ pub(crate) fn positional_only_count(parameters: &Parameters, written: WrittenNam
 }
 
 /// the name a read of `_` in the body of a definition with `parameters` means, when the
-/// lowering binds no parameter to `_` any more: the first `_` took a name from the method
-/// the definition overrides, and a read of `_` is still the first `_`'s value
+/// lowering binds `_` to anything but the first `_`: the first `_` took a name from the
+/// method the definition overrides, and a read of `_` is still the first `_`'s value
 pub(crate) fn rebound_underscore(parameters: &Parameters, written: WrittenNames) -> Option<Name> {
     let Some(Ok(lowering)) = written.lowering(parameters) else {
         return None;
@@ -271,6 +290,7 @@ pub(crate) fn rebound_underscore(parameters: &Parameters, written: WrittenNames)
         .zip(written.names(parameters))
         .find(|(parameter, _)| parameter.name() == "_")
         .map(|(_, name)| name)
+        .filter(|name| name != "_")
 }
 
 /// whether `body` reads `_`, anywhere in it
@@ -720,6 +740,63 @@ mod tests {
                 class B(A):
                     @override
                     def f(self, x: int, y: int) -> int:
+                        _ = x
+                        return _
+            "},
+        );
+    }
+
+    /// a base that repeats `_` numbers its own, and the override takes those names. its
+    /// first is `_`, which the body's `_` already reads
+    #[test]
+    fn an_override_of_numbered_underscores_keeps_them() {
+        check(
+            indoc! {"
+                class A:
+                    def f(self, _: int, _: int) -> int:
+                        return _
+
+                class B(A):
+                    override def f(self, _: int, _: int) -> int:
+                        return _
+            "},
+            indoc! {"
+                from typing_extensions import override
+                class A:
+                    def f(self, _: int, _2: int, /) -> int:
+                        return _
+
+                class B(A):
+                    @override
+                    def f(self, _: int, _2: int, /) -> int:
+                        return _
+            "},
+        );
+    }
+
+    /// a base parameter its author named `_` is reached by that keyword, so the `_` in its
+    /// position keeps the name
+    #[test]
+    fn a_base_parameter_named_underscore_keeps_it() {
+        check(
+            indoc! {"
+                class A:
+                    def f(self, x: int, _: int) -> int:
+                        return x
+
+                class B(A):
+                    override def f(self, _: int, _: int) -> int:
+                        return _
+            "},
+            indoc! {"
+                from typing_extensions import override
+                class A:
+                    def f(self, x: int, _: int) -> int:
+                        return x
+
+                class B(A):
+                    @override
+                    def f(self, x: int, _: int) -> int:
                         _ = x
                         return _
             "},

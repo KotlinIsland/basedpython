@@ -80,7 +80,7 @@ use ty_python_semantic::types::soundness::CheckTarget;
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::parametric_is::variance_tuple;
 use super::repeated_underscore::WrittenNames;
-use super::source_util::{PrologueStatement, body_prologue};
+use super::source_util::{PrologueStatement, body_prologue, needs_parentheses_as_argument};
 use crate::Config;
 use crate::config::SoundnessPositions;
 use crate::type_info::{SoundnessCheck, TypeInfo};
@@ -544,24 +544,32 @@ struct Rendered {
 }
 
 impl Rendered {
-    /// wrap `source[range]` in `helper(<source>, <trailing-args>)`. `trailing`
+    /// wrap `expr` in `helper(<expr>, <trailing-args>)`. `trailing`
     /// carries its own leading `, ` (e.g. `", str"` or `", A[int], (0,)"`)
-    fn wrap_call(&mut self, range: TextRange, helper: &str, trailing: &str) {
-        self.wraps
-            .push((range, format!("{helper}("), format!("{trailing})")));
+    fn wrap_call(&mut self, expr: &Expr, helper: &str, trailing: &str) {
+        let (open, close) = if needs_parentheses_as_argument(expr) {
+            ("(", ")")
+        } else {
+            ("", "")
+        };
+        self.wraps.push((
+            expr.range(),
+            format!("{helper}({open}"),
+            format!("{close}{trailing})"),
+        ));
     }
 
-    /// wrap `range` in the scalar check (`_soundness_check` /
+    /// wrap `expr` in the scalar check (`_soundness_check` /
     /// `_soundness_parametric`) named by `plan`
-    fn wrap_check(&mut self, range: TextRange, plan: &SoundnessCheck) {
+    fn wrap_check(&mut self, expr: &Expr, plan: &SoundnessCheck) {
         match plan {
             SoundnessCheck::Isinstance(target) => {
-                self.wrap_call(range, "_soundness_check", &format!(", {target}"));
+                self.wrap_call(expr, "_soundness_check", &format!(", {target}"));
             }
             SoundnessCheck::Parametric { alias, variances } => {
                 self.used_parametric = true;
                 self.wrap_call(
-                    range,
+                    expr,
                     "_soundness_parametric",
                     &format!(", {alias}, {}", variance_tuple(variances)),
                 );
@@ -595,7 +603,7 @@ impl Rendered {
                 (helper, format!(", {alias}, {}", variance_tuple(variances)))
             }
         };
-        self.wrap_call(iterable.range(), helper, &trailing);
+        self.wrap_call(iterable, helper, &trailing);
     }
 
     /// the guard statements that validate each of `checks`, in order
@@ -683,7 +691,7 @@ impl TypeAwarePass for SoundnessPass<'_> {
                 let mut checks = Vec::new();
                 for site in &walker.sites {
                     match site {
-                        Site::Value { expr, plan } => rendered.wrap_check(expr.range(), plan),
+                        Site::Value { expr, plan } => rendered.wrap_check(expr, plan),
                         Site::Elements {
                             iterable,
                             is_async,
@@ -716,7 +724,7 @@ impl TypeAwarePass for SoundnessPass<'_> {
             }
             for site in &walker.sites {
                 match site {
-                    Site::Value { expr, plan } => inner.wrap_check(expr.range(), plan),
+                    Site::Value { expr, plan } => inner.wrap_check(expr, plan),
                     Site::Elements {
                         iterable,
                         is_async,
@@ -1042,6 +1050,40 @@ mod tests {
             "got:\n{out}"
         );
         assert!(out.contains("def _soundness_iter"), "got:\n{out}");
+    }
+
+    /// a tuple written without parentheses is one iterable, and stays one inside the
+    /// check's call rather than becoming its arguments
+    #[test]
+    fn an_unparenthesized_tuple_is_checked_as_one_iterable() {
+        let out = check(
+            "def f(a: list[int], b: list[int]):\n    for x in *a, *b:\n        print(x)\n    for y in a, b:\n        print(y)\n",
+        );
+        assert!(
+            out.contains("for x in _soundness_iter((*a, *b), int):"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("for y in _soundness_iter((a, b), list):"),
+            "got:\n{out}"
+        );
+    }
+
+    /// a call takes a `yield` only parenthesized, and a `yield` the source parenthesized
+    /// has its parentheses outside the check
+    #[test]
+    fn a_yield_is_checked_parenthesized() {
+        let out = check(
+            "from typing import Any, Generator\ndef g() -> Generator[int, Any, None]:\n    x: int = yield 1\n    y: int = (yield 2)\n",
+        );
+        assert!(
+            out.contains("x: int = _soundness_check((yield 1), int)"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("y: int = (_soundness_check((yield 2), int))"),
+            "got:\n{out}"
+        );
     }
 
     #[test]

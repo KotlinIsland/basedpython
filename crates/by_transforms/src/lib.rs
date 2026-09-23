@@ -6,7 +6,10 @@ mod transforms;
 pub(crate) mod type_info;
 
 pub use config::{Config, FloatLiteralLowering, PythonVersion, SoundnessPositions};
-pub use transforms::repeated_underscore::{WrittenNames, python_parameter_name};
+pub use transforms::repeated_underscore::{
+    UnderscoreLowerings, WrittenNames, positional_only_count, python_parameter_name,
+    repeated_underscore_lowerings,
+};
 pub use transforms::soundness::{SoundnessSites, soundness_sites};
 
 /// A module's `main` as the program's command line — the reading the entry-point
@@ -2085,6 +2088,8 @@ mod python_parse_errors {
 #[cfg(test)]
 mod transpile_error {
     use super::*;
+    use ruff_python_ast::PySourceType;
+    use ruff_python_parser::UnsupportedSyntaxErrorKind as Kind;
     use ruff_text_size::TextSize;
 
     /// basedpython holds back python's two `match` checks for a `.by` source,
@@ -2120,6 +2125,156 @@ mod transpile_error {
             &AuthorNames::none(),
         )
         .unwrap();
+    }
+
+    /// how many kinds of syntax the parser holds a python version to
+    const KINDS: usize = 22;
+
+    /// the name of `kind`'s variant. a new kind fails to compile here until it is counted in
+    /// [`KINDS`] and given an example in `the_target_syntax_the_lowering_keeps_is_refused`
+    fn variant(kind: Kind) -> &'static str {
+        match kind {
+            Kind::Match => "Match",
+            Kind::Walrus => "Walrus",
+            Kind::ExceptStar => "ExceptStar",
+            Kind::UnparenthesizedNamedExpr(_) => "UnparenthesizedNamedExpr",
+            Kind::ParenthesizedKeywordArgumentName => "ParenthesizedKeywordArgumentName",
+            Kind::StarTuple(_) => "StarTuple",
+            Kind::RelaxedDecorator(_) => "RelaxedDecorator",
+            Kind::PositionalOnlyParameter => "PositionalOnlyParameter",
+            Kind::TypeParameterList => "TypeParameterList",
+            Kind::LazyImportStatement => "LazyImportStatement",
+            Kind::TypeAliasStatement => "TypeAliasStatement",
+            Kind::TypeParamDefault => "TypeParamDefault",
+            Kind::Pep701FString(_) => "Pep701FString",
+            Kind::ParenthesizedContextManager => "ParenthesizedContextManager",
+            Kind::StarExpressionInIndex => "StarExpressionInIndex",
+            Kind::StarAnnotation => "StarAnnotation",
+            Kind::UnpackingInComprehension(_) => "UnpackingInComprehension",
+            Kind::UnparenthesizedUnpackInFor => "UnparenthesizedUnpackInFor",
+            Kind::UnparenthesizedExceptionTypes => "UnparenthesizedExceptionTypes",
+            Kind::TemplateStrings => "TemplateStrings",
+            Kind::UnaryPlusMatchPattern => "UnaryPlusMatchPattern",
+            Kind::Destructuring => "Destructuring",
+        }
+    }
+
+    /// the parser holds a `.by` file to the python it targets for every kind of syntax the
+    /// lowering leaves standing, and to none the lowering rewrites
+    /// (`UnsupportedSyntaxErrorKind::is_lowered_by_basedpython`). so that a checker reports
+    /// exactly what the transpile refuses, each kind is written here at a python too old for
+    /// it, and the transpile refuses it exactly when the parser says the lowering keeps it
+    #[test]
+    fn the_target_syntax_the_lowering_keeps_is_refused() {
+        // the python spelling of each kind, and the basedpython forms written as one
+        let python = PySourceType::Python;
+        let basedpython = PySourceType::BasedPython;
+        let examples = [
+            ("let (a, b) := x\n", PythonVersion::PY37, basedpython),
+            (
+                "if let [a] := x:\n    pass\n",
+                PythonVersion::PY37,
+                basedpython,
+            ),
+            (
+                "match x:\n    case 1:\n        pass\n",
+                PythonVersion::PY37,
+                python,
+            ),
+            (
+                "match x:\n    case 1:\n        pass\n",
+                PythonVersion::PY39,
+                python,
+            ),
+            (
+                "match x:\n    case +1:\n        pass\n",
+                PythonVersion::PY39,
+                python,
+            ),
+            (
+                "match x:\n    case +1:\n        pass\n",
+                PythonVersion::PY312,
+                python,
+            ),
+            ("if (y := 1):\n    pass\n", PythonVersion::PY37, python),
+            (
+                "try:\n    pass\nexcept* ValueError:\n    pass\n",
+                PythonVersion::PY310,
+                python,
+            ),
+            ("print(a[y := 0])\n", PythonVersion::PY38, python),
+            ("f((a)=1)\n", PythonVersion::PY38, python),
+            ("def f(a):\n    return 1, *a\n", PythonVersion::PY37, python),
+            ("@d[0]\ndef f():\n    pass\n", PythonVersion::PY38, python),
+            ("def f(a, /):\n    pass\n", PythonVersion::PY37, python),
+            (
+                "def f[T](x: T) -> T:\n    return x\n",
+                PythonVersion::PY311,
+                python,
+            ),
+            ("lazy import json\n", PythonVersion::PY314, python),
+            ("type A = int\n", PythonVersion::PY311, python),
+            (
+                "class C[T = int]:\n    pass\n",
+                PythonVersion::PY312,
+                python,
+            ),
+            ("f\"{d[\"a\"]}\"\n", PythonVersion::PY311, python),
+            (
+                "with (open(a) as x, open(b) as y):\n    pass\n",
+                PythonVersion::PY38,
+                python,
+            ),
+            (
+                "def f[*Ts](x: tuple[*Ts]) -> None:\n    pass\n",
+                PythonVersion::PY310,
+                python,
+            ),
+            (
+                "def f[*Ts](*args: *Ts) -> None:\n    pass\n",
+                PythonVersion::PY310,
+                python,
+            ),
+            ("[*x for x in a]\n", PythonVersion::PY314, python),
+            ("for x in *a, *b:\n    pass\n", PythonVersion::PY38, python),
+            (
+                "try:\n    pass\nexcept ValueError, TypeError:\n    pass\n",
+                PythonVersion::PY313,
+                python,
+            ),
+            ("t\"{a}\"\n", PythonVersion::PY313, python),
+        ];
+
+        let mut covered = HashSet::new();
+        for (source, version, source_type) in examples {
+            let options =
+                ruff_python_parser::ParseOptions::from(source_type).with_target_version(version);
+            let parsed = ruff_python_parser::parse_unchecked(source, options);
+            let kinds: Vec<Kind> = parsed
+                .unsupported_syntax_errors()
+                .iter()
+                .map(|error| error.kind)
+                .collect();
+            assert!(!kinds.is_empty(), "{source:?} is fine on {version}");
+            covered.extend(kinds.iter().map(|kind| variant(*kind)));
+            let kept = kinds
+                .iter()
+                .any(|kind| !kind.is_lowered_by_basedpython(version));
+            // every real transpile lowers imports, which is what rewrites a written `lazy`
+            let config = Config {
+                min_version: version,
+                lazy_imports: true,
+                ..Config::test_default()
+            };
+            let refused = transpile(source, &config).is_err();
+            assert_eq!(
+                refused,
+                kept,
+                "{source:?} on {version}: the parser says {kinds:?} is {}",
+                if kept { "kept" } else { "lowered" }
+            );
+        }
+        assert_eq!(covered.len(), KINDS, "covered only {covered:?}");
     }
 
     #[test]

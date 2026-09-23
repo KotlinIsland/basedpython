@@ -284,6 +284,31 @@ fn is_literal_expr(expr: &Expr, float_literals: FloatLiteralLowering) -> bool {
     }
 }
 
+/// how a float or complex literal type written as `text` is spelled in the output, or
+/// `None` when `expr` is no such literal: what [`LiteralType`] writes for one the source wrote
+pub(crate) fn float_literal_spelling(
+    expr: &Expr,
+    text: &str,
+    float_literals: FloatLiteralLowering,
+) -> Option<String> {
+    if let Some(nominal) = nominal_float_type(expr, float_literals) {
+        return Some(nominal.to_owned());
+    }
+    let is_float =
+        |number: &ruff_python_ast::Number| !matches!(number, ruff_python_ast::Number::Int(_));
+    let number = match expr {
+        Expr::NumberLiteral(n) => &n.value,
+        Expr::UnaryOp(u) if matches!(u.op, UnaryOp::USub | UnaryOp::UAdd) => {
+            match u.operand.as_ref() {
+                Expr::NumberLiteral(n) => &n.value,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    is_float(number).then(|| format!("Literal[{text}]"))
+}
+
 /// the builtin a float or complex literal type is one of, when the project
 /// spells such a literal with its nominal type rather than with `Literal[...]`.
 ///

@@ -65,7 +65,13 @@ source (.by)
            version cannot parse. the first check asks whether the output is
            python at all; this one asks whether it is python the declared floor
            can run, so syntax no polyfill covers is a diagnostic instead of a
-           `SyntaxError` at import time in generated code
+           `SyntaxError` at import time in generated code. which kinds of
+           syntax a lowering removes is stated once, by
+           `UnsupportedSyntaxErrorKind::is_lowered_by_basedpython`; the parser
+           holds a `.by` file to its target for every other kind, so a checker
+           reports what this check would refuse. a basedpython form written as
+           syntax of its own is a kind in that list too: a destructuring
+           pattern is written as a `match`, and is held to where one runs
 ```
 
 entry points in `crates/by_transforms/src/lib.rs`:

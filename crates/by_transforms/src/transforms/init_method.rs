@@ -33,28 +33,22 @@ use super::callable::lower_type_expr_full;
 use super::mutable_defaults::{parameter_guards, undeclarable_error};
 use super::repeated_underscore::WrittenNames;
 use super::source_util::{PrologueStatement, body_prologue, first_body_statement};
-use crate::config::FloatLiteralLowering;
+use super::type_expr_walker::RootKind;
+use crate::config::Config;
 use crate::type_info::TypeInfo;
 
 pub(crate) struct InitMethod<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
-    float_literals: FloatLiteralLowering,
-    is_stub: bool,
+    config: Config,
 }
 
 impl<'src> InitMethod<'src> {
-    pub(crate) fn new(
-        source: &'src str,
-        written: WrittenNames<'src>,
-        float_literals: FloatLiteralLowering,
-        is_stub: bool,
-    ) -> Self {
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: Config) -> Self {
         Self {
             source,
             written,
-            float_literals,
-            is_stub,
+            config,
         }
     }
 }
@@ -66,8 +60,7 @@ impl TypeAwarePass for InitMethod<'_> {
             written: self.written,
             types,
             symbolic_substitutions: ctx.symbolic_substitutions.clone(),
-            float_literals: self.float_literals,
-            is_stub: self.is_stub,
+            config: &self.config,
             edits: RefCell::new(Vec::new()),
             templates: RefCell::new(Vec::new()),
             relocating: RefCell::new(Vec::new()),
@@ -141,8 +134,7 @@ struct State<'src> {
     /// line is fresh output, so a fold inside a parameter annotation is dropped
     /// unless it is spliced in here
     symbolic_substitutions: Vec<(TextRange, String)>,
-    float_literals: FloatLiteralLowering,
-    is_stub: bool,
+    config: &'src Config,
     edits: RefCell<Vec<(TextRange, String)>>,
     templates: RefCell<Vec<(TextRange, Vec<Fragment>)>>,
     /// the `_MISSING` substitutions, whose defaults the guards re-evaluate
@@ -207,7 +199,8 @@ impl State<'_> {
             self.types,
             ann,
             &substitutions,
-            self.float_literals,
+            self.config,
+            RootKind::Annotation,
         )
         .unwrap_or_else(|| {
             self.source[usize::from(ann.range().start())..usize::from(ann.range().end())].to_owned()
@@ -366,7 +359,7 @@ impl State<'_> {
                 self.written,
                 &super::mutable_defaults::sentinel_name(self.source),
                 self.types,
-                self.is_stub,
+                self.config.is_stub,
             );
             if let Some(parameter) = undeclarable.first() {
                 self.errors

@@ -692,6 +692,7 @@ impl<'db> OverloadLiteral<'db> {
                         Some(BaseParameter {
                             name: parameter.name()?.clone(),
                             positional_only: parameter.is_positional_only(),
+                            underscore: parameter.is_repeated_underscore(),
                         })
                     })
                     .collect()
@@ -3205,6 +3206,16 @@ fn check_classinfo_in_isinstance<'db>(
             diagnostic
                 .set_primary_annotation_message("This call will raise `TypeError` at runtime");
         }
+        Type::KnownInstance(KnownInstanceType::UnionType(_))
+            if context.program_environment().python_version(db) < PythonVersion::PY310
+                && !spelled_as_classes_by_the_lowering(
+                    context,
+                    call_expression,
+                    classinfo_expr,
+                ) =>
+        {
+            report_union_classinfo_before_python_310(context, call_expression, function);
+        }
         Type::KnownInstance(KnownInstanceType::UnionType(_)) => {
             report_invalid_union_type_elements(
                 db,
@@ -3237,6 +3248,57 @@ fn check_classinfo_in_isinstance<'db>(
 
         _ => {}
     }
+}
+
+/// whether the union `classinfo_expr` evaluates to is spelled as a tuple of classes where it
+/// stands, by the lowering a basedpython module goes through before it runs
+///
+/// below 3.10 a union object is no class, and `isinstance` rejects one. the transpiler writes
+/// a union spelled in the call itself as the tuple it stands for, so
+/// `isinstance(x, int | str)` runs as `isinstance(x, (int, str,))`, and the same for an optional
+/// `int?`, alone or inside a tuple the call spells. that is only done for a call to `isinstance`
+/// or `issubclass` by those names, and a union reached any other way, through a name for one,
+/// is the `typing.Union` the transpiler spells everywhere else
+fn spelled_as_classes_by_the_lowering(
+    context: &InferContext<'_, '_>,
+    call_expression: &ast::ExprCall,
+    classinfo_expr: Option<&ast::Expr>,
+) -> bool {
+    context.file().source_type(context.db()) == ast::PySourceType::BasedPython
+        && matches!(
+            call_expression.func.as_ref(),
+            ast::Expr::Name(name) if matches!(name.id.as_str(), "isinstance" | "issubclass")
+        )
+        && matches!(
+            classinfo_expr,
+            Some(
+                ast::Expr::BinOp(ast::ExprBinOp {
+                    op: ast::Operator::BitOr,
+                    ..
+                }) | ast::Expr::UnaryOp(ast::ExprUnaryOp {
+                    op: ast::UnaryOp::Optional,
+                    ..
+                })
+            )
+        )
+}
+
+/// report a union object passed to `isinstance()` / `issubclass()` on a python older than
+/// 3.10, where it is not a class and the call raises
+fn report_union_classinfo_before_python_310(
+    context: &InferContext<'_, '_>,
+    call_expression: &ast::ExprCall,
+    function: KnownFunction,
+) {
+    let Some(builder) = context.report_lint(&INVALID_ARGUMENT_TYPE, call_expression) else {
+        return;
+    };
+    let function_name: &str = function.into();
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "A union cannot be used with `{function_name}()` before Python 3.10"
+    ));
+    diagnostic.set_primary_annotation_message("This call will raise `TypeError` at runtime");
+    diagnostic.info("Pass a tuple of classes instead");
 }
 
 /// Report an error if a `types.UnionType` instance passed to `isinstance()`/`issubclass()`

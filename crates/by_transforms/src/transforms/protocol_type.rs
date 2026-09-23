@@ -39,7 +39,7 @@ use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::{Expr, ExprProtocolType, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::config::FloatLiteralLowering;
+use crate::config::Config;
 use crate::type_info::TypeInfo;
 
 use super::ast_driver::{PassContext, TypeAwarePass};
@@ -123,11 +123,11 @@ impl<'src> ProtocolTypeLowering<'src> {
         written: WrittenNames<'src>,
         types: &'src dyn TypeInfo,
         claimed: &'src [TextRange],
-        float_literals: FloatLiteralLowering,
+        config: &Config,
     ) -> Self {
         Self {
             source,
-            callable: CallableSyntax::new(source, written, float_literals)
+            callable: CallableSyntax::new(source, written, config)
                 .with_types(types)
                 .with_claimed_ranges(claimed),
             edits: Vec::new(),
@@ -338,6 +338,7 @@ impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for ValueProtocolWalker<'_, '
 /// Collects the typevar renames the PEP 695 polyfill will apply, keyed by the
 /// range of the generic scope that declares them.
 struct TypevarScopeWalker<'a> {
+    written: WrittenNames<'a>,
     config: crate::Config,
     scopes: &'a mut Vec<(TextRange, HashMap<String, String>)>,
 }
@@ -356,7 +357,10 @@ impl TypevarScopeWalker<'_> {
             .iter()
             .map(|param| {
                 let name = param.name().id.as_str();
-                (name.to_owned(), super::generics::mangle(name))
+                (
+                    name.to_owned(),
+                    super::generics::polyfilled_name(self.written, name),
+                )
             })
             .collect();
         if !frame.is_empty() {
@@ -388,10 +392,10 @@ fn lower<'src>(
     stmts: &[Stmt],
     config: &crate::Config,
 ) -> ProtocolTypeLowering<'src> {
-    let mut inner =
-        ProtocolTypeLowering::new(source, written, types, claimed, config.float_literals);
+    let mut inner = ProtocolTypeLowering::new(source, written, types, claimed, config);
     {
         let mut walker = TypevarScopeWalker {
+            written,
             config: config.clone(),
             scopes: &mut inner.typevar_scopes,
         };

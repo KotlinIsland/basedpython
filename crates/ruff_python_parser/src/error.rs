@@ -993,6 +993,18 @@ pub enum UnsupportedSyntaxErrorKind {
     ///     case +1: ...  # error before 3.15
     /// ```
     UnaryPlusMatchPattern,
+
+    /// basedpython: a destructuring pattern — `let P := v`, an `if let` / `elif let`
+    /// clause, or a pattern written as a `for` or `with` target or as a parameter. none has
+    /// a python spelling of its own, and each is written as a `match` statement, so it
+    /// needs a python that runs one
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// let Point(x, y) := origin  # error before 3.8, where no `match` can be written
+    /// ```
+    Destructuring,
 }
 
 impl Display for UnsupportedSyntaxError {
@@ -1093,6 +1105,9 @@ impl Display for UnsupportedSyntaxError {
             UnsupportedSyntaxErrorKind::UnaryPlusMatchPattern => {
                 "Unary '+' is not allowed in a literal pattern"
             }
+            UnsupportedSyntaxErrorKind::Destructuring => {
+                "Cannot use a destructuring pattern, which is written as a `match` statement,"
+            }
         };
 
         write!(
@@ -1171,6 +1186,51 @@ impl UnsupportedSyntaxErrorKind {
             UnsupportedSyntaxErrorKind::UnaryPlusMatchPattern => {
                 Change::Added(PythonVersion::PY315)
             }
+            UnsupportedSyntaxErrorKind::Destructuring => {
+                UnsupportedSyntaxErrorKind::Match.changed_version()
+            }
+        }
+    }
+
+    /// basedpython: whether the lowering rewrites this syntax into python that `target_version`
+    /// parses, so a `.by` file may write it whatever python it targets
+    ///
+    /// the rest is written into the python as it stands, so it is checked against the target as
+    /// in a `.py` file. the transpiler re-parses its output at the target and refuses anything
+    /// left that the target cannot parse, so a kind wrongly listed here is still refused by the
+    /// transpile, just no longer reported by a checker first
+    pub fn is_lowered_by_basedpython(self, target_version: PythonVersion) -> bool {
+        match self {
+            // pep 695 and pep 696 lower to `TypeVar` declarations, pep 646 to `Unpack`, and a
+            // `lazy` import to a module the first attribute read imports
+            UnsupportedSyntaxErrorKind::TypeParameterList
+            | UnsupportedSyntaxErrorKind::TypeAliasStatement
+            | UnsupportedSyntaxErrorKind::TypeParamDefault
+            | UnsupportedSyntaxErrorKind::StarAnnotation
+            | UnsupportedSyntaxErrorKind::StarExpressionInIndex
+            | UnsupportedSyntaxErrorKind::LazyImportStatement => true,
+            // the `match` lowering writes each pattern as a test built of assignment
+            // expressions, in which a unary `+` is an ordinary operator. a destructuring is
+            // written as a `match`, so it goes wherever one goes
+            UnsupportedSyntaxErrorKind::Match
+            | UnsupportedSyntaxErrorKind::UnaryPlusMatchPattern
+            | UnsupportedSyntaxErrorKind::Destructuring => {
+                UnsupportedSyntaxErrorKind::Match.is_unsupported(target_version)
+                    && UnsupportedSyntaxErrorKind::Walrus.is_supported(target_version)
+            }
+            UnsupportedSyntaxErrorKind::Walrus
+            | UnsupportedSyntaxErrorKind::ExceptStar
+            | UnsupportedSyntaxErrorKind::UnparenthesizedNamedExpr(_)
+            | UnsupportedSyntaxErrorKind::ParenthesizedKeywordArgumentName
+            | UnsupportedSyntaxErrorKind::StarTuple(_)
+            | UnsupportedSyntaxErrorKind::RelaxedDecorator(_)
+            | UnsupportedSyntaxErrorKind::PositionalOnlyParameter
+            | UnsupportedSyntaxErrorKind::Pep701FString(_)
+            | UnsupportedSyntaxErrorKind::ParenthesizedContextManager
+            | UnsupportedSyntaxErrorKind::UnpackingInComprehension(_)
+            | UnsupportedSyntaxErrorKind::UnparenthesizedUnpackInFor
+            | UnsupportedSyntaxErrorKind::UnparenthesizedExceptionTypes
+            | UnsupportedSyntaxErrorKind::TemplateStrings => false,
         }
     }
 

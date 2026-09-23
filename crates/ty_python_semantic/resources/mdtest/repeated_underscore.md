@@ -338,6 +338,128 @@ reveal_type(Override.f)  # revealed: def f(self, x: int = 1, y: str = "a")
 Override().f()
 ```
 
+## an override of a method whose `_`s are numbered
+
+A base that repeats `_` numbers its own, and an override takes those names and kinds as it takes any
+other. The first is `_` in both, so a read of `_` in the override's body is its first parameter, as
+it is in any definition that repeats `_`:
+
+```by
+class Base:
+    def f(self, _: int, _: int) -> int:
+        return _
+
+class Override(Base):
+    override def f(self, _: int, _: int) -> int:
+        return _ * 10
+
+reveal_type(Override.f)  # revealed: def f(self, _: int, _: int, /) -> int
+
+assert Override().f(1, 2) == 10
+```
+
+A variadic `_` has no counterpart in the base, and is numbered after the names the others take:
+
+```by
+class Variadic(Base):
+    override def f(self, _: int, _: int, *_: int) -> int:
+        return 20
+
+reveal_type(Variadic.f)  # revealed: def f(self, _: int, _: int, /, *_: int) -> int
+
+assert Variadic().f(1, 2, 3) == 20
+```
+
+## an override of an override
+
+An override that repeats `_` has the names of the method it overrides, so an override of it takes
+those same names in turn:
+
+```by
+class Base:
+    def f(self, x: int, y: int) -> int:
+        return 1
+
+class Middle(Base):
+    override def f(self, _: int, _: int) -> int:
+        return 2
+
+class Override(Middle):
+    override def f(self, _: int, _: int) -> int:
+        return _ * 30
+
+reveal_type(Override.f)  # revealed: def f(self, x: int, y: int) -> int
+
+assert Override().f(x=1, y=2) == 30
+```
+
+## a base parameter named `_`
+
+A base parameter that its author named `_` is reached by that keyword, so the override's `_` in that
+position keeps the name rather than being numbered:
+
+```by
+class Base:
+    def f(self, x: int, _: int) -> int:
+        return x
+
+class Override(Base):
+    override def f(self, _: int, _: int) -> int:
+        return _
+
+reveal_type(Override.f)  # revealed: def f(self, x: int, _: int) -> int
+
+assert Override().f(1, _=2) == 1
+```
+
+## an override of a base in another module
+
+`base.by`:
+
+```by
+class Base:
+    def f(self, x: int, y: int) -> int:
+        return 1
+```
+
+`main.by`:
+
+```by
+from base import Base
+
+class Override(Base):
+    override def f(self, _: int, _: int) -> int:
+        return _ * 40
+
+reveal_type(Override.f)  # revealed: def f(self, x: int, y: int) -> int
+
+assert Override().f(x=1, y=2) == 40
+```
+
+## an override of a generic base
+
+The names come from the base whether or not the override specializes it:
+
+```by
+class Base[T]:
+    def f(self, x: T, y: T) -> int:
+        return 1
+
+class Specialized(Base[int]):
+    override def f(self, _: int, _: int) -> int:
+        return _ * 50
+
+class Generic[T](Base[T]):
+    override def f(self, _: T, _: T) -> int:
+        return 60
+
+reveal_type(Specialized.f)  # revealed: def f(self, x: int, y: int) -> int
+reveal_type(Generic[str]().f)  # revealed: bound method Generic[str].f(x: str, y: str) -> int
+
+assert Specialized().f(x=1, y=2) == 50
+assert Generic[str]().f(x="a", y="b") == 60
+```
+
 ## an override that does not line up with its base is numbered
 
 Where the base has no parameter at a `_`'s position, none of the `_`s take a name from it. The
