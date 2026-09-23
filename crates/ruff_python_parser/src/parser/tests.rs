@@ -1,5 +1,6 @@
 use std::assert_matches;
 
+use ruff_python_ast::comparable::ComparableStmt;
 use ruff_python_ast::helpers::{UseSiteVariance, use_site_variance_marker};
 use ruff_python_ast::{
     Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Pattern, Stmt,
@@ -3325,4 +3326,110 @@ fn basedpython_init_method_rejects_a_destructuring_parameter() {
         "expected the init-shorthand error, got {:?}",
         parsed.errors()
     );
+}
+
+/// `some` is taken as a keyword only at the top of a parameter's annotation. written anywhere
+/// else in front of a name it is reported once, and what follows it parses as though it were
+/// not there
+#[test]
+fn a_misplaced_some_is_one_error() {
+    for (source, parsed_as) in [
+        (
+            "def f(n: int) -> some int: ...\n",
+            "def f(n: int) -> int: ...",
+        ),
+        (
+            "def g(xs: list[some int]): ...\n",
+            "def g(xs: list[int]): ...",
+        ),
+        ("x: some int = 1\n", "x: int = 1"),
+        ("y = cast(some int?, 1)\n", "y = cast(int?, 1)"),
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        let messages: Vec<String> = parsed
+            .errors()
+            .iter()
+            .map(|error| error.error.to_string())
+            .collect();
+        assert_eq!(
+            messages,
+            ["`some` is only allowed at the top of a parameter annotation"],
+            "{source}"
+        );
+        let expected = parse_basedpython_module(&format!("{parsed_as}\n"));
+        let comparable = |body: &[Stmt]| -> Vec<String> {
+            body.iter()
+                .map(|stmt| format!("{:?}", ComparableStmt::from(stmt)))
+                .collect()
+        };
+        assert_eq!(
+            comparable(&parsed.syntax().body),
+            comparable(&expected.syntax().body),
+            "{source}"
+        );
+    }
+}
+
+/// a variable named `some` followed by anything that continues an expression is that
+/// variable, as it is in python
+#[test]
+fn a_variable_named_some_is_a_variable() {
+    for source in [
+        "some(int)\n",
+        "some[int]\n",
+        "some - 1\n",
+        "some cast int\n",
+        "x = some\n",
+        "def f(some: int) -> None: ...\n",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed.errors().is_empty(),
+            "{source}: {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+/// the annotation of `*args` / `**kwargs` is the type of each element, so the parameter's name
+/// cannot name the type `some` would open. `some` there is reported once, and the annotation
+/// parses as though it were not there
+#[test]
+fn some_on_a_variadic_parameter_is_one_error() {
+    for (source, parsed_as, expected_errors) in [
+        ("def f(*xs: some int): ...\n", "def f(*xs: int): ...", 1),
+        ("def g(**kw: some int): ...\n", "def g(**kw: int): ...", 1),
+        (
+            "def h(a: some int, *xs: some str, **kw: some bytes): ...\n",
+            "def h(a: some int, *xs: str, **kw: bytes): ...",
+            2,
+        ),
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        let messages: Vec<String> = parsed
+            .errors()
+            .iter()
+            .map(|error| error.error.to_string())
+            .collect();
+        assert_eq!(
+            messages,
+            vec![
+                "`some` is not allowed on a variadic parameter: its annotation is the type of \
+                 each element, not of the parameter";
+                expected_errors
+            ],
+            "{source}"
+        );
+        let expected = parse_basedpython_module(&format!("{parsed_as}\n"));
+        let comparable = |body: &[Stmt]| -> Vec<String> {
+            body.iter()
+                .map(|stmt| format!("{:?}", ComparableStmt::from(stmt)))
+                .collect()
+        };
+        assert_eq!(
+            comparable(&parsed.syntax().body),
+            comparable(&expected.syntax().body),
+            "{source}"
+        );
+    }
 }

@@ -754,9 +754,11 @@ impl<'src> Parser<'src> {
     /// Add an [`UnsupportedSyntaxError`] with the given [`UnsupportedSyntaxErrorKind`] and
     /// [`TextRange`] if its minimum version is less than [`Parser::target_version`].
     fn add_unsupported_syntax_error(&mut self, kind: UnsupportedSyntaxErrorKind, range: TextRange) {
-        // basedpython transpiles modern syntax (PEP 695 type params, etc.) down to
-        // the runtime target version, so the source itself is not constrained
-        if self.options.is_basedpython {
+        // basedpython lowers some modern syntax (pep 695 type parameters and the like) to
+        // what the target parses, so the source is not held to the target there
+        if self.options.is_basedpython
+            && kind.is_lowered_by_basedpython(self.options.target_version)
+        {
             return;
         }
         if kind.is_unsupported(self.options.target_version) {

@@ -81,7 +81,8 @@ pub(crate) enum Command {
         /// [default: the version of the interpreter that will run it]
         #[arg(long, value_name = "VERSION")]
         min_version: Option<String>,
-        /// The interpreter to run on, or the environment holding it.
+        /// The interpreter to run on, or the environment holding it. A bare name
+        /// that is neither, like `python3.14`, is found on `PATH`.
         ///
         /// Defaults to the project environment — the same one `by check`
         /// resolves imports against — then `$PYTHON`, then `python3` on `PATH`.

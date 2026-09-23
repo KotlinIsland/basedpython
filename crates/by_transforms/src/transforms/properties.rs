@@ -129,13 +129,19 @@ impl<'ast> Visitor<'ast> for ValueRangeCollector<'_> {
 pub(crate) struct PropertiesPass<'src> {
     source: &'src str,
     value_ranges: ValueRanges,
+    min_version: ruff_python_ast::PythonVersion,
 }
 
 impl<'src> PropertiesPass<'src> {
-    pub(crate) fn new(source: &'src str, value_ranges: ValueRanges) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        value_ranges: ValueRanges,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Self {
         Self {
             source,
             value_ranges,
+            min_version,
         }
     }
 
@@ -197,7 +203,19 @@ impl<'ast> Visitor<'ast> for FieldAccessFinder<'_> {
 /// and/or an initialiser, each emitted as a source passthrough.
 struct Backing<'a> {
     annotation: Option<&'a Expr>,
+    /// the type ty infers for an initialiser declared with no type, written where
+    /// `inferred_annotation` writes one for a bare class-body assignment
+    inferred: Option<String>,
     value: Option<&'a Expr>,
+}
+
+impl Backing<'_> {
+    /// the backing field's annotation, after the `: ` it follows
+    fn annotation_fragment(&self) -> Option<Fragment> {
+        self.annotation
+            .map(|annotation| Fragment::Src(annotation.range()))
+            .or_else(|| self.inferred.clone().map(Fragment::Lit))
+    }
 }
 
 /// the leading whitespace of the line `text` starts at
@@ -473,7 +491,7 @@ impl PropertiesPass<'_> {
         spans
     }
 
-    fn process_class(&self, class: &StmtClassDef, ctx: &mut PassContext) {
+    fn process_class(&self, class: &StmtClassDef, types: &dyn TypeInfo, ctx: &mut PassContext) {
         let placement = self.init_placement(class);
         // assignment templates for every backing field whose initialiser moved into
         // `__init__`, in class-body order
@@ -545,6 +563,7 @@ impl PropertiesPass<'_> {
                         .then_some(assign.annotation.as_ref());
                     Some(Backing {
                         annotation,
+                        inferred: None,
                         value: assign.value.as_deref(),
                     })
                 }
@@ -552,8 +571,26 @@ impl PropertiesPass<'_> {
                     if within(assign.range())
                         && matches!(assign.targets.first(), Some(Expr::Name(name)) if name.id.as_str() == backing_name) =>
                 {
+                    // a declaration with no type is a bare class-body assignment to ty,
+                    // which gets the type ty infers for it where a class body's
+                    // annotations mean nothing more than a type
+                    let inferred = (!types.class_body_annotation_is_semantic(class))
+                        .then(|| types.inferred_annotation(&assign.value, self.min_version))
+                        .flatten()
+                        .map(|synthesized| {
+                            ctx.type_only_imports
+                                .extend(synthesized.modules.into_iter().map(|m| format!("import {m}")));
+                            ctx.type_only_imports.extend(
+                                synthesized
+                                    .typing_names
+                                    .into_iter()
+                                    .map(|name| format!("from typing import {name}")),
+                            );
+                            synthesized.text
+                        });
                     Some(Backing {
                         annotation: None,
+                        inferred,
                         value: Some(assign.value.as_ref()),
                     })
                 }
@@ -596,9 +633,9 @@ impl PropertiesPass<'_> {
                     backing.value.is_some() && !matches!(placement, InitPlacement::ClassLevel);
                 if moves {
                     let mut assign = vec![Fragment::Lit(format!("self.{backing_name}"))];
-                    if let Some(annotation) = backing.annotation {
+                    if let Some(annotation) = backing.annotation_fragment() {
                         assign.push(Fragment::Lit(": ".to_owned()));
-                        assign.push(Fragment::Src(annotation.range()));
+                        assign.push(annotation);
                     }
                     if let Some(value) = backing.value {
                         assign.push(Fragment::Lit(" = ".to_owned()));
@@ -607,9 +644,9 @@ impl PropertiesPass<'_> {
                     moved.push(assign);
                 } else {
                     frags.push(Fragment::Lit(backing_name.clone()));
-                    if let Some(annotation) = backing.annotation {
+                    if let Some(annotation) = backing.annotation_fragment() {
                         frags.push(Fragment::Lit(": ".to_owned()));
-                        frags.push(Fragment::Src(annotation.range()));
+                        frags.push(annotation);
                     }
                     if let Some(value) = backing.value {
                         frags.push(Fragment::Lit(" = ".to_owned()));
@@ -713,8 +750,8 @@ fn join_assignments(out: &mut Vec<Fragment>, assignments: Vec<Vec<Fragment>>, in
 
 impl TypeAwarePass for PropertiesPass<'_> {
     /// an accessor block it replaces is written as the `@property` members the parser
-    /// synthesized, with the modifiers as their decorators and the declared type as the
-    /// backing field's annotation
+    /// synthesized, with the modifiers as their decorators and the declared type — or,
+    /// for a declaration with none, the type ty infers — as the backing field's annotation
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
         &[
             super::ast_driver::Lowering::Modifiers,
@@ -722,7 +759,7 @@ impl TypeAwarePass for PropertiesPass<'_> {
         ]
     }
 
-    fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut finder = ClassFinder {
             classes: Vec::new(),
         };
@@ -730,7 +767,7 @@ impl TypeAwarePass for PropertiesPass<'_> {
             finder.visit_stmt(stmt);
         }
         for class in finder.classes {
-            self.process_class(class, ctx);
+            self.process_class(class, types, ctx);
         }
     }
 }
@@ -965,6 +1002,32 @@ mod tests {
                     def age(self, value: int) -> None:
                         assert value >= 0
                         self.__age = value
+            "},
+        );
+    }
+
+    /// a declaration with no type gives the backing field the type ty infers for it, as a
+    /// bare class-body assignment gets one
+    #[test]
+    fn an_untyped_property_backing_field_takes_the_inferred_type() {
+        check(
+            indoc! {"
+                class Counter:
+                    var count = 0
+                        get() = field
+                        set(value):
+                            field = value
+            "},
+            indoc! {"
+                class Counter:
+                    def __init__(self) -> None:
+                        self.__count: int = 0
+                    @property
+                    def count(self):
+                        return self.__count
+                    @count.setter
+                    def count(self, value) -> None:
+                        self.__count = value
             "},
         );
     }

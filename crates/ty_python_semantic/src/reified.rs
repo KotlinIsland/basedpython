@@ -64,6 +64,12 @@ pub fn reified_type_param_names(
     }
 
     let mut active: FxHashSet<&str> = candidates.iter().map(|(name, _)| name.as_str()).collect();
+    // the body reads a parameter under its own name, which a type parameter of that name does
+    // not reach: the parameter is bound in the body's scope, the type parameter in the one
+    // around it
+    for parameter in &function.parameters {
+        active.remove(parameter.name().id.as_str());
+    }
     shadow_bound_names(&function.body, &mut active);
     let param_typevars = param_annotation_typevars(&function.parameters, &active);
     let mut finder = ValueUseFinder {

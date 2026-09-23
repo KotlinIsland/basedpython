@@ -15,25 +15,6 @@ pub(super) fn bind_type_guard_return_type<'db>(
     bindings: &Bindings<'db>,
     call: &ast::ExprCall,
 ) -> Type<'db> {
-    let arguments = &call.arguments;
-
-    let narrowed_argument_index = || {
-        bindings
-            .single_element()
-            .and_then(|binding| {
-                binding
-                    .signature_type
-                    .as_function_literal()
-                    .or_else(|| binding.callable_type.as_function_literal())
-                    .map(|function| {
-                        usize::from(
-                            function.has_implicit_receiver(db) && binding.bound_type.is_none(),
-                        )
-                    })
-            })
-            .unwrap_or(0)
-    };
-
     // basedpython: the annotation names the place it narrows, which is not always an
     // argument — see [`crate::types::narrowing_guards`]
     let guard = || {
@@ -67,72 +48,7 @@ pub(super) fn bind_type_guard_return_type<'db>(
             }
         }
 
-        // Use the call binding to find the argument that maps to the parameter the guard
-        // narrows. This supports keyword arguments without falling back to a later
-        // parameter when the target is defaulted.
-        let matched_narrowed_argument_index = bindings.single_element().and_then(|binding| {
-            let has_implicit_receiver = binding
-                .signature_type
-                .as_function_literal()
-                .or_else(|| binding.callable_type.as_function_literal())
-                .is_some_and(|function| function.has_implicit_receiver(db));
-            let bound_argument_offset = usize::from(binding.bound_type.is_some());
-            let narrowed_parameter_index = |overload: &Binding<'db>| {
-                let guards = overload.signature.all_narrowing_guards(db);
-                match guards.first() {
-                    Some(guard) => match guard_root(guard, overload.signature.parameters(), call) {
-                        GuardRoot::Parameter(index) => Some(index),
-                        GuardRoot::Receiver(_) | GuardRoot::Scope => None,
-                    },
-                    None => Some(usize::from(
-                        bound_argument_offset > 0 || has_implicit_receiver,
-                    )),
-                }
-            };
-            let narrowed_argument_index = |overload: &Binding<'db>| {
-                let narrowed_parameter_index = narrowed_parameter_index(overload)?;
-                overload
-                    .argument_matches()
-                    .iter()
-                    .enumerate()
-                    .skip(bound_argument_offset)
-                    .find_map(|(argument_index, matched_argument)| {
-                        matched_argument
-                            .parameters
-                            .iter()
-                            .any(|parameter| parameter.index == narrowed_parameter_index)
-                            .then_some(argument_index - bound_argument_offset)
-                    })
-            };
-            let mut matching_overloads = binding.matching_overloads();
-            let (_, first_overload) = matching_overloads.next()?;
-            let first_argument_index = narrowed_argument_index(first_overload);
-
-            Some(
-                if matching_overloads
-                    .all(|(_, overload)| narrowed_argument_index(overload) == first_argument_index)
-                {
-                    first_argument_index
-                } else {
-                    None
-                },
-            )
-        });
-
-        let argument = match matched_narrowed_argument_index {
-            Some(Some(argument_index)) => arguments.iter_source_order().nth(argument_index),
-            // The target parameter was omitted, so there is no expression to narrow.
-            Some(None) => return None,
-            // Preserve positional behavior when there isn't a unique callable binding whose
-            // parameter mapping we can use.
-            None => arguments
-                .args
-                .get(narrowed_argument_index())
-                .map(ast::ArgOrKeyword::from),
-        }?;
-        if argument.is_variadic() {
-            return None;
-        }
+        let argument = narrowed_argument(db, bindings, call)?;
 
         match guard() {
             // the guard may name a member of the argument: `-> x.data is str`
@@ -155,4 +71,99 @@ pub(super) fn bind_type_guard_return_type<'db>(
         },
         _ => return_ty,
     }
+}
+
+/// the argument of `call` a `TypeIs` or `TypeGuard` its callee returns narrows: the one bound to
+/// the parameter the guard names, or to the first parameter
+pub(super) fn narrowed_argument<'a, 'db>(
+    db: &'db dyn Db,
+    bindings: &Bindings<'db>,
+    call: &'a ast::ExprCall,
+) -> Option<ast::ArgOrKeyword<'a>> {
+    let arguments = &call.arguments;
+
+    let narrowed_argument_index = || {
+        bindings
+            .single_element()
+            .and_then(|binding| {
+                binding
+                    .signature_type
+                    .as_function_literal()
+                    .or_else(|| binding.callable_type.as_function_literal())
+                    .map(|function| {
+                        usize::from(
+                            function.has_implicit_receiver(db) && binding.bound_type.is_none(),
+                        )
+                    })
+            })
+            .unwrap_or(0)
+    };
+
+    // Use the call binding to find the argument that maps to the parameter the guard
+    // narrows. This supports keyword arguments without falling back to a later
+    // parameter when the target is defaulted.
+    let matched_narrowed_argument_index = bindings.single_element().and_then(|binding| {
+        let has_implicit_receiver = binding
+            .signature_type
+            .as_function_literal()
+            .or_else(|| binding.callable_type.as_function_literal())
+            .is_some_and(|function| function.has_implicit_receiver(db));
+        let bound_argument_offset = usize::from(binding.bound_type.is_some());
+        let narrowed_parameter_index = |overload: &Binding<'db>| {
+            let guards = overload.signature.all_narrowing_guards(db);
+            match guards.first() {
+                Some(guard) => match guard_root(guard, overload.signature.parameters(), call) {
+                    GuardRoot::Parameter(index) => Some(index),
+                    GuardRoot::Receiver(_) | GuardRoot::Scope => None,
+                },
+                None => Some(usize::from(
+                    bound_argument_offset > 0 || has_implicit_receiver,
+                )),
+            }
+        };
+        let narrowed_argument_index = |overload: &Binding<'db>| {
+            let narrowed_parameter_index = narrowed_parameter_index(overload)?;
+            overload
+                .argument_matches()
+                .iter()
+                .enumerate()
+                .skip(bound_argument_offset)
+                .find_map(|(argument_index, matched_argument)| {
+                    matched_argument
+                        .parameters
+                        .iter()
+                        .any(|parameter| parameter.index == narrowed_parameter_index)
+                        .then_some(argument_index - bound_argument_offset)
+                })
+        };
+        let mut matching_overloads = binding.matching_overloads();
+        let (_, first_overload) = matching_overloads.next()?;
+        let first_argument_index = narrowed_argument_index(first_overload);
+
+        Some(
+            if matching_overloads
+                .all(|(_, overload)| narrowed_argument_index(overload) == first_argument_index)
+            {
+                first_argument_index
+            } else {
+                None
+            },
+        )
+    });
+
+    let argument = match matched_narrowed_argument_index {
+        Some(Some(argument_index)) => arguments.iter_source_order().nth(argument_index),
+        // The target parameter was omitted, so there is no expression to narrow.
+        Some(None) => return None,
+        // Preserve positional behavior when there isn't a unique callable binding whose
+        // parameter mapping we can use.
+        None => arguments
+            .args
+            .get(narrowed_argument_index())
+            .map(ast::ArgOrKeyword::from),
+    }?;
+    if argument.is_variadic() {
+        return None;
+    }
+    Some(argument)
 }

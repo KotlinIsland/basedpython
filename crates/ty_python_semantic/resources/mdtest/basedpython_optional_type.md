@@ -77,6 +77,31 @@ def f(x: str? | int) -> None:
     reveal_type(x)  # revealed: str | None | int
 ```
 
+## an optional read as a value is the union
+
+where a program evaluates `T?` — a type alias, the classes `isinstance` is given — it is the union
+object `T | None` is, so an alias of it is that union and `isinstance` narrows by it
+
+```by
+Alias = int?
+reveal_type(Alias)  # revealed: <types.UnionType special-form 'int | None'>
+
+def f(x: Alias, y: object) -> None:
+    reveal_type(x)  # revealed: int | None
+    if isinstance(y, int?):
+        reveal_type(y)  # revealed: int | None
+```
+
+inside a union or a tuple of classes it is the same union
+
+```by
+def g(y: object) -> None:
+    if isinstance(y, int? | str):
+        reveal_type(y)  # revealed: int | None | str
+    if isinstance(y, (bytes?, str)):
+        reveal_type(y)  # revealed: bytes | None | str
+```
+
 ## double optional is a distinct wrapped type
 
 a single `T?` is the lossless union `T | None`, but a nested optional cannot collapse that way (the
@@ -369,6 +394,44 @@ def sink(o: object): ...
 def f(x: object??):
     # error: [optional-object-conversion] "Optional `object?` is implicitly widened to `object`"
     sink(x)
+```
+
+## a type test of an optional is not flagged
+
+a call that tests the type of an argument reads the optional rather than discarding it: its result
+says whether the value was `None`, and narrows the value when the call is a condition. the argument
+`isinstance` and `hasattr` test, and the one a `TypeIs` or `TypeGuard` return narrows, takes
+`object` for exactly that reason
+
+```by
+from typing import TypeGuard, TypeIs
+
+def is_int(v: object) -> TypeIs[int]:
+    return isinstance(v, int)
+
+def guard(v: object) -> TypeGuard[int]:
+    return isinstance(v, int)
+
+def f(x: int?, y: str?) -> None:
+    isinstance(x, int)
+    hasattr(x, "real")
+    callable(y)
+    is_int(x)
+    guard(x)
+```
+
+## the other arguments of a type test are flagged
+
+only the argument the test is about is read by it. an optional passed to another `object` parameter
+of the same call is still widened
+
+```by
+def is_str(tag: object, v: object) -> v is str:
+    return isinstance(v, str)
+
+def f(x: int?, y: str?):
+    # error: [optional-object-conversion] "Optional `str | None` is implicitly widened to `object`"
+    is_str(y, x)
 ```
 
 ## passing an optional to a parameter of equal depth stays silent

@@ -583,7 +583,7 @@ fn implicit_context_arguments_for<'db>(
 /// decided here, and a report true of every one of them is true whichever it is. This is
 /// what reaches a `decorator def`, whose declaration is always the pair of overloads it is
 /// applied in.
-pub fn unfilled_decoration_context_parameters<'db>(
+pub(crate) fn unfilled_decoration_context_parameters<'db>(
     db: &'db dyn Db,
     callee: Type<'db>,
 ) -> Vec<Name> {

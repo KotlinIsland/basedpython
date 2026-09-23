@@ -139,6 +139,7 @@ features = [
   ] },
   { "generics" = [
     { "generics" = "features/generics.md" },
+    { "some parameters" = "features/some-parameters.md" },
     { "type mappings" = "features/type-mappings.md" },
     { "type parameter bound ranges" = "features/bound-ranges.md" },
     { "bounds on a variadic pack" = "features/pack-bounds.md" },

@@ -42,6 +42,10 @@ use ruff_text_size::Ranged;
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::callable::CallableSyntax;
+use super::repeated_underscore::WrittenNames;
+use crate::config::Config;
+use crate::type_info::TypeInfo;
 
 /// Sorted list of `(field_name, type_source)` pairs identifying a unique
 /// shape. Sorted so that `{"a": int, "b": str}` and `{"b": str, "a": int}`
@@ -126,12 +130,22 @@ pub(crate) struct TypedDictLiteral<'src> {
     needs_literal_import: bool,
     /// set when a nested `T??` field needs the runtime `Optional[...]` wrapper
     needs_optional_runtime: bool,
+    /// the shared type-expression lowerer, which prints every field type this pass does
+    /// not take apart itself. the class is hoisted out of the statement the field type
+    /// was written in, so no other pass's edit reaches the field
+    callable: CallableSyntax<'src>,
 }
 
 impl<'src> TypedDictLiteral<'src> {
-    fn new(source: &'src str) -> Self {
+    fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        config: &Config,
+        types: &'src dyn TypeInfo,
+    ) -> Self {
         Self {
             source,
+            callable: CallableSyntax::new(source, written, config).with_types(types),
             edits: Vec::new(),
             errors: Vec::new(),
             shapes: IndexMap::new(),
@@ -295,7 +309,7 @@ impl<'src> TypedDictLiteral<'src> {
                 self.needs_literal_import = true;
                 format!("Literal[{}]", self.render_subbed(expr.range()))
             }
-            _ => self.render_subbed(expr.range()),
+            _ => self.callable.lower_type_expr(expr),
         }
     }
 
@@ -333,6 +347,7 @@ impl<'src> TypedDictLiteral<'src> {
             n
         };
         self.range_to_class.push((source_range, name.clone()));
+        self.callable.add_substitution(source_range, name.clone());
         name
     }
 
@@ -403,17 +418,27 @@ impl TypeExprVisitor for TypedDictLiteral<'_> {
 /// `Literal[…]` in a type expression: int, str/bytes, bool, hex/neg-int, or
 /// `None`
 fn is_literal_value(expr: &Expr) -> bool {
+    // a float or complex is no `Literal`, and the shared lowerer prints it the way the
+    // project spells one
     matches!(
         expr,
-        Expr::NumberLiteral(_)
-            | Expr::StringLiteral(_)
+        Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral {
+            value: ruff_python_ast::Number::Int(_),
+            ..
+        }) | Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)
             | Expr::BooleanLiteral(_)
             | Expr::NoneLiteral(_)
     ) || matches!(
         expr,
         Expr::UnaryOp(u) if matches!(u.op, ruff_python_ast::UnaryOp::USub)
-            && matches!(u.operand.as_ref(), Expr::NumberLiteral(_))
+            && matches!(
+                u.operand.as_ref(),
+                Expr::NumberLiteral(ruff_python_ast::ExprNumberLiteral {
+                    value: ruff_python_ast::Number::Int(_),
+                    ..
+                })
+            )
     )
 }
 
@@ -449,15 +474,25 @@ fn flatten_bitand(expr: &Expr) -> Vec<&Expr> {
 
 impl AstPass for TypedDictLiteralPass<'_> {
     /// a typed dict type it replaces moves into a class, whose field types the shared
-    /// type-expression lowerer prints
+    /// type-expression lowerer prints, a `typeof` among them
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
-        super::callable::TYPE_EXPRESSION
+        &[
+            super::ast_driver::Lowering::Callable,
+            super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::LiteralType,
+            super::ast_driver::Lowering::JustFloat,
+            super::ast_driver::Lowering::DynamicKeyword,
+            super::ast_driver::Lowering::FloatConst,
+            super::ast_driver::Lowering::Typeof,
+        ]
     }
 
-    fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
-        let mut inner = TypedDictLiteral::new(self.source);
-        let body: &[Stmt] = &module.body;
-        walk_type_positions(body, None, &mut inner);
+    fn run(&self, _module: &mut ModModule, ctx: &mut PassContext) {
+        let mut inner = TypedDictLiteral::new(self.source, self.written, &self.config, self.types);
+        // the module as parsed, not the one the passes before this rewrote: the type
+        // information the field lowerer asks is about those nodes, and the edits are keyed
+        // on the source ranges both share
+        walk_type_positions(self.suite, None, &mut inner);
         if inner.needs_literal_import {
             ctx.required_imports
                 .push("from typing import Literal".to_owned());
@@ -476,12 +511,16 @@ impl AstPass for TypedDictLiteralPass<'_> {
             // them into required_imports as a single non-`from` line so
             // merge_from_imports leaves them untouched and they end up in
             // the preamble verbatim
-            let defs = inner.class_defs();
+            // the field lowerer's own classes come first: a field type may name one
+            let defs = format!("{}{}", inner.callable.class_defs(), inner.class_defs());
             if !defs.is_empty() {
                 ctx.required_imports
                     .push(defs.trim_end_matches('\n').to_owned());
             }
         }
+        let (imports, helpers) = inner.callable.take_requirements();
+        ctx.required_imports.extend(imports);
+        ctx.runtime.extend(helpers);
         for fix in inner.edits {
             for edit in fix.edits() {
                 let range = edit.range();
@@ -498,11 +537,28 @@ impl AstPass for TypedDictLiteralPass<'_> {
 /// import is emitted alongside the synthesized class definitions
 pub(crate) struct TypedDictLiteralPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
+    config: Config,
+    /// the module as parsed, which is what `types` answers for
+    suite: &'src [Stmt],
+    types: &'src dyn TypeInfo,
 }
 
 impl<'src> TypedDictLiteralPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        config: Config,
+        suite: &'src [Stmt],
+        types: &'src dyn TypeInfo,
+    ) -> Self {
+        Self {
+            source,
+            written,
+            config,
+            suite,
+            types,
+        }
     }
 }
 
@@ -809,5 +865,29 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("must be a string literal"), "got: {err}");
+    }
+
+    /// the class is hoisted out of the annotation, so no other pass's edit reaches a field
+    /// type: each is printed lowered here, where a field read back by `get_type_hints`
+    /// has to name a real type
+    #[test]
+    fn field_types_are_printed_lowered() {
+        let out = transpile(
+            indoc! {"
+                y = 1
+                a: {\"f\": float, \"d\": dynamic, \"c\": 1.5, \"k\": (int) -> str, \"t\": typeof y}
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        for field in [
+            "f: \"JustFloat\"",
+            "d: \"Any\"",
+            "c: \"float\"",
+            "k: \"Callable[[int], str]\"",
+            "t: \"TypeOf[y]\"",
+        ] {
+            assert!(out.contains(field), "`{field}` is missing from:\n{out}");
+        }
     }
 }

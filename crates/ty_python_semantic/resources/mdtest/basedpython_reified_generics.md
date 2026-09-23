@@ -41,6 +41,20 @@ def f[T](x: T) -> T:
 reveal_type(f[int](1))  # revealed: int
 ```
 
+## a parameter of the same name is not a read of the type parameter
+
+A parameter is bound in the body's scope and the type parameter in the one around it, so the body
+reads the parameter under that name. `n` here is used only in annotations, stays erased, and the
+call needs no specialization even though nothing solves `n`:
+
+```by
+def f[n](n: n | None = None) -> n | None:
+    reveal_type(n)  # revealed: n@f | None
+    return n
+
+f()
+```
+
 ## `reified` declares reification outright
 
 The `reified` modifier reifies a type parameter whether or not the body ever reads it as a value.

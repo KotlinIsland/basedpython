@@ -156,6 +156,33 @@ mod tests {
         );
     }
 
+    /// a target without 3.10's `typing` names imports them from `typing_extensions`, the
+    /// `ParamSpec` a polyfilled `**P` declares among them
+    #[test]
+    fn redirects_310_names_below_it() {
+        let config = Config {
+            min_version: ruff_python_ast::PythonVersion::PY39,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile(
+                "from typing import Optional, ParamSpec, Concatenate, TypeAlias, TypeGuard\n",
+                &config
+            )
+            .unwrap(),
+            indoc! {"
+                from __future__ import annotations
+                from typing import Optional
+                from typing_extensions import ParamSpec, Concatenate, TypeAlias, TypeGuard
+            "}
+        );
+        let out = transpile("class Deco[**P]:\n    pass\n", &config).unwrap();
+        assert!(
+            out.contains("from typing_extensions import ParamSpec\n"),
+            "got:\n{out}"
+        );
+    }
+
     #[test]
     fn redirects_312_override() {
         check(

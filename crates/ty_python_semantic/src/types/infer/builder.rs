@@ -134,7 +134,9 @@ use crate::types::infer::{
 use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_positional_result};
 use crate::types::match_type::literal_pattern_type;
 use crate::types::narrow::NarrowingEvaluatorExtension;
-use crate::types::narrow::{pattern_subject_type, pattern_success_types};
+use crate::types::narrow::{
+    argument_tested_by_known_function, pattern_subject_type, pattern_success_types,
+};
 use crate::types::newtype::NewType;
 use crate::types::receivers;
 use crate::types::regex;
@@ -178,10 +180,10 @@ use crate::types::{
     Parameters, ProgramEnvironment, PropertyDeprecations, RestrictedType, SentinelInstance,
     Signature, SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers,
     TypeContext, TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
-    TypedDictType, TypingModule, UnionAccumulator, UnionBuilder, UnionType, any_over_type,
-    binding_type, extract_fixed_length_iterable_element_types, infer_complete_scope_types,
-    infer_scope_types, is_discarded_dict_key_assignment, report_iteration_over_character,
-    todo_type,
+    TypedDictType, TypingModule, UnionAccumulator, UnionBuilder, UnionType, UnionTypeInstance,
+    any_over_type, binding_type, extract_fixed_length_iterable_element_types,
+    infer_complete_scope_types, infer_scope_types, is_discarded_dict_key_assignment,
+    report_iteration_over_character, todo_type,
 };
 use crate::{AnalysisSettings, Db, DisplaySettings, FxIndexSet, FxOrderSet, SemanticModel};
 use fluid::FluidTimeline;
@@ -11282,6 +11284,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         else {
             return;
         };
+        // a call that tests the type of an argument reads the optional rather than discarding
+        // it: its result says whether the value was `None`, and narrows it when the call is a
+        // condition. `isinstance(x, int)` and a function returning `TypeIs` both take `object`
+        // for that reason
+        let tested = match bindings.return_type(db, env) {
+            Type::TypeIs(_) | Type::TypeGuard(_) => {
+                typeguard::narrowed_argument(db, bindings, call).map(ast::ArgOrKeyword::value)
+            }
+            _ => bindings
+                .single_element()
+                .and_then(|binding| binding.callable_type.as_function_literal())
+                .and_then(|function| function.known(db))
+                .and_then(|function| argument_tested_by_known_function(function, call)),
+        };
         for (argument, parameter_type) in arguments.iter().zip(parameter_types) {
             let Some(parameter_type) = parameter_type else {
                 continue;
@@ -11290,6 +11306,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 continue;
             }
             let value = argument.value();
+            if tested.is_some_and(|tested| std::ptr::eq(tested, value)) {
+                continue;
+            }
             let argument_type = self.expression_type(value);
             if !is_optional_value(db, argument_type) {
                 continue;
@@ -15912,6 +15931,44 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 } else {
                     UnionType::from_elements(self.db(), env, present)
                 }
+            }
+
+            // basedpython: `T?` read as a value — `isinstance(x, int?)`, `Alias = int?` — is
+            // the object the transpiler writes for it, `T | None`, so it is that union. an
+            // optional over an optional, or over a type variable, is instead the runtime
+            // `Optional` wrapper the type expression reading of `?` describes, which is left
+            // to the arm below
+            (ast::UnaryOp::Optional, _)
+                if self.is_basedpython_file()
+                    && !matches!(
+                        &*unary.operand,
+                        ast::Expr::UnaryOp(operand) if operand.op == ast::UnaryOp::Optional
+                    )
+                    && matches!(
+                        operand_type,
+                        Type::ClassLiteral(..)
+                            | Type::SubclassOf(..)
+                            | Type::GenericAlias(..)
+                            | Type::SpecialForm(_)
+                            | Type::KnownInstance(_)
+                    )
+                    && !match operand_type {
+                        Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) => {
+                            !typevar.is_self(db)
+                        }
+                        Type::SubclassOf(subclass_of) => subclass_of
+                            .into_type_var()
+                            .is_some_and(|typevar| !typevar.typevar(db).is_self(db)),
+                        _ => false,
+                    } =>
+            {
+                UnionTypeInstance::from_value_expression_types(
+                    db,
+                    [operand_type, Type::none(db, env)],
+                    self.scope(),
+                    self.typevar_binding_context,
+                    self.inference_flags(),
+                )
             }
 
             // basedpython postfix `?` and `^` / `!` on non-optional operands.

@@ -190,6 +190,7 @@ pub(crate) enum Lowering {
     ParametricIs,
     ProtocolType,
     RepeatedUnderscore,
+    RuntimeUnion,
     StatementExpression,
     SymbolicTypeOp,
     TupleLiteralType,
@@ -912,8 +913,19 @@ struct Authorship {
     marks: Vec<[usize; 5]>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// the lowerings each pass declares it writes itself, by the pass's name, recorded as
+    /// the passes run: the test holding every declaration to a case showing it reads them
+    static DECLARED_SUBSUMPTIONS: RefCell<Vec<(&'static str, &'static [Lowering])>> =
+        const { RefCell::new(Vec::new()) };
+}
+
 impl Authorship {
     fn finished(&mut self, author: Author, ctx: &PassContext) {
+        #[cfg(test)]
+        DECLARED_SUBSUMPTIONS
+            .with(|declared| declared.borrow_mut().push((author.name, author.subsumes)));
         self.authors.push(author);
         self.marks.push([
             ctx.text_edits.len(),
@@ -1244,8 +1256,11 @@ pub(crate) fn run_against_source<'a>(
         source_ref,
     );
 
-    let symbolic_folds =
-        symbolic_type_op::collect_symbolic_folds(parsed_handle.suite(), &semantic_model);
+    let symbolic_folds = symbolic_type_op::collect_symbolic_folds(
+        parsed_handle.suite(),
+        &semantic_model,
+        config.float_literals,
+    );
     let symbolic_needs_literal_import = symbolic_folds.needs_literal_import;
     let symbolic_needs_any_import = symbolic_folds.needs_any_import;
     ctx.claimed_type_op_ranges = symbolic_folds.claimed_ranges();
@@ -1319,9 +1334,9 @@ pub(crate) fn run_against_source<'a>(
         config.min_version,
         config.inject_future_annotations,
     );
-    let init_method_pass =
-        init_method::InitMethod::new(source_ref, written, config.float_literals, config.is_stub);
-    let properties_pass = properties::PropertiesPass::new(source_ref, accessor_value_ranges);
+    let init_method_pass = init_method::InitMethod::new(source_ref, written, config.clone());
+    let properties_pass =
+        properties::PropertiesPass::new(source_ref, accessor_value_ranges, config.min_version);
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
     let return_value_use_pass = return_value_use::ReturnValueUsePass::new(
@@ -1347,8 +1362,17 @@ pub(crate) fn run_against_source<'a>(
             config.min_version,
         ),
     );
-    let unpack_pass = unpack::UnpackSyntax::new(config.clone());
-    let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass::new(source_ref);
+    let unpack_pass = unpack::UnpackSyntax::new(
+        config.clone(),
+        unpack::collect_type_subscripts(parsed_handle.suite(), &semantic_model),
+    );
+    let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass::new(
+        source_ref,
+        written,
+        config.clone(),
+        parsed_handle.suite(),
+        &semantic_model,
+    );
     let just_float_pass = just_float::JustFloatPass::new();
     let float_const_pass = float_const::FloatConstPass::new();
     let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(source_ref, config.min_version);
@@ -1366,8 +1390,7 @@ pub(crate) fn run_against_source<'a>(
     let tuple_types_pass =
         annotation::TupleLiteralTypePass::new(source_ref, written, config.clone());
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref, config.float_literals);
-    let callable_pass =
-        callable::CallableSyntaxPass::new(source_ref, written, config.float_literals);
+    let callable_pass = callable::CallableSyntaxPass::new(source_ref, written, config.clone());
     let protocol_type_pass =
         protocol_type::ProtocolTypePass::new(source_ref, written, config.clone());
     let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref);
@@ -2388,5 +2411,414 @@ mod driver_tests {
         let mut out = Replacement::default();
         materialize_fragments(&mut out, &frags, source, &all, &[0], 0, &mut [false]);
         assert_eq!(out.text(), "[1])W");
+    }
+}
+
+/// a pass that declares it writes another lowering itself
+/// ([`TypeAwarePass::subsumes`]) is trusted to: the edits that lowering makes inside
+/// one of the pass's own are left out of the output without an error. a declaration
+/// the pass does not live up to drops the lowering in silence, so each one is shown
+/// here written, by a construct of the declaring pass with the lowered construct
+/// inside it, unless [`SHOWN_ELSEWHERE`](subsumed_lowerings::SHOWN_ELSEWHERE) says where
+/// it is shown. a declaration with neither fails
+/// `every_declared_lowering_is_shown_written`
+#[cfg(test)]
+mod subsumed_lowerings {
+    use ruff_python_ast::PythonVersion;
+
+    use super::{DECLARED_SUBSUMPTIONS, Lowering};
+    use crate::{Config, transpile};
+
+    /// the declared pairs shown written somewhere other than a case here, by the declaring
+    /// pass's name: the test of the pass's own that shows it, or why it holds
+    const SHOWN_ELSEWHERE: &[(&str, Lowering, &str)] = &[
+        (
+            "GenericPolyfillPass",
+            Lowering::MatchType,
+            "polyfilled_match_type_lowers_to_object",
+        ),
+        (
+            "GenericPolyfillPass",
+            Lowering::SymbolicTypeOp,
+            "arithmetic_type_alias_is_folded_too",
+        ),
+        (
+            "GenericPolyfillPass",
+            Lowering::Modifiers,
+            "private_match_type_takes_the_underscore_name",
+        ),
+        (
+            "GenericPolyfillPass",
+            Lowering::VisibilityRename,
+            "private_match_type_takes_the_underscore_name",
+        ),
+        (
+            "ModifiersPass",
+            Lowering::StatementExpression,
+            "a_declaration_takes_a_suite_bearing_value",
+        ),
+        (
+            "ExtensionBlockPass",
+            Lowering::Modifiers,
+            "static_and_class_members_bind_the_class_object",
+        ),
+        (
+            "ExtensionBlockPass",
+            Lowering::ContextParams,
+            "a_context_parameter_of_an_extension_member_is_filled",
+        ),
+        (
+            "ExtensionBlockPass",
+            Lowering::GenericPolyfill,
+            "conditional_extension_keeps_bounds_in_marker",
+        ),
+        (
+            "ExtensionBlockPass",
+            Lowering::RepeatedUnderscore,
+            "a_repeated_underscore_in_a_member_is_numbered",
+        ),
+        (
+            "DecoratorKeyword",
+            Lowering::LocalOnce,
+            "a_parameter_modifier_leaves_the_overloads_as_they_were",
+        ),
+        (
+            "DecoratorKeyword",
+            Lowering::ContextParams,
+            "a_parameter_modifier_leaves_the_overloads_as_they_were",
+        ),
+        (
+            "KwSubscriptPass",
+            Lowering::OptionalType,
+            "getitem_kw_value_optional_lowers",
+        ),
+        (
+            "MatchTypePass",
+            Lowering::Unpack,
+            "polyfilled_match_type_lowers_to_object",
+        ),
+        (
+            "VisibilityRenamePass",
+            Lowering::Modifiers,
+            "private_type_alias_polyfilled",
+        ),
+        ("PropertiesPass", Lowering::Modifiers, "stored_var_property"),
+        (
+            "SymbolicTypeOp",
+            Lowering::LiteralType,
+            "plain_int_addition",
+        ),
+        (
+            "SymbolicTypeOp",
+            Lowering::DynamicKeyword,
+            "dynamic_operand_folds_to_any",
+        ),
+        ("SymbolicTypeOp", Lowering::Typeof, "typeof_operand"),
+        (
+            "SymbolicTypeOp",
+            Lowering::Callable,
+            "by construction: a fold writes the type ty computed and none of its operands",
+        ),
+        (
+            "SymbolicTypeOp",
+            Lowering::OptionalType,
+            "by construction: a fold writes the type ty computed and none of its operands",
+        ),
+        (
+            "SymbolicTypeOp",
+            Lowering::JustFloat,
+            "by construction: a fold writes the type ty computed and none of its operands",
+        ),
+        (
+            "SymbolicTypeOp",
+            Lowering::FloatConst,
+            "by construction: a fold writes the type ty computed and none of its operands",
+        ),
+        (
+            "ParametricIsPass",
+            Lowering::LiteralType,
+            "protocol_int_literal_argument",
+        ),
+        // the runtime-union lowering runs only below 3.10, where the cases above never go
+        (
+            "CallableSyntaxPass",
+            Lowering::RuntimeUnion,
+            "a_cast_target_and_a_typevar_bound_are_spelled_out_below_310",
+        ),
+    ];
+
+    /// `source`, which puts a construct of the pass named `pass` around one of each of
+    /// `lowerings`, transpiles to python holding each of `written` and none of `unwritten`
+    struct Case {
+        pass: &'static str,
+        lowerings: Vec<Lowering>,
+        source: String,
+        written: Vec<String>,
+        unwritten: Vec<String>,
+    }
+
+    fn case(
+        pass: &'static str,
+        lowerings: &[Lowering],
+        source: &str,
+        written: &[&str],
+        unwritten: &[&str],
+    ) -> Case {
+        Case {
+            pass,
+            lowerings: lowerings.to_vec(),
+            source: source.to_owned(),
+            written: written.iter().map(|text| (*text).to_owned()).collect(),
+            unwritten: unwritten.iter().map(|text| (*text).to_owned()).collect(),
+        }
+    }
+
+    /// a type expression of each of `lowerings`, as `wrap` puts it inside a construct of
+    /// `pass`, is printed lowered where `show` says the construct puts it
+    fn leaves(
+        pass: &'static str,
+        lowerings: &[Lowering],
+        wrap: impl Fn(&str) -> String,
+        show: impl Fn(&str) -> String,
+    ) -> Vec<Case> {
+        let leaves = [
+            (Lowering::LiteralType, "1", "Literal[1]", None),
+            (Lowering::JustFloat, "float", "JustFloat", None),
+            (Lowering::DynamicKeyword, "dynamic", "Any", Some("dynamic")),
+            (Lowering::FloatConst, "1.5", "float", Some("1.5")),
+            (Lowering::OptionalType, "int?", "int | None", Some("int?")),
+            (
+                Lowering::Callable,
+                "(int) -> str",
+                "Callable[[int], str]",
+                Some("(int) ->"),
+            ),
+            (Lowering::Typeof, "typeof y", "TypeOf[y]", Some("typeof")),
+        ];
+        leaves
+            .into_iter()
+            .filter(|(lowering, ..)| lowerings.contains(lowering))
+            .map(|(lowering, leaf, lowered, unwritten)| Case {
+                pass,
+                lowerings: vec![lowering],
+                source: format!("y = 1\n{}\n", wrap(leaf)),
+                written: vec![show(lowered)],
+                unwritten: unwritten.map(str::to_owned).into_iter().collect(),
+            })
+            .collect()
+    }
+
+    fn check(cases: &[Case], version: PythonVersion) {
+        let config = Config {
+            min_version: version,
+            ..Config::test_default()
+        };
+        let mut failures = Vec::new();
+        for case in cases {
+            let what = format!("`{}` around {:?}", case.pass, case.lowerings);
+            let output = match transpile(&case.source, &config) {
+                Ok(output) => output,
+                Err(error) => {
+                    failures.push(format!("{what}: refused: {error}"));
+                    continue;
+                }
+            };
+            for text in &case.written {
+                if !output.contains(text.as_str()) {
+                    failures.push(format!("{what}: `{text}` is missing from\n{output}"));
+                }
+            }
+            for text in &case.unwritten {
+                if output.contains(text.as_str()) {
+                    failures.push(format!("{what}: `{text}` is left in\n{output}"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    }
+
+    fn type_expression_cases() -> Vec<Case> {
+        let mut cases = Vec::new();
+        cases.extend(leaves(
+            "TupleLiteralTypePass",
+            super::super::callable::TYPE_EXPRESSION,
+            |leaf| format!("def f(x: ({leaf}, str)) -> None: ..."),
+            |lowered| format!("tuple[{lowered}, str]"),
+        ));
+        cases.extend(leaves(
+            "CallableSyntaxPass",
+            super::super::callable::TYPE_EXPRESSION,
+            |leaf| format!("def f(x: ({leaf}) -> str) -> None: ..."),
+            |lowered| format!("Callable[[{lowered}], str]"),
+        ));
+        let fields = [
+            Lowering::Callable,
+            Lowering::OptionalType,
+            Lowering::LiteralType,
+            Lowering::JustFloat,
+            Lowering::DynamicKeyword,
+            Lowering::FloatConst,
+            Lowering::Typeof,
+        ];
+        cases.extend(leaves(
+            "AnonNamedTuplePass",
+            &fields,
+            |leaf| format!("def f(x: (a: {leaf}, b: str)) -> None: ..."),
+            |lowered| format!("a: {lowered}"),
+        ));
+        cases.extend(leaves(
+            "ProtocolTypePass",
+            &fields,
+            |leaf| format!("def f(x: protocol(a: {leaf})) -> None: ..."),
+            |lowered| format!("a: \"{lowered}\""),
+        ));
+        cases.extend(leaves(
+            "TypedDictLiteralPass",
+            &fields,
+            |leaf| format!("def f(x: {{\"a\": {leaf}}}) -> None: ..."),
+            |lowered| format!("a: \"{lowered}\""),
+        ));
+        cases.push(case(
+            "CallableSyntaxPass",
+            &[Lowering::ProtocolType],
+            "def f(x: (protocol(a: int)) -> str) -> None: ...\n",
+            &["Callable[[_Protocol_"],
+            &["protocol("],
+        ));
+        cases
+    }
+
+    fn whole_construct_cases() -> Vec<Case> {
+        vec![
+            case(
+                "GenericPolyfillPass",
+                &[Lowering::TupleLiteralType],
+                "type Pair = (int, str)\n",
+                &["TypeAliasType(\"Pair\", tuple[int, str])"],
+                &["(int, str)"],
+            ),
+            case(
+                "GenericPolyfillPass",
+                &[Lowering::AnonNamedTuple],
+                "type Point = (x: int, y: int)\n",
+                &["TypeAliasType(\"Point\", _AnonNamedTuple_"],
+                &["(x: int"],
+            ),
+            case(
+                "GenericPolyfillPass",
+                &[Lowering::VarianceStrip],
+                "class Box[out T]:\n    def get(self) -> T: ...\n",
+                &["covariant=True"],
+                &["out T"],
+            ),
+            case(
+                "ExtensionBlockPass",
+                &[
+                    Lowering::LiteralType,
+                    Lowering::JustFloat,
+                    Lowering::DynamicKeyword,
+                    Lowering::FloatConst,
+                    Lowering::OptionalType,
+                    Lowering::Callable,
+                ],
+                "extension int:\n    def scaled(self, by: 1, f: float, d: dynamic, c: 1.5, o: int?, k: (int) -> str) -> float:\n        return 1.0\n",
+                &["(self, by, f, d, c, o, k)"],
+                &["dynamic", "1.5", "int?", "(int) ->"],
+            ),
+            case(
+                "PropertiesPass",
+                &[Lowering::InferredAnnotation],
+                "class A:\n    var v = 0\n        get() = field\n        set(value):\n            field = value\n",
+                &["self.__v: int = 0"],
+                &["var v"],
+            ),
+            case(
+                "TypeIs",
+                &[Lowering::ParametricIs],
+                "def f(x: object) -> x is list[int]:\n    return isinstance(x, list)\n",
+                &["TypeIs[list[int]]"],
+                &["is list"],
+            ),
+            case(
+                "StatementExpressionPass",
+                &[Lowering::NoneCoalesce],
+                "def f(xs: list[int?]) -> None:\n    for x in xs:\n        y = x ?? continue\n        print(y)\n",
+                &["continue"],
+                &["??"],
+            ),
+            case(
+                "NoneCoalescePass",
+                &[Lowering::NoneChain],
+                "class A:\n    b: int? = None\n\ndef f(a: A?) -> int:\n    return a?.b ?? 1\n",
+                &[],
+                &["?.", "??"],
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_type_expression_a_pass_moves_is_written_lowered() {
+        check(&type_expression_cases(), PythonVersion::PY310);
+    }
+
+    #[test]
+    fn a_construct_a_pass_writes_whole_is_written_lowered() {
+        check(&whole_construct_cases(), PythonVersion::PY310);
+    }
+
+    /// every lowering a pass declares it writes has a case above or an entry in
+    /// [`SHOWN_ELSEWHERE`], so a declaration added later fails here until something shows
+    /// it written — and an entry whose declaration is gone fails too
+    #[test]
+    fn every_declared_lowering_is_shown_written() {
+        DECLARED_SUBSUMPTIONS.with(|declared| declared.borrow_mut().clear());
+        transpile("x = 1\n", &Config::test_default()).expect("transpile failed");
+        let declared = DECLARED_SUBSUMPTIONS.with(std::cell::RefCell::take);
+        let cases: Vec<Case> = type_expression_cases()
+            .into_iter()
+            .chain(whole_construct_cases())
+            .collect();
+
+        let mut failures = Vec::new();
+        for &(pass, lowerings) in &declared {
+            for lowering in lowerings {
+                let in_a_case = cases
+                    .iter()
+                    .any(|case| case.pass == pass && case.lowerings.contains(lowering));
+                let elsewhere = SHOWN_ELSEWHERE
+                    .iter()
+                    .any(|(shown, shown_lowering, _)| *shown == pass && shown_lowering == lowering);
+                if !in_a_case && !elsewhere {
+                    failures.push(format!(
+                        "`{pass}` declares it writes {lowering:?}, and nothing shows it"
+                    ));
+                }
+            }
+        }
+        for (pass, lowering, _) in SHOWN_ELSEWHERE {
+            if !declared
+                .iter()
+                .any(|(name, lowerings)| name == pass && lowerings.contains(lowering))
+            {
+                failures.push(format!(
+                    "`{pass}` no longer declares {lowering:?}, which `SHOWN_ELSEWHERE` lists"
+                ));
+            }
+        }
+        for case in &cases {
+            if !declared.iter().any(|(name, lowerings)| {
+                *name == case.pass
+                    && case
+                        .lowerings
+                        .iter()
+                        .all(|lowering| lowerings.contains(lowering))
+            }) {
+                failures.push(format!(
+                    "a case shows `{}` writing {:?}, which it does not declare",
+                    case.pass, case.lowerings
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

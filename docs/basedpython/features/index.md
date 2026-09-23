@@ -123,6 +123,7 @@ type parameters — their bounds, their variance, and what survives to runtime
 <div class="by-index" markdown>
 
 - [generics](generics.md)
+- [`some` parameters](some-parameters.md)
 - [type mappings](type-mappings.md)
 - [type parameter bound ranges](bound-ranges.md)
 - [bounds on a variadic pack](pack-bounds.md)

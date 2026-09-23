@@ -23,12 +23,20 @@
 //! value, not a class, and only the union operator accepts it as shorthand for
 //! `NoneType`.
 //!
+//! An optional `T?` the runtime evaluates is the union `T | None` too, and is
+//! spelled by the same rule: `(T, type(None),)` where `isinstance` expects
+//! classes, `Union[T, None]` everywhere else. The optional lowering writes it, and
+//! asks [`classinfo_optionals`] which of its optionals stand in the classinfo
+//! argument.
+//!
 //! Whether a `|` is a union at all is asked of the checker rather than guessed
 //! from the shape: `a | b` is overwhelmingly a bitwise or, and only the types of
 //! its operands tell the two apart.
 
+use std::collections::HashSet;
+
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, ExprCall, Operator, PythonVersion, Stmt};
+use ruff_python_ast::{Expr, ExprCall, Operator, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
@@ -48,6 +56,10 @@ impl RuntimeUnionPass {
 }
 
 impl TypeAwarePass for RuntimeUnionPass {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::RuntimeUnion)
+    }
+
     // only a union the runtime evaluates needs the older spelling. a checker
     // reads `X | Y` in a stub whatever version the stub is for
     fn runtime_only(&self) -> bool {
@@ -58,11 +70,7 @@ impl TypeAwarePass for RuntimeUnionPass {
         if self.min_version >= MIN_VERSION {
             return;
         }
-        let mut lower = Lower {
-            types,
-            edits: Vec::new(),
-            needs_import: false,
-        };
+        let mut lower = Lower::new(types);
         for stmt in stmts {
             lower.visit_stmt(stmt);
         }
@@ -74,10 +82,33 @@ impl TypeAwarePass for RuntimeUnionPass {
     }
 }
 
+/// The optionals in `stmts` that stand where `isinstance` / `issubclass` expects
+/// classes, and so are spelled as a tuple of classes below 3.10.
+pub(crate) fn classinfo_optionals(stmts: &[Stmt], types: &dyn TypeInfo) -> HashSet<TextRange> {
+    let mut lower = Lower::new(types);
+    for stmt in stmts {
+        lower.visit_stmt(stmt);
+    }
+    lower.classinfo_optionals
+}
+
 struct Lower<'a> {
     types: &'a dyn TypeInfo,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     needs_import: bool,
+    /// every optional the classinfo walk reached, for the optional lowering
+    classinfo_optionals: HashSet<TextRange>,
+}
+
+impl<'a> Lower<'a> {
+    fn new(types: &'a dyn TypeInfo) -> Self {
+        Self {
+            types,
+            edits: Vec::new(),
+            needs_import: false,
+            classinfo_optionals: HashSet::new(),
+        }
+    }
 }
 
 impl<'ast> Visitor<'ast> for Lower<'_> {
@@ -162,7 +193,8 @@ impl<'ast> Lower<'_> {
 
     /// Visit an expression standing where `isinstance` expects classes. A union
     /// here becomes a tuple, and so does one nested inside a tuple or list the
-    /// argument already spells; everything else is ordinary value context.
+    /// argument already spells, or inside an optional; everything else is
+    /// ordinary value context.
     fn visit_classinfo(&mut self, expr: &'ast Expr) {
         if let Some(arms) = self.union_arms(expr) {
             let fragments = spell(&arms, Form::ClassInfo);
@@ -182,6 +214,12 @@ impl<'ast> Lower<'_> {
                 for element in &list.elts {
                     self.visit_classinfo(element);
                 }
+            }
+            Expr::UnaryOp(optional)
+                if optional.op == UnaryOp::Optional && self.types.is_runtime_union(expr) =>
+            {
+                self.classinfo_optionals.insert(expr.range());
+                self.visit_classinfo(&optional.operand);
             }
             _ => self.visit_expr(expr),
         }
@@ -289,6 +327,56 @@ mod tests {
             out.contains("isinstance(x, (bytes, (int, str,)))"),
             "got:\n{out}"
         );
+    }
+
+    /// an optional is the union `T | None`, and where `isinstance` expects classes it
+    /// is spelled as that union is there
+    #[test]
+    fn an_optional_classinfo_is_a_tuple() {
+        let out = lowered(indoc! {"
+            def f(x: object, t: type):
+                return isinstance(x, int?) or issubclass(t, int?)
+        "});
+        assert!(
+            out.contains("isinstance(x, (int, type(None),)) or issubclass(t, (int, type(None),))"),
+            "got:\n{out}"
+        );
+        assert!(!out.contains("Union"), "got:\n{out}");
+    }
+
+    /// an optional inside a classinfo union or tuple is still a classinfo, and so is a
+    /// union an optional wraps
+    #[test]
+    fn a_nested_classinfo_optional_is_a_tuple_too() {
+        let out = lowered(indoc! {"
+            def f(x: object):
+                return isinstance(x, int? | str) or isinstance(x, (float?, bytes)) or isinstance(x, (int | str)?)
+        "});
+        assert!(
+            out.contains("isinstance(x, ((int, type(None),), str,))"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("isinstance(x, ((float, type(None),), bytes))"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("isinstance(x, (((int, str,)), type(None),))"),
+            "got:\n{out}"
+        );
+        assert!(!out.contains("Union"), "got:\n{out}");
+    }
+
+    /// an optional anywhere else keeps the `Union` spelling, a subscript inside the
+    /// classinfo argument among them
+    #[test]
+    fn an_optional_outside_a_classinfo_is_a_union() {
+        let out = lowered(indoc! {"
+            from typing import cast
+            def f(v: object):
+                return cast(int?, v)
+        "});
+        assert!(out.contains("cast(Union[int, None], v)"), "got:\n{out}");
     }
 
     /// a `cast` target is a type expression the runtime still evaluates
