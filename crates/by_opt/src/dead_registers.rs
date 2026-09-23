@@ -110,7 +110,7 @@ fn live_registers(function: &Function) -> HashSet<RegisterId> {
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BinOp, Op, Terminator};
+    use by_ir::ops::{BinOp, Mutation, Op, Terminator};
     use by_ir::print::print_function;
     use by_ir::rtype::RType;
     use by_ir::verify::verify;
@@ -143,6 +143,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(live)));
 
@@ -164,6 +165,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(live)));
         let mut m = module(builder.finish());
@@ -199,6 +201,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut m = module(builder.finish());

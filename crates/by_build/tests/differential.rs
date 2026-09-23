@@ -1323,6 +1323,60 @@ def _annotation_report(f):
         out['annotate'] = attempt(lambda: f.__annotate__ and f.__annotate__.__qualname__)
     return out
 
+# an `int` subclass with an in-place method for every operator, each answering 1000 more
+# than the plain one, so an augmented assignment that asked the plain method shows
+class _InPlace(int):
+    def __repr__(self):
+        return f'_InPlace({int(self)})'
+
+for _name in ('add', 'sub', 'mul', 'floordiv', 'mod', 'pow', 'lshift', 'rshift', 'and', 'or', 'xor'):
+    def _plain(self, other, _name=_name):
+        return _InPlace(getattr(int, f'__{_name}__')(int(self), int(other)))
+    def _in_place(self, other, _name=_name):
+        return _InPlace(getattr(int, f'__{_name}__')(int(self), int(other)) + 1000)
+    setattr(_InPlace, f'__{_name}__', _plain)
+    setattr(_InPlace, f'__i{_name}__', _in_place)
+
+# an `int` subclass whose every method answers something `int`'s own would not, so a
+# compiled `int` that let go of the object, or asked `int` instead of it, shows
+class _Int(int):
+    def __repr__(self):
+        return f'_Int({int(self)})'
+    def __str__(self):
+        return f's{int(self)}'
+    def __format__(self, spec):
+        return f'f{int(self)}'
+    def __add__(self, other):
+        if isinstance(other, float):
+            return other - 0.5
+        return _Int(int(self) + int(other) + 100)
+    def __radd__(self, other):
+        return _Int(int(other) + int(self) + 1000)
+    def __sub__(self, other):
+        return _Int(int(self) - int(other) - 100)
+    def __rsub__(self, other):
+        return _Int(int(other) - int(self) - 1000)
+    def __eq__(self, other):
+        return int(self) % 10 == int(other) % 10
+    def __ne__(self, other):
+        return int(self) % 10 != int(other) % 10
+    def __lt__(self, other):
+        return int(self) > int(other)
+    def __gt__(self, other):
+        return int(self) < int(other)
+    def __hash__(self):
+        return 7
+    def __bool__(self):
+        return False
+    def __neg__(self):
+        return _Int(99)
+    def __pos__(self):
+        return _Int(77)
+    def __invert__(self):
+        return _Int(55)
+    def __index__(self):
+        return 0
+
 # whether what `make` built is still alive once the only references left are the ones
 # `keep` took from it, handed back beside what `keep` took so a caller can go on to use it
 def _outlives(make, keep):
@@ -3418,6 +3472,313 @@ def both(a: bool, b: bool) -> bool:
             "[m.both(a, b) for a in (True, False) for b in (True, False)]",
             // `True` must come back as `True`, not as `1`
             "type(m.both(True, True)).__name__",
+        ],
+    );
+}
+
+#[test]
+fn an_int_keeps_the_bool_or_the_subclass_it_was_handed() {
+    // `bool` is an `int` subclass, and so is a class of the program's own. python hands
+    // back the very object it was given, so an `int` register has to keep it rather than
+    // narrow it to its value — through a parameter, a list element, a field, a loop, a
+    // dict key and a default
+    agree_python(
+        "intkeeps",
+        "\
+class Box:
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+def ident(x: int) -> int:
+    return x
+
+def first(xs: list[int]) -> int:
+    return xs[0]
+
+def field(b: Box) -> int:
+    return b.v
+
+def boxed(x: int) -> int:
+    return Box(x).v
+
+def each(xs: list[int]) -> list[int]:
+    out: list[int] = []
+    for x in xs:
+        out.append(x)
+    return out
+
+def keyed(xs: list[int]) -> list[int]:
+    d: dict[int, int] = {}
+    for x in xs:
+        d[x] = 1
+    return list(d)
+
+def fallback(x: int = True) -> int:
+    return x
+",
+        &[
+            "[(m.ident(v), type(m.ident(v)).__name__) for v in (True, False, _Int(5), _Int(2**70), 5)]",
+            "[m.first([v]) for v in (True, False, _Int(5), _Int(2**70))]",
+            "[m.field(m.Box(v)) for v in (True, _Int(5))]",
+            "[m.boxed(v) for v in (True, _Int(5))]",
+            "m.each([True, _Int(5), 3, False])",
+            "m.keyed([True, _Int(5), 1, 17])",
+            "(m.fallback(), m.fallback(_Int(3)))",
+        ],
+    );
+}
+
+#[test]
+fn an_int_subclass_answers_every_operation_with_its_own_method() {
+    // an operation on an `int` is the method its type holds, and a subclass may hold one
+    // of its own for any of them. `_Int`'s answer differs from `int`'s everywhere, and
+    // `True` is there beside it because `bool` keeps `int`'s methods for all of these
+    agree_python(
+        "intmethods",
+        "\
+def added(xs: list[int]) -> list[int]:
+    return [xs[0] + 1, 1 + xs[0], xs[0] - 1, 1 - xs[0], xs[0] + xs[0]]
+
+def compared(xs: list[int]) -> list[bool]:
+    return [xs[0] == 5, xs[0] != 5, xs[0] < 3, xs[0] > 3, xs[0] == xs[1]]
+
+def hashed(xs: list[int]) -> int:
+    return hash(xs[0])
+
+def text(xs: list[int]) -> list[str]:
+    return [repr(xs[0]), str(xs[0]), f\"{xs[0]}\", f\"{xs[0]:>3}\"]
+
+def truth(xs: list[int]) -> list[bool]:
+    seen: list[bool] = []
+    if xs[0]:
+        seen.append(True)
+    else:
+        seen.append(False)
+    seen.append(not xs[0])
+    return seen
+
+def unary(xs: list[int]) -> list[int]:
+    return [-xs[0], +xs[0], ~xs[0]]
+
+def mixed(xs: list[int]) -> list[float]:
+    return [xs[0] + 1.5, 1.5 + xs[0]]
+
+def total(xs: list[int]) -> int:
+    t = 0
+    for x in xs:
+        t = t + x
+    return t
+",
+        &[
+            "[m.added([v]) for v in (True, _Int(5), _Int(2**70))]",
+            "[m.compared([v, w]) for v in (True, _Int(5), _Int(2**70)) for w in (1, _Int(15))]",
+            "[m.hashed([v]) for v in (True, _Int(5), _Int(2**70))]",
+            "[m.text([v]) for v in (True, _Int(5))]",
+            "[m.truth([v]) for v in (True, False, _Int(5), _Int(0), _Int(2**70))]",
+            "[m.unary([v]) for v in (True, _Int(5), _Int(2**70))]",
+            "[m.mixed([v]) for v in (True, _Int(5))]",
+            "[m.total(vs) for vs in ([True, True], [_Int(5), 2], [2, _Int(5)])]",
+        ],
+    );
+}
+
+#[test]
+fn an_augmented_assignment_on_an_int_asks_a_subclass_its_in_place_method() {
+    // python offers the left operand of `x += y` its `__iadd__` before its `__add__`, and
+    // the same for every other augmented operator. `int` and `bool` have no in-place
+    // methods, so only a subclass that defines one can tell — `_InPlace` answers 1000 more
+    // from each of them. the exact `int`s and `True` beside it take the plain operator
+    agree_python(
+        "intinplace",
+        "\
+def each(xs: list[int], y: int) -> list[int]:
+    out: list[int] = []
+    a = xs[0]
+    a += y
+    out.append(a)
+    a = xs[0]
+    a -= y
+    out.append(a)
+    a = xs[0]
+    a *= y
+    out.append(a)
+    a = xs[0]
+    a //= y
+    out.append(a)
+    a = xs[0]
+    a %= y
+    out.append(a)
+    a = xs[0]
+    a **= 2
+    out.append(a)
+    a = xs[0]
+    a <<= y
+    out.append(a)
+    a = xs[0]
+    a >>= y
+    out.append(a)
+    a = xs[0]
+    a &= y
+    out.append(a)
+    a = xs[0]
+    a |= y
+    out.append(a)
+    a = xs[0]
+    a ^= y
+    out.append(a)
+    return out
+
+def stepped(xs: list[int]) -> int:
+    total = xs[0]
+    for i in range(3):
+        total += i
+    return total
+
+class Tally:
+    def __init__(self, n: int) -> None:
+        self.n = n
+
+    def bump(self) -> int:
+        self.n += 1
+        return self.n
+",
+        &[
+            "m.each([_InPlace(7)], 2)",
+            "m.each([_InPlace(7 * 2**70)], 3)",
+            "[m.each([v], 2) for v in (7, -7, 7 * 2**70, True)]",
+            "m.each([7], _InPlace(2))",
+            "[m.stepped([v]) for v in (_InPlace(7), 7, True)]",
+            "[m.Tally(v).bump() for v in (_InPlace(7), 7, True)]",
+        ],
+    );
+}
+
+#[test]
+fn unary_plus_asks_the_operand_its_own_pos_whatever_it_is() {
+    // `+x` is `type(x).__pos__(x)` for every `x`, not only an `int`. a `Counter` answers
+    // with a copy that drops each count that is not positive, a `bool` with the `int` it
+    // stands for, and a class of the program's own with whatever its method returns
+    agree_python(
+        "objectpos",
+        "\
+from collections import Counter
+
+class Signed:
+    def __pos__(self) -> str:
+        return \"positive\"
+
+def counted(c: Counter[str]) -> Counter[str]:
+    return +c
+
+def flag(b: bool) -> int:
+    return +b
+
+def signed(s: Signed) -> str:
+    return +s
+
+def floating(x: float) -> float:
+    return +x
+",
+        &[
+            "sorted(m.counted(__import__('collections').Counter(a=1, b=-2, c=0)).items())",
+            "[(m.flag(b), type(m.flag(b)).__name__) for b in (True, False)]",
+            "m.signed(m.Signed())",
+            "[repr(m.floating(x)) for x in (1.5, -0.0, float('inf'))]",
+        ],
+    );
+}
+
+#[test]
+fn a_literal_default_is_the_object_python_holds_whatever_the_parameter_holds() {
+    // a default is the object the literal made, whatever the annotation says: `x: float
+    // = 1` leaves `x` the `int` 1, which a double cannot hold, and `x: int = None` leaves
+    // it `None`, which a tagged `int` cannot. a call that omits such a parameter is
+    // handed to the definition that holds the object, and a call that passes one is not
+    agree_python(
+        "defaultstands",
+        "\
+def scaled(x: float = 1) -> float:
+    return x
+
+def flagged(x: float = True) -> float:
+    return x
+
+def plain(x: float = 1.5) -> float:
+    return x
+
+def absent(x: int = None) -> int:
+    return x
+
+def text(x: str = None) -> str:
+    return x
+
+class Meter:
+    def reset(self, n: int = None) -> int:
+        return n
+",
+        &[
+            "[(v, type(v).__name__) for v in (m.scaled(), m.scaled(2.5), m.scaled(x=0.5))]",
+            "[(v, type(v).__name__) for v in (m.flagged(), m.flagged(2.5))]",
+            "[(v, type(v).__name__) for v in (m.plain(), m.plain(2.5))]",
+            "(m.absent(), m.absent(3))",
+            "(m.text(), m.text('a'))",
+            "(m.Meter().reset(), m.Meter().reset(4))",
+        ],
+    );
+}
+
+#[test]
+fn a_counted_range_reads_an_int_subclass_bound_by_its_value() {
+    // `range` takes each bound through `operator.index`, which copies an `int` subclass
+    // to the plain `int` of its value and asks it nothing. so the loop counts in plain
+    // `int`s, and neither `_Int.__lt__` nor `_Int.__add__` is ever reached
+    agree_python(
+        "intrange",
+        "\
+def counted(n: int) -> list[int]:
+    out: list[int] = []
+    for i in range(n):
+        out.append(i)
+    return out
+
+def counted_from(a: int, n: int) -> list[int]:
+    out: list[int] = []
+    for i in range(a, n):
+        out.append(i)
+    return out
+
+def comprehended(a: int, n: int) -> list[int]:
+    return [i for i in range(a, n)]
+",
+        &[
+            "[m.counted(n) for n in (True, _Int(3))]",
+            "[m.counted_from(a, n) for a in (True, _Int(1)) for n in (4, _Int(4))]",
+            "[m.comprehended(a, n) for a in (True, _Int(1)) for n in (4, _Int(4))]",
+            "[type(i).__name__ for i in m.counted_from(_Int(1), _Int(3))]",
+        ],
+    );
+}
+
+#[test]
+fn an_unboxed_list_is_indexed_by_a_bool_at_its_value() {
+    // an index held tagged is an object when it is a `bool` or an `int` subclass, whatever
+    // its value — so an object index is not, by being one, too big for the buffer
+    agree_python(
+        "intbufindex",
+        "\
+def pick(n: int, k: int) -> float:
+    out = [i * 1.5 for i in range(n)]
+    return out[k]
+
+def store(n: int, k: int) -> float:
+    out = [i * 1.5 for i in range(n)]
+    out[k] = 9.5
+    return out[1]
+",
+        &[
+            "[m.pick(3, k) for k in (True, False, _Int(2), 1)]",
+            "[m.store(3, k) for k in (True, False, _Int(1))]",
+            "_capture(m.pick, 3, 2**70)",
         ],
     );
 }
@@ -17113,9 +17474,11 @@ def calls_none() -> int:
 #[test]
 fn repeated_underscore_parameters_agree() {
     // basedpython lets a `def` repeat `_` for parameters it ignores, and python refuses a
-    // repeated name, so the interpreted definition keeps the first `_` and numbers the rest.
-    // the compiled one answers to the same names — the forwarder spells them, and a keyword
-    // call reaches them — where it used to spell `_` twice and fail the module's import
+    // repeated name, so the interpreted definition keeps the first `_`, numbers the rest and
+    // makes them positional-only: the numbered name is the lowering's, and no call may spell
+    // it. the compiled definition answers to the same names and the same `/` — a keyword
+    // naming a numbered `_` is python's positional-only `TypeError` in both, where the
+    // compiled one used to bind it
     let Some(compiled) = agree_in(
         "underscores",
         "\
@@ -17124,37 +17487,47 @@ from collections.abc import Iterator
 def pair(_: int, _: int) -> int:
     return 7
 
-def spaced(a: int, _: int, b: int, _: int) -> int:
-    return a * 10 + b
+def labelled(_: int, _: int, label: str) -> str:
+    return label
 
-def every_kind(_: int, *_: int, _: int, **_: int) -> int:
+def every_kind(_: int, _: int, *_: int, **_: int) -> int:
     return 1
 
-def counted(_: int, n: int, _: int) -> Iterator[int]:
+def counted(_: int, _: int, n: int) -> Iterator[int]:
     for i in range(n):
         yield i
 
-def outer(n: int) -> int:
+def written_slash(a: int, _: int, b: int, _: int, /) -> int:
+    return a * 10 + b
+
+def outer(n: int) -> object:
     def inner(_: int, _: int) -> int:
         return n
-    return inner(1, 2)
+    return inner
 
-def through_lambda(n: int) -> int:
+def through_lambda(n: int) -> object:
     ignore = lambda _, _: n
-    return ignore(1, 2)
+    return ignore
 
 class Holder:
     def method(self, _: int, _: int) -> int:
         return 5
+
+def calls_every_kind() -> int:
+    return every_kind(1, 2, 3, x=4)
 ",
         &[
-            "[str(__import__('inspect').signature(f)) for f in (m.pair, m.spaced, m.every_kind, m.counted, m.Holder().method)]",
-            "(m.pair(1, 2), m.pair(1, _2=2), m.pair(_=1, _2=2))",
-            "str(_capture_kw(m.pair, (1,), {'_': 2}))",
-            "(m.spaced(1, 2, 3, _2=4), m.every_kind(1, 2, 3, _2=4, x=5), m.every_kind(1, _2=4))",
-            "(list(m.counted(1, 3, 2)), list(m.counted(1, 3, _2=2)))",
-            "(m.outer(1), m.through_lambda(4))",
-            "(m.Holder().method(5, _2=6), str(_capture(m.Holder().method, 5, 6, 7)))",
+            "[str(__import__('inspect').signature(f)) for f in (m.pair, m.labelled, m.every_kind, m.counted, m.written_slash, m.Holder().method, m.outer(1), m.through_lambda(1))]",
+            "(m.pair(1, 2), m.labelled(1, 2, 'a'), m.labelled(1, 2, label='b'), m.every_kind(1, 2, 3, x=4))",
+            "(list(m.counted(1, 2, 3)), list(m.counted(1, 2, n=2)), m.written_slash(1, 2, 3, 4))",
+            "(m.outer(3)(1, 2), m.through_lambda(4)(1, 2), m.Holder().method(5, 6), m.calls_every_kind())",
+            // a keyword naming a numbered `_`, or the first `_`, reaches no parameter
+            "[str(_capture_kw(f, (1,), {'_2': 2})) for f in (m.pair, m.every_kind, m.outer(1), m.through_lambda(1), m.Holder().method)]",
+            "[str(_capture_kw(f, (), {'_': 1, '_2': 2})) for f in (m.pair, m.outer(1), m.Holder().method)]",
+            "str(_capture_kw(m.labelled, (1,), {'_2': 2, 'label': 'c'}))",
+            "str(_capture_kw(m.counted, (1,), {'_2': 2, 'n': 3}))",
+            "str(_capture_kw(m.written_slash, (1, 2, 3), {'_2': 4}))",
+            "str(_capture(m.Holder().method, 5, 6, 7))",
         ],
         false,
         by_irbuild::Language::BasedPython,
@@ -17169,9 +17542,191 @@ class Holder:
             &python,
             &compiled,
             "import by_diff_underscores as m\n\
-             print([f.__code__.co_filename for f in (m.pair, m.spaced, m.every_kind, m.counted)])\n",
+             assert m.__file__.endswith('.so'), m.__file__\n\
+             print([f.__code__.co_filename for f in (m.pair, m.labelled, m.every_kind, m.counted, m.written_slash)])\n\
+             print(type(m.Holder.__dict__['method']).__name__)\n",
         ),
-        "['<by native forwarder>', '<by native forwarder>', '<by native forwarder>', '<by native forwarder>']"
+        "['<by native forwarder>', '<by native forwarder>', '<by native forwarder>', '<by native forwarder>', '<by native forwarder>']\n\
+         method_descriptor"
+    );
+}
+
+#[test]
+fn an_override_repeating_underscore_takes_the_base_method_names() {
+    // an override that repeats `_` takes the names the method it overrides gives those
+    // positions, so a call written against the base — by keyword too — reaches the override.
+    // the compiled override is published under those names, where it used to number its
+    // `_`s and refuse the base's keywords
+    let Some(compiled) = agree_in(
+        "underscorebase",
+        "\
+class A:
+    def m(self, x: int, y: int) -> int:
+        return x * 100 + y
+
+    def n(self, _: int, _: int) -> int:
+        return 1
+
+class B(A):
+    def m(self, _: int, _: int) -> int:
+        return 7
+
+    def n(self, _: int, _: int) -> int:
+        return 2
+
+def by_keyword(b: B) -> int:
+    return b.m(x=3, y=4)
+
+def through_the_base(a: A) -> int:
+    return a.m(5, y=6)
+",
+        &[
+            "[str(__import__('inspect').signature(f)) for f in (m.B().m, m.B().n)]",
+            "(m.B().m(3, 4), m.B().m(x=3, y=4), m.B().m(3, y=4), m.by_keyword(m.B()))",
+            "(m.through_the_base(m.A()), m.through_the_base(m.B()))",
+            // a base that repeats `_` itself hands on its own numbered names, positional-only
+            "(m.B().n(1, 2), str(_capture_kw(m.B().n, (1,), {'_2': 2})))",
+            "str(_capture_kw(m.B().m, (), {'_': 1, '_2': 2}))",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscorebase as m\n\
+             assert m.__file__.endswith('.so'), m.__file__\n\
+             print([type(m.B.__dict__[name]).__name__ for name in ('m', 'n')])\n",
+        ),
+        "['method_descriptor', 'method_descriptor']"
+    );
+}
+
+#[test]
+fn a_base_named_override_reading_underscore_declines() {
+    // an override that took its names from the base binds `_` to the first of them at the
+    // top of its body, and a read of `_` finds that. the compiled build declines any body
+    // that reads a repeated `_`, so this one runs from its interpreted definition and the
+    // two builds answer alike
+    let Some(compiled) = agree_in(
+        "underscorebaseread",
+        "\
+class A:
+    def m(self, x: int, y: int) -> int:
+        return x * 100 + y
+
+class C(A):
+    def m(self, _: int, _: int) -> int:
+        return _ + 1
+",
+        &[
+            "str(__import__('inspect').signature(m.C().m))",
+            "(m.C().m(3, 4), m.C().m(x=3, y=4), m.C().m(3, y=4))",
+        ],
+        true,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscorebaseread as m\n\
+             assert m.__file__.endswith('.so'), m.__file__\n\
+             print(type(m.C.__dict__['m']).__name__, m.C.m.__code__.co_filename)\n",
+        ),
+        "function <string>"
+    );
+}
+
+#[test]
+fn a_repeated_underscore_shape_the_lowering_refuses_is_not_compiled() {
+    // a named parameter ahead of a repeated `_` would be dragged positional-only by the `/`,
+    // and a keyword-only `_` has no name to be reached by, so the transpiler refuses both.
+    // the compiled build refuses them with it rather than publishing a signature the
+    // interpreted build does not have
+    let Some((_, toolchain)) = environment() else {
+        return;
+    };
+    for (tag, source, refusal) in [
+        (
+            "underscoredragged",
+            "def dragged(a: int, _: int, b: int, _: int) -> int:\n    return a\n",
+            "after `a` make it positional-only in `dragged`",
+        ),
+        (
+            "underscorekwonly",
+            "def keyword_only(_: int, *, _: int) -> int:\n    return 1\n",
+            "cannot be keyword-only in `keyword_only`",
+        ),
+    ] {
+        let dir = Scratch::new(format!("by_diff_{tag}_c"));
+        let options = Options {
+            fallback: Some(Config::default()),
+            ..Options::default()
+        };
+        let error = build_source(source, tag, &toolchain, &dir, &options)
+            .expect_err("a refused shape is not compiled");
+        assert!(
+            format!("{error:#}").contains(refusal),
+            "{tag}: expected the refusal, got {error:#}"
+        );
+    }
+}
+
+#[test]
+fn repeated_underscore_in_a_callable_type_agrees() {
+    // a callable type and an inline protocol's method follow the rules a `def` does: the
+    // `_`s are numbered and positional-only in the protocol the interpreted build writes,
+    // and a compiled caller passes them by position
+    let Some(compiled) = agree_in(
+        "underscorecallable",
+        "\
+def apply(cb: (_: int, _: str) -> int) -> int:
+    return cb(1, 'a')
+
+def ask(p: protocol(def m(self, _: int, _: str) -> int)) -> int:
+    return p.m(2, 'b')
+
+class Impl:
+    def m(self, _: int, _: str) -> int:
+        return 3
+
+def use() -> int:
+    return ask(Impl())
+",
+        &[
+            "(m.apply(lambda a, b: a + len(b)), m.use())",
+            "str(__import__('inspect').signature(m.apply.__annotations__['cb'].__call__))",
+            "str(__import__('inspect').signature(m.ask.__annotations__['p'].m))",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_underscorecallable as m\n\
+             assert m.__file__.endswith('.so'), m.__file__\n\
+             print([f.__code__.co_filename for f in (m.apply, m.ask, m.use)])\n",
+        ),
+        "['<by native forwarder>', '<by native forwarder>', '<by native forwarder>']"
     );
 }
 
@@ -17195,6 +17750,8 @@ def reads(_: int, _: int) -> list[int]:
         &[
             "(m.defaulted(1, 2), m.reads(1, 2))",
             "[list(__import__('inspect').signature(f).parameters) for f in (m.defaulted, m.reads)]",
+            // the numbered name is positional-only there too
+            "[str(_capture_kw(f, (1,), {'_3': 2})) for f in (m.defaulted, m.reads)]",
         ],
         false,
         by_irbuild::Language::BasedPython,

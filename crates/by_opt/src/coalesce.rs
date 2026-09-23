@@ -113,7 +113,7 @@ fn use_counts(function: &Function) -> Vec<usize> {
 mod tests {
     use by_ir::builder::FunctionBuilder;
     use by_ir::function::ModuleIr;
-    use by_ir::ops::{BinOp, Op, Terminator, Value};
+    use by_ir::ops::{BinOp, Mutation, Op, Terminator, Value};
     use by_ir::rtype::RType;
 
     fn module(function: by_ir::function::Function) -> ModuleIr {
@@ -143,6 +143,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(k),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(k, Value::Register(temp));
         builder.terminate(Terminator::Return(Value::Register(k)));
@@ -165,6 +166,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(k),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(k, Value::Register(temp));
         builder.terminate(Terminator::Return(Value::Register(temp)));
@@ -187,6 +189,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(k),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(k, Value::Register(named));
         builder.terminate(Terminator::Return(Value::Register(k)));

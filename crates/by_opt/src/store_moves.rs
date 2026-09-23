@@ -340,7 +340,7 @@ fn may_hand_over(function: &Function, register: RegisterId) -> bool {
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BinOp, Terminator};
+    use by_ir::ops::{BinOp, Mutation, Terminator};
     use std::collections::BTreeSet;
 
     fn module(function: Function) -> ModuleIr {
@@ -394,6 +394,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(k),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.push(store(receiver, sum));
         builder.terminate(Terminator::Return(Value::None));
@@ -415,6 +416,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(k),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.push(store(receiver, sum));
         builder.terminate(Terminator::Return(Value::Register(sum)));
@@ -437,6 +439,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(k),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.push(store(receiver, named));
         builder.terminate(Terminator::Return(Value::None));
@@ -557,6 +560,7 @@ mod tests {
                 op,
                 lhs: Value::Register(p),
                 rhs: Value::Int(7),
+                mutation: Mutation::Fresh,
             });
         }
         builder.push(Op::TupleBuild {

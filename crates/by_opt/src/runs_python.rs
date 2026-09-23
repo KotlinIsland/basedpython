@@ -699,10 +699,13 @@ impl Held {
                 Some(Kind::Int)
             }
             Op::Unary {
-                op: UnaryOp::Neg | UnaryOp::Invert,
+                op: UnaryOp::Neg | UnaryOp::Invert | UnaryOp::Pos,
                 operand,
                 ..
             } if exact(operand) == Some(Kind::Int) && *ty == RType::INT => Some(Kind::Int),
+            Op::Unary {
+                op: UnaryOp::Index, ..
+            } => Some(Kind::Int),
             // a machine value boxed is built as the builtin, and an exact value boxed is
             // itself
             Op::TagShort { .. } => Some(Kind::Int),
@@ -785,6 +788,11 @@ fn op_itself_runs_python(function: &Function, op: &Op, held: &Held) -> bool {
     }
     let kind = |value: &Value| held.exact_kind(function, value);
     match op {
+        // an `int` on the left of a double operation answers with its own method, which
+        // for an exact `int` is the double arithmetic
+        Op::FloatBinary { lhs, .. } if function.value_type(lhs) == Some(RType::INT) => {
+            kind(lhs) != Some(Kind::Int)
+        }
         // copies and loads of what the frame already holds, comparisons and arithmetic on
         // machine values, and questions answered by reading a pointer or a flag
         Op::Assign { .. }
@@ -864,10 +872,16 @@ fn op_itself_runs_python(function: &Function, op: &Op, held: &Held) -> bool {
         }
         Op::Unary { op, operand, .. } => match op {
             UnaryOp::Not => false,
-            UnaryOp::Neg | UnaryOp::Invert => {
+            UnaryOp::Neg | UnaryOp::Invert | UnaryOp::Pos => {
                 !matches!(kind(operand), Some(Kind::Int | Kind::Float))
             }
+            // an `int` subclass is copied by value, which asks it nothing
+            UnaryOp::Index => false,
         },
+        // an exact `int` is true where it is not zero, and a subclass has a `__bool__`
+        Op::Truthy { src, .. } if function.value_type(src) == Some(RType::INT) => {
+            kind(src) != Some(Kind::Int)
+        }
         // an exact `str`, `bytes` or `list` knows its own size
         Op::Len { src, .. } => !matches!(kind(src), Some(Kind::Str | Kind::Bytes | Kind::List)),
         // an element of an exact `list` at an index that is an exact `int`, which raises
@@ -994,7 +1008,7 @@ fn op_itself_runs_python(function: &Function, op: &Op, held: &Held) -> bool {
 mod tests {
     use by_ir::builder::FunctionBuilder;
     use by_ir::function::{ClassIr, FieldDecl, Function, ModuleIr};
-    use by_ir::ops::{BinOp, BlockId, CmpOp, Op, RegisterId, Terminator, Value};
+    use by_ir::ops::{BinOp, BlockId, CmpOp, Mutation, Op, RegisterId, Terminator, Value};
     use by_ir::rtype::{IntWidth, RType};
 
     use std::collections::BTreeSet;
@@ -1155,6 +1169,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Register(b),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         builder.finish()
@@ -1231,6 +1246,7 @@ mod tests {
             op: BinOp::Sub,
             lhs: Value::Register(n),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.push(Op::FunctionStands {
             dest: stands,
@@ -1283,6 +1299,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(below),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
 
@@ -1437,6 +1454,7 @@ mod tests {
                     op: BinOp::Add,
                     lhs: Value::Register(n),
                     rhs: Value::Int(1),
+                    mutation: Mutation::Fresh,
                 });
             }
             let out = builder.temp(RType::BIT);
@@ -1482,6 +1500,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(n),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(held, Value::Int(1));
         builder.terminate(Terminator::Return(Value::Float(0.0)));

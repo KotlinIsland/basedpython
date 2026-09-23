@@ -100,6 +100,12 @@ static inline int By_InterpreterMatches(void) {
  * a ByTagged is a pointer-sized word. an even value is a "short": the integer
  * shifted left by one. an odd value is a PyLongObject pointer with the low bit
  * set. python's arbitrary precision is preserved — the tag is only a fast path.
+ *
+ * a short is always an exact `int`. a pointer is either an exact `int` too wide to be
+ * a short, or an instance of an `int` subclass — `True`, or a class of the program's
+ * own — whatever its value, because that object is what python hands back and what
+ * python asks for its methods. so a pointer does *not* mean a value outside the short
+ * range: a fast path may conclude that only from a pointer to an exact `int`
  */
 
 typedef size_t ByTagged;
@@ -263,6 +269,12 @@ BY_HOT PyObject *By_LongOf(ByTagged x) {
     return (PyObject *)(x & ~BY_INT_TAG);
 }
 
+/* whether a tagged integer holds exactly an `int` rather than a subclass: a short always
+ * does, and a pointer is asked its type */
+static inline char By_IsExactInt(ByTagged x) {
+    return (char)(By_IsShort(x) || PyLong_CheckExact(By_LongOf(x)));
+}
+
 /* `By_DecRefTagged` and `By_IncRefTagged` release the sentinel by handing it to
  * `By_LongOf` and letting the X-forms drop the NULL, rather than comparing against
  * `BY_INT_ERROR` a second time. that only works while the sentinel carries no object
@@ -302,7 +314,7 @@ static inline PyObject *By_BoxIntOwned(ByTagged x) {
  *
  * the tag is added and no reference is taken: like a string literal, the module owns
  * it and a use of it is borrowed. the value lies outside the short range by
- * construction, which is the invariant every tagged pointer carries */
+ * construction, which is what a pointer to an exact `int` always holds */
 BY_HOT ByTagged By_TaggedLiteral(PyObject *o) {
     return ((ByTagged)(void *)o) | BY_INT_TAG;
 }
@@ -514,16 +526,28 @@ BY_REFUSAL void By_SoundViolationOf(PyObject *o, PyObject *target) {
 #define BY_DIGITS_PAST_SHORT ((uintptr_t)((sizeof(Py_ssize_t) * 8 - 2) / PyLong_SHIFT + 2))
 #endif
 
-/* takes a new reference to `o` when it cannot be represented as a short
+/* everything [`By_TaggedFromLong`] is handed that is not an exact `int`
  *
- * anything that is not an `int` raises the `TypeError` an unbox of it raises, and the
- * error path never clears: an operator on a big `int` subclass can answer with any
- * object at all, and swallowing the failure here once tagged a `str` as an int */
-static inline ByTagged By_TaggedFromLong(PyObject *o) {
-    if (BY_UNLIKELY(o == NULL || !PyLong_Check(o))) {
+ * an instance of an `int` subclass is held as itself, with a reference of its own,
+ * whatever its value. `True` is the one every program meets: an `int` register that
+ * narrowed it to the short 1 answered `1` where python answers `True`, and a subclass
+ * lost its methods the same way. anything that is not an `int` at all raises the
+ * `TypeError` an unbox of it raises, and the error path never clears: an operator on
+ * an `int` subclass can answer with any object at all, and swallowing the failure here
+ * once tagged a `str` as an int */
+BY_REFUSAL ByTagged By_TaggedFromOther(PyObject *o) {
+    if (o == NULL || !PyLong_Check(o)) {
         By_TypeError("int", o);
         return BY_INT_ERROR;
     }
+    By_IncRef(o);
+    return ((ByTagged)(void *)o) | BY_INT_TAG;
+}
+
+/* takes a new reference to `o` when it cannot be represented as a short, which an
+ * exact `int` can whenever its value fits and a subclass never can */
+static inline ByTagged By_TaggedFromLong(PyObject *o) {
+    if (BY_UNLIKELY(o == NULL || !PyLong_CheckExact(o))) return By_TaggedFromOther(o);
 #if PY_VERSION_HEX >= 0x030C0000
     /* almost every `int` a program unboxes is one that fits a single digit, and
      * python 3.12 onwards stores such a value in the object's own header rather
@@ -643,6 +667,29 @@ BY_COLD ByTagged By_IntSlowBitwise(ByTagged a, ByTagged b, char op) {
     ByTagged tagged = By_TaggedFromLong(result);
     Py_DECREF(result);
     return tagged;
+}
+
+/* `a <op>= b` where `a` is not a short: python asks `a` for its in-place method before
+ * its plain one, and an `int` subclass may define one of its own. `operation` is the
+ * abstract api's in-place form, which makes both asks, so an exact `int` — which has no
+ * in-place methods — gets exactly what the plain operator's slow path would give it */
+BY_COLD ByTagged By_IntSlowInPlace(ByTagged a, ByTagged b, binaryfunc operation) {
+    PyObject *left = By_BoxInt(a);
+    if (left == NULL) return BY_INT_ERROR;
+    PyObject *right = By_BoxInt(b);
+    if (right == NULL) { Py_DECREF(left); return BY_INT_ERROR; }
+    PyObject *result = operation(left, right);
+    Py_DECREF(left);
+    Py_DECREF(right);
+    if (result == NULL) return BY_INT_ERROR;
+    ByTagged tagged = By_TaggedFromLong(result);
+    Py_DECREF(result);
+    return tagged;
+}
+
+/* `**=` as a two-operand in-place operation, which is the form the slow path calls */
+static inline PyObject *By_NumberInPlacePower(PyObject *a, PyObject *b) {
+    return PyNumber_InPlacePower(a, b, Py_None);
 }
 
 /* the fast paths alone, for a caller that branches on them: each answers 1 with the
@@ -800,12 +847,12 @@ BY_HOT ByTagged By_IntMod(ByTagged a, ByTagged b) {
     return By_IntSlowBinary(a, b, "%");
 }
 
-static inline double By_IntTrueDiv(ByTagged a, ByTagged b) {
+static inline double By_IntTrueDivWith(ByTagged a, ByTagged b, binaryfunc operation) {
     PyObject *left = By_BoxInt(a);
     if (left == NULL) return BY_FLOAT_ERROR;
     PyObject *right = By_BoxInt(b);
     if (right == NULL) { Py_DECREF(left); return BY_FLOAT_ERROR; }
-    PyObject *result = PyNumber_TrueDivide(left, right);
+    PyObject *result = operation(left, right);
     Py_DECREF(left);
     Py_DECREF(right);
     if (result == NULL) return BY_FLOAT_ERROR;
@@ -839,8 +886,54 @@ static inline ByTagged By_IntPow(ByTagged a, ByTagged b) {
     return By_IntSlowBitwise(a, b, 'p');
 }
 
-/* `~a` is `-1 - a`, which the tagged subtraction already handles */
+static inline double By_IntTrueDiv(ByTagged a, ByTagged b) {
+    return By_IntTrueDivWith(a, b, PyNumber_TrueDivide);
+}
+
+/* the augmented assignments. an exact `int` on the left has no in-place method, so the
+ * operation is the plain operator's, fast path and all; anything else is asked its own
+ * in-place method first. `/=` always goes through the protocol, so it asks it directly */
+#define BY_DEFINE_INT_IN_PLACE(name, plain, operation)                         \
+    static inline ByTagged name(ByTagged a, ByTagged b) {                      \
+        if (BY_UNLIKELY(!By_IsExactInt(a))) return By_IntSlowInPlace(a, b, operation); \
+        return plain(a, b);                                                    \
+    }
+
+BY_DEFINE_INT_IN_PLACE(By_IntIAdd, By_IntAdd, PyNumber_InPlaceAdd)
+BY_DEFINE_INT_IN_PLACE(By_IntISub, By_IntSub, PyNumber_InPlaceSubtract)
+BY_DEFINE_INT_IN_PLACE(By_IntIMul, By_IntMul, PyNumber_InPlaceMultiply)
+BY_DEFINE_INT_IN_PLACE(By_IntIFloorDiv, By_IntFloorDiv, PyNumber_InPlaceFloorDivide)
+BY_DEFINE_INT_IN_PLACE(By_IntIMod, By_IntMod, PyNumber_InPlaceRemainder)
+BY_DEFINE_INT_IN_PLACE(By_IntIPow, By_IntPow, By_NumberInPlacePower)
+BY_DEFINE_INT_IN_PLACE(By_IntIAnd, By_IntAnd, PyNumber_InPlaceAnd)
+BY_DEFINE_INT_IN_PLACE(By_IntIOr, By_IntOr, PyNumber_InPlaceOr)
+BY_DEFINE_INT_IN_PLACE(By_IntIXor, By_IntXor, PyNumber_InPlaceXor)
+BY_DEFINE_INT_IN_PLACE(By_IntIShl, By_IntShl, PyNumber_InPlaceLshift)
+BY_DEFINE_INT_IN_PLACE(By_IntIShr, By_IntShr, PyNumber_InPlaceRshift)
+
+static inline double By_IntITrueDiv(ByTagged a, ByTagged b) {
+    return By_IntTrueDivWith(a, b, PyNumber_InPlaceTrueDivide);
+}
+
+/* a unary operator on an `int` subclass, which answers through the subclass's own
+ * method: `-a` is `type(a).__neg__(a)`, which the subtraction the exact forms reduce to
+ * would have taken to `__rsub__` instead */
+BY_COLD ByTagged By_IntUnarySlow(ByTagged a, PyObject *(*operation)(PyObject *)) {
+    PyObject *operand = By_BoxInt(a);
+    PyObject *result;
+    ByTagged tagged;
+    if (operand == NULL) return BY_INT_ERROR;
+    result = operation(operand);
+    Py_DECREF(operand);
+    if (result == NULL) return BY_INT_ERROR;
+    tagged = By_TaggedFromLong(result);
+    Py_DECREF(result);
+    return tagged;
+}
+
+/* `~a` is `-1 - a` for an exact `int`, which the tagged subtraction already handles */
 static inline ByTagged By_IntInvert(ByTagged a) {
+    if (BY_UNLIKELY(!By_IsExactInt(a))) return By_IntUnarySlow(a, PyNumber_Invert);
     return By_IntSub(By_ShortFrom(-1), a);
 }
 
@@ -849,8 +942,41 @@ static inline ByTagged By_IntNeg(ByTagged a) {
         Py_ssize_t x = By_ShortValue(a);
         /* the short range is one wider below zero than above it */
         if (x != BY_SHORT_MIN) return By_ShortFrom(-x);
+    } else if (BY_UNLIKELY(!By_IsExactInt(a))) {
+        return By_IntUnarySlow(a, PyNumber_Negative);
     }
     return By_IntSub(By_ShortFrom(0), a);
+}
+
+/* `+a`, which is `a` itself for an exact `int` and `int.__pos__`'s exact copy, or a
+ * method of the subclass's own, for anything else */
+static inline ByTagged By_IntPos(ByTagged a) {
+    if (BY_UNLIKELY(!By_IsExactInt(a))) return By_IntUnarySlow(a, PyNumber_Positive);
+    By_IncRefTagged(a);
+    return a;
+}
+
+/* `operator.index(a)`: the exact `int` a subclass stands for, copied by value, which is
+ * how `range` reads its bounds. `PyNumber_Index` asks an `int` subclass nothing of its
+ * own — not even `__index__` — and only copies it */
+static inline ByTagged By_IntIndex(ByTagged a) {
+    if (BY_UNLIKELY(!By_IsExactInt(a))) return By_IntUnarySlow(a, PyNumber_Index);
+    By_IncRefTagged(a);
+    return a;
+}
+
+/* whether an `int` behind a pointer is true: always, for an exact one, and its own
+ * `__bool__` for a subclass. 2 is an error. a short is tested where it is read */
+BY_COLD char By_IntTruthySlow(ByTagged a) {
+    PyObject *operand;
+    int answer;
+    /* a pointer to an exact `int` holds a value too wide to be a short, so not zero */
+    if (By_IsExactInt(a)) return 1;
+    operand = By_BoxInt(a);
+    if (operand == NULL) return 2;
+    answer = PyObject_IsTrue(operand);
+    Py_DECREF(operand);
+    return answer < 0 ? 2 : (char)answer;
 }
 
 /* ── int comparison ───────────────────────────────────────────────────────── */
@@ -983,6 +1109,47 @@ BY_COLD double By_FloatObjectSlow(double a, PyObject *b,
     double value = PyFloat_AsDouble(result);
     Py_DECREF(result);
     if (value == -1.0 && PyErr_Occurred()) return BY_FLOAT_ERROR;
+    return value;
+}
+
+/* `a <op> b` for an `int` on the left of a double, where `a` is not a short
+ *
+ * python asks the `int` first. an exact one declines a double and the double's reflected
+ * method converts it, which is what the operation does with a short and what the
+ * protocol does here with a value too wide for one, `OverflowError` included. a subclass
+ * may answer with a method of its own, so it is asked. the checker has said the answer
+ * is a `float`, and an answer that is not one is refused rather than converted */
+BY_COLD double By_IntFloatSlow(ByTagged a, double b, char op) {
+    PyObject *left = By_BoxInt(a);
+    PyObject *right;
+    PyObject *result = NULL;
+    double value;
+    if (left == NULL) return BY_FLOAT_ERROR;
+    right = PyFloat_FromDouble(b);
+    if (right == NULL) {
+        Py_DECREF(left);
+        return BY_FLOAT_ERROR;
+    }
+    switch (op) {
+        case '+': result = PyNumber_Add(left, right); break;
+        case '-': result = PyNumber_Subtract(left, right); break;
+        case '*': result = PyNumber_Multiply(left, right); break;
+        case '/': result = PyNumber_TrueDivide(left, right); break;
+        case 'f': result = PyNumber_FloorDivide(left, right); break;
+        case '%': result = PyNumber_Remainder(left, right); break;
+        case 'p': result = PyNumber_Power(left, right, Py_None); break;
+        default: PyErr_SetString(PyExc_SystemError, "unknown float operation"); break;
+    }
+    Py_DECREF(left);
+    Py_DECREF(right);
+    if (result == NULL) return BY_FLOAT_ERROR;
+    if (!PyFloat_Check(result)) {
+        By_TypeError("float", result);
+        Py_DECREF(result);
+        return BY_FLOAT_ERROR;
+    }
+    value = PyFloat_AS_DOUBLE(result);
+    Py_DECREF(result);
     return value;
 }
 
@@ -1231,12 +1398,13 @@ static inline PyObject *By_BoxNone(void) {
 }
 
 /* unboxing is a *narrowing*, so it is always checked — this is the
- * representation invariant's inserted check, not an assumption */
+ * representation invariant's inserted check, not an assumption
+ *
+ * the exact-`int` test the conversion opens with is the check: what fails it is tested
+ * again out of line, and only there is anything refused. asking `PyLong_Check` first as
+ * well made the narrowing too big for clang to inline into a loop, and `dictget`, which
+ * narrows two values a trip, retired 5% more instructions for the call */
 static inline ByTagged By_UnboxInt(PyObject *o) {
-    if (o == NULL || !PyLong_Check(o)) {
-        By_TypeError("int", o);
-        return BY_INT_ERROR;
-    }
     return By_TaggedFromLong(o);
 }
 
@@ -1424,6 +1592,7 @@ static inline PyObject *By_ObjIShr(PyObject *a, PyObject *b) {
 
 static inline PyObject *By_ObjNeg(PyObject *o) { return PyNumber_Negative(o); }
 static inline PyObject *By_ObjInvert(PyObject *o) { return PyNumber_Invert(o); }
+static inline PyObject *By_ObjPos(PyObject *o) { return PyNumber_Positive(o); }
 
 /* ── the two questions python's comparison can be answered without asking ──────
  *
@@ -10063,10 +10232,12 @@ static inline Py_ssize_t By_ArrayIndexIn(ByArrayHeader *array, int64_t at,
     return index;
 }
 
-/* an index held tagged. a big integer cannot be a valid index into a buffer, but which
- * error it raises depends on whether it fits `Py_ssize_t`: python converts the index
- * before it compares it with the length */
-BY_COLD Py_ssize_t By_ArrayIndexBig(ByTagged tagged, const char *out_of_range) {
+/* an index held tagged as an object: an exact `int` too big to index a buffer, or an
+ * `int` subclass — `True` among them — which indexes by its value like any other. which
+ * error a big one raises depends on whether it fits `Py_ssize_t`: python converts the
+ * index before it compares it with the length */
+BY_COLD Py_ssize_t By_ArrayIndexObject(ByArrayHeader *array, ByTagged tagged,
+                                       const char *out_of_range) {
     PyObject *big = By_LongOf(tagged);
     Py_ssize_t value = PyLong_AsSsize_t(big);
     if (value == -1 && PyErr_Occurred()) {
@@ -10076,14 +10247,15 @@ BY_COLD Py_ssize_t By_ArrayIndexBig(ByTagged tagged, const char *out_of_range) {
                      Py_TYPE(big)->tp_name);
         return -1;
     }
-    PyErr_SetString(PyExc_IndexError, out_of_range);
-    return -1;
+    return By_ArrayIndexIn(array, value, out_of_range);
 }
 
 static inline Py_ssize_t By_ArrayIndexTaggedIn(ByArrayHeader *array, ByTagged tagged,
                                                const char *out_of_range) {
     if (array == NULL) return -1;
-    if (BY_UNLIKELY(!By_IsShort(tagged))) return By_ArrayIndexBig(tagged, out_of_range);
+    if (BY_UNLIKELY(!By_IsShort(tagged))) {
+        return By_ArrayIndexObject(array, tagged, out_of_range);
+    }
     return By_ArrayIndexIn(array, By_ShortValue(tagged), out_of_range);
 }
 
@@ -10975,11 +11147,6 @@ static inline char By_BuiltinStandsOnEntry(ByBuiltinSite *site, PyObject *dict,
 #endif
 }
 
-/* whether a tagged integer holds exactly an `int` rather than a subclass: a short always
- * does, and a pointer is asked its type */
-static inline char By_IsExactInt(ByTagged x) {
-    return (char)(By_IsShort(x) || PyLong_CheckExact(By_LongOf(x)));
-}
 
 /* `str(n)` for a tagged integer, given whatever the name `str` resolved to
  *

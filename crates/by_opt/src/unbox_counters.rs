@@ -344,6 +344,7 @@ pub(crate) fn unbox(
                     op: step,
                     lhs,
                     rhs,
+                    ..
                 } = &op
             {
                 let resume = resumes[&(*original, index)];
@@ -652,7 +653,9 @@ fn served(
         | Op::GetItem { index, .. }
         | Op::ArrayGet { index, .. }
         | Op::ArraySet { index, .. } => counter(index).into_iter().collect(),
-        Op::IntToFloat { src, .. } => counter(src).into_iter().collect(),
+        Op::IntToFloat { src, .. } | Op::FloatBinary { lhs: src, .. } => {
+            counter(src).into_iter().collect()
+        }
         Op::Box { dest, src }
             if function
                 .register(*dest)
@@ -761,7 +764,7 @@ fn narrow_reads(
     for (op, fixed_lhs) in function.blocks[block.index()].ops.iter_mut().zip(fixed_lhs) {
         match op {
             Op::IntCompare { rhs, .. } if fixed_lhs => narrow(rhs),
-            Op::IntToFloat { src, .. } => narrow(src),
+            Op::IntToFloat { src, .. } | Op::FloatBinary { lhs: src, .. } => narrow(src),
             _ => {}
         }
     }
@@ -992,6 +995,7 @@ fn never_past(function: &Function, counter: RegisterId, side: Side) -> bool {
 #[cfg(test)]
 mod tests {
     use by_ir::builder::FunctionBuilder;
+    use by_ir::ops::Mutation;
     use by_ir::verify::verify;
 
     use super::*;
@@ -1028,6 +1032,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(counter),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Goto(header));
         builder.switch_to(exit);
@@ -1167,12 +1172,14 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(n),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.push(Op::IntBinary {
             dest: product,
             op: BinOp::Mul,
             lhs: Value::Register(n),
             rhs: Value::Int(2),
+            mutation: Mutation::Fresh,
         });
         let added = match source {
             "counter" => n,
@@ -1184,6 +1191,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(m),
             rhs: Value::Register(added),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Goto(header));
         builder.switch_to(exit);
@@ -1248,6 +1256,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(counter),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Goto(header));
         builder.switch_to(exit);

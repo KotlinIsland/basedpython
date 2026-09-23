@@ -300,7 +300,11 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
         Op::IsInstance { .. } => true,
         // …and a soundness check raises when its answer is no
         Op::CheckSound { .. } => true,
-        Op::FloatBinary { op, .. } => op.can_fail(),
+        // an `int` on the left converts only while it is short, and asks cpython
+        // otherwise
+        Op::FloatBinary { op, lhs, .. } => {
+            op.can_fail() || function.value_type(lhs) == Some(RType::INT)
+        }
         // the object side may be anything, so any of them may raise
         Op::FloatObjectBinary { .. } | Op::FloatObjectCompare { .. } => true,
 
@@ -313,7 +317,8 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
                 function.value_type(operand),
                 Some(RType::Primitive(Primitive::Float))
             ),
-            UnaryOp::Invert => true,
+            // an exact `int` is its own answer, and a subclass asks python
+            UnaryOp::Invert | UnaryOp::Pos | UnaryOp::Index => true,
         },
 
         // a call's failure is decided by the callee, in the fixed point above
@@ -338,7 +343,7 @@ fn op_can_fail(module: &ModuleIr, function: &by_ir::function::Function, op: &Op)
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BinOp, CmpOp, Terminator, Value};
+    use by_ir::ops::{BinOp, CmpOp, Mutation, Terminator, Value};
     use by_ir::rtype::RType;
 
     fn module(functions: Vec<by_ir::function::Function>) -> ModuleIr {
@@ -419,6 +424,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Register(b),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut m = module(vec![builder.finish()]);

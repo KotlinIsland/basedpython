@@ -49,11 +49,36 @@ pub fn verify_module(module: &ModuleIr) -> Result<(), Vec<VerifyError>> {
         .flatten()
         .collect();
     errors.extend(check_accessor_coverage(module));
+    errors.extend(check_field_defaults(module));
     if errors.is_empty() {
         Ok(())
     } else {
         Err(errors)
     }
+}
+
+/// a constructor writes a field's default straight into the field, so the field's
+/// representation has to hold it as the object python holds — see
+/// [`Value::stands_as_itself_in`]
+fn check_field_defaults(module: &ModuleIr) -> Vec<VerifyError> {
+    module
+        .classes
+        .iter()
+        .flat_map(|class| {
+            class.fields.iter().filter_map(move |field| {
+                let default = field.default.as_ref()?;
+                (!default.stands_as_itself_in(&field.ty)).then(|| VerifyError {
+                    function: class.name.clone(),
+                    block: None,
+                    message: format!(
+                        "the default {default:?} of field `{}` does not stand as itself in its {} place",
+                        field.name, field.ty
+                    ),
+                    about_the_source: false,
+                })
+            })
+        })
+        .collect()
 }
 
 /// each class's in-module base, which is the whole of the layout chain
@@ -403,9 +428,38 @@ impl Verifier<'_> {
             self.check_block(id);
         }
 
+        self.check_defaults();
         self.check_definite_assignment();
         self.check_release_sets();
         self.check_borrowed_writes();
+    }
+
+    /// the boundary writes a default straight into its parameter, so the parameter's
+    /// representation has to hold it as the object python holds — see
+    /// [`Value::stands_as_itself_in`]
+    fn check_defaults(&mut self) {
+        let function = self.function;
+        for (index, default) in function.defaults.iter().enumerate() {
+            let Some(default) = default else {
+                continue;
+            };
+            let Some(param) = function.params().get(index) else {
+                self.error(
+                    None,
+                    format!("a default for parameter {index}, which does not exist"),
+                );
+                continue;
+            };
+            if !default.stands_as_itself_in(&param.ty) {
+                self.error(
+                    None,
+                    format!(
+                        "the default {default:?} of parameter {index} does not stand as itself in its {} place",
+                        param.ty
+                    ),
+                );
+            }
+        }
     }
 
     /// a borrowed register may only be filled by an operation that *lends*
@@ -733,7 +787,9 @@ impl Verifier<'_> {
                     self.expect_dest(block, *dest, &expected, "assign");
                 }
             }
-            Op::IntBinary { dest, lhs, rhs, op } => {
+            Op::IntBinary {
+                dest, lhs, rhs, op, ..
+            } => {
                 // a *fixed* width is plain machine arithmetic: no tag, no shift, no
                 // overflow branch. both operands have to agree on it, because the
                 // width is the representation rather than a property of the value
@@ -751,7 +807,12 @@ impl Verifier<'_> {
                 self.expect_dest(block, *dest, &result, op.symbol());
             }
             Op::FloatBinary { dest, lhs, rhs, op } => {
-                self.expect(block, lhs, &RType::FLOAT, op.symbol());
+                match self.operand_type(block, lhs) {
+                    Some(ty @ RType::Primitive(Primitive::Int | Primitive::Fixed(_))) => {
+                        self.expect(block, lhs, &ty, op.symbol());
+                    }
+                    _ => self.expect(block, lhs, &RType::FLOAT, op.symbol()),
+                }
                 self.expect(block, rhs, &RType::FLOAT, op.symbol());
                 self.expect_dest(block, *dest, &RType::FLOAT, op.symbol());
             }
@@ -975,7 +1036,10 @@ impl Verifier<'_> {
                 self.expect_dest(block, *dest, &RType::BIT, op.symbol());
             }
             Op::Truthy { dest, src } => {
-                self.expect(block, src, &RType::OBJECT, "truthiness");
+                // an `int` is asked in its own representation, for its `__bool__`
+                if self.operand_type(block, src) != Some(RType::INT) {
+                    self.expect(block, src, &RType::OBJECT, "truthiness");
+                }
                 self.expect_dest(block, *dest, &RType::BIT, "truthiness");
             }
             Op::IntCompare { dest, lhs, rhs, op } => {
@@ -1021,18 +1085,25 @@ impl Verifier<'_> {
                         }
                         self.expect_dest(block, *dest, &operand_ty, "unary `-`");
                     }
-                    UnaryOp::Invert => {
+                    UnaryOp::Invert | UnaryOp::Pos => {
+                        let symbol = if *op == UnaryOp::Invert { "~" } else { "+" };
                         if !matches!(
                             operand_ty,
                             RType::Primitive(Primitive::Int | Primitive::Object)
                         ) {
                             self.error(
                                 Some(block),
-                                format!("unary `~` expects int or object, found {operand_ty}"),
+                                format!(
+                                    "unary `{symbol}` expects int or object, found {operand_ty}"
+                                ),
                             );
                             return;
                         }
-                        self.expect_dest(block, *dest, &operand_ty, "unary `~`");
+                        self.expect_dest(block, *dest, &operand_ty, &format!("unary `{symbol}`"));
+                    }
+                    UnaryOp::Index => {
+                        self.expect(block, operand, &RType::INT, "an integer's unary");
+                        self.expect_dest(block, *dest, &RType::INT, "an integer's unary");
                     }
                     UnaryOp::Not => {
                         // `bool` and `bit` are both a 0-or-1 byte, so `not`
@@ -2218,6 +2289,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(RegisterId(0)),
             rhs: Value::Register(RegisterId(1)),
+            mutation: Mutation::Fresh,
         });
         Function {
             posonly: 0,
@@ -2251,6 +2323,25 @@ mod tests {
     #[test]
     fn a_well_formed_function_verifies() {
         assert_eq!(verify(&add()), Ok(()));
+    }
+
+    #[test]
+    fn a_default_its_parameter_cannot_hold_as_itself_is_rejected() {
+        let mut f = add();
+        f.defaults = vec![Some(Value::Bool(true)), Some(Value::Int(3))];
+        assert_eq!(verify(&f), Ok(()));
+        f.registers[1].ty = RType::FLOAT;
+        f.registers[2].ty = RType::FLOAT;
+        f.blocks[0].ops.clear();
+        f.ret = RType::FLOAT;
+        f.blocks[0].terminator = Terminator::Return(Value::Register(RegisterId(1)));
+        let errors = verify(&f).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e
+                .message
+                .contains("does not stand as itself in its float place")),
+            "{errors:?}"
+        );
     }
 
     #[test]

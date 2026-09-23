@@ -48,6 +48,14 @@ use by_ir::rtype::{Primitive, RType, tuple_mangle};
 /// unboxed `None`, a bare byte, and handing that to `By_NewRef` produced a NULL
 /// the error check read as a failure with no exception behind it
 fn default_expr(ty: &RType, default: &Value) -> String {
+    // `x: int = True` holds `True` itself, which a tagged `int` keeps as the object. the
+    // byte a bool immediate is written as would be read as a tagged word, and 1 is the
+    // error value
+    if *ty == RType::INT
+        && let Value::Bool(value) | Value::Bit(value) = default
+    {
+        return format!("By_UnboxInt(Py_{})", if *value { "True" } else { "False" });
+    }
     let expr = value_expr(default);
     if !matches!(
         ty,
@@ -6693,6 +6701,7 @@ fn unset_test(
             lhs,
             rhs,
             dest: result,
+            ..
         },
     ) = (require, read, arithmetic)
     else {
@@ -6705,7 +6714,7 @@ fn unset_test(
     if (*lhs != operand && *rhs != operand)
         || *result == *dest
         || function.value_type(&Value::Register(*result)) != Some(RType::INT)
-        || split_int_binary(*op, lhs, rhs).is_none()
+        || split_int_binary(*op, lhs, rhs, Mutation::Fresh).is_none()
     {
         return None;
     }
@@ -7576,7 +7585,13 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             }
             out
         }
-        Op::IntBinary { dest, op, lhs, rhs } => {
+        Op::IntBinary {
+            dest,
+            op,
+            lhs,
+            rhs,
+            mutation,
+        } => {
             // a fixed width is plain machine arithmetic: the C compiler emits one
             // instruction, and there is no tag to strip
             if let Some(RType::Primitive(Primitive::Fixed(_))) = operand_type(function, lhs) {
@@ -7627,25 +7642,38 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                     op: *op,
                     lhs: lhs.clone(),
                     rhs: rhs.clone(),
+                    mutation: *mutation,
                 },
                 error_target,
                 "",
             ) {
                 return split;
             }
-            let call = match op {
-                BinOp::Add => "By_IntAdd",
-                BinOp::Sub => "By_IntSub",
-                BinOp::Mul => "By_IntMul",
-                BinOp::FloorDiv => "By_IntFloorDiv",
-                BinOp::Mod => "By_IntMod",
-                BinOp::TrueDiv => "By_IntTrueDiv",
-                BinOp::Pow => "By_IntPow",
-                BinOp::BitAnd => "By_IntAnd",
-                BinOp::BitOr => "By_IntOr",
-                BinOp::BitXor => "By_IntXor",
-                BinOp::Shl => "By_IntShl",
-                BinOp::Shr => "By_IntShr",
+            let call = match (op, mutation) {
+                (BinOp::Add, Mutation::Fresh) => "By_IntAdd",
+                (BinOp::Sub, Mutation::Fresh) => "By_IntSub",
+                (BinOp::Mul, Mutation::Fresh) => "By_IntMul",
+                (BinOp::FloorDiv, Mutation::Fresh) => "By_IntFloorDiv",
+                (BinOp::Mod, Mutation::Fresh) => "By_IntMod",
+                (BinOp::TrueDiv, Mutation::Fresh) => "By_IntTrueDiv",
+                (BinOp::Pow, Mutation::Fresh) => "By_IntPow",
+                (BinOp::BitAnd, Mutation::Fresh) => "By_IntAnd",
+                (BinOp::BitOr, Mutation::Fresh) => "By_IntOr",
+                (BinOp::BitXor, Mutation::Fresh) => "By_IntXor",
+                (BinOp::Shl, Mutation::Fresh) => "By_IntShl",
+                (BinOp::Shr, Mutation::Fresh) => "By_IntShr",
+                (BinOp::Add, Mutation::InPlace) => "By_IntIAdd",
+                (BinOp::Sub, Mutation::InPlace) => "By_IntISub",
+                (BinOp::Mul, Mutation::InPlace) => "By_IntIMul",
+                (BinOp::FloorDiv, Mutation::InPlace) => "By_IntIFloorDiv",
+                (BinOp::Mod, Mutation::InPlace) => "By_IntIMod",
+                (BinOp::TrueDiv, Mutation::InPlace) => "By_IntITrueDiv",
+                (BinOp::Pow, Mutation::InPlace) => "By_IntIPow",
+                (BinOp::BitAnd, Mutation::InPlace) => "By_IntIAnd",
+                (BinOp::BitOr, Mutation::InPlace) => "By_IntIOr",
+                (BinOp::BitXor, Mutation::InPlace) => "By_IntIXor",
+                (BinOp::Shl, Mutation::InPlace) => "By_IntIShl",
+                (BinOp::Shr, Mutation::InPlace) => "By_IntIShr",
             };
             let expr = format!("{call}({}, {})", value_expr(lhs), value_expr(rhs));
             assign_checked(module, function, *dest, &expr, error_target)
@@ -8092,43 +8120,58 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             assign_checked(module, function, *dest, &expr, error_target)
         }
         Op::FloatBinary { dest, op, lhs, rhs } => {
-            let (lhs, rhs) = (value_expr(lhs), value_expr(rhs));
-            // a division fails only on a zero divisor, and every double it can answer is a
-            // legal one — so the divisor is tested here and the test jumps to the error
-            // edge, rather than a sentinel answer being told apart from a real one by
-            // asking the thread for an exception on every division
-            let divided = match op {
-                BinOp::FloorDiv => Some((
-                    "PyNumber_FloorDivide",
-                    format!("By_FloatFloorDivNonzero({lhs}, {rhs})"),
-                )),
-                BinOp::Mod => Some((
-                    "PyNumber_Remainder",
-                    format!("By_FloatModNonzero({lhs}, {rhs})"),
-                )),
-                BinOp::TrueDiv => Some(("PyNumber_TrueDivide", format!("({lhs} / {rhs})"))),
-                _ => None,
-            };
-            if let Some((operation, quotient)) = divided {
-                return format!(
-                    "    if (BY_UNLIKELY({rhs} == 0.0)) {{ By_ZeroDivision({operation}, 1); goto {}; }}\n{}",
-                    error_label(error_target),
-                    assign_owned(module, function, *dest, &quotient)
-                );
-            }
-            let expr = match op {
-                BinOp::Add => format!("({lhs} + {rhs})"),
-                BinOp::Sub => format!("({lhs} - {rhs})"),
-                BinOp::Mul => format!("({lhs} * {rhs})"),
-                BinOp::Pow => format!("By_FloatPow({lhs}, {rhs})"),
-                // the bitwise operators have no float form; the frontend routes
-                // them through the object protocol instead
-                other => format!("(void)0 /* unreachable: float {} */", other.symbol()),
-            };
-            if op.can_fail() {
-                assign_checked(module, function, *dest, &expr, error_target)
-            } else {
-                assign_owned(module, function, *dest, &expr)
+            let rhs_c = value_expr(rhs);
+            match function.value_type(lhs) {
+                Some(RType::Primitive(Primitive::Fixed(_))) => float_binary(
+                    module,
+                    function,
+                    *dest,
+                    *op,
+                    &format!("(double){}", value_expr(lhs)),
+                    &rhs_c,
+                    error_target,
+                ),
+                // an `int` on the left: a short converts, and anything else is asked
+                Some(RType::Primitive(Primitive::Int)) => {
+                    let tagged = value_expr(lhs);
+                    let short = float_binary(
+                        module,
+                        function,
+                        *dest,
+                        *op,
+                        &format!("(double)By_ShortValue({tagged})"),
+                        &rhs_c,
+                        error_target,
+                    );
+                    let code = match op {
+                        BinOp::Add => '+',
+                        BinOp::Sub => '-',
+                        BinOp::Mul => '*',
+                        BinOp::TrueDiv => '/',
+                        BinOp::FloorDiv => 'f',
+                        BinOp::Mod => '%',
+                        _ => 'p',
+                    };
+                    let boxed = assign_checked(
+                        module,
+                        function,
+                        *dest,
+                        &format!("By_IntFloatSlow({tagged}, {rhs_c}, '{code}')"),
+                        error_target,
+                    );
+                    format!(
+                        "    if (BY_LIKELY(By_IsShort({tagged}))) {{\n{short}    }} else {{\n{boxed}    }}\n"
+                    )
+                }
+                _ => float_binary(
+                    module,
+                    function,
+                    *dest,
+                    *op,
+                    &value_expr(lhs),
+                    &rhs_c,
+                    error_target,
+                ),
             }
         }
         Op::ObjectBinary {
@@ -8195,6 +8238,27 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             assign_checked(module, function, *dest, &expr, error_target)
         }
         Op::Truthy { dest, src } => {
+            // a short is true where it is not zero, and only a pointer — a big `int` or a
+            // subclass with a `__bool__` of its own — can fail
+            if function.value_type(src) == Some(RType::INT) {
+                let value = value_expr(src);
+                let short = assign_owned(
+                    module,
+                    function,
+                    *dest,
+                    &format!("(char)({value} != By_ShortFrom(0))"),
+                );
+                let boxed = assign_checked(
+                    module,
+                    function,
+                    *dest,
+                    &format!("By_IntTruthySlow({value})"),
+                    error_target,
+                );
+                return format!(
+                    "    if (BY_LIKELY(By_IsShort({value}))) {{\n{short}    }} else {{\n{boxed}    }}\n"
+                );
+            }
             let expr = format!("By_Truthy({})", value_expr(src));
             assign_checked(module, function, *dest, &expr, error_target)
         }
@@ -8285,13 +8349,21 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                     }
                     _ => format!("By_IntInvert({})", value_expr(operand)),
                 },
+                UnaryOp::Pos => match function.value_type(operand) {
+                    Some(RType::Primitive(Primitive::Object)) => {
+                        format!("By_ObjPos({})", value_expr(operand))
+                    }
+                    _ => format!("By_IntPos({})", value_expr(operand)),
+                },
+                UnaryOp::Index => format!("By_IntIndex({})", value_expr(operand)),
             };
-            if matches!(op, UnaryOp::Neg | UnaryOp::Invert)
-                && matches!(
-                    function.value_type(operand),
-                    Some(RType::Primitive(Primitive::Int | Primitive::Object))
-                )
-            {
+            if matches!(
+                op,
+                UnaryOp::Neg | UnaryOp::Invert | UnaryOp::Pos | UnaryOp::Index
+            ) && matches!(
+                function.value_type(operand),
+                Some(RType::Primitive(Primitive::Int | Primitive::Object))
+            ) {
                 assign_checked(module, function, *dest, &expr, error_target)
             } else {
                 assign_owned(module, function, *dest, &expr)
@@ -10429,6 +10501,56 @@ fn defer_tests(function: &Function, receiver: bool) -> Vec<String> {
         .collect()
 }
 
+/// a double operation, with each operand already written as a C `double`
+///
+/// a division fails only on a zero divisor, and every double it can answer is a legal
+/// one — so the divisor is tested here and the test jumps to the error edge, rather than
+/// a sentinel answer being told apart from a real one by asking the thread for an
+/// exception on every division
+fn float_binary(
+    module: &ModuleIr,
+    function: &Function,
+    dest: RegisterId,
+    op: BinOp,
+    lhs: &str,
+    rhs: &str,
+    error_target: ErrorEdge,
+) -> String {
+    let divided = match op {
+        BinOp::FloorDiv => Some((
+            "PyNumber_FloorDivide",
+            format!("By_FloatFloorDivNonzero({lhs}, {rhs})"),
+        )),
+        BinOp::Mod => Some((
+            "PyNumber_Remainder",
+            format!("By_FloatModNonzero({lhs}, {rhs})"),
+        )),
+        BinOp::TrueDiv => Some(("PyNumber_TrueDivide", format!("({lhs} / {rhs})"))),
+        _ => None,
+    };
+    if let Some((operation, quotient)) = divided {
+        return format!(
+            "    if (BY_UNLIKELY({rhs} == 0.0)) {{ By_ZeroDivision({operation}, 1); goto {}; }}\n{}",
+            error_label(error_target),
+            assign_owned(module, function, dest, &quotient)
+        );
+    }
+    let expr = match op {
+        BinOp::Add => format!("({lhs} + {rhs})"),
+        BinOp::Sub => format!("({lhs} - {rhs})"),
+        BinOp::Mul => format!("({lhs} * {rhs})"),
+        BinOp::Pow => format!("By_FloatPow({lhs}, {rhs})"),
+        // the bitwise operators have no float form; the frontend routes
+        // them through the object protocol instead
+        other => format!("(void)0 /* unreachable: float {} */", other.symbol()),
+    };
+    if op.can_fail() {
+        assign_checked(module, function, dest, &expr, error_target)
+    } else {
+        assign_owned(module, function, dest, &expr)
+    }
+}
+
 /// the fast path and the slow call of a tagged operation whose fast path cannot fail
 ///
 /// a short is an even word, and a sum, difference, product or bitwise combination of two
@@ -10443,13 +10565,20 @@ fn split_int_binary_c(
     error_target: ErrorEdge,
     unset: &str,
 ) -> Option<String> {
-    let Op::IntBinary { dest, op, lhs, rhs } = op else {
+    let Op::IntBinary {
+        dest,
+        op,
+        lhs,
+        rhs,
+        mutation,
+    } = op
+    else {
         return None;
     };
     if function.value_type(&Value::Register(*dest)) != Some(RType::INT) {
         return None;
     }
-    let (fast, slow) = split_int_binary(*op, lhs, rhs)?;
+    let (fast, slow) = split_int_binary(*op, lhs, rhs, *mutation)?;
     let target = local(*dest);
     Some(format!(
         "    {{ ByTagged by_t;\n\
@@ -10701,8 +10830,32 @@ fn unbox_owning_nothing_of_its_source(to: &RType) -> Option<&'static str> {
     })
 }
 
-fn split_int_binary(op: BinOp, lhs: &Value, rhs: &Value) -> Option<(&'static str, String)> {
+fn split_int_binary(
+    op: BinOp,
+    lhs: &Value,
+    rhs: &Value,
+    mutation: Mutation,
+) -> Option<(&'static str, String)> {
     let (l, r) = (value_expr(lhs), value_expr(rhs));
+    // the fast path is taken only by two shorts, which are exact `int`s with no in-place
+    // methods, so an augmented assignment differs from the plain operator only here
+    if mutation == Mutation::InPlace {
+        let (fast, operation) = match op {
+            BinOp::Add => ("By_IntAddShort", "PyNumber_InPlaceAdd"),
+            BinOp::Sub => ("By_IntSubShort", "PyNumber_InPlaceSubtract"),
+            BinOp::Mul => ("By_IntMulShort", "PyNumber_InPlaceMultiply"),
+            BinOp::BitAnd => ("By_IntAndShort", "PyNumber_InPlaceAnd"),
+            BinOp::BitOr => ("By_IntOrShort", "PyNumber_InPlaceOr"),
+            BinOp::BitXor => ("By_IntXorShort", "PyNumber_InPlaceXor"),
+            BinOp::FloorDiv
+            | BinOp::Mod
+            | BinOp::TrueDiv
+            | BinOp::Pow
+            | BinOp::Shl
+            | BinOp::Shr => return None,
+        };
+        return Some((fast, format!("By_IntSlowInPlace({l}, {r}, {operation})")));
+    }
     Some(match op {
         BinOp::Add => (
             "By_IntAddShort",
@@ -12598,6 +12751,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Register(b),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
         builder.finish()
@@ -12741,6 +12895,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(read),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
         let mut function = builder.finish();
@@ -14060,6 +14215,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
         let mut module = module_with(builder.finish());
@@ -14106,6 +14262,7 @@ mod tests {
             op: BinOp::FloorDiv,
             lhs: Value::Register(n),
             rhs: Value::Int(2),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(n)));
         let c = emit_module(&module_with(builder.finish()));
@@ -14145,6 +14302,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(acc),
             rhs: Value::Register(n),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(acc)));
         let c = emit_module(&module_with(builder.finish()));
@@ -14207,6 +14365,7 @@ mod tests {
                 op,
                 lhs: Value::Register(a),
                 rhs: Value::Register(b),
+                mutation: Mutation::Fresh,
             });
             builder.terminate(Terminator::Return(Value::Register(out)));
             let c = emit_module(&module_with(builder.finish()));
@@ -14219,6 +14378,45 @@ mod tests {
                  \x20     By_DecRefTagged(r2); r2 = by_t; }}\n"
             );
             assert!(c.contains(&expected), "{op:?}: {c}");
+        }
+    }
+
+    #[test]
+    fn an_augmented_int_operation_asks_for_the_in_place_method_off_the_short_path() {
+        // two shorts are exact `int`s, which have no in-place methods, so `x += y` keeps the
+        // plain operator's fast path unchanged. anything else may be a subclass with an
+        // `__iadd__` of its own, and the slow path asks the in-place form of the operator.
+        // an operation with no split form tests the left operand's exactness first
+        for (op, expected) in [
+            (
+                BinOp::Add,
+                "if (BY_UNLIKELY(!By_IntAddShort(r0, r1, &by_t))) {\n\
+                 \x20         by_t = By_IntSlowInPlace(r0, r1, PyNumber_InPlaceAdd);",
+            ),
+            (
+                BinOp::BitXor,
+                "if (BY_UNLIKELY(!By_IntXorShort(r0, r1, &by_t))) {\n\
+                 \x20         by_t = By_IntSlowInPlace(r0, r1, PyNumber_InPlaceXor);",
+            ),
+            (BinOp::FloorDiv, "By_IntIFloorDiv(r0, r1)"),
+            (BinOp::Mod, "By_IntIMod(r0, r1)"),
+            (BinOp::Shl, "By_IntIShl(r0, r1)"),
+            (BinOp::Pow, "By_IntIPow(r0, r1)"),
+        ] {
+            let mut builder = FunctionBuilder::new("bump", RType::INT);
+            let a = builder.param("a", RType::INT);
+            let b = builder.param("b", RType::INT);
+            let out = builder.temp(RType::INT);
+            builder.push(Op::IntBinary {
+                dest: out,
+                op,
+                lhs: Value::Register(a),
+                rhs: Value::Register(b),
+                mutation: Mutation::InPlace,
+            });
+            builder.terminate(Terminator::Return(Value::Register(out)));
+            let c = emit_module(&module_with(builder.finish()));
+            assert!(c.contains(expected), "{op:?}: {c}");
         }
     }
 
@@ -15456,6 +15654,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Register(b),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut module = ModuleIr::new("app");
