@@ -30,19 +30,27 @@ use ruff_python_ast::{Expr, ExprName, Stmt, StmtClassDef};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
-pub(crate) struct InferredAnnotationPass {
+pub(crate) struct InferredAnnotationPass<'src> {
+    written: WrittenNames<'src>,
     min_version: ruff_python_ast::PythonVersion,
 }
 
-impl InferredAnnotationPass {
-    pub(crate) fn new(min_version: ruff_python_ast::PythonVersion) -> Self {
-        Self { min_version }
+impl<'src> InferredAnnotationPass<'src> {
+    pub(crate) fn new(
+        written: WrittenNames<'src>,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Self {
+        Self {
+            written,
+            min_version,
+        }
     }
 }
 
-impl TypeAwarePass for InferredAnnotationPass {
+impl TypeAwarePass for InferredAnnotationPass<'_> {
     fn lowering(&self) -> Option<super::ast_driver::Lowering> {
         Some(super::ast_driver::Lowering::InferredAnnotation)
     }
@@ -50,34 +58,27 @@ impl TypeAwarePass for InferredAnnotationPass {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut state = State {
             types,
+            written: self.written,
             min_version: self.min_version,
             edits: Vec::new(),
-            modules: BTreeSet::new(),
-            typing_names: BTreeSet::new(),
+            imports: BTreeSet::new(),
         };
         for stmt in stmts {
             state.visit_stmt(stmt);
         }
         ctx.text_edits.extend(state.edits);
-        ctx.type_only_imports
-            .extend(state.modules.into_iter().map(|m| format!("import {m}")));
-        ctx.type_only_imports.extend(
-            state
-                .typing_names
-                .into_iter()
-                .map(|name| format!("from typing import {name}")),
-        );
+        ctx.type_only_imports.extend(state.imports);
     }
 }
 
 struct State<'a> {
     types: &'a dyn TypeInfo,
+    written: WrittenNames<'a>,
     min_version: ruff_python_ast::PythonVersion,
     edits: Vec<(TextRange, String)>,
-    /// modules a synthesized annotation names but the source never imported
-    modules: BTreeSet<String>,
-    /// `typing` names it reads that the source never imported either
-    typing_names: BTreeSet<&'static str>,
+    /// the modules and `typing` names a synthesized annotation reads but the source never
+    /// imported, as the import lines that bind them
+    imports: BTreeSet<String>,
 }
 
 impl State<'_> {
@@ -117,10 +118,11 @@ impl State<'_> {
             return;
         };
         let pos = name.range().end();
-        self.edits
-            .push((TextRange::new(pos, pos), format!(": {}", annotation.text)));
-        self.modules.extend(annotation.modules);
-        self.typing_names.extend(annotation.typing_names);
+        self.edits.push((
+            TextRange::new(pos, pos),
+            format!(": {}", annotation.text_in(self.written)),
+        ));
+        self.imports.extend(annotation.imports_in(self.written));
     }
 }
 
@@ -391,6 +393,31 @@ mod tests {
                     raise ValueError
                 class A:
                     n: Never = boom()
+            "},
+        );
+    }
+
+    /// a module that binds a `typing` name to something of its own keeps it, and the
+    /// annotation reads `typing`'s under a name of its own
+    #[test]
+    fn a_typing_name_the_module_binds_otherwise_is_imported_fresh() {
+        check(
+            indoc! {"
+                Never = 4
+                def boom():
+                    raise ValueError
+                class A:
+                    n = boom()
+            "},
+            indoc! {"
+                from typing import TYPE_CHECKING
+                if TYPE_CHECKING:
+                    from typing_extensions import Never as Never2
+                Never = 4
+                def boom():
+                    raise ValueError
+                class A:
+                    n: Never2 = boom()
             "},
         );
     }

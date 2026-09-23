@@ -18,16 +18,14 @@
 //! resolved eagerly would pass every forwarding assertion while quietly
 //! destroying the feature.
 
-#![expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use by_transforms::{Config, transpile};
+
+mod interpreters;
+use interpreters::Interpreter;
 
 /// module whose values the importer exercises. every binding is a plain value
 /// (not a callable), which is exactly the case the proxy used to break
@@ -256,31 +254,10 @@ assert typing.get_type_hints(half)["value"] === fractions.Fraction, "the string 
 print("ok")
 "#;
 
-/// an interpreter to run the transpiled output on. `$PYTHON` first, then the
-/// usual names; `None` (test skips) when none is found
-fn python() -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Ok(p) = std::env::var("PYTHON") {
-        candidates.push(p);
-    }
-    candidates.extend(["python3", "python"].map(String::from));
-
-    candidates.into_iter().find(|py| {
-        Command::new(py)
-            .args(["-c", ""])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
-}
-
-/// whether `python` runs what the transpiler targets by default, 3.10 — a
-/// dataclass's `KW_ONLY` among it
-fn runs_the_default_target(python: &str) -> bool {
-    Command::new(python)
-        .args(["-c", "import sys; sys.exit(sys.version_info < (3, 10))"])
-        .status()
-        .is_ok_and(|status| status.success())
+/// the interpreter to run the transpiled output on: the oldest found that runs what the
+/// transpiler targets by default, 3.10 — a dataclass's `KW_ONLY` among it. none is a skip, said so
+fn python() -> Option<Interpreter> {
+    interpreters::oldest(Config::default().min_version, "", "")
 }
 
 /// transpile `sources` (`module stem` → basedpython source) into a fresh
@@ -299,8 +276,8 @@ fn build_case(case: &str, sources: &[(&str, &str)]) -> PathBuf {
 }
 
 /// run `main.py` in `dir`, asserting it exits cleanly and prints `ok`
-fn run_main(python: &str, dir: &Path) {
-    let output = Command::new(python)
+fn run_main(python: &Interpreter, dir: &Path) {
+    let output = Command::new(&python.command)
         .arg("main.py")
         .current_dir(dir)
         .output()
@@ -313,12 +290,12 @@ fn run_main(python: &str, dir: &Path) {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    interpreters::ran(python, Config::default().min_version);
 }
 
 #[test]
 fn proxy_forwards_value_operations() {
     let Some(python) = python() else {
-        eprintln!("skipping lazy-import runtime test: no python interpreter found");
         return;
     };
     let dir = build_case(
@@ -331,7 +308,6 @@ fn proxy_forwards_value_operations() {
 #[test]
 fn character_identity_survives_an_import() {
     let Some(python) = python() else {
-        eprintln!("skipping lazy-import runtime test: no python interpreter found");
         return;
     };
     let dir = build_case(
@@ -344,7 +320,6 @@ fn character_identity_survives_an_import() {
 #[test]
 fn import_stays_lazy_until_first_use() {
     let Some(python) = python() else {
-        eprintln!("skipping lazy-import runtime test: no python interpreter found");
         return;
     };
     let dir = build_case(
@@ -357,7 +332,6 @@ fn import_stays_lazy_until_first_use() {
 #[test]
 fn a_name_is_claimed_only_once_the_module_is_lazy() {
     let Some(python) = python() else {
-        eprintln!("skipping lazy-import runtime test: no python interpreter found");
         return;
     };
     let dir = build_case(
@@ -370,7 +344,6 @@ fn a_name_is_claimed_only_once_the_module_is_lazy() {
 #[test]
 fn an_unlazifiable_name_in_a_multi_name_import_stays_bound() {
     let Some(python) = python() else {
-        eprintln!("skipping lazy-import runtime test: no python interpreter found");
         return;
     };
     let dir = build_case("lazy_mixed", &[("main", MIXED_MAIN)]);
@@ -380,7 +353,6 @@ fn an_unlazifiable_name_in_a_multi_name_import_stays_bound() {
 #[test]
 fn a_submodule_resolves_through_the_proxy() {
     let Some(python) = python() else {
-        eprintln!("skipping lazy-import runtime test: no python interpreter found");
         return;
     };
     let dir = build_case("lazy_submodule", &[("main", SUBMODULE_MAIN)]);
@@ -390,13 +362,8 @@ fn a_submodule_resolves_through_the_proxy() {
 #[test]
 fn an_annotation_reads_the_imported_object() {
     let Some(python) = python() else {
-        eprintln!("skipping lazy-import runtime test: no python interpreter found");
         return;
     };
-    if !runs_the_default_target(&python) {
-        eprintln!("skipping lazy-import runtime test: {python} is older than python 3.10");
-        return;
-    }
     let dir = build_case("lazy_annotations", &[("main", ANNOTATIONS_MAIN)]);
     run_main(&python, &dir);
 }
@@ -404,13 +371,8 @@ fn an_annotation_reads_the_imported_object() {
 #[test]
 fn a_string_annotation_resolves_to_the_imported_object() {
     let Some(python) = python() else {
-        eprintln!("skipping lazy-import runtime test: no python interpreter found");
         return;
     };
-    if !runs_the_default_target(&python) {
-        eprintln!("skipping lazy-import runtime test: {python} is older than python 3.10");
-        return;
-    }
     let dir = build_case(
         "lazy_future_annotations",
         &[("main", FUTURE_ANNOTATIONS_MAIN)],

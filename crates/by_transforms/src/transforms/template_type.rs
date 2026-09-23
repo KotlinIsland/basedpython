@@ -34,24 +34,29 @@ use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
     Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping,
 };
 use crate::type_info::TypeInfo;
 
-pub(crate) struct TemplateTypePass;
+pub(crate) struct TemplateTypePass<'src> {
+    pub(crate) written: WrittenNames<'src>,
+}
 
-impl TypeAwarePass for TemplateTypePass {
+impl TypeAwarePass for TemplateTypePass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = TemplateType {
             types,
+            literal: self.written.imported("typing", "Literal"),
+            str_: self.written.builtin("str"),
             edits: Vec::new(),
             needs_literal_import: false,
         };
         walk_type_positions_skipping(stmts, Some(types), &ctx.claimed_type_op_ranges, &mut inner);
         if inner.needs_literal_import {
             ctx.required_imports
-                .push("from typing import Literal".to_owned());
+                .push(self.written.import_from("typing", &["Literal"]));
         }
         ctx.text_edits.extend(inner.edits);
     }
@@ -59,6 +64,10 @@ impl TypeAwarePass for TemplateTypePass {
 
 struct TemplateType<'src> {
     types: &'src dyn TypeInfo,
+    /// the name `typing.Literal` is written under
+    literal: String,
+    /// the name the builtin `str` is written under
+    str_: String,
     edits: Vec<(TextRange, String)>,
     needs_literal_import: bool,
 }
@@ -76,9 +85,9 @@ impl TypeExprVisitor for TemplateType<'_> {
                     .map(|value| render_string_literal(value))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("Literal[{arms}]")
+                format!("{}[{arms}]", self.literal)
             }
-            _ => "str".to_owned(),
+            _ => self.str_.clone(),
         };
         self.edits.push((expr.range(), replacement));
         // the holes are type expressions of their own, but they are gone from

@@ -540,6 +540,8 @@ pub(super) fn arguments_span(arguments: &ast::Arguments) -> Option<TextRange> {
 pub(super) fn member_reference_fragments(
     info: &ty_python_semantic::ExtensionAttributeInfo,
     receiver: &[Fragment],
+    functools: &str,
+    written: WrittenNames,
 ) -> (Vec<Fragment>, bool) {
     let mut fragments = Vec::new();
     let mut needs_functools = false;
@@ -557,7 +559,7 @@ pub(super) fn member_reference_fragments(
             if info.receiver_is_class {
                 fragments.extend_from_slice(receiver);
             } else {
-                fragments.push(Fragment::Lit("type(".to_owned()));
+                fragments.push(Fragment::Lit(format!("{}(", written.builtin("type"))));
                 fragments.extend_from_slice(receiver);
                 fragments.push(Fragment::Lit(")".to_owned()));
             }
@@ -572,11 +574,11 @@ pub(super) fn member_reference_fragments(
         ExtensionMemberKind::Method | ExtensionMemberKind::ClassMethod => {
             needs_functools = true;
             fragments.push(Fragment::Lit(format!(
-                "functools.partial({}, ",
+                "{functools}.partial({}, ",
                 info.function
             )));
             if info.kind == ExtensionMemberKind::ClassMethod && !info.receiver_is_class {
-                fragments.push(Fragment::Lit("type(".to_owned()));
+                fragments.push(Fragment::Lit(format!("{}(", written.builtin("type"))));
                 fragments.extend_from_slice(receiver);
                 fragments.push(Fragment::Lit(")".to_owned()));
             } else {
@@ -591,6 +593,9 @@ pub(super) fn member_reference_fragments(
 /// rewrites attribute accesses that ty resolved to extension members
 struct ExtensionCallLower<'a> {
     types: &'a dyn TypeInfo,
+    written: WrittenNames<'a>,
+    /// the name the `functools` module is imported under
+    functools: String,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     imports: BTreeSet<String>,
     needs_functools: bool,
@@ -601,9 +606,11 @@ struct ExtensionCallLower<'a> {
 }
 
 impl<'a> ExtensionCallLower<'a> {
-    fn new(types: &'a dyn TypeInfo) -> Self {
+    fn new(types: &'a dyn TypeInfo, written: WrittenNames<'a>) -> Self {
         Self {
             types,
+            written,
+            functools: written.imported_module("functools"),
             edits: Vec::new(),
             imports: BTreeSet::new(),
             needs_functools: false,
@@ -623,12 +630,13 @@ impl<'a> ExtensionCallLower<'a> {
     /// methods, the class object for a `class def` (via `type(…)` when the
     /// access went through an instance)
     fn receiver_fragments(
+        &self,
         info: &ty_python_semantic::ExtensionAttributeInfo,
         receiver: &Expr,
         fragments: &mut Vec<Fragment>,
     ) {
         if info.kind == ExtensionMemberKind::ClassMethod && !info.receiver_is_class {
-            fragments.push(Fragment::Lit("type(".to_owned()));
+            fragments.push(Fragment::Lit(format!("{}(", self.written.builtin("type"))));
             fragments.push(Fragment::Src(receiver.range()));
             fragments.push(Fragment::Lit(")".to_owned()));
         } else {
@@ -666,7 +674,7 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                         let receiver_counts = info.kind != ExtensionMemberKind::StaticMethod;
                         let mut written = false;
                         if receiver_counts {
-                            Self::receiver_fragments(&info, &attr.value, &mut fragments);
+                            self.receiver_fragments(&info, &attr.value, &mut fragments);
                             written = true;
                         }
                         if let Some(span) = arguments_span(&call.arguments) {
@@ -687,11 +695,11 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                                 Vec::new()
                             }
                         };
-                        for (parameter, variable) in implicit {
+                        for argument in implicit {
                             if written {
                                 fragments.push(Fragment::Lit(", ".to_owned()));
                             }
-                            fragments.push(Fragment::Lit(format!("{parameter}={variable}")));
+                            fragments.push(Fragment::Lit(argument.keyword(self.written)));
                             written = true;
                         }
                         fragments.push(Fragment::Lit(")".to_owned()));
@@ -727,7 +735,10 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                                 if info.receiver_is_class {
                                     fragments.push(Fragment::Src(attr.value.range()));
                                 } else {
-                                    fragments.push(Fragment::Lit("type(".to_owned()));
+                                    fragments.push(Fragment::Lit(format!(
+                                        "{}(",
+                                        self.written.builtin("type")
+                                    )));
                                     fragments.push(Fragment::Src(attr.value.range()));
                                     fragments.push(Fragment::Lit(")".to_owned()));
                                 }
@@ -741,10 +752,10 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                                 // receiver the way the bound method would have
                                 self.needs_functools = true;
                                 fragments.push(Fragment::Lit(format!(
-                                    "functools.partial({}, ",
-                                    info.function
+                                    "{}.partial({}, ",
+                                    self.functools, info.function
                                 )));
-                                Self::receiver_fragments(&info, &attr.value, &mut fragments);
+                                self.receiver_fragments(&info, &attr.value, &mut fragments);
                                 fragments.push(Fragment::Lit(")".to_owned()));
                             }
                         }
@@ -780,15 +791,18 @@ impl ExtensionCallLower<'_> {
         // dunder's result, and negates it for `not in`
         let wrapper = match expr {
             Expr::Compare(compare) => match compare.ops.as_ref() {
-                [ast::CmpOp::In] => Some("bool("),
-                [ast::CmpOp::NotIn] => Some("not bool("),
+                [ast::CmpOp::In] => Some(""),
+                [ast::CmpOp::NotIn] => Some("not "),
                 _ => None,
             },
             _ => None,
         };
         let mut fragments = Vec::new();
         if let Some(wrapper) = wrapper {
-            fragments.push(Fragment::Lit(wrapper.to_owned()));
+            fragments.push(Fragment::Lit(format!(
+                "{wrapper}{}(",
+                self.written.builtin("bool")
+            )));
         }
         fragments.push(Fragment::Lit(format!("{}(", rewrite.info.function)));
         fragments.push(Fragment::Src(receiver.range()));
@@ -819,11 +833,13 @@ fn operator_operands(expr: &Expr) -> Option<(&Expr, Option<&Expr>)> {
     }
 }
 
-pub(crate) struct ExtensionCallPass;
+pub(crate) struct ExtensionCallPass<'src> {
+    pub(crate) written: WrittenNames<'src>,
+}
 
-impl TypeAwarePass for ExtensionCallPass {
+impl TypeAwarePass for ExtensionCallPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = ExtensionCallLower::new(types);
+        let mut inner = ExtensionCallLower::new(types, self.written);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -832,7 +848,8 @@ impl TypeAwarePass for ExtensionCallPass {
             return;
         }
         if inner.needs_functools {
-            ctx.required_imports.push("import functools".to_owned());
+            ctx.required_imports
+                .push(self.written.import_module("functools"));
         }
         ctx.required_imports.extend(inner.imports);
         ctx.template_edits.extend(inner.edits);

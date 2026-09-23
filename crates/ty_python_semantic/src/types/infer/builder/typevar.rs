@@ -953,7 +953,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         }
         if let Some(default) = default.as_deref() {
-            self.infer_paramspec_default(default, Some(&name.id));
+            let kind = TypeVarKind::double_starred_type_param(self.source_type());
+            self.infer_paramspec_default(default, Some(&name.id), kind);
         }
         self.deferred_state = previous_deferred_state;
     }
@@ -988,16 +989,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         bound_ty
     }
 
+    /// `kind` is what the parameter the default is for declares: a `ParamSpec`, or a basedpython
+    /// keyword-variadic pack
     pub(super) fn infer_paramspec_default(
         &mut self,
         default_expr: &ast::Expr,
         paramspec_name: Option<&str>,
+        kind: TypeVarKind,
     ) {
         let previously_allowed_paramspec = self
             .context
             .inference_flags
             .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, true);
-        self.infer_paramspec_default_impl(default_expr, paramspec_name);
+        self.infer_paramspec_default_impl(default_expr, paramspec_name, kind);
         self.context.inference_flags.set(
             InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR,
             previously_allowed_paramspec,
@@ -1008,14 +1012,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         &mut self,
         default_expr: &ast::Expr,
         paramspec_name: Option<&str>,
+        kind: TypeVarKind,
     ) {
         let db = self.db();
 
         match default_expr {
+            // a `ParamSpec`'s default may spell a parameter list of its own. a keyword-variadic
+            // pack's may only name another pack: its fields are named, and neither form names them
             ast::Expr::EllipsisLiteral(ellipsis) => {
                 let ty = self.infer_ellipsis_literal_expression(ellipsis);
                 self.store_expression_type(default_expr, ty);
-                return;
+                if !kind.is_keyword_variadic() {
+                    return;
+                }
             }
             ast::Expr::List(ast::ExprList { elts, .. }) => {
                 let previously_allowed_paramspec = self
@@ -1034,7 +1043,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // use a heterogeneous tuple type to represent the list of types instead.
                 let ty = Type::heterogeneous_tuple(db, self.program_environment(), types);
                 self.store_expression_type(default_expr, ty);
-                return;
+                if !kind.is_keyword_variadic() {
+                    return;
+                }
             }
             ast::Expr::Name(_) => {
                 let ty = self.infer_type_expression(default_expr);
@@ -1043,20 +1054,36 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 {
                     return;
                 }
-                let is_paramspec = match ty {
+                // another parameter of the same kind: a `ParamSpec` defaults to a `ParamSpec`, as
+                // PEP 696 has it, and a keyword-variadic pack to a pack. python sees both as a
+                // `ParamSpec`, and a pack's default is one there too
+                let same_kind = match ty {
+                    Type::TypeVar(typevar) if kind.is_keyword_variadic() => {
+                        typevar.is_keyword_variadic(db)
+                    }
                     Type::TypeVar(typevar) => typevar.is_paramspec(db),
                     Type::KnownInstance(known_instance) => {
-                        known_instance.class(db) == KnownClass::ParamSpec
+                        !kind.is_keyword_variadic()
+                            && known_instance.class(db) == KnownClass::ParamSpec
                     }
                     _ => false,
                 };
-                if is_paramspec {
+                if same_kind {
                     return;
                 }
             }
             _ => {}
         }
-        if let Some(builder) = self.context.report_lint(&INVALID_PARAMSPEC, default_expr) {
+        if kind.is_keyword_variadic() {
+            if let Some(builder) = self
+                .context
+                .report_lint(&INVALID_TYPE_VARIABLE_DEFAULT, default_expr)
+            {
+                builder.into_diagnostic(
+                    "The default of a keyword-variadic pack must name another pack",
+                );
+            }
+        } else if let Some(builder) = self.context.report_lint(&INVALID_PARAMSPEC, default_expr) {
             builder.into_diagnostic(
                 "The default value to `ParamSpec` must be either \
                     a list of types, `ParamSpec`, or `...`",

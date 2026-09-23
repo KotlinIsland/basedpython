@@ -16,7 +16,8 @@ use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
-mod common;
+mod interpreters;
+use interpreters::Interpreter;
 
 /// basedpython whose `=` fields all hold an expression that lowers
 const PROGRAM: &str = r#"
@@ -65,8 +66,8 @@ show(3, 7, {"k": 5})
 print("ok")
 "#;
 
-fn run(python: &str, source: &str, what: &str) {
-    let output = Command::new(python)
+fn run(python: &Interpreter, source: &str, what: &str) {
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(source)
         .output()
@@ -80,29 +81,12 @@ fn run(python: &str, source: &str, what: &str) {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_debug_field_prints_the_source_the_author_wrote() {
-    let Some(python) = common::python() else {
-        eprintln!("skipping f-string `=` field runtime test: no interpreter found");
+    // a replacement field may nest the string's own quote from 3.12 on, and hold a backslash
+    // from the same release. the program is transpiled for 3.13
+    let Some(python) = interpreters::oldest(PythonVersion::PY313, "", "") else {
         return;
     };
-    // a replacement field may nest the string's own quote from 3.12 on, and hold a
-    // backslash from the same release
-    let probe = Command::new(&python)
-        .args([
-            "-c",
-            "import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)",
-        ])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-    if !probe {
-        eprintln!("skipping f-string `=` field runtime test: needs python 3.12 or later");
-        return;
-    }
 
     run(&python, PYTHON_REFERENCE, "the plain-python reference");
 
@@ -112,4 +96,5 @@ fn a_debug_field_prints_the_source_the_author_wrote() {
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
     run(&python, &transpiled, "the transpiled program");
+    interpreters::ran(&python, PythonVersion::PY313);
 }

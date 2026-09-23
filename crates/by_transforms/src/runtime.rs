@@ -112,6 +112,7 @@ helpers! {
     MATCH_REST = "_by_match_rest",
     MATCH_ARGS = "_by_match_args",
     MATCH_ATTR = "_by_match_attr",
+    DATACLASS_SLOTS = "_by_dataclass_slots",
 }
 
 /// one definition of the runtime, with whatever finishes setting it up

@@ -41,13 +41,15 @@ use ruff_python_ast::{self as ast, Expr, ExprContext, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
-use super::modifiers::module_private_name;
+use super::repeated_underscore::WrittenNames;
 use super::source_util::header_end;
 use crate::type_info::TypeInfo;
 
-pub(crate) struct VisibilityRenamePass;
+pub(crate) struct VisibilityRenamePass<'src> {
+    pub(crate) written: WrittenNames<'src>,
+}
 
-impl TypeAwarePass for VisibilityRenamePass {
+impl TypeAwarePass for VisibilityRenamePass<'_> {
     fn lowering(&self) -> Option<super::ast_driver::Lowering> {
         Some(super::ast_driver::Lowering::VisibilityRename)
     }
@@ -64,6 +66,7 @@ impl TypeAwarePass for VisibilityRenamePass {
         declarations.visit_body(stmts);
         let mut renamer = Renamer {
             types,
+            written: self.written,
             edits: Vec::new(),
             header_end: TextSize::new(0),
             module_private,
@@ -147,6 +150,7 @@ fn has_visibility_modifier(decorators: &[ast::Decorator]) -> bool {
 
 struct Renamer<'a> {
     types: &'a dyn TypeInfo,
+    written: WrittenNames<'a>,
     edits: Vec<(ruff_text_size::TextRange, String)>,
     /// the offset past the enclosing `def`'s header, or zero outside one
     header_end: TextSize,
@@ -229,7 +233,7 @@ impl Renamer<'_> {
     fn rename_binding(&mut self, name: &ast::Identifier) {
         if self.binds_module(name.as_str()) {
             self.edits
-                .push((name.range, module_private_name(name.as_str())));
+                .push((name.range, self.written.module_private(name.as_str())));
         }
     }
 
@@ -246,7 +250,7 @@ impl Renamer<'_> {
         if !self.binds_module(bound) {
             return;
         }
-        let renamed = module_private_name(bound);
+        let renamed = self.written.module_private(bound);
         match &alias.asname {
             Some(asname) => self.edits.push((asname.range, renamed)),
             // `import a.b` binds its top-level package, which no alias keeps: the
@@ -311,7 +315,7 @@ impl<'ast> Visitor<'ast> for Renamer<'_> {
             for name in &global.names {
                 if self.module_private.contains(name.as_str()) {
                     self.edits
-                        .push((name.range, module_private_name(name.as_str())));
+                        .push((name.range, self.written.module_private(name.as_str())));
                 }
             }
         }
@@ -372,7 +376,7 @@ impl<'ast> Visitor<'ast> for Renamer<'_> {
                 && self.types.resolves_to_module_scope(name) == Some(true)
             {
                 self.edits
-                    .push((name.range, module_private_name(name.id.as_str())));
+                    .push((name.range, self.written.module_private(name.id.as_str())));
             } else if let Some(renamed) = self.types.class_body_member_name(name) {
                 self.edits.push((name.range, renamed));
             }

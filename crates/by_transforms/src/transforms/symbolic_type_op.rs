@@ -21,7 +21,7 @@
 //! already carries the resolved type, so the result stays correct either way.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use ruff_python_ast::visitor::transformer::{Transformer, walk_expr};
 use ruff_python_ast::visitor::{self, Visitor};
@@ -31,9 +31,11 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{AstPass, PassContext};
 use super::literal_types::float_literal_spelling;
+use super::repeated_underscore::WrittenNames;
 use super::type_expr_walker::{
     Recurse, TypeExprVisitor, TypePos, walk_one_type_expr, walk_type_positions,
 };
+use crate::PythonVersion;
 use crate::config::FloatLiteralLowering;
 use crate::type_info::TypeInfo;
 
@@ -48,12 +50,9 @@ struct Fold {
 /// source range.
 pub(crate) struct SymbolicFolds {
     folds: HashMap<TextRange, Fold>,
-    /// whether any replacement references `typing.Literal`, so the driver can
-    /// add the import
-    pub(crate) needs_literal_import: bool,
-    /// whether any replacement is `Any` (e.g. `dynamic + 1` folds to `Any`), so
-    /// the driver can add `from typing import Any`
-    pub(crate) needs_any_import: bool,
+    /// the imports the replacements read: a `typing` name (`Literal`, the `Any` of
+    /// `dynamic + 1`), or the module a class is qualified with
+    pub(crate) imports: BTreeSet<String>,
 }
 
 impl SymbolicFolds {
@@ -82,29 +81,37 @@ impl SymbolicFolds {
 pub(crate) fn collect_symbolic_folds(
     stmts: &[Stmt],
     types: &dyn TypeInfo,
+    written: WrittenNames,
     float_literals: FloatLiteralLowering,
+    min_version: PythonVersion,
 ) -> SymbolicFolds {
     let mut collector = FoldCollector {
         types,
+        written,
+        literal: written.imported("typing", "Literal"),
+        any: written.imported("typing", "Any"),
         float_literals,
+        min_version,
         folds: HashMap::new(),
-        needs_literal_import: false,
-        needs_any_import: false,
+        imports: BTreeSet::new(),
     };
     walk_type_positions(stmts, Some(types), &mut collector);
     SymbolicFolds {
         folds: collector.folds,
-        needs_literal_import: collector.needs_literal_import,
-        needs_any_import: collector.needs_any_import,
+        imports: collector.imports,
     }
 }
 
 struct FoldCollector<'a> {
     types: &'a dyn TypeInfo,
+    written: WrittenNames<'a>,
+    /// the names `typing.Literal` and `typing.Any` are written under
+    literal: String,
+    any: String,
     float_literals: FloatLiteralLowering,
+    min_version: PythonVersion,
     folds: HashMap<TextRange, Fold>,
-    needs_literal_import: bool,
-    needs_any_import: bool,
+    imports: BTreeSet<String>,
 }
 
 impl TypeExprVisitor for FoldCollector<'_> {
@@ -169,61 +176,62 @@ impl TypeExprVisitor for FoldCollector<'_> {
         if !foldable {
             return Recurse::Descend;
         }
-        let Some(rendered) = self.types.symbolic_type_fold(expr) else {
-            return Recurse::Descend;
-        };
-        // the special float-literal types render as the bare names `inf` /
-        // `-inf` / `nan`, which have no python literal syntax — leave them for
-        // `float_const` to erase to `float` rather than folding to an undefined
-        // name (only `float.inf` etc. produce these, so this never shadows a
-        // real arithmetic fold)
-        if matches!(rendered.as_str(), "inf" | "-inf" | "nan") {
-            return Recurse::Descend;
-        }
-        // the rendered type must itself parse as a type expression, and `Unknown`
-        // is not a runtime name either
-        let (rendered, parsed) = match parse_expression(&rendered) {
-            Ok(parsed) if rendered != "Unknown" => (rendered, parsed),
-            // some forms *must* be replaced, because their source spelling names
-            // nothing at runtime: a `type def` application (its declaration is
-            // erased, so the name would dangle) and an attribute type (`T.a` is an
-            // attribute access on a `TypeVar` object). `Any` is the honest
-            // spelling when the resolved type has none — a deferred application,
-            // or a member python cannot write down such as a bound method or a
-            // callable, which ty renders in arrow form. anything else keeps its
-            // source so ty's own diagnostic stands.
-            //
-            // the widening is deliberately silent: it is the same trade every
-            // deferred operation already makes when it lowers to its reduced form
-            // (`Array[Dim + 1]` → `Array[int]`), the `.by` file keeps the precise
-            // type either way, and the transpiler has no warning channel — only
-            // hard errors, which would reject perfectly good source
-            _ => {
-                if !(self.types.is_type_fn_application(expr) || self.types.is_attribute_type(expr))
+        // some forms *must* be replaced, because their source spelling names nothing at
+        // runtime: a `type def` application (its declaration is erased, so the name would
+        // dangle) and an attribute type (`T.a` is an attribute access on a `TypeVar`
+        // object). `Any` is the honest spelling when the resolved type has none the output
+        // can resolve — a deferred application, or a member python cannot write down such
+        // as a bound method or a callable, which ty renders in arrow form. anything else
+        // keeps its source so ty's own diagnostic stands.
+        //
+        // the widening is deliberately silent: it is the same trade every deferred
+        // operation already makes when it lowers to its reduced form (`Array[Dim + 1]` →
+        // `Array[int]`), the `.by` file keeps the precise type either way, and the
+        // transpiler has no warning channel — only hard errors, which would reject
+        // perfectly good source
+        let must_replace =
+            self.types.is_type_fn_application(expr) || self.types.is_attribute_type(expr);
+        let spelled = self
+            .types
+            .symbolic_type_fold(expr, self.min_version)
+            // the special float-literal types render as the bare names `inf` / `-inf` /
+            // `nan`, which have no python literal syntax — leave them for `float_const`
+            // to erase to `float` rather than folding to an undefined name (only
+            // `float.inf` etc. produce these, so this never shadows a real arithmetic
+            // fold)
+            .filter(|spelled| !matches!(spelled.text.as_str(), "inf" | "-inf" | "nan" | "Unknown"));
+        let rendered = match spelled {
+            Some(mut spelled) => {
+                // ty spells a float or complex literal type as the bare number, which
+                // python reads as no type at all. it is written the way the same literal
+                // written in the source is
+                if let Ok(parsed) = parse_expression(&spelled.text)
+                    && let Some(floats) = spell_float_literals(
+                        &spelled.text,
+                        parsed.expr(),
+                        self.written,
+                        &self.literal,
+                        self.float_literals,
+                    )
                 {
-                    return Recurse::Descend;
+                    spelled.text = floats;
                 }
-                let Ok(parsed) = parse_expression("Any") else {
-                    return Recurse::Descend;
-                };
-                ("Any".to_string(), parsed)
+                self.imports.extend(spelled.imports_in(self.written));
+                spelled.text_in(self.written)
             }
+            None if must_replace => self.any.clone(),
+            None => return Recurse::Descend,
         };
-        // ty spells a float or complex literal type as the bare number, which python reads
-        // as no type at all. it is written the way the same literal written in the source is
-        let (rendered, parsed) =
-            match spell_float_literals(&rendered, parsed.expr(), self.float_literals) {
-                Some(spelled) => match parse_expression(&spelled) {
-                    Ok(parsed) => (spelled, parsed),
-                    Err(_) => return Recurse::Descend,
-                },
-                None => (rendered, parsed),
-            };
-        if rendered.contains("Literal[") {
-            self.needs_literal_import = true;
+        let Ok(parsed) = parse_expression(&rendered) else {
+            return Recurse::Descend;
+        };
+        if uses_name(parsed.expr(), &self.literal) {
+            self.imports
+                .insert(self.written.import_from("typing", &["Literal"]));
         }
-        if rendered == "Any" {
-            self.needs_any_import = true;
+        if uses_name(parsed.expr(), &self.any) {
+            self.imports
+                .insert(self.written.import_from("typing", &["Any"]));
         }
         let mut node = *parsed.into_syntax().body;
         super::rerender::forget_expr_ranges(&mut node);
@@ -233,15 +241,38 @@ impl TypeExprVisitor for FoldCollector<'_> {
     }
 }
 
+/// whether `expr` reads `name`
+fn uses_name(expr: &Expr, name: &str) -> bool {
+    struct Uses<'a> {
+        name: &'a str,
+        found: bool,
+    }
+    impl<'b> Visitor<'b> for Uses<'_> {
+        fn visit_expr(&mut self, expr: &'b Expr) {
+            if matches!(expr, Expr::Name(candidate) if candidate.id.as_str() == self.name) {
+                self.found = true;
+            }
+            visitor::walk_expr(self, expr);
+        }
+    }
+    let mut uses = Uses { name, found: false };
+    uses.visit_expr(expr);
+    uses.found
+}
+
 /// `rendered` with each float or complex literal type in `parsed` (its parse) spelled as
 /// [`float_literal_spelling`] spells a written one, or `None` when it holds none
 fn spell_float_literals(
     rendered: &str,
     parsed: &Expr,
+    written: WrittenNames,
+    literal: &str,
     float_literals: FloatLiteralLowering,
 ) -> Option<String> {
     struct Spellings<'a> {
         rendered: &'a str,
+        written: WrittenNames<'a>,
+        literal: &'a str,
         float_literals: FloatLiteralLowering,
         edits: Vec<(TextRange, String)>,
     }
@@ -254,7 +285,9 @@ fn spell_float_literals(
                 return;
             }
             let text = &self.rendered[expr.range()];
-            if let Some(spelling) = float_literal_spelling(expr, text, self.float_literals) {
+            if let Some(spelling) =
+                float_literal_spelling(expr, text, self.written, self.literal, self.float_literals)
+            {
                 self.edits.push((expr.range(), spelling));
                 return;
             }
@@ -263,6 +296,8 @@ fn spell_float_literals(
     }
     let mut spellings = Spellings {
         rendered,
+        written,
+        literal,
         float_literals,
         edits: Vec::new(),
     };
@@ -374,6 +409,51 @@ mod tests {
                 c: Literal[2]
             "},
         );
+    }
+
+    /// a class of the module's own named like a `typing` special form is the class where the
+    /// fold names it, and `typing`'s `Literal` goes under a name of its own
+    #[test]
+    fn a_class_named_literal_is_the_class_in_a_fold() {
+        check(
+            indoc! {"
+                class Literal: ...
+                class Box:
+                    a: Literal
+                def f[T: Box](y: T.a) -> T.a:
+                    return y
+                c: 1 + 1
+            "},
+            indoc! {"
+                from typing import Literal as Literal2, TypeVar
+                class Literal: ...
+                class Box:
+                    a: Literal
+                _T = TypeVar(\"_T\", bound=Box)
+                def f(y: Literal) -> Literal:
+                    return y
+                c: Literal2[2]
+            "},
+        );
+    }
+
+    /// a type that names both the class and the special form has no spelling that tells
+    /// them apart, so an attribute type, which has to be replaced, is written `Any`
+    #[test]
+    fn a_fold_naming_a_class_and_a_special_form_alike_is_any() {
+        let out = transpile(
+            indoc! {"
+                import typing
+                class Literal: ...
+                class Box:
+                    a: Literal | typing.Literal[1]
+                def f[T: Box](y: T.a) -> T.a:
+                    return y
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(out.contains("def f(y: Any) -> Any:"), "got:\n{out}");
     }
 
     /// a fold to a float literal type is written as the same literal written in the source

@@ -14,16 +14,6 @@ use crate::transforms::type_expr_walker::{
 };
 use crate::type_info::TypeInfo;
 
-/// The element type an unpacked tuple element wraps, whichever way the target
-/// spells the unpack.
-fn strip_unpack(element: &str) -> Option<&str> {
-    element.strip_prefix('*').or_else(|| {
-        element
-            .strip_prefix("Unpack[")
-            .and_then(|rest| rest.strip_suffix(']'))
-    })
-}
-
 /// Whether a parameter-shape tuple element is a `*: *Args` variadic — one whose annotation is
 /// itself an unpack, and so names the whole run of fields rather than typing each one.
 fn is_unpacked_variadic(element: &Expr) -> bool {
@@ -44,6 +34,7 @@ fn is_unpacked_variadic(element: &Expr) -> bool {
 /// subscripts on unresolved names are left alone.
 pub(crate) struct TupleLiteralType<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     min_version: PythonVersion,
     /// set when a lowering spelled an `Unpack`, so the pass can ask for the import
@@ -74,6 +65,7 @@ impl<'src> TupleLiteralType<'src> {
         }
         Self {
             source,
+            written,
             types,
             min_version: config.min_version,
             needs_unpack_import: Cell::new(false),
@@ -92,8 +84,19 @@ impl<'src> TupleLiteralType<'src> {
             format!("*{inner}")
         } else {
             self.needs_unpack_import.set(true);
-            format!("Unpack[{inner}]")
+            format!("{}[{inner}]", self.written.imported("typing", "Unpack"))
         }
+    }
+
+    /// The element type an unpacked tuple element wraps, whichever way [`Self::unpack`]
+    /// spelled the unpack.
+    fn strip_unpack<'a>(&self, element: &'a str) -> Option<&'a str> {
+        element.strip_prefix('*').or_else(|| {
+            element
+                .strip_prefix(&self.written.imported("typing", "Unpack"))
+                .and_then(|rest| rest.strip_prefix('['))
+                .and_then(|rest| rest.strip_suffix(']'))
+        })
     }
 
     fn src(&self, range: ruff_text_size::TextRange) -> &str {
@@ -129,7 +132,7 @@ impl<'src> TupleLiteralType<'src> {
             // annotation
             Expr::Tuple(t) if t.parenthesized => {
                 if t.elts.is_empty() {
-                    return Some("tuple[()]".to_owned());
+                    return Some(format!("{}[()]", self.written.builtin("tuple")));
                 }
                 // `*: T` and a bare unpack `*A` share one AST shape, so which
                 // one a `Starred` element is comes from the enclosing tuple:
@@ -142,7 +145,7 @@ impl<'src> TupleLiteralType<'src> {
                     .filter(|s| !s.is_empty())
                     .collect();
                 if lowered.is_empty() {
-                    return Some("tuple[()]".to_owned());
+                    return Some(format!("{}[()]", self.written.builtin("tuple")));
                 }
                 // pure variadic `(*: T)` → `tuple[T, ...]` directly
                 // rather than the wrapped `tuple[*tuple[T, ...]]` form.
@@ -152,11 +155,15 @@ impl<'src> TupleLiteralType<'src> {
                 if parameter_shape
                     && lowered.len() == 1
                     && !t.elts.first().is_some_and(is_unpacked_variadic)
-                    && let Some(rest) = strip_unpack(&lowered[0])
+                    && let Some(rest) = self.strip_unpack(&lowered[0])
                 {
                     return Some(rest.to_owned());
                 }
-                Some(format!("tuple[{}]", lowered.join(", ")))
+                Some(format!(
+                    "{}[{}]",
+                    self.written.builtin("tuple"),
+                    lowered.join(", ")
+                ))
             }
 
             // `(int, str) * n` — an operation `symbolic_type_op` folded is the type it
@@ -315,7 +322,10 @@ impl<'src> TupleLiteralType<'src> {
                     let value_src = self
                         .transform_annotation(&named.value)
                         .unwrap_or_else(|| self.fallback_src(&named.value));
-                    return self.unpack(&format!("tuple[{value_src}, ...]"));
+                    return self.unpack(&format!(
+                        "{}[{value_src}, ...]",
+                        self.written.builtin("tuple")
+                    ));
                 }
                 self.transform_annotation(&named.value)
                     .unwrap_or_else(|| self.fallback_src(&named.value))
@@ -330,7 +340,10 @@ impl<'src> TupleLiteralType<'src> {
                     .transform_annotation(&s.value)
                     .unwrap_or_else(|| self.fallback_src(&s.value));
                 if parameter_shape {
-                    self.unpack(&format!("tuple[{value_src}, ...]"))
+                    self.unpack(&format!(
+                        "{}[{value_src}, ...]",
+                        self.written.builtin("tuple")
+                    ))
                 } else {
                     self.unpack(&value_src)
                 }
@@ -340,7 +353,14 @@ impl<'src> TupleLiteralType<'src> {
             // tuple's whole-expression edit subsumes the optional pass's edit
             _ => self
                 .transform_annotation(elt)
-                .or_else(|| optional_type::rewrite_type_expr(self.source, elt, self.min_version))
+                .or_else(|| {
+                    optional_type::rewrite_type_expr(
+                        self.source,
+                        self.written,
+                        elt,
+                        self.min_version,
+                    )
+                })
                 .unwrap_or_else(|| self.fallback_src(elt)),
         }
     }
@@ -428,7 +448,7 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
         }
         if inner.needs_unpack_import.get() {
             ctx.required_imports
-                .push("from typing import Unpack".to_owned());
+                .push(self.written.import_from("typing", &["Unpack"]));
         }
         // whatever the element lowerer spelled needs its own imports, and a
         // callable arrow among the elements needs its hoisted `Protocol` class.

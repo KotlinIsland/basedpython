@@ -29,6 +29,10 @@
 //! asks [`classinfo_optionals`] which of its optionals stand in the classinfo
 //! argument.
 //!
+//! Which expressions of the argument are read as classes is decided once, in
+//! `ty_python_semantic::types::classinfo_spelling`, which ty reads too: a union
+//! spelled there is one it does not report as a union `isinstance` rejects.
+//!
 //! Whether a `|` is a union at all is asked of the checker rather than guessed
 //! from the shape: `a | b` is overwhelmingly a bitwise or, and only the types of
 //! its operands tell the two apart.
@@ -36,26 +40,32 @@
 use std::collections::HashSet;
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, ExprCall, Operator, PythonVersion, Stmt, UnaryOp};
+use ruff_python_ast::{Expr, Operator, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
+use ty_python_semantic::types::classinfo_spelling;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 /// the version `type.__or__` arrived in
 const MIN_VERSION: PythonVersion = PythonVersion::PY310;
 
-pub(crate) struct RuntimeUnionPass {
+pub(crate) struct RuntimeUnionPass<'src> {
+    written: WrittenNames<'src>,
     min_version: PythonVersion,
 }
 
-impl RuntimeUnionPass {
-    pub(crate) fn new(min_version: PythonVersion) -> Self {
-        Self { min_version }
+impl<'src> RuntimeUnionPass<'src> {
+    pub(crate) fn new(written: WrittenNames<'src>, min_version: PythonVersion) -> Self {
+        Self {
+            written,
+            min_version,
+        }
     }
 }
 
-impl TypeAwarePass for RuntimeUnionPass {
+impl TypeAwarePass for RuntimeUnionPass<'_> {
     fn lowering(&self) -> Option<super::ast_driver::Lowering> {
         Some(super::ast_driver::Lowering::RuntimeUnion)
     }
@@ -70,13 +80,17 @@ impl TypeAwarePass for RuntimeUnionPass {
         if self.min_version >= MIN_VERSION {
             return;
         }
-        let mut lower = Lower::new(types);
+        let mut lower = Lower::new(
+            types,
+            self.written.imported("typing", "Union"),
+            self.written.builtin("type"),
+        );
         for stmt in stmts {
             lower.visit_stmt(stmt);
         }
         if lower.needs_import {
             ctx.required_imports
-                .push("from typing import Union".to_owned());
+                .push(self.written.import_from("typing", &["Union"]));
         }
         ctx.template_edits.extend(lower.edits);
     }
@@ -85,7 +99,8 @@ impl TypeAwarePass for RuntimeUnionPass {
 /// The optionals in `stmts` that stand where `isinstance` / `issubclass` expects
 /// classes, and so are spelled as a tuple of classes below 3.10.
 pub(crate) fn classinfo_optionals(stmts: &[Stmt], types: &dyn TypeInfo) -> HashSet<TextRange> {
-    let mut lower = Lower::new(types);
+    // only the ranges are read, never the spelling
+    let mut lower = Lower::new(types, String::new(), String::new());
     for stmt in stmts {
         lower.visit_stmt(stmt);
     }
@@ -94,6 +109,10 @@ pub(crate) fn classinfo_optionals(stmts: &[Stmt], types: &dyn TypeInfo) -> HashS
 
 struct Lower<'a> {
     types: &'a dyn TypeInfo,
+    /// the name `typing.Union` is written under
+    union: String,
+    /// the name the builtin `type` is written under
+    type_: String,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     needs_import: bool,
     /// every optional the classinfo walk reached, for the optional lowering
@@ -101,9 +120,11 @@ struct Lower<'a> {
 }
 
 impl<'a> Lower<'a> {
-    fn new(types: &'a dyn TypeInfo) -> Self {
+    fn new(types: &'a dyn TypeInfo, union: String, type_: String) -> Self {
         Self {
             types,
+            union,
+            type_,
             edits: Vec::new(),
             needs_import: false,
             classinfo_optionals: HashSet::new(),
@@ -122,7 +143,7 @@ impl<'ast> Visitor<'ast> for Lower<'_> {
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Expr::Call(call) = expr
-            && let Some(classinfo) = self.classinfo_argument(call)
+            && let Some(classinfo) = self.types.classinfo_argument(call)
         {
             for (index, argument) in call.arguments.args.iter().enumerate() {
                 if index == 1 {
@@ -140,7 +161,7 @@ impl<'ast> Visitor<'ast> for Lower<'_> {
 
         if let Some(arms) = self.union_arms(expr) {
             self.needs_import = true;
-            let fragments = spell(&arms, Form::Union);
+            let fragments = spell(&arms, Form::Union(&self.union));
             self.edits.push((expr.range(), fragments));
             for arm in arms {
                 self.visit_expr(arm);
@@ -154,30 +175,15 @@ impl<'ast> Visitor<'ast> for Lower<'_> {
 
 /// How a union is spelled, which is decided by where it stands.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Form {
-    /// a tuple of classes, for `isinstance` / `issubclass`
-    ClassInfo,
-    /// `Union[...]`, for everywhere else
-    Union,
+enum Form<'a> {
+    /// a tuple of classes, for `isinstance` / `issubclass`, the builtin `type` written
+    /// under the name given
+    ClassInfo(&'a str),
+    /// `Union[...]`, for everywhere else, `Union` written under the name given
+    Union(&'a str),
 }
 
 impl<'ast> Lower<'_> {
-    /// The second positional argument of a call to the real `isinstance` or
-    /// `issubclass`. A file that binds either name means something else by it,
-    /// and gets no special treatment.
-    fn classinfo_argument(&self, call: &'ast ExprCall) -> Option<&'ast Expr> {
-        let Expr::Name(name) = call.func.as_ref() else {
-            return None;
-        };
-        if !matches!(name.id.as_str(), "isinstance" | "issubclass") {
-            return None;
-        }
-        if !self.types.is_unbound_at(name.id.as_str(), &call.func) {
-            return None;
-        }
-        call.arguments.args.get(1)
-    }
-
     /// The arms of `expr`, when it is a union the runtime will evaluate.
     fn union_arms(&self, expr: &'ast Expr) -> Option<Vec<&'ast Expr>> {
         let Expr::BinOp(binop) = expr else {
@@ -186,42 +192,32 @@ impl<'ast> Lower<'_> {
         if binop.op != Operator::BitOr || !self.types.is_runtime_union(expr) {
             return None;
         }
-        let mut arms = Vec::new();
-        collect_arms(expr, &mut arms);
-        Some(arms)
+        Some(classinfo_spelling::union_arms(expr))
     }
 
-    /// Visit an expression standing where `isinstance` expects classes. A union
-    /// here becomes a tuple, and so does one nested inside a tuple or list the
-    /// argument already spells, or inside an optional; everything else is
-    /// ordinary value context.
-    fn visit_classinfo(&mut self, expr: &'ast Expr) {
-        if let Some(arms) = self.union_arms(expr) {
-            let fragments = spell(&arms, Form::ClassInfo);
-            self.edits.push((expr.range(), fragments));
-            for arm in arms {
-                self.visit_classinfo(arm);
-            }
-            return;
-        }
-        match expr {
-            Expr::Tuple(tuple) => {
-                for element in &tuple.elts {
-                    self.visit_classinfo(element);
+    /// Visit the argument `isinstance` reads as classes. Each union where it reads classes
+    /// becomes a tuple, and each optional there is spelled as one by the optional lowering;
+    /// everything else is ordinary value context.
+    fn visit_classinfo(&mut self, classinfo: &'ast Expr) {
+        let types = self.types;
+        let positions =
+            classinfo_spelling::class_positions(classinfo, &|expr| types.is_runtime_union(expr));
+        for position in positions {
+            match position {
+                Expr::Tuple(_) | Expr::List(_) => {}
+                Expr::UnaryOp(optional)
+                    if optional.op == UnaryOp::Optional && types.is_runtime_union(position) =>
+                {
+                    self.classinfo_optionals.insert(position.range());
                 }
+                _ => match self.union_arms(position) {
+                    Some(arms) => {
+                        let fragments = spell(&arms, Form::ClassInfo(&self.type_));
+                        self.edits.push((position.range(), fragments));
+                    }
+                    None => self.visit_expr(position),
+                },
             }
-            Expr::List(list) => {
-                for element in &list.elts {
-                    self.visit_classinfo(element);
-                }
-            }
-            Expr::UnaryOp(optional)
-                if optional.op == UnaryOp::Optional && self.types.is_runtime_union(expr) =>
-            {
-                self.classinfo_optionals.insert(expr.range());
-                self.visit_classinfo(&optional.operand);
-            }
-            _ => self.visit_expr(expr),
         }
     }
 }
@@ -230,19 +226,18 @@ impl<'ast> Lower<'_> {
 /// that a lowering inside it — an optional `T?`, a tuple type — still composes.
 fn spell(arms: &[&Expr], form: Form) -> Vec<Fragment> {
     let mut fragments = Vec::with_capacity(arms.len() * 2 + 2);
-    fragments.push(Fragment::Lit(
-        match form {
-            Form::ClassInfo => "(",
-            Form::Union => "Union[",
-        }
-        .to_owned(),
-    ));
+    fragments.push(Fragment::Lit(match form {
+        Form::ClassInfo(_) => "(".to_owned(),
+        Form::Union(union) => format!("{union}["),
+    }));
     for (index, arm) in arms.iter().enumerate() {
         if index > 0 {
             fragments.push(Fragment::Lit(", ".to_owned()));
         }
-        if form == Form::ClassInfo && arm.is_none_literal_expr() {
-            fragments.push(Fragment::Lit("type(None)".to_owned()));
+        if let Form::ClassInfo(type_) = form
+            && arm.is_none_literal_expr()
+        {
+            fragments.push(Fragment::Lit(format!("{type_}(None)")));
         } else {
             fragments.push(Fragment::Src(arm.range()));
         }
@@ -251,24 +246,12 @@ fn spell(arms: &[&Expr], form: Form) -> Vec<Fragment> {
     // than a parenthesized class
     fragments.push(Fragment::Lit(
         match form {
-            Form::ClassInfo => ",)",
-            Form::Union => "]",
+            Form::ClassInfo(_) => ",)",
+            Form::Union(_) => "]",
         }
         .to_owned(),
     ));
     fragments
-}
-
-/// Flatten `a | b | c`, which parses as `(a | b) | c`, into its arms.
-fn collect_arms<'ast>(expr: &'ast Expr, arms: &mut Vec<&'ast Expr>) {
-    if let Expr::BinOp(binop) = expr
-        && binop.op == Operator::BitOr
-    {
-        collect_arms(&binop.left, arms);
-        collect_arms(&binop.right, arms);
-        return;
-    }
-    arms.push(expr);
 }
 
 #[cfg(test)]
@@ -421,6 +404,18 @@ mod tests {
             out.contains("isinstance(x, Union[int, str])"),
             "got:\n{out}"
         );
+    }
+
+    /// the builtin reached by another name is the builtin all the same
+    #[test]
+    fn an_isinstance_by_another_name_takes_a_tuple() {
+        let out = lowered(indoc! {"
+            from builtins import isinstance as is_instance
+
+            def f(x: object):
+                return is_instance(x, int | str)
+        "});
+        assert!(out.contains("is_instance(x, (int, str,))"), "got:\n{out}");
     }
 
     /// a target that has `type.__or__` keeps every union as written

@@ -976,11 +976,17 @@ pub struct SourceSpelling {
     pub text: String,
     /// modules the spelling needs, each as an `import <module>` target
     pub modules: Vec<String>,
+    /// the names of the classes [`Self::text`] writes bare, each read nowhere in it but as
+    /// that class
+    pub bare_classes: Vec<String>,
 }
 
 /// Collects every class a type names, so each can be spelled for a particular file.
 struct ClassCollector<'a, 'db> {
     env: &'a ProgramEnvironment<'db>,
+    /// whether the display writes a symbolic operation as the type it reduces to, whose
+    /// classes are then the ones written
+    reduce_symbolic_operations: bool,
     visited_types: RefCell<FxHashSet<Type<'db>>>,
     classes: RefCell<Vec<ClassLiteral<'db>>>,
 }
@@ -1013,6 +1019,11 @@ impl<'db> TypeVisitor<'db> for ClassCollector<'_, 'db> {
                 return self.visit_type(db, Type::from(class));
             }
             Type::TypeVar(_) => return,
+            Type::Deferred(deferred)
+                if self.reduce_symbolic_operations || !deferred.is_checked(db) =>
+            {
+                return self.visit_type(db, deferred.reduced(db, self.env));
+            }
             _ => {}
         }
 
@@ -1045,6 +1056,7 @@ impl<'db> Type<'db> {
     ) -> Option<SourceSpelling> {
         let collector = ClassCollector {
             env,
+            reduce_symbolic_operations: settings.reduce_symbolic_operations,
             visited_types: RefCell::default(),
             classes: RefCell::default(),
         };
@@ -1080,6 +1092,41 @@ impl<'db> Type<'db> {
             }
         }
 
+        let mut bare: Vec<&str> = classes
+            .iter()
+            .map(|class| class.name(db).as_str())
+            .filter(|name| !qualified.contains_key(name))
+            .collect();
+        bare.sort_unstable();
+        bare.dedup();
+
+        // the display writes other things bare too — a type variable, a `typing` special
+        // form — and one of them may share a class's name: a module's own `class Literal`
+        // beside the `Literal[1]` of a literal type. the text is written again with every
+        // bare class qualified, and a name that text still reads bare is not the class
+        // alone, so no spelling reads as this type
+        if !bare.is_empty() {
+            let mut every_class_qualified = qualified.clone();
+            for name in &bare {
+                every_class_qualified.insert(name, QualificationLevel::ModuleName);
+            }
+            let text = self
+                .display_with(
+                    db,
+                    env,
+                    DisplaySettings {
+                        qualified: Rc::new(every_class_qualified),
+                        ..settings.clone()
+                    },
+                )
+                .to_string();
+            let read = names_read_in(&text);
+            if bare.iter().any(|name| read.contains(*name)) {
+                return None;
+            }
+        }
+        let bare_classes = bare.into_iter().map(str::to_owned).collect();
+
         let settings = DisplaySettings {
             qualified: Rc::new(qualified),
             ..settings
@@ -1087,8 +1134,28 @@ impl<'db> Type<'db> {
         Some(SourceSpelling {
             text: self.display_with(db, env, settings).to_string(),
             modules: modules.into_iter().collect(),
+            bare_classes,
         })
     }
+}
+
+/// the names `text`, a type expression, reads at its roots — `decimal` in `decimal.Decimal`,
+/// `Literal` in `Literal[1]`. empty when it is no expression
+fn names_read_in(text: &str) -> FxHashSet<String> {
+    struct Roots(FxHashSet<String>);
+    impl<'ast> ast::visitor::Visitor<'ast> for Roots {
+        fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+            if let ast::Expr::Name(name) = expr {
+                self.0.insert(name.id.to_string());
+            }
+            ast::visitor::walk_expr(self, expr);
+        }
+    }
+    let mut roots = Roots(FxHashSet::default());
+    if let Ok(parsed) = ruff_python_parser::parse_expression(text) {
+        ast::visitor::Visitor::visit_expr(&mut roots, parsed.expr());
+    }
+    roots.0
 }
 
 /// Whether `name` reaches `class` from `file`'s module scope — a class the file defines or
@@ -3140,6 +3207,10 @@ impl<'db> DisplaySpecialization<'_, 'db> {
             .variables(db)
             .collect::<Vec<_>>();
         let types = self.specialization.types(db);
+        let keyword_packs = variables
+            .iter()
+            .filter(|typevar| typevar.is_keyword_variadic(db))
+            .count();
         let mut wrote_any = false;
         for (typevar, ty) in variables.iter().zip(types) {
             if typevar.is_typevartuple(db) {
@@ -3187,8 +3258,11 @@ impl<'db> DisplaySpecialization<'_, 'db> {
             }
 
             // basedpython: a keyword-variadic pack reads back the way it is written —
-            // `A[foo=int, bar=str]` — rather than as the parameter list that stores it
+            // `A[foo=int, bar=str]` — rather than as the parameter list that stores it. a class
+            // with two packs has no such spelling, since every keyword names a field of the
+            // first, so each reads back as its parameter list instead, which keeps them apart
             if typevar.is_keyword_variadic(self.db)
+                && keyword_packs == 1
                 && let Some(fields) = ty.keyword_pack_fields(self.db)
             {
                 if fields.is_empty() {

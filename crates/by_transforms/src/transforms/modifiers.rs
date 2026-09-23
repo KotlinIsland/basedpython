@@ -17,6 +17,7 @@
 //! `class def`             → `@classmethod`
 //! `data class`            → `@dataclass(slots=True)` (from `dataclasses`)
 //! `frozen data class`     → `@dataclass(frozen=True, slots=True)`
+//!                           below 3.10 `slots=True` is the runtime's `@_by_dataclass_slots` instead
 //! `let x = 5`             → `x: Final = 5` (from `typing`)
 //! `class a = 1`           → `a: ClassVar = 1` (from `typing`)
 //! `newtype Foo = int`     → `Foo = NewType("Foo", int)` (from `typing`)
@@ -38,6 +39,8 @@ use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::repeated_underscore::WrittenNames;
+use crate::{Config, PythonVersion};
 
 /// basedpython: the visibility a modifier keyword records, read off the
 /// synthetic decorator the parser leaves in its place
@@ -92,6 +95,7 @@ fn base_head_name(base: &Expr) -> Option<&str> {
 #[expect(clippy::struct_excessive_bools)]
 pub(crate) struct Modifiers<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     edits: Vec<Fix>,
     /// Needs `from typing import final` (decorator for classes/methods)
     needs_final: bool,
@@ -105,6 +109,10 @@ pub(crate) struct Modifiers<'src> {
     needs_protocol: bool,
     needs_classvar: bool,
     needs_newtype: bool,
+    /// whether a `data class` is given its slots by the runtime helper, on a python whose
+    /// `dataclass` has no `slots` option
+    slots_by_helper: bool,
+    needs_dataclass_slots: bool,
     /// Names marked `export`/`public` at module level. Used to generate `__all__`.
     exports: Vec<String>,
     /// Module-level names renamed by `private` (original → `_original`).
@@ -131,9 +139,10 @@ pub(crate) struct Modifiers<'src> {
 }
 
 impl<'src> Modifiers<'src> {
-    fn new(source: &'src str) -> Self {
+    fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
         Self {
             source,
+            written,
             edits: Vec::new(),
             needs_final: false,
             needs_final_annotation: false,
@@ -144,6 +153,8 @@ impl<'src> Modifiers<'src> {
             needs_protocol: false,
             needs_classvar: false,
             needs_newtype: false,
+            slots_by_helper: false,
+            needs_dataclass_slots: false,
             exports: Vec::new(),
             private_renames: Vec::new(),
             sealed_classes: Vec::new(),
@@ -225,7 +236,10 @@ impl<'src> Modifiers<'src> {
             // two insertions rather than a replacement, so the lowerings written
             // inside the default still apply to it where it now sits
             self.edits.push(Fix::safe_edit(Edit::insertion(
-                "field(default_factory=lambda: ".to_owned(),
+                format!(
+                    "{}(default_factory=lambda: ",
+                    self.written.imported("dataclasses", "field")
+                ),
                 default.range().start(),
             )));
             self.edits.push(Fix::safe_edit(Edit::insertion(
@@ -272,22 +286,27 @@ impl<'src> Modifiers<'src> {
                 "final" => {
                     self.needs_final = true;
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("@final\n{indent}"),
+                        format!("@{}\n{indent}", self.written.imported("typing", "final")),
                         dec.range(),
                     )));
                 }
-                "data_class" => {
+                "data_class" | "frozen_data_class" => {
                     self.needs_dataclass = true;
+                    let dataclass = self.written.imported("dataclasses", "dataclass");
+                    let frozen = name == "frozen_data_class";
+                    let decorators = if self.slots_by_helper {
+                        self.needs_dataclass_slots = true;
+                        let options = if frozen { "(frozen=True)" } else { "" };
+                        format!(
+                            "@{}\n{indent}@{dataclass}{options}\n{indent}",
+                            crate::runtime::DATACLASS_SLOTS.name()
+                        )
+                    } else {
+                        let frozen = if frozen { "frozen=True, " } else { "" };
+                        format!("@{dataclass}({frozen}slots=True)\n{indent}")
+                    };
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("@dataclass(slots=True)\n{indent}"),
-                        dec.range(),
-                    )));
-                    self.wrap_mutable_field_defaults(class);
-                }
-                "frozen_data_class" => {
-                    self.needs_dataclass = true;
-                    self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("@dataclass(frozen=True, slots=True)\n{indent}"),
+                        decorators,
                         dec.range(),
                     )));
                     self.wrap_mutable_field_defaults(class);
@@ -344,21 +363,24 @@ impl<'src> Modifiers<'src> {
                 "abstract" => {
                     self.needs_abstractmethod = true;
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("@abstractmethod\n{indent}"),
+                        format!(
+                            "@{}\n{indent}",
+                            self.written.imported("abc", "abstractmethod")
+                        ),
                         dec.range(),
                     )));
                 }
                 "final" => {
                     self.needs_final = true;
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("@final\n{indent}"),
+                        format!("@{}\n{indent}", self.written.imported("typing", "final")),
                         dec.range(),
                     )));
                 }
                 "override" => {
                     self.needs_override = true;
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("@override\n{indent}"),
+                        format!("@{}\n{indent}", self.written.imported("typing", "override")),
                         dec.range(),
                     )));
                 }
@@ -369,13 +391,13 @@ impl<'src> Modifiers<'src> {
                 }
                 "static" => {
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("@staticmethod\n{indent}"),
+                        format!("@{}\n{indent}", self.written.builtin("staticmethod")),
                         dec.range(),
                     )));
                 }
                 "classmethod" => {
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("@classmethod\n{indent}"),
+                        format!("@{}\n{indent}", self.written.builtin("classmethod")),
                         dec.range(),
                     )));
                 }
@@ -412,7 +434,7 @@ impl<'src> Modifiers<'src> {
     fn rename_with_underscore(&mut self, range: TextRange) {
         let original = self.src(range).to_owned();
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            module_private_name(&original),
+            self.written.module_private(&original),
             range,
         )));
     }
@@ -490,7 +512,7 @@ impl<'src> Modifiers<'src> {
             // `private def` is, and for the same reason. its references are
             // renamed by `visibility_rename`, which asks ty where each one resolves
             self.private_renames.push(written.clone());
-            module_private_name(&written)
+            self.written.module_private(&written)
         } else {
             written
         };
@@ -527,7 +549,7 @@ impl<'src> Modifiers<'src> {
                 let pre_range = TextRange::new(stmt_start, slice.range().start());
                 self.needs_classvar = true;
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    format!("{name}: ClassVar["),
+                    format!("{name}: {}[", self.written.imported("typing", "ClassVar")),
                     pre_range,
                 )));
                 self.edits.push(Fix::safe_edit(Edit::insertion(
@@ -543,7 +565,7 @@ impl<'src> Modifiers<'src> {
                 let pre_range = TextRange::new(stmt_start, slice.range().start());
                 self.needs_final_annotation = true;
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    format!("{name}: Final["),
+                    format!("{name}: {}[", self.written.imported("typing", "Final")),
                     pre_range,
                 )));
                 self.edits.push(Fix::safe_edit(Edit::insertion(
@@ -556,7 +578,7 @@ impl<'src> Modifiers<'src> {
                 // read-only declaration
                 self.needs_final_annotation = true;
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    format!("{name}: Final"),
+                    format!("{name}: {}", self.written.imported("typing", "Final")),
                     TextRange::new(stmt_start, node.range().end()),
                 )));
             }
@@ -572,7 +594,7 @@ impl<'src> Modifiers<'src> {
                     id if is_let_marker_id(id) => {
                         self.needs_final_annotation = true;
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                            format!("{name}: Final = "),
+                            format!("{name}: {} = ", self.written.imported("typing", "Final")),
                             prefix_range,
                         )));
                     }
@@ -595,7 +617,7 @@ impl<'src> Modifiers<'src> {
                     id if is_classvar_marker_id(id) => {
                         self.needs_classvar = true;
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                            format!("{name}: ClassVar = "),
+                            format!("{name}: {} = ", self.written.imported("typing", "ClassVar")),
                             prefix_range,
                         )));
                     }
@@ -603,7 +625,10 @@ impl<'src> Modifiers<'src> {
                         let value_src = self.src(value_range).to_owned();
                         self.needs_newtype = true;
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                            format!("{name} = NewType(\"{name}\", {value_src})"),
+                            format!(
+                                "{name} = {}(\"{name}\", {value_src})",
+                                self.written.imported("typing", "NewType")
+                            ),
                             TextRange::new(stmt_start, value_range.end()),
                         )));
                     }
@@ -619,7 +644,7 @@ impl<'src> Modifiers<'src> {
                     TextRange::new(slice.range().end(), self.value_range(node, value).start());
                 self.needs_classvar = true;
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    format!("{name}: ClassVar["),
+                    format!("{name}: {}[", self.written.imported("typing", "ClassVar")),
                     pre_range,
                 )));
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -655,7 +680,7 @@ impl<'src> Modifiers<'src> {
                 } else {
                     self.needs_final_annotation = true;
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("{name}: Final["),
+                        format!("{name}: {}[", self.written.imported("typing", "Final")),
                         pre_range,
                     )));
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -692,7 +717,8 @@ impl<'src> Modifiers<'src> {
     }
 
     fn insert_protocol_base(&mut self, class: &StmtClassDef) {
-        self.insert_base_class(class, "Protocol");
+        let protocol = self.written.imported("typing", "Protocol");
+        self.insert_base_class(class, &protocol);
     }
 }
 
@@ -749,12 +775,20 @@ pub(crate) fn module_private_name(name: &str) -> String {
 
 pub(crate) struct ModifiersPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     is_stub: bool,
+    /// whether the python the module targets has `dataclass(slots=True)`
+    dataclass_slots: bool,
 }
 
 impl<'src> ModifiersPass<'src> {
-    pub(crate) fn new(source: &'src str, is_stub: bool) -> Self {
-        Self { source, is_stub }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: &Config) -> Self {
+        Self {
+            source,
+            written,
+            is_stub: config.is_stub,
+            dataclass_slots: config.min_version >= PythonVersion::PY310,
+        }
     }
 }
 
@@ -770,7 +804,9 @@ impl AstPass for ModifiersPass<'_> {
     }
 
     fn run(&self, module: &mut ruff_python_ast::ModModule, ctx: &mut PassContext) {
-        let mut inner = Modifiers::new(self.source);
+        let mut inner = Modifiers::new(self.source, self.written);
+        // a stub is never run, so it keeps the option a checker reads
+        inner.slots_by_helper = !self.dataclass_slots && !self.is_stub;
         for stmt in &module.body {
             inner.visit_stmt(stmt);
         }
@@ -785,42 +821,24 @@ impl AstPass for ModifiersPass<'_> {
         };
         let class_bases = std::mem::take(&mut inner.class_bases);
 
-        // typing import grouping mirrors lib.rs's preamble logic
-        let mut typing_imports: Vec<&'static str> = Vec::new();
-        if inner.needs_final {
-            typing_imports.push("final");
+        if inner.needs_dataclass_slots {
+            ctx.runtime.insert(crate::runtime::DATACLASS_SLOTS);
         }
-        if inner.needs_final_annotation {
-            typing_imports.push("Final");
-        }
-        if inner.needs_classvar {
-            typing_imports.push("ClassVar");
-        }
-        if inner.needs_newtype {
-            typing_imports.push("NewType");
-        }
-        if inner.needs_override {
-            typing_imports.push("override");
-        }
-        for name in typing_imports {
-            ctx.required_imports
-                .push(format!("from typing import {name}"));
-        }
-        if inner.needs_abstractmethod {
-            ctx.required_imports
-                .push("from abc import abstractmethod".to_owned());
-        }
-        if inner.needs_dataclass {
-            ctx.required_imports
-                .push("from dataclasses import dataclass".to_owned());
-        }
-        if inner.needs_dataclass_field {
-            ctx.required_imports
-                .push("from dataclasses import field".to_owned());
-        }
-        if inner.needs_protocol {
-            ctx.required_imports
-                .push("from typing import Protocol".to_owned());
+        for (needed, module, name) in [
+            (inner.needs_final, "typing", "final"),
+            (inner.needs_final_annotation, "typing", "Final"),
+            (inner.needs_classvar, "typing", "ClassVar"),
+            (inner.needs_newtype, "typing", "NewType"),
+            (inner.needs_override, "typing", "override"),
+            (inner.needs_abstractmethod, "abc", "abstractmethod"),
+            (inner.needs_dataclass, "dataclasses", "dataclass"),
+            (inner.needs_dataclass_field, "dataclasses", "field"),
+            (inner.needs_protocol, "typing", "Protocol"),
+        ] {
+            if needed {
+                ctx.required_imports
+                    .push(self.written.import_from(module, &[name]));
+            }
         }
 
         for fix in inner.edits {
@@ -1020,6 +1038,26 @@ mod tests {
         );
     }
 
+    /// the class body binds `staticmethod` itself, so the decorator reads the builtin under
+    /// a name of its own
+    #[test]
+    fn static_def_in_a_class_that_binds_staticmethod() {
+        check(
+            indoc! {"
+                class A:
+                    staticmethod = 3
+                    static def helper(): ...
+            "},
+            indoc! {"
+                from builtins import staticmethod as staticmethod2
+                class A:
+                    staticmethod: int = 3
+                    @staticmethod2
+                    def helper(): ...
+            "},
+        );
+    }
+
     #[test]
     fn class_def() {
         check(
@@ -1107,6 +1145,35 @@ mod tests {
                 @dataclass(frozen=True, slots=True)
                 class Point: ...
             "},
+        );
+    }
+
+    /// `dataclass` has no `slots` option below 3.10, so the runtime's helper does what it
+    /// would, to the class `dataclass` returns
+    #[test]
+    fn data_class_below_python_310() {
+        let out = transpile(
+            indoc! {"
+                data class Point:
+                    x: int
+
+                final frozen data class Frozen:
+                    x: int
+            "},
+            &Config {
+                min_version: PythonVersion::PY39,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("@_by_dataclass_slots\n@dataclass\nclass Point:")
+                && out.contains(
+                    "@final\n@_by_dataclass_slots\n@dataclass(frozen=True)\nclass Frozen:"
+                )
+                && out.contains("def _by_dataclass_slots(cls):")
+                && !out.contains("slots=True"),
+            "got:\n{out}"
         );
     }
 
@@ -1715,6 +1782,52 @@ mod tests {
                 def f(x: _Alias) -> _Alias:
                     return x
             "},
+        );
+    }
+
+    #[test]
+    fn private_type_alias_already_underscored_polyfilled() {
+        check(
+            indoc! {"
+                private type _Alias = int
+
+                def f(x: _Alias) -> _Alias:
+                    return x
+            "},
+            indoc! {"
+                from typing_extensions import TypeAliasType
+                _Alias = TypeAliasType(\"_Alias\", int)
+
+                def f(x: _Alias) -> _Alias:
+                    return x
+            "},
+        );
+    }
+
+    /// `_force_unwrap` is the runtime helper `x!` calls, and `_count` the module's own
+    #[test]
+    fn a_private_symbol_is_emitted_under_a_name_the_module_does_not_have() {
+        let out = transpile(
+            indoc! {"
+                _count = 0
+
+                private def force_unwrap(x: int) -> int:
+                    return x
+
+                private def count() -> int:
+                    return force_unwrap(_count)
+
+                def first(x: int | None) -> int:
+                    return x!
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("def _force_unwrap2(x: int) -> int:")
+                && out.contains("def _count2() -> int:\n    return _force_unwrap2(_count)")
+                && out.contains("return _force_unwrap(x)"),
+            "got:\n{out}"
         );
     }
 

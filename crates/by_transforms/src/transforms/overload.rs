@@ -25,15 +25,21 @@ use ruff_python_ast::{Expr, ModModule, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::repeated_underscore::WrittenNames;
 
 pub(crate) struct Overload<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     is_stub: bool,
 }
 
 impl<'src> Overload<'src> {
-    pub(crate) fn new(source: &'src str, is_stub: bool) -> Self {
-        Self { source, is_stub }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, is_stub: bool) -> Self {
+        Self {
+            source,
+            written,
+            is_stub,
+        }
     }
 }
 
@@ -41,54 +47,31 @@ impl AstPass for Overload<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut state = State {
             source: self.source,
+            overload: self.written.imported("typing", "overload"),
+            not_implemented: self.written.builtin("NotImplementedError"),
             is_stub: self.is_stub,
             edits: RefCell::new(Vec::new()),
-            first_emitted: None,
+            writes_overload: false,
         };
         state.visit_body(&module.body);
-        if let Some(first_emitted) = state.first_emitted
-            && !imports_overload_before(&module.body, first_emitted)
-        {
+        if state.writes_overload {
             ctx.required_imports
-                .push("from typing import overload".to_owned());
+                .push(self.written.import_from("typing", &["overload"]));
         }
         ctx.text_edits.extend(state.edits.into_inner());
     }
 }
 
-/// whether the module already binds `overload` at `pos`, through a top-level
-/// `from typing import overload` of its own.
-///
-/// the name is read where a decorator runs, which is when the `def` below it is
-/// evaluated — so an import after that `def` binds the name too late and the output
-/// still needs its own. an alias binds some other name, and an import nested in a
-/// function or under `if TYPE_CHECKING:` is not in scope at module level at all,
-/// so neither is one of these
-fn imports_overload_before(body: &[Stmt], pos: TextSize) -> bool {
-    body.iter().any(|stmt| {
-        let Stmt::ImportFrom(import) = stmt else {
-            return false;
-        };
-        import.level == 0
-            && import
-                .module
-                .as_ref()
-                .is_some_and(|m| m.as_str() == "typing")
-            && import.range().end() <= pos
-            && import
-                .names
-                .iter()
-                .any(|alias| alias.name.as_str() == "overload" && alias.asname.is_none())
-    })
-}
-
 struct State<'src> {
     source: &'src str,
+    /// the name `typing.overload` is written under
+    overload: String,
+    /// the name the builtin `NotImplementedError` is written under
+    not_implemented: String,
     is_stub: bool,
     edits: RefCell<Vec<(TextRange, String)>>,
-    /// where the earliest `@overload` this pass writes goes, which is the position the
-    /// name has to be bound by. `None` when it writes none and needs no import
-    first_emitted: Option<TextSize>,
+    /// whether this pass writes an `@overload`, which needs the import
+    writes_overload: bool,
 }
 
 impl State<'_> {
@@ -132,11 +115,11 @@ impl State<'_> {
         // the stub idiom and round-trips with the reverse pass. only a runtime
         // `.by` file needs the `raise NotImplementedError` body
         let body = if self.is_abstract(func) && !self.is_stub {
-            ": raise NotImplementedError"
+            format!(": raise {}", self.not_implemented)
         } else {
-            ": ..."
+            ": ...".to_owned()
         };
-        self.push(TextRange::new(end, end), body.to_owned());
+        self.push(TextRange::new(end, end), body);
     }
 
     fn is_stub_shaped(func: &StmtFunctionDef) -> bool {
@@ -165,12 +148,10 @@ impl State<'_> {
     fn add_overload_stub(&mut self, func: &StmtFunctionDef) {
         if !Self::wears_overload(func) {
             let start = func.range().start();
-            self.first_emitted = Some(match self.first_emitted {
-                Some(first) => first.min(start),
-                None => start,
-            });
+            self.writes_overload = true;
             let indent = self.line_indent(start).to_owned();
-            self.push(TextRange::new(start, start), format!("@overload\n{indent}"));
+            let decorator = format!("@{}\n{indent}", self.overload);
+            self.push(TextRange::new(start, start), decorator);
         }
         if func.body.is_empty() {
             let end = func.range().end();

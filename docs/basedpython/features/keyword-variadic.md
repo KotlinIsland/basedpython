@@ -77,6 +77,23 @@ this is why a pack's context can't also use the
 [keyword-subscript](kw-subscript.md) form for binding typevars by name: with a pack in scope,
 `A[foo=int]` always names a field
 
+## defaults
+
+a pack's default names an earlier pack of the same list, whose fields it takes when nothing
+specializes it, as a `ParamSpec`'s default names an earlier `ParamSpec`:
+
+```by
+class A[**P, **Q = P]:
+    def second(self) -> (**Q) -> None: ...
+
+def f(a: A[foo=int]):
+    reveal_type(a.second())  # (*, foo: int) -> None
+```
+
+a list of types, `...` or `()` is an error there: none of them names fields. every keyword names a
+field of the first pack, so a class with two packs has no keyword spelling for its specialization,
+and each pack reads back as the parameter list it unpacks to — `A[(*, foo: int), (*, foo: int)]`
+
 ## scope
 
 the keyword-pack reading is confined to `.by`. `.byi` is the interop surface with python's typing
@@ -147,7 +164,8 @@ before specialization the pack shows as a pending splice — `{"tag": int, **Kwa
     pack a variance there is what surfaces the adoption bug above, so the two have to be fixed
     together. spelling the pack in an [arrow](callable.md) as well restores invariance
 - a pack cannot yet be *forwarded* as a type argument (`A[**Kwargs]` inside another signature)
-- a pack cannot have a default (`class D[**Kwargs = ()]`)
+- a pack's default cannot spell fields of its own (`class D[**Kwargs = ()]`), only name another
+    pack
 - a generic context containing a pack skips literal promotion for its other type variables, so
     `class Two[T, **Kwargs]` infers `T` as `Literal[...]`. this is pre-existing ty behaviour, shared
     with `ParamSpec`

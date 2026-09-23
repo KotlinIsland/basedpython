@@ -19,19 +19,24 @@ use ruff_python_ast::{
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{AstPass, PassContext, render_expr};
+use super::repeated_underscore::WrittenNames;
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 
-pub(crate) struct TopStar;
+pub(crate) struct TopStar<'src> {
+    written: WrittenNames<'src>,
+}
 
-impl TopStar {
-    pub(crate) fn new() -> Self {
-        Self
+impl<'src> TopStar<'src> {
+    pub(crate) fn new(written: WrittenNames<'src>) -> Self {
+        Self { written }
     }
 }
 
-impl AstPass for TopStar {
+impl AstPass for TopStar<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut state = State {
+            top: self.written.imported("ty_extensions", "Top"),
+            any: self.written.imported("typing", "Any"),
             edits: Vec::new(),
             needs_top: false,
             needs_any: false,
@@ -41,16 +46,19 @@ impl AstPass for TopStar {
         ctx.text_edits.extend(state.edits);
         if state.needs_top {
             ctx.required_imports
-                .push("from ty_extensions import Top".to_owned());
+                .push(self.written.import_from("ty_extensions", &["Top"]));
         }
         if state.needs_any {
             ctx.required_imports
-                .push("from typing import Any".to_owned());
+                .push(self.written.import_from("typing", &["Any"]));
         }
     }
 }
 
 struct State {
+    /// the names `ty_extensions.Top` and `typing.Any` are written under
+    top: String,
+    any: String,
     edits: Vec<(TextRange, String)>,
     needs_top: bool,
     needs_any: bool,
@@ -64,7 +72,7 @@ impl TypeExprVisitor for State {
             self.needs_top = true;
             self.needs_any = true;
             let mut new_slice = (*s.slice).clone();
-            replace_markers_with_any(&mut new_slice);
+            replace_markers_with_any(&mut new_slice, &self.any);
             let inner = Expr::Subscript(ExprSubscript {
                 node_index: AtomicNodeIndex::NONE,
                 range: TextRange::default(),
@@ -80,7 +88,7 @@ impl TypeExprVisitor for State {
                 value: Box::new(Expr::Name(ExprName {
                     node_index: AtomicNodeIndex::NONE,
                     range: TextRange::default(),
-                    id: Name::from("Top"),
+                    id: Name::from(self.top.as_str()),
                     ctx: ExprContext::Load,
                 })),
                 slice: Box::new(inner),
@@ -99,11 +107,11 @@ impl TypeExprVisitor for State {
     }
 }
 
-fn any_expr() -> Expr {
+fn any_expr(any: &str) -> Expr {
     Expr::Name(ExprName {
         node_index: AtomicNodeIndex::NONE,
         range: TextRange::default(),
-        id: Name::from("Any"),
+        id: Name::from(any),
         ctx: ExprContext::Load,
     })
 }
@@ -111,26 +119,26 @@ fn any_expr() -> Expr {
 /// Replace every top-star marker reachable from `expr` with an `Any` name,
 /// stopping at nested `Subscript` boundaries so markers bind to their
 /// enclosing subscript only
-fn replace_markers_with_any(expr: &mut Expr) {
+fn replace_markers_with_any(expr: &mut Expr, any: &str) {
     if is_top_star_marker(expr) {
-        *expr = any_expr();
+        *expr = any_expr(any);
         return;
     }
     match expr {
         Expr::Subscript(_) => {}
         Expr::BinOp(b) => {
-            replace_markers_with_any(&mut b.left);
-            replace_markers_with_any(&mut b.right);
+            replace_markers_with_any(&mut b.left, any);
+            replace_markers_with_any(&mut b.right, any);
         }
         Expr::Tuple(t) => {
             for elt in &mut t.elts {
-                replace_markers_with_any(elt);
+                replace_markers_with_any(elt, any);
             }
         }
-        Expr::UnaryOp(u) => replace_markers_with_any(&mut u.operand),
+        Expr::UnaryOp(u) => replace_markers_with_any(&mut u.operand, any),
         Expr::BoolOp(b) => {
             for v in &mut b.values {
-                replace_markers_with_any(v);
+                replace_markers_with_any(v, any);
             }
         }
         _ => {}

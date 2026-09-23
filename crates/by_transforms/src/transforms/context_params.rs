@@ -49,15 +49,17 @@ use ruff_python_ast::{self as ast, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 pub(crate) struct ContextParamsPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
 }
 
 impl<'src> ContextParamsPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
+        Self { source, written }
     }
 }
 
@@ -69,6 +71,7 @@ impl TypeAwarePass for ContextParamsPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut lowerer = ContextLowerer {
             source: self.source,
+            written: self.written,
             types,
             edits: Vec::new(),
             errors: Vec::new(),
@@ -83,6 +86,7 @@ impl TypeAwarePass for ContextParamsPass<'_> {
 
 struct ContextLowerer<'src, 'ti> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'ti dyn TypeInfo,
     edits: Vec<(TextRange, String)>,
     errors: Vec<String>,
@@ -126,7 +130,7 @@ impl ContextLowerer<'_, '_> {
         };
         let arguments = implicit
             .iter()
-            .map(|(parameter, variable)| format!("{parameter}={variable}"))
+            .map(|argument| argument.keyword(self.written))
             .collect::<Vec<_>>()
             .join(", ");
         let parens = call.arguments.range();

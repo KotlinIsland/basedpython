@@ -24,18 +24,25 @@ use ruff_python_ast::{Expr, ModModule, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::repeated_underscore::WrittenNames;
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 use crate::config::Config;
 use crate::type_info::TypeInfo;
 
-pub(crate) struct UnpackSyntax {
+pub(crate) struct UnpackSyntax<'src> {
+    written: WrittenNames<'src>,
     config: Config,
     type_subscripts: TypeSubscripts,
 }
 
-impl UnpackSyntax {
-    pub(crate) fn new(config: Config, type_subscripts: TypeSubscripts) -> Self {
+impl<'src> UnpackSyntax<'src> {
+    pub(crate) fn new(
+        written: WrittenNames<'src>,
+        config: Config,
+        type_subscripts: TypeSubscripts,
+    ) -> Self {
         Self {
+            written,
             config,
             type_subscripts,
         }
@@ -63,7 +70,7 @@ impl TypeExprVisitor for TypeSubscripts {
     }
 }
 
-impl AstPass for UnpackSyntax {
+impl AstPass for UnpackSyntax<'_> {
     fn lowering(&self) -> Option<super::ast_driver::Lowering> {
         Some(super::ast_driver::Lowering::Unpack)
     }
@@ -85,6 +92,7 @@ impl AstPass for UnpackSyntax {
             return;
         }
         let mut state = State {
+            unpack: format!("{}[", self.written.imported("typing", "Unpack")),
             edits: RefCell::new(Vec::new()),
             needs_import: false,
             lowered_varargs: pack.lowered_varargs,
@@ -95,7 +103,7 @@ impl AstPass for UnpackSyntax {
         }
         if state.needs_import {
             ctx.required_imports
-                .push("from typing import Unpack".to_owned());
+                .push(self.written.import_from("typing", &["Unpack"]));
         }
         ctx.text_edits.extend(state.edits.into_inner());
     }
@@ -178,6 +186,8 @@ fn star_token_range(unpack: TextRange) -> TextRange {
 }
 
 struct State<'a> {
+    /// `Unpack[`, with `typing.Unpack` written under the name the lowering imports it by
+    unpack: String,
     edits: RefCell<Vec<(TextRange, String)>>,
     needs_import: bool,
     lowered_varargs: Vec<TextRange>,
@@ -201,7 +211,7 @@ impl State<'_> {
         let star_range = star_token_range(starred.range());
         self.edits
             .borrow_mut()
-            .push((star_range, "Unpack[".to_owned()));
+            .push((star_range, self.unpack.clone()));
         let end = starred.range().end();
         self.edits
             .borrow_mut()
@@ -220,7 +230,7 @@ impl State<'_> {
         let star_range = star_token_range(ann.range());
         self.edits
             .borrow_mut()
-            .push((star_range, "Unpack[".to_owned()));
+            .push((star_range, self.unpack.clone()));
         let end = ann.range().end();
         self.edits
             .borrow_mut()

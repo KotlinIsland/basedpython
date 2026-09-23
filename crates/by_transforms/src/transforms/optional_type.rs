@@ -32,6 +32,7 @@ use ruff_python_ast::{Expr, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 /// Walks the source AST and emits narrow text edits that lower each optional in
@@ -46,6 +47,10 @@ struct OptionalLower<'src> {
     needs_union: bool,
     /// whether the target can spell a union with `|` (python 3.10)
     native_union: bool,
+    /// the name `typing.Union` is written under
+    union: String,
+    /// the name the builtin `type` is written under
+    type_: String,
     /// the optionals standing where `isinstance` expects classes, which a target
     /// without `|` spells as a tuple of classes, see [`super::runtime_union`]
     classinfo: HashSet<TextRange>,
@@ -58,12 +63,14 @@ struct OptionalLower<'src> {
 }
 
 impl<'src> OptionalLower<'src> {
-    fn new(source: &'src str, min_version: PythonVersion) -> Self {
+    fn new(source: &'src str, written: WrittenNames, min_version: PythonVersion) -> Self {
         Self {
             edits: Vec::new(),
             needs_runtime: false,
             needs_union: false,
             native_union: min_version >= PythonVersion::PY310,
+            union: written.imported("typing", "Union"),
+            type_: written.builtin("type"),
             classinfo: HashSet::new(),
             source,
             typevar_scopes: Vec::new(),
@@ -147,14 +154,17 @@ impl<'ast> Visitor<'ast> for OptionalLower<'_> {
             prefix.push('(');
         } else if !self.native_union {
             self.needs_union = true;
-            prefix.push_str("Union[");
+            prefix.push_str(&self.union);
+            prefix.push('[');
         }
         if !prefix.is_empty() {
             self.edits.push((TextRange::empty(node.start()), prefix));
         }
         let mut replacement = close_parens;
         if classinfo {
-            replacement.push_str(", type(None),)");
+            replacement.push_str(", ");
+            replacement.push_str(&self.type_);
+            replacement.push_str("(None),)");
         } else if self.native_union {
             replacement.push_str(" | None");
         } else {
@@ -174,13 +184,19 @@ impl<'ast> Visitor<'ast> for OptionalLower<'_> {
 
 pub(crate) struct OptionalTypePass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     min_version: PythonVersion,
 }
 
 impl<'src> OptionalTypePass<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        min_version: PythonVersion,
+    ) -> Self {
         Self {
             source,
+            written,
             min_version,
         }
     }
@@ -195,10 +211,11 @@ impl<'src> OptionalTypePass<'src> {
 /// which independently walks every type position.
 fn collect_edits(
     source: &str,
+    written: WrittenNames,
     expr: &Expr,
     min_version: PythonVersion,
 ) -> Vec<(TextRange, String)> {
-    let mut lower = OptionalLower::new(source, min_version);
+    let mut lower = OptionalLower::new(source, written, min_version);
     lower.visit_expr(expr);
     lower.edits
 }
@@ -208,10 +225,11 @@ fn collect_edits(
 /// kw-subscript) to lower a nested `T?` when they splice their element types.
 pub(crate) fn rewrite_type_expr(
     source: &str,
+    written: WrittenNames,
     expr: &Expr,
     min_version: PythonVersion,
 ) -> Option<String> {
-    let mut edits = collect_edits(source, expr, min_version);
+    let mut edits = collect_edits(source, written, expr, min_version);
     if edits.is_empty() {
         return None;
     }
@@ -237,7 +255,7 @@ impl TypeAwarePass for OptionalTypePass<'_> {
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut lower = OptionalLower::new(self.source, self.min_version);
+        let mut lower = OptionalLower::new(self.source, self.written, self.min_version);
         if !lower.native_union {
             lower.classinfo = super::runtime_union::classinfo_optionals(stmts, types);
         }
@@ -249,7 +267,7 @@ impl TypeAwarePass for OptionalTypePass<'_> {
         }
         if lower.needs_union {
             ctx.required_imports
-                .push("from typing import Union".to_owned());
+                .push(self.written.import_from("typing", &["Union"]));
         }
         ctx.text_edits.extend(lower.edits);
     }

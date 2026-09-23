@@ -32,14 +32,16 @@ use ruff_python_ast::{Decorator, Expr, ModModule, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::repeated_underscore::WrittenNames;
 
 pub(crate) struct DecoratedBindingPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
 }
 
 impl<'src> DecoratedBindingPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
+        Self { source, written }
     }
 }
 
@@ -47,6 +49,7 @@ impl AstPass for DecoratedBindingPass<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut inner = BindingVisitor {
             source: self.source,
+            annotated: self.written.imported("typing", "Annotated"),
             edits: Vec::new(),
         };
         for stmt in &module.body {
@@ -54,7 +57,7 @@ impl AstPass for DecoratedBindingPass<'_> {
         }
         if !inner.edits.is_empty() {
             ctx.required_imports
-                .push("from typing import Annotated".to_owned());
+                .push(self.written.import_from("typing", &["Annotated"]));
         }
         ctx.text_edits.extend(inner.edits);
     }
@@ -62,6 +65,8 @@ impl AstPass for DecoratedBindingPass<'_> {
 
 struct BindingVisitor<'src> {
     source: &'src str,
+    /// the name `typing.Annotated` is written under
+    annotated: String,
     /// `(range, replacement)` — the decorator-line erasures, and the two inserts
     /// that put the `Annotated` around the written type
     edits: Vec<(TextRange, String)>,
@@ -93,8 +98,10 @@ impl BindingVisitor<'_> {
         // one that won, dropping the metadata. Nothing sits at a zero-width range,
         // so these two compose with whatever rewrites the type between them
         let range = written_type.range();
-        self.edits
-            .push((TextRange::empty(range.start()), "Annotated[".to_owned()));
+        self.edits.push((
+            TextRange::empty(range.start()),
+            format!("{}[", self.annotated),
+        ));
         self.edits.push((
             TextRange::empty(range.end()),
             format!(", {}]", metadata.join(", ")),

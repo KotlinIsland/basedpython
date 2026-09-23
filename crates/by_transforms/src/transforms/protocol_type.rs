@@ -65,8 +65,9 @@ impl Shape {
         format!("_Protocol_{truncated:08x}")
     }
 
-    fn class_def(&self, name: &str) -> String {
-        let mut out = format!("class {name}(Protocol):\n");
+    /// the class declaring this shape as `name`, `typing.Protocol` written as `protocol`
+    fn class_def(&self, name: &str, protocol: &str) -> String {
+        let mut out = format!("class {name}({protocol}):\n");
         if self.members.is_empty() {
             out.push_str("    pass\n");
             return out;
@@ -100,6 +101,7 @@ impl<'src> ProtocolTypePass<'src> {
 
 struct ProtocolTypeLowering<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     /// One lowerer drives every member type in the run, so its imports and the
     /// `_Callable_*` classes it synthesizes can be collected at the end. The
     /// `callable` pass deliberately does not descend into an inline protocol,
@@ -127,6 +129,7 @@ impl<'src> ProtocolTypeLowering<'src> {
     ) -> Self {
         Self {
             source,
+            written,
             callable: CallableSyntax::new(source, written, config)
                 .with_types(types)
                 .with_claimed_ranges(claimed),
@@ -140,8 +143,9 @@ impl<'src> ProtocolTypeLowering<'src> {
 
     fn class_defs(&self) -> String {
         let mut out = String::new();
+        let protocol = self.written.imported("typing", "Protocol");
         for (shape, name) in &self.shapes {
-            out.push_str(&shape.class_def(name));
+            out.push_str(&shape.class_def(name, &protocol));
             out.push('\n');
         }
         out
@@ -335,35 +339,18 @@ impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for ValueProtocolWalker<'_, '
     }
 }
 
-/// Collects the typevar renames the PEP 695 polyfill will apply, keyed by the
+/// Collects the typevar renames the PEP 695 polyfill applies, keyed by the
 /// range of the generic scope that declares them.
 struct TypevarScopeWalker<'a> {
-    written: WrittenNames<'a>,
-    config: crate::Config,
+    polyfilled: &'a super::generics::PolyfilledTypeParams,
     scopes: &'a mut Vec<(TextRange, HashMap<String, String>)>,
 }
 
 impl TypevarScopeWalker<'_> {
     fn record(&mut self, range: TextRange, type_params: Option<&ruff_python_ast::TypeParams>) {
-        // python 3.12+ keeps PEP 695 native, so nothing is renamed
-        if self.config.min_version >= ruff_python_ast::PythonVersion::PY312 {
-            return;
-        }
-        let Some(type_params) = type_params else {
-            return;
-        };
-        let frame: HashMap<String, String> = type_params
-            .type_params
-            .iter()
-            .map(|param| {
-                let name = param.name().id.as_str();
-                (
-                    name.to_owned(),
-                    super::generics::polyfilled_name(self.written, name),
-                )
-            })
-            .collect();
-        if !frame.is_empty() {
+        if let Some(frame) = type_params.and_then(|tp| self.polyfilled.hoisted_renames(tp))
+            && !frame.is_empty()
+        {
             self.scopes.push((range, frame));
         }
     }
@@ -393,10 +380,10 @@ fn lower<'src>(
     config: &crate::Config,
 ) -> ProtocolTypeLowering<'src> {
     let mut inner = ProtocolTypeLowering::new(source, written, types, claimed, config);
+    let polyfilled = super::generics::PolyfilledTypeParams::decide(source, written, stmts, config);
     {
         let mut walker = TypevarScopeWalker {
-            written,
-            config: config.clone(),
+            polyfilled: &polyfilled,
             scopes: &mut inner.typevar_scopes,
         };
         for stmt in stmts {
@@ -450,7 +437,7 @@ pub(crate) fn cleanup(
             preamble.push('\n');
         }
     };
-    push_missing(&mut preamble, "from typing import Protocol");
+    push_missing(&mut preamble, &written.import_from("typing", &["Protocol"]));
     let (imports, helpers) = inner.callable.take_requirements();
     for line in imports
         .into_iter()
@@ -498,7 +485,7 @@ impl TypeAwarePass for ProtocolTypePass<'_> {
 
         if inner.needs_import {
             ctx.required_imports
-                .push("from typing import Protocol".to_owned());
+                .push(self.written.import_from("typing", &["Protocol"]));
             // synthesized class defs are raw multi-line python source; push
             // them as a single non-`from` line so `merge_from_imports` leaves
             // them untouched and they land in the preamble verbatim. the
@@ -703,6 +690,82 @@ mod tests {
                 _T = TypeVar("_T")
                 class A(Generic[_T]):
                     def get(self) -> _Protocol_72797bc7: ...
+            "#},
+        );
+    }
+
+    /// kept as native syntax, `T` exists only in the scope of `A`, so the hoisted class reads it
+    /// off `A`. a generic no path of names reaches from module scope — local to a function —
+    /// has nothing to read it through
+    #[test]
+    fn a_native_type_parameter_is_read_off_its_generic() {
+        let out = transpile(
+            indoc! {"
+                class A[T]:
+                    def get(self) -> protocol(a: T; def m(self, x: T) -> T): ...
+                    def put[U](self, p: protocol(u: U)) -> None: ...
+                def f[V](p: protocol(v: V)) -> None: ...
+                def g():
+                    def h[W](p: protocol(w: W)) -> None: ...
+            "},
+            &Config {
+                min_version: crate::PythonVersion::PY313,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("    a: \"A.__type_params__[0]\"\n")
+                && out.contains(
+                    "    def m(self, x: \"A.__type_params__[0]\") -> \"A.__type_params__[0]\": ...\n"
+                )
+                && out.contains("    u: \"A.put.__type_params__[0]\"\n")
+                && out.contains("    v: \"f.__type_params__[0]\"\n")
+                && out.contains("    w: \"W\"\n"),
+            "got:\n{out}"
+        );
+    }
+
+    /// an earlier generic declaring `T` differently takes `_T`, so the member names the one
+    /// the polyfill declared for this generic's `T`
+    #[test]
+    fn typevar_member_uses_the_name_the_polyfill_declared() {
+        check(
+            indoc! {"
+                class A[T: int]: ...
+                class B[T]:
+                    def get(self) -> protocol(a: T): ...
+            "},
+            indoc! {r#"
+                from typing import Protocol, TypeVar, Generic
+                class _Protocol_fd816244(Protocol):
+                    a: "_T_1"
+                _T = TypeVar("_T", bound=int)
+                class A(Generic[_T]): ...
+                _T_1 = TypeVar("_T_1")
+                class B(Generic[_T_1]):
+                    def get(self) -> _Protocol_fd816244: ...
+            "#},
+        );
+    }
+
+    /// a defaulted list is polyfilled on 3.12, which has native syntax for one without a
+    /// default
+    #[test]
+    fn typevar_member_of_a_defaulted_list_on_312() {
+        check_py312(
+            indoc! {"
+                class A[T = int]:
+                    def get(self) -> protocol(a: T): ...
+            "},
+            indoc! {r#"
+                from typing import Generic, Protocol
+                from typing_extensions import TypeVar
+                class _Protocol_ea950896(Protocol):
+                    a: "_T"
+                _T = TypeVar("_T", default=int)
+                class A(Generic[_T]):
+                    def get(self) -> _Protocol_ea950896: ...
             "#},
         );
     }

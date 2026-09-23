@@ -136,6 +136,219 @@ fn repeats_underscore(parameters: &Parameters) -> bool {
 pub struct WrittenNames<'src> {
     names: decision::WrittenNames<'src>,
     lowerings: Option<&'src UnderscoreLowerings>,
+    /// every name the module's code binds or reads, which a typing name a lowering writes
+    /// has to stay clear of
+    code: Option<&'src CodeNames>,
+    /// the names the module's `private` symbols are emitted under, which no other name a
+    /// lowering writes may take
+    private: Option<&'src PrivateNames>,
+}
+
+/// the name each module-level `private` symbol is emitted under
+///
+/// `private` hides a symbol by giving it a leading underscore, `private def helper` becoming
+/// `_helper`. when the module already has that name — its own `_helper`, a runtime helper's,
+/// or one a lowering wrote before this — the renamed symbol would take it over, so it is
+/// emitted under the next name nothing has, `_helper2`, `_helper3`, …:
+///
+/// ```by
+/// private def force_unwrap(x: int) -> int:  # `_force_unwrap` is the helper `x!` calls
+///     return x + 100
+/// ```
+///
+/// a name the author already wrote with a leading underscore is emitted as written
+#[derive(Debug, Default)]
+pub(crate) struct PrivateNames {
+    emitted: HashMap<String, String>,
+    /// the names in `emitted` a symbol's own spelling does not account for, which every
+    /// name a lowering takes afterwards has to stay clear of
+    claimed: std::collections::HashSet<String>,
+}
+
+impl PrivateNames {
+    /// how each of `symbols`, the module-level names a module declares `private`, is emitted.
+    /// `sources` are the texts of the module the lowering reads — as written, and as the
+    /// passes that run before the name is decided left it
+    pub(crate) fn decide<'a>(symbols: impl IntoIterator<Item = &'a str>, sources: &[&str]) -> Self {
+        let mut symbols: Vec<&str> = symbols.into_iter().collect();
+        // the order a name is taken in decides who gets `_helper` and who `_helper2`, so it
+        // must not be the order of a hash set
+        symbols.sort_unstable();
+        symbols.dedup();
+        let mut private = Self::default();
+        for symbol in symbols {
+            if symbol.starts_with('_') {
+                private.emitted.insert(symbol.to_owned(), symbol.to_owned());
+                continue;
+            }
+            let stem = format!("_{symbol}");
+            let emitted = decision::WrittenNames::new("").fresh_outside(&stem, |candidate| {
+                crate::runtime::defines(candidate)
+                    || private.claimed.contains(candidate)
+                    || sources
+                        .iter()
+                        .any(|source| decision::WrittenNames::new(source).spells(candidate))
+            });
+            private.claimed.insert(emitted.clone());
+            private.emitted.insert(symbol.to_owned(), emitted);
+        }
+        private
+    }
+}
+
+/// how a module's own code binds each name, in any scope, which says whether a name a lowering
+/// writes reads what the lowering means by it
+///
+/// a keyword the parser stands up as a name — the `final` of `final class`, the `cast` of
+/// `x cast int` — binds nothing, and a read binds nothing either: a name only read is a builtin,
+/// or a typing name basedpython imports implicitly, which is the lowering's own
+#[derive(Debug, Default)]
+pub(crate) struct CodeNames {
+    bindings: std::collections::HashMap<String, Vec<Binding>>,
+    /// whether the module imports `*` from somewhere, which binds names it never spells
+    star_import: bool,
+}
+
+/// one way a module binds a name
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Binding {
+    /// `from <module> import <name>`, which binds the name to what `module` exports as it
+    From(String),
+    /// `import <name>`, which binds the name to the module of that name
+    Module,
+    /// anything else
+    Other,
+}
+
+impl CodeNames {
+    /// the names `suite`, a module's statements as the author wrote them, binds
+    pub(crate) fn of(suite: &[Stmt]) -> Self {
+        use ruff_python_ast::visitor::source_order::{
+            SourceOrderVisitor, walk_except_handler, walk_expr, walk_parameter, walk_pattern,
+            walk_stmt, walk_type_param,
+        };
+        use ruff_python_ast::{ExceptHandler, Pattern, TypeParam};
+
+        #[derive(Default)]
+        struct Collect(CodeNames);
+        impl Collect {
+            fn bind(&mut self, name: &str, binding: Binding) {
+                self.0
+                    .bindings
+                    .entry(name.to_owned())
+                    .or_default()
+                    .push(binding);
+            }
+        }
+        impl<'a> SourceOrderVisitor<'a> for Collect {
+            fn visit_stmt(&mut self, stmt: &'a Stmt) {
+                match stmt {
+                    Stmt::FunctionDef(function) => self.bind(&function.name, Binding::Other),
+                    Stmt::ClassDef(class) => self.bind(&class.name, Binding::Other),
+                    Stmt::Global(global) => {
+                        for name in &global.names {
+                            self.bind(name, Binding::Other);
+                        }
+                    }
+                    Stmt::Nonlocal(nonlocal) => {
+                        for name in &nonlocal.names {
+                            self.bind(name, Binding::Other);
+                        }
+                    }
+                    Stmt::Import(import) => {
+                        for alias in &import.names {
+                            match &alias.asname {
+                                Some(asname) => self.bind(asname, Binding::Other),
+                                None => {
+                                    let root = alias.name.split('.').next().unwrap_or_default();
+                                    self.bind(root, Binding::Module);
+                                }
+                            }
+                        }
+                    }
+                    Stmt::ImportFrom(import) => {
+                        for alias in &import.names {
+                            if &*alias.name == "*" {
+                                self.0.star_import = true;
+                                continue;
+                            }
+                            match (&alias.asname, &import.module) {
+                                (None, Some(module)) if import.level == 0 => {
+                                    self.bind(&alias.name, Binding::From(module.to_string()));
+                                }
+                                (asname, _) => self
+                                    .bind(asname.as_ref().unwrap_or(&alias.name), Binding::Other),
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                walk_stmt(self, stmt);
+            }
+
+            fn visit_expr(&mut self, expr: &'a Expr) {
+                match expr {
+                    Expr::Name(name) if name.ctx.is_store() || name.ctx.is_del() => {
+                        self.bind(&name.id, Binding::Other);
+                    }
+                    // the callee of `x cast int` is the keyword, not a name
+                    Expr::Call(call) if call.cast_kind.is_some() => {
+                        self.visit_arguments(&call.arguments);
+                        return;
+                    }
+                    _ => {}
+                }
+                walk_expr(self, expr);
+            }
+
+            fn visit_parameter(&mut self, parameter: &'a Parameter) {
+                self.bind(&parameter.name, Binding::Other);
+                walk_parameter(self, parameter);
+            }
+
+            fn visit_except_handler(&mut self, handler: &'a ExceptHandler) {
+                let ExceptHandler::ExceptHandler(handler_node) = handler;
+                if let Some(name) = &handler_node.name {
+                    self.bind(name, Binding::Other);
+                }
+                walk_except_handler(self, handler);
+            }
+
+            fn visit_pattern(&mut self, pattern: &'a Pattern) {
+                let name = match pattern {
+                    Pattern::MatchAs(pattern) => pattern.name.as_ref(),
+                    Pattern::MatchStar(pattern) => pattern.name.as_ref(),
+                    Pattern::MatchMapping(pattern) => pattern.rest.as_ref(),
+                    _ => None,
+                };
+                if let Some(name) = name {
+                    self.bind(name, Binding::Other);
+                }
+                walk_pattern(self, pattern);
+            }
+
+            fn visit_type_param(&mut self, type_param: &'a TypeParam) {
+                self.bind(type_param.name(), Binding::Other);
+                walk_type_param(self, type_param);
+            }
+        }
+
+        let mut collect = Collect::default();
+        for stmt in suite {
+            collect.visit_stmt(stmt);
+        }
+        collect.0
+    }
+
+    /// whether every binding of `name` is `binding`, so a lowering can read the module's own
+    /// `name` as the thing `binding` binds it to
+    fn only_binds(&self, name: &str, binding: &Binding) -> bool {
+        !self.star_import
+            && self
+                .bindings
+                .get(name)
+                .is_none_or(|bindings| bindings.iter().all(|bound| bound == binding))
+    }
 }
 
 impl<'src> WrittenNames<'src> {
@@ -144,6 +357,34 @@ impl<'src> WrittenNames<'src> {
         Self {
             names: decision::WrittenNames::new(source),
             lowerings: None,
+            code: None,
+            private: None,
+        }
+    }
+
+    /// these names, with `code` the names the module's code binds or reads
+    pub(crate) fn with_code<'a>(self, code: &'a CodeNames) -> WrittenNames<'a>
+    where
+        'src: 'a,
+    {
+        WrittenNames {
+            names: self.names,
+            lowerings: self.lowerings,
+            code: Some(code),
+            private: self.private,
+        }
+    }
+
+    /// these names, with `private` the names the module's `private` symbols are emitted under
+    pub(crate) fn with_private<'a>(self, private: &'a PrivateNames) -> WrittenNames<'a>
+    where
+        'src: 'a,
+    {
+        WrittenNames {
+            names: self.names,
+            lowerings: self.lowerings,
+            code: self.code,
+            private: Some(private),
         }
     }
 
@@ -156,6 +397,8 @@ impl<'src> WrittenNames<'src> {
         WrittenNames {
             names: self.names,
             lowerings: Some(lowerings),
+            code: self.code,
+            private: self.private,
         }
     }
 
@@ -165,13 +408,121 @@ impl<'src> WrittenNames<'src> {
     /// a binding the lowering writes under a name the source wrote would shadow it — the
     /// `inner` a `decorator def` writes standing where an option of that name is declared,
     /// which the dispatcher then passed the dispatcher itself for
+    ///
+    /// nor is it a runtime helper's, or one a `private` symbol is emitted under: those are
+    /// bound at module scope too, and the source never spells them
     pub(crate) fn fresh(self, stem: &str) -> String {
-        self.names.fresh(stem)
+        self.names
+            .fresh_outside(stem, |name| self.lowering_binds(name))
     }
 
-    /// whether the module spells `name` anywhere
-    pub(crate) fn spells(self, name: &str) -> bool {
-        self.names.spells(name)
+    /// whether `name` is one a lowering cannot bind: the module spells it, a runtime
+    /// helper is bound under it, or a `private` symbol is emitted under it
+    pub(crate) fn taken(self, name: &str) -> bool {
+        self.names.spells(name) || self.lowering_binds(name)
+    }
+
+    /// whether the module has `name` bound without spelling it: a runtime helper is bound
+    /// under it, or a `private` symbol is emitted under it
+    fn lowering_binds(self, name: &str) -> bool {
+        crate::runtime::defines(name)
+            || self
+                .private
+                .is_some_and(|private| private.claimed.contains(name))
+    }
+
+    /// the name `symbol`, a module-level name the module declares `private`, is emitted
+    /// under ([`PrivateNames`]). without the module's decision, it gains a leading
+    /// underscore unless it has one already
+    pub(crate) fn module_private(self, symbol: &str) -> String {
+        match self.private.and_then(|private| private.emitted.get(symbol)) {
+            Some(emitted) => emitted.clone(),
+            None => super::modifiers::module_private_name(symbol),
+        }
+    }
+
+    /// the name a lowering writes `name`, which `module` exports, under — `typing`,
+    /// `typing_extensions`, `collections.abc` and the like
+    ///
+    /// a module that binds `name` itself may bind it to anything at all — `Union = …` — so the
+    /// lowering's is imported under a name the module does not spell ([`Self::import_from`]).
+    /// one that binds it only by importing it from `module` has it already, and one that never
+    /// binds it reads the lowering's. without the module's bindings, every name the module
+    /// spells counts as bound
+    pub(crate) fn imported(self, module: &str, name: &str) -> String {
+        self.name_for(name, &Binding::From(module.to_owned()))
+    }
+
+    /// the name a lowering writes `name`, a builtin, under: the builtin's own unless the
+    /// module binds that name to something else, anywhere — a parameter named `type`, a
+    /// class attribute named `staticmethod` — and then a name of the lowering's own, which
+    /// [`Self::builtin_imports`] binds
+    pub(crate) fn builtin(self, name: &str) -> String {
+        self.imported("builtins", name)
+    }
+
+    /// the import that binds each builtin `output`, python a lowering wrote, reads under a
+    /// name of the lowering's own ([`Self::builtin`]), on a python of `minor`
+    ///
+    /// such a name is spelled nowhere in the module, so only a lowering can have written it
+    pub(crate) fn builtin_imports(self, output: &str, minor: u8) -> Vec<String> {
+        let written = decision::WrittenNames::new(output);
+        ruff_python_stdlib::builtins::python_builtins(minor, false)
+            .filter_map(|name| {
+                let local = self.builtin(name);
+                (local != name && written.spells(&local))
+                    .then(|| format!("from builtins import {name} as {local}"))
+            })
+            .collect()
+    }
+
+    /// the import that binds each of `names`, which `module` exports, to the name
+    /// [`Self::imported`] answers for it
+    pub(crate) fn import_from(self, module: &str, names: &[&str]) -> String {
+        let names: Vec<String> = names
+            .iter()
+            .map(|name| {
+                let local = self.imported(module, name);
+                if local == *name {
+                    local
+                } else {
+                    format!("{name} as {local}")
+                }
+            })
+            .collect();
+        format!("from {module} import {}", names.join(", "))
+    }
+
+    /// the name a lowering reads `module`, a module it reads attributes of, under, as
+    /// [`Self::imported`] answers for an exported name
+    pub(crate) fn imported_module(self, module: &str) -> String {
+        self.name_for(module, &Binding::Module)
+    }
+
+    /// the import that binds `module` to the name [`Self::imported_module`] answers for it
+    pub(crate) fn import_module(self, module: &str) -> String {
+        let local = self.imported_module(module);
+        if local == module {
+            format!("import {module}")
+        } else {
+            format!("import {module} as {local}")
+        }
+    }
+
+    fn name_for(self, name: &str, binding: &Binding) -> String {
+        let free = self.code.map_or_else(
+            || !self.names.spells(name),
+            |code| code.only_binds(name, binding),
+        );
+        if free && !self.lowering_binds(name) {
+            name.to_owned()
+        } else {
+            // the name itself is taken even when the module never spells it: a star import
+            // binds it unseen
+            self.names.fresh_outside(name, |candidate| {
+                candidate == name || self.lowering_binds(candidate)
+            })
+        }
     }
 
     /// how `parameters` is lowered when it repeats `_`. without ty's answer, the list is
@@ -516,6 +867,101 @@ mod tests {
 
     fn refused(input: &str) -> String {
         transpile(input, &Config::test_default()).unwrap_err()
+    }
+
+    fn check_at(input: &str, expected: &str, min_version: crate::PythonVersion) {
+        let config = Config {
+            min_version,
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(input, &config).unwrap(), expected);
+    }
+
+    /// a typing name a lowering writes is imported under a name the module does not spell
+    /// when the module binds that name to something of its own
+    #[test]
+    fn a_typing_name_the_module_binds_is_imported_under_another_name() {
+        check_at(
+            indoc! {"
+                Union = 1
+                x = list[int?]
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from typing import Union as Union2
+                Union = 1
+                x = list[Union2[int, None]]
+            "},
+            crate::PythonVersion::PY39,
+        );
+    }
+
+    /// a module that binds the name only by importing it from where the lowering imports it
+    /// has the lowering's already
+    #[test]
+    fn a_typing_name_the_module_imports_from_the_same_module_is_the_modules_own() {
+        check(
+            indoc! {"
+                from typing import Literal
+                x: 1 | 2 = 1
+            "},
+            indoc! {"
+                from typing import Literal
+                x: Literal[1, 2] = 1
+            "},
+        );
+    }
+
+    /// the same name exported by another module need not be the same object
+    #[test]
+    fn a_typing_name_the_module_imports_from_elsewhere_is_not() {
+        check(
+            indoc! {"
+                from typing_extensions import Literal
+                x: 1 | 2 = 1
+            "},
+            indoc! {"
+                from typing import Literal as Literal2
+                from typing_extensions import Literal
+                x: Literal2[1, 2] = 1
+            "},
+        );
+    }
+
+    /// a star import binds names the module never spells
+    #[test]
+    fn a_star_import_takes_every_typing_name() {
+        check(
+            indoc! {"
+                from os.path import *
+                x: 1 | 2 = 1
+            "},
+            indoc! {"
+                from typing import Literal as Literal2
+                from os.path import *
+                x: Literal2[1, 2] = 1
+            "},
+        );
+    }
+
+    /// a keyword the parser writes as a name binds nothing, and a parameter is a binding like
+    /// any other
+    #[test]
+    fn a_keyword_binds_no_typing_name() {
+        check(
+            indoc! {"
+                final class A: ...
+                def f(Literal: int) -> None: ...
+                x: 1 | 2 = 1
+            "},
+            indoc! {"
+                from typing import Literal as Literal2, final
+                @final
+                class A: ...
+                def f(Literal: int) -> None: ...
+                x: Literal2[1, 2] = 1
+            "},
+        );
     }
 
     #[test]

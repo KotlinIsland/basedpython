@@ -51,6 +51,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::parametric_is::{PredicateRuntime, ProbeStrictness, build_predicate};
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::{CastCheck, SoundnessCheck, TypeInfo};
 
 /// the lambda parameter a predicate-form cast binds its value to, so the value
@@ -88,13 +89,14 @@ impl Helper {
         }
     }
 
-    fn open_call(self) -> &'static str {
+    /// the call this form opens, `typing.cast` written as `cast`
+    fn open_call(self, cast: &str) -> String {
         match self {
-            Self::Checked => "_checked_cast(",
-            Self::Try => "_try_cast(",
-            Self::CheckedPredicate => "_checked_cast_pred(",
-            Self::TryPredicate => "_try_cast_pred(",
-            Self::TypingCast => "cast(",
+            Self::Checked => "_checked_cast(".to_owned(),
+            Self::Try => "_try_cast(".to_owned(),
+            Self::CheckedPredicate => "_checked_cast_pred(".to_owned(),
+            Self::TryPredicate => "_try_cast_pred(".to_owned(),
+            Self::TypingCast => format!("{cast}("),
         }
     }
 
@@ -114,6 +116,9 @@ impl Helper {
 
 struct CastLower<'a> {
     types: &'a dyn TypeInfo,
+    written: WrittenNames<'a>,
+    /// the name `typing.cast` is written under
+    cast: String,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     used: BTreeSet<Helper>,
     /// the runtime helpers the emitted predicates call
@@ -121,9 +126,11 @@ struct CastLower<'a> {
 }
 
 impl<'a> CastLower<'a> {
-    fn new(types: &'a dyn TypeInfo) -> Self {
+    fn new(types: &'a dyn TypeInfo, written: WrittenNames<'a>) -> Self {
         Self {
             types,
+            written,
+            cast: written.imported("typing", "cast"),
             edits: Vec::new(),
             used: BTreeSet::new(),
             runtimes: BTreeSet::new(),
@@ -148,6 +155,7 @@ impl<'a> CastLower<'a> {
         let value_ref = || Fragment::Lit(CAST_VALUE_PARAM.to_owned());
         let (predicate, needs) = build_predicate(
             self.types,
+            self.written,
             &value_ref,
             value_arg,
             type_arg,
@@ -197,7 +205,7 @@ impl<'a> CastLower<'a> {
 
         self.used.insert(helper);
         let mut fragments = vec![
-            Fragment::Lit(helper.open_call().to_owned()),
+            Fragment::Lit(helper.open_call(&self.cast)),
             first,
             Fragment::Lit(", ".to_owned()),
         ];
@@ -238,11 +246,13 @@ impl<'ast> Visitor<'ast> for CastLower<'_> {
     }
 }
 
-pub(crate) struct CheckedCastPass;
+pub(crate) struct CheckedCastPass<'src> {
+    pub(crate) written: WrittenNames<'src>,
+}
 
-impl TypeAwarePass for CheckedCastPass {
+impl TypeAwarePass for CheckedCastPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = CastLower::new(types);
+        let mut inner = CastLower::new(types, self.written);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -261,7 +271,7 @@ impl TypeAwarePass for CheckedCastPass {
                 }
                 None => ctx
                     .required_imports
-                    .push("from typing import cast".to_owned()),
+                    .push(self.written.import_from("typing", &["cast"])),
             }
         }
         ctx.template_edits.extend(inner.edits);

@@ -25,11 +25,15 @@ use ty_python_semantic::ImplicitReceiverReference;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::extension::{arguments_span, spine_has_optional};
+use super::repeated_underscore::WrittenNames;
 use super::trailing_lambda::RECEIVER_PARAMETER;
 use crate::type_info::TypeInfo;
 
 struct ImplicitReceiverLower<'a> {
     types: &'a dyn TypeInfo,
+    written: WrittenNames<'a>,
+    /// the name the `functools` module is imported under
+    functools: String,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     errors: Vec<String>,
     /// attribute ranges already rewritten as part of an enclosing call, so the
@@ -71,7 +75,10 @@ impl<'ast> Visitor<'ast> for ImplicitReceiverLower<'_> {
                         self.edits.push((
                             attr.range(),
                             vec![
-                                Fragment::Lit(format!("functools.partial({}, ", attr.attr)),
+                                Fragment::Lit(format!(
+                                    "{}.partial({}, ",
+                                    self.functools, attr.attr
+                                )),
                                 Fragment::Src(attr.value.range()),
                                 Fragment::Lit(")".to_owned()),
                             ],
@@ -120,6 +127,8 @@ impl<'ast> Visitor<'ast> for ImplicitReceiverLower<'_> {
                                 super::extension::member_reference_fragments(
                                     &info,
                                     &[Fragment::Lit(RECEIVER_PARAMETER.to_owned())],
+                                    &self.functools,
+                                    self.written,
                                 );
                             self.needs_functools |= needs_functools;
                             fragments
@@ -161,12 +170,16 @@ fn chain_error(name: &str, verb: &str) -> String {
     format!("implicit receiver `{name}` cannot be {verb} through an optional chain yet")
 }
 
-pub(crate) struct ImplicitReceiverPass;
+pub(crate) struct ImplicitReceiverPass<'src> {
+    pub(crate) written: WrittenNames<'src>,
+}
 
-impl TypeAwarePass for ImplicitReceiverPass {
+impl TypeAwarePass for ImplicitReceiverPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = ImplicitReceiverLower {
             types,
+            written: self.written,
+            functools: self.written.imported_module("functools"),
             edits: Vec::new(),
             handled: Vec::new(),
             errors: Vec::new(),
@@ -181,7 +194,8 @@ impl TypeAwarePass for ImplicitReceiverPass {
             return;
         }
         if inner.needs_functools {
-            ctx.required_imports.push("import functools".to_owned());
+            ctx.required_imports
+                .push(self.written.import_module("functools"));
         }
         ctx.required_imports.extend(inner.imports);
         ctx.template_edits.extend(inner.edits);
