@@ -2,13 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use ruff_diagnostics::{Edit, Fix};
-use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
+use ruff_python_ast::visitor::{Visitor, walk_body, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef, StmtTypeAlias, TypeParam};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::config::Config;
 use crate::transforms::callable::lower_type_expr_full;
 use crate::transforms::repeated_underscore::WrittenNames;
+use crate::transforms::type_expr_walker::RootKind;
 use crate::type_info::TypeInfo;
 use ruff_python_ast::PythonVersion;
 
@@ -25,18 +26,20 @@ pub(crate) struct GenericPolyfill<'src> {
     edits: Vec<Fix>,
     // Imports to inject at the top of the file.
     needed_imports: ImportNeeds,
+    /// the names the typing constructors this pass writes are called by
+    constructors: Constructors,
     /// `TypeVar` definitions already emitted at module scope. Polyfilling each
     /// generic class/function emits its own `_T = TypeVar("_T")` line; without
     /// dedup, a module with several generics over the same name produces
     /// repeated identical declarations (and an `F811 redefinition` warning).
     emitted_typevar_defs: std::collections::HashSet<String>,
-    /// names already bound to a `TypeVar` at module scope along with the
-    /// arguments used. when a later class needs a `TypeVar` with the same name
-    /// but different shape (different bound/default/variance) we generate a
-    /// fresh suffix to avoid shadowing the earlier definition
-    emitted_typevar_signatures: std::collections::HashMap<String, String>,
-    /// counter for fresh-suffix typevar names (`_T_2`, `_T_3`, …)
-    typevar_suffix_counter: usize,
+    /// each name a `TypeVar` definition this pass writes binds, with the arguments it is
+    /// called with and the suite it is written into. a name is only ever bound in one suite:
+    /// a definition written into a class body is not visible to a function the module
+    /// declares later, and one written into an `if` does not run when the `if` does not
+    emitted_typevar_signatures: HashMap<String, (String, Suite)>,
+    /// the suite the statement being visited stands in
+    suite: Suite,
     /// names of classes/functions whose first type parameter has a top-parameters
     /// bound (i.e. `class A[P: (*: *, **: *)]`). subscript sites for these
     /// targets get tuple slices rewritten to list form so paramspec
@@ -92,37 +95,52 @@ pub(crate) struct ImportNeeds {
     paramspec: bool,
     typealias_type: bool,
     typevar_needs_ext: bool, // TypeVar(default=) on < 3.13
+    /// a `default=` below 3.13, which `typing`'s own `ParamSpec` does not take
+    paramspec_needs_ext: bool,
+    /// a `default=` below 3.13, which `typing`'s own `TypeVarTuple` does not take
+    typevar_tuple_needs_ext: bool,
 }
 
 impl ImportNeeds {
     /// Build the import lines to prepend to the file.
-    fn into_lines(self) -> Vec<String> {
+    fn into_lines(self, constructors: &Constructors) -> Vec<String> {
         let mut lines = Vec::new();
 
-        let mut typing_names: Vec<&str> = Vec::new();
-        let mut ext_names: Vec<&str> = Vec::new();
+        let mut typing_names: Vec<String> = Vec::new();
+        let mut ext_names: Vec<String> = Vec::new();
 
         if self.typevar {
+            let name = imported("TypeVar", &constructors.type_var);
             if self.typevar_needs_ext {
-                ext_names.push("TypeVar");
+                ext_names.push(name);
             } else {
-                typing_names.push("TypeVar");
+                typing_names.push(name);
             }
         }
         if self.typevar_tuple {
-            typing_names.push("TypeVarTuple");
+            let name = imported("TypeVarTuple", &constructors.type_var_tuple);
+            if self.typevar_tuple_needs_ext {
+                ext_names.push(name);
+            } else {
+                typing_names.push(name);
+            }
         }
         if self.unpack {
-            typing_names.push("Unpack");
+            typing_names.push(imported("Unpack", &constructors.unpack));
         }
         if self.paramspec {
-            typing_names.push("ParamSpec");
+            let name = imported("ParamSpec", &constructors.param_spec);
+            if self.paramspec_needs_ext {
+                ext_names.push(name);
+            } else {
+                typing_names.push(name);
+            }
         }
         if self.generic {
-            typing_names.push("Generic");
+            typing_names.push(imported("Generic", &constructors.generic));
         }
         if self.typealias_type {
-            ext_names.push("TypeAliasType");
+            ext_names.push(imported("TypeAliasType", &constructors.type_alias_type));
         }
 
         if !typing_names.is_empty() {
@@ -136,6 +154,41 @@ impl ImportNeeds {
         }
 
         lines
+    }
+}
+
+/// `name` imported so that it is bound to `local`
+fn imported(name: &str, local: &str) -> String {
+    if name == local {
+        name.to_owned()
+    } else {
+        format!("{name} as {local}")
+    }
+}
+
+/// the names the typing constructors the polyfill writes are called by. one the module spells
+/// is imported under a name it does not: the module's own binding need not be the one the
+/// polyfill needs. `from typing import TypeVar` binds a `TypeVar` that takes no `default=`
+/// below 3.13, and nothing stops a module binding `Generic` to a class of its own
+struct Constructors {
+    type_var: String,
+    generic: String,
+    type_var_tuple: String,
+    unpack: String,
+    param_spec: String,
+    type_alias_type: String,
+}
+
+impl Constructors {
+    fn new(written: WrittenNames) -> Self {
+        Self {
+            type_var: written.fresh("TypeVar"),
+            generic: written.fresh("Generic"),
+            type_var_tuple: written.fresh("TypeVarTuple"),
+            unpack: written.fresh("Unpack"),
+            param_spec: written.fresh("ParamSpec"),
+            type_alias_type: written.fresh("TypeAliasType"),
+        }
     }
 }
 
@@ -170,9 +223,10 @@ impl<'src> GenericPolyfill<'src> {
             config,
             edits: Vec::new(),
             needed_imports: ImportNeeds::default(),
+            constructors: Constructors::new(written),
             emitted_typevar_defs: std::collections::HashSet::new(),
-            emitted_typevar_signatures: std::collections::HashMap::new(),
-            typevar_suffix_counter: 0,
+            emitted_typevar_signatures: HashMap::new(),
+            suite: Suite::Module,
             parameters_targets: HashSet::new(),
             needed_imports_any: false,
             generic_class_renames: HashMap::new(),
@@ -309,33 +363,32 @@ impl<'src> GenericPolyfill<'src> {
         self.config.min_version >= required
     }
 
-    /// Pick a unique mangled name for a `TypeVar`.
+    /// the name the `TypeVar` a parameter declared as `source_name` is bound to
     ///
-    /// First emission of a given source name returns the standard mangled
-    /// form (`T` → `_T`). A *later* emission with a different signature gets
-    /// a numeric suffix (`_T_2`, `_T_3`, …) so the per-class `TypeVar` object
-    /// isn't shadowed by a later one with a different bound / default /
-    /// variance. A later emission whose signature *matches* the existing one
-    /// reuses the original mangled name (Python identity is preserved)
+    /// the first definition is named [`polyfilled_name`] (`T` → `_T`). a later one written
+    /// with the same arguments into the same suite reuses that name, so python sees one
+    /// object; any other takes a numeric suffix (`_T_1`, `_T_2`, …) the module does not spell,
+    /// so it shadows neither an earlier definition nor a binding of the module's own
     fn unique_typevar_name(&mut self, source_name: &str, signature_args: &str) -> String {
-        let base = mangle(source_name);
-        let key_existing = self.emitted_typevar_signatures.get(&base).cloned();
-        if let Some(existing_sig) = key_existing {
-            if existing_sig == signature_args {
-                return base;
-            }
-            self.typevar_suffix_counter += 1;
-            let mangled = format!("{base}_{}", self.typevar_suffix_counter);
-            self.emitted_typevar_signatures
-                .insert(mangled.clone(), signature_args.to_owned());
-            return mangled;
-        }
+        let base = polyfilled_name(self.written, source_name);
+        let signature = (signature_args.to_owned(), self.suite);
+        let name = std::iter::once(base.clone())
+            .chain((1u32..u32::MAX).map(|number| format!("{base}_{number}")))
+            .find(
+                |candidate| match self.emitted_typevar_signatures.get(candidate) {
+                    Some(existing) => *existing == signature,
+                    None => !self.written.spells(candidate),
+                },
+            )
+            .unwrap_or(base);
         self.emitted_typevar_signatures
-            .insert(base.clone(), signature_args.to_owned());
-        base
+            .entry(name.clone())
+            .or_insert(signature);
+        name
     }
 
-    /// Skip `TypeVar` declarations already emitted elsewhere in the module
+    /// Skip `TypeVar` declarations already written into the suite being visited. a name is
+    /// bound in one suite only, so a definition seen before was written into this one
     fn dedupe_defs(&mut self, defs: &[String], indent: &str) -> String {
         use std::fmt::Write as _;
         let mut prefix = String::new();
@@ -390,6 +443,65 @@ impl<'src> GenericPolyfill<'src> {
         (start, indent)
     }
 
+    /// `default`, a type parameter's default, as the python the `default=` argument of its
+    /// declaration is written with. `visible` renames the type parameters in scope
+    fn default_arg(&mut self, default: &Expr, visible: &HashMap<String, String>) -> String {
+        let rendered = lower_type_expr_full(
+            self.source,
+            self.written,
+            self.types,
+            default,
+            &self.subsume_within(default.range()),
+            &self.config,
+            RootKind::Evaluated,
+        )
+        .unwrap_or_else(|| self.src(default.range()).to_owned());
+        apply_renames_to_rendered(&rendered, visible)
+    }
+
+    /// the `default=` argument of a `ParamSpec`: a list of types, `...`, or another parameter
+    /// specification
+    fn param_spec_default(&mut self, default: &Expr, visible: &HashMap<String, String>) -> String {
+        match default {
+            Expr::Tuple(tuple) if tuple.parenthesized => {
+                self.parameter_shape_list(tuple, Some(visible))
+            }
+            Expr::List(list) => {
+                let elements: Vec<String> = list
+                    .elts
+                    .iter()
+                    .map(|element| self.default_arg(element, visible))
+                    .collect();
+                format!("[{}]", elements.join(", "))
+            }
+            other => self.default_arg(other, visible),
+        }
+    }
+
+    /// write the declaration of a `ParamSpec` a parameter named `name` lowers to, with
+    /// `default` as its `default=` argument, and answer the name it is bound to
+    fn declare_param_spec(
+        &mut self,
+        name: &str,
+        default: Option<String>,
+        defs: &mut Vec<String>,
+    ) -> String {
+        let arguments = default
+            .map(|default| {
+                self.needed_imports.paramspec_needs_ext |=
+                    self.config.min_version < PythonVersion::PY313;
+                format!(", default={default}")
+            })
+            .unwrap_or_default();
+        let mangled = self.unique_typevar_name(name, &format!("ParamSpec({arguments})"));
+        defs.push(format!(
+            "{mangled} = {}(\"{mangled}\"{arguments})",
+            self.constructors.param_spec
+        ));
+        self.needed_imports.paramspec = true;
+        mangled
+    }
+
     fn process_type_params(&mut self, params: &[TypeParam]) -> ProcessedTypeParams {
         let mut generic_args: Vec<String> = Vec::new();
         let mut param_names: Vec<String> = Vec::new();
@@ -416,11 +528,13 @@ impl<'src> GenericPolyfill<'src> {
                     if let Some(bound) = &tv.bound
                         && is_parameters_bound(bound)
                     {
-                        let mangled = self.unique_typevar_name(name, "ParamSpec");
+                        let default = tv
+                            .default
+                            .as_deref()
+                            .map(|default| self.param_spec_default(default, &visible));
+                        let mangled = self.declare_param_spec(name, default, &mut defs);
                         renames.insert(name.to_owned(), mangled.clone());
                         visible.insert(name.to_owned(), mangled.clone());
-                        defs.push(format!("{mangled} = ParamSpec(\"{mangled}\")"));
-                        self.needed_imports.paramspec = true;
                         param_names.push(mangled.clone());
                         generic_args.push(mangled);
                         continue;
@@ -481,7 +595,8 @@ impl<'src> GenericPolyfill<'src> {
                                     self.types,
                                     bound,
                                     &self.subsume_within(bound.range()),
-                                    self.config.float_literals,
+                                    &self.config,
+                                    RootKind::Evaluated,
                                 )
                                 .unwrap_or_else(|| self.src(bound.range()).to_owned())
                             };
@@ -493,22 +608,10 @@ impl<'src> GenericPolyfill<'src> {
                     }
 
                     if let Some(default) = &tv.default {
-                        let default_src = lower_type_expr_full(
-                            self.source,
-                            self.written,
-                            self.types,
-                            default,
-                            &self.subsume_within(default.range()),
-                            self.config.float_literals,
-                        )
-                        .unwrap_or_else(|| self.src(default.range()).to_owned());
                         if self.config.min_version < PythonVersion::PY313 {
                             self.needed_imports.typevar_needs_ext = true;
                         }
-                        extra_args.push(format!(
-                            "default={}",
-                            apply_renames_to_rendered(&default_src, &visible)
-                        ));
+                        extra_args.push(format!("default={}", self.default_arg(default, &visible)));
                     }
 
                     // basedpython variance keywords: forward `out`/`in`/`in out`
@@ -538,7 +641,11 @@ impl<'src> GenericPolyfill<'src> {
                     visible.insert(name.to_owned(), mangled.clone());
                     let mut args: Vec<String> = vec![format!("\"{mangled}\"")];
                     args.extend(extra_args);
-                    let def = format!("{mangled} = TypeVar({})", args.join(", "));
+                    let def = format!(
+                        "{mangled} = {}({})",
+                        self.constructors.type_var,
+                        args.join(", ")
+                    );
 
                     self.needed_imports.typevar = true;
                     param_names.push(mangled.clone());
@@ -548,10 +655,39 @@ impl<'src> GenericPolyfill<'src> {
 
                 TypeParam::TypeVarTuple(tvt) => {
                     let name = tvt.name.id.as_str();
-                    let mangled = self.unique_typevar_name(name, "TypeVarTuple");
+                    // a keyword argument cannot be starred, so the default `*tuple[int, str]`
+                    // is passed as `Unpack[tuple[int, str]]`, the spelling the call accepts
+                    let default = tvt.default.as_deref().map(|default| {
+                        let unpacked = match default {
+                            Expr::Starred(starred) => starred.value.as_ref(),
+                            other => other,
+                        };
+                        let rendered = self.default_arg(unpacked, &visible);
+                        if matches!(default, Expr::Starred(_)) {
+                            self.needed_imports.unpack = true;
+                            format!("{}[{rendered}]", self.constructors.unpack)
+                        } else {
+                            rendered
+                        }
+                    });
+                    let signature = default
+                        .as_ref()
+                        .map_or_else(String::new, |default| format!("default={default}"));
+                    let mangled =
+                        self.unique_typevar_name(name, &format!("TypeVarTuple({signature})"));
                     renames.insert(name.to_owned(), mangled.clone());
                     visible.insert(name.to_owned(), mangled.clone());
-                    defs.push(format!("{mangled} = TypeVarTuple(\"{mangled}\")"));
+                    let arguments = if default.is_some() {
+                        self.needed_imports.typevar_tuple_needs_ext |=
+                            self.config.min_version < PythonVersion::PY313;
+                        format!(", {signature}")
+                    } else {
+                        String::new()
+                    };
+                    defs.push(format!(
+                        "{mangled} = {}(\"{mangled}\"{arguments})",
+                        self.constructors.type_var_tuple
+                    ));
                     self.needed_imports.typevar_tuple = true;
                     self.needed_imports.unpack = true;
                     // star-in-subscript (`Generic[*T]`) is only valid syntax
@@ -560,7 +696,7 @@ impl<'src> GenericPolyfill<'src> {
                     let arg = if self.config.min_version >= PythonVersion::PY311 {
                         format!("*{mangled}")
                     } else {
-                        format!("Unpack[{mangled}]")
+                        format!("{}[{mangled}]", self.constructors.unpack)
                     };
                     param_names.push(mangled);
                     generic_args.push(arg);
@@ -568,11 +704,13 @@ impl<'src> GenericPolyfill<'src> {
 
                 TypeParam::ParamSpec(ps) => {
                     let name = ps.name.id.as_str();
-                    let mangled = self.unique_typevar_name(name, "ParamSpec");
+                    let default = ps
+                        .default
+                        .as_deref()
+                        .map(|default| self.param_spec_default(default, &visible));
+                    let mangled = self.declare_param_spec(name, default, &mut defs);
                     renames.insert(name.to_owned(), mangled.clone());
                     visible.insert(name.to_owned(), mangled.clone());
-                    defs.push(format!("{mangled} = ParamSpec(\"{mangled}\")"));
-                    self.needed_imports.paramspec = true;
                     param_names.push(mangled.clone());
                     generic_args.push(mangled);
                 }
@@ -600,8 +738,15 @@ impl<'src> GenericPolyfill<'src> {
                     // top-parameters bound → `**T` (PEP 695 paramspec syntax)
                     if is_parameters_bound(bound) {
                         let name = tv.name.id.as_str();
+                        let default = tv
+                            .default
+                            .as_deref()
+                            .map(|default| {
+                                format!(" = {}", self.param_spec_default(default, &HashMap::new()))
+                            })
+                            .unwrap_or_default();
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                            format!("**{name}"),
+                            format!("**{name}{default}"),
                             param.range(),
                         )));
                         continue;
@@ -689,7 +834,7 @@ impl<'src> GenericPolyfill<'src> {
         // record for module-level variant subclasses that reference these params
         self.generic_class_renames
             .insert(class.name.id.as_str().to_owned(), rename_map.clone());
-        let generic_str = format!("Generic[{}]", generic_args.join(", "));
+        let generic_str = format!("{}[{}]", self.constructors.generic, generic_args.join(", "));
         self.needed_imports.generic = true;
 
         // Modify or add base classes.
@@ -787,8 +932,13 @@ impl<'src> GenericPolyfill<'src> {
             self.parameters_targets
                 .insert(func.name.id.as_str().to_owned());
         }
+        // basedpython: `some T` declares a type parameter the source writes nowhere in the
+        // list, so native syntax has no place for it, and it is always declared as a `TypeVar`
+        let is_hole =
+            |param: &TypeParam| matches!(param, TypeParam::TypeVar(tv) if tv.is_some_hole);
+        let has_hole = tp.type_params.iter().any(is_hole);
         // PEP 695 function type params are native syntax in 3.12+ (3.13+ with defaults)
-        if self.supports_native_type_params(&tp.type_params) {
+        if !has_hole && self.supports_native_type_params(&tp.type_params) {
             self.lower_type_param_bounds(&tp.type_params);
             return HashMap::new();
         }
@@ -799,9 +949,13 @@ impl<'src> GenericPolyfill<'src> {
             ..
         } = self.process_type_params(&tp.type_params);
 
-        // Remove `[T, ...]` from the function signature.
-        self.edits
-            .push(Fix::safe_edit(Edit::range_deletion(tp.range())));
+        // Remove `[T, ...]` from the function signature. a list of holes alone is the
+        // parser's, and there are no brackets in the source to remove: its range is the
+        // parameter list's
+        if !tp.type_params.iter().all(is_hole) {
+            self.edits
+                .push(Fix::safe_edit(Edit::range_deletion(tp.range())));
+        }
 
         // Insert TypeVar definitions before the function.
         let (line_start, indent) = self.line_start_of(func.range().start());
@@ -837,11 +991,21 @@ impl<'src> GenericPolyfill<'src> {
         if let Some(ret) = &func.returns {
             rename_in_expr(ret, &rename_map, &mut self.edits);
         }
-        for stmt in &func.body {
-            rename_in_stmt(stmt, &rename_map, &mut self.edits);
+        // the body reads a parameter under its own name, which a type parameter of that name
+        // does not reach: the parameter is bound in the body's scope, the type parameter in
+        // the one around it. a `some` hole always has its parameter's name
+        let mut body_renames = rename_map.clone();
+        for parameter in &func.parameters {
+            body_renames.remove(parameter.name().as_str());
         }
         self.reconcile_pending(&rename_map, mark);
-        rename_map
+        let mark = self.edits.len();
+        for stmt in &func.body {
+            rename_in_stmt(stmt, &body_renames, &mut self.edits);
+        }
+        self.reconcile_pending(&body_renames, mark);
+        // what the rest of the body sees, a nested definition among it
+        body_renames
     }
 
     fn process_type_alias(&mut self, alias: &StmtTypeAlias) {
@@ -900,13 +1064,11 @@ impl<'src> GenericPolyfill<'src> {
             self.needed_imports.typealias_type = true;
             let (_line_start, indent) = self.line_start_of(alias.range().start());
             let indent = indent.to_owned();
-            let mut replacement = String::new();
-            for d in &defs {
-                let _ = writeln!(replacement, "{indent}{d}");
-            }
+            let mut replacement = self.dedupe_defs(&defs, &indent);
             let _ = write!(
                 replacement,
-                "{indent}{name_src} = TypeAliasType(\"{name_src}\", object{type_params_arg})"
+                "{indent}{name_src} = {}(\"{name_src}\", object{type_params_arg})",
+                self.constructors.type_alias_type
             );
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 replacement,
@@ -944,7 +1106,8 @@ impl<'src> GenericPolyfill<'src> {
             self.types,
             &alias.value,
             &substitutions,
-            self.config.float_literals,
+            &self.config,
+            RootKind::Evaluated,
         )
         .unwrap_or(raw_value_src);
 
@@ -953,13 +1116,11 @@ impl<'src> GenericPolyfill<'src> {
         let (_line_start, indent) = self.line_start_of(alias.range().start());
         let indent = indent.to_owned();
 
-        let mut replacement = String::new();
-        for d in &defs {
-            let _ = writeln!(replacement, "{indent}{d}");
-        }
+        let mut replacement = self.dedupe_defs(&defs, &indent);
         let _ = write!(
             replacement,
-            "{indent}{name_src} = TypeAliasType(\"{name_src}\", {value_src}{type_params_arg})"
+            "{indent}{name_src} = {}(\"{name_src}\", {value_src}{type_params_arg})",
+            self.constructors.type_alias_type
         );
 
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -975,6 +1136,61 @@ impl GenericPolyfill<'_> {
     /// the substitution. Parameters spec syntax (`(int, str, /, name: T)`)
     /// drops the `/` and `*` markers and replaces named-only fields with
     /// `Any` since runtime `ParamSpec` only carries positional types
+    /// a parameter-shape tuple (`(int, name: str)`) as the list a `ParamSpec` is specialized by
+    /// or defaults to at runtime. each element is written as the source spells it, or, given
+    /// the type parameters `visible` in scope, lowered as a default is
+    fn parameter_shape_list(
+        &mut self,
+        t: &ruff_python_ast::ExprTuple,
+        visible: Option<&HashMap<String, String>>,
+    ) -> String {
+        // the inner structure (markers, named, variadic, kwargs) doesn't map
+        // 1:1 to runtime ParamSpec list elements, so we lower each
+        // element to a positional Python type. mapping:
+        //   `int`        → `int`
+        //   `name: T`    → `Any` (named-only has no positional slot)
+        //   `*: T`       → `Any` (variadic flattened to one element)
+        //   `*name: T`   → `Any`
+        //   `**: T`      → dropped
+        //   `**name: T`  → dropped
+        let mut parts: Vec<String> = Vec::new();
+        for elt in &t.elts {
+            match elt {
+                Expr::Named(named) => {
+                    if let Expr::Starred(starred) = named.target.as_ref() {
+                        // `**name: T` — Starred(Starred(...)) target → drop
+                        if matches!(starred.value.as_ref(), Expr::Starred(_)) {
+                            continue;
+                        }
+                        // `*name: T`
+                        parts.push("Any".to_owned());
+                        self.needed_imports_any = true;
+                    } else {
+                        // `name: T`
+                        parts.push("Any".to_owned());
+                        self.needed_imports_any = true;
+                    }
+                }
+                Expr::Starred(s) => {
+                    if matches!(s.value.as_ref(), Expr::Starred(_)) {
+                        // `**: T` — drop
+                        continue;
+                    }
+                    // `*: T`
+                    parts.push("Any".to_owned());
+                    self.needed_imports_any = true;
+                }
+                _ => {
+                    parts.push(match visible {
+                        Some(visible) => self.default_arg(elt, visible),
+                        None => self.src(elt.range()).to_owned(),
+                    });
+                }
+            }
+        }
+        format!("[{}]", parts.join(", "))
+    }
+
     fn rewrite_parameters_subscript(&mut self, sub: &ruff_python_ast::ExprSubscript) {
         let Expr::Name(name) = sub.value.as_ref() else {
             return;
@@ -990,52 +1206,9 @@ impl GenericPolyfill<'_> {
         }
 
         if t.has_parameter_shape() {
-            // emit a single replacement for the whole tuple — the inner
-            // structure (markers, named, variadic, kwargs) doesn't map
-            // 1:1 to runtime ParamSpec list elements, so we lower each
-            // element to a positional Python type. mapping:
-            //   `int`        → `int`
-            //   `name: T`    → `Any` (named-only has no positional slot)
-            //   `*: T`       → `Any` (variadic flattened to one element)
-            //   `*name: T`   → `Any`
-            //   `**: T`      → dropped
-            //   `**name: T`  → dropped
-            let mut parts: Vec<String> = Vec::new();
-            for elt in &t.elts {
-                match elt {
-                    Expr::Named(named) => {
-                        if let Expr::Starred(starred) = named.target.as_ref() {
-                            // `**name: T` — Starred(Starred(...)) target → drop
-                            if matches!(starred.value.as_ref(), Expr::Starred(_)) {
-                                continue;
-                            }
-                            // `*name: T`
-                            parts.push("Any".to_owned());
-                            self.needed_imports_any = true;
-                        } else {
-                            // `name: T`
-                            parts.push("Any".to_owned());
-                            self.needed_imports_any = true;
-                        }
-                    }
-                    Expr::Starred(s) => {
-                        if matches!(s.value.as_ref(), Expr::Starred(_)) {
-                            // `**: T` — drop
-                            continue;
-                        }
-                        // `*: T`
-                        parts.push("Any".to_owned());
-                        self.needed_imports_any = true;
-                    }
-                    _ => {
-                        parts.push(self.src(elt.range()).to_owned());
-                    }
-                }
-            }
-            self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                format!("[{}]", parts.join(", ")),
-                t.range(),
-            )));
+            let list = self.parameter_shape_list(t, None);
+            self.edits
+                .push(Fix::safe_edit(Edit::range_replacement(list, t.range())));
             return;
         }
 
@@ -1075,6 +1248,15 @@ impl<'ast> Visitor<'ast> for GenericPolyfill<'_> {
         } else {
             walk_stmt(self, stmt);
         }
+    }
+
+    fn visit_body(&mut self, body: &'ast [Stmt]) {
+        let outer = self.suite;
+        if let Some(first) = body.first() {
+            self.suite = Suite::Nested(first.start());
+        }
+        walk_body(self, body);
+        self.suite = outer;
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
@@ -1291,12 +1473,24 @@ fn rename_in_stmt(stmt: &Stmt, renames: &HashMap<String, String>, edits: &mut Ve
     }
 }
 
-pub(crate) fn mangle(name: &str) -> String {
+/// the name the polyfill first tries for the `TypeVar` a type parameter named `name` is
+/// declared as: `_T` for `T`, spelled so that the module spells it nowhere. the definition is
+/// written into the scope the generic stands in, where a name the module binds would be
+/// overwritten by it
+pub(crate) fn polyfilled_name(written: WrittenNames, name: &str) -> String {
     if name.starts_with('_') {
-        name.to_owned()
+        written.fresh(name)
     } else {
-        format!("_{name}")
+        written.fresh(&format!("_{name}"))
     }
+}
+
+/// the statement list a definition the polyfill writes lands in, told apart by where its
+/// first statement starts
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Suite {
+    Module,
+    Nested(TextSize),
 }
 
 pub(crate) struct GenericPolyfillPass<'src> {
@@ -1360,7 +1554,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
         ctx.text_edits
             .retain(|(range, _)| !superseded.contains(range));
         let emits_any = inner.needed_imports_any;
-        for line in std::mem::take(&mut inner.needed_imports).into_lines() {
+        for line in std::mem::take(&mut inner.needed_imports).into_lines(&inner.constructors) {
             ctx.required_imports.push(line);
         }
         if emits_any {
@@ -1888,22 +2082,163 @@ mod tests {
 
     #[test]
     fn paramspec_and_typevartuple_defaults_downlevel_on_312() {
-        // defaults on any parameter kind make the header 3.13-only syntax, so
-        // the whole declaration polyfills. the polyfill itself drops paramspec
-        // and typevartuple defaults, matching the pre-3.12 path
+        // defaults on any parameter kind make the header 3.13-only syntax, so the whole
+        // declaration polyfills. `typing`'s own `ParamSpec` and `TypeVarTuple` take no
+        // `default=` below 3.13, so both come from `typing_extensions`. a keyword argument
+        // cannot be starred, so a variadic's default is passed unpacked with `Unpack`
         check_at(
             indoc! {"
                 class A[**P = [int]]: ...
                 class B[*Ts = *tuple[int, str]]: ...
             "},
             indoc! {"
-                from typing import TypeVarTuple, Unpack, ParamSpec, Generic
-                _P = ParamSpec(\"_P\")
+                from typing import Unpack, Generic
+                from typing_extensions import TypeVarTuple, ParamSpec
+                _P = ParamSpec(\"_P\", default=[int])
                 class A(Generic[_P]): ...
-                _Ts = TypeVarTuple(\"_Ts\")
+                _Ts = TypeVarTuple(\"_Ts\", default=Unpack[tuple[int, str]])
                 class B(Generic[*_Ts]): ...
             "},
             PythonVersion::PY312,
+        );
+    }
+
+    /// a parameter specification spelled with the top-parameters bound takes its default as a
+    /// parameter list, which python spells as a list
+    #[test]
+    fn a_parameters_bound_default_is_a_list() {
+        check_at(
+            "class A[P: (*: *, **: *) = (int, str)]: ...\n",
+            indoc! {"
+                from typing import Generic
+                from typing_extensions import ParamSpec
+                _P = ParamSpec(\"_P\", default=[int, str])
+                class A(Generic[_P]): ...
+            "},
+            PythonVersion::PY312,
+        );
+        check_at(
+            "class A[P: (*: *, **: *) = (int, str)]: ...\n",
+            "class A[**P = [int, str]]: ...\n",
+            PythonVersion::PY313,
+        );
+    }
+
+    /// a default needs the `TypeVar` from `typing_extensions` below 3.13, and the one a module
+    /// imports from `typing` itself takes none. so the polyfill calls its own by a name the
+    /// module does not spell, and the module's `TypeVar` keeps meaning what it imported
+    #[test]
+    fn a_default_calls_a_type_var_the_module_does_not_bind() {
+        check_at(
+            indoc! {"
+                from typing import TypeVar
+                U = TypeVar(\"U\")
+                class A[T = int]: ...
+            "},
+            indoc! {"
+                from typing_extensions import TypeVar as TypeVar2
+                from typing import TypeVar, Generic
+                U = TypeVar(\"U\")
+                _T = TypeVar2(\"_T\", default=int)
+                class A(Generic[_T]): ...
+            "},
+            PythonVersion::PY312,
+        );
+    }
+
+    /// every constructor the polyfill writes is called by a name the module does not spell,
+    /// whatever the module binds that name to
+    #[test]
+    fn a_constructor_the_module_binds_is_imported_under_another_name() {
+        check_at(
+            indoc! {"
+                class Generic: ...
+                class A[T, *Ts, **P]: ...
+            "},
+            indoc! {"
+                from typing import TypeVar, TypeVarTuple, Unpack, ParamSpec, Generic as Generic2
+                class Generic: ...
+                _T = TypeVar(\"_T\")
+                _Ts = TypeVarTuple(\"_Ts\")
+                _P = ParamSpec(\"_P\")
+                class A(Generic2[_T, *_Ts, _P]): ...
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// the `TypeVar` a type parameter is declared as is written into the module, where a
+    /// binding of the module's own under the same name would be overwritten by it
+    #[test]
+    fn a_type_variable_the_module_binds_keeps_its_name() {
+        check_at(
+            indoc! {"
+                from typing import TypeVar
+                _T = TypeVar(\"_T\", bound=int)
+                def legacy(x: _T) -> _T: ...
+                def modern[T](x: T) -> T: ...
+                class A[_T]: ...
+            "},
+            indoc! {"
+                from typing import TypeVar, TypeVar as TypeVar2, Generic
+                _T = TypeVar(\"_T\", bound=int)
+                def legacy(x: _T) -> _T: ...
+                _T2 = TypeVar2(\"_T2\")
+                def modern(x: _T2) -> _T2: ...
+                class A(Generic[_T2]): ...
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// a definition written into a class body or an `if` is not in scope where the module
+    /// declares a function later, so that function gets a definition of its own, under a name
+    /// that shadows neither
+    #[test]
+    fn a_type_variable_is_bound_in_one_suite() {
+        check_at(
+            indoc! {"
+                class C:
+                    def m[T](self, x: T) -> T: ...
+                if flag:
+                    def g[T](x: T) -> T: ...
+                def f[T](x: T) -> T: ...
+                def h[T](x: T) -> T: ...
+            "},
+            indoc! {"
+                from typing import TypeVar
+                class C:
+                    _T = TypeVar(\"_T\")
+                    def m(self, x: _T) -> _T: ...
+                if flag:
+                    _T_1 = TypeVar(\"_T_1\")
+                    def g(x: _T_1) -> _T_1: ...
+                _T_2 = TypeVar(\"_T_2\")
+                def f(x: _T_2) -> _T_2: ...
+                def h(x: _T_2) -> _T_2: ...
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// a numbered name is skipped when the module spells it, as the first name is
+    #[test]
+    fn a_numbered_type_variable_skips_a_name_the_module_binds() {
+        check_at(
+            indoc! {"
+                _T_1 = 1
+                def f[T: int](x: T) -> T: ...
+                def g[T](x: T) -> T: ...
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _T_1 = 1
+                _T = TypeVar(\"_T\", bound=int)
+                def f(x: _T) -> _T: ...
+                _T_2 = TypeVar(\"_T_2\")
+                def g(x: _T_2) -> _T_2: ...
+            "},
+            PythonVersion::PY311,
         );
     }
 
@@ -2380,6 +2715,114 @@ mod tests {
                 _T = TypeVar(\"_T\", int, str)
                 class Foo(Generic[_T]): ...
             "},
+        );
+    }
+
+    /// `some int` declares a type parameter named after its parameter. the parser gives the
+    /// list it synthesizes the parameter list's range, which has no brackets to remove
+    #[test]
+    fn some_parameter() {
+        check(
+            indoc! {"
+                def inc(n: some int) -> int:
+                    return n + 1
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _n = TypeVar(\"_n\", bound=int)
+                def inc(n: _n) -> int:
+                    return n + 1
+            "},
+        );
+    }
+
+    /// native syntax has nowhere to declare a `some` hole, so it is a `TypeVar` at every
+    /// version, and the signature's other reads of it are renamed with it
+    #[test]
+    fn some_parameter_read_by_the_return_type() {
+        check_at(
+            indoc! {"
+                def echo[T](x: T, n: some int) -> n:
+                    return n
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _T = TypeVar(\"_T\")
+                _n = TypeVar(\"_n\", bound=int)
+                def echo(x: _T, n: _n) -> _n:
+                    return n
+            "},
+            PythonVersion::PY313,
+        );
+    }
+
+    /// the body reads a `some` parameter under its own name, which the hole shares, in a
+    /// nested definition too
+    #[test]
+    fn a_some_parameter_is_not_renamed_in_the_body() {
+        check(
+            indoc! {"
+                def show(n: some int) -> n:
+                    def inner() -> None:
+                        print(n)
+                    inner()
+                    return n
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _n = TypeVar(\"_n\", bound=int)
+                def show(n: _n) -> _n:
+                    def inner() -> None:
+                        print(n)
+                    inner()
+                    return n
+            "},
+        );
+    }
+
+    /// a bound is evaluated when the `TypeVar` is made, so below 3.10 an optional in it is
+    /// the `Union` the optional lowering spells for that version, written whole
+    #[test]
+    fn an_optional_bound_below_310() {
+        check_at(
+            indoc! {"
+                def f[T: int?](x: T) -> T:
+                    return x
+                def g(n: some int?) -> int:
+                    return 0
+                type B = int?
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from typing import TypeVar, Union
+                from typing_extensions import TypeAliasType
+                _T = TypeVar(\"_T\", bound=Union[int, None])
+                def f(x: _T) -> _T:
+                    return x
+                _n = TypeVar(\"_n\", bound=Union[int, None])
+                def g(n: _n) -> int:
+                    return 0
+                B = TypeAliasType(\"B\", Union[int, None])
+            "},
+            PythonVersion::PY39,
+        );
+    }
+
+    /// an optional of an optional keeps its outer layer as the runtime `Optional` wrapper,
+    /// which the bound writes once
+    #[test]
+    fn a_nested_optional_bound() {
+        let output = crate::transpile(
+            "def f[T: int??](x: T) -> T:\n    return x\n",
+            &crate::Config {
+                min_version: PythonVersion::PY311,
+                ..crate::Config::test_default()
+            },
+        )
+        .expect("transpile failed");
+        assert!(
+            output.contains("TypeVar(\"_T\", bound=Optional[int | None])"),
+            "unexpected output:\n{output}"
         );
     }
 }

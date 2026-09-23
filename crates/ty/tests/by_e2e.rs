@@ -1294,6 +1294,128 @@ fn run_checks_a_deeply_nested_expression() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2000");
 }
 
+/// python 3.9 to 3.11 compile a syntax tree handed to `compile` under the
+/// interpreter's recursion limit, and refuse one nested deeper than the source
+/// they compile without complaint. `by run` names each module's code after its
+/// `.by`, and a module nested this deep still runs on each of them
+#[test]
+fn run_compiles_a_deeply_nested_expression_on_each_interpreter() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let terms = vec!["1"; 2000].join(" + ");
+    fs::write(dir.path().join("main.by"), format!("print({terms})\n")).unwrap();
+
+    let interpreters = ["python3", "python3.9", "python3.10", "python3.11"]
+        .into_iter()
+        .filter(|python| {
+            Command::new(python)
+                .args(["-c", ""])
+                .status()
+                .is_ok_and(|status| status.success())
+        });
+    for python in interpreters {
+        let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+            .args(["run", "--python", python, "main"])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by");
+
+        assert!(
+            output.status.success(),
+            "by run on {python} failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "2000",
+            "on {python}"
+        );
+    }
+}
+
+/// a warning python raises while compiling a module names the `.by` line it came
+/// from, like one the program raises as it runs
+#[test]
+fn run_names_the_by_line_of_a_compile_time_warning() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // the force-unwrap writes a runtime helper above the print, so the generated
+    // line is not the `.by` line
+    fs::write(
+        dir.path().join("main.by"),
+        "def f(a: int?) -> int:\n    return a!\n\nprint(\"\\d\", f(1))\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        // an invalid escape is a `DeprecationWarning` before 3.12, hidden by default
+        .env("PYTHONWARNINGS", "always")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert!(
+        stderr.contains("main.by:4: ") && stderr.contains("invalid escape sequence"),
+        "the warning should name the .by line of the string:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains(".py:"),
+        "the warning should not name the generated file:\n{stderr}"
+    );
+}
+
+/// a warning the filters make an error is raised by python's compiler as a `SyntaxError`
+/// at the line it would have warned about, which names the `.by` line as the warning does.
+/// in the module `by run` was asked to run, it is reported the way python reports a script
+/// it cannot compile, with none of the runner's frames above it
+#[test]
+fn run_names_the_by_line_of_a_compile_time_warning_made_an_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    // the force-unwrap writes a runtime helper above the print, so the generated
+    // line is not the `.by` line
+    let program = "def f(a: int?) -> int:\n    return a!\n\nprint(\"\\d\", f(1))\n";
+    fs::write(dir.path().join("main.by"), program).unwrap();
+    fs::write(dir.path().join("bad.by"), program).unwrap();
+    fs::write(
+        dir.path().join("importer.by"),
+        "import bad\n\nprint(bad.f(2))\n",
+    )
+    .unwrap();
+
+    for (module, by_file) in [("main", "main.by"), ("importer", "bad.by")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_by"))
+            .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+            // an invalid escape is a `DeprecationWarning` before 3.12 and a
+            // `SyntaxWarning` from it, and an error under this filter on both
+            .env("PYTHONWARNINGS", "error")
+            .args(["run", module])
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by");
+
+        // python writes its traceback in text mode, which ends a line with `\r\n` on windows
+        let stderr = String::from_utf8_lossy(&output.stderr).replace("\r\n", "\n");
+        assert!(
+            !output.status.success(),
+            "by run {module} succeeded:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("{by_file}\", line 4\n"))
+                && stderr.contains("SyntaxError")
+                && stderr.contains("invalid escape sequence"),
+            "the error should name the .by line of the string:\n{stderr}"
+        );
+        let generated = by_file.replace(".by", ".py");
+        assert!(
+            !stderr.contains(&generated) && !stderr.contains("_by_runner"),
+            "the error should name neither the generated file nor the runner:\n{stderr}"
+        );
+    }
+}
+
 #[test]
 fn run_force_unwrap_yields_inner_value() {
     // `Some(x)` lowers to the `Optional(x)` wrapper; force-unwrapping it must
@@ -6237,6 +6359,51 @@ fn run_falls_back_to_the_python_variable() {
         elsewhere.ran_it(&stdout),
         "with no project environment, `$PYTHON` is the answer:\n{stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// `--python` takes a bare name, like `$PYTHON` does, and finds it on `PATH`. it
+/// was read as a path relative to the working directory and panicked there
+#[test]
+fn run_finds_a_bare_python_name_on_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--python", "python3", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+/// a relative `--python` that is neither an interpreter nor an environment is
+/// reported as an interpreter that cannot be run, not a panic
+#[test]
+fn run_reports_a_relative_python_that_is_not_one() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
+    fs::create_dir(dir.path().join("empty")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "--python", "empty", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "expected a refusal:\n{stderr}");
+    assert!(
+        stderr.contains("could not run `empty`"),
+        "the message has to name the interpreter it could not run:\n{stderr}"
     );
 }
 

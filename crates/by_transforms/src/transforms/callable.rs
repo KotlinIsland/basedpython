@@ -25,14 +25,15 @@ use std::hash::{Hash, Hasher};
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::helpers::{is_classvar_marker_id, is_final_marker_id, is_let_marker_id};
-use ruff_python_ast::{Expr, ExprCallableType, Stmt, UnaryOp};
+use ruff_python_ast::{Expr, ExprCallableType, Operator, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Lowering, PassContext, TypeAwarePass};
 use super::intersection::{collect_intersect, collect_union, is_intersection_node};
 use super::just_float::rewrite_type_expr_with_imports;
 use super::repeated_underscore::{WrittenNames, lowered_callable_parameters};
-use crate::config::FloatLiteralLowering;
+use super::type_expr_walker::RootKind;
+use crate::config::{Config, FloatLiteralLowering};
 use crate::type_info::{TypeInfo, UnpackedKwargsLowering};
 
 /// the lowerings [`CallableSyntax::lower_type_expr`] writes itself, wherever it prints a type
@@ -64,8 +65,17 @@ pub(crate) struct CallableSyntax<'src> {
     /// `typeof` fold lowers the rest in the syntax tree. `None` owns every one
     owned_typeof: Option<&'src [TextRange]>,
     float_literals: FloatLiteralLowering,
+    /// whether a union the runtime evaluates can be written `A | B`: from 3.10, where
+    /// `type.__or__` arrived, and in a stub, which nothing evaluates
+    union_operator_runs: bool,
+    /// whether the runtime evaluates the type expression being lowered where it
+    /// stands. an annotation it does not: below 3.10, the only targets where the
+    /// spelling matters, annotations are always deferred, so a union the author
+    /// wrote with the operator can stay as written there
+    evaluated: bool,
     edits: Vec<Fix>,
     needs_import: bool,
+    needs_union_import: bool,
     needs_concatenate_import: bool,
     needs_protocol_import: bool,
     needs_intersection_import: bool,
@@ -100,20 +110,19 @@ struct ProtocolShape {
 }
 
 impl<'src> CallableSyntax<'src> {
-    pub(crate) fn new(
-        source: &'src str,
-        written: WrittenNames<'src>,
-        float_literals: FloatLiteralLowering,
-    ) -> Self {
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: &Config) -> Self {
         Self {
             source,
             written,
             types: None,
             claimed_ranges: &[],
             owned_typeof: None,
-            float_literals,
+            float_literals: config.float_literals,
+            union_operator_runs: config.is_stub || config.min_version >= PythonVersion::PY310,
+            evaluated: false,
             edits: Vec::new(),
             needs_import: false,
+            needs_union_import: false,
             needs_concatenate_import: false,
             needs_protocol_import: false,
             needs_intersection_import: false,
@@ -143,6 +152,27 @@ impl<'src> CallableSyntax<'src> {
             .map(|(_, name)| name.as_str())
     }
 
+    /// say whether the runtime evaluates the type expressions lowered from here on
+    /// where they stand, which decides whether a union written with the operator has
+    /// to be spelled out
+    pub(crate) fn set_evaluated(&mut self, evaluated: bool) {
+        self.evaluated = evaluated;
+    }
+
+    /// a union of the rendered `arms`, which is `Union[A, B]` below 3.10, since
+    /// `A | B` calls `type.__or__`. a union this lowerer spells for a `?` or an `or`
+    /// is written so wherever it stands, as the optional lowering writes a bare `T?`:
+    /// even a deferred annotation is evaluated by whatever reads it with
+    /// `get_type_hints`
+    fn spell_union(&mut self, arms: &[String]) -> String {
+        if self.union_operator_runs {
+            arms.join(" | ")
+        } else {
+            self.needs_union_import = true;
+            format!("Union[{}]", arms.join(", "))
+        }
+    }
+
     pub(crate) fn with_types(mut self, types: &'src dyn TypeInfo) -> Self {
         self.types = Some(types);
         self
@@ -154,7 +184,7 @@ impl<'src> CallableSyntax<'src> {
     }
 
     /// leave to the `typeof` fold every `typeof` a type position holds outside `owned`
-    pub(crate) fn with_owned_typeof(mut self, owned: &'src [TextRange]) -> Self {
+    fn with_owned_typeof(mut self, owned: &'src [TextRange]) -> Self {
         self.owned_typeof = Some(owned);
         self
     }
@@ -186,6 +216,7 @@ impl<'src> CallableSyntax<'src> {
             (self.needs_typeof_import, "from ty_extensions import TypeOf"),
             (self.needs_not_import, "from ty_extensions import Not"),
             (self.needs_annotated_import, "from typing import Annotated"),
+            (self.needs_union_import, "from typing import Union"),
         ] {
             if needed {
                 lines.push(line.to_owned());
@@ -204,6 +235,7 @@ impl<'src> CallableSyntax<'src> {
         self.needs_typeof_import = false;
         self.needs_not_import = false;
         self.needs_annotated_import = false;
+        self.needs_union_import = false;
         self.needs_optional_runtime = false;
         (lines, helpers)
     }
@@ -259,7 +291,8 @@ impl<'src> CallableSyntax<'src> {
             .filter(|(candidate, _)| range.contains_range(*candidate))
             .map(|(candidate, name)| (*candidate, name.as_str()))
             .collect();
-        subs.sort_by_key(|(candidate, _)| candidate.start());
+        // an insertion at an offset goes ahead of a replacement starting there
+        subs.sort_by_key(|(candidate, _)| (candidate.start(), candidate.end()));
 
         let mut out = String::new();
         let mut cursor = range.start();
@@ -621,7 +654,18 @@ impl<'src> CallableSyntax<'src> {
                 let mut parts: Vec<Expr> = Vec::new();
                 collect_union(expr, &mut parts);
                 let rendered: Vec<String> = parts.iter().map(|p| self.rewrite_or_leaf(p)).collect();
-                Some(rendered.join(" | "))
+                Some(self.spell_union(&rendered))
+            }
+
+            // a union written with the operator is kept as written, unless the runtime
+            // evaluates it on a target without the operator
+            Expr::BinOp(b)
+                if b.op == Operator::BitOr && self.evaluated && !self.union_operator_runs =>
+            {
+                let mut parts: Vec<Expr> = Vec::new();
+                collect_union(expr, &mut parts);
+                let rendered: Vec<String> = parts.iter().map(|p| self.rewrite_or_leaf(p)).collect();
+                Some(self.spell_union(&rendered))
             }
 
             // `not T` → `Not[T]`
@@ -643,12 +687,23 @@ impl<'src> CallableSyntax<'src> {
                     depth += 1;
                     inner = u2.operand.as_ref();
                 }
+                // the `?` already rewritten by the optional lowering, in a spelling for the
+                // target's version, is written with that rewrite: its insertion ahead of the
+                // operand would otherwise land inside the operand's rendering, with no tail
+                if self.substitutions.iter().any(|(range, _)| {
+                    !range.is_empty()
+                        && range.start() >= inner.end()
+                        && expr.range().contains_range(*range)
+                }) {
+                    return Some(self.sweep_substitutions(expr.range()));
+                }
                 let inner_str = self.rewrite_or_leaf(inner);
                 if depth >= 2 {
                     self.needs_optional_runtime = true;
                 }
+                let union = self.spell_union(&[inner_str, "None".to_owned()]);
                 Some(format!(
-                    "{}{inner_str} | None{}",
+                    "{}{union}{}",
                     "Optional[".repeat(depth - 1),
                     "]".repeat(depth - 1)
                 ))
@@ -841,15 +896,19 @@ fn is_named(expr: &Expr, ident: &str) -> bool {
 /// `substitutions` are ranges another transform has already lowered — a symbolic
 /// fold (`T.a` → `int`), a typevar rename (`T` → `_T`). They are honoured on every
 /// rendering path, which is what lets one wide edit carry rewrites it subsumes.
+///
+/// `root` says where the text is written, which decides how a union in it is spelled
 pub(crate) fn lower_type_expr_full(
     source: &str,
     written: WrittenNames,
     types: &dyn TypeInfo,
     expr: &Expr,
     substitutions: &[(TextRange, String)],
-    float_literals: FloatLiteralLowering,
+    config: &Config,
+    root: RootKind,
 ) -> Option<String> {
-    let mut inner = CallableSyntax::new(source, written, float_literals).with_types(types);
+    let mut inner = CallableSyntax::new(source, written, config).with_types(types);
+    inner.set_evaluated(root == RootKind::Evaluated);
     for (range, name) in substitutions {
         inner.add_substitution(*range, name.clone());
     }
@@ -866,7 +925,7 @@ pub(crate) fn lower_type_expr_full(
     }
     // no structural type-form — fall back to the per-leaf composer
     // (`float` → `JustFloat`, a literal → `Literal[…]`, `dynamic` → `Any`)
-    rewrite_type_expr_with_imports(source, types, expr, float_literals).map(|(text, _)| text)
+    rewrite_type_expr_with_imports(source, types, expr, config.float_literals).map(|(text, _)| text)
 }
 
 /// if `expr` is `Subscript(Name("__let__"|"__classvar__"|"__final__"), slice)`,
@@ -945,24 +1004,24 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
         }
         crate::transforms::type_expr_walker::Recurse::Stop
     }
+
+    fn enter_root(&mut self, kind: RootKind) {
+        self.set_evaluated(kind == RootKind::Evaluated);
+    }
 }
 
 pub(crate) struct CallableSyntaxPass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
-    float_literals: FloatLiteralLowering,
+    config: Config,
 }
 
 impl<'src> CallableSyntaxPass<'src> {
-    pub(crate) fn new(
-        source: &'src str,
-        written: WrittenNames<'src>,
-        float_literals: FloatLiteralLowering,
-    ) -> Self {
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: Config) -> Self {
         Self {
             source,
             written,
-            float_literals,
+            config,
         }
     }
 }
@@ -977,6 +1036,11 @@ struct ValueCallableWalker<'a, 'src> {
 }
 
 impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for ValueCallableWalker<'_, '_> {
+    /// every annotation is a type position the type-position walk has lowered, as
+    /// the annotation it is. lowered again here as a value, a union in it would be
+    /// spelled for a runtime that never evaluates it
+    fn visit_annotation(&mut self, _expr: &'ast Expr) {}
+
     fn visit_expr(&mut self, expr: &'ast Expr) {
         // an inline protocol is lowered whole by `protocol_type`, which renders
         // its members through its own lowerer — rewriting a method member's
@@ -1003,7 +1067,8 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
     }
 
     /// a type expression it replaces is printed by the shared lowerer, which writes every
-    /// leaf inside it too, an inline protocol as the name of the class it hoists to
+    /// leaf inside it too, an inline protocol as the name of the class it hoists to, and a
+    /// union the runtime evaluates in the spelling the target can run
     fn subsumes(&self) -> &'static [Lowering] {
         &[
             Lowering::Callable,
@@ -1013,6 +1078,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             Lowering::DynamicKeyword,
             Lowering::FloatConst,
             Lowering::ProtocolType,
+            Lowering::RuntimeUnion,
         ]
     }
 
@@ -1021,7 +1087,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
         // `required_imports` / `edits` uses below
         let claimed = ctx.claimed_type_op_ranges.clone();
         let structural_typeof = ctx.structural_typeof_ranges.clone();
-        let mut inner = CallableSyntax::new(self.source, self.written, self.float_literals)
+        let mut inner = CallableSyntax::new(self.source, self.written, &self.config)
             .with_types(types)
             .with_claimed_ranges(&claimed)
             .with_owned_typeof(&structural_typeof);
@@ -1034,6 +1100,8 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
         // also lower callable types appearing in value positions; duplicate
         // edits over type-position callables dedup in the splice
         {
+            // a callable type standing as a value is evaluated there
+            inner.set_evaluated(true);
             let mut walker = ValueCallableWalker { inner: &mut inner };
             for stmt in stmts {
                 ruff_python_ast::visitor::Visitor::visit_stmt(&mut walker, stmt);
@@ -1074,6 +1142,120 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// transpile for python 3.9, which has no `type.__or__`
+    fn check_py39(input: &str, expected: &str) {
+        let config = Config {
+            min_version: crate::PythonVersion::PY39,
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(input, &config).unwrap(), expected);
+    }
+
+    /// a type written where the runtime evaluates it is spelled with `Union` below 3.10,
+    /// at any depth, whether the union was written with `|`, `or` or `?`
+    #[test]
+    fn an_evaluated_union_is_spelled_out_below_310() {
+        check_py39(
+            indoc! {"
+                Optionals = list[int?]
+                Values = dict[str, int | None]
+                Either = list[int or str]
+                Pairs = list[(int, str | None)]
+                Handlers = list[(int | None) -> str]
+                class Items(list[int | str]): ...
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from typing import Callable, Union
+                Optionals = list[Union[int, None]]
+                Values = dict[str, Union[int, None]]
+                Either = list[Union[int, str]]
+                Pairs = list[tuple[int, Union[str, None]]]
+                Handlers = list[Callable[[Union[int, None]], str]]
+                class Items(list[Union[int, str]]): ...
+            "},
+        );
+    }
+
+    /// a `cast` target and a type argument of a typing construct are evaluated by the
+    /// call. a union at the top of a `cast` target is also a value the runtime-union
+    /// lowering reads, and this pass writes it in its place
+    #[test]
+    fn a_cast_target_and_a_typevar_bound_are_spelled_out_below_310() {
+        check_py39(
+            indoc! {"
+                from typing import TypeVar, cast
+                Bound = TypeVar(\"Bound\", bound=int | str)
+                def f(v: object):
+                    return cast(int | str, v), cast(list[int?], v)
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from typing import TypeVar, cast, Union
+                Bound = TypeVar(\"Bound\", bound=Union[int, str])
+                def f(v: object):
+                    return cast(Union[int, str], v), cast(list[Union[int, None]], v)
+            "},
+        );
+    }
+
+    /// a bound, a default and an alias value are call arguments once polyfilled, so the
+    /// union the author wrote with `|` is spelled out there too
+    #[test]
+    fn a_polyfilled_bound_default_and_alias_are_spelled_out_below_310() {
+        check_py39(
+            indoc! {"
+                def f[T: int | str](x: T) -> T:
+                    return x
+                def g[T = int | None]():
+                    pass
+                type A = list[int?] | str
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from typing import Union
+                from typing_extensions import TypeVar, TypeAliasType
+                _T = TypeVar(\"_T\", bound=Union[int, str])
+                def f(x: _T) -> _T:
+                    return x
+                _T_1 = TypeVar(\"_T_1\", default=Union[int, None])
+                def g():
+                    pass
+                A = TypeAliasType(\"A\", Union[list[Union[int, None]], str])
+            "},
+        );
+    }
+
+    /// an annotation is deferred, so a union the author wrote with `|` keeps its spelling.
+    /// one this lowerer spells for a `?` or an `or` is written as the optional lowering
+    /// writes a bare `T?`, which `get_type_hints` can evaluate
+    #[test]
+    fn an_annotation_keeps_a_written_operator_below_310() {
+        check_py39(
+            "def f(a: list[int?], b: int | str, c: int or str, d: (int | str) -> str) -> list[int] | None: ...\n",
+            indoc! {"
+                from __future__ import annotations
+                from typing import Callable, Union
+                def f(a: list[Union[int, None]], b: int | str, c: Union[int, str], d: Callable[[int | str], str]) -> list[int] | None: ...
+            "},
+        );
+    }
+
+    /// nothing in a stub is evaluated, so a written union keeps its spelling whatever the
+    /// target
+    #[test]
+    fn a_stub_keeps_a_written_operator_below_310() {
+        let config = Config {
+            min_version: crate::PythonVersion::PY39,
+            is_stub: true,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile("Values = dict[str, int | None]\n", &config).unwrap(),
+            "Values = dict[str, int | None]\n"
         );
     }
 

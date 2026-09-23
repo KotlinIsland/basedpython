@@ -637,6 +637,22 @@ pub(crate) fn pattern_success_types<'db>(
     }
 }
 
+/// the argument a call to `function` tests the type of, and narrows when the call is a condition:
+/// the first of `isinstance(x, int)`, `issubclass(t, int)` and `hasattr(x, "a")`
+pub(crate) fn argument_tested_by_known_function(
+    function: KnownFunction,
+    call: &ast::ExprCall,
+) -> Option<&ast::Expr> {
+    if !call.arguments.keywords.is_empty() {
+        return None;
+    }
+    let [tested, _] = &*call.arguments.args else {
+        return None;
+    };
+    (function == KnownFunction::HasAttr || function.into_classinfo_constraint_function().is_some())
+        .then_some(tested)
+}
+
 /// Functions that can be used to narrow the type of a first argument using a "classinfo" second argument.
 ///
 /// A "classinfo" argument is either a class or a tuple of classes, or a tuple of tuples of classes
@@ -4802,12 +4818,13 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                     None
                 }
             }
-            Type::FunctionLiteral(function_type) if expr_call.arguments.keywords.is_empty() => {
-                let [first_arg, second_arg] = &*expr_call.arguments.args else {
+            Type::FunctionLiteral(function_type) => {
+                let function = function_type.known(db)?;
+                let first_arg = argument_tested_by_known_function(function, expr_call)?;
+                let [_, second_arg] = &*expr_call.arguments.args else {
                     return None;
                 };
                 let first_arg = PlaceExpr::try_from_expr(first_arg)?;
-                let function = function_type.known(db)?;
                 let place = self.expect_place(&first_arg);
 
                 if function == KnownFunction::HasAttr {

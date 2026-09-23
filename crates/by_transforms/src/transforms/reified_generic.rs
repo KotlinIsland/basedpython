@@ -558,6 +558,27 @@ mod tests {
         );
     }
 
+    /// the body reads the parameter `n`, not the type parameter of that name, so nothing is
+    /// reified and the function lowers like any other generic one
+    #[test]
+    fn a_parameter_named_like_the_type_parameter_is_not_a_read_of_it() {
+        let output = transpile(
+            indoc! {"
+                def f[n](n: n) -> n:
+                    return n
+            "},
+            &Config {
+                min_version: PythonVersion::PY311,
+                ..Config::test_default()
+            },
+        )
+        .expect("transpile failed");
+        assert!(
+            output.contains("def f(n: _n) -> _n:\n    return n\n"),
+            "unexpected output:\n{output}"
+        );
+    }
+
     #[test]
     fn default_on_312_is_an_error() {
         // pep 696 defaults are 3.13-only syntax, and a reified function can't

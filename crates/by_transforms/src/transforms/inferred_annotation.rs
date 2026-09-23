@@ -10,7 +10,9 @@
 //! (`Literal[1]` → `int`) and spliced in as an annotation, so the class's
 //! implicit attribute types become declared.
 //!
-//! only a bare `<name> = <value>` directly in a class body is rewritten.
+//! only a bare `<name> = <value>` directly in a class body is rewritten, and a
+//! declaration that states no type, `var <name> = <value>`, which is the same
+//! assignment.
 //! multi-target (`a = b = 1`) and unpacking (`a, b = ...`) assignments are
 //! left alone, as are assignments whose value has no faithful annotation: one
 //! with an `Unknown` / `Any` part, and one whose type python cannot spell in a
@@ -22,8 +24,9 @@
 
 use std::collections::BTreeSet;
 
+use ruff_python_ast::helpers::{DeclarationMarker, DeclarationMarkerKind};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtAssign, StmtClassDef};
+use ruff_python_ast::{Expr, ExprName, Stmt, StmtClassDef};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
@@ -83,28 +86,34 @@ impl State<'_> {
             return;
         }
         for stmt in &class.body {
-            if let Stmt::Assign(assign) = stmt {
-                self.process_assign(assign);
+            match stmt {
+                Stmt::Assign(assign) => {
+                    // only a single `<name> = <value>` — chained (`a = b = 1`) and
+                    // unpacking (`a, b = ...`) targets have no single declared type
+                    if let [Expr::Name(name)] = assign.targets.as_slice() {
+                        self.process_assign(name, &assign.value);
+                    }
+                }
+                Stmt::AnnAssign(declaration)
+                    if let Expr::Name(name) = declaration.target.as_ref()
+                        && let Some(value) = &declaration.value
+                        && states_no_type(&declaration.annotation) =>
+                {
+                    self.process_assign(name, value);
+                }
+                _ => {}
             }
         }
     }
 
-    fn process_assign(&mut self, assign: &StmtAssign) {
-        // only a single `<name> = <value>` — chained (`a = b = 1`) and
-        // unpacking (`a, b = ...`) targets have no single declared type
-        let [Expr::Name(name)] = assign.targets.as_slice() else {
-            return;
-        };
+    fn process_assign(&mut self, name: &ExprName, value: &Expr) {
         // dunders (`__slots__`, `__match_args__`, ...) are class machinery, not
         // typed attributes — annotating them is noise (and `__slots__ = ()` is
         // exactly what the enum lowering re-feeds through this pipeline)
         if is_dunder(name.id.as_str()) {
             return;
         }
-        let Some(annotation) = self
-            .types
-            .inferred_annotation(&assign.value, self.min_version)
-        else {
+        let Some(annotation) = self.types.inferred_annotation(value, self.min_version) else {
             return;
         };
         let pos = name.range().end();
@@ -113,6 +122,13 @@ impl State<'_> {
         self.modules.extend(annotation.modules);
         self.typing_names.extend(annotation.typing_names);
     }
+}
+
+/// whether a declaration's annotation is the marker of `[modifiers] <name> = <value>`,
+/// which declares no type of its own
+fn states_no_type(annotation: &Expr) -> bool {
+    matches!(annotation, Expr::Name(marker) if DeclarationMarker::from_id(marker.id.as_str())
+        .is_some_and(|marker| marker.kind == DeclarationMarkerKind::Assign))
 }
 
 fn is_dunder(name: &str) -> bool {
@@ -151,6 +167,52 @@ mod tests {
             indoc! {"
                 class A:
                     a: int = 1
+            "},
+        );
+    }
+
+    /// `var` and a modifier chain declare no type, so the member is the bare assignment
+    /// it lowers to and gets the same annotation
+    #[test]
+    fn a_declaration_stating_no_type_is_annotated() {
+        check(
+            indoc! {"
+                class A:
+                    var a = 0
+                    b = 0
+                    var c = 1.5
+                    private var d = \"x\"
+                    protected e = [1]
+            "},
+            indoc! {"
+                class A:
+                    a: int = 0
+                    b: int = 0
+                    c: float = 1.5
+                    __d: str = \"x\"
+                    _e: list[int] = [1]
+            "},
+        );
+    }
+
+    /// outside a class body a declaration is left as the assignment it lowers to, as a
+    /// bare one is
+    #[test]
+    fn a_declaration_outside_a_class_is_left_bare() {
+        check(
+            indoc! {"
+                var a = 0
+                b = 0
+                def f():
+                    var c = 0
+                    return c
+            "},
+            indoc! {"
+                a = 0
+                b = 0
+                def f():
+                    c = 0
+                    return c
             "},
         );
     }

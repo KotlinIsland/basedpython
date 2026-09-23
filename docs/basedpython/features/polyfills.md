@@ -111,6 +111,23 @@ ______________________________________________________________________
 `TypeVar` with a `default=` argument requires Python 3.13+. basedpython imports `TypeVar` from `typing_extensions` instead (which supports `default=`).
 this applies when using PEP 695 generic syntax with a default (see the [generics polyfill](#generic-classes-and-functions-pep-695) below)
 
+the same goes for `ParamSpec` and `TypeVarTuple`. a keyword argument can't be starred, so a variadic's default is passed unpacked with `Unpack`:
+
+```python
+# basedpython source
+class Row[T = str, *Ts = *tuple[int, str]]: ...
+```
+
+```python
+# generated Python
+_T = TypeVar("_T", default=str)  # from typing_extensions
+_Ts = TypeVarTuple("_Ts", default=Unpack[tuple[int, str]])  # from typing_extensions
+
+class Row(Generic[_T, Unpack[_Ts]]): ...
+```
+
+a module that binds `TypeVar` itself — `from typing import TypeVar` binds the one without `default=` — keeps its own, and the polyfill's is imported under a name the module does not spell, `TypeVar2`. the same goes for every name the polyfill calls: `Generic`, `ParamSpec`, `TypeVarTuple`, `Unpack` and `TypeAliasType`
+
 the `[T = int]` header syntax is itself 3.13+: on a 3.12 target, a declaration with a defaulted type parameter is desugared by the generics polyfill while declarations without defaults keep the native syntax. a [reified](reified-generics.md) function can't be desugared, so a defaulted reified function on a 3.12 target is a transpile error
 
 ### `typing.TypeIs` (PEP 742)
@@ -362,6 +379,9 @@ the lowering binds with assignment expressions, so it needs python 3.8. below th
 Alias = int | str
 isinstance(x, int | None)
 cast(int | str, value)
+Rows = list[int | None]
+class Items(list[int | str]): ...
+def f[T: int | str](t: T) -> T: ...
 ```
 
 ```python
@@ -369,11 +389,23 @@ cast(int | str, value)
 Alias = Union[int, str]
 isinstance(x, (int, type(None),))
 cast(Union[int, str], value)
+Rows = list[Union[int, None]]
+class Items(list[Union[int, str]]): ...
+_T = TypeVar("_T", bound=Union[int, str])
+def f(t: _T) -> _T: ...
 ```
 
 the two spellings are not interchangeable — `isinstance` takes a tuple of classes and rejects a `typing.Union` — so the classinfo argument of `isinstance` and `issubclass` becomes a tuple and everything else a `Union`. whether a `|` is a union at all is asked of the checker rather than guessed from the shape, so an ordinary bitwise or is left alone
 
-[`T?`](wrapped-results.md) is spelled `Union[T, None]` on these targets for the same reason
+a type the runtime evaluates is spelled this way at any depth: a type written as a value, a class base, a `cast` target, and a type parameter's bound, default or alias value, which the [generics polyfill](#generic-classes-and-functions-pep-695) turns into call arguments
+
+[`T?`](wrapped-results.md) and `A or B` are spelled `Union[T, None]` and `Union[A, B]` on these targets, in annotations too: a union basedpython spells itself is one `typing.get_type_hints` can evaluate. a `|` written in an annotation is kept as written. `T?` is a union where `isinstance` expects classes too, so there it is the tuple `(T, type(None),)`, alone or inside a union or tuple of classes
+
+a union given a name is spelled `Union[...]`, since it may be read as a type, so it cannot then be handed to `isinstance`: `Alias = int | str` followed by `isinstance(x, Alias)` raises `TypeError` below 3.10, and `by check` reports it. write the union, or the tuple, where `isinstance` is called
+
+### `typing.ParamSpec`, `Concatenate`, `TypeAlias`, `TypeGuard` (PEP 612, 613, 647)
+
+redirected to `typing_extensions`, as is the `ParamSpec` the [generics polyfill](#generic-classes-and-functions-pep-695) declares for a `**P`
 
 ______________________________________________________________________
 
@@ -389,7 +421,7 @@ python 3.12 introduced compact generic syntax. basedpython rewrites it using `ty
 | `def f[T](x: T) -> T: ...`         | `def f(x: T) -> T: ...`                         |
 | `type Point = tuple[float, float]` | `Point: TypeAlias = tuple[float, float]`        |
 
-each type parameter becomes a module-level `TypeVar` with a mangled name (`_T`, `_K`, etc)
+each type parameter becomes a `TypeVar` with a mangled name (`_T`, `_K`, etc), declared just above the generic, in the same block. the name is never one the module spells: in a module that binds `_T` itself, `T` is declared as `_T2`, so the module's own `_T` is left alone. a parameter declared again with different arguments, or in a different block — a method's type parameter, declared in its class body, and a function's of the same name further down — gets a numbered name of its own, `_T_1`
 
 ```python
 # python source
@@ -488,6 +520,8 @@ it silently redirects to `typing_extensions`
 | `reveal_type`, `assert_type` | 3.11     | `typing_extensions` |
 | `override`                   | 3.12     | `typing_extensions` |
 | `TypeVar(default=...)`       | 3.13     | `typing_extensions` |
+| `ParamSpec(default=...)`     | 3.13     | `typing_extensions` |
+| `TypeVarTuple(default=...)`  | 3.13     | `typing_extensions` |
 | `TypeIs`                     | 3.13     | `typing_extensions` |
 | `ReadOnly`                   | 3.13     | `typing_extensions` |
 | `deprecated` (warnings)      | 3.13     | `typing_extensions` |

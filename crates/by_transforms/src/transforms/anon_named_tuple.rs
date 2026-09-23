@@ -97,6 +97,7 @@ impl Shape {
 
 pub(crate) struct AnonNamedTuple<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     config: crate::Config,
     /// One lowerer drives every field type in the run, so its imports and the
@@ -173,8 +174,9 @@ impl<'src> AnonNamedTuple<'src> {
     ) -> Self {
         Self {
             source,
+            written,
             types,
-            callable: CallableSyntax::new(source, written, config.float_literals).with_types(types),
+            callable: CallableSyntax::new(source, written, &config).with_types(types),
             config,
             edits: Vec::new(),
             shapes: indexmap::IndexMap::new(),
@@ -704,7 +706,10 @@ impl<'src> AnonNamedTuple<'src> {
                 ruff_python_ast::TypeParam::TypeVarTuple(tvt) => tvt.name.id.as_str(),
                 ruff_python_ast::TypeParam::ParamSpec(ps) => ps.name.id.as_str(),
             };
-            frame.insert(name.to_owned(), super::generics::mangle(name));
+            frame.insert(
+                name.to_owned(),
+                super::generics::polyfilled_name(self.written, name),
+            );
         }
         if frame.is_empty() {
             return false;

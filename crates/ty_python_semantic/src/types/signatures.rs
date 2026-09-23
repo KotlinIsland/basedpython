@@ -6549,7 +6549,7 @@ impl<'db> Parameter<'db> {
     ///
     /// `None` for a parameter no keyword can name: a variadic one, or a positional-only one that
     /// a `Callable` annotation left unnamed.
-    pub(crate) fn into_keyword_only(self) -> Option<Self> {
+    fn into_keyword_only(self) -> Option<Self> {
         let (name, default_type) = match self.kind {
             ParameterKind::PositionalOnly {
                 name: Some(name),
@@ -6570,7 +6570,7 @@ impl<'db> Parameter<'db> {
     /// basedpython: this parameter made positional-only, keeping its name, annotation and default.
     ///
     /// `None` for a variadic parameter, which stands for a run of arguments rather than one.
-    pub(crate) fn into_positional_only(self) -> Option<Self> {
+    fn into_positional_only(self) -> Option<Self> {
         let (name, default_type) = match self.kind {
             ParameterKind::PositionalOnly { name, default_type } => (name, default_type),
             ParameterKind::PositionalOrKeyword { name, default_type }

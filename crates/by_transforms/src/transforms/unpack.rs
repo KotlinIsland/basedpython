@@ -5,12 +5,17 @@
 //! `tuple[*Ts]`                     → `tuple[Unpack[Ts]]`
 //! `class Stack(Generic[*Ts]):`     → `class Stack(Generic[Unpack[Ts]]):`
 //!
+//! A starred subscript that is not a type is the tuple python 3.11 reads it as:
+//!
+//! `d[*a]`                          → `d[(*a,)]`
+//!
 //! Also lowers basedpython's pack forwarding, which no python version accepts:
 //!
 //! `def f(**kwargs: **Kwargs)`      → `def f(**kwargs: Kwargs.kwargs)`
 //! `def f(*args: *P, **kwargs: **P)` → `def f(*args: P.args, **kwargs: P.kwargs)`
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use ruff_python_ast::PythonVersion;
 use ruff_python_ast::helpers::top_star_slice_elements;
@@ -19,15 +24,42 @@ use ruff_python_ast::{Expr, ModModule, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 use crate::config::Config;
+use crate::type_info::TypeInfo;
 
 pub(crate) struct UnpackSyntax {
     config: Config,
+    type_subscripts: TypeSubscripts,
 }
 
 impl UnpackSyntax {
-    pub(crate) fn new(config: Config) -> Self {
-        Self { config }
+    pub(crate) fn new(config: Config, type_subscripts: TypeSubscripts) -> Self {
+        Self {
+            config,
+            type_subscripts,
+        }
+    }
+}
+
+/// the ranges of the subscripts that are type expressions — the ones whose starred elements
+/// are spelled `Unpack[...]` rather than as the tuple python reads a starred subscript as
+#[derive(Default)]
+pub(crate) struct TypeSubscripts(HashSet<TextRange>);
+
+/// which subscripts in `stmts` are type expressions, as the type checker reads them
+pub(crate) fn collect_type_subscripts(stmts: &[Stmt], types: &dyn TypeInfo) -> TypeSubscripts {
+    let mut subscripts = TypeSubscripts::default();
+    walk_type_positions(stmts, Some(types), &mut subscripts);
+    subscripts
+}
+
+impl TypeExprVisitor for TypeSubscripts {
+    fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
+        if let Expr::Subscript(subscript) = expr {
+            self.0.insert(subscript.range());
+        }
+        Recurse::Descend
     }
 }
 
@@ -56,6 +88,7 @@ impl AstPass for UnpackSyntax {
             edits: RefCell::new(Vec::new()),
             needs_import: false,
             lowered_varargs: pack.lowered_varargs,
+            type_subscripts: &self.type_subscripts,
         };
         for stmt in &module.body {
             state.visit_stmt(stmt);
@@ -144,13 +177,25 @@ fn star_token_range(unpack: TextRange) -> TextRange {
     TextRange::at(unpack.start(), TextSize::from(1))
 }
 
-struct State {
+struct State<'a> {
     edits: RefCell<Vec<(TextRange, String)>>,
     needs_import: bool,
     lowered_varargs: Vec<TextRange>,
+    type_subscripts: &'a TypeSubscripts,
 }
 
-impl State {
+impl State<'_> {
+    /// `d[*a]` → `d[(*a,)]` and `d[*a, b]` → `d[(*a, b)]`: the tuple python 3.11 builds
+    /// for a starred subscript, which earlier versions only accept parenthesized
+    fn parenthesize_value_slice(&self, slice: &ruff_python_ast::ExprTuple) {
+        let mut edits = self.edits.borrow_mut();
+        edits.push((TextRange::empty(slice.start()), "(".to_owned()));
+        // a tuple of one element needs a comma, which its range takes in when written
+        let needs_comma = matches!(&*slice.elts, [only] if only.end() == slice.end());
+        let closing = if needs_comma { ",)" } else { ")" };
+        edits.push((TextRange::empty(slice.end()), closing.to_owned()));
+    }
+
     fn rewrite_subscript_starred(&mut self, starred: &ruff_python_ast::ExprStarred) {
         self.needs_import = true;
         let star_range = star_token_range(starred.range());
@@ -183,7 +228,7 @@ impl State {
     }
 }
 
-impl<'ast> Visitor<'ast> for State {
+impl<'ast> Visitor<'ast> for State<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         if let Stmt::FunctionDef(f) = stmt
             && let Some(vararg) = &f.parameters.vararg
@@ -200,7 +245,16 @@ impl<'ast> Visitor<'ast> for State {
                 walk_expr(self, expr);
                 return;
             }
+            let is_type = self.type_subscripts.0.contains(&s.range());
             match s.slice.as_ref() {
+                Expr::Tuple(t)
+                    if !is_type
+                        && !t.parenthesized
+                        && !t.has_parameter_shape()
+                        && t.elts.iter().any(Expr::is_starred_expr) =>
+                {
+                    self.parenthesize_value_slice(t);
+                }
                 Expr::Starred(st) => self.rewrite_subscript_starred(st),
                 Expr::Tuple(t) if !t.has_parameter_shape() => {
                     for elt in &t.elts {
@@ -330,6 +384,50 @@ mod tests {
                 from typing_extensions import Unpack
                 class A:
                     def method(self, *args: Unpack[tuple[str, ...]]): ...
+            "},
+        );
+    }
+
+    /// a starred subscript of a value is the tuple of what it unpacks, which python before
+    /// 3.11 spells with parentheses. `Unpack[a]` there would look `a` up as a type
+    #[test]
+    fn a_value_subscript_is_the_tuple_python_reads() {
+        check(
+            indoc! {"
+                d = {(1, 2): \"x\", (1, 2, 3): \"y\"}
+                a = (1, 2)
+                print(d[*a], d[*a,], d[*a, 3], d[*a, 3,])
+            "},
+            indoc! {"
+                d = {(1, 2): \"x\", (1, 2, 3): \"y\"}
+                a = (1, 2)
+                print(d[(*a,)], d[(*a,)], d[(*a, 3)], d[(*a, 3,)])
+            "},
+        );
+    }
+
+    /// whether a subscript is a type is the type checker's answer, so a generic type
+    /// applied outside an annotation is still an unpack, and a value in the metadata of
+    /// an annotation is still a tuple
+    #[test]
+    fn a_type_subscript_outside_an_annotation_is_an_unpack() {
+        check(
+            indoc! {"
+                from typing import Annotated, TypeVarTuple
+                Ts = TypeVarTuple(\"Ts\")
+                d = {(1,): 1}
+                a = (1,)
+                Alias = tuple[int, *Ts]
+                x: Annotated[tuple[*Ts], d[*a]]
+            "},
+            indoc! {"
+                from typing import Annotated
+                from typing_extensions import TypeVarTuple, Unpack
+                Ts = TypeVarTuple(\"Ts\")
+                d = {(1,): 1}
+                a = (1,)
+                Alias = tuple[int, Unpack[Ts]]
+                x: Annotated[tuple[Unpack[Ts]], d[(*a,)]]
             "},
         );
     }

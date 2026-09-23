@@ -70,8 +70,24 @@ pub(crate) enum Recurse {
     Stop,
 }
 
+/// whether the runtime evaluates a root type expression where it stands
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootKind {
+    /// a variable, parameter or return annotation, which a target without
+    /// `type.__or__` always defers through `from __future__ import annotations`
+    Annotation,
+    /// every other root: an alias value, a type parameter's bound or default (each
+    /// a call argument once polyfilled), a class base, a `cast` target, a
+    /// value-position type application, the type argument of a typing construct
+    Evaluated,
+}
+
 pub(crate) trait TypeExprVisitor {
     fn visit(&mut self, expr: &Expr, pos: TypePos) -> Recurse;
+
+    /// told ahead of each root the walk visits what kind of root it is, which holds
+    /// for everything nested inside it
+    fn enter_root(&mut self, _kind: RootKind) {}
 }
 
 /// walk every type-position expression in `stmts`. `types` enables detection
@@ -125,6 +141,11 @@ struct TypePosWalker<'a> {
 }
 
 impl TypePosWalker<'_> {
+    fn visit_root(&mut self, expr: &Expr, kind: RootKind) {
+        self.visitor.enter_root(kind);
+        self.visit_type_expr(expr, TypePos::Root);
+    }
+
     fn visit_type_expr(&mut self, expr: &Expr, pos: TypePos) {
         // a claimed subtree has already been resolved by an earlier pass; don't
         // visit or descend into it
@@ -241,7 +262,7 @@ impl TypePosWalker<'_> {
     fn visit_parameters(&mut self, params: &Parameters) {
         for p in params.iter_non_variadic_params() {
             if let Some(ann) = &p.parameter.annotation {
-                self.visit_type_expr(ann, TypePos::Root);
+                self.visit_root(ann, RootKind::Annotation);
             }
             if let Some(default) = &p.default {
                 self.visit_expr(default);
@@ -249,12 +270,12 @@ impl TypePosWalker<'_> {
         }
         if let Some(v) = &params.vararg {
             if let Some(ann) = &v.annotation {
-                self.visit_type_expr(ann, TypePos::Root);
+                self.visit_root(ann, RootKind::Annotation);
             }
         }
         if let Some(k) = &params.kwarg {
             if let Some(ann) = &k.annotation {
-                self.visit_type_expr(ann, TypePos::Root);
+                self.visit_root(ann, RootKind::Annotation);
             }
         }
     }
@@ -268,24 +289,24 @@ impl TypePosWalker<'_> {
                     match b.as_ref() {
                         Expr::Tuple(t) if tv.is_type_mapping && t.parenthesized => {
                             for member in &t.elts {
-                                self.visit_type_expr(member, TypePos::Root);
+                                self.visit_root(member, RootKind::Evaluated);
                             }
                         }
-                        _ => self.visit_type_expr(b, TypePos::Root),
+                        _ => self.visit_root(b, RootKind::Evaluated),
                     }
                 }
                 if let Some(d) = &tv.default {
-                    self.visit_type_expr(d, TypePos::Root);
+                    self.visit_root(d, RootKind::Evaluated);
                 }
             }
             TypeParam::TypeVarTuple(tvt) => {
                 if let Some(d) = &tvt.default {
-                    self.visit_type_expr(d, TypePos::Root);
+                    self.visit_root(d, RootKind::Evaluated);
                 }
             }
             TypeParam::ParamSpec(ps) => {
                 if let Some(d) = &ps.default {
-                    self.visit_type_expr(d, TypePos::Root);
+                    self.visit_root(d, RootKind::Evaluated);
                 }
             }
         }
@@ -310,13 +331,13 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
                 // name being declared (`var a: str?` → `var [str | None]`)
                 let annotation =
                     declaration_annotation_type(&a.annotation).unwrap_or(&a.annotation);
-                self.visit_type_expr(annotation, TypePos::Root);
+                self.visit_root(annotation, RootKind::Annotation);
                 if let Some(v) = &a.value {
                     self.visit_expr(v);
                 }
             }
             Stmt::TypeAlias(a) => {
-                self.visit_type_expr(&a.value, TypePos::Root);
+                self.visit_root(&a.value, RootKind::Evaluated);
                 if let Some(tp) = &a.type_params {
                     for p in &tp.type_params {
                         self.visit_type_param(p);
@@ -329,7 +350,7 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
                 if let Some(ret) = &f.returns
                     && !f.is_asserts_return
                 {
-                    self.visit_type_expr(ret, TypePos::Root);
+                    self.visit_root(ret, RootKind::Annotation);
                 }
                 if let Some(tp) = &f.type_params {
                     for p in &tp.type_params {
@@ -343,7 +364,7 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
             Stmt::ClassDef(c) => {
                 if let Some(arguments) = &c.arguments {
                     for base in &arguments.args {
-                        self.visit_type_expr(base, TypePos::Root);
+                        self.visit_root(base, RootKind::Evaluated);
                     }
                     for kw in &arguments.keywords {
                         // class kwargs (e.g. `metaclass=Meta`) are runtime
@@ -368,7 +389,7 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
         // value-position type application: `list[T]` outside annotation
         if let Expr::Subscript(s) = expr {
             if self.is_known_type_subscript(&s.value) {
-                self.visit_type_expr(expr, TypePos::Root);
+                self.visit_root(expr, RootKind::Evaluated);
                 return;
             }
         }
@@ -376,7 +397,7 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
         if let Expr::Call(c) = expr {
             if is_cast_name(&c.func) {
                 if let Some(t) = c.arguments.args.first() {
-                    self.visit_type_expr(t, TypePos::Root);
+                    self.visit_root(t, RootKind::Evaluated);
                 }
                 for arg in c.arguments.args.iter().skip(1) {
                     self.visit_expr(arg);
@@ -400,7 +421,7 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
                             .any(|argument| expr.range().contains_range(argument.range()))
                     };
                     for argument in &type_arguments {
-                        self.visit_type_expr(argument, TypePos::Root);
+                        self.visit_root(argument, RootKind::Evaluated);
                     }
                     // everything else the call holds is an ordinary value
                     for arg in &c.arguments.args {

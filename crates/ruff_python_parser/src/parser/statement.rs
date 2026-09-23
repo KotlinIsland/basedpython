@@ -4575,8 +4575,18 @@ impl<'src> Parser<'src> {
             "pattern-matching `if let` is not valid in .py files".to_string(),
             TextRange::new(let_range.start(), pattern.end()),
         );
+        self.add_destructuring_syntax_error(TextRange::new(let_range.start(), pattern.end()));
 
         Some(pattern)
+    }
+
+    /// basedpython: holds a destructuring pattern to the python the file targets, which
+    /// runs it as the `match` statement it is written as. a `.py` file is refused the form
+    /// outright, so it is not told the version as well
+    fn add_destructuring_syntax_error(&mut self, range: TextRange) {
+        if self.options.is_basedpython {
+            self.add_unsupported_syntax_error(UnsupportedSyntaxErrorKind::Destructuring, range);
+        }
     }
 
     /// basedpython: the synthetic binder holding the value `pattern`
@@ -4647,6 +4657,7 @@ impl<'src> Parser<'src> {
             "a destructuring `let` is not valid in .py files".to_string(),
             TextRange::new(start, pattern.end()),
         );
+        self.add_destructuring_syntax_error(TextRange::new(start, pattern.end()));
 
         let value = self.parse_expression_list(ExpressionContext::default());
 
@@ -5087,6 +5098,7 @@ impl<'src> Parser<'src> {
                         "a destructuring `for` target is not valid in .py files".to_string(),
                         pattern.range(),
                     );
+                    self.add_destructuring_syntax_error(pattern.range());
                     target.expr = self.destructure_binder(&pattern, ExprContext::Store);
                     Some(Box::new(pattern))
                 }
@@ -7027,6 +7039,7 @@ impl<'src> Parser<'src> {
                         "a destructuring `with` target is not valid in .py files".to_string(),
                         pattern.range(),
                     );
+                    self.add_destructuring_syntax_error(pattern.range());
                     let binder = self.destructure_binder(&pattern, ExprContext::Store);
                     return (binder, Some(Box::new(pattern)));
                 }
@@ -7944,6 +7957,7 @@ impl<'src> Parser<'src> {
                     "a destructuring parameter is not valid in .py files".to_string(),
                     pattern.range(),
                 );
+                self.add_destructuring_syntax_error(pattern.range());
                 self.destructure_binder_identifier(pattern)
             }
             None => self.parse_identifier(),
@@ -7967,8 +7981,22 @@ impl<'src> Parser<'src> {
                     self.error_if_not_basedpython(
                         "`some` parameter annotations are not valid in .py files".to_string(),
                     );
+                    // the annotation of `*args` / `**kwargs` types each element rather than
+                    // the parameter, so the parameter's name could not name the type `some`
+                    // opens. the annotation then reads as though `some` were not there
+                    if matches!(allow_star_annotation, AllowStarAnnotation::No) {
+                        is_some = true;
+                    } else {
+                        self.add_error(
+                            ParseErrorType::OtherError(
+                                "`some` is not allowed on a variadic parameter: its annotation \
+                                 is the type of each element, not of the parameter"
+                                    .to_string(),
+                            ),
+                            self.current_token_range(),
+                        );
+                    }
                     self.bump(TokenKind::Name);
-                    is_some = true;
                 }
                 if self.at_expr() {
                     let parsed_expr = match allow_star_annotation {
@@ -9048,12 +9076,11 @@ impl<'src> Parser<'src> {
         type_params: Option<ast::TypeParams>,
         parameters: &mut ast::Parameters,
     ) -> Option<ast::TypeParams> {
+        // `*args` / `**kwargs` never carry `some`, see `parse_parameter`
         let ast::Parameters {
             posonlyargs,
             args,
-            vararg,
             kwonlyargs,
-            kwarg,
             ..
         } = parameters;
         let holes: Vec<ast::TypeParam> = posonlyargs
@@ -9061,8 +9088,6 @@ impl<'src> Parser<'src> {
             .chain(args.iter_mut())
             .chain(kwonlyargs.iter_mut())
             .map(|parameter| &mut parameter.parameter)
-            .chain(vararg.iter_mut().map(Box::as_mut))
-            .chain(kwarg.iter_mut().map(Box::as_mut))
             .filter(|parameter| parameter.is_some)
             .filter_map(|parameter| {
                 // the annotation becomes a reference to the hole, which is what makes the

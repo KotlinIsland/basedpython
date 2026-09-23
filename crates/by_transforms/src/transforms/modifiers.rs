@@ -579,9 +579,17 @@ impl<'src> Modifiers<'src> {
                     id if DeclarationMarker::from_id(id)
                         .is_some_and(|marker| marker.kind == DeclarationMarkerKind::Assign) =>
                     {
+                        // the name and the `=` are two edits, so the type the
+                        // inferred-annotation lowering gives a class member lands
+                        // between them
+                        let target_end = node.target.range().end();
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                            format!("{name} = "),
-                            prefix_range,
+                            name,
+                            TextRange::new(stmt_start, target_end),
+                        )));
+                        self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                            " = ".to_owned(),
+                            TextRange::new(target_end, value_range.start()),
                         )));
                     }
                     id if is_classvar_marker_id(id) => {
@@ -1324,7 +1332,7 @@ mod tests {
             "},
             indoc! {"
                 class A:
-                    a = 1
+                    a: int = 1
             "},
         );
     }
@@ -1357,7 +1365,7 @@ mod tests {
             "},
             indoc! {"
                 class A:
-                    a = 1
+                    a: int = 1
                     b: int = 2
                     c: str
             "},
@@ -1823,7 +1831,7 @@ mod tests {
             "},
             indoc! {"
                 class Foo:
-                    a = 1
+                    a: int = 1
             "},
         );
     }
@@ -1994,8 +2002,8 @@ mod tests {
             "},
             indoc! {"
                 class Outer:
-                    __count = 0
-                    _step = 2
+                    __count: int = 0
+                    _step: int = 2
             "},
         );
     }

@@ -12,6 +12,19 @@ use ruff_python_ast::{
 use ruff_python_trivia::SimpleTokenizer;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
+/// Whether `expr`, written as it is, has to be parenthesized to stand as one argument
+/// of a call among others: a tuple or generator expression written without its own
+/// parentheses (`for x in a, b:`), or a `yield`, which a call does not accept bare
+/// even where the source parenthesized it, since those parentheses are outside its range
+pub(crate) fn needs_parentheses_as_argument(expr: &Expr) -> bool {
+    match expr {
+        Expr::Tuple(tuple) => !tuple.parenthesized,
+        Expr::Generator(generator) => !generator.parenthesized,
+        Expr::Yield(_) | Expr::YieldFrom(_) => true,
+        _ => false,
+    }
+}
+
 /// Names a temporary a lowering needs in its output.
 ///
 /// The name is a dunder because a lowering fires wherever its construct was

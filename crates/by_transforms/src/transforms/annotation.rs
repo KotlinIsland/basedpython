@@ -5,12 +5,13 @@ use ruff_python_ast::{Expr, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::Config;
-use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::callable::CallableSyntax;
 use crate::transforms::optional_type;
 use crate::transforms::repeated_underscore::WrittenNames;
-use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
+use crate::transforms::type_expr_walker::{
+    Recurse, RootKind, TypeExprVisitor, TypePos, walk_type_positions,
+};
 use crate::type_info::TypeInfo;
 
 /// The element type an unpacked tuple element wraps, whichever way the target
@@ -64,18 +65,17 @@ impl<'src> TupleLiteralType<'src> {
         source: &'src str,
         written: WrittenNames<'src>,
         types: &'src dyn TypeInfo,
-        min_version: PythonVersion,
-        float_literals: FloatLiteralLowering,
+        config: &Config,
         symbolic_substitutions: &'src [(TextRange, String)],
     ) -> Self {
-        let mut leaves = CallableSyntax::new(source, written, float_literals).with_types(types);
+        let mut leaves = CallableSyntax::new(source, written, config).with_types(types);
         for (range, rendered) in symbolic_substitutions {
             leaves.add_substitution(*range, rendered.clone());
         }
         Self {
             source,
             types,
-            min_version,
+            min_version: config.min_version,
             needs_unpack_import: Cell::new(false),
             leaves: RefCell::new(leaves),
             symbolic_substitutions,
@@ -374,6 +374,12 @@ impl TypeExprVisitor for TupleLiteralType<'_> {
         }
         Recurse::Stop
     }
+
+    fn enter_root(&mut self, kind: RootKind) {
+        self.leaves
+            .borrow_mut()
+            .set_evaluated(kind == RootKind::Evaluated);
+    }
 }
 
 pub(crate) struct TupleLiteralTypePass<'src> {
@@ -409,8 +415,7 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
             self.source,
             self.written,
             types,
-            self.config.min_version,
-            self.config.float_literals,
+            &self.config,
             &symbolic_substitutions,
         );
         walk_type_positions(stmts, Some(types), &mut inner);

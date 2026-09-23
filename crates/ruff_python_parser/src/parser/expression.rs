@@ -1173,6 +1173,25 @@ impl<'src> Parser<'src> {
                     node_index: AtomicNodeIndex::NONE,
                 })
             }
+            // basedpython: `some T` names a parameter's own type parameter, so it means
+            // something only at the top of a parameter's annotation, where the parameter
+            // parser takes it. anywhere else two adjacent names are never valid python, so
+            // `some` followed by a name is this keyword written where it cannot stand.
+            // parsing on from the name keeps one error rather than a cascade
+            TokenKind::Name
+                if self.options.is_basedpython
+                    && self.src_text(self.current_token_range()) == "some"
+                    && self.peek() == TokenKind::Name =>
+            {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "`some` is only allowed at the top of a parameter annotation".to_string(),
+                    ),
+                    self.current_token_range(),
+                );
+                self.bump(TokenKind::Name);
+                return self.parse_atom(context);
+            }
             TokenKind::Name => {
                 // basedpython `typeof <expr>` keyword: when the current
                 // identifier is `typeof` and the following token starts an

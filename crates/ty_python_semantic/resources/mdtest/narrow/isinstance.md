@@ -278,6 +278,54 @@ def _(x: dict[int, str] | ListStrOrInt):
         reveal_type(x)  # revealed: list[str] | int
 ```
 
+## `classinfo` is a union before Python 3.10
+
+A union object is a class only from Python 3.10 on. Before that, `isinstance()` and `issubclass()`
+reject one with a `TypeError`, whether it is spelled with `|` or with `typing.Union`, so we report
+it:
+
+```toml
+[environment]
+python-version = "3.9"
+```
+
+```py
+from typing import Union
+
+IntOrStr = Union[int, str]
+
+def _(x: object, y: type):
+    # error: [invalid-argument-type] "A union cannot be used with `isinstance()` before Python 3.10"
+    isinstance(x, IntOrStr)
+    # error: [invalid-argument-type] "A union cannot be used with `issubclass()` before Python 3.10"
+    issubclass(y, (bytes, Union[int, None]))
+```
+
+## `classinfo` is a union before Python 3.10, in basedpython
+
+A basedpython module is transpiled before it runs, and a union spelled in the call itself — with
+`|`, or as an optional `T?` — is written as the tuple of classes it stands for, which `isinstance()`
+accepts at every version. A union reached through a name is written as the `typing.Union` it is
+everywhere else, and is rejected like one:
+
+```toml
+[environment]
+python-version = "3.9"
+```
+
+```by
+IntOrStr = int | str
+
+def _(x: object, y: type):
+    isinstance(x, int | str)
+    isinstance(x, (bytes, int?))
+    issubclass(y, int | None)
+    # error: [invalid-argument-type] "A union cannot be used with `isinstance()` before Python 3.10"
+    isinstance(x, IntOrStr)
+    # error: [invalid-argument-type] "A union cannot be used with `isinstance()` before Python 3.10"
+    isinstance(x, (bytes, IntOrStr))
+```
+
 ## `Optional` as `classinfo`
 
 ```py

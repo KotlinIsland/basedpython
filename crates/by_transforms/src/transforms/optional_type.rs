@@ -6,8 +6,9 @@
 //!
 //! A target older than 3.10 has no `type.__or__`, and an optional is written in
 //! plenty of places the runtime evaluates — a `cast` target, an alias — so for
-//! those the union is spelled `Union[T, None]` instead. Which spelling is used
-//! never changes what the type means.
+//! those the union is spelled `Union[T, None]` instead, and `(T, type(None),)`
+//! where `isinstance` expects classes, as the runtime union lowering spells a
+//! `|` there. Which spelling is used never changes what the type means.
 //!
 //! It emits narrow text edits rather than mutating the AST so it composes with
 //! the value-position operator lowerings that share a statement — e.g. a
@@ -23,6 +24,8 @@
 //! The result form `T ? E` (`ExprBinOp` with `Operator::Result`) and the
 //! postfix `^` / `!` operators are intentionally left for a later pass — their
 //! runtime representation is still being settled.
+
+use std::collections::HashSet;
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, PythonVersion, Stmt, UnaryOp};
@@ -43,6 +46,9 @@ struct OptionalLower<'src> {
     needs_union: bool,
     /// whether the target can spell a union with `|` (python 3.10)
     native_union: bool,
+    /// the optionals standing where `isinstance` expects classes, which a target
+    /// without `|` spells as a tuple of classes, see [`super::runtime_union`]
+    classinfo: HashSet<TextRange>,
     source: &'src str,
     /// stack of in-scope PEP 695 type-parameter names. `?` over a bare type
     /// variable lowers to the *wrapped* form (`Optional[T | None]`) — a plain
@@ -58,6 +64,7 @@ impl<'src> OptionalLower<'src> {
             needs_runtime: false,
             needs_union: false,
             native_union: min_version >= PythonVersion::PY310,
+            classinfo: HashSet::new(),
             source,
             typevar_scopes: Vec::new(),
         }
@@ -134,8 +141,11 @@ impl<'ast> Visitor<'ast> for OptionalLower<'_> {
         if wrap_layers >= 1 {
             self.needs_runtime = true;
         }
+        let classinfo = !self.native_union && wrap_layers == 0 && self.classinfo.contains(&node);
         let mut prefix = "Optional[".repeat(wrap_layers);
-        if !self.native_union {
+        if classinfo {
+            prefix.push('(');
+        } else if !self.native_union {
             self.needs_union = true;
             prefix.push_str("Union[");
         }
@@ -143,7 +153,9 @@ impl<'ast> Visitor<'ast> for OptionalLower<'_> {
             self.edits.push((TextRange::empty(node.start()), prefix));
         }
         let mut replacement = close_parens;
-        if self.native_union {
+        if classinfo {
+            replacement.push_str(", type(None),)");
+        } else if self.native_union {
             replacement.push_str(" | None");
         } else {
             replacement.push_str(", None]");
@@ -224,8 +236,11 @@ impl TypeAwarePass for OptionalTypePass<'_> {
         Some(super::ast_driver::Lowering::OptionalType)
     }
 
-    fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut lower = OptionalLower::new(self.source, self.min_version);
+        if !lower.native_union {
+            lower.classinfo = super::runtime_union::classinfo_optionals(stmts, types);
+        }
         for stmt in stmts {
             lower.visit_stmt(stmt);
         }

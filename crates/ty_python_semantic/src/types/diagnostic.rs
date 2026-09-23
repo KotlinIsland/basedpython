@@ -2796,6 +2796,10 @@ declare_lint! {
     /// the target narrows back to the optional type, so nothing is lost there.
     /// The diagnostic surfaces at each use of the value as `object` instead.
     ///
+    /// Nor is an argument whose type the call tests — the first argument of
+    /// `isinstance`, or the one a `TypeIs` return narrows. The test reads the
+    /// `None` rather than losing it.
+    ///
     /// ## Examples
     /// ```by
     /// def sink(o: object): ...

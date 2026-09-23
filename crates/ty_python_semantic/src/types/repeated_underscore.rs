@@ -215,18 +215,21 @@ pub fn callable_parameter_slots(
 }
 
 /// a positional parameter of the method a definition overrides
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize)]
 pub struct BaseParameter {
-    pub name: Name,
-    pub positional_only: bool,
+    pub(crate) name: Name,
+    pub(crate) positional_only: bool,
+    /// the parameter is one of the base's own repeated `_`s, so `name` is the lowering's
+    /// rather than one its author wrote
+    pub(crate) underscore: bool,
 }
 
 /// how the lowering writes a parameter list that repeats `_`
 #[derive(Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub struct UnderscoreLowering {
-    /// the name each positional `_` takes from the overridden method, in declaration order.
-    /// `None` when they are numbered instead
-    inherited: Option<Box<[Name]>>,
+    /// the parameter of the overridden method each positional `_` takes its name from, in
+    /// declaration order. `None` when they are numbered instead
+    inherited: Option<Box<[BaseParameter]>>,
     /// how many of the leading positional parameters a call reaches by position alone
     positional_only: usize,
 }
@@ -237,9 +240,8 @@ impl UnderscoreLowering {
         self.positional_only
     }
 
-    /// whether the positional `_`s take their names from the overridden method. no
-    /// parameter is called `_` in the python then, so a read of `_` in the body finds
-    /// nothing of the definition's own
+    /// whether the positional `_`s take their names from the overridden method. the first
+    /// of them is called `_` in the python then only where the base calls its parameter `_`
     pub fn is_inherited(&self) -> bool {
         self.inherited.is_some()
     }
@@ -256,14 +258,14 @@ impl UnderscoreLowering {
                 .iter_mut()
                 .filter(|(slot, name)| slot.is_positional() && name == "_");
             for ((_, name), base) in underscores.zip(inherited) {
-                name.clone_from(base);
+                name.clone_from(&base.name);
             }
         }
         let spelled: Vec<(ParameterSlot, &str)> = spelled
             .iter()
             .map(|(slot, name)| (*slot, name.as_str()))
             .collect();
-        number_underscores(&spelled, !self.is_inherited(), written)
+        number_underscores(&spelled, self.is_inherited(), written)
     }
 }
 
@@ -271,12 +273,12 @@ impl UnderscoreLowering {
 /// are one of its `_`s, and how many of the leading positional ones a call reaches by position
 /// alone
 pub(crate) struct LoweredParameters {
-    pub(crate) names: Vec<Name>,
+    names: Vec<Name>,
     /// which of the parameters are written `_`. every one after the first has a python name
     /// the author never wrote, so the signature shows each as the `_` written, and a
     /// diagnostic about one says which it is by position
-    pub(crate) underscores: Vec<bool>,
-    pub(crate) positional_only: usize,
+    underscores: Vec<bool>,
+    positional_only: usize,
 }
 
 impl LoweredParameters {
@@ -287,10 +289,17 @@ impl LoweredParameters {
         slots: &[(ParameterSlot, &str)],
         written: WrittenNames,
     ) -> Self {
-        // a name taken from an overridden method is a name the author can spell
+        // a name taken from an overridden method is a name the author can spell, unless the
+        // base has it from a repeated `_` of its own
+        let mut inherited = lowering.inherited.iter().flatten();
         let underscores = slots
             .iter()
-            .map(|(_, spelled)| *spelled == "_" && !lowering.is_inherited())
+            .map(|(slot, spelled)| {
+                *spelled == "_"
+                    && (!lowering.is_inherited()
+                        || !slot.is_positional()
+                        || inherited.next().is_some_and(|base| base.underscore))
+            })
             .collect();
         Self {
             names: lowering.names(slots, written),
@@ -336,7 +345,7 @@ pub enum UnderscoreRefusal {
 
 impl UnderscoreRefusal {
     /// the declaration index of the parameter the refusal is about
-    pub fn index(&self) -> usize {
+    pub(crate) fn index(&self) -> usize {
         match self {
             Self::KeywordOnly { index }
             | Self::DraggedPositionalOnly { index, .. }
@@ -454,10 +463,15 @@ pub fn lower_repeated_underscores(
         {
             return Some(Err(UnderscoreRefusal::KeywordOnly { index }));
         }
-        if let Some((index, parameter)) = inherited
-            .iter()
-            .find(|(_, parameter)| reads_from_enclosing_scope(&parameter.name))
-        {
+        // a name the list already gives a parameter is read from the definition itself, so a
+        // parameter taking it shadows nothing. only `_` can be one: an override of a method
+        // whose own `_`s are numbered takes `_` for the first of them
+        if let Some((index, parameter)) = inherited.iter().find(|(_, parameter)| {
+            !slots
+                .iter()
+                .any(|(_, spelled)| *spelled == parameter.name.as_str())
+                && reads_from_enclosing_scope(&parameter.name)
+        }) {
             return Some(Err(UnderscoreRefusal::ShadowsEnclosingName {
                 index: *index,
                 name: parameter.name.clone(),
@@ -477,7 +491,7 @@ pub fn lower_repeated_underscores(
             inherited: Some(
                 inherited
                     .into_iter()
-                    .map(|(_, parameter)| parameter.name.clone())
+                    .map(|(_, parameter)| parameter.clone())
                     .collect(),
             ),
             positional_only,
@@ -582,13 +596,15 @@ pub fn lowered_parameter_names(
     parameters: &[(ParameterSlot, &str)],
     written: WrittenNames,
 ) -> Vec<Name> {
-    number_underscores(parameters, true, written)
+    number_underscores(parameters, false, written)
 }
 
-/// `parameters` with every `_` numbered, bar the first in numbering order when `keep_first`
+/// `parameters` with every `_` numbered but the ones that keep the name: the first in
+/// numbering order, or when the positional ones have taken the names of an overridden
+/// method, each positional one still called `_`, which is a `_` the base calls `_` too
 fn number_underscores(
     parameters: &[(ParameterSlot, &str)],
-    keep_first: bool,
+    inherited: bool,
     written: WrittenNames,
 ) -> Vec<Name> {
     let taken: HashSet<&str> = parameters.iter().map(|(_, name)| *name).collect();
@@ -598,11 +614,15 @@ fn number_underscores(
         .iter()
         .map(|(_, name)| Name::from(*name))
         .collect();
-    let mut keep = keep_first;
+    let mut keep_first = !inherited;
     // candidates only ever count up, so one never repeats an earlier one
     let mut next = 2u32;
     for index in order {
-        if parameters[index].1 != "_" || std::mem::replace(&mut keep, false) {
+        let (slot, name) = parameters[index];
+        if name != "_"
+            || (inherited && slot.is_positional())
+            || std::mem::replace(&mut keep_first, false)
+        {
             continue;
         }
         let candidate = loop {
@@ -638,6 +658,7 @@ mod tests {
                 Some(BaseParameter {
                     name: Name::from(*name),
                     positional_only: *positional_only,
+                    underscore: false,
                 })
             })
             .collect()
@@ -771,6 +792,37 @@ mod tests {
         let base = base(&[("self", false), ("x", false)]);
         let lowering = lower(&slots, true, Some(&base)).unwrap().unwrap();
         assert!(!lowering.is_inherited());
+    }
+
+    /// an override of a method whose own `_`s are numbered takes `_` for the first of them,
+    /// and the body's `_` is already one of the list's parameters
+    #[test]
+    fn an_inherited_underscore_shadows_nothing() {
+        let slots = [(PositionalOrKeyword, "_"), (PositionalOrKeyword, "_")];
+        let base: Vec<_> = base(&[("_", true), ("_2", true)])
+            .into_iter()
+            .map(|parameter| {
+                parameter.map(|parameter| BaseParameter {
+                    underscore: true,
+                    ..parameter
+                })
+            })
+            .collect();
+        let lowering =
+            lower_repeated_underscores(&slots, false, Some(&base), |name| name == "_", true)
+                .unwrap()
+                .unwrap();
+        assert!(lowering.is_inherited());
+        assert_eq!(lowering.positional_only(), 2);
+        let variadic = [
+            (PositionalOrKeyword, "_"),
+            (PositionalOrKeyword, "_"),
+            (Variadic, "_"),
+        ];
+        assert_eq!(
+            lowering.names(&variadic, WrittenNames::new("")),
+            [Name::from("_"), Name::from("_2"), Name::from("_3")]
+        );
     }
 
     #[test]
