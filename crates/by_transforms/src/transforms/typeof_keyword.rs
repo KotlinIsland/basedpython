@@ -28,6 +28,8 @@ use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_posit
 use crate::type_info::TypeInfo;
 
 pub(crate) struct TypeofFold {
+    /// the name `ty_extensions.TypeOf` is written under
+    type_of: String,
     changed: Cell<bool>,
     ever_changed: Cell<bool>,
     /// ranges of `typeof` nodes owned by the type-expression lowerer — skipped
@@ -35,8 +37,9 @@ pub(crate) struct TypeofFold {
 }
 
 impl TypeofFold {
-    pub(crate) fn new(skip: Vec<TextRange>) -> Self {
+    pub(crate) fn new(skip: Vec<TextRange>, type_of: String) -> Self {
         Self {
+            type_of,
             changed: Cell::new(false),
             ever_changed: Cell::new(false),
             skip,
@@ -65,7 +68,7 @@ impl Transformer for TypeofFold {
             *s.value = Expr::Name(ExprName {
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                 range: TextRange::default(),
-                id: Name::from("TypeOf"),
+                id: Name::from(self.type_of.as_str()),
                 ctx: ExprContext::Load,
             });
             self.changed.set(true);

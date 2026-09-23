@@ -20,6 +20,8 @@ use by_transforms::{Config, PythonVersion, transpile};
 mod common;
 use common::python;
 
+mod interpreters;
+
 /// Every visibility shape that reaches `__all__`, in both keyword orders.
 const PROGRAM: &str = r#"
 export private def helper() -> int:
@@ -379,4 +381,91 @@ fn a_renamed_name_is_read_back_wherever_python_looks_it_up() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
+/// module-level `private` symbols whose underscored name the module already has: a runtime
+/// helper's (`_force_unwrap`, which `x!` calls), the author's own (`_shadowed`, `_theme`), and
+/// ones a lowering takes for itself (the `_T` a polyfilled type parameter is declared under, the
+/// `_MISSING` a mutable default is replaced by). each renamed symbol has to go somewhere else,
+/// and every place that names it has to follow
+const TAKEN_NAMES: &str = r#"
+_shadowed = 7
+_theme = "light"
+
+private def force_unwrap(x: int) -> int:
+    return x + 100
+
+private def shadowed() -> int:
+    return 1
+
+private type T = int
+
+def ident[T](x: T) -> T:
+    return x
+
+def holder(v: T):
+    pass
+
+def count(xs: list[int] = []) -> int:
+    return len(xs)
+
+private let MISSING: int = 5
+
+private context let theme = "dark"
+
+def paint(context theme: str) -> str:
+    return theme
+
+def first(x: int | None) -> int:
+    return x!
+
+def calls() -> tuple[int, int, int, int, int, str]:
+    return (first(1), force_unwrap(1), shadowed(), count(), MISSING, paint())
+"#;
+
+const TAKEN_NAMES_IMPORTER: &str = r#"
+import importlib, typing
+m = importlib.import_module("emitted")
+assert m.calls() == (1, 101, 1, 0, 5, "dark"), m.calls()
+assert m._shadowed == 7 and m._theme == "light", "the author's own names keep their values"
+assert typing.get_type_hints(m.holder)["v"].__value__ is int, "`T` is still the private alias"
+assert m.ident(2) == 2
+print("ok")
+"#;
+
+#[test]
+fn a_renamed_symbol_never_takes_a_name_the_module_already_has() {
+    let Some(interpreter) = interpreters::oldest(
+        PythonVersion::PY39,
+        "import typing_extensions",
+        "with `typing_extensions`",
+    ) else {
+        return;
+    };
+    // the oldest target the interpreter runs, where the type parameter is polyfilled
+    let target = interpreter.version.min(PythonVersion::PY311);
+    let config = Config {
+        min_version: target,
+        ..Config::default()
+    };
+    let transpiled = transpile(TAKEN_NAMES, &config).expect("transpile should succeed");
+
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    std::fs::write(dir.path().join("emitted.py"), &transpiled).expect("failed to write the module");
+
+    let output = Command::new(&interpreter.command)
+        .arg("-c")
+        .arg(TAKEN_NAMES_IMPORTER)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn python");
+
+    assert!(
+        output.status.success(),
+        "importing the transpiled module failed on {interpreter}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    interpreters::ran(&interpreter, target);
 }

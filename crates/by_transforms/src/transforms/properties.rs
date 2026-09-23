@@ -53,6 +53,7 @@ use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass, render_stmt};
+use super::repeated_underscore::WrittenNames;
 use super::source_util::{line_indent, line_start};
 use crate::type_info::TypeInfo;
 
@@ -128,6 +129,7 @@ impl<'ast> Visitor<'ast> for ValueRangeCollector<'_> {
 
 pub(crate) struct PropertiesPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     value_ranges: ValueRanges,
     min_version: ruff_python_ast::PythonVersion,
 }
@@ -135,11 +137,13 @@ pub(crate) struct PropertiesPass<'src> {
 impl<'src> PropertiesPass<'src> {
     pub(crate) fn new(
         source: &'src str,
+        written: WrittenNames<'src>,
         value_ranges: ValueRanges,
         min_version: ruff_python_ast::PythonVersion,
     ) -> Self {
         Self {
             source,
+            written,
             value_ranges,
             min_version,
         }
@@ -579,14 +583,8 @@ impl PropertiesPass<'_> {
                         .flatten()
                         .map(|synthesized| {
                             ctx.type_only_imports
-                                .extend(synthesized.modules.into_iter().map(|m| format!("import {m}")));
-                            ctx.type_only_imports.extend(
-                                synthesized
-                                    .typing_names
-                                    .into_iter()
-                                    .map(|name| format!("from typing import {name}")),
-                            );
-                            synthesized.text
+                                .extend(synthesized.imports_in(self.written));
+                            synthesized.text_in(self.written)
                         });
                     Some(Backing {
                         annotation: None,
@@ -606,20 +604,20 @@ impl PropertiesPass<'_> {
             let is_abstract = has("abstract");
 
             let mut accessor_decorators = String::new();
-            if is_abstract {
-                ctx.required_imports
-                    .push("from abc import abstractmethod".to_owned());
-                let _ = write!(accessor_decorators, "@abstractmethod\n{indent}");
-            }
-            if has("override") {
-                ctx.required_imports
-                    .push("from typing import override".to_owned());
-                let _ = write!(accessor_decorators, "@override\n{indent}");
-            }
-            if has("final") {
-                ctx.required_imports
-                    .push("from typing import final".to_owned());
-                let _ = write!(accessor_decorators, "@final\n{indent}");
+            for (written_by, module, name) in [
+                (is_abstract, "abc", "abstractmethod"),
+                (has("override"), "typing", "override"),
+                (has("final"), "typing", "final"),
+            ] {
+                if written_by {
+                    ctx.required_imports
+                        .push(self.written.import_from(module, &[name]));
+                    let _ = write!(
+                        accessor_decorators,
+                        "@{}\n{indent}",
+                        self.written.imported(module, name)
+                    );
+                }
             }
 
             let mut frags: Vec<Fragment> = Vec::new();
@@ -660,9 +658,9 @@ impl PropertiesPass<'_> {
             // rather than a `property` taking an instance
             let (decorator, receiver) = if is_static {
                 ctx.runtime.insert(crate::runtime::STATIC_PROPERTY);
-                ("_by_static_property", "cls")
+                ("_by_static_property".to_owned(), "cls")
             } else {
-                ("property", "self")
+                (self.written.builtin("property"), "self")
             };
             frags.push(Fragment::Lit(format!(
                 "@{decorator}\n{indent}{accessor_decorators}def {emitted}({receiver})"

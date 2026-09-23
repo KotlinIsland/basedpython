@@ -126,7 +126,7 @@ _Ts = TypeVarTuple("_Ts", default=Unpack[tuple[int, str]])  # from typing_extens
 class Row(Generic[_T, Unpack[_Ts]]): ...
 ```
 
-a module that binds `TypeVar` itself — `from typing import TypeVar` binds the one without `default=` — keeps its own, and the polyfill's is imported under a name the module does not spell, `TypeVar2`. the same goes for every name the polyfill calls: `Generic`, `ParamSpec`, `TypeVarTuple`, `Unpack` and `TypeAliasType`
+a module that binds `TypeVar` itself to something other than the polyfill's — `from typing import TypeVar` binds the one without `default=` — keeps its own, and the polyfill's is imported under a name the module does not spell, `TypeVar2`. the same goes for every name the polyfill calls, `Generic`, `ParamSpec`, `TypeVarTuple`, `Unpack` and `TypeAliasType`, and for every typing name any other lowering writes
 
 the `[T = int]` header syntax is itself 3.13+: on a 3.12 target, a declaration with a defaulted type parameter is desugared by the generics polyfill while declarations without defaults keep the native syntax. a [reified](reified-generics.md) function can't be desugared, so a defaulted reified function on a 3.12 target is a transpile error
 
@@ -395,7 +395,7 @@ _T = TypeVar("_T", bound=Union[int, str])
 def f(t: _T) -> _T: ...
 ```
 
-the two spellings are not interchangeable — `isinstance` takes a tuple of classes and rejects a `typing.Union` — so the classinfo argument of `isinstance` and `issubclass` becomes a tuple and everything else a `Union`. whether a `|` is a union at all is asked of the checker rather than guessed from the shape, so an ordinary bitwise or is left alone
+the two spellings are not interchangeable — `isinstance` takes a tuple of classes and rejects a `typing.Union` — so the classinfo argument of `isinstance` and `issubclass`, under whatever name they are called, becomes a tuple and everything else a `Union`. whether a `|` is a union at all is asked of the checker rather than guessed from the shape, so an ordinary bitwise or is left alone
 
 a type the runtime evaluates is spelled this way at any depth: a type written as a value, a class base, a `cast` target, and a type parameter's bound, default or alias value, which the [generics polyfill](#generic-classes-and-functions-pep-695) turns into call arguments
 
@@ -421,7 +421,7 @@ python 3.12 introduced compact generic syntax. basedpython rewrites it using `ty
 | `def f[T](x: T) -> T: ...`         | `def f(x: T) -> T: ...`                         |
 | `type Point = tuple[float, float]` | `Point: TypeAlias = tuple[float, float]`        |
 
-each type parameter becomes a `TypeVar` with a mangled name (`_T`, `_K`, etc), declared just above the generic, in the same block. the name is never one the module spells: in a module that binds `_T` itself, `T` is declared as `_T2`, so the module's own `_T` is left alone. a parameter declared again with different arguments, or in a different block — a method's type parameter, declared in its class body, and a function's of the same name further down — gets a numbered name of its own, `_T_1`
+each type parameter becomes a `TypeVar` with a mangled name (`_T`, `_K`, etc), declared at module scope, just above the generic or above the class or function at module scope it is written inside. a method's type parameter is declared above its class, so `typing.get_type_hints` finds it in the module, where it resolves the method's annotations. a bound or default that reads a name of the class the generic stands in reads it through the class, as a string — `T: Inner` in `class C` is declared `TypeVar("_T", bound="C.Inner")` — since the class does not exist yet where the declaration is written. one that reads a name of a function around the generic stays in that function, where the name is in scope. the name is never one the module spells: in a module that binds `_T` itself, `T` is declared as `_T2`, so the module's own `_T` is left alone. a parameter declared again with different arguments, or in a different block — inside an `if`, say, and a function's of the same name further down — gets a numbered name of its own, `_T_1`
 
 ```python
 # python source

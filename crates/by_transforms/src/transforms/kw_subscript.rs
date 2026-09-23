@@ -12,19 +12,27 @@ use ruff_python_ast::{Expr, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 pub(crate) struct KwSubscript<'src, T: TypeInfo + ?Sized> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: Option<&'src T>,
     min_version: PythonVersion,
     edits: Vec<Fix>,
 }
 
 impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
-    fn new(source: &'src str, types: Option<&'src T>, min_version: PythonVersion) -> Self {
+    fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        types: Option<&'src T>,
+        min_version: PythonVersion,
+    ) -> Self {
         Self {
             source,
+            written,
             types,
             min_version,
             edits: Vec::new(),
@@ -41,8 +49,13 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
     /// import for nested `??` is still raised by `OptionalTypePass`, which walks
     /// every expression independently
     fn value_src(&self, expr: &Expr) -> String {
-        crate::transforms::optional_type::rewrite_type_expr(self.source, expr, self.min_version)
-            .unwrap_or_else(|| self.src(expr.range()).to_owned())
+        crate::transforms::optional_type::rewrite_type_expr(
+            self.source,
+            self.written,
+            expr,
+            self.min_version,
+        )
+        .unwrap_or_else(|| self.src(expr.range()).to_owned())
     }
 
     /// Lower a subscript of a class declaring a keyword-variadic pack.
@@ -309,13 +322,19 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
 
 pub(crate) struct KwSubscriptPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     min_version: PythonVersion,
 }
 
 impl<'src> KwSubscriptPass<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        min_version: PythonVersion,
+    ) -> Self {
         Self {
             source,
+            written,
             min_version,
         }
     }
@@ -329,7 +348,7 @@ impl TypeAwarePass for KwSubscriptPass<'_> {
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner: KwSubscript<'_, dyn TypeInfo> =
-            KwSubscript::new(self.source, Some(types), self.min_version);
+            KwSubscript::new(self.source, self.written, Some(types), self.min_version);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }

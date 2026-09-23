@@ -73,8 +73,12 @@ impl AstPass for MainFunction<'_> {
             "main(*_by_args, **_by_kwargs)".to_owned()
         };
         if entry.function.is_async {
-            ctx.epilogue.push(format!("    asyncio.run({call})"));
-            ctx.required_imports.push("import asyncio".to_owned());
+            ctx.epilogue.push(format!(
+                "    {}.run({call})",
+                self.written.imported_module("asyncio")
+            ));
+            ctx.required_imports
+                .push(self.written.import_module("asyncio"));
         } else {
             ctx.epilogue.push(format!("    {call}"));
         }

@@ -32,6 +32,7 @@ use ruff_python_ast::{Expr, PySourceType, PythonVersion, Stmt, StmtClassDef};
 use ruff_python_parser::parse_unchecked_source;
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 
+use super::repeated_underscore::{CodeNames, WrittenNames};
 use super::source_util::{is_synthetic_decorator, line_indent, line_start};
 use crate::Config;
 
@@ -119,7 +120,8 @@ pub(crate) fn lower<'a>(source: &'a str, config: &Config) -> EnumLowering<'a> {
         };
     }
 
-    let mut imports = ImportSet::default();
+    let code = CodeNames::of(suite);
+    let mut imports = ImportSet::new(WrittenNames::new(source).with_code(&code));
     let mut out = Out::default();
 
     // a sealed hierarchy is mutually recursive (base methods reference variants
@@ -362,12 +364,12 @@ fn emit_plain_enum(
     members: &[&Stmt],
     imports: &mut ImportSet,
 ) {
-    imports.add("enum", "Enum");
-    imports.add("enum", "auto");
+    let enum_ = imports.add("enum", "Enum");
+    let auto = imports.add("enum", "auto");
 
-    out.push_gen(&format!("{vis}class {name}(Enum):\n"));
+    out.push_gen(&format!("{vis}class {name}({enum_}):\n"));
     for variant in variants {
-        out.push_gen(&format!("{}{} = auto()\n", variant.indent, variant.name));
+        out.push_gen(&format!("{}{} = {auto}()\n", variant.indent, variant.name));
     }
     for member in members {
         emit_member(out, source, member);
@@ -424,17 +426,17 @@ fn emit_sealed_hierarchy(
     // import annotations`), so naming a class defined further down costs
     // nothing at run time
     if !variants.is_empty() {
-        imports.add("typing", "ClassVar");
-    }
-    for variant in variants {
-        let variant_class = variant_class_name(source, name, &variant.name);
-        let declared = match variant.kind {
-            // a payload variant is the class its call constructs
-            VariantKind::Tuple => format!("type[{variant_class}]"),
-            // a unit variant is the one instance of its class
-            VariantKind::Unit => variant_class,
-        };
-        out.push_gen(&format!("    {}: ClassVar[{declared}]\n", variant.name));
+        let class_var = imports.add("typing", "ClassVar");
+        for variant in variants {
+            let variant_class = variant_class_name(source, name, &variant.name);
+            let declared = match variant.kind {
+                // a payload variant is the class its call constructs
+                VariantKind::Tuple => format!("{}[{variant_class}]", imports.builtin("type")),
+                // a unit variant is the one instance of its class
+                VariantKind::Unit => variant_class,
+            };
+            out.push_gen(&format!("    {}: {class_var}[{declared}]\n", variant.name));
+        }
     }
     // ordinary members (methods, classmethods, constants) — copied verbatim,
     // already indented under the enum in the source. they may refer to variants
@@ -449,7 +451,7 @@ fn emit_sealed_hierarchy(
     // variant subclasses, emitted at module level and attached to the enum
     for variant in variants {
         out.push_gen("\n");
-        emit_variant_class(out, source, name, variant, config);
+        emit_variant_class(out, source, name, variant, imports, config);
     }
 }
 
@@ -475,6 +477,7 @@ fn emit_variant_class(
     source: &str,
     enum_name: &str,
     variant: &Variant,
+    imports: &mut ImportSet,
     config: &Config,
 ) {
     // a private module-level name holds the subclass; the public binding is the
@@ -496,7 +499,10 @@ fn emit_variant_class(
             // fail outright) unless it reduces to that path. a `__reduce__`
             // returning a name makes both return the original object, which is
             // what the idiomatic `Enum` lowering of an all-unit enum already does
-            out.push_gen("    def __reduce__(self): return type(self).__qualname__\n");
+            out.push_gen(&format!(
+                "    def __reduce__(self): return {}(self).__qualname__\n",
+                imports.builtin("type")
+            ));
             if !config.is_stub {
                 emit_variant_name_reset(out, enum_name, &variant.name, &mangled);
                 out.push_gen(&format!("{enum_name}.{} = {mangled}()\n", variant.name));
@@ -511,8 +517,10 @@ fn emit_variant_class(
             } else {
                 ""
             };
-            out.push_gen("@final\n");
-            out.push_gen(&format!("@dataclass(frozen=True{slots})\n"));
+            let final_ = imports.add("typing", "final");
+            let dataclass = imports.add("dataclasses", "dataclass");
+            out.push_gen(&format!("@{final_}\n"));
+            out.push_gen(&format!("@{dataclass}(frozen=True{slots})\n"));
             out.push_gen(&format!("class {mangled}({enum_name}):\n"));
             if variant.fields.is_empty() {
                 // a zero-field payload variant (`A()`) is a valid
@@ -666,24 +674,38 @@ impl Out {
 
 /// A small set of `from <module> import <name>` requests, deduplicated and
 /// merged per module.
-#[derive(Default)]
-struct ImportSet {
+struct ImportSet<'a> {
+    written: WrittenNames<'a>,
     modules: BTreeMap<&'static str, Vec<&'static str>>,
 }
 
-impl ImportSet {
-    fn add(&mut self, module: &'static str, name: &'static str) {
+impl<'a> ImportSet<'a> {
+    fn new(written: WrittenNames<'a>) -> Self {
+        Self {
+            written,
+            modules: BTreeMap::new(),
+        }
+    }
+
+    /// ask for `name` from `module`, answering the name the lowering writes it under
+    fn add(&mut self, module: &'static str, name: &'static str) -> String {
         let names = self.modules.entry(module).or_default();
         if !names.contains(&name) {
             names.push(name);
         }
+        self.written.imported(module, name)
+    }
+
+    /// the name the lowering writes `name`, a builtin, under
+    fn builtin(&self, name: &str) -> String {
+        self.written.builtin(name)
     }
 
     fn render(&self) -> String {
         use std::fmt::Write as _;
         let mut out = String::new();
         for (module, names) in &self.modules {
-            let _ = writeln!(out, "from {module} import {}", names.join(", "));
+            let _ = writeln!(out, "{}", self.written.import_from(module, names));
         }
         out
     }

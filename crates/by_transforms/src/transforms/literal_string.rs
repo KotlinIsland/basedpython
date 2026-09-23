@@ -24,6 +24,7 @@ use ruff_python_ast::helpers::{TypeModifier, type_modifier_marker};
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 use crate::type_info::TypeInfo;
 
@@ -32,8 +33,9 @@ use crate::type_info::TypeInfo;
 pub(crate) struct LiteralStringRewrites {
     /// each marker's full source range — the keyword through the type it wraps
     ranges: Vec<TextRange>,
-    /// whether any rewrite fired *and* `LiteralString` is not already bound, so
-    /// the driver can add the import
+    /// the name `typing.LiteralString` is written under
+    literal_string: String,
+    /// whether any rewrite fired, so the driver can add the import
     pub(crate) needs_import: bool,
 }
 
@@ -42,7 +44,7 @@ impl LiteralStringRewrites {
     pub(crate) fn edits(&self) -> impl Iterator<Item = (TextRange, String)> + '_ {
         self.ranges
             .iter()
-            .map(|range| (*range, "LiteralString".to_owned()))
+            .map(|range| (*range, self.literal_string.clone()))
     }
 
     /// whether `range` falls inside a rewritten marker. The blanking pass emits
@@ -58,16 +60,20 @@ impl LiteralStringRewrites {
 
 /// Collect every `literal str` marker in `stmts` that ty reduced to
 /// `LiteralString`. `stmts` must come from the same parse `types` answers for.
-pub(crate) fn collect(stmts: &[Stmt], types: &dyn TypeInfo) -> LiteralStringRewrites {
+pub(crate) fn collect(
+    stmts: &[Stmt],
+    types: &dyn TypeInfo,
+    written: WrittenNames,
+) -> LiteralStringRewrites {
     let mut collector = Collector {
         types,
         ranges: Vec::new(),
     };
     walk_type_positions(stmts, Some(types), &mut collector);
-    let needs_import = !collector.ranges.is_empty() && !types.is_bound_globally("LiteralString");
     LiteralStringRewrites {
+        needs_import: !collector.ranges.is_empty(),
         ranges: collector.ranges,
-        needs_import,
+        literal_string: written.imported("typing", "LiteralString"),
     }
 }
 

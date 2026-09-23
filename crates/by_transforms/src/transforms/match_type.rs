@@ -30,14 +30,16 @@ use ruff_python_ast::{ModModule, Stmt, StmtTypeAlias, TypeParam};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::repeated_underscore::WrittenNames;
 
 pub(crate) struct MatchTypePass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
 }
 
 impl<'src> MatchTypePass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
+        Self { source, written }
     }
 }
 
@@ -55,6 +57,7 @@ impl AstPass for MatchTypePass<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut inner = MatchTypeLowering {
             source: self.source,
+            object: self.written.builtin("object"),
             edits: Vec::new(),
         };
         for stmt in &module.body {
@@ -66,6 +69,8 @@ impl AstPass for MatchTypePass<'_> {
 
 struct MatchTypeLowering<'src> {
     source: &'src str,
+    /// the name the builtin `object` is written under
+    object: String,
     edits: Vec<(TextRange, String)>,
 }
 
@@ -76,7 +81,7 @@ impl<'ast> Visitor<'ast> for MatchTypeLowering<'_> {
         {
             self.edits.push((
                 match_body_range(alias, self.source),
-                " = object".to_string(),
+                format!(" = {}", self.object),
             ));
             // the case bodies are erased with the rest of the statement, so nothing
             // inside them is worth descending into

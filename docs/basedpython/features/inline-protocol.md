@@ -123,4 +123,6 @@ contributes nothing to the generated class
 
 a member naming a type variable is rewritten to the mangled name the
 [generics](generics.md) polyfill gives it below python 3.12, since the hoisted
-class sits outside the scope that declared it
+class sits outside the scope that declared it. where the type parameters stay
+native syntax, the member reads the parameter off its generic instead —
+`"A.__type_params__[0]"` for the `T` of `class A[T]`

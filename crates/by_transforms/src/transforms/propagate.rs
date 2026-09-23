@@ -7,9 +7,9 @@
 //!
 //! ```python
 //! # f()^.bar   (f() : int?)   becomes
-//! _prop0 = f()
-//! if _prop0 is None: return _prop0
-//! _prop0.bar
+//! __by_prop_0__ = f()
+//! if __by_prop_0__ is None: return __by_prop_0__
+//! __by_prop_0__.bar
 //! ```
 //!
 //! A trivially-pure operand (a bare name) needs no temp:
@@ -27,15 +27,21 @@ use ruff_python_ast::{Expr, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
+use super::source_util::temporary_name;
 use crate::type_info::{AbsentTest, TypeInfo};
 
 /// The guard condition that detects the "absent" value for a given operand
 /// `target` (a temp name or the operand source). `T?` tests `is None`; a
 /// result-like `T | E` tests `isinstance(_, BaseException)`.
-fn absent_condition(test: AbsentTest, target: &str) -> String {
+fn absent_condition(test: AbsentTest, target: &str, written: WrittenNames) -> String {
     match test {
         AbsentTest::Optional | AbsentTest::WrappedOptional => format!("{target} is None"),
-        AbsentTest::Result => format!("isinstance({target}, BaseException)"),
+        AbsentTest::Result => format!(
+            "{}({target}, {})",
+            written.builtin("isinstance"),
+            written.builtin("BaseException")
+        ),
     }
 }
 
@@ -67,6 +73,7 @@ enum Scope {
 
 struct Propagate<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     edits: Vec<(TextRange, String)>,
     /// (start offset, indentation) of each enclosing statement; the top is the
@@ -81,9 +88,10 @@ struct Propagate<'src> {
 }
 
 impl<'src> Propagate<'src> {
-    fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
+    fn new(source: &'src str, written: WrittenNames<'src>, types: &'src dyn TypeInfo) -> Self {
         Self {
             source,
+            written,
             types,
             edits: Vec::new(),
             stmt_stack: Vec::new(),
@@ -177,15 +185,15 @@ impl<'ast> Visitor<'ast> for Propagate<'_> {
                 ""
             };
             let (guard, value) = if is_trivially_pure(&unary.operand) {
-                let cond = absent_condition(absent, &operand_src);
+                let cond = absent_condition(absent, &operand_src, self.written);
                 (
                     format!("if {cond}: return {operand_src}\n{indent}"),
                     format!("{operand_src}{unwrap}"),
                 )
             } else {
-                let temp = format!("_prop{}", self.counter);
+                let temp = temporary_name(self.written, "prop", self.counter);
                 self.counter += 1;
-                let cond = absent_condition(absent, &temp);
+                let cond = absent_condition(absent, &temp, self.written);
                 (
                     format!("{temp} = {operand_src}\n{indent}if {cond}: return {temp}\n{indent}"),
                     format!("{temp}{unwrap}"),
@@ -204,17 +212,18 @@ impl<'ast> Visitor<'ast> for Propagate<'_> {
 
 pub(crate) struct PropagatePass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
 }
 
 impl<'src> PropagatePass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
+        Self { source, written }
     }
 }
 
 impl TypeAwarePass for PropagatePass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = Propagate::new(self.source, types);
+        let mut inner = Propagate::new(self.source, self.written, types);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -269,9 +278,9 @@ mod tests {
                     return Optional(5)
 
                 def f() -> int | None:
-                    _prop0 = g()
-                    if _prop0 is None: return _prop0
-                    x = _prop0.value
+                    __by_prop_0__ = g()
+                    if __by_prop_0__ is None: return __by_prop_0__
+                    x = __by_prop_0__.value
                     return x
             "},
         );
@@ -327,9 +336,9 @@ mod tests {
                     return None
 
                 def g() -> str:
-                    _prop0 = f()
-                    if _prop0 is None: return _prop0
-                    _prop0.__class__.__name__
+                    __by_prop_0__ = f()
+                    if __by_prop_0__ is None: return __by_prop_0__
+                    __by_prop_0__.__class__.__name__
             "},
         );
     }
@@ -344,9 +353,9 @@ mod tests {
             "},
             indoc! {"
                 def g(a) -> int | None:
-                    _prop0 = a()
-                    if _prop0 is None: return _prop0
-                    y = _prop0
+                    __by_prop_0__ = a()
+                    if __by_prop_0__ is None: return __by_prop_0__
+                    y = __by_prop_0__
                     return y
             "},
         );
@@ -368,10 +377,35 @@ mod tests {
                 def f() -> int | TypeError: ...
 
                 def m() -> int | TypeError:
-                    _prop0 = f()
-                    if isinstance(_prop0, BaseException): return _prop0
-                    x = _prop0
+                    __by_prop_0__ = f()
+                    if isinstance(__by_prop_0__, BaseException): return __by_prop_0__
+                    x = __by_prop_0__
                     return x
+            "},
+        );
+    }
+
+    /// the guard reads the builtins through names of its own where the function binds
+    /// theirs, and its temporary is a name the function cannot bind
+    #[test]
+    fn propagate_result_keeps_clear_of_the_functions_names() {
+        check(
+            indoc! {"
+                def f() -> int | TypeError: ...
+
+                def m(isinstance: int, _prop0: int) -> int | TypeError:
+                    x = f()^
+                    return x + isinstance + _prop0
+            "},
+            indoc! {"
+                from builtins import isinstance as isinstance2
+                def f() -> int | TypeError: ...
+
+                def m(isinstance: int, _prop0: int) -> int | TypeError:
+                    __by_prop_0__ = f()
+                    if isinstance2(__by_prop_0__, BaseException): return __by_prop_0__
+                    x = __by_prop_0__
+                    return x + isinstance + _prop0
             "},
         );
     }

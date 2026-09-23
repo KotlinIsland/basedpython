@@ -1,5 +1,6 @@
 //! Abstraction over type/binding information consumed by transforms.
 
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::trailing_lambda::RECEIVER_PARAMETER;
 use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::{
@@ -7,7 +8,6 @@ use ruff_python_ast::{
     StmtFunctionDef,
 };
 use ruff_python_parser::parse_expression;
-use ruff_python_stdlib::basedpython::IMPLICIT_TYPING_NAMES;
 use ruff_text_size::TextRange;
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
@@ -66,6 +66,62 @@ pub(crate) struct SynthesizedType {
     pub(crate) typing_names: Vec<&'static str>,
 }
 
+impl SynthesizedType {
+    /// the type as the module `written` is of writes it, each of [`Self::typing_names`] under
+    /// the name the lowering imports it by
+    pub(crate) fn text_in(&self, written: WrittenNames) -> String {
+        struct Roots<'a> {
+            typing_names: &'a [&'static str],
+            written: WrittenNames<'a>,
+            edits: Vec<(TextRange, String)>,
+        }
+        impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for Roots<'_> {
+            fn visit_expr(&mut self, expr: &'ast Expr) {
+                if let Expr::Name(name) = expr
+                    && self.typing_names.contains(&name.id.as_str())
+                {
+                    let local = self.written.imported("typing", name.id.as_str());
+                    if local != name.id.as_str() {
+                        self.edits.push((name.range, local));
+                    }
+                }
+                ruff_python_ast::visitor::walk_expr(self, expr);
+            }
+        }
+        let Ok(parsed) = parse_expression(&self.text) else {
+            return self.text.clone();
+        };
+        let mut roots = Roots {
+            typing_names: &self.typing_names,
+            written,
+            edits: Vec::new(),
+        };
+        ruff_python_ast::visitor::Visitor::visit_expr(&mut roots, parsed.expr());
+        roots
+            .edits
+            .sort_by_key(|(range, _)| std::cmp::Reverse(range.start()));
+        let mut text = self.text.clone();
+        for (range, local) in roots.edits {
+            text.replace_range(std::ops::Range::<usize>::from(range), &local);
+        }
+        text
+    }
+
+    /// the imports [`Self::text_in`] reads: each module it qualifies a class with, and each
+    /// `typing` name
+    pub(crate) fn imports_in(&self, written: WrittenNames) -> Vec<String> {
+        self.modules
+            .iter()
+            .map(|module| format!("import {module}"))
+            .chain(
+                self.typing_names
+                    .iter()
+                    .map(|name| written.import_from("typing", &[name])),
+            )
+            .collect()
+    }
+}
+
 /// How an assignment inside a trailing-lambda block reaches an enclosing scope,
 /// so the block writes through instead of shadowing with a fresh local.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -74,6 +130,33 @@ pub(crate) enum CaptureKind {
     Global,
     /// the name is bound in an enclosing function — declare `nonlocal`
     Nonlocal,
+}
+
+/// a `context` argument a call is given implicitly
+pub(crate) struct ImplicitContextArgument {
+    /// the parameter it fills
+    parameter: String,
+    variable: ContextVariable,
+}
+
+/// the variable that fills an implicit `context` argument
+enum ContextVariable {
+    /// a variable the lowered module spells as ty names it
+    Named(String),
+    /// a module-level `private` variable, which the lowering emits under another name
+    ModulePrivate(String),
+}
+
+impl ImplicitContextArgument {
+    /// the `parameter=variable` keyword argument, the variable spelled as the lowered module
+    /// binds it
+    pub(crate) fn keyword(&self, written: crate::WrittenNames) -> String {
+        let variable = match &self.variable {
+            ContextVariable::Named(variable) => variable.clone(),
+            ContextVariable::ModulePrivate(variable) => written.module_private(variable),
+        };
+        format!("{}={variable}", self.parameter)
+    }
 }
 
 pub(crate) trait TypeInfo {
@@ -204,6 +287,11 @@ pub(crate) trait TypeInfo {
     /// one of these, since the lowering defers every annotation for such a
     /// target and nothing ever evaluates it
     fn is_runtime_union(&self, expr: &Expr) -> bool;
+
+    /// the argument a call to the builtin `isinstance` or `issubclass` reads as classes, when
+    /// `call` is one, whatever the name the callee is reached by — ty's answer, the one it
+    /// exempts a union the lowering spells there by
+    fn classinfo_argument<'a>(&self, call: &'a ExprCall) -> Option<&'a Expr>;
 
     /// when `attribute` resolves to a basedpython `extension` member, the
     /// backing-function rewrite to apply (`xs.second()` →
@@ -418,7 +506,11 @@ pub(crate) trait TypeInfo {
     /// kept precise. returns `None` when ty resolves no concrete type — e.g. an
     /// unsupported operation inferred as `Unknown` — so the caller leaves the
     /// source unchanged and ty's own diagnostic stands
-    fn symbolic_type_fold(&self, expr: &Expr) -> Option<String>;
+    fn symbolic_type_fold(
+        &self,
+        expr: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<SynthesizedType>;
 
     /// basedpython: the finite set of strings an f-string in a type position
     /// denotes, when it denotes one — `f"a{1 | 2}b"` is `["a1b", "a2b"]`.
@@ -565,7 +657,10 @@ pub(crate) trait TypeInfo {
     /// which of those a read of `_` means is not decided, so no argument can be
     /// written for it. an error too when a parameter to fill is a `_` the callee
     /// repeats, since which of those a keyword `_` names is not decided either
-    fn implicit_context_arguments(&self, call: &ExprCall) -> Result<Vec<(String, String)>, String>;
+    fn implicit_context_arguments(
+        &self,
+        call: &ExprCall,
+    ) -> Result<Vec<ImplicitContextArgument>, String>;
 
     /// whether `expr`'s inferred type is a string — a `str` / `Character` /
     /// `LiteralString` / string-literal / `str`-subclass instance. dynamic
@@ -752,7 +847,7 @@ impl TypeInfo for SemanticModel<'_> {
         // `final A`, which has no python spelling at all, and the annotation a reader
         // would write for it is `A`
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted, min_version)
+        spell_for_python(db, &env, self, promoted, min_version, false)
     }
 
     fn is_return_value_marker(&self, name: &ExprName) -> bool {
@@ -793,6 +888,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn is_plain_value(&self, expr: &Expr) -> bool {
         SemanticModel::denotes_plain_value(self, expr)
+    }
+
+    fn classinfo_argument<'a>(&self, call: &'a ExprCall) -> Option<&'a Expr> {
+        ty_python_semantic::types::ide_support::classinfo_argument(self, call)
     }
 
     fn is_runtime_union(&self, expr: &Expr) -> bool {
@@ -1071,7 +1170,7 @@ impl TypeInfo for SemanticModel<'_> {
         let env = self.program_environment();
         let ty = expr.inferred_type(self)?;
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted, min_version)
+        spell_for_python(db, &env, self, promoted, min_version, false)
     }
 
     fn template_literal_strings(&self, expr: &Expr) -> Option<Vec<String>> {
@@ -1079,7 +1178,11 @@ impl TypeInfo for SemanticModel<'_> {
         ty_python_semantic::finite_string_set(self.db(), ty)
     }
 
-    fn symbolic_type_fold(&self, expr: &Expr) -> Option<String> {
+    fn symbolic_type_fold(
+        &self,
+        expr: &Expr,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<SynthesizedType> {
         let ty = expr.inferred_type(self)?;
         // fold concrete types and explicit `Any` (e.g. `dynamic + 1`, which ty
         // resolves to `Any`), but not the `Unknown` / Todo dynamics an
@@ -1088,13 +1191,14 @@ impl TypeInfo for SemanticModel<'_> {
         if ty.is_dynamic() && !matches!(ty, Type::Dynamic(DynamicType::Any)) {
             return None;
         }
-        // display with the standard (non-basedpython) renderer so literals come
-        // out as `Literal[..]` rather than bare — the transpiler emits python
-        Some(strip_binding_context_suffix(&display_for_python(
+        spell_for_python(
             self.db(),
             &self.program_environment(),
+            self,
             ty,
-        )))
+            min_version,
+            true,
+        )
     }
 
     fn class_typevars(&self, expr: &Expr) -> Option<Vec<(String, Option<String>)>> {
@@ -1329,7 +1433,10 @@ impl TypeInfo for SemanticModel<'_> {
         SemanticModel::trailing_lambda_callee_is_once(self, callee)
     }
 
-    fn implicit_context_arguments(&self, call: &ExprCall) -> Result<Vec<(String, String)>, String> {
+    fn implicit_context_arguments(
+        &self,
+        call: &ExprCall,
+    ) -> Result<Vec<ImplicitContextArgument>, String> {
         let Some(callee) = call.func.inferred_type(self) else {
             return Ok(Vec::new());
         };
@@ -1354,17 +1461,15 @@ impl TypeInfo for SemanticModel<'_> {
         Ok(implicit
             .arguments
             .into_iter()
-            .map(|argument| {
-                let variable = if argument.is_block_receiver {
-                    RECEIVER_PARAMETER.to_string()
+            .map(|argument| ImplicitContextArgument {
+                parameter: argument.parameter.to_string(),
+                variable: if argument.is_block_receiver {
+                    ContextVariable::Named(RECEIVER_PARAMETER.to_string())
                 } else if argument.is_module_private {
-                    // the binding is a module-level `private` variable, which the
-                    // lowering emits under its underscored name
-                    crate::transforms::modifiers::module_private_name(&argument.variable)
+                    ContextVariable::ModulePrivate(argument.variable.to_string())
                 } else {
-                    argument.variable.to_string()
-                };
-                (argument.parameter.to_string(), variable)
+                    ContextVariable::Named(argument.variable.to_string())
+                },
             })
             .collect())
     }
@@ -1421,7 +1526,7 @@ impl TypeInfo for SemanticModel<'_> {
         // `<class 'int'>`); `type[int]` is its promoted form, and the type ty
         // itself reads back off the undeclared attribute through an instance
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted, min_version)
+        spell_for_python(db, &env, self, promoted, min_version, false)
     }
 
     fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool {
@@ -1501,12 +1606,16 @@ fn display_for_python<'db>(
 /// the modules reported are only those the spelling actually names, because the reporting
 /// is per-type rather than per-name: ty names `types` for the type spelled `None`, which
 /// bought an emitted file a `if TYPE_CHECKING: import types` it never read.
+///
+/// `literal` makes `Literal` a `typing` name like the implicit ones, for a caller that
+/// writes the import it needs: a symbolic fold, whose answer is so often a literal type
 fn spell_for_python<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     model: &SemanticModel<'db>,
     ty: Type<'db>,
     min_version: ruff_python_ast::PythonVersion,
+    literal: bool,
 ) -> Option<SynthesizedType> {
     let spelling = ty.source_spelling_in(
         db,
@@ -1517,20 +1626,31 @@ fn spell_for_python<'db>(
     let text = strip_binding_context_suffix(&spelling.text);
     let read = names_read(&text)?;
 
-    let typing_names: Vec<&'static str> = read
-        .iter()
-        .filter(|name| !model.is_bound_globally(name))
-        .filter_map(|name| IMPLICIT_TYPING_NAMES.iter().copied().find(|n| *n == name))
-        .collect();
     let mut modules = spelling.modules;
     modules.retain(|module| read.iter().any(|name| name == module));
+    // a name the display writes that is neither a class nor a module is a `typing` special
+    // form's, whatever the module binds under it — `Literal` in `Literal[1]` — and is written
+    // under the name the lowering imports it by
+    let typing_names: Vec<&'static str> = read
+        .iter()
+        .filter(|name| !spelling.bare_classes.contains(name) && !modules.contains(name))
+        .filter_map(|name| typing_name(name, literal))
+        .collect();
 
     let spelled = SynthesizedType {
         text,
         modules,
         typing_names,
     };
-    resolvable_in_output(model, min_version, &spelled, &read).then_some(spelled)
+    resolvable_in_output(model, min_version, &spelled, &spelling.bare_classes, &read)
+        .then_some(spelled)
+}
+
+/// the `typing` name `name` is, when ty's display writes it for a special form rather than
+/// for a class: one basedpython binds implicitly, or, when `literal`, `Literal`
+fn typing_name(name: &str, literal: bool) -> Option<&'static str> {
+    ruff_python_stdlib::basedpython::implicit_typing_name(name)
+        .or_else(|| (literal && name == "Literal").then_some("Literal"))
 }
 
 /// Whether every name `spelled` reads will resolve in the emitted file.
@@ -1544,11 +1664,13 @@ fn resolvable_in_output(
     model: &SemanticModel<'_>,
     min_version: ruff_python_ast::PythonVersion,
     spelled: &SynthesizedType,
+    bare_classes: &[String],
     read: &[String],
 ) -> bool {
     read.iter().all(|name| {
         spelled.modules.iter().any(|module| module == name)
             || spelled.typing_names.contains(&name.as_str())
+            || bare_classes.contains(name)
             || model.is_bound_globally(name)
             || ruff_python_stdlib::builtins::is_python_builtin(name, min_version.minor, false)
     })

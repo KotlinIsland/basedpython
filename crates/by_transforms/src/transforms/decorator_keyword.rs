@@ -158,11 +158,11 @@ impl AstPass for DecoratorKeyword<'_> {
         }
         if state.needs_callable {
             ctx.required_imports
-                .push("from typing import Callable".to_owned());
+                .push(self.written.import_from("typing", &["Callable"]));
         }
         if state.needs_overload {
             ctx.required_imports
-                .push("from typing import overload".to_owned());
+                .push(self.written.import_from("typing", &["overload"]));
         }
         // the emitted overloads are read and never run, so a name only they need is
         // imported where only a checker sees it
@@ -257,6 +257,8 @@ impl State<'_> {
         }
 
         self.needs_overload = true;
+        let callable = self.written.imported("typing", "Callable");
+        let overload = self.written.imported("typing", "overload");
 
         let fn_name = func.name.as_str();
 
@@ -276,7 +278,7 @@ impl State<'_> {
         let decorated_type = |frags: &mut Vec<Fragment>| match fn_param.annotation() {
             Some(annotation) => frags.push(Fragment::Src(annotation.range())),
             // an unannotated decorated parameter accepts any callable
-            None => frags.push(Fragment::Lit("Callable[..., object]".to_owned())),
+            None => frags.push(Fragment::Lit(format!("{callable}[..., object]"))),
         };
         // a declaration that wrote no return annotation still has a return type, and both
         // overloads state it: written as `object` the emitted python would be weaker than
@@ -285,28 +287,19 @@ impl State<'_> {
         // says less than the truth rather than something else
         let inferred_return = self.return_types.by_function.get(&func.range());
         if let Some(inferred) = inferred_return {
-            let mut imports = self.synthesized_imports.borrow_mut();
-            imports.extend(
-                inferred
-                    .modules
-                    .iter()
-                    .map(|module| format!("import {module}")),
-            );
-            imports.extend(
-                inferred
-                    .typing_names
-                    .iter()
-                    .map(|name| format!("from typing import {name}")),
-            );
+            self.synthesized_imports
+                .borrow_mut()
+                .extend(inferred.imports_in(self.written));
         }
-        let return_type = |frags: &mut Vec<Fragment>| match (&func.returns, inferred_return) {
+        let inferred_return = inferred_return.map(|inferred| inferred.text_in(self.written));
+        let return_type = |frags: &mut Vec<Fragment>| match (&func.returns, &inferred_return) {
             (Some(returns), _) => frags.push(Fragment::Src(returns.range())),
-            (None, Some(inferred)) => frags.push(Fragment::Lit(inferred.text.clone())),
-            (None, None) => frags.push(Fragment::Lit("object".to_owned())),
+            (None, Some(inferred)) => frags.push(Fragment::Lit(inferred.clone())),
+            (None, None) => frags.push(Fragment::Lit(self.written.builtin("object"))),
         };
-        if fn_param.annotation().is_none() {
-            self.needs_callable = true;
-        }
+        // the second overload's return type is a `Callable` whatever the decorated
+        // parameter declares
+        self.needs_callable = true;
         // the decorated parameter is declared as the source declares it, so applying the
         // decorator by keyword (`d(fn=f)`) is accepted here exactly where it is accepted
         // of the declaration
@@ -336,7 +329,7 @@ impl State<'_> {
         // overload 1: applied to the function itself, with whatever options were given
         let mut header: Vec<Fragment> = Vec::new();
         header.push(Fragment::Lit(format!(
-            "@overload\n{base_indent}def {fn_name}({decorated}: "
+            "@{overload}\n{base_indent}def {fn_name}({decorated}: "
         )));
         decorated_type(&mut header);
         if !options.is_empty() {
@@ -350,13 +343,13 @@ impl State<'_> {
         // overload 2: applied to the options alone, and what it hands back takes the
         // function
         header.push(Fragment::Lit(format!(
-            ": ...\n{base_indent}@overload\n{base_indent}def {fn_name}("
+            ": ...\n{base_indent}@{overload}\n{base_indent}def {fn_name}("
         )));
         if !options.is_empty() {
             header.push(Fragment::Lit("*".to_owned()));
             declared_options(&mut header);
         }
-        header.push(Fragment::Lit(") -> Callable[[".to_owned()));
+        header.push(Fragment::Lit(format!(") -> {callable}[[")));
         decorated_type(&mut header);
         header.push(Fragment::Lit("], ".to_owned()));
         return_type(&mut header);

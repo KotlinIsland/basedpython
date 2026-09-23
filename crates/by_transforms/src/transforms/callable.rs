@@ -169,7 +169,11 @@ impl<'src> CallableSyntax<'src> {
             arms.join(" | ")
         } else {
             self.needs_union_import = true;
-            format!("Union[{}]", arms.join(", "))
+            format!(
+                "{}[{}]",
+                self.written.imported("typing", "Union"),
+                arms.join(", ")
+            )
         }
     }
 
@@ -202,24 +206,22 @@ impl<'src> CallableSyntax<'src> {
     /// nothing defines
     pub(crate) fn take_requirements(&mut self) -> (Vec<String>, Vec<crate::runtime::Helper>) {
         let mut lines = Vec::new();
-        for (needed, line) in [
-            (self.needs_import, "from typing import Callable"),
-            (
-                self.needs_concatenate_import,
-                "from typing import Concatenate",
-            ),
-            (self.needs_protocol_import, "from typing import Protocol"),
+        for (needed, module, name) in [
+            (self.needs_import, "typing", "Callable"),
+            (self.needs_concatenate_import, "typing", "Concatenate"),
+            (self.needs_protocol_import, "typing", "Protocol"),
             (
                 self.needs_intersection_import,
-                "from ty_extensions import Intersection",
+                "ty_extensions",
+                "Intersection",
             ),
-            (self.needs_typeof_import, "from ty_extensions import TypeOf"),
-            (self.needs_not_import, "from ty_extensions import Not"),
-            (self.needs_annotated_import, "from typing import Annotated"),
-            (self.needs_union_import, "from typing import Union"),
+            (self.needs_typeof_import, "ty_extensions", "TypeOf"),
+            (self.needs_not_import, "ty_extensions", "Not"),
+            (self.needs_annotated_import, "typing", "Annotated"),
+            (self.needs_union_import, "typing", "Union"),
         ] {
             if needed {
-                lines.push(line.to_owned());
+                lines.push(self.written.import_from(module, &[name]));
             }
         }
         lines.append(&mut self.extra_imports);
@@ -274,8 +276,13 @@ impl<'src> CallableSyntax<'src> {
             return self.sweep_substitutions(expr.range());
         }
         if let Some(types) = self.types
-            && let Some((text, imports)) =
-                rewrite_type_expr_with_imports(self.source, types, expr, self.float_literals)
+            && let Some((text, imports)) = rewrite_type_expr_with_imports(
+                self.source,
+                self.written,
+                types,
+                expr,
+                self.float_literals,
+            )
         {
             self.extra_imports.extend(imports);
             return text;
@@ -481,11 +488,14 @@ impl<'src> CallableSyntax<'src> {
                         match self.unpacked_kwargs(&inner.value) {
                             Some(UnpackedKwargsLowering::TypedDict) => {
                                 let ty = quote_forward_ref(&format!(
-                                    "Unpack[{}]",
+                                    "{}[{}]",
+                                    self.written.imported("typing", "Unpack"),
                                     self.rewrite_or_leaf(&inner.value)
                                 ));
-                                self.extra_imports
-                                    .push("from typing import Unpack\n".to_owned());
+                                self.extra_imports.push(format!(
+                                    "{}\n",
+                                    self.written.import_from("typing", &["Unpack"])
+                                ));
                                 parts.push(format!("**kwargs: {ty}"));
                             }
                             Some(UnpackedKwargsLowering::Protocol(members)) => {
@@ -549,7 +559,8 @@ impl<'src> CallableSyntax<'src> {
         self.protocol_shapes.insert(shape.clone(), name.clone());
         let _ = writeln!(
             self.protocol_class_defs,
-            "class {name}(Protocol):\n    def __call__({params}) -> {ret}: ...\n",
+            "class {name}({protocol}):\n    def __call__({params}) -> {ret}: ...\n",
+            protocol = self.written.imported("typing", "Protocol"),
             params = shape.params,
             ret = shape.returns,
         );
@@ -582,12 +593,14 @@ impl<'src> CallableSyntax<'src> {
                     .map(|receiver| self.rewrite_or_leaf(receiver))
                     .collect();
                 prefix_str.extend(prefix.iter().map(|a| self.rewrite_or_leaf(a)));
+                let callable = self.written.imported("typing", "Callable");
                 if prefix_str.is_empty() {
-                    Some(format!("Callable[{ps}, {ret_str}]"))
+                    Some(format!("{callable}[{ps}, {ret_str}]"))
                 } else {
                     self.needs_concatenate_import = true;
                     Some(format!(
-                        "Callable[Concatenate[{}, {ps}], {ret_str}]",
+                        "{callable}[{}[{}, {ps}], {ret_str}]",
+                        self.written.imported("typing", "Concatenate"),
                         prefix_str.join(", ")
                     ))
                 }
@@ -618,7 +631,10 @@ impl<'src> CallableSyntax<'src> {
             {
                 self.needs_import = true;
                 let ret_str = self.rewrite_or_leaf(returns);
-                Some(format!("Callable[..., {ret_str}]"))
+                Some(format!(
+                    "{}[..., {ret_str}]",
+                    self.written.imported("typing", "Callable")
+                ))
             }
 
             Expr::CallableType(ExprCallableType {
@@ -635,7 +651,10 @@ impl<'src> CallableSyntax<'src> {
                 rendered.extend(args.iter().map(|a| self.rewrite_or_leaf(a)));
                 let args_str = rendered.join(", ");
                 let ret_str = self.rewrite_or_leaf(returns);
-                Some(format!("Callable[[{args_str}], {ret_str}]"))
+                Some(format!(
+                    "{}[[{args_str}], {ret_str}]",
+                    self.written.imported("typing", "Callable")
+                ))
             }
 
             // intersection: `A & B`, `A and B`, `A & B and C` → `Intersection[…]`.
@@ -646,7 +665,11 @@ impl<'src> CallableSyntax<'src> {
                 let mut parts: Vec<Expr> = Vec::new();
                 collect_intersect(expr, &mut parts);
                 let rendered: Vec<String> = parts.iter().map(|p| self.rewrite_or_leaf(p)).collect();
-                Some(format!("Intersection[{}]", rendered.join(", ")))
+                Some(format!(
+                    "{}[{}]",
+                    self.written.imported("ty_extensions", "Intersection"),
+                    rendered.join(", ")
+                ))
             }
             // keyword union: `A or B` → `A | B`. `|` and `or` flatten into one
             // chain so the rendered output carries no redundant parentheses
@@ -672,7 +695,10 @@ impl<'src> CallableSyntax<'src> {
             Expr::UnaryOp(u) if matches!(u.op, UnaryOp::Not) => {
                 self.needs_not_import = true;
                 let inner = self.rewrite_or_leaf(&u.operand);
-                Some(format!("Not[{inner}]"))
+                Some(format!(
+                    "{}[{inner}]",
+                    self.written.imported("ty_extensions", "Not")
+                ))
             }
 
             // `T?` → `T | None` (and nested `T??` → `Optional[T | None]`), so the
@@ -740,14 +766,21 @@ impl<'src> CallableSyntax<'src> {
                 }
                 metadata.reverse();
                 let inner = self.rewrite_or_leaf(inner);
-                Some(format!("Annotated[{inner}, {}]", metadata.join(", ")))
+                Some(format!(
+                    "{}[{inner}, {}]",
+                    self.written.imported("typing", "Annotated"),
+                    metadata.join(", ")
+                ))
             }
 
             // `typeof X` → `TypeOf[X]` (parser tags such subscripts with `is_typeof`)
             Expr::Subscript(s) if s.is_typeof => {
                 self.needs_typeof_import = true;
                 let inner = self.rewrite_or_leaf(&s.slice);
-                Some(format!("TypeOf[{inner}]"))
+                Some(format!(
+                    "{}[{inner}]",
+                    self.written.imported("ty_extensions", "TypeOf")
+                ))
             }
 
             Expr::Subscript(s) => {
@@ -824,7 +857,11 @@ impl<'src> CallableSyntax<'src> {
                     .zip(t.elts.iter())
                     .map(|(r, e)| r.unwrap_or_else(|| self.src(e.range()).to_owned()))
                     .collect();
-                Some(format!("tuple[{}]", parts.join(", ")))
+                Some(format!(
+                    "{}[{}]",
+                    self.written.builtin("tuple"),
+                    parts.join(", ")
+                ))
             }
 
             _ => None,
@@ -925,7 +962,8 @@ pub(crate) fn lower_type_expr_full(
     }
     // no structural type-form — fall back to the per-leaf composer
     // (`float` → `JustFloat`, a literal → `Literal[…]`, `dynamic` → `Any`)
-    rewrite_type_expr_with_imports(source, types, expr, config.float_literals).map(|(text, _)| text)
+    rewrite_type_expr_with_imports(source, written, types, expr, config.float_literals)
+        .map(|(text, _)| text)
 }
 
 /// if `expr` is `Subscript(Name("__let__"|"__classvar__"|"__final__"), slice)`,

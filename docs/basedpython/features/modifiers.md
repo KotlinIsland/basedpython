@@ -46,6 +46,9 @@ ORIGIN: Final = Point(0, 0)
 | `protocol Foo`          | `class Foo(Protocol)` (base added)                  |
 | `sealed class Foo`      | `class Foo` + `Foo.__sealed_members__ = (...)`      |
 
+`dataclass(slots=True)` is new in python 3.10. below it, a `data class` is
+decorated with a runtime helper that makes it slotted the way that option would
+
 `abstract` is a marker for the type checker; it has no runtime decorator.
 `open` is the inverse of `final` — a marker that the class is intended to be
 subclassed. neither emits a runtime artefact
@@ -200,9 +203,11 @@ member is not a module export
 a module-level `private` strips the keyword and gives the symbol a leading
 underscore at the definition site *and* every same-module call site. a name that
 already has one keeps it — a second would make it a `__name`, which python
-name-mangles wherever a class body reads it. it is excluded from `__all__` even
-when no `export`/`public` declarations exist, and another module that imports it
-is reported by `private-import`
+name-mangles wherever a class body reads it. when the module already has the
+underscored name — its own `_helper`, or one the lowering binds — the symbol is
+emitted as `_helper2` instead, so it never takes over a name the module has. it
+is excluded from `__all__` even when no `export`/`public` declarations exist, and
+another module that imports it is reported by `private-import`
 
 a module-level `private` works on a variable exactly as it does on a function,
 class or type alias — `private count: int = 0` is emitted as `_count`, and so is

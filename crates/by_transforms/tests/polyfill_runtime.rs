@@ -16,9 +16,12 @@
 //! Asserting on the lowered *text* is what let all three through, so these
 //! tests execute it instead.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
+
+mod interpreters;
+use interpreters::Interpreter;
 
 /// exercises the polyfill's typevar rename across every position that renders
 /// replacement text rather than patching source bytes
@@ -171,6 +174,9 @@ assert hints["b"] == typing.Union[int, str], "a keyword union the lowering spell
 assert isinstance(None, int?) and not isinstance("a", int?), "an optional as a classinfo"
 assert isinstance(None, int? | str) and isinstance(None, (bytes, float?)), "nested in a classinfo"
 assert isinstance("a", (int | str)?) and issubclass(bool, int?), "around a union, and in issubclass"
+assert isinstance(1, (bytes, (float, int | str))), "in a tuple nested in the classinfo"
+from builtins import isinstance as is_instance
+assert is_instance(1, int | str), "an isinstance reached by another name"
 
 print("ok")
 "#;
@@ -277,93 +283,152 @@ assert call(1) == 1, "a defaulted function"
 print("ok")
 "#;
 
-/// an interpreter found under one of the names the tests look for
-struct Interpreter {
-    command: String,
-    version: PythonVersion,
-    typing_extensions: bool,
-}
+/// a method's type variable, and a nested function's, is declared at module scope, where
+/// `typing.get_type_hints` resolves the annotations that name it: in the function's module
+/// namespace, which a class body or an enclosing function's locals are not part of
+const METHOD_TYPE_VARIABLES: &str = r#"
+import typing
 
-impl std::fmt::Display for Interpreter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.command, self.version)?;
-        if self.typing_extensions {
-            write!(f, " with `typing_extensions`")?;
-        }
-        Ok(())
-    }
-}
+class Box:
+    def put[T](self, x: T) -> T:
+        return x
 
-/// what an interpreter says about itself: its version, whether it has `typing_extensions`, and
-/// the file it runs from, which tells two names for one interpreter apart
-const PROBE: &str = "import sys, importlib.util; \
-print(sys.version_info[0], sys.version_info[1], \
-int(importlib.util.find_spec('typing_extensions') is not None), sys.executable)";
+def outer():
+    def inner[U](y: U) -> U:
+        return y
+    return inner
 
-/// every interpreter this machine has under `$PYTHON`, `python3.N` or `python3`, oldest first,
-/// each listed once however many of the names reach it
-///
-/// the polyfill is only told apart from native syntax by an old interpreter, and its output
-/// imports `typing_extensions` below 3.13, which an interpreter often does not have. `python3`
-/// alone is whichever one the path finds first, so every name is asked
-fn interpreters() -> Vec<Interpreter> {
-    let mut candidates: Vec<String> = std::env::var("PYTHON").into_iter().collect();
-    candidates.extend((8..=15).map(|minor| format!("python3.{minor}")));
-    candidates.push("python3".to_owned());
+hints = typing.get_type_hints(Box.put)
+assert hints["x"] === hints["return"], "a method's annotations resolve"
+nested = typing.get_type_hints(outer())
+assert nested["y"] === nested["return"], "and a nested function's"
+assert Box().put(1) == 1
+print("ok")
+"#;
 
-    let mut seen = std::collections::HashSet::new();
-    let mut found: Vec<Interpreter> = candidates
-        .into_iter()
-        .filter_map(|command| {
-            let output = Command::new(&command)
-                .args(["-c", PROBE])
-                .stderr(Stdio::null())
-                .output()
-                .ok()
-                .filter(|output| output.status.success())?;
-            let stdout = String::from_utf8(output.stdout).ok()?;
-            let mut fields = stdout.trim_end().splitn(4, ' ');
-            let major = fields.next()?.parse().ok()?;
-            let minor = fields.next()?.parse().ok()?;
-            let typing_extensions = fields.next()? == "1";
-            let executable = fields.next()?;
-            let executable = std::fs::canonicalize(executable)
-                .unwrap_or_else(|_| std::path::PathBuf::from(executable));
-            seen.insert(executable).then(|| Interpreter {
-                command,
-                version: PythonVersion::from((major, minor)),
-                typing_extensions,
-            })
-        })
-        .collect();
-    found.sort_by_key(|interpreter| interpreter.version);
-    found
-}
+/// a method whose bound reads a name of its class. the declaration reads it through the class,
+/// so it is at module scope with the others: `typing.get_type_hints` finds it, and so does a
+/// function nested in the method, whose annotations are evaluated when the method runs on a
+/// target that does not defer them
+const CLASS_LEVEL_BOUNDS: &str = r#"
+import typing
+
+class C:
+    class Inner:
+        pass
+
+    def m[T: Inner, U: T](self, x: T, y: U) -> T:
+        def nested[V](v: V, t: T) -> V:
+            return v
+        return nested(x, y)
+
+hints = typing.get_type_hints(C.m)
+assert hints["x"] === hints["return"] and hints["y"].__bound__ === hints["x"]
+assert typing.get_type_hints(C.m)["x"].__bound__.__forward_arg__ == "C.Inner"
+inner = C.Inner()
+assert C().m(inner, inner) === inner
+print("ok")
+"#;
+
+/// a type moved out of its generic to module scope — an inline protocol, an anonymous named
+/// tuple — names the type variable the polyfill declared for the generic's parameter. an earlier
+/// generic declaring a parameter of the same name differently takes the first name, so a guess
+/// at it reads that one instead. where the type parameters stay native syntax, the parameter
+/// exists only in its generic's scope, so the hoisted type reads it off the generic
+const HOISTED_TYPES: &str = r#"
+import typing
+
+class Bounded[T: int]:
+    pass
+
+class Holder[T]:
+    def takes(self, p: protocol(a: T)) -> None:
+        pass
+
+    def gives(self, t: T) -> (x: T, y: int):
+        return (t, 1)
+
+parameter = getattr(Holder, "__parameters__")[0]
+hoisted = typing.get_type_hints(Holder.takes)["p"]
+assert typing.get_type_hints(hoisted)["a"] === parameter, "an inline protocol names its generic's"
+named = typing.get_type_hints(Holder.gives)["return"]
+assert typing.get_type_hints(named)["x"] === parameter, "and so does an anonymous named tuple"
+print("ok")
+"#;
+
+/// a module that binds, as values of its own, the names of the typing constructs the lowerings
+/// write. each lowering reads the construct it means under a name the module does not spell,
+/// and the module keeps its own
+const OWN_TYPING_NAMES: &str = r#"
+import typing
+
+Union = Callable = Literal = Any = Protocol = NamedTuple = "mine"
+cast = overload = Final = ClassVar = final = override = "mine"
+abstractmethod = Annotated = TypeIs = NewType = TypeVar = Generic = "mine"
+
+class Base:
+    def name(self) -> str:
+        return "base"
+
+final class Derived(Base):
+    override def name(self) -> str:
+        return "derived"
+
+class Counter:
+    class var count: int = 0
+
+protocol Named:
+    def name(self) -> str: ...
+
+let limit: int = 3
+
+def is_int(x: object) -> x is int:
+    return type(x) === int
+
+def first[T](xs: list[T]) -> T:
+    return xs[0]
+
+def call(f: (int) -> str) -> str:
+    return f(1)
+
+def pick(x: "a" | "b") -> dynamic:
+    return x
+
+def opt(x: int?) -> list[int?]:
+    return [x]
+
+def shape(p: protocol(a: int)) -> (x: int, y: str):
+    return (p.a, "s")
+
+newtype UserId = int
+
+class HasA:
+    a: int = 3
+
+assert Derived().name() == "derived" and Counter.count == 0 and limit == 3
+assert first([1]) == 1 and call(str) == "1" and pick("a") == "a" and opt(None) == [None]
+assert shape(HasA()).x == 3 and UserId(3) == 3 and is_int(1) and (5 cast! int) == 5
+assert typing.get_type_hints(opt)["x"] == typing.Optional[int], "a union the lowering spelled"
+assert typing.get_type_hints(pick)["x"] == typing.Literal["a", "b"], "a literal type"
+assert typing.get_type_hints(call)["f"] == typing.Callable[[int], str], "an arrow"
+assert Union == Callable == Literal == Any == Protocol == NamedTuple == "mine"
+assert cast == overload == Final == ClassVar == final == override == "mine"
+assert abstractmethod == Annotated == TypeIs == NewType == TypeVar == Generic == "mine"
+print("ok")
+"#;
 
 /// run `program`, transpiled for `target`, on the oldest interpreter found that runs what it is
 /// transpiled for, and say which one ran it. `extensions` asks for one with
 /// `typing_extensions`. none is a skip, said so
-///
-/// a skip passes, so nothing on the test's line says it ran nothing: the nextest configuration
-/// shows what this binary's passing tests print
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn run_on_oldest(program: &str, target: PythonVersion, extensions: bool) {
-    let found = interpreters();
-    let Some(interpreter) = found.iter().find(|interpreter| {
-        interpreter.version >= target && (interpreter.typing_extensions || !extensions)
-    }) else {
-        let needs = if extensions {
-            " with `typing_extensions`"
-        } else {
-            ""
-        };
-        eprintln!("skipping: no interpreter of python {target} or later{needs} found");
-        return;
+    let (probe, needs) = if extensions {
+        ("import typing_extensions", "with `typing_extensions`")
+    } else {
+        ("", "")
     };
-    run_at(interpreter, program, target);
+    if let Some(interpreter) = interpreters::oldest(target, probe, needs) {
+        run_at(&interpreter, program, target);
+    }
 }
 
 /// the target the polyfill lowers for on `interpreter`: 3.10, the one a user gets without
@@ -374,28 +439,16 @@ fn polyfill_target(interpreter: &Interpreter) -> PythonVersion {
 
 /// run `program`, lowered by the polyfill, on the oldest interpreter found with
 /// `typing_extensions`, which the polyfill's output imports below 3.13
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn run_polyfilled_with_extensions(program: &str) {
-    let found = interpreters();
-    let Some(interpreter) = found.iter().find(|interpreter| {
-        interpreter.typing_extensions && interpreter.version >= PythonVersion::PY39
-    }) else {
-        eprintln!(
-            "skipping: no interpreter of python 3.9 or later with `typing_extensions` found, \
-             so the polyfill's output was not run"
-        );
-        return;
-    };
-    run_at(interpreter, program, polyfill_target(interpreter));
+    if let Some(interpreter) = interpreters::oldest(
+        PythonVersion::PY39,
+        "import typing_extensions",
+        "with `typing_extensions`",
+    ) {
+        run_at(&interpreter, program, polyfill_target(&interpreter));
+    }
 }
 
-#[expect(
-    clippy::print_stderr,
-    reason = "a test that can skip says what it ran on, so a pass is told apart from a skip"
-)]
 fn run_at(interpreter: &Interpreter, program: &str, min_version: PythonVersion) {
     let config = Config {
         min_version,
@@ -415,7 +468,7 @@ fn run_at(interpreter: &Interpreter, program: &str, min_version: PythonVersion) 
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
-    eprintln!("ran, transpiled for {min_version}, on {interpreter}");
+    interpreters::ran(interpreter, min_version);
 }
 
 #[test]
@@ -447,7 +500,7 @@ fn some_parameters_run_at_every_version() {
     reason = "a skipped test must say why it skipped, or it reads as a pass"
 )]
 fn evaluated_unions_run_below_python_310() {
-    let found = interpreters();
+    let found = interpreters::interpreters();
     let older: Vec<&Interpreter> = found
         .iter()
         .filter(|interpreter| {
@@ -481,7 +534,7 @@ fn evaluated_unions_run_below_python_310() {
     reason = "a skipped test must say why it skipped, or it reads as a pass"
 )]
 fn a_module_binding_the_constructors_runs() {
-    let found = interpreters();
+    let found = interpreters::interpreters();
     let older: Vec<&Interpreter> = found
         .iter()
         .filter(|interpreter| {
@@ -506,4 +559,29 @@ fn a_module_binding_the_type_variables_runs() {
 fn defaulted_parameter_specifications_and_variadics_run() {
     run_polyfilled_with_extensions(DEFAULTED_PACKS);
     run_on_oldest(DEFAULTED_PACKS, PythonVersion::PY313, false);
+}
+
+#[test]
+fn a_hoisted_type_names_its_generics_type_variable() {
+    run_on_oldest(HOISTED_TYPES, PythonVersion::PY39, false);
+    run_on_oldest(HOISTED_TYPES, PythonVersion::PY313, false);
+}
+
+#[test]
+fn a_module_binding_the_typing_names_runs() {
+    run_on_oldest(OWN_TYPING_NAMES, PythonVersion::PY39, true);
+    run_on_oldest(OWN_TYPING_NAMES, PythonVersion::PY313, false);
+}
+
+#[test]
+fn a_method_type_variable_resolves_in_type_hints() {
+    run_on_oldest(METHOD_TYPE_VARIABLES, PythonVersion::PY39, false);
+}
+
+/// 3.10 and 3.11 evaluate annotations when the function is defined, which a nested function
+/// is each time the method runs
+#[test]
+fn a_bound_reading_a_class_level_name_resolves() {
+    run_on_oldest(CLASS_LEVEL_BOUNDS, PythonVersion::PY39, false);
+    run_on_oldest(CLASS_LEVEL_BOUNDS, PythonVersion::PY310, false);
 }

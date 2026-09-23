@@ -72,7 +72,7 @@ impl TypeAwarePass for InitMethod<'_> {
         }
         if state.needs_missing.into_inner() {
             ctx.required_imports
-                .extend(super::mutable_defaults::sentinel_definition(self.source));
+                .extend(super::mutable_defaults::sentinel_definition(self.written));
         }
         ctx.text_edits.extend(state.edits.into_inner());
         ctx.template_edits.extend(state.templates.into_inner());
@@ -357,7 +357,7 @@ impl State<'_> {
             } = parameter_guards(
                 func,
                 self.written,
-                &super::mutable_defaults::sentinel_name(self.source),
+                &super::mutable_defaults::sentinel_name(self.written),
                 self.types,
                 self.config.is_stub,
             );

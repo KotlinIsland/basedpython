@@ -3251,36 +3251,17 @@ fn check_classinfo_in_isinstance<'db>(
 }
 
 /// whether the union `classinfo_expr` evaluates to is spelled as a tuple of classes where it
-/// stands, by the lowering a basedpython module goes through before it runs
-///
-/// below 3.10 a union object is no class, and `isinstance` rejects one. the transpiler writes
-/// a union spelled in the call itself as the tuple it stands for, so
-/// `isinstance(x, int | str)` runs as `isinstance(x, (int, str,))`, and the same for an optional
-/// `int?`, alone or inside a tuple the call spells. that is only done for a call to `isinstance`
-/// or `issubclass` by those names, and a union reached any other way, through a name for one,
-/// is the `typing.Union` the transpiler spells everywhere else
+/// stands, by the lowering a basedpython module goes through before it runs. see
+/// [`classinfo_spelling`](crate::types::classinfo_spelling)
 fn spelled_as_classes_by_the_lowering(
     context: &InferContext<'_, '_>,
     call_expression: &ast::ExprCall,
     classinfo_expr: Option<&ast::Expr>,
 ) -> bool {
     context.file().source_type(context.db()) == ast::PySourceType::BasedPython
-        && matches!(
-            call_expression.func.as_ref(),
-            ast::Expr::Name(name) if matches!(name.id.as_str(), "isinstance" | "issubclass")
-        )
-        && matches!(
-            classinfo_expr,
-            Some(
-                ast::Expr::BinOp(ast::ExprBinOp {
-                    op: ast::Operator::BitOr,
-                    ..
-                }) | ast::Expr::UnaryOp(ast::ExprUnaryOp {
-                    op: ast::UnaryOp::Optional,
-                    ..
-                })
-            )
-        )
+        && classinfo_expr.is_some_and(|classinfo_expr| {
+            crate::types::classinfo_spelling::spelled_as_classes(call_expression, classinfo_expr)
+        })
 }
 
 /// report a union object passed to `isinstance()` / `issubclass()` on a python older than
@@ -4508,7 +4489,7 @@ impl KnownFunction {
                     call_expression,
                     self,
                     *second_argument,
-                    call_expression.arguments.args.get(1),
+                    crate::types::classinfo_spelling::classinfo_argument(call_expression),
                 );
 
                 if self == KnownFunction::IsInstance {

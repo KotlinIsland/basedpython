@@ -20,6 +20,8 @@ pub mod entry_point {
     };
 }
 
+use transforms::repeated_underscore::{CodeNames, PrivateNames};
+
 use std::collections::{BTreeSet, HashSet};
 
 use ruff_db::files::{File, system_path_to_file};
@@ -153,24 +155,24 @@ fn transpile_with_report(
         return Ok((source.to_owned(), RuntimeRequirements::default()));
     }
 
-    // the names the module spells as written, which a repeated `_` parameter is
-    // numbered around. read before any rewrite, as the native compiler reads them
-    let written_names = WrittenNames::new(source);
-
     // one db over the original source, shared by the qualification phase below
     // and — as long as nothing rewrites the source — by phase 0's type-aware
     // passes, which would otherwise build an identical one of their own
     let (local_db, local_file) = make_in_memory_db(source);
+    let parsed = ruff_db::parsed::parsed_module(
+        &local_db,
+        ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
+    )
+    .load(&local_db);
     // what the author wrote, before any rewrite, so phase 3 can tell a helper
     // call the transpiler emitted from a name the program reads itself
-    let author = AuthorNames::new(
-        ruff_db::parsed::parsed_module(
-            &local_db,
-            ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
-        )
-        .load(&local_db)
-        .suite(),
-    );
+    let author = AuthorNames::new(parsed.suite());
+    // the names the module spells as written, which a repeated `_` parameter is
+    // numbered around and a lowering's typing name kept clear of. read before any
+    // rewrite, as the native compiler reads them
+    let code_names = CodeNames::of(parsed.suite());
+    let written_names = WrittenNames::new(source).with_code(&code_names);
+    let as_written = source;
 
     // --- Erased-union reification: give a `list[int] | list[str]` parameter a
     // reified type parameter, while the source is still the one ty checks ---
@@ -200,6 +202,13 @@ fn transpile_with_report(
         return Err(first.clone());
     }
     let source = enum_lowered.output.as_ref();
+    let private_names = PrivateNames::decide(
+        ty_python_semantic::private_symbols(&local_db, local_file)
+            .iter()
+            .map(ruff_python_ast::name::Name::as_str),
+        &[as_written, source],
+    );
+    let written_names = written_names.with_private(&private_names);
 
     // --- Phase 0: AST rewrite passes ---
     let unchanged = !reified_changed
@@ -352,10 +361,6 @@ pub fn transpile_typed_with_report(
     };
     let source_ref = ruff_db::source::source_text(db, file);
     let original_source = source_ref.as_str();
-    // the names the module spells as written, which a repeated `_` parameter is
-    // numbered around. read before any rewrite, as the native compiler reads them
-    let written_names = WrittenNames::new(original_source);
-
     if config.is_python {
         let out = original_source.to_owned();
         return Ok((
@@ -365,14 +370,17 @@ pub fn transpile_typed_with_report(
         ));
     }
 
-    let author = AuthorNames::new(
-        ruff_db::parsed::parsed_module(
-            db,
-            ty_python_semantic::Db::program_file(db, file).python_file(db),
-        )
-        .load(db)
-        .suite(),
-    );
+    let parsed = ruff_db::parsed::parsed_module(
+        db,
+        ty_python_semantic::Db::program_file(db, file).python_file(db),
+    )
+    .load(db);
+    let author = AuthorNames::new(parsed.suite());
+    // the names the module spells as written, which a repeated `_` parameter is
+    // numbered around and a lowering's typing name kept clear of. read before any
+    // rewrite, as the native compiler reads them
+    let code_names = CodeNames::of(parsed.suite());
+    let written_names = WrittenNames::new(original_source).with_code(&code_names);
 
     // erased-union reification: give a `list[int] | list[str]` parameter a
     // reified type parameter, against the source ty checks. edits stay inside
@@ -405,6 +413,13 @@ pub fn transpile_typed_with_report(
         return Err(first.clone().into());
     }
     let working_source = enum_lowered.output.as_ref();
+    let private_names = PrivateNames::decide(
+        ty_python_semantic::private_symbols(db, file)
+            .iter()
+            .map(ruff_python_ast::name::Name::as_str),
+        &[original_source, working_source],
+    );
+    let written_names = written_names.with_private(&private_names);
     // two independent facts, deliberately kept apart: `enum_changed` says the
     // enum phase *renumbered lines*, so the final map must compose through its
     // line map (which is empty when it didn't fire, and would map every line to
@@ -572,8 +587,13 @@ fn run_anon_named_tuple_cleanup(
             ty_python_semantic::Db::program_file(&db, file),
         );
 
-        let mut anon =
-            transforms::anon_named_tuple::AnonNamedTuple::new(src, written, &model, config.clone());
+        let mut anon = transforms::anon_named_tuple::AnonNamedTuple::new(
+            src,
+            written,
+            &model,
+            config.clone(),
+            module.suite(),
+        );
         for stmt in module.suite() {
             anon.visit_stmt(stmt);
         }
@@ -605,7 +625,10 @@ fn run_anon_named_tuple_cleanup(
                     preamble.push('\n');
                 }
             };
-            push_missing(&mut preamble, "from typing import NamedTuple");
+            push_missing(
+                &mut preamble,
+                &written.import_from("typing", &["NamedTuple"]),
+            );
             let (imports, helpers) = anon.callable.take_requirements();
             for line in imports.into_iter().chain(runtime_entries(config, &helpers)) {
                 push_missing(&mut preamble, line.trim_end_matches('\n'));

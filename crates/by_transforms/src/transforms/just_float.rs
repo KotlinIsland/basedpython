@@ -25,6 +25,7 @@ use ruff_text_size::Ranged;
 use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::transforms::literal_types::LiteralType;
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
     Recurse, TypeExprVisitor, TypePos, walk_one_type_expr, walk_type_positions,
 };
@@ -32,15 +33,17 @@ use crate::type_info::TypeInfo;
 
 pub(crate) struct JustFloat<'src> {
     types: &'src dyn TypeInfo,
+    written: WrittenNames<'src>,
     edits: Vec<Fix>,
     needs_float_alias: bool,
     needs_complex_alias: bool,
 }
 
 impl<'src> JustFloat<'src> {
-    fn new(types: &'src dyn TypeInfo) -> Self {
+    fn new(types: &'src dyn TypeInfo, written: WrittenNames<'src>) -> Self {
         Self {
             types,
+            written,
             edits: Vec::new(),
             needs_float_alias: false,
             needs_complex_alias: false,
@@ -81,7 +84,7 @@ impl TypeExprVisitor for JustFloat<'_> {
                 self.needs_complex_alias = true;
             }
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                replacement.to_owned(),
+                self.written.imported("ty_extensions", replacement),
                 n.range(),
             )));
         }
@@ -89,29 +92,31 @@ impl TypeExprVisitor for JustFloat<'_> {
     }
 }
 
-pub(crate) struct JustFloatPass;
+pub(crate) struct JustFloatPass<'src> {
+    written: WrittenNames<'src>,
+}
 
-impl JustFloatPass {
-    pub(crate) fn new() -> Self {
-        Self
+impl<'src> JustFloatPass<'src> {
+    pub(crate) fn new(written: WrittenNames<'src>) -> Self {
+        Self { written }
     }
 }
 
-impl TypeAwarePass for JustFloatPass {
+impl TypeAwarePass for JustFloatPass<'_> {
     fn lowering(&self) -> Option<super::ast_driver::Lowering> {
         Some(super::ast_driver::Lowering::JustFloat)
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = JustFloat::new(types);
+        let mut inner = JustFloat::new(types, self.written);
         walk_type_positions(stmts, Some(types), &mut inner);
         if inner.needs_float_alias {
             ctx.required_imports
-                .push("from ty_extensions import JustFloat".to_owned());
+                .push(self.written.import_from("ty_extensions", &["JustFloat"]));
         }
         if inner.needs_complex_alias {
             ctx.required_imports
-                .push("from ty_extensions import JustComplex".to_owned());
+                .push(self.written.import_from("ty_extensions", &["JustComplex"]));
         }
         for fix in inner.edits {
             for edit in fix.edits() {
@@ -141,6 +146,7 @@ impl TypeAwarePass for JustFloatPass {
 /// otherwise be the only trace left — needs these so the lowered names resolve.
 pub(crate) fn rewrite_type_expr_with_imports(
     source: &str,
+    written: WrittenNames,
     types: &dyn TypeInfo,
     expr: &Expr,
     float_literals: FloatLiteralLowering,
@@ -148,22 +154,22 @@ pub(crate) fn rewrite_type_expr_with_imports(
     let mut all_edits: Vec<Edit> = Vec::new();
     let mut imports: Vec<String> = Vec::new();
 
-    let mut lt = LiteralType::new(source, types, float_literals);
+    let mut lt = LiteralType::new(source, written, types, float_literals);
     lt.emit_type_edits(expr, true);
     if lt.needs_literal_import {
-        imports.push("from typing import Literal".to_owned());
+        imports.push(written.import_from("typing", &["Literal"]));
     }
     for fix in lt.edits {
         all_edits.extend(fix.into_edits());
     }
 
-    let mut jf = JustFloat::new(types);
+    let mut jf = JustFloat::new(types, written);
     jf.emit_in_type_expr(expr);
     if jf.needs_float_alias {
-        imports.push("from ty_extensions import JustFloat".to_owned());
+        imports.push(written.import_from("ty_extensions", &["JustFloat"]));
     }
     if jf.needs_complex_alias {
-        imports.push("from ty_extensions import JustComplex".to_owned());
+        imports.push(written.import_from("ty_extensions", &["JustComplex"]));
     }
     for fix in jf.edits {
         all_edits.extend(fix.into_edits());
@@ -172,10 +178,10 @@ pub(crate) fn rewrite_type_expr_with_imports(
     // `dynamic` → `Any` in the same composed rewrite, so a `type X = dynamic`
     // / `def f[T: dynamic]` polyfilled on Python < 3.12 doesn't leak the bare
     // keyword (an undefined name the final parse can't catch)
-    let mut dk = crate::transforms::dynamic_keyword::DynamicKeyword::new(types);
+    let mut dk = crate::transforms::dynamic_keyword::DynamicKeyword::new(types, written);
     dk.emit_in_type_expr(expr);
-    if dk.needs_any_import && !types.is_bound_globally("Any") {
-        imports.push("from typing import Any".to_owned());
+    if dk.needs_any_import {
+        imports.push(written.import_from("typing", &["Any"]));
     }
     for fix in dk.edits {
         all_edits.extend(fix.into_edits());

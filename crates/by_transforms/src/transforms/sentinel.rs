@@ -20,13 +20,16 @@ use ruff_python_ast::{
 use ruff_text_size::TextRange;
 
 pub(crate) struct Sentinel {
+    /// the name `typing_extensions.Sentinel` is written under
+    constructor: String,
     changed: Cell<bool>,
     ever_changed: Cell<bool>,
 }
 
 impl Sentinel {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(constructor: String) -> Self {
         Self {
+            constructor,
             changed: Cell::new(false),
             ever_changed: Cell::new(false),
         }
@@ -62,7 +65,7 @@ impl Transformer for Sentinel {
                 func: Box::new(Expr::Name(ExprName {
                     node_index: AtomicNodeIndex::NONE,
                     range: TextRange::default(),
-                    id: Name::from("Sentinel"),
+                    id: Name::from(self.constructor.as_str()),
                     ctx: ExprContext::Load,
                 })),
                 arguments: Arguments {

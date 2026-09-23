@@ -4927,7 +4927,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // typevars are instead validated by `check_legacy_typevar_defaults`
                 // (for functions) and `report_invalid_typevar_default_reference`
                 // (for classes).
-                self.infer_paramspec_default(&default.value, None);
+                self.infer_paramspec_default(&default.value, None, TypeVarKind::LegacyParamSpec);
             } else {
                 let default_ty = self.infer_type_expression(&default.value);
                 let bound_or_constraints_node = arguments

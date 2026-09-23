@@ -3241,6 +3241,22 @@ fn declared_parameter<'s, 'db>(
         .find(|candidate| candidate.source_parameter_index() == Some(position))
 }
 
+/// basedpython: the argument a call to the builtin `isinstance` or `issubclass` reads as
+/// classes, when `call` is one — whatever the name the callee is reached by. see
+/// [`classinfo_spelling`](crate::types::classinfo_spelling)
+pub fn classinfo_argument<'a>(
+    model: &SemanticModel<'_>,
+    call: &'a ast::ExprCall,
+) -> Option<&'a ast::Expr> {
+    let Type::FunctionLiteral(function) = call.func.inferred_type(model)? else {
+        return None;
+    };
+    function
+        .known(model.db())
+        .and_then(KnownFunction::into_classinfo_constraint_function)?;
+    crate::types::classinfo_spelling::classinfo_argument(call)
+}
+
 /// basedpython: how the lowering writes `function`'s parameters when they repeat `_` — the
 /// answer ty's signature of the definition is built from. `None` when they do not
 pub fn repeated_underscore_lowering(

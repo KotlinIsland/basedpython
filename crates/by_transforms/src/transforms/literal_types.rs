@@ -20,6 +20,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::config::FloatLiteralLowering;
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
     Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping,
 };
@@ -27,6 +28,9 @@ use crate::type_info::{TypeInfo, trailing_name};
 
 pub(crate) struct LiteralType<'src> {
     source: &'src str,
+    /// the name `typing.Literal` is written under
+    literal: String,
+    written: WrittenNames<'src>,
     types: &'src dyn TypeInfo,
     float_literals: FloatLiteralLowering,
     pub(crate) edits: Vec<Fix>,
@@ -36,11 +40,14 @@ pub(crate) struct LiteralType<'src> {
 impl<'src> LiteralType<'src> {
     pub(crate) fn new(
         source: &'src str,
+        written: WrittenNames<'src>,
         types: &'src dyn TypeInfo,
         float_literals: FloatLiteralLowering,
     ) -> Self {
         Self {
             source,
+            literal: written.imported("typing", "Literal"),
+            written,
             types,
             float_literals,
             edits: Vec::new(),
@@ -81,14 +88,14 @@ impl<'src> LiteralType<'src> {
         if is_literal_expr(expr, self.float_literals) {
             self.needs_literal_import = true;
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                format!("Literal[{}]", self.src(expr.range())),
+                format!("{}[{}]", self.literal, self.src(expr.range())),
                 expr.range(),
             )));
             return;
         }
         if let Some(nominal) = nominal_float_type(expr, self.float_literals) {
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                nominal.to_owned(),
+                self.written.builtin(nominal),
                 expr.range(),
             )));
             return;
@@ -170,7 +177,7 @@ impl<'src> LiteralType<'src> {
                     let lit_str = std::mem::take(&mut group_list).join(", ");
                     self.needs_literal_import = true;
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                        format!("Literal[{lit_str}]"),
+                        format!("{}[{lit_str}]", self.literal),
                         TextRange::new(start, group_end),
                     )));
                 }
@@ -212,13 +219,19 @@ impl<'src> LiteralType<'src> {
 
 pub(crate) struct LiteralTypePass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     float_literals: FloatLiteralLowering,
 }
 
 impl<'src> LiteralTypePass<'src> {
-    pub(crate) fn new(source: &'src str, float_literals: FloatLiteralLowering) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        float_literals: FloatLiteralLowering,
+    ) -> Self {
         Self {
             source,
+            written,
             float_literals,
         }
     }
@@ -230,11 +243,11 @@ impl TypeAwarePass for LiteralTypePass<'_> {
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = LiteralType::new(self.source, types, self.float_literals);
+        let mut inner = LiteralType::new(self.source, self.written, types, self.float_literals);
         walk_type_positions_skipping(stmts, Some(types), &ctx.claimed_type_op_ranges, &mut inner);
-        if inner.needs_literal_import && !literal_already_imported(types) {
+        if inner.needs_literal_import {
             ctx.required_imports
-                .push("from typing import Literal".to_owned());
+                .push(self.written.import_from("typing", &["Literal"]));
         }
         for fix in inner.edits {
             for edit in fix.edits() {
@@ -289,10 +302,12 @@ fn is_literal_expr(expr: &Expr, float_literals: FloatLiteralLowering) -> bool {
 pub(crate) fn float_literal_spelling(
     expr: &Expr,
     text: &str,
+    written: WrittenNames,
+    literal: &str,
     float_literals: FloatLiteralLowering,
 ) -> Option<String> {
     if let Some(nominal) = nominal_float_type(expr, float_literals) {
-        return Some(nominal.to_owned());
+        return Some(written.builtin(nominal));
     }
     let is_float =
         |number: &ruff_python_ast::Number| !matches!(number, ruff_python_ast::Number::Int(_));
@@ -306,7 +321,7 @@ pub(crate) fn float_literal_spelling(
         }
         _ => return None,
     };
-    is_float(number).then(|| format!("Literal[{text}]"))
+    is_float(number).then(|| format!("{literal}[{text}]"))
 }
 
 /// the builtin a float or complex literal type is one of, when the project
@@ -350,12 +365,6 @@ fn flatten_into<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
         }
     }
     out.push(expr);
-}
-
-/// Whether `Literal` is already bound at module level, so lib.rs can avoid
-/// prepending a duplicate import.
-pub(crate) fn literal_already_imported(types: &dyn TypeInfo) -> bool {
-    types.is_bound_globally("Literal")
 }
 
 #[cfg(test)]

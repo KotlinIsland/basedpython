@@ -39,6 +39,7 @@ use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtFunctionDef, StmtReturn};
 use ruff_text_size::Ranged;
 
 use crate::transforms::callable::CallableSyntax;
+use crate::transforms::generics::PolyfilledTypeParams;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
@@ -86,8 +87,9 @@ impl Shape {
         format!("_AnonNamedTuple_{truncated:08x}")
     }
 
-    fn class_def(&self, name: &str) -> String {
-        let mut out = format!("class {name}(NamedTuple):\n");
+    /// the class declaring this shape as `name`, `typing.NamedTuple` written as `named_tuple`
+    fn class_def(&self, name: &str, named_tuple: &str) -> String {
+        let mut out = format!("class {name}({named_tuple}):\n");
         for (field_name, field_type) in &self.fields {
             let _ = writeln!(out, "    {field_name}: {field_type}");
         }
@@ -133,11 +135,9 @@ pub(crate) struct AnonNamedTuple<'src> {
     /// Set when at least one anonymous named tuple was seen, so the preamble
     /// emits the `NamedTuple` import.
     pub(crate) needs_import: bool,
-    /// Modules a field type names that the source never imported. A shape is
-    /// built through `&self`, so this collects behind a cell
+    /// The imports of the modules and `typing` names a field type reads that the source
+    /// never imported. A shape is built through `&self`, so this collects behind a cell
     type_only_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
-    /// `typing` names a field type reads that the source never imported
-    typing_names: std::cell::RefCell<std::collections::BTreeSet<&'static str>>,
     /// Active function-scope return-annotation shape stack. Empty when not
     /// inside a function. The innermost (last) entry governs how a `return`
     /// statement inside the current function is coerced.
@@ -150,9 +150,10 @@ pub(crate) struct AnonNamedTuple<'src> {
     /// the same module-level `_T = TypeVar("_T")` that the generics polyfill
     /// emits, instead of leaving an unbound `T`.
     ///
-    /// Skipped on Python 3.12+: PEP 695 native syntax doesn't rename, so the
-    /// stack stays empty.
+    /// A list kept as native PEP 695 syntax isn't renamed, so it pushes no frame.
     typevar_rename_stack: Vec<HashMap<String, String>>,
+    /// the name the generics polyfill declares each type parameter under
+    polyfilled: PolyfilledTypeParams,
     /// Names bound to an anonymous named tuple by an alias — `P = (a: int)` or
     /// `type P = (a: int)`. Coercion asks what the annotation *means*, not how
     /// it is spelled, so a plain tuple literal under `x: P` is wrapped exactly
@@ -171,8 +172,10 @@ impl<'src> AnonNamedTuple<'src> {
         written: WrittenNames<'src>,
         types: &'src dyn TypeInfo,
         config: crate::Config,
+        stmts: &[Stmt],
     ) -> Self {
         Self {
+            polyfilled: PolyfilledTypeParams::decide(source, written, stmts, &config),
             source,
             written,
             types,
@@ -184,7 +187,6 @@ impl<'src> AnonNamedTuple<'src> {
             range_to_value_render: Vec::new(),
             needs_import: false,
             type_only_imports: std::cell::RefCell::default(),
-            typing_names: std::cell::RefCell::default(),
             return_shape_stack: Vec::new(),
             typevar_rename_stack: Vec::new(),
             aliases: HashMap::new(),
@@ -199,8 +201,9 @@ impl<'src> AnonNamedTuple<'src> {
     /// `NamedTuple` definitions are valid Python.
     pub(crate) fn class_defs(&self) -> String {
         let mut out = String::new();
+        let named_tuple = self.written.imported("typing", "NamedTuple");
         for (shape, name) in &self.shapes {
-            out.push_str(&shape.class_def(name));
+            out.push_str(&shape.class_def(name, &named_tuple));
             out.push('\n');
         }
         out
@@ -438,9 +441,10 @@ impl<'src> AnonNamedTuple<'src> {
                          its own"
                     ));
                 };
-                self.type_only_imports.borrow_mut().extend(d.modules);
-                self.typing_names.borrow_mut().extend(d.typing_names);
-                d.text
+                self.type_only_imports
+                    .borrow_mut()
+                    .extend(d.imports_in(self.written));
+                d.text_in(self.written)
             };
             fields.push((name, type_display));
         }
@@ -688,29 +692,13 @@ impl<'src> AnonNamedTuple<'src> {
         self.render_subbed(elt.range())
     }
 
-    /// Build a typevar rename frame from a `[T, U, ...]` type-parameter list
-    /// and push it onto the stack. Returns whether a frame was pushed so the
-    /// caller knows to pop. No-op (returns false) when targeting Python 3.12+
-    /// since native PEP 695 generics don't get renamed.
+    /// Push the typevar rename frame the generics polyfill gives a `[T, U, ...]`
+    /// type-parameter list. Returns whether a frame was pushed so the caller
+    /// knows to pop. No-op (returns false) for a list kept as native syntax
     fn push_typevar_scope_from(&mut self, tp: Option<&ruff_python_ast::TypeParams>) -> bool {
-        if self.config.min_version >= ruff_python_ast::PythonVersion::PY312 {
-            return false;
-        }
-        let Some(tp) = tp else {
+        let Some(frame) = tp.and_then(|tp| self.polyfilled.hoisted_renames(tp)) else {
             return false;
         };
-        let mut frame = HashMap::new();
-        for param in &tp.type_params {
-            let name = match param {
-                ruff_python_ast::TypeParam::TypeVar(tv) => tv.name.id.as_str(),
-                ruff_python_ast::TypeParam::TypeVarTuple(tvt) => tvt.name.id.as_str(),
-                ruff_python_ast::TypeParam::ParamSpec(ps) => ps.name.id.as_str(),
-            };
-            frame.insert(
-                name.to_owned(),
-                super::generics::polyfilled_name(self.written, name),
-            );
-        }
         if frame.is_empty() {
             return false;
         }
@@ -927,7 +915,8 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         types: &dyn TypeInfo,
         ctx: &mut super::ast_driver::PassContext,
     ) {
-        let mut inner = AnonNamedTuple::new(self.source, self.written, types, self.config.clone());
+        let mut inner =
+            AnonNamedTuple::new(self.source, self.written, types, self.config.clone(), stmts);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -936,7 +925,7 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         }
         if inner.needs_import {
             ctx.required_imports
-                .push("from typing import NamedTuple".to_owned());
+                .push(self.written.import_from("typing", &["NamedTuple"]));
             // the field lowerer's own classes come first: a field type may name
             // one. they go in as a single entry so the sort below cannot part
             // them from the classes that reference them
@@ -949,20 +938,7 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         let (imports, helpers) = inner.callable.take_requirements();
         ctx.required_imports.extend(imports);
         ctx.runtime.extend(helpers);
-        ctx.type_only_imports.extend(
-            inner
-                .type_only_imports
-                .borrow()
-                .iter()
-                .map(|module| format!("import {module}")),
-        );
-        ctx.type_only_imports.extend(
-            inner
-                .typing_names
-                .borrow()
-                .iter()
-                .map(|name| format!("from typing import {name}")),
-        );
+        ctx.type_only_imports.extend(inner.type_only_imports.take());
         for fix in std::mem::take(&mut inner.edits) {
             for edit in fix.edits() {
                 let range = edit.range();
@@ -983,6 +959,28 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// kept as native syntax, `T` exists only in the scope of `A`, and the hoisted class is
+    /// built at import, ahead of `A`, so the field reads it off `A` as a forward reference
+    #[test]
+    fn a_native_type_parameter_is_read_off_its_generic() {
+        let out = transpile(
+            indoc! {"
+                class A[T]:
+                    def m(self, p: (a: T, b: int)) -> int:
+                        return p.b
+            "},
+            &Config {
+                min_version: crate::PythonVersion::PY313,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("    a: \"A.__type_params__[0]\"\n    b: int\n"),
+            "got:\n{out}"
         );
     }
 
@@ -1290,6 +1288,33 @@ mod tests {
         assert!(
             !out.contains("(x: int, y: int)"),
             "raw anon-NT leaked into output, got: {out}"
+        );
+    }
+
+    /// the hoisted class names the type variable the polyfill declared for the generic's `T`,
+    /// which an earlier generic declaring `T` differently leaves as `_T_1`
+    #[test]
+    fn field_type_uses_the_name_the_polyfill_declared() {
+        check(
+            indoc! {"
+                class A[T: int]: ...
+                class B[T]:
+                    def get(self, t: T) -> (x: T, y: int):
+                        return (t, 1)
+            "},
+            indoc! {r#"
+                from typing import NamedTuple, TypeVar, Generic
+                class _AnonNamedTuple_3e0dae9f(NamedTuple):
+                    x: "_T_1"
+                    y: int
+
+                _T = TypeVar("_T", bound=int)
+                class A(Generic[_T]): ...
+                _T_1 = TypeVar("_T_1")
+                class B(Generic[_T_1]):
+                    def get(self, t: _T_1) -> _AnonNamedTuple_3e0dae9f:
+                        return _AnonNamedTuple_3e0dae9f(t, 1)
+            "#},
         );
     }
 

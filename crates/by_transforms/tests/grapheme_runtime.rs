@@ -11,12 +11,14 @@
 //!
 //! The grapheme helpers require the third-party `regex` package (the only
 //! widely available UAX #29 engine). If no interpreter with `regex` importable
-//! can be found, the test skips rather than fails — it documents a runtime
-//! dependency, it doesn't police the CI image.
+//! can be found, the test skips rather than fails, and says so — it documents a
+//! runtime dependency, it doesn't police the CI image.
 
 use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
+
+mod interpreters;
 
 /// basedpython source whose module-level `assert`s exercise the grapheme
 /// surface end to end. every string here is a single grapheme cluster made of
@@ -71,35 +73,13 @@ assert type("a") is str, "a bare literal is still a plain str"
 print("ok")
 "#;
 
-/// Locate an interpreter with `regex` importable: `$PYTHON` first, then a short
-/// list of common names. Returns `None` (test skips) when none qualifies.
-fn python_with_regex() -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Ok(p) = std::env::var("PYTHON") {
-        candidates.push(p);
-    }
-    candidates.extend(["python3.13", "python3", "python"].map(String::from));
-
-    candidates.into_iter().find(|py| {
-        Command::new(py)
-            .args(["-c", "import regex"])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
-}
-
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn grapheme_surface_runs_correctly() {
-    let Some(python) = python_with_regex() else {
-        eprintln!(
-            "skipping grapheme runtime test: no interpreter with `regex` found \
-             (set PYTHON to one with `pip install regex`)"
-        );
+    let Some(interpreter) = interpreters::oldest(
+        PythonVersion::PY313,
+        "import regex",
+        "with `regex` (`pip install regex` into one, or set `PYTHON` to one that has it)",
+    ) else {
         return;
     };
 
@@ -109,7 +89,7 @@ fn grapheme_surface_runs_correctly() {
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(&interpreter.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -117,9 +97,10 @@ fn grapheme_surface_runs_correctly() {
 
     assert!(
         output.status.success(),
-        "transpiled grapheme program failed on {python}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+        "transpiled grapheme program failed on {interpreter}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    interpreters::ran(&interpreter, PythonVersion::PY313);
 }

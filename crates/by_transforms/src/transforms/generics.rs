@@ -33,13 +33,9 @@ pub(crate) struct GenericPolyfill<'src> {
     /// dedup, a module with several generics over the same name produces
     /// repeated identical declarations (and an `F811 redefinition` warning).
     emitted_typevar_defs: std::collections::HashSet<String>,
-    /// each name a `TypeVar` definition this pass writes binds, with the arguments it is
-    /// called with and the suite it is written into. a name is only ever bound in one suite:
-    /// a definition written into a class body is not visible to a function the module
-    /// declares later, and one written into an `if` does not run when the `if` does not
-    emitted_typevar_signatures: HashMap<String, (String, Suite)>,
-    /// the suite the statement being visited stands in
-    suite: Suite,
+    /// how each type-parameter list in the module is lowered, and the name each polyfilled
+    /// parameter is declared under
+    decided: PolyfilledTypeParams,
     /// names of classes/functions whose first type parameter has a top-parameters
     /// bound (i.e. `class A[P: (*: *, **: *)]`). subscript sites for these
     /// targets get tuple slices rewritten to list form so paramspec
@@ -94,100 +90,104 @@ pub(crate) struct ImportNeeds {
     unpack: bool,
     paramspec: bool,
     typealias_type: bool,
-    typevar_needs_ext: bool, // TypeVar(default=) on < 3.13
-    /// a `default=` below 3.13, which `typing`'s own `ParamSpec` does not take
-    paramspec_needs_ext: bool,
-    /// a `default=` below 3.13, which `typing`'s own `TypeVarTuple` does not take
-    typevar_tuple_needs_ext: bool,
 }
 
 impl ImportNeeds {
     /// Build the import lines to prepend to the file.
-    fn into_lines(self, constructors: &Constructors) -> Vec<String> {
-        let mut lines = Vec::new();
-
-        let mut typing_names: Vec<String> = Vec::new();
-        let mut ext_names: Vec<String> = Vec::new();
-
-        if self.typevar {
-            let name = imported("TypeVar", &constructors.type_var);
-            if self.typevar_needs_ext {
-                ext_names.push(name);
-            } else {
-                typing_names.push(name);
+    fn into_lines(self, constructors: &Constructors, written: WrittenNames) -> Vec<String> {
+        // one line per module, in the order each is first asked for
+        let mut modules: Vec<(&'static str, Vec<&'static str>)> = Vec::new();
+        for (needed, constructor) in [
+            (self.typevar, &constructors.type_var),
+            (self.typevar_tuple, &constructors.type_var_tuple),
+            (self.unpack, &constructors.unpack),
+            (self.paramspec, &constructors.param_spec),
+            (self.generic, &constructors.generic),
+            (self.typealias_type, &constructors.type_alias_type),
+        ] {
+            if !needed {
+                continue;
+            }
+            match modules
+                .iter_mut()
+                .find(|(module, _)| *module == constructor.module)
+            {
+                Some((_, names)) => names.push(constructor.name),
+                None => modules.push((constructor.module, vec![constructor.name])),
             }
         }
-        if self.typevar_tuple {
-            let name = imported("TypeVarTuple", &constructors.type_var_tuple);
-            if self.typevar_tuple_needs_ext {
-                ext_names.push(name);
-            } else {
-                typing_names.push(name);
-            }
-        }
-        if self.unpack {
-            typing_names.push(imported("Unpack", &constructors.unpack));
-        }
-        if self.paramspec {
-            let name = imported("ParamSpec", &constructors.param_spec);
-            if self.paramspec_needs_ext {
-                ext_names.push(name);
-            } else {
-                typing_names.push(name);
-            }
-        }
-        if self.generic {
-            typing_names.push(imported("Generic", &constructors.generic));
-        }
-        if self.typealias_type {
-            ext_names.push(imported("TypeAliasType", &constructors.type_alias_type));
-        }
-
-        if !typing_names.is_empty() {
-            lines.push(format!("from typing import {}", typing_names.join(", ")));
-        }
-        if !ext_names.is_empty() {
-            lines.push(format!(
-                "from typing_extensions import {}",
-                ext_names.join(", ")
-            ));
-        }
-
-        lines
+        // `typing` ahead of `typing_extensions`, as a reader expects
+        modules.sort_by_key(|(module, _)| *module != "typing");
+        modules
+            .into_iter()
+            .map(|(module, names)| written.import_from(module, &names))
+            .collect()
     }
 }
 
-/// `name` imported so that it is bound to `local`
-fn imported(name: &str, local: &str) -> String {
-    if name == local {
-        name.to_owned()
-    } else {
-        format!("{name} as {local}")
+/// a typing constructor the polyfill calls: the module it comes from, and the name it is
+/// called by there. one the module binds is imported under a name it does not: the module's
+/// own binding need not be the one the polyfill needs. `from typing import TypeVar` binds a
+/// `TypeVar` that takes no `default=` below 3.13, and nothing stops a module binding `Generic`
+/// to a class of its own
+struct Constructor {
+    module: &'static str,
+    name: &'static str,
+    local: String,
+}
+
+impl Constructor {
+    fn new(written: WrittenNames, module: &'static str, name: &'static str) -> Self {
+        Self {
+            module,
+            name,
+            local: written.imported(module, name),
+        }
     }
 }
 
-/// the names the typing constructors the polyfill writes are called by. one the module spells
-/// is imported under a name it does not: the module's own binding need not be the one the
-/// polyfill needs. `from typing import TypeVar` binds a `TypeVar` that takes no `default=`
-/// below 3.13, and nothing stops a module binding `Generic` to a class of its own
+impl std::fmt::Display for Constructor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.local)
+    }
+}
+
+/// the typing constructors the polyfill calls
 struct Constructors {
-    type_var: String,
-    generic: String,
-    type_var_tuple: String,
-    unpack: String,
-    param_spec: String,
-    type_alias_type: String,
+    type_var: Constructor,
+    generic: Constructor,
+    type_var_tuple: Constructor,
+    unpack: Constructor,
+    param_spec: Constructor,
+    type_alias_type: Constructor,
 }
 
 impl Constructors {
-    fn new(written: WrittenNames) -> Self {
+    /// `typing`'s own `TypeVar`, `ParamSpec` and `TypeVarTuple` take no `default=` below 3.13,
+    /// so a module that declares one with a default calls `typing_extensions`'
+    fn new(written: WrittenNames, config: &Config, decided: &PolyfilledTypeParams) -> Self {
+        let with_default = |declares_default: bool| {
+            if declares_default && config.min_version < PythonVersion::PY313 {
+                "typing_extensions"
+            } else {
+                "typing"
+            }
+        };
         Self {
-            type_var: written.fresh("TypeVar"),
-            generic: written.fresh("Generic"),
-            type_var_tuple: written.fresh("TypeVarTuple"),
-            unpack: written.fresh("Unpack"),
-            param_spec: written.fresh("ParamSpec"),
-            type_alias_type: written.fresh("TypeAliasType"),
+            type_var: Constructor::new(written, with_default(decided.defaults.type_var), "TypeVar"),
+            generic: Constructor::new(written, "typing", "Generic"),
+            type_var_tuple: Constructor::new(
+                written,
+                with_default(decided.defaults.type_var_tuple),
+                "TypeVarTuple",
+            ),
+            unpack: Constructor::new(written, "typing", "Unpack"),
+            param_spec: Constructor::new(
+                written,
+                with_default(decided.defaults.param_spec),
+                "ParamSpec",
+            ),
+            type_alias_type: Constructor::new(written, "typing_extensions", "TypeAliasType"),
         }
     }
 }
@@ -215,7 +215,9 @@ impl<'src> GenericPolyfill<'src> {
         config: Config,
         symbolic_substitutions: Vec<(TextRange, String)>,
         pending_edits: Vec<(TextRange, String)>,
+        decided: PolyfilledTypeParams,
     ) -> Self {
+        let constructors = Constructors::new(written, &config, &decided);
         Self {
             source,
             written,
@@ -223,10 +225,9 @@ impl<'src> GenericPolyfill<'src> {
             config,
             edits: Vec::new(),
             needed_imports: ImportNeeds::default(),
-            constructors: Constructors::new(written),
+            constructors,
             emitted_typevar_defs: std::collections::HashSet::new(),
-            emitted_typevar_signatures: HashMap::new(),
-            suite: Suite::Module,
+            decided,
             parameters_targets: HashSet::new(),
             needed_imports_any: false,
             generic_class_renames: HashMap::new(),
@@ -332,59 +333,23 @@ impl<'src> GenericPolyfill<'src> {
     /// pre-scan for `private type` aliases so a reference inside a later
     /// alias's value can be renamed as the value is re-rendered
     fn collect_private_aliases(&mut self, stmts: &[Stmt]) {
-        struct Collect<'a>(&'a mut HashMap<String, String>);
-        impl<'ast> Visitor<'ast> for Collect<'_> {
+        struct Collect<'a, 'src>(&'a mut HashMap<String, String>, WrittenNames<'src>);
+        impl<'ast> Visitor<'ast> for Collect<'_, '_> {
             fn visit_stmt(&mut self, stmt: &'ast Stmt) {
                 if let Stmt::TypeAlias(alias) = stmt
                     && alias.is_private
                     && let Expr::Name(name) = alias.name.as_ref()
                 {
-                    self.0.insert(name.id.to_string(), format!("_{}", name.id));
+                    self.0
+                        .insert(name.id.to_string(), self.1.module_private(&name.id));
                 }
                 ruff_python_ast::visitor::walk_stmt(self, stmt);
             }
         }
-        let mut collect = Collect(&mut self.private_aliases);
+        let mut collect = Collect(&mut self.private_aliases, self.written);
         for stmt in stmts {
             collect.visit_stmt(stmt);
         }
-    }
-
-    /// whether the target can keep this parameter list as native syntax:
-    /// pep 695 lists need 3.12+, and a pep 696 default (`[T = int]`) bumps
-    /// the requirement to 3.13. a defaulted list on a 3.12 target polyfills
-    /// the declaration exactly like pre-3.12 code
-    fn supports_native_type_params(&self, params: &[TypeParam]) -> bool {
-        let required = if params.iter().any(|p| p.default().is_some()) {
-            PythonVersion::PY313
-        } else {
-            PythonVersion::PY312
-        };
-        self.config.min_version >= required
-    }
-
-    /// the name the `TypeVar` a parameter declared as `source_name` is bound to
-    ///
-    /// the first definition is named [`polyfilled_name`] (`T` → `_T`). a later one written
-    /// with the same arguments into the same suite reuses that name, so python sees one
-    /// object; any other takes a numeric suffix (`_T_1`, `_T_2`, …) the module does not spell,
-    /// so it shadows neither an earlier definition nor a binding of the module's own
-    fn unique_typevar_name(&mut self, source_name: &str, signature_args: &str) -> String {
-        let base = polyfilled_name(self.written, source_name);
-        let signature = (signature_args.to_owned(), self.suite);
-        let name = std::iter::once(base.clone())
-            .chain((1u32..u32::MAX).map(|number| format!("{base}_{number}")))
-            .find(
-                |candidate| match self.emitted_typevar_signatures.get(candidate) {
-                    Some(existing) => *existing == signature,
-                    None => !self.written.spells(candidate),
-                },
-            )
-            .unwrap_or(base);
-        self.emitted_typevar_signatures
-            .entry(name.clone())
-            .or_insert(signature);
-        name
     }
 
     /// Skip `TypeVar` declarations already written into the suite being visited. a name is
@@ -423,7 +388,11 @@ impl<'src> GenericPolyfill<'src> {
                     if matches!(starred.value.as_ref(), Expr::Starred(_)) {
                         return String::new();
                     }
-                    return format!("*tuple[{}, ...]", self.src(named.value.range()));
+                    return format!(
+                        "*{}[{}, ...]",
+                        self.written.builtin("tuple"),
+                        self.src(named.value.range())
+                    );
                 }
                 self.src(named.value.range()).to_owned()
             }
@@ -431,7 +400,11 @@ impl<'src> GenericPolyfill<'src> {
                 if matches!(s.value.as_ref(), Expr::Starred(_)) {
                     return String::new();
                 }
-                format!("*tuple[{}, ...]", self.src(s.value.range()))
+                format!(
+                    "*{}[{}, ...]",
+                    self.written.builtin("tuple"),
+                    self.src(s.value.range())
+                )
             }
             _ => self.src(elt.range()).to_owned(),
         }
@@ -478,31 +451,41 @@ impl<'src> GenericPolyfill<'src> {
         }
     }
 
-    /// write the declaration of a `ParamSpec` a parameter named `name` lowers to, with
-    /// `default` as its `default=` argument, and answer the name it is bound to
+    /// write the declaration of a `ParamSpec` bound to `mangled`, with `default` as its
+    /// `default=` argument
     fn declare_param_spec(
         &mut self,
-        name: &str,
+        mangled: &str,
         default: Option<String>,
         defs: &mut Vec<String>,
-    ) -> String {
+    ) {
         let arguments = default
-            .map(|default| {
-                self.needed_imports.paramspec_needs_ext |=
-                    self.config.min_version < PythonVersion::PY313;
-                format!(", default={default}")
-            })
+            .map(|default| format!(", default={default}"))
             .unwrap_or_default();
-        let mangled = self.unique_typevar_name(name, &format!("ParamSpec({arguments})"));
         defs.push(format!(
             "{mangled} = {}(\"{mangled}\"{arguments})",
             self.constructors.param_spec
         ));
         self.needed_imports.paramspec = true;
-        mangled
     }
 
-    fn process_type_params(&mut self, params: &[TypeParam]) -> ProcessedTypeParams {
+    /// lower `params`, each declared under the name at the same position in `names`
+    fn process_type_params(
+        &mut self,
+        params: &[TypeParam],
+        names: &[String],
+        qualified: &HashMap<String, String>,
+    ) -> ProcessedTypeParams {
+        // a bound that reads a class's name through the class is written ahead of the class,
+        // so it is a string, which `TypeVar` keeps as a forward reference
+        let through_classes = |text: String| {
+            let read_through = apply_renames_to_rendered(&text, qualified);
+            if read_through == text {
+                text
+            } else {
+                super::source_util::python_string_literal(&read_through)
+            }
+        };
         let mut generic_args: Vec<String> = Vec::new();
         let mut param_names: Vec<String> = Vec::new();
         let mut defs: Vec<String> = Vec::new();
@@ -518,7 +501,8 @@ impl<'src> GenericPolyfill<'src> {
             visible.extend(enclosing.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
 
-        for param in params {
+        for (param, mangled) in params.iter().zip(names) {
+            let mangled = mangled.clone();
             match param {
                 TypeParam::TypeVar(tv) => {
                     let name = tv.name.id.as_str();
@@ -532,7 +516,7 @@ impl<'src> GenericPolyfill<'src> {
                             .default
                             .as_deref()
                             .map(|default| self.param_spec_default(default, &visible));
-                        let mangled = self.declare_param_spec(name, default, &mut defs);
+                        self.declare_param_spec(&mangled, default, &mut defs);
                         renames.insert(name.to_owned(), mangled.clone());
                         visible.insert(name.to_owned(), mangled.clone());
                         param_names.push(mangled.clone());
@@ -540,8 +524,6 @@ impl<'src> GenericPolyfill<'src> {
                         continue;
                     }
 
-                    // build the non-name TypeVar arguments first so we can
-                    // pick a unique mangled name based on the call signature
                     let mut extra_args: Vec<String> = Vec::new();
 
                     if let Some(bound) = &tv.bound {
@@ -580,13 +562,13 @@ impl<'src> GenericPolyfill<'src> {
                                     .collect::<Vec<_>>()
                                     .join(", ");
                                 if inner.is_empty() {
-                                    "tuple[()]".to_owned()
+                                    format!("{}[()]", self.written.builtin("tuple"))
                                 } else if t.elts.len() == 1
                                     && let Some(rest) = inner.strip_prefix("*")
                                 {
                                     rest.to_owned()
                                 } else {
-                                    format!("tuple[{inner}]")
+                                    format!("{}[{inner}]", self.written.builtin("tuple"))
                                 }
                             } else {
                                 lower_type_expr_full(
@@ -602,16 +584,16 @@ impl<'src> GenericPolyfill<'src> {
                             };
                             extra_args.push(format!(
                                 "bound={}",
-                                apply_renames_to_rendered(&bound_src, &visible)
+                                through_classes(apply_renames_to_rendered(&bound_src, &visible))
                             ));
                         }
                     }
 
                     if let Some(default) = &tv.default {
-                        if self.config.min_version < PythonVersion::PY313 {
-                            self.needed_imports.typevar_needs_ext = true;
-                        }
-                        extra_args.push(format!("default={}", self.default_arg(default, &visible)));
+                        extra_args.push(format!(
+                            "default={}",
+                            through_classes(self.default_arg(default, &visible))
+                        ));
                     }
 
                     // basedpython variance keywords: forward `out`/`in`/`in out`
@@ -632,11 +614,6 @@ impl<'src> GenericPolyfill<'src> {
                         None => {}
                     }
 
-                    // pick a unique mangled name based on the call signature
-                    // so two classes that both declare `T` but with different
-                    // bounds / variance / defaults don't shadow each other
-                    let signature_args = extra_args.join(", ");
-                    let mangled = self.unique_typevar_name(name, &signature_args);
                     renames.insert(name.to_owned(), mangled.clone());
                     visible.insert(name.to_owned(), mangled.clone());
                     let mut args: Vec<String> = vec![format!("\"{mangled}\"")];
@@ -670,20 +647,11 @@ impl<'src> GenericPolyfill<'src> {
                             rendered
                         }
                     });
-                    let signature = default
-                        .as_ref()
-                        .map_or_else(String::new, |default| format!("default={default}"));
-                    let mangled =
-                        self.unique_typevar_name(name, &format!("TypeVarTuple({signature})"));
                     renames.insert(name.to_owned(), mangled.clone());
                     visible.insert(name.to_owned(), mangled.clone());
-                    let arguments = if default.is_some() {
-                        self.needed_imports.typevar_tuple_needs_ext |=
-                            self.config.min_version < PythonVersion::PY313;
-                        format!(", {signature}")
-                    } else {
-                        String::new()
-                    };
+                    let arguments = default
+                        .map(|default| format!(", default={default}"))
+                        .unwrap_or_default();
                     defs.push(format!(
                         "{mangled} = {}(\"{mangled}\"{arguments})",
                         self.constructors.type_var_tuple
@@ -708,7 +676,7 @@ impl<'src> GenericPolyfill<'src> {
                         .default
                         .as_deref()
                         .map(|default| self.param_spec_default(default, &visible));
-                    let mangled = self.declare_param_spec(name, default, &mut defs);
+                    self.declare_param_spec(&mangled, default, &mut defs);
                     renames.insert(name.to_owned(), mangled.clone());
                     visible.insert(name.to_owned(), mangled.clone());
                     param_names.push(mangled.clone());
@@ -777,14 +745,14 @@ impl<'src> GenericPolyfill<'src> {
                             .collect::<Vec<_>>()
                             .join(", ");
                         let replacement = if inner.is_empty() {
-                            "tuple[()]".to_owned()
+                            format!("{}[()]", self.written.builtin("tuple"))
                         } else if t.elts.len() == 1
                             && let Some(rest) = inner.strip_prefix("*")
                         {
                             // pure variadic `(*: T)` → `tuple[T, ...]`
                             rest.to_owned()
                         } else {
-                            format!("tuple[{inner}]")
+                            format!("{}[{inner}]", self.written.builtin("tuple"))
                         };
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
                             replacement,
@@ -812,25 +780,24 @@ impl<'src> GenericPolyfill<'src> {
         // this pass, which owns the base list for a type-param class (modifiers
         // skips it to avoid two competing base-parens around the type params)
         let deferred_protocol = class.arguments.is_none() && self.has_protocol_marker(class);
-        // PEP 695 class type params are native syntax in 3.12+ (3.13+ with defaults)
-        if self.supports_native_type_params(&tp.type_params) {
+        let Some((names, anchor)) = self.decided.declared(tp) else {
             self.lower_type_param_bounds(&tp.type_params);
             if deferred_protocol {
                 // keep the native `[T]`, append the base after it: `[T](Protocol)`
                 self.edits.push(Fix::safe_edit(Edit::insertion(
-                    "(Protocol)".to_owned(),
+                    format!("({})", self.written.imported("typing", "Protocol")),
                     tp.range().end(),
                 )));
             }
             return HashMap::new();
-        }
+        };
 
         let ProcessedTypeParams {
             generic_args,
             defs,
             renames: rename_map,
             ..
-        } = self.process_type_params(&tp.type_params);
+        } = self.process_type_params(&tp.type_params, &names, &self.decided.qualified(tp));
         // record for module-level variant subclasses that reference these params
         self.generic_class_renames
             .insert(class.name.id.as_str().to_owned(), rename_map.clone());
@@ -874,7 +841,10 @@ impl<'src> GenericPolyfill<'src> {
             // the marker protocol's base goes in the same parens as `Generic`,
             // positional and before it: `(Protocol, Generic[_T])`
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                format!("(Protocol, {generic_str})"),
+                format!(
+                    "({}, {generic_str})",
+                    self.written.imported("typing", "Protocol")
+                ),
                 tp.range(),
             )));
         } else {
@@ -884,8 +854,8 @@ impl<'src> GenericPolyfill<'src> {
             )));
         }
 
-        // Insert TypeVar definitions before the class.
-        let (line_start, indent) = self.line_start_of(class.range().start());
+        // Insert TypeVar definitions before the statement they are declared ahead of.
+        let (line_start, indent) = self.line_start_of(anchor);
         let indent = indent.to_owned();
         let prefix = self.dedupe_defs(&defs, &indent);
         if !prefix.is_empty() {
@@ -932,33 +902,27 @@ impl<'src> GenericPolyfill<'src> {
             self.parameters_targets
                 .insert(func.name.id.as_str().to_owned());
         }
-        // basedpython: `some T` declares a type parameter the source writes nowhere in the
-        // list, so native syntax has no place for it, and it is always declared as a `TypeVar`
-        let is_hole =
-            |param: &TypeParam| matches!(param, TypeParam::TypeVar(tv) if tv.is_some_hole);
-        let has_hole = tp.type_params.iter().any(is_hole);
-        // PEP 695 function type params are native syntax in 3.12+ (3.13+ with defaults)
-        if !has_hole && self.supports_native_type_params(&tp.type_params) {
+        let Some((names, anchor)) = self.decided.declared(tp) else {
             self.lower_type_param_bounds(&tp.type_params);
             return HashMap::new();
-        }
+        };
 
         let ProcessedTypeParams {
             defs,
             renames: rename_map,
             ..
-        } = self.process_type_params(&tp.type_params);
+        } = self.process_type_params(&tp.type_params, &names, &self.decided.qualified(tp));
 
         // Remove `[T, ...]` from the function signature. a list of holes alone is the
         // parser's, and there are no brackets in the source to remove: its range is the
         // parameter list's
-        if !tp.type_params.iter().all(is_hole) {
+        if !tp.type_params.iter().all(is_some_hole) {
             self.edits
                 .push(Fix::safe_edit(Edit::range_deletion(tp.range())));
         }
 
-        // Insert TypeVar definitions before the function.
-        let (line_start, indent) = self.line_start_of(func.range().start());
+        // Insert TypeVar definitions before the statement they are declared ahead of.
+        let (line_start, indent) = self.line_start_of(anchor);
         let indent = indent.to_owned();
         let prefix = self.dedupe_defs(&defs, &indent);
         if !prefix.is_empty() {
@@ -1011,22 +975,23 @@ impl<'src> GenericPolyfill<'src> {
     fn process_type_alias(&mut self, alias: &StmtTypeAlias) {
         // `type Point = tuple[float, float]`
         //   → `Point = TypeAliasType("Point", tuple[float, float])`
-        let params = alias
-            .type_params
-            .as_deref()
-            .map_or(&[][..], |tp| tp.type_params.as_slice());
-        if self.supports_native_type_params(params) {
-            if let Some(tp) = &alias.type_params {
-                self.lower_type_param_bounds(&tp.type_params);
-            }
-            return;
-        }
+        let names = match &alias.type_params {
+            Some(tp) => match self.decided.declared(tp) {
+                Some((names, _)) => Some(names),
+                None => {
+                    self.lower_type_param_bounds(&tp.type_params);
+                    return;
+                }
+            },
+            None if is_native(&self.config, &[]) => return,
+            None => None,
+        };
 
         // this replacement subsumes `modifiers`' `private ` deletion and the
         // rename of the definition site, so the private name has to be applied
         // here instead
         let name_src = if alias.is_private {
-            format!("_{}", self.src(alias.name.range()))
+            self.written.module_private(self.src(alias.name.range()))
         } else {
             self.src(alias.name.range()).to_owned()
         };
@@ -1036,13 +1001,15 @@ impl<'src> GenericPolyfill<'src> {
         // also sit inside the subsumed value, so they are renamed here too
         let mut rename_map = self.private_aliases.clone();
 
-        let (type_params_arg, defs) = if let Some(tp) = &alias.type_params {
+        let (type_params_arg, defs) = if let Some(tp) = &alias.type_params
+            && let Some(names) = names
+        {
             let ProcessedTypeParams {
                 param_names,
                 defs: type_defs,
                 renames: tp_renames,
                 ..
-            } = self.process_type_params(&tp.type_params);
+            } = self.process_type_params(&tp.type_params, &names, &self.decided.qualified(tp));
             rename_map.extend(tp_renames);
 
             // `type_params=` wants each parameter object itself, so a variadic
@@ -1067,8 +1034,9 @@ impl<'src> GenericPolyfill<'src> {
             let mut replacement = self.dedupe_defs(&defs, &indent);
             let _ = write!(
                 replacement,
-                "{indent}{name_src} = {}(\"{name_src}\", object{type_params_arg})",
-                self.constructors.type_alias_type
+                "{indent}{name_src} = {}(\"{name_src}\", {}{type_params_arg})",
+                self.constructors.type_alias_type,
+                self.written.builtin("object")
             );
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 replacement,
@@ -1163,11 +1131,11 @@ impl GenericPolyfill<'_> {
                             continue;
                         }
                         // `*name: T`
-                        parts.push("Any".to_owned());
+                        parts.push(self.written.imported("typing", "Any"));
                         self.needed_imports_any = true;
                     } else {
                         // `name: T`
-                        parts.push("Any".to_owned());
+                        parts.push(self.written.imported("typing", "Any"));
                         self.needed_imports_any = true;
                     }
                 }
@@ -1177,7 +1145,7 @@ impl GenericPolyfill<'_> {
                         continue;
                     }
                     // `*: T`
-                    parts.push("Any".to_owned());
+                    parts.push(self.written.imported("typing", "Any"));
                     self.needed_imports_any = true;
                 }
                 _ => {
@@ -1248,15 +1216,6 @@ impl<'ast> Visitor<'ast> for GenericPolyfill<'_> {
         } else {
             walk_stmt(self, stmt);
         }
-    }
-
-    fn visit_body(&mut self, body: &'ast [Stmt]) {
-        let outer = self.suite;
-        if let Some(first) = body.first() {
-            self.suite = Suite::Nested(first.start());
-        }
-        walk_body(self, body);
-        self.suite = outer;
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
@@ -1477,7 +1436,7 @@ fn rename_in_stmt(stmt: &Stmt, renames: &HashMap<String, String>, edits: &mut Ve
 /// declared as: `_T` for `T`, spelled so that the module spells it nowhere. the definition is
 /// written into the scope the generic stands in, where a name the module binds would be
 /// overwritten by it
-pub(crate) fn polyfilled_name(written: WrittenNames, name: &str) -> String {
+fn polyfilled_name(written: WrittenNames, name: &str) -> String {
     if name.starts_with('_') {
         written.fresh(name)
     } else {
@@ -1485,12 +1444,589 @@ pub(crate) fn polyfilled_name(written: WrittenNames, name: &str) -> String {
     }
 }
 
+/// whether the target keeps the type-parameter list `params` as native syntax: pep 695 lists
+/// need 3.12, and a pep 696 default (`[T = int]`) 3.13. a defaulted list on a 3.12 target is
+/// polyfilled exactly as below 3.12
+fn is_native(config: &Config, params: &[TypeParam]) -> bool {
+    let required = if params.iter().any(|p| p.default().is_some()) {
+        PythonVersion::PY313
+    } else {
+        PythonVersion::PY312
+    };
+    config.min_version >= required
+}
+
+/// basedpython: `some T` declares a type parameter the source writes nowhere in the list, so
+/// native syntax has no place for it, and it is always declared as a `TypeVar`
+fn is_some_hole(param: &TypeParam) -> bool {
+    matches!(param, TypeParam::TypeVar(tv) if tv.is_some_hole)
+}
+
+/// the polyfill's decision for every type-parameter list in a module: whether it is lowered,
+/// and the name the `TypeVar`, `ParamSpec` or `TypeVarTuple` each parameter of a lowered list
+/// is declared under
+///
+/// a lowering that moves a type out of its generic — an inline protocol or an anonymous named
+/// tuple hoisted to module scope — has to name the variable the polyfill declared, so it reads
+/// this rather than working the name out again
+pub(crate) struct PolyfilledTypeParams {
+    /// how each lowered list is declared, keyed on the list's range
+    lists: HashMap<TextRange, Declared>,
+    /// for each list kept as native syntax whose generic module scope reaches by a path of
+    /// names, the expression that reaches each parameter from module scope:
+    /// `B.__type_params__[0]` for the `T` of `class B[T]`
+    native: HashMap<TextRange, HashMap<String, String>>,
+    /// which kinds of declaration a lowered list gives a default
+    defaults: Defaults,
+}
+
+/// how the polyfill declares one type-parameter list
+struct Declared {
+    /// the name each parameter is declared under, in order
+    names: Vec<String>,
+    /// the statement the declarations are written ahead of, in its suite: the outermost `class`
+    /// or `def` around the generic that stands at module scope, or the generic itself when
+    /// something it declares reads a name only a scope inside that statement binds
+    ///
+    /// at module scope a declaration is a global, which is where everything that reads it
+    /// looks: `typing.get_type_hints` resolves a method's annotations in the module's
+    /// namespace, and a method's body cannot see its class's. one written in a class body
+    /// reaches neither
+    ///
+    /// a bound that reads a name of the class around the generic moves out with it, and
+    /// reads the name through the class
+    anchor: TextSize,
+    /// each class-level name a bound, constraint or default reads, by the path that reaches
+    /// it from where the declarations are written: `Inner` in `class C` is `C.Inner`. the
+    /// class does not exist yet where they are written, so what reads one of these is written
+    /// as a string, which `TypeVar` keeps as a forward reference
+    qualified: HashMap<String, String>,
+}
+
+/// which kinds of type parameter the polyfill declares with a default somewhere in a module
+#[derive(Default, Clone, Copy)]
+struct Defaults {
+    type_var: bool,
+    param_spec: bool,
+    type_var_tuple: bool,
+}
+
+impl PolyfilledTypeParams {
+    /// decide every list in `stmts`, the module `source` parses to
+    pub(crate) fn decide(
+        source: &str,
+        written: WrittenNames,
+        stmts: &[Stmt],
+        config: &Config,
+    ) -> Self {
+        let mut decider = Decider {
+            source,
+            written,
+            config,
+            lists: HashMap::new(),
+            native: HashMap::new(),
+            defaults: Defaults::default(),
+            signatures: HashMap::new(),
+            suite: Suite::Module,
+            enclosing: Vec::new(),
+            scopes: Vec::new(),
+            local_type_params: Vec::new(),
+            module_statement: None,
+        };
+        for stmt in stmts {
+            decider.visit_stmt(stmt);
+        }
+        Self {
+            lists: decider.lists,
+            native: decider.native,
+            defaults: decider.defaults,
+        }
+    }
+
+    /// what each parameter of `type_params` is written as in a type hoisted to module scope
+    /// out of its generic — an inline protocol, an anonymous named tuple: the polyfill's name
+    /// for it, or for a list kept as native syntax, the parameter read off its generic.
+    /// `None` when the generic is not reached from module scope by a path of names — one
+    /// local to a function, or renamed or replaced by a decorator
+    pub(crate) fn hoisted_renames(
+        &self,
+        type_params: &ruff_python_ast::TypeParams,
+    ) -> Option<HashMap<String, String>> {
+        self.renames(type_params)
+            .or_else(|| self.native.get(&type_params.range()).cloned())
+    }
+
+    /// the name each of `type_params` is declared under, in order, and the start of the
+    /// statement the declarations are written ahead of, or `None` when the list is kept as
+    /// native syntax
+    fn declared(
+        &self,
+        type_params: &ruff_python_ast::TypeParams,
+    ) -> Option<(Vec<String>, TextSize)> {
+        self.lists
+            .get(&type_params.range())
+            .map(|declared| (declared.names.clone(), declared.anchor))
+    }
+
+    /// the class-level names the declarations of `type_params` read through their class
+    fn qualified(&self, type_params: &ruff_python_ast::TypeParams) -> HashMap<String, String> {
+        self.lists
+            .get(&type_params.range())
+            .map(|declared| declared.qualified.clone())
+            .unwrap_or_default()
+    }
+
+    /// what each parameter of `type_params` is renamed to, or `None` when the list is kept as
+    /// native syntax
+    pub(crate) fn renames(
+        &self,
+        type_params: &ruff_python_ast::TypeParams,
+    ) -> Option<HashMap<String, String>> {
+        let declared = self.lists.get(&type_params.range())?;
+        Some(
+            type_params
+                .iter()
+                .zip(&declared.names)
+                .map(|(param, name)| (param.name().id.to_string(), name.clone()))
+                .collect(),
+        )
+    }
+}
+
 /// the statement list a definition the polyfill writes lands in, told apart by where its
 /// first statement starts
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Suite {
     Module,
     Nested(TextSize),
+}
+
+/// walks a module in the order the polyfill writes its definitions, naming each parameter
+struct Decider<'a> {
+    source: &'a str,
+    written: WrittenNames<'a>,
+    config: &'a Config,
+    lists: HashMap<TextRange, Declared>,
+    /// see [`PolyfilledTypeParams::native`]
+    native: HashMap<TextRange, HashMap<String, String>>,
+    defaults: Defaults,
+    /// each name a definition binds, with what the definition declares and the suite it is
+    /// written into. a name is only ever bound in one suite: a definition written into a class
+    /// body is not visible to a function the module declares later, and one written into an
+    /// `if` does not run when the `if` does not
+    signatures: HashMap<String, (String, Suite)>,
+    /// the suite the statement being visited stands in
+    suite: Suite,
+    /// the renames of the lists enclosing the statement being visited, outermost first
+    enclosing: Vec<HashMap<String, String>>,
+    /// each scope around the statement being visited, outermost first: a class body, or a
+    /// function's parameters and body. the module is none of them
+    scopes: Vec<Scope>,
+    /// the type parameters in scope declared inside one of `scopes` rather than at module
+    /// scope, by the names they are written with
+    local_type_params: Vec<String>,
+    /// the start of the outermost statement around the one being visited that stands at
+    /// module scope, and the suite it stands in
+    module_statement: Option<(TextSize, Suite)>,
+}
+
+impl Decider<'_> {
+    fn src(&self, expr: &Expr) -> &str {
+        &self.source[expr.range()]
+    }
+
+    /// `expr` with the type parameters `visible` in scope renamed, which is what tells apart
+    /// two bounds that name different variables with the same spelling
+    fn spelled(&self, expr: &Expr, visible: &HashMap<String, String>) -> String {
+        apply_renames_to_rendered(self.src(expr), visible)
+    }
+
+    /// what `param` declares: its kind, bound or constraints, default and variance. two
+    /// parameters that declare the same thing in the same suite share one variable
+    fn signature(&self, param: &TypeParam, visible: &HashMap<String, String>) -> String {
+        let default = param
+            .default()
+            .map(|default| format!(", default={}", self.spelled(default, visible)))
+            .unwrap_or_default();
+        match param {
+            TypeParam::TypeVar(tv) => {
+                if tv.bound.as_deref().is_some_and(is_parameters_bound) {
+                    return format!("ParamSpec({default})");
+                }
+                let bound = match tv.bound.as_deref() {
+                    Some(constraints) if tv.is_type_mapping => {
+                        format!(", constraints={}", self.spelled(constraints, visible))
+                    }
+                    Some(bound) => format!(", bound={}", self.spelled(bound, visible)),
+                    None => String::new(),
+                };
+                let variance = match tv.variance {
+                    Some(ruff_python_ast::Variance::Covariant) => ", covariant=True",
+                    Some(ruff_python_ast::Variance::Contravariant) => ", contravariant=True",
+                    Some(ruff_python_ast::Variance::Invariant) | None => "",
+                };
+                format!("TypeVar({bound}{default}{variance})")
+            }
+            TypeParam::TypeVarTuple(_) => format!("TypeVarTuple({default})"),
+            TypeParam::ParamSpec(_) => format!("ParamSpec({default})"),
+        }
+    }
+
+    /// the name a parameter declared as `source_name` with `signature` is bound to
+    ///
+    /// the first definition is named [`polyfilled_name`] (`T` → `_T`). a later one declaring
+    /// the same thing in the same suite reuses that name, so python sees one object; any other
+    /// takes a numeric suffix (`_T_1`, `_T_2`, …) the module does not spell, so it shadows
+    /// neither an earlier definition nor a binding of the module's own
+    fn name(&mut self, source_name: &str, signature: String, suite: Suite) -> String {
+        let base = polyfilled_name(self.written, source_name);
+        let signature = (signature, suite);
+        let name = std::iter::once(base.clone())
+            .chain((1u32..u32::MAX).map(|number| format!("{base}_{number}")))
+            .find(|candidate| match self.signatures.get(candidate) {
+                Some(existing) => *existing == signature,
+                None => !self.written.taken(candidate),
+            })
+            .unwrap_or(base);
+        self.signatures.entry(name.clone()).or_insert(signature);
+        name
+    }
+
+    /// where the declarations of `type_params`, the list of the statement starting at `start`,
+    /// are written ahead of, and the suite that statement stands in
+    ///
+    /// at module scope, unless a bound, constraint or default reads a name a scope around the
+    /// generic binds — a class-level name, say, or a type parameter declared in such a scope —
+    /// which a module-scope declaration would read before it exists
+    fn anchor(
+        &self,
+        type_params: &ruff_python_ast::TypeParams,
+        start: TextSize,
+    ) -> (TextSize, Suite) {
+        let Some(module_statement) = self.module_statement else {
+            return (start, self.suite);
+        };
+        let reads_a_local = type_params.iter().any(|param| {
+            let read = [
+                match param {
+                    TypeParam::TypeVar(tv) => tv.bound.as_deref(),
+                    _ => None,
+                },
+                param.default(),
+            ];
+            read.into_iter().flatten().flat_map(names_read).any(|name| {
+                self.local_type_params.iter().any(|local| *local == name)
+                    || self.scopes.iter().any(|scope| scope.names.contains(name))
+            })
+        });
+        if reads_a_local {
+            (start, self.suite)
+        } else {
+            module_statement
+        }
+    }
+
+    /// where the declarations of `type_params`, the list of a generic standing directly in a
+    /// class body, are written when a bound, constraint or default reads a name of that class
+    /// — and the path each such name is read through from there
+    ///
+    /// the class body is where those names are evaluated, and nothing but the class body
+    /// sees a declaration written there: not `typing.get_type_hints`, not the method's own
+    /// body, and not a function nested in it, whose annotations are evaluated when the method
+    /// runs. so the declarations go ahead of the outermost of the classes the generic stands
+    /// in, and read the class's names through the classes. a name any other scope binds, or
+    /// a type parameter declared in one, keeps them where they are
+    fn through_classes(
+        &self,
+        type_params: &ruff_python_ast::TypeParams,
+    ) -> Option<(TextSize, Suite, HashMap<String, String>)> {
+        // the classes the generic stands in, the innermost last, with no function between
+        let first_class = self
+            .scopes
+            .iter()
+            .rposition(|scope| scope.class.is_none())
+            .map_or(0, |function| function + 1);
+        let classes = &self.scopes[first_class..];
+        let innermost = classes.last()?;
+        let path: Vec<&str> = classes
+            .iter()
+            .filter_map(|scope| scope.class.as_deref())
+            .collect();
+        let mut qualified = HashMap::new();
+        for param in type_params {
+            let read = match param {
+                TypeParam::TypeVar(tv) if !tv.bound.as_deref().is_some_and(is_parameters_bound) => {
+                    [tv.bound.as_deref(), param.default()]
+                }
+                // a `ParamSpec` or `TypeVarTuple` default is written without a way to read
+                // a class's name through the class
+                _ => [None, param.default()],
+            };
+            let cannot_qualify = !matches!(param, TypeParam::TypeVar(tv)
+                if !tv.bound.as_deref().is_some_and(is_parameters_bound));
+            for name in read.into_iter().flatten().flat_map(names_read) {
+                if self.local_type_params.iter().any(|local| *local == name) {
+                    return None;
+                }
+                if innermost.names.contains(name) {
+                    if cannot_qualify {
+                        return None;
+                    }
+                    qualified.insert(name.to_owned(), format!("{}.{name}", path.join(".")));
+                } else if self.scopes.iter().any(|scope| scope.names.contains(name)) {
+                    return None;
+                }
+            }
+        }
+        let outermost = classes.first()?;
+        (!qualified.is_empty()).then_some((outermost.start, outermost.suite, qualified))
+    }
+
+    /// record how a type hoisted out of `name`, a generic kept as native syntax, reads each of
+    /// its parameters `type_params`: through the classes around it, when there are only classes,
+    /// each bound under its own name
+    fn record_native(
+        &mut self,
+        type_params: &ruff_python_ast::TypeParams,
+        name: &ruff_python_ast::Identifier,
+        decorators: &[ruff_python_ast::Decorator],
+    ) {
+        if !keeps_its_name(self.source, decorators)
+            || !self
+                .scopes
+                .iter()
+                .all(|scope| scope.class.is_some() && scope.keeps_its_name)
+        {
+            return;
+        }
+        let path: Vec<&str> = self
+            .scopes
+            .iter()
+            .filter_map(|scope| scope.class.as_deref())
+            .chain(std::iter::once(name.as_str()))
+            .collect();
+        let path = path.join(".");
+        let reads = type_params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| {
+                (
+                    param.name().id.to_string(),
+                    format!("{path}.__type_params__[{index}]"),
+                )
+            })
+            .collect();
+        self.native.insert(type_params.range(), reads);
+    }
+
+    /// decide `type_params`, the list of the statement starting at `start`, answering what each
+    /// parameter is renamed to
+    fn decide(
+        &mut self,
+        type_params: &ruff_python_ast::TypeParams,
+        start: TextSize,
+        kept_native: bool,
+    ) -> HashMap<String, String> {
+        if kept_native {
+            return HashMap::new();
+        }
+        let (anchor, suite, qualified) = match self.through_classes(type_params) {
+            Some((anchor, suite, qualified)) => (anchor, suite, qualified),
+            None => {
+                let (anchor, suite) = self.anchor(type_params, start);
+                (anchor, suite, HashMap::new())
+            }
+        };
+        // declared inside a scope the module statement opens, where only that scope reads it
+        let local = self
+            .module_statement
+            .is_some_and(|(module_statement, _)| module_statement != anchor);
+        let mut visible: HashMap<String, String> = self
+            .enclosing
+            .iter()
+            .flatten()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .chain(qualified.iter().map(|(k, v)| (k.clone(), v.clone())))
+            .collect();
+        let mut renames = HashMap::new();
+        let mut names = Vec::new();
+        for param in type_params {
+            if param.default().is_some() {
+                let kind = match param {
+                    TypeParam::TypeVar(tv)
+                        if tv.bound.as_deref().is_some_and(is_parameters_bound) =>
+                    {
+                        &mut self.defaults.param_spec
+                    }
+                    TypeParam::TypeVar(_) => &mut self.defaults.type_var,
+                    TypeParam::ParamSpec(_) => &mut self.defaults.param_spec,
+                    TypeParam::TypeVarTuple(_) => &mut self.defaults.type_var_tuple,
+                };
+                *kind = true;
+            }
+            let signature = self.signature(param, &visible);
+            let source_name = param.name().id.as_str();
+            let name = self.name(source_name, signature, suite);
+            visible.insert(source_name.to_owned(), name.clone());
+            renames.insert(source_name.to_owned(), name.clone());
+            names.push(name);
+        }
+        if local {
+            self.local_type_params
+                .extend(type_params.iter().map(|param| param.name().id.to_string()));
+        }
+        self.lists.insert(
+            type_params.range(),
+            Declared {
+                names,
+                anchor,
+                qualified,
+            },
+        );
+        renames
+    }
+}
+
+impl<'ast> Visitor<'ast> for Decider<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        let entered = matches!(stmt, Stmt::ClassDef(_) | Stmt::FunctionDef(_))
+            && self.module_statement.is_none();
+        if entered {
+            self.module_statement = Some((stmt.start(), self.suite));
+        }
+        let local_type_params = self.local_type_params.len();
+        let renames = match stmt {
+            Stmt::ClassDef(class) => class.type_params.as_deref().map(|tp| {
+                let native = is_native(self.config, &tp.type_params);
+                if native {
+                    self.record_native(tp, &class.name, &class.decorator_list);
+                }
+                self.decide(tp, class.start(), native)
+            }),
+            // a `type def` is erased by its own pass, so none of its parameters is declared
+            Stmt::FunctionDef(func) if ruff_python_ast::helpers::is_type_def(func) => None,
+            Stmt::FunctionDef(func) => func.type_params.as_deref().map(|tp| {
+                let native = !tp.type_params.iter().any(is_some_hole)
+                    && is_native(self.config, &tp.type_params);
+                if native {
+                    self.record_native(tp, &func.name, &func.decorator_list);
+                }
+                let mut renames = self.decide(tp, func.start(), native);
+                // the body reads a parameter under its own name, which a type parameter of
+                // that name does not reach: the parameter is bound in the body's scope, the
+                // type parameter in the one around it
+                for parameter in &func.parameters {
+                    renames.remove(parameter.name().as_str());
+                }
+                renames
+            }),
+            // an alias writes its declarations into its own replacement
+            Stmt::TypeAlias(alias) => {
+                if let Some(tp) = alias.type_params.as_deref() {
+                    let native = is_native(self.config, &tp.type_params);
+                    let module_statement = self.module_statement.take();
+                    self.decide(tp, alias.start(), native);
+                    self.module_statement = module_statement;
+                    self.local_type_params.truncate(local_type_params);
+                }
+                return;
+            }
+            _ => None,
+        };
+        // the scope the statement opens, which its body's declarations cannot be read in from
+        // module scope
+        let scope = match stmt {
+            Stmt::ClassDef(class) => Some(Scope {
+                names: class.body.iter().flat_map(bound_names).collect(),
+                class: Some(class.name.id.to_string()),
+                keeps_its_name: keeps_its_name(self.source, &class.decorator_list),
+                start: class.start(),
+                suite: self.suite,
+            }),
+            Stmt::FunctionDef(func) => Some(Scope {
+                names: func
+                    .parameters
+                    .iter()
+                    .map(|parameter| parameter.name().to_string())
+                    .chain(func.body.iter().flat_map(bound_names))
+                    .collect(),
+                class: None,
+                keeps_its_name: false,
+                start: func.start(),
+                suite: self.suite,
+            }),
+            _ => None,
+        };
+        let opens_scope = scope.is_some();
+        self.scopes.extend(scope);
+        self.enclosing.push(renames.unwrap_or_default());
+        walk_stmt(self, stmt);
+        self.enclosing.pop();
+        if opens_scope {
+            self.scopes.pop();
+        }
+        self.local_type_params.truncate(local_type_params);
+        if entered {
+            self.module_statement = None;
+        }
+    }
+
+    fn visit_body(&mut self, body: &'ast [Stmt]) {
+        let outer = self.suite;
+        if let Some(first) = body.first() {
+            self.suite = Suite::Nested(first.start());
+        }
+        walk_body(self, body);
+        self.suite = outer;
+    }
+}
+
+/// whether a definition with `decorators` is bound under the name it is written with, and to
+/// the definition itself: no decorator of the author's, which may return anything, and no
+/// visibility keyword, which renames it
+fn keeps_its_name(source: &str, decorators: &[ruff_python_ast::Decorator]) -> bool {
+    decorators.iter().all(|decorator| {
+        super::source_util::is_synthetic_decorator(source, decorator)
+            && !matches!(
+                &decorator.expression,
+                Expr::Name(name)
+                    if matches!(name.id.as_str(), "private" | "protected" | "decorator_keyword")
+            )
+    })
+}
+
+/// a scope around a statement the polyfill visits
+struct Scope {
+    /// the names the scope binds
+    names: HashSet<String>,
+    /// the class's name, when the scope is a class body
+    class: Option<String>,
+    /// whether the class is bound under its own name, and to itself
+    keeps_its_name: bool,
+    /// where the statement opening the scope starts, and the suite it stands in
+    start: TextSize,
+    suite: Suite,
+}
+
+/// the names `stmt` binds in the scope it stands in
+fn bound_names(stmt: &Stmt) -> impl Iterator<Item = String> {
+    crate::runtime::bindings(stmt).into_keys()
+}
+
+/// the names `expr` reads
+fn names_read(expr: &Expr) -> Vec<&str> {
+    struct Reads<'a>(Vec<&'a str>);
+    impl<'a> Visitor<'a> for Reads<'a> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Name(name) = expr {
+                self.0.push(name.id.as_str());
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut reads = Reads(Vec::new());
+    reads.visit_expr(expr);
+    reads.0
 }
 
 pub(crate) struct GenericPolyfillPass<'src> {
@@ -1543,6 +2079,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
             self.config.clone(),
             ctx.symbolic_substitutions.clone(),
             ctx.text_edits.clone(),
+            PolyfilledTypeParams::decide(self.source, self.written, stmts, &self.config),
         );
         inner.collect_private_aliases(stmts);
         for stmt in stmts {
@@ -1554,12 +2091,14 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
         ctx.text_edits
             .retain(|(range, _)| !superseded.contains(range));
         let emits_any = inner.needed_imports_any;
-        for line in std::mem::take(&mut inner.needed_imports).into_lines(&inner.constructors) {
+        for line in
+            std::mem::take(&mut inner.needed_imports).into_lines(&inner.constructors, self.written)
+        {
             ctx.required_imports.push(line);
         }
         if emits_any {
             ctx.required_imports
-                .push("from typing import Any".to_owned());
+                .push(self.written.import_from("typing", &["Any"]));
         }
         for (at, prefix) in std::mem::take(&mut inner.statement_prefixes) {
             ctx.statement_inserts
@@ -1836,8 +2375,8 @@ mod tests {
             indoc! {"
                 from typing import TypeVar, Generic
                 _T = TypeVar(\"_T\")
+                _U = TypeVar(\"_U\", bound=_T)
                 class Owner(Generic[_T]):
-                    _U = TypeVar(\"_U\", bound=_T)
                     def narrow(self, u: _U) -> None: ...
             "},
         );
@@ -2146,8 +2685,8 @@ mod tests {
         );
     }
 
-    /// every constructor the polyfill writes is called by a name the module does not spell,
-    /// whatever the module binds that name to
+    /// a constructor the polyfill writes is called by a name the module does not spell when the
+    /// module binds that name to something other than the constructor
     #[test]
     fn a_constructor_the_module_binds_is_imported_under_another_name() {
         check_at(
@@ -2180,10 +2719,10 @@ mod tests {
                 class A[_T]: ...
             "},
             indoc! {"
-                from typing import TypeVar, TypeVar as TypeVar2, Generic
+                from typing import TypeVar, Generic
                 _T = TypeVar(\"_T\", bound=int)
                 def legacy(x: _T) -> _T: ...
-                _T2 = TypeVar2(\"_T2\")
+                _T2 = TypeVar(\"_T2\")
                 def modern(x: _T2) -> _T2: ...
                 class A(Generic[_T2]): ...
             "},
@@ -2191,9 +2730,10 @@ mod tests {
         );
     }
 
-    /// a definition written into a class body or an `if` is not in scope where the module
-    /// declares a function later, so that function gets a definition of its own, under a name
-    /// that shadows neither
+    /// a definition written into an `if` does not run when the `if` does not, so a function the
+    /// module declares later gets a definition of its own, under a name that shadows neither.
+    /// a method's is written ahead of its class, at module scope, where everything that reads
+    /// it looks
     #[test]
     fn a_type_variable_is_bound_in_one_suite() {
         check_at(
@@ -2207,15 +2747,135 @@ mod tests {
             "},
             indoc! {"
                 from typing import TypeVar
+                _T = TypeVar(\"_T\")
                 class C:
-                    _T = TypeVar(\"_T\")
                     def m(self, x: _T) -> _T: ...
                 if flag:
                     _T_1 = TypeVar(\"_T_1\")
                     def g(x: _T_1) -> _T_1: ...
-                _T_2 = TypeVar(\"_T_2\")
-                def f(x: _T_2) -> _T_2: ...
-                def h(x: _T_2) -> _T_2: ...
+                def f(x: _T) -> _T: ...
+                def h(x: _T) -> _T: ...
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// a function nested in another has its type variable declared at module scope too, ahead
+    /// of the statement at module scope around it
+    #[test]
+    fn a_nested_function_declares_its_type_variable_at_module_scope() {
+        check_at(
+            indoc! {"
+                @decorate
+                def outer() -> None:
+                    def inner[T](x: T) -> T: ...
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _T = TypeVar(\"_T\")
+                @decorate
+                def outer() -> None:
+                    def inner(x: _T) -> _T: ...
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// a bound that reads a class-level name is declared at module scope with the rest, and
+    /// reads the name through the class. the class does not exist yet where the declaration
+    /// is written, so the bound is a string, which `TypeVar` keeps as a forward reference. a
+    /// declaration in the class body would be out of reach of `typing.get_type_hints`, and of
+    /// a function nested in the method, whose annotations are evaluated when the method runs
+    #[test]
+    fn a_bound_reading_a_class_level_name_reads_it_through_the_class() {
+        check_at(
+            indoc! {"
+                class C:
+                    class Inner: ...
+                    def m[T: Inner, U: T](self, x: T, y: U) -> T: ...
+                    def n[V](self, v: V) -> V: ...
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _T = TypeVar(\"_T\", bound=\"C.Inner\")
+                _U = TypeVar(\"_U\", bound=_T)
+                _V = TypeVar(\"_V\")
+                class C:
+                    class Inner: ...
+                    def m(self, x: _T, y: _U) -> _T: ...
+                    def n(self, v: _V) -> _V: ...
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// in a class nested in another, the name is read through both
+    #[test]
+    fn a_bound_reading_a_nested_class_level_name_reads_it_through_every_class() {
+        check_at(
+            indoc! {"
+                class A:
+                    class B:
+                        class Inner: ...
+                        def m[T: Inner](self, x: T) -> T: ...
+            "},
+            indoc! {"
+                from typing import TypeVar
+                _T = TypeVar(\"_T\", bound=\"A.B.Inner\")
+                class A:
+                    class B:
+                        class Inner: ...
+                        def m(self, x: _T) -> _T: ...
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// a class inside a function has its declarations written ahead of it in the function,
+    /// where the method's body sees them as it sees the function's other names
+    #[test]
+    fn a_bound_reading_a_class_level_name_in_a_function_is_declared_in_the_function() {
+        check_at(
+            indoc! {"
+                def f() -> object:
+                    class C:
+                        class Inner: ...
+                        def m[T: Inner](self, x: T) -> T: ...
+                    return C
+            "},
+            indoc! {"
+                from typing import TypeVar
+                def f() -> object:
+                    _T = TypeVar(\"_T\", bound=\"C.Inner\")
+                    class C:
+                        class Inner: ...
+                        def m(self, x: _T) -> _T: ...
+                    return C
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// a bound that reads a name of the function around the generic is declared where that
+    /// name is bound, as python would evaluate it
+    #[test]
+    fn a_bound_reading_a_function_local_name_is_declared_in_the_function() {
+        check_at(
+            indoc! {"
+                def f() -> object:
+                    class Local: ...
+                    def g[T: Local](x: T) -> T:
+                        return x
+                    return g
+            "},
+            indoc! {"
+                from typing import TypeVar
+                def f() -> object:
+                    class Local: ...
+                    _T = TypeVar(\"_T\", bound=Local)
+                    def g(x: _T) -> _T:
+                        return x
+                    return g
             "},
             PythonVersion::PY311,
         );
@@ -2237,6 +2897,21 @@ mod tests {
                 def f(x: _T) -> _T: ...
                 _T_2 = TypeVar(\"_T_2\")
                 def g(x: _T_2) -> _T_2: ...
+            "},
+            PythonVersion::PY311,
+        );
+    }
+
+    /// a runtime helper is bound at module scope beside the definition, and the module never
+    /// spells it, so a name the module leaves free can still be one
+    #[test]
+    fn a_type_variable_skips_a_runtime_helper_name() {
+        check_at(
+            "def f[force_unwrap](x: force_unwrap) -> force_unwrap: ...\n",
+            indoc! {"
+                from typing import TypeVar
+                _force_unwrap2 = TypeVar(\"_force_unwrap2\")
+                def f(x: _force_unwrap2) -> _force_unwrap2: ...
             "},
             PythonVersion::PY311,
         );

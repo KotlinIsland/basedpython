@@ -58,6 +58,7 @@ use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::{ArgVariance, ParametricIsPlan, ProtocolMemberCheck, TargetSpelling};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 /// probes a value's `__orig_class__` against a target alias — the runtime
@@ -188,6 +189,7 @@ impl PredicateNeeds {
 /// `probe`, which decides what an unreified value means.
 fn arm_predicate(
     types: &dyn TypeInfo,
+    written: WrittenNames,
     value_ref: &dyn Fn() -> Fragment,
     value_expr: &Expr,
     arm: &Expr,
@@ -198,14 +200,14 @@ fn arm_predicate(
         needs.all_true = false;
         needs.references_value = true;
         return vec![
-            Fragment::Lit("isinstance(".to_owned()),
+            Fragment::Lit(format!("{}(", written.builtin("isinstance"))),
             value_ref(),
             Fragment::Lit(", ".to_owned()),
             Fragment::Src(arm.range()),
             Fragment::Lit(")".to_owned()),
         ];
     };
-    fragments_for_plan(types, plan, value_ref, arm, probe, needs)
+    fragments_for_plan(types, written, plan, value_ref, arm, probe, needs)
 }
 
 /// the fragments one already-classified plan lowers to. split out from
@@ -213,6 +215,7 @@ fn arm_predicate(
 /// not spell separately — a PEP 695 alias names a whole union with one word
 fn fragments_for_plan(
     types: &dyn TypeInfo,
+    written: WrittenNames,
     plan: ParametricIsPlan,
     value_ref: &dyn Fn() -> Fragment,
     arm: &Expr,
@@ -319,7 +322,7 @@ fn fragments_for_plan(
                 ];
             }
             vec![
-                Fragment::Lit("isinstance(".to_owned()),
+                Fragment::Lit(format!("{}(", written.builtin("isinstance"))),
                 value_ref(),
                 Fragment::Lit(", ".to_owned()),
                 Fragment::Src(arm.range()),
@@ -329,7 +332,7 @@ fn fragments_for_plan(
         ParametricIsPlan::Isinstance(target) => {
             needs.references_value = true;
             let mut frags = vec![
-                Fragment::Lit("isinstance(".to_owned()),
+                Fragment::Lit(format!("{}(", written.builtin("isinstance"))),
                 value_ref(),
                 Fragment::Lit(", ".to_owned()),
             ];
@@ -343,7 +346,7 @@ fn fragments_for_plan(
         ParametricIsPlan::IsCallable => {
             needs.references_value = true;
             vec![
-                Fragment::Lit("callable(".to_owned()),
+                Fragment::Lit(format!("{}(", written.builtin("callable"))),
                 value_ref(),
                 Fragment::Lit(")".to_owned()),
             ]
@@ -357,7 +360,7 @@ fn fragments_for_plan(
         ParametricIsPlan::Equality { class, value } => {
             needs.references_value = true;
             vec![
-                Fragment::Lit("(type(".to_owned()),
+                Fragment::Lit(format!("({}(", written.builtin("type"))),
                 value_ref(),
                 Fragment::Lit(format!(") is {class} and ")),
                 value_ref(),
@@ -376,8 +379,15 @@ fn fragments_for_plan(
         }
         ParametricIsPlan::Subclass(target) => {
             needs.references_value = true;
-            let mut frags = vec![Fragment::Lit("(isinstance(".to_owned()), value_ref()];
-            frags.push(Fragment::Lit(", type) and issubclass(".to_owned()));
+            let mut frags = vec![
+                Fragment::Lit(format!("({}(", written.builtin("isinstance"))),
+                value_ref(),
+            ];
+            frags.push(Fragment::Lit(format!(
+                ", {}) and {}(",
+                written.builtin("type"),
+                written.builtin("issubclass")
+            )));
             frags.push(value_ref());
             frags.push(Fragment::Lit(", ".to_owned()));
             frags.push(target_fragment(&target, arm));
@@ -406,6 +416,7 @@ fn fragments_for_plan(
                 any_true |= matches!(arm_plan, ParametricIsPlan::Fold(true));
                 frags.extend(fragments_for_plan(
                     types,
+                    written,
                     arm_plan.clone(),
                     value_ref,
                     arm,
@@ -459,13 +470,16 @@ fn python_string_literal(text: &str) -> String {
 /// the arms of a union the source never spelled as one.
 pub(crate) fn build_predicate(
     types: &dyn TypeInfo,
+    written: WrittenNames,
     value_ref: &dyn Fn() -> Fragment,
     value_expr: &Expr,
     target: &Expr,
     probe: ProbeStrictness,
 ) -> (Vec<Fragment>, PredicateNeeds) {
     let mut needs = PredicateNeeds::new();
-    let frags = arm_predicate(types, value_ref, value_expr, target, probe, &mut needs);
+    let frags = arm_predicate(
+        types, written, value_ref, value_expr, target, probe, &mut needs,
+    );
     (frags, needs)
 }
 
@@ -476,6 +490,7 @@ fn effect_free(expr: &Expr) -> bool {
 
 struct ParametricIs<'src, 'ti> {
     source: &'src str,
+    written: WrittenNames<'src>,
     types: &'ti dyn TypeInfo,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     /// the runtime helpers the predicates emitted so far call
@@ -510,12 +525,25 @@ impl ParametricIs<'_, '_> {
             mentions.set(mentions.get() + 1);
             Fragment::Src(lhs.range())
         };
-        let (frags, needs) =
-            build_predicate(self.types, &counting, lhs, rhs, ProbeStrictness::Strict);
+        let (frags, needs) = build_predicate(
+            self.types,
+            self.written,
+            &counting,
+            lhs,
+            rhs,
+            ProbeStrictness::Strict,
+        );
         let via_lambda = mentions.get() > 1 && !effect_free(lhs);
         let (frags, needs) = if via_lambda {
             let param = || Fragment::Lit(UNION_VALUE_PARAM.to_owned());
-            build_predicate(self.types, &param, lhs, rhs, ProbeStrictness::Strict)
+            build_predicate(
+                self.types,
+                self.written,
+                &param,
+                lhs,
+                rhs,
+                ProbeStrictness::Strict,
+            )
         } else {
             (frags, needs)
         };
@@ -683,11 +711,12 @@ impl<'ast> Visitor<'ast> for ParametricIs<'_, '_> {
 
 pub(crate) struct ParametricIsPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
 }
 
 impl<'src> ParametricIsPass<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>) -> Self {
+        Self { source, written }
     }
 }
 
@@ -704,6 +733,7 @@ impl TypeAwarePass for ParametricIsPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = ParametricIs {
             source: self.source,
+            written: self.written,
             types,
             edits: Vec::new(),
             runtimes: BTreeSet::new(),

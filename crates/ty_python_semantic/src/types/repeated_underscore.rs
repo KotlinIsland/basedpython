@@ -54,7 +54,13 @@ impl<'src> WrittenNames<'src> {
     /// `inner` a `decorator def` writes standing where an option of that name is declared,
     /// which the dispatcher then passed the dispatcher itself for
     pub fn fresh(self, stem: &str) -> String {
-        if !self.spells(stem) {
+        self.fresh_outside(stem, |_| false)
+    }
+
+    /// [`Self::fresh`], also passing over every name `taken` answers for
+    pub fn fresh_outside(self, stem: &str, taken: impl Fn(&str) -> bool) -> String {
+        let free = |name: &str| !self.spells(name) && !taken(name);
+        if free(stem) {
             return stem.to_owned();
         }
         // candidates only ever count up, so one never repeats an earlier one. a module
@@ -62,7 +68,7 @@ impl<'src> WrittenNames<'src> {
         // of them is free long before the numbers run out
         (2u32..u32::MAX)
             .map(|number| format!("{stem}{number}"))
-            .find(|candidate| !self.spells(candidate))
+            .find(|candidate| free(candidate))
             .unwrap_or_else(|| stem.to_owned())
     }
 

@@ -23,6 +23,7 @@ use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::Ranged;
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
     Recurse, TypeExprVisitor, TypePos, walk_one_type_expr, walk_type_positions,
 };
@@ -30,14 +31,17 @@ use crate::type_info::TypeInfo;
 
 pub(crate) struct DynamicKeyword<'src> {
     types: &'src dyn TypeInfo,
+    /// the name `typing.Any` is written under
+    any: String,
     pub(crate) edits: Vec<Fix>,
     pub(crate) needs_any_import: bool,
 }
 
 impl<'src> DynamicKeyword<'src> {
-    pub(crate) fn new(types: &'src dyn TypeInfo) -> Self {
+    pub(crate) fn new(types: &'src dyn TypeInfo, written: WrittenNames) -> Self {
         Self {
             types,
+            any: written.imported("typing", "Any"),
             edits: Vec::new(),
             needs_any_import: false,
         }
@@ -60,7 +64,7 @@ impl TypeExprVisitor for DynamicKeyword<'_> {
         {
             self.needs_any_import = true;
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                "Any".to_owned(),
+                self.any.clone(),
                 n.range(),
             )));
         }
@@ -68,27 +72,27 @@ impl TypeExprVisitor for DynamicKeyword<'_> {
     }
 }
 
-pub(crate) struct DynamicKeywordPass;
+pub(crate) struct DynamicKeywordPass<'src> {
+    written: WrittenNames<'src>,
+}
 
-impl DynamicKeywordPass {
-    pub(crate) fn new() -> Self {
-        Self
+impl<'src> DynamicKeywordPass<'src> {
+    pub(crate) fn new(written: WrittenNames<'src>) -> Self {
+        Self { written }
     }
 }
 
-impl TypeAwarePass for DynamicKeywordPass {
+impl TypeAwarePass for DynamicKeywordPass<'_> {
     fn lowering(&self) -> Option<super::ast_driver::Lowering> {
         Some(super::ast_driver::Lowering::DynamicKeyword)
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = DynamicKeyword::new(types);
+        let mut inner = DynamicKeyword::new(types, self.written);
         walk_type_positions(stmts, Some(types), &mut inner);
-        // skip the import when `Any` is already bound at module level (the user
-        // imported it themselves) — avoids a duplicate `from typing import Any`
-        if inner.needs_any_import && !types.is_bound_globally("Any") {
+        if inner.needs_any_import {
             ctx.required_imports
-                .push("from typing import Any".to_owned());
+                .push(self.written.import_from("typing", &["Any"]));
         }
         for fix in inner.edits {
             for edit in fix.edits() {

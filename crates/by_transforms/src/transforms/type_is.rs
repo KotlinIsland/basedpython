@@ -22,15 +22,17 @@ use ruff_python_ast::{
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext, render_expr};
+use super::repeated_underscore::WrittenNames;
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping};
 
 pub(crate) struct TypeIs<'src> {
     src: &'src str,
+    written: WrittenNames<'src>,
 }
 
 impl<'src> TypeIs<'src> {
-    pub(crate) fn new(src: &'src str) -> Self {
-        Self { src }
+    pub(crate) fn new(src: &'src str, written: WrittenNames<'src>) -> Self {
+        Self { src, written }
     }
 }
 
@@ -43,6 +45,7 @@ impl AstPass for TypeIs<'_> {
 
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut state = State {
+            type_is: self.written.imported("typing", "TypeIs"),
             edits: Vec::new(),
             needs_import: false,
         };
@@ -53,6 +56,7 @@ impl AstPass for TypeIs<'_> {
         // returns, and their ranges are claimed so the `TypeIs[T]` rewrite below skips them
         let mut guards = ReturnGuards {
             src: self.src,
+            bool_: self.written.builtin("bool"),
             edits: Vec::new(),
             claimed: Vec::new(),
         };
@@ -67,12 +71,14 @@ impl AstPass for TypeIs<'_> {
             // typing.TypeIs landed in 3.13 (PEP 742). on older runtimes the
             // typing_redirect pass switches the import to typing_extensions
             ctx.required_imports
-                .push("from typing import TypeIs".to_owned());
+                .push(self.written.import_from("typing", &["TypeIs"]));
         }
     }
 }
 
 struct State {
+    /// the name `typing.TypeIs` is written under
+    type_is: String,
     edits: Vec<(TextRange, String)>,
     needs_import: bool,
 }
@@ -80,6 +86,8 @@ struct State {
 /// lowers the narrowing return annotations that have no `TypeIs` spelling
 struct ReturnGuards<'src> {
     src: &'src str,
+    /// the name the builtin `bool` is written under
+    bool_: String,
     edits: Vec<(TextRange, String)>,
     claimed: Vec<TextRange>,
 }
@@ -120,7 +128,7 @@ impl ReturnGuards<'_> {
                     .iter()
                     .any(|parameter| parameter.name().id == *name);
             if !narrows_a_parameter {
-                self.edits.push((returns.range(), "bool".to_owned()));
+                self.edits.push((returns.range(), self.bool_.clone()));
                 self.claimed.push(returns.range());
             }
         }
@@ -150,7 +158,7 @@ impl TypeExprVisitor for State {
                 value: Box::new(Expr::Name(ExprName {
                     node_index: AtomicNodeIndex::NONE,
                     range: TextRange::default(),
-                    id: Name::from("TypeIs"),
+                    id: Name::from(self.type_is.as_str()),
                     ctx: ExprContext::Load,
                 })),
                 slice: Box::new(target.clone()),

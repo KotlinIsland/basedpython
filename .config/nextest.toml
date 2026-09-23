@@ -7,12 +7,13 @@ serial = { max-threads = 1 }
 filter = 'binary(file_watching)'
 test-group = 'serial'
 
-# the polyfill runtime tests run their output on an old interpreter with
-# `typing_extensions`, which a machine often does not have. each says which
-# interpreter it ran on, or that it found none and ran nothing, and a passing
-# test's output is otherwise hidden, so a skip would read as a pass
+# the runtime tests that need something of their interpreter — an old version
+# with `typing_extensions`, a new one, the `regex` package — run on one found to
+# have it, which a machine often does not. each says which interpreter it ran
+# on, or that it found none and ran nothing, and a passing test's output is
+# otherwise hidden, so a skip would read as a pass
 [[profile.default.overrides]]
-filter = 'binary(polyfill_runtime)'
+filter = 'binary(polyfill_runtime) | binary(grapheme_runtime) | binary(conversion_runtime) | binary(lazy_import_runtime) | binary(fstring_debug_runtime) | binary(tstring_expression_runtime) | binary(visibility_runtime) | binary(data_class_runtime) | binary(builtin_names_runtime)'
 success-output = "final"
 
 [profile.ci]

@@ -121,6 +121,46 @@ reformatting it rewrites transpiled output, and the isort rule would put a
 `from __future__ import annotations` at the top of every module that gets a
 helper pasted into it
 
+## names the lowerings write
+
+a lowering writes names of its own into the module: a temporary, a `TypeVar` the
+generics polyfill declares, and the typing constructs it spells a type with —
+`Union`, `Callable`, `Literal`, `final`, `functools.partial` and the rest. each is
+chosen through `WrittenNames` (`transforms/repeated_underscore.rs`), so the names
+cannot collide with the module's own:
+
+- a binding the lowering writes (`fresh`) takes a name the module spells nowhere,
+    and none a runtime helper is bound under
+- a typing name (`imported`, `import_from`) keeps its own spelling unless the
+    module binds that name to something else, and is imported under a fresh name
+    when it does. a module that binds it only by importing the very same thing —
+    `from typing import Literal` beside a lowered `1 | 2` — reads the lowering's
+    already. a star import binds names unseen, so a module with one gets a fresh
+    name for every typing name
+- a builtin (`builtin`) is the same: `isinstance`, `staticmethod`, `type` keep
+    their names unless the module binds them anywhere — a parameter named `type`
+    counts — and are then imported from `builtins` under a fresh name, which the
+    driver binds once it sees the output read it
+- a module-level `private` symbol is emitted under `_name` unless the module, a
+    runtime helper or another lowering already has that name, and then under a
+    fresh one (`PrivateNames`). every other fresh name stays clear of the ones it
+    chose
+
+```by
+Union = "mine"
+x = list[int?]
+```
+
+```python
+# generated python, for 3.9
+from typing import Union as Union2
+Union = "mine"
+x = list[Union2[int, None]]
+```
+
+a keyword the parser stands up as a name — the `final` of `final class` — binds
+nothing, so a module that writes one still gets `@final`
+
 ## the phase-0 database
 
 three pre-passes run before phase 0 and can rewrite the source: erased-union
