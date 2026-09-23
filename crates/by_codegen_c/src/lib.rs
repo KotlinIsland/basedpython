@@ -314,7 +314,7 @@ pub fn emit_module(module: &ModuleIr) -> String {
         // every class a name reaches is a heap type built from a spec at module init —
         // so its name is a pointer rather than a static struct. only a generator's state
         // and a closure's environment stay static
-        let heap = heap_type(module, class);
+        let heap = heap_type(class);
         let type_name = class.type_name(module.name.dotted());
         let _ = writeln!(
             out,
@@ -1038,10 +1038,10 @@ fn absent_values_owner<'a>(module: &'a ModuleIr, class: &'a ClassIr) -> Option<&
 /// reads a C function there as a base that owns the allocation, and refuses
 /// `object.__new__(cls)` on the class outright. see `By_PublishAllocatingNew`
 fn publishes_absent_values_new(module: &ModuleIr, class: &ClassIr) -> bool {
-    heap_type(module, class)
+    heap_type(class)
         && !external_storage(module, class)
         && !inherits_layout(module, class)
-        && initializes(module, class)
+        && initializes(class)
         && !constructs_through_a_written_new(module, class)
         && absent_values_owner(module, class).is_some()
 }
@@ -1055,7 +1055,7 @@ fn publishes_absent_values_new(module: &ModuleIr, class: &ClassIr) -> bool {
 /// absent values publishes one: a class that inherits that layout reaches its base's through
 /// the mro, which is the allocator it needs
 fn publishes_init_subclass(module: &ModuleIr, class: &ClassIr) -> bool {
-    heap_type(module, class) && writes_absent_values(module, class)
+    heap_type(class) && writes_absent_values(module, class)
 }
 
 /// the `__init_subclass__` [`publishes_init_subclass`] describes, and its method definition
@@ -1079,8 +1079,8 @@ fn emit_init_subclass(module: &ModuleIr, class: &ClassIr) -> String {
 /// cannot name that function, and one left without a `tp_new` on `object` is made
 /// uninstantiable by `PyType_Ready`, so it is written in first. nothing subclasses a static
 /// struct, so no allocator has to be handed on — see [`publishes_absent_values_new`]
-fn static_type_ready(module: &ModuleIr, class: &ClassIr, type_name: &str) -> String {
-    let new = if made_only_by_its_frame(module, class) {
+fn static_type_ready(class: &ClassIr, type_name: &str) -> String {
+    let new = if made_only_by_its_frame(class) {
         String::new()
     } else {
         format!("    {type_name}.tp_new = PyBaseObject_Type.tp_new;\n")
@@ -1216,7 +1216,7 @@ const RECYCLED_INSTANCES: usize = 16;
 /// every object. those are inside the reset, and zeroing them would cut a live list
 /// in two, so such a build recycles nothing — see [`emit_instance_recycling`]
 ///
-/// and the block has to be the right *size*. [`mutable_type`] is false only for a
+/// and the block has to be the right *size*. [`ClassIr::mutable`] is false only for a
 /// sealed leaf: no base, nothing derived from it, no decorator and no written
 /// `__new__`. that is the shape whose `tp_alloc` and `tp_free` nothing can inherit,
 /// so every block that reaches the array was allocated by this class's own
@@ -1227,7 +1227,7 @@ const RECYCLED_INSTANCES: usize = 16;
 /// plain member inside the struct — and a weakref list, which a spec of ours never
 /// asks for
 fn recycles_instances(module: &ModuleIr, class: &ClassIr) -> bool {
-    !mutable_type(module, class)
+    !class.mutable
         && !finalizes(module, class)
         && class
             .resume
@@ -1457,7 +1457,7 @@ fn emit_class_type(module: &ModuleIr, class: &ClassIr) -> String {
 
     // a class with nothing to initialize publishes no `__init__` at all, so that
     // `object.__init__` is what a construction reaches — exactly as in the source
-    if !initializes(module, class) || made_only_by_its_frame(module, class) {
+    if !initializes(class) || made_only_by_its_frame(class) {
         out.push_str(&emit_class_members(module, class));
         return out;
     }
@@ -1867,7 +1867,7 @@ fn missing_attribute(module: &ModuleIr, class: &ClassIr, object: &str, field: &s
     format!(
         "By_FieldMissing({object}, {}, {});",
         c_string(field),
-        i32::from(class.declares_slots && !instance_dict(module, class))
+        i32::from(class.slots.is_some() && !instance_dict(module, class))
     )
 }
 
@@ -1948,7 +1948,9 @@ fn delete_field(
         // before the release, for the reason the order above is what it is: a `__del__`
         // the release runs can read this instance, and it must not find the mapping
         // still naming an attribute the object has already given up
-        unpublish = if reserves_dict_word(module, owner) {
+        unpublish = if reserves_dict_word(module, owner)
+            && !held_in_a_slot(module, owner, &field.name)
+        {
             format!(
                 "\x20       if (BY_UNLIKELY(By_HasPublishedDict({storage}->{BY_DICT_MEMBER})))\n\
                  \x20           By_UnpublishedField({storage}->{BY_DICT_MEMBER}, {});\n",
@@ -2020,6 +2022,59 @@ fn dataclass_slots(class: &ClassIr, type_name: &str) -> Vec<(&'static str, Strin
         slots.push(("tp_hash", "PyObject_HashNotImplemented".to_string()));
     }
     slots
+}
+
+/// the setter a field of an *immutable* class publishes, which writes only a field the
+/// instance does not have yet
+///
+/// python's `frozen` refuses a write in `__setattr__`, and leaves the slot itself writable
+/// through `object.__setattr__` — which is how `@dataclass(frozen=True, slots=True)`'s own
+/// `__setstate__` restores a copied or unpickled instance, onto one `__new__` made with
+/// every field absent. a write over a field already written is refused instead, because
+/// compiled code reads a frozen field once and keeps the answer across any call
+fn emit_initializing_setter(
+    module: &ModuleIr,
+    class: &ClassIr,
+    type_name: &str,
+    field: &by_ir::function::FieldDecl,
+) -> String {
+    let owner = field_owner(module, class, &field.name);
+    let Some(absent) = field_absent(field, "self") else {
+        return format!(
+            "static int {type_name}_set_{name}(PyObject *selfobj, PyObject *by_value, void *closure) {{\n\
+             \x20   (void)by_value; (void)closure;\n\
+             \x20   return By_FieldNotWritable(selfobj, {quoted});\n}}\n",
+            name = field.name,
+            quoted = c_string(&field.name),
+        );
+    };
+    format!(
+        "static int {type_name}_set_{name}(PyObject *selfobj, PyObject *by_value, void *closure) {{\n\
+         \x20   (void)closure;\n\
+         \x20   {bind}\n\
+         \x20   if (by_value == NULL || !({absent})) return By_FieldNotWritable(selfobj, {quoted});\n\
+         \x20   {ty} by_v = {unbox};\n\
+         \x20   if ({failed}) return -1;\n\
+         \x20   self->{member} = by_v;\n\
+         {present}\
+         {publish}\
+         \x20   return 0;\n}}\n",
+        name = field.name,
+        quoted = c_string(&field.name),
+        bind = bind_self(module, owner, "selfobj"),
+        ty = ctype(module, &field.ty),
+        unbox = unbox_checked(module, &field.ty, "by_value"),
+        failed = error_check(&field.ty, "by_v"),
+        member = field.member(),
+        present = mark_present(field, "self"),
+        publish = publish_field(
+            module,
+            owner,
+            "self",
+            field,
+            &format!("self->{}", field.member())
+        ),
+    )
 }
 
 /// the slot id a designated initializer names as a field
@@ -2123,6 +2178,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // wrong representation
     for field in published_fields(class) {
         if !class.writable() {
+            out.push_str(&emit_initializing_setter(module, class, &type_name, field));
             continue;
         }
         let _ = writeln!(
@@ -2197,7 +2253,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             out,
             "static const By_DictField {type_name}_dictfields[] = {{"
         );
-        for field in &class.fields {
+        for field in dict_fields(module, class) {
             let present = if field_default(module, class, field).is_some() {
                 format!("{type_name}_has_{}", field.name)
             } else {
@@ -2205,7 +2261,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
             };
             // the same setter the field's descriptor publishes, and the one condition it
             // is emitted under
-            let set = if class.writable() {
+            let set = if class.exported {
                 format!("{type_name}_set_{}", field.name)
             } else {
                 "NULL".to_string()
@@ -2226,11 +2282,26 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         // instance names the extra attributes and none of the class's own — so `copy` and
         // `pickle` would be handed half an object's state, quietly
         if publishes_a_state_method(module, class) {
+            let slots = slot_names(module, class);
+            let held = if slots.is_empty() {
+                "NULL".to_string()
+            } else {
+                let _ = writeln!(
+                    out,
+                    "static const char *const {type_name}_slotnames[] = {{{}, NULL}};",
+                    slots
+                        .iter()
+                        .map(|name| c_string(name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                format!("{type_name}_slotnames")
+            };
             let _ = write!(
                 out,
                 "static PyObject *{type_name}_getstate(PyObject *selfobj, PyObject *by_unused) {{\n\
                  \x20   (void)by_unused;\n\
-                 \x20   return By_InstanceState(selfobj, {type_name}_dictfields);\n}}\n"
+                 \x20   return By_InstanceState(selfobj, {type_name}_dictfields, {held});\n}}\n"
             );
         }
     }
@@ -2246,10 +2317,10 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
         if field_default(module, class, field).is_some() {
             continue;
         }
-        let setter = if !class.writable() {
-            "NULL".to_string()
-        } else {
+        let setter = if class.exported {
             format!("{type_name}_set_{}", field.name)
+        } else {
+            "NULL".to_string()
         };
         let _ = writeln!(
             out,
@@ -2263,7 +2334,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // over both halves instead. handing back the dict there would be an *empty* mapping
     // where the interpreted class gives a full one: quiet, and wrong
     if instance_dict(module, class) {
-        if class.fields.is_empty() {
+        if !publishes_a_dict_view(module, class) {
             out.push_str(
                 "    {\"__dict__\", PyObject_GenericGetDict, PyObject_GenericSetDict, NULL, NULL},\n",
             );
@@ -3010,8 +3081,8 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     let dotted = module.name.dotted();
     // a static struct is what a class no name reaches gets: a generator's state or a
     // closure's environment, neither of which anything can ask about
-    if !heap_type(module, class) {
-        let (refused, construction) = if made_only_by_its_frame(module, class) {
+    if !heap_type(class) {
+        let (refused, construction) = if made_only_by_its_frame(class) {
             (" | Py_TPFLAGS_DISALLOW_INSTANTIATION", String::new())
         } else {
             (
@@ -3061,7 +3132,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // emitted class that cannot be subclassed is a difference from the interpreted
     // one for no gain. a sealed one has given up neither, and both of those rest on the
     // same thing: that nothing can rebind a method and nothing can override one
-    let basetype = if mutable_type(module, class) {
+    let basetype = if class.mutable {
         " | Py_TPFLAGS_BASETYPE"
     } else {
         " | Py_TPFLAGS_IMMUTABLETYPE"
@@ -3084,7 +3155,7 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     // a class that publishes no `__init__` supplies no slot for it either, and the
     // base's is what a construction then reaches — which is the source's own answer.
     // it is the same question whichever layout the class has, so it is asked once
-    let init = if initializes(module, class) {
+    let init = if initializes(class) {
         format!("\x20   {{Py_tp_init, (void *){type_name}_init}},\n")
     } else {
         String::new()
@@ -3215,12 +3286,16 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
 /// whether this class or an in-module base of it carries a class decorator
 ///
 /// the base chain, because an instance discipline is not a per-class answer: a subclass
-/// allocates and frees instances of a shape its base decided
+/// allocates and frees instances of a shape its base decided.
+///
+/// a `data class` rung does not count. `@dataclass(slots=True)` is the twin's innermost
+/// decorator, so every decorator written above it is handed a class whose instances have
+/// no dict in python either
 fn decorated_chain(module: &ModuleIr, class: &ClassIr) -> bool {
     let mut current = class;
     // bounded by the class count, for the reason `inherits_layout` gives
     for _ in 0..=module.classes.len() {
-        if !current.decorators.is_empty() {
+        if !current.decorators.is_empty() && !current.dataclass {
             return true;
         }
         match current
@@ -3271,7 +3346,7 @@ fn decorated_chain(module: &ModuleIr, class: &ClassIr) -> bool {
 /// machine are types nothing can name, so no attribute can be written on one
 fn instance_dict(module: &ModuleIr, class: &ClassIr) -> bool {
     class.exported
-        && heap_type(module, class)
+        && heap_type(class)
         && !inherits_layout(module, class)
         && (decorated_chain(module, class) || !slots_declared_throughout(module, class))
 }
@@ -3283,7 +3358,7 @@ fn instance_dict(module: &ModuleIr, class: &ClassIr) -> bool {
 fn publishes_offsets(module: &ModuleIr, class: &ClassIr) -> bool {
     instance_dict(module, class)
         || (class.exported
-            && heap_type(module, class)
+            && heap_type(class)
             && !inherits_layout(module, class)
             && module.keeps_weak_references(class))
 }
@@ -3291,10 +3366,60 @@ fn publishes_offsets(module: &ModuleIr, class: &ClassIr) -> bool {
 /// whether this class answers `__dict__` with a view over its layout as well as its dict
 ///
 /// a class keeping a dict and no fields has nothing outside that dict, so python's own
-/// answer — the dict — is the whole of the mapping. every other class keeps its attributes
-/// in two places at once, and only a view over both is the mapping python promises
+/// answer — the dict — is the whole of the mapping, and so has one whose every field is
+/// held in a slot, which python's mapping names none of. every other class keeps its
+/// attributes in two places at once, and only a view over both is the mapping python
+/// promises
 fn publishes_a_dict_view(module: &ModuleIr, class: &ClassIr) -> bool {
-    instance_dict(module, class) && !class.fields.is_empty()
+    instance_dict(module, class) && dict_fields(module, class).next().is_some()
+}
+
+/// the fields an instance's `__dict__` names: every one but those held in a slot
+fn dict_fields<'a>(
+    module: &'a ModuleIr,
+    class: &'a ClassIr,
+) -> impl Iterator<Item = &'a by_ir::function::FieldDecl> {
+    class
+        .fields
+        .iter()
+        .filter(|field| !held_in_a_slot(module, class, &field.name))
+}
+
+/// what an instance of `class` holds in a slot, in the order `copyreg._slotnames` lists
+/// it: the class's own declaration first and each base's after it
+fn slot_names<'a>(module: &'a ModuleIr, class: &'a ClassIr) -> Vec<&'a str> {
+    let mut names = Vec::new();
+    let mut current = class;
+    // bounded by the class count, for the reason [`inherits_layout`] gives
+    for _ in 0..=module.classes.len() {
+        names.extend(
+            current
+                .slots
+                .iter()
+                .flatten()
+                .map(String::as_str)
+                .filter(|name| !matches!(*name, "__dict__" | "__weakref__")),
+        );
+        match current
+            .base
+            .as_ref()
+            .and_then(ClassBase::in_module)
+            .and_then(|base| class_named(module, base))
+        {
+            Some(next) => current = next,
+            None => break,
+        }
+    }
+    names
+}
+
+/// whether `class` or an in-module base of it declares `name` in its `__slots__`
+///
+/// python keeps such an attribute in the slot, never in a dict a base gave the instance,
+/// so `vars()` does not name it and `copyreg` hands it over beside the dict rather than
+/// in it
+fn held_in_a_slot(module: &ModuleIr, class: &ClassIr, name: &str) -> bool {
+    slot_names(module, class).contains(&name)
 }
 
 /// whether this class answers `__getstate__` over the whole of an instance's state
@@ -3337,7 +3462,7 @@ fn publish_field(
     field: &by_ir::function::FieldDecl,
     held: &str,
 ) -> String {
-    if !reserves_dict_word(module, owner) {
+    if !reserves_dict_word(module, owner) || held_in_a_slot(module, owner, &field.name) {
         return String::new();
     }
     format!(
@@ -3432,7 +3557,7 @@ fn slots_declared_throughout(module: &ModuleIr, class: &ClassIr) -> bool {
     // bounded the way [`inherits_layout`] is: a chain that visits a class twice is a
     // cycle, and one here would hang the compiler rather than fail it
     for _ in 0..=module.classes.len() {
-        if !current.declares_slots {
+        if current.slots.is_none() {
             return false;
         }
         let Some(name) = current.base.as_ref().and_then(ClassBase::in_module) else {
@@ -3519,8 +3644,8 @@ fn finalizes(module: &ModuleIr, class: &ClassIr) -> bool {
 /// hand a static type `object`'s. nothing is built on such a class — being a base is
 /// what makes one mutable — so no other mro can reach an `__init__` of its, and a
 /// sealed type answers the question the same way its static edition did
-fn initializes(module: &ModuleIr, class: &ClassIr) -> bool {
-    !mutable_type(module, class) || !class.inherited_init
+fn initializes(class: &ClassIr) -> bool {
+    !class.mutable || !class.inherited_init
 }
 
 /// whether an instance of this class may only come from the compiled frame that owns it
@@ -3539,8 +3664,8 @@ fn initializes(module: &ModuleIr, class: &ClassIr) -> bool {
 ///
 /// so the type refuses instantiation the way python's own `generator` does, and has no
 /// `__init__` for a second call to reach
-fn made_only_by_its_frame(module: &ModuleIr, class: &ClassIr) -> bool {
-    !class.exported && !heap_type(module, class)
+fn made_only_by_its_frame(class: &ClassIr) -> bool {
+    !class.exported && !heap_type(class)
 }
 
 /// whether this class keeps its fields *after* a base's instance rather than inside one
@@ -4364,35 +4489,6 @@ fn stands_on_an_emitted_base(module: &ModuleIr, class: &ClassIr) -> bool {
     })
 }
 
-/// whether any class in the module is built on this one
-///
-/// not only the ones that extend its *layout*: a class standing beside names from
-/// outside still has to be a type python can derive from, and only a heap type is
-fn is_base(module: &ModuleIr, class: &ClassIr) -> bool {
-    module.classes.iter().any(|candidate| {
-        candidate
-            .base
-            .as_ref()
-            .is_some_and(|base| base.plain_names().any(|name| name == class.name))
-    })
-}
-
-/// whether a class needs a *mutable* heap type rather than a sealed one
-///
-/// a sealed type is immutable and cannot be subclassed, which is exactly what
-/// licenses the direct method call. a decorator that touches the class, and a
-/// subclass, each need the opposite — so those classes pay for it.
-///
-/// a written `__new__` is the third: it is published by *assigning* it onto the finished
-/// type, which is the only way to reach the slot fixup that a class statement runs and a
-/// type spec does not — see [`publishes_new`]. an immutable type refuses that assignment
-fn mutable_type(module: &ModuleIr, class: &ClassIr) -> bool {
-    !class.decorators.is_empty()
-        || is_base(module, class)
-        || class.base.is_some()
-        || publishes_new(class).is_some()
-}
-
 /// the written `__new__` this class publishes onto its finished type, where it wrote one
 ///
 /// `tp_new` is deliberately **not** filled from the spec. a C function there is one
@@ -4458,8 +4554,8 @@ fn constructs_through_a_written_new(module: &ModuleIr, class: &ClassIr) -> bool 
 /// so as a heap type it would answer its own descriptor where the class should answer
 /// the module's name. staying static is what it already was, refusal on
 /// `__annotations__` included
-fn heap_type(module: &ModuleIr, class: &ClassIr) -> bool {
-    mutable_type(module, class)
+fn heap_type(class: &ClassIr) -> bool {
+    class.mutable
         || (class.exported
             && !class
                 .fields
@@ -11463,12 +11559,14 @@ fn emit_install_verification(module: &ModuleIr) -> String {
     for (slot, class) in published_classes(module).iter().enumerate() {
         let type_name = class.type_name(module.name.dotted());
         let bases = emitted_base_slots(module, class);
-        // a decorated method's entry is whatever its decorator returned, which is not
-        // the descriptor the method table put there and is not this check's business
+        // a decorated method's entry is whatever its decorator returned, and a rebound
+        // one's whatever the body bound last, neither of which is the descriptor the
+        // method table put there nor this check's business. one that only marks is the
+        // compiled method, and is held to that like any other
         let settled: Vec<&str> = class
             .methods
             .iter()
-            .filter(|method| !method.decorators.is_empty())
+            .filter(|method| class.installs_the_body_answer(method))
             .map(|method| method.name.as_str())
             .collect();
         let mut block = String::new();
@@ -11539,14 +11637,41 @@ fn emit_install_verification(module: &ModuleIr) -> String {
 
 /// whether init has an exit that leaves the *whole* module interpreted
 ///
-/// only a class built ahead of everything else can refuse in a way init cannot go on
-/// from — see the layout guard in [`emit_module_init`] — so a module with none of those
-/// installs its classes or fails the import, and never quietly stands down entire
+/// two things can refuse in a way init cannot go on from — see the layout guard in
+/// [`emit_module_init`]: a class built ahead of everything else, and a class the module body
+/// changed after its statement in a way the type replacing it cannot answer for. a module
+/// with neither installs its classes or fails the import, and never quietly stands down
+/// entire
 fn stands_the_module_down(module: &ModuleIr) -> bool {
     module
         .classes
         .iter()
-        .any(|class| built_ahead(module, class))
+        .any(|class| built_ahead(module, class) || class.checked_after_the_body())
+}
+
+/// what compiled code reaches on `class` with no lookup at all, by the name the class
+/// publishes each under — empty where every access is checked
+///
+/// a method whose entry is the body's own answer is left out: a call to one looks it up
+/// already, so a rewrite of it is carried and obeyed. a `data class` is read against the
+/// class its statement bound rather than the body, so the fields and dunders `@dataclass`
+/// replaced are the ones that class holds — see `By_BodyOutgrewClass`
+fn reached_without_lookup(class: &ClassIr) -> Vec<&str> {
+    if !class.unchecked_licences {
+        return Vec::new();
+    }
+    class
+        .table_methods()
+        .filter(|method| !class.installs_the_body_answer(method))
+        .map(|method| method.name.as_str())
+        .chain(
+            class
+                .properties
+                .iter()
+                .map(|property| property.name.as_str()),
+        )
+        .chain(class.fields.iter().map(|field| field.name.as_str()))
+        .collect()
 }
 
 fn emit_module_init(module: &ModuleIr) -> String {
@@ -11676,7 +11801,39 @@ fn emit_module_init(module: &ModuleIr) -> String {
         .iter()
         .any(|class| built_ahead(module, class))
     {
-        conditions.push("!BY_HAS_TYPE_DATA");
+        conditions.push("!BY_HAS_TYPE_DATA".to_string());
+    }
+    // the module body has run, and every write it made to a class after the statement is
+    // on the twin. one the emitted type cannot answer for leaves the module interpreted,
+    // which is the one refusal left once the compiled code reading the class is fixed —
+    // see `By_BodyOutgrewClass`
+    let mut outgrown_members = String::new();
+    for (at, class) in module
+        .classes
+        .iter()
+        .filter(|class| class.checked_after_the_body())
+        .enumerate()
+    {
+        let members = reached_without_lookup(class);
+        let members = if members.is_empty() {
+            "NULL".to_string()
+        } else {
+            let listed = members
+                .iter()
+                .map(|member| c_string(member))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(
+                outgrown_members,
+                "    static const char *const by_unlooked_{at}[] = {{{listed}, NULL}};"
+            );
+            format!("by_unlooked_{at}")
+        };
+        conditions.push(format!(
+            "By_BodyOutgrewClass(by_bodies, by_statements, by_bound, dict, {}, {members}, {})",
+            c_string(&class.name),
+            i32::from(class.records_what_it_bound())
+        ));
     }
     // whether the fallback source has to be run with its class bodies captured. the
     // capture costs a dict copy per class the body writes, so a module with nothing to
@@ -11686,7 +11843,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
     // named by the one list, so this asks that rather than repeating it
     let captures_bodies = module.classes.iter().any(|class| class.exported);
     let release_bodies = if captures_bodies {
-        "    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n"
+        "    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n    Py_XDECREF(by_bound);\n"
     } else {
         ""
     };
@@ -11712,8 +11869,8 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // definitions, which is where python would have run them
         let _ = write!(
             layout_guard,
-            "    if ({}) {{\n{record_interpreted}{}{drop_installer}{release_bodies}    return 0;\n    }}\n",
-            conditions.join(" || "),
+            "{outgrown_members}    if ({}) {{\n{record_interpreted}{}{drop_installer}{release_bodies}    return 0;\n    }}\n",
+            conditions.join("\n        || "),
             twin_decorators(module)
         );
     }
@@ -11917,6 +12074,19 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 class.type_name(module.name.dotted())
             );
         }
+        // after the carry, which is where a frozen data class takes the `__getstate__` its
+        // decorator wrote, and after `__slots__` is in every type's dict, which is what
+        // `copyreg` reads. a class with a dict view answers its own state already
+        for class in &twins {
+            if slot_names(module, class).is_empty() || publishes_a_dict_view(module, class) {
+                continue;
+            }
+            let _ = writeln!(
+                adopt_init,
+                "    if (By_PublishSlottedState({}_OBJ) < 0) return -1;",
+                class.type_name(module.name.dotted())
+            );
+        }
         // and now that every type holds everything its body gave it, the methods those
         // values captured. this waits for the adoption because a table a factory installed
         // after the `class` statement is one of the values it has to reach
@@ -12036,8 +12206,8 @@ fn emit_module_init(module: &ModuleIr) -> String {
         let ready = if built_ahead(module, class) {
             // already built, by the one construction open to it
             String::new()
-        } else if !heap_type(module, class) {
-            static_type_ready(module, class, &type_name)
+        } else if !heap_type(class) {
+            static_type_ready(class, &type_name)
         } else if let Some(base) =
             class
                 .base
@@ -12156,7 +12326,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
         // a spec cannot say a slot is empty, so the ones python empties are taken off the
         // finished type before anything inherits them
         let emptied = emptied_sequence_slots(class);
-        if !emptied.is_empty() && heap_type(module, class) {
+        if !emptied.is_empty() && heap_type(class) {
             let mut clears = String::new();
             for member in emptied {
                 let _ = write!(clears, " by_sequence->{member} = NULL;");
@@ -12213,7 +12383,8 @@ fn emit_module_init(module: &ModuleIr) -> String {
                 .join(", ");
             let _ = writeln!(
                 installed,
-                "    if (By_PublishProperty({type_name}_OBJ, dict, {}, {}, {defs}) < 0) return -1;",
+                "    if (By_PublishProperty({}, {type_name}_OBJ, dict, {}, {}, {defs}) < 0) return -1;",
+                c_string(module.name.dotted()),
                 c_string(&class.name),
                 c_string(&property.name)
             );
@@ -12267,7 +12438,7 @@ fn emit_module_init(module: &ModuleIr) -> String {
             let Some((cell, holds)) = field_default(module, class, field) else {
                 continue;
             };
-            let setter = if class.writable() {
+            let setter = if class.exported {
                 format!("{type_name}_set_{}", field.name)
             } else {
                 "NULL".to_string()
@@ -12314,6 +12485,20 @@ fn emit_module_init(module: &ModuleIr) -> String {
             // decorator's answer from — and never ran the decorators either, so
             // applying them there is the only application rather than a second one
             let body = slot.map_or_else(|| "NULL".to_string(), |slot| format!("by_body[{slot}]"));
+            // decorators that only mark what they were handed leave nothing in the body's
+            // answer but its `__dict__`, so the compiled method is published with that
+            // copied onto it rather than the body's function in its place
+            if let Some(entry) = class.marked_entry(method) {
+                let _ = writeln!(
+                    installed,
+                    "    {{ static const char *const by_decorators[] = {{{names}}};\n\
+                     \x20     if (By_MarkedMethod({body}, (PyTypeObject *){type_name}_OBJ, dict, {}, &{type_name}_methods[{}], by_decorators, {}, &by_twins) < 0) return -1; }}",
+                    c_string(&class.name),
+                    synthetic_table_entries(class, &type_name).len() + entry,
+                    method.decorators.len()
+                );
+                continue;
+            }
             let _ = writeln!(
                 installed,
                 "    {{ static const char *const by_decorators[] = {{{names}}};\n\
@@ -12432,8 +12617,9 @@ fn emit_module_init(module: &ModuleIr) -> String {
     let run_body = if captures_bodies {
         "\x20   PyObject *by_bodies = NULL;\n\
          \x20   PyObject *by_statements = NULL;\n\
+         \x20   PyObject *by_bound = NULL;\n\
          \x20   if (by_fallback_source[0] != '\\0') {\n\
-         \x20       by_bodies = By_RunModuleBody(&by_fallback, dict, &by_statements);\n\
+         \x20       by_bodies = By_RunModuleBody(&by_fallback, dict, &by_statements, &by_bound);\n\
          \x20       if (by_bodies == NULL) return -1;\n\
          \x20   }\n"
             .to_string()
@@ -12839,14 +13025,15 @@ mod tests {
             name: "Cell".to_string(),
             immutable: true,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             exported: true,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -13107,14 +13294,15 @@ mod tests {
             name: "Wrapped".to_string(),
             immutable: false,
             environment: false,
+            mutable: true,
+            unchecked_licences: false,
             exported: true,
             base: Some(ClassBase::External(vec!["Exception".to_string()])),
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -13203,6 +13391,7 @@ mod tests {
         let mut owned = appending_class();
         owned.name = "Owned".to_string();
         owned.base = None;
+        owned.mutable = false;
         module.classes.push(owned);
         let c = emit_module(&module);
 
@@ -13383,7 +13572,8 @@ mod tests {
         let mut wakeup = appending_class();
         wakeup.name = "Wakeup".to_string();
         wakeup.base = None;
-        wakeup.declares_slots = true;
+        wakeup.mutable = false;
+        declare_slots(&mut wakeup);
         wakeup.methods.push(writes_an_unheld_attribute("Wakeup"));
         module.classes.push(wakeup);
         let c = emit_module(&module);
@@ -13403,7 +13593,8 @@ mod tests {
         let mut wakeup = appending_class();
         wakeup.name = "Wakeup".to_string();
         wakeup.base = None;
-        wakeup.declares_slots = true;
+        wakeup.mutable = false;
+        declare_slots(&mut wakeup);
         wakeup.fields.push(by_ir::function::FieldDecl {
             cell: false,
             name: "spare".to_string(),
@@ -13434,6 +13625,7 @@ mod tests {
         let mut open = appending_class();
         open.name = "Open".to_string();
         open.base = None;
+        open.mutable = false;
         module.classes.push(open);
         let c = emit_module(&module);
 
@@ -13466,7 +13658,7 @@ mod tests {
         let mut tight = appending_class();
         tight.name = "Tight".to_string();
         tight.base = None;
-        tight.declares_slots = true;
+        declare_slots(&mut tight);
         module.classes.push(tight);
         let mut loose = appending_class();
         loose.name = "Loose".to_string();
@@ -13508,12 +13700,12 @@ mod tests {
         let mut tight = appending_class();
         tight.name = "Tight".to_string();
         tight.base = None;
-        tight.declares_slots = true;
+        declare_slots(&mut tight);
         module.classes.push(tight);
         let mut tighter = appending_class();
         tighter.name = "Tighter".to_string();
         tighter.base = Some(ClassBase::InModule("Tight".to_string()));
-        tighter.declares_slots = true;
+        declare_slots(&mut tighter);
         module.classes.push(tighter);
         let c = emit_module(&module);
 
@@ -13533,6 +13725,7 @@ mod tests {
         let mut wakeup = appending_class();
         wakeup.name = "Wakeup".to_string();
         wakeup.base = None;
+        wakeup.mutable = false;
         wakeup.methods.push(writes_an_unheld_attribute("Wakeup"));
         module.classes.push(wakeup);
         let c = emit_module(&module);
@@ -13977,8 +14170,19 @@ mod tests {
     /// installed nothing
     fn refuses_whole_module(type_name: &str) -> String {
         format!(
-            "if ({type_name} == NULL) {{\n    by_record_interpreted();\n    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n    return 0;\n    }}"
+            "if ({type_name} == NULL) {{\n    by_record_interpreted();\n    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n    Py_XDECREF(by_bound);\n    return 0;\n    }}"
         )
+    }
+
+    /// a `__slots__` on `class` naming exactly the fields it has
+    fn declare_slots(class: &mut ClassIr) {
+        class.slots = Some(
+            class
+                .fields
+                .iter()
+                .map(|field| field.name.clone())
+                .collect(),
+        );
     }
 
     fn appending_class() -> ClassIr {
@@ -13986,14 +14190,15 @@ mod tests {
             name: "Wrapped".to_string(),
             immutable: false,
             environment: false,
+            mutable: true,
+            unchecked_licences: false,
             exported: true,
             base: Some(ClassBase::External(vec!["Exception".to_string()])),
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -14673,14 +14878,15 @@ mod tests {
             name: "Point".to_string(),
             immutable: false,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             exported: true,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -15166,6 +15372,7 @@ mod tests {
         let mut class = appending_class();
         class.name = "Point".to_string();
         class.base = None;
+        class.mutable = false;
         module.classes.push(class);
         let c = emit_module(&module);
 
@@ -15211,6 +15418,7 @@ mod tests {
         let mut class = appending_class();
         class.name = "Point".to_string();
         class.base = None;
+        class.mutable = false;
         module.classes.push(class);
         for function in &module.functions {
             assert_eq!(verify(function), Ok(()), "{}", function.name);
@@ -15708,14 +15916,15 @@ mod tests {
             name: "Holder".to_string(),
             immutable: false,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             exported: true,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -15801,14 +16010,15 @@ mod tests {
             name: "outer$env".to_string(),
             immutable: false,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             exported: false,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -15879,14 +16089,15 @@ mod tests {
             name: "Var".to_string(),
             immutable: false,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             exported: true,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),
@@ -16016,6 +16227,7 @@ mod tests {
         let mut class = appending_class();
         class.name = "Env".to_string();
         class.base = None;
+        class.mutable = false;
         class.environment = true;
         class.methods = vec![nested];
 
@@ -16113,10 +16325,13 @@ mod tests {
     #[test]
     fn a_subclassable_class_keeps_no_instance_memory() {
         let mut module = module_with(add());
+        let mut base = sealed_class();
+        base.mutable = true;
         let mut derived = sealed_class();
         derived.name = "Shifted".to_string();
         derived.base = Some(ClassBase::InModule("Point".to_string()));
-        module.classes = vec![sealed_class(), derived];
+        derived.mutable = true;
+        module.classes = vec![base, derived];
         let c = emit_module(&module);
 
         assert!(
@@ -16151,7 +16366,7 @@ mod tests {
     fn an_uncollected_class_recycles_through_the_plain_allocator() {
         let mut module = module_with(add());
         let mut class = sealed_class();
-        class.declares_slots = true;
+        declare_slots(&mut class);
         module.classes = vec![class];
         let c = emit_module(&module);
 
@@ -16237,14 +16452,15 @@ mod tests {
             name: "Point".to_string(),
             immutable: false,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             exported: true,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             constants: Vec::new(),
             properties: Vec::new(),
             slot_aliases: Vec::new(),

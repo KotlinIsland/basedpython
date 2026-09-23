@@ -4,6 +4,7 @@
 //! declared once with a type, which is what makes the representation invariant
 //! checkable: every write to a register must produce that register's type.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::ops::{BlockId, Op, RegisterId, Terminator, Value};
@@ -168,6 +169,14 @@ pub enum Decorator {
     Path {
         root: String,
         attributes: Vec<String>,
+        /// whether the decorator is known to hand back the very function it was given,
+        /// having done nothing but write attributes onto it — `typing.override`,
+        /// `typing.final`, `abc.abstractmethod`
+        ///
+        /// what such a decorator did is entirely in the function's `__dict__`, so a class
+        /// can publish its compiled method with those attributes copied across instead of
+        /// the function its body decorated — see [`ClassIr::installs_the_body_answer`]
+        marks_only: bool,
     },
 }
 
@@ -178,13 +187,39 @@ impl Decorator {
         Self::Path {
             root: name.into(),
             attributes: Vec::new(),
+            marks_only: false,
+        }
+    }
+
+    /// the same decorator, known to only mark what it was handed — see
+    /// [`Self::marks_only`]
+    #[must_use]
+    pub fn marking(self) -> Self {
+        match self {
+            Self::Path {
+                root, attributes, ..
+            } => Self::Path {
+                root,
+                attributes,
+                marks_only: true,
+            },
+        }
+    }
+
+    /// whether this decorator hands back what it was given, having only written
+    /// attributes onto it
+    pub fn marks_only(&self) -> bool {
+        match self {
+            Self::Path { marks_only, .. } => *marks_only,
         }
     }
 
     /// the bare name this is, where it is one
     pub fn as_name(&self) -> Option<&str> {
         match self {
-            Self::Path { root, attributes } if attributes.is_empty() => Some(root),
+            Self::Path {
+                root, attributes, ..
+            } if attributes.is_empty() => Some(root),
             Self::Path { .. } => None,
         }
     }
@@ -200,8 +235,12 @@ impl Decorator {
     /// identifier holds no `.`, so the join is unambiguous to split again
     pub fn dotted(&self) -> String {
         match self {
-            Self::Path { root, attributes } if attributes.is_empty() => root.clone(),
-            Self::Path { root, attributes } => format!("{root}.{}", attributes.join(".")),
+            Self::Path {
+                root, attributes, ..
+            } if attributes.is_empty() => root.clone(),
+            Self::Path {
+                root, attributes, ..
+            } => format!("{root}.{}", attributes.join(".")),
         }
     }
 }
@@ -826,6 +865,24 @@ pub struct ClassIr {
     /// their captures from, which a nested function reading its own name holds a cycle
     /// through, so the collector has to be able to walk it
     pub environment: bool,
+    /// whether the class is emitted as a *mutable* heap type python can subclass and write
+    /// to, rather than a sealed one
+    ///
+    /// one decision with two readers, taken once when the module's classes are first
+    /// seen: the emitter sets `Py_TPFLAGS_BASETYPE` on exactly these, and lowering calls a
+    /// method, runs a property half or reads a field with no lookup on exactly the others.
+    /// a class the emitter made subclassable while lowering still called it directly
+    /// ignored every override an interpreted subclass wrote
+    pub mutable: bool,
+    /// whether compiled code reaches this class's members under licences nothing checks at
+    /// runtime: a method called, a property half run and a field read at its offset, each
+    /// with no lookup at all
+    ///
+    /// that rests on the class being one nothing can subclass or write to once import is
+    /// over. what the module body writes over a member *before* then lands on the twin and
+    /// is carried to the type's dict, where none of those accesses looks — so module init
+    /// leaves the whole module interpreted instead. see `By_BodyOutgrewClass`
+    pub unchecked_licences: bool,
     /// whether the module's python namespace exposes this class.
     ///
     /// a closure environment is a real type with a real layout, but it is an
@@ -854,18 +911,26 @@ pub struct ClassIr {
     /// `@dataclass(frozen=True, slots=True)` where [`immutable`](Self::immutable) is set,
     /// and those two are the whole option matrix: a written `@dataclass(...)` declines
     /// because a decorator call cannot be moved to module init. so what the twin's class
-    /// grows is settled, and the emitted type has to grow the same
-    pub dataclass: bool,
-    /// whether the class body declares `__slots__`.
+    /// grows is settled, and the emitted type has to grow the same.
     ///
-    /// python reads that as "this instance's attributes are exactly these names", and
-    /// gives such an instance no `__dict__` — so a class that declares it is asking for
-    /// the layout an emitted class has anyway, and one that does not is asking for a
-    /// name it never mentioned to still have somewhere to go
-    pub declares_slots: bool,
-    /// whether that `__slots__` names `__weakref__`, which asks for the weak-reference list
-    /// a class without `__slots__` is given anyway
-    pub slots_weak_references: bool,
+    /// below 3.13 a body naming `super` or `__class__` has its slots added by the
+    /// transpiler's `_by_dataclass_slots` rather than by `slots=True`, which there leaves
+    /// each method's `__class__` cell on the class it replaced. the class it makes is the
+    /// same shape, and a half left to the twin then reaches the emitted type through the
+    /// cell module init settles
+    pub dataclass: bool,
+    /// the names the class's `__slots__` declares, where it declares one: in its body, or
+    /// — for a `data class` — through the `@dataclass(slots=True)` its twin carries, which
+    /// declares the fields the class adds and no `__weakref__`.
+    ///
+    /// python reads a declaration as "this instance's attributes are exactly these names",
+    /// and gives such an instance no `__dict__` — so a class that declares one is asking
+    /// for the layout an emitted class has anyway, and one that does not is asking for a
+    /// name it never mentioned to still have somewhere to go. a name declared here is held
+    /// in a slot rather than in a dict any base gives the instance, so `vars()` leaves it
+    /// out. `__weakref__` among them asks for the weak-reference list a class without
+    /// `__slots__` is given anyway
+    pub slots: Option<Vec<String>>,
     /// whether the class declares type parameters.
     ///
     /// they are erased in the *layout* — every `T` field is an object, whatever
@@ -960,6 +1025,27 @@ impl ClassIr {
         !self.immutable && self.exported
     }
 
+    /// whether module init checks this class against what the module body did to it after
+    /// its `class` statement, and leaves the whole module interpreted where it changed in
+    /// a way the emitted type cannot answer for — see `By_BodyOutgrewClass`
+    ///
+    /// a decorated class is left out: its decorator is applied to the emitted type again,
+    /// which rewrites the same names on it as it rewrote on the twin
+    pub fn checked_after_the_body(&self) -> bool {
+        self.exported && self.decorators.is_empty()
+    }
+
+    /// whether the twin's `class` statement records the class it bound, after its
+    /// decorators, for that check to read the class against
+    ///
+    /// a `data class` is the one class whose twin is not what its statement built: the
+    /// `@dataclass` the transpiler wrote makes it again and writes every dunder it
+    /// generates, so the body the statement left says nothing about which of those the
+    /// module body wrote over afterwards
+    pub fn records_what_it_bound(&self) -> bool {
+        self.dataclass && self.checked_after_the_body()
+    }
+
     /// the methods python reaches by name, through the method table
     ///
     /// a property's accessors are reached through the `property` object instead. a table
@@ -985,6 +1071,52 @@ impl ClassIr {
                     .iter()
                     .any(|property| property.holds(&method.name))
         })
+    }
+
+    /// whether module init publishes the function the class body decorated under
+    /// `method`'s name, rather than `method` itself
+    ///
+    /// a method's decorators run inside the class body, which the interpreted definition
+    /// ran before anything of this module existed. applying them again to the compiled
+    /// method would call each a second time, so init takes the body's answer instead —
+    /// see `By_DecoratedMethod` — and the compiled body is emitted and never installed.
+    /// only a class some `class` statement wrote has a body to take it from, and that is
+    /// an exported one
+    ///
+    /// a method whose every decorator [only marks](Decorator::marks_only) what it was
+    /// handed is the exception: those attributes are all the body's answer adds to the
+    /// function, and init copies them onto the compiled method and installs that — see
+    /// `By_MarkedMethod`
+    ///
+    /// a method whose name the class body binds again takes the body's answer whatever its
+    /// decorators are, marks or none: python's class holds what the last binding left, and
+    /// init copies that across as a class-level constant — see [`Self::rebinds`]
+    pub fn installs_the_body_answer(&self, method: &Function) -> bool {
+        self.exported
+            && (self.rebinds(method)
+                || (!method.decorators.is_empty() && self.marked_entry(method).is_none()))
+    }
+
+    /// whether the class body binds `method`'s name somewhere besides its `def`
+    ///
+    /// `m = other` under `def m`, `x = (m := other)`, or `m = other` above it: the name is
+    /// then a class-level constant as well as a method, and the constant is what the body
+    /// left under it
+    pub fn rebinds(&self, method: &Function) -> bool {
+        self.constants.contains(&method.name)
+    }
+
+    /// where `method` stands among [`Self::table_methods`], when it carries decorators and
+    /// every one of them only marks what it was handed
+    ///
+    /// the table entry is what init publishes under the name with the marks copied on, so
+    /// a method with no entry of its own keeps taking the body's answer
+    pub fn marked_entry(&self, method: &Function) -> Option<usize> {
+        if method.decorators.is_empty() || !method.decorators.iter().all(Decorator::marks_only) {
+            return None;
+        }
+        self.table_methods()
+            .position(|entry| entry.name == method.name)
     }
 
     /// whether `method` is the one this class's resumable frame steps through
@@ -1167,6 +1299,15 @@ pub struct PromotedPlace {
     pub missed: RType,
 }
 
+/// a function the compiler lowered and emitted, and that no import of the module runs
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unreached {
+    /// the qualified name, as a decline names its function
+    pub name: String,
+    pub reason: String,
+    pub range: Option<(u32, u32)>,
+}
+
 /// a function the compiler could not lower natively
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Declined {
@@ -1319,7 +1460,7 @@ impl ModuleIr {
     /// `__slots__` without asking for one, and an emitted class keeps a weak-reference list
     /// on the same terms — so `weakref.ref`, `WeakSet`, `WeakKeyDictionary`, `finalize` and
     /// every other weak container reach one of its instances as they would the interpreted
-    /// one's. a `data class`'s twin is `@dataclass(slots=True)`, which asks for none.
+    /// one's. a `data class` declares slots without one, as `@dataclass(slots=True)` does.
     ///
     /// the layout has to be this module's all the way down to `object`: a class standing on
     /// a base from outside takes that base's instance whole, and has no word of its own to
@@ -1333,10 +1474,10 @@ impl ModuleIr {
         // bounded by the class count: a base chain cannot visit one twice without being a
         // cycle, and a cycle here would otherwise hang rather than answer
         for _ in 0..=self.classes.len() {
-            if current.dataclass {
-                return false;
-            }
-            unslotted |= !current.declares_slots || current.slots_weak_references;
+            unslotted |= current
+                .slots
+                .as_ref()
+                .is_none_or(|names| names.iter().any(|name| name == "__weakref__"));
             match &current.base {
                 None => return unslotted,
                 Some(ClassBase::External(_)) => return false,
@@ -1380,6 +1521,187 @@ impl ModuleIr {
         self.functions
             .iter()
             .chain(self.classes.iter().flat_map(|class| class.methods.iter()))
+    }
+
+    /// whether module init builds `class` by calling its metaclass, whatever its bases turn
+    /// out to resolve to
+    ///
+    /// a class with a base is built by whichever construction the running interpreter
+    /// allows, and a type spec is refused wherever a base's metaclass is not `type`. three
+    /// shapes settle that before anything runs:
+    ///
+    /// - a class keyword, which a spec has nowhere to put
+    /// - a class of this module's standing beside a base from outside, a shape a spec
+    ///   cannot work out
+    /// - a class of this module's among its bases that writes a `metaclass` keyword, or
+    ///   stands on one that does: the type it is built as is an instance of that metaclass
+    ///
+    /// a base from outside with a metaclass of its own — `abc.ABC` — sends a class the same
+    /// way, and only the interpreter knows what such a name meant, so a class on one is not
+    /// counted here. and a keyword is read as the metaclass it names without asking which:
+    /// a class on one written `metaclass=type` is counted though a spec builds it
+    pub fn built_through_its_metaclass(&self, class: &ClassIr) -> bool {
+        let Some(base) = &class.base else {
+            return false;
+        };
+        !class.keywords.is_empty()
+            || (base.external().is_some() && base.plain_names().any(|name| self.emits(name)))
+            || base
+                .plain_names()
+                .any(|name| self.writes_a_metaclass(name, &mut Vec::new()))
+    }
+
+    /// whether this module emits an exported class called `name`
+    fn emits(&self, name: &str) -> bool {
+        self.classes
+            .iter()
+            .any(|class| class.exported && class.name == name)
+    }
+
+    /// whether the exported class called `name`, or one of this module's classes it stands
+    /// on, writes a `metaclass` keyword. `seen` is the walk so far, which a base cannot
+    /// name twice in a module python could run
+    fn writes_a_metaclass<'a>(&'a self, name: &'a str, seen: &mut Vec<&'a str>) -> bool {
+        if seen.contains(&name) {
+            return false;
+        }
+        seen.push(name);
+        let Some(class) = self
+            .classes
+            .iter()
+            .find(|class| class.exported && class.name == name)
+        else {
+            return false;
+        };
+        class
+            .keywords
+            .iter()
+            .any(|keyword| keyword.name == "metaclass")
+            || class.base.as_ref().is_some_and(|base| {
+                base.plain_names()
+                    .any(|base| self.writes_a_metaclass(base, seen))
+            })
+    }
+
+    /// every compiled function no import of this module runs, in module order
+    ///
+    /// a method whose class installs the body's decorated function in its place — see
+    /// [`ClassIr::installs_the_body_answer`] — is one. so is everything only such a method
+    /// makes: a closure's body and a generator's frame are methods of a class nothing can
+    /// name, reached solely through the frame that builds that class's instance, and a
+    /// frame that never runs builds none.
+    ///
+    /// a property half of a class [built through its
+    /// metaclass](Self::built_through_its_metaclass) is one too. such a class is handed the
+    /// `property` the interpreted body built, which is the object a `class` statement
+    /// would have left under the name, and that is what the class keeps
+    ///
+    /// the answer is the functions those methods reach and nothing else reaches. a
+    /// function this does not look at — one of a hidden class no frame is seen building —
+    /// is left counted as it was, so what moves is exactly what the installed body answer
+    /// takes out of reach
+    pub fn unreached(&self) -> Vec<Unreached> {
+        let hidden: HashMap<&str, &ClassIr> = self
+            .classes
+            .iter()
+            .filter(|class| !class.exported)
+            .map(|class| (class.name.as_str(), class))
+            .collect();
+        let by_name: HashMap<String, &Function> = self
+            .all_functions()
+            .map(|function| (function.qualified_name(), function))
+            .collect();
+        // what a function can run next: a method it calls directly, and every method of a
+        // hidden class it names, since naming one is how a frame builds or reads it
+        let reached_from = |function: &Function| -> Vec<String> {
+            let mut next = Vec::new();
+            for op in function.blocks.iter().flat_map(|block| &block.ops) {
+                if let Op::CallNative { owner, callee, .. } = op {
+                    next.push(qualify(owner.as_deref(), callee));
+                }
+                for class in op.named_classes() {
+                    if let Some(class) = hidden.get(class) {
+                        next.extend(class.methods.iter().map(Function::qualified_name));
+                    }
+                }
+            }
+            next
+        };
+        // every function reachable from `roots`, each with the root it was first reached
+        // from
+        let walk = |roots: Vec<(String, String)>| -> HashMap<String, String> {
+            let mut seen: HashMap<String, String> = HashMap::new();
+            let mut pending = roots;
+            while let Some((name, root)) = pending.pop() {
+                if seen.contains_key(&name) {
+                    continue;
+                }
+                let Some(function) = by_name.get(&name) else {
+                    continue;
+                };
+                pending.extend(
+                    reached_from(function)
+                        .into_iter()
+                        .map(|next| (next, root.clone())),
+                );
+                seen.insert(name, root);
+            }
+            seen
+        };
+        let (mut rebound, mut carried) = (Vec::new(), Vec::new());
+        let (mut shadowed, mut installed) = (Vec::new(), Vec::new());
+        for function in &self.functions {
+            installed.push(function.qualified_name());
+        }
+        for class in self.classes.iter().filter(|class| class.exported) {
+            let through_metaclass = self.built_through_its_metaclass(class);
+            for method in &class.methods {
+                let name = method.qualified_name();
+                if class.rebinds(method) {
+                    rebound.push(name.clone());
+                }
+                let a_carried_half = through_metaclass
+                    && class
+                        .properties
+                        .iter()
+                        .any(|property| property.holds(&method.name));
+                if a_carried_half {
+                    carried.push(name.clone());
+                }
+                if a_carried_half || class.installs_the_body_answer(method) {
+                    shadowed.push((name.clone(), name));
+                } else {
+                    installed.push(name);
+                }
+            }
+        }
+        let live = walk(
+            installed
+                .into_iter()
+                .map(|name| (name, String::new()))
+                .collect(),
+        );
+        let dead = walk(shadowed);
+        self.all_functions()
+            .filter_map(|function| {
+                let name = function.qualified_name();
+                let root = dead.get(&name).filter(|_| !live.contains_key(&name))?;
+                let reason = if *root == name && carried.contains(&name) {
+                    "a half of a property on a class built by calling its metaclass, which is handed the `property` the interpreted definition built and keeps it".to_string()
+                } else if *root == name && rebound.contains(&name) {
+                    "its name is bound again in the class body, so the class holds what that binding left and this one is never installed".to_string()
+                } else if *root == name {
+                    "decorated in the class body, so the class holds the function the interpreted definition decorated and this one is never installed".to_string()
+                } else {
+                    format!("only `{root}` reaches this, and `{root}` is never installed")
+                };
+                Some(Unreached {
+                    name,
+                    reason,
+                    range: function.range,
+                })
+            })
+            .collect()
     }
 
     pub fn all_functions_mut(&mut self) -> impl Iterator<Item = &mut Function> {

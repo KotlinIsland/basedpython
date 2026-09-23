@@ -54,7 +54,7 @@ pub fn build_source(
     artifact.annotation = write_annotation(&module, out_dir, options)?;
     Ok(Built {
         artifact,
-        declined: module.declined,
+        declined: left_interpreted(&module),
     })
 }
 
@@ -76,7 +76,7 @@ pub fn build_lowered(
     artifact.annotation = write_annotation(&module, out_dir, options)?;
     Ok(Built {
         artifact,
-        declined: module.declined,
+        declined: left_interpreted(&module),
     })
 }
 
@@ -138,7 +138,7 @@ fn emit_verified(module: &ModuleIr, out_dir: &Path, options: &Options) -> Result
             extension: None,
             annotation: write_annotation(module, out_dir, options)?,
         },
-        declined: module.declined.clone(),
+        declined: left_interpreted(module),
     })
 }
 
@@ -288,6 +288,29 @@ fn write_annotation(
     Ok(Some(path))
 }
 
+/// every function an import of `module` runs from its interpreted definition: each one
+/// that declined, and each one that compiled and is never installed — see
+/// [`ModuleIr::unreached`](by_ir::function::ModuleIr::unreached)
+pub(crate) fn left_interpreted(
+    module: &by_ir::function::ModuleIr,
+) -> Vec<by_ir::function::Declined> {
+    module
+        .declined
+        .iter()
+        .cloned()
+        .chain(
+            module
+                .unreached()
+                .into_iter()
+                .map(|unreached| by_ir::function::Declined {
+                    name: unreached.name,
+                    reason: unreached.reason,
+                    range: unreached.range,
+                }),
+        )
+        .collect()
+}
+
 fn render_declines<'a>(declines: impl Iterator<Item = &'a by_ir::function::Declined>) -> String {
     declines
         .map(|declined| format!("  {}: {}", declined.name, declined.reason))
@@ -337,12 +360,15 @@ fn finish(
     module.verify_install = options.verify_install;
     module.follow_recursion_limit = options.follow_recursion_limit;
 
-    if options.require_native && !module.declined.is_empty() {
-        bail!(
-            "`require-native` is on and {} function(s) were left interpreted:\n{}",
-            module.declined.len(),
-            render_declines(module.declined.iter())
-        );
+    if options.require_native {
+        let left = left_interpreted(&module);
+        if !left.is_empty() {
+            bail!(
+                "`require-native` is on and {} function(s) were left interpreted:\n{}",
+                left.len(),
+                render_declines(left.iter())
+            );
+        }
     }
     if options.no_any && !module.gradual.is_empty() {
         let places = module
@@ -390,6 +416,9 @@ fn finish(
     // a decorator module init applies to the native definition would otherwise run here
     // too, over the twin's — once for each definition rather than once for the name
     let twin = by_irbuild::without_init_decorators(&twin, &module)
+        .map_err(|error| anyhow::anyhow!("could not prepare the interpreted fallback: {error}"))?;
+    // and a class init reads against what its statement bound has that statement record it
+    let twin = by_irbuild::with_bound_records(&twin, &module)
         .map_err(|error| anyhow::anyhow!("could not prepare the interpreted fallback: {error}"))?;
     // a nested function's annotations are the twin's, evaluated by python, so they are
     // written from the twin's text

@@ -72,6 +72,13 @@ would be the *opposite* divergence: accepting what the interpreted twin refuses.
 python asks the whole chain rather than one class, so a `__slots__` over a base
 that declares none still has the dict that base gave the instance.
 
+a `data class` declares its slots without writing them: its twin is
+`@dataclass(slots=True)`, which names each field the class adds and asks for neither a
+dict nor a weak-reference list. so the emitted class takes neither unless a base gives
+one, publishes the same `__slots__`, and refuses `p.extra = 5` and `vars(p)` as python
+does. a slot stays out of the dict a base gave the instance, as python keeps it, so
+`vars()` does not name it and `copy` and `pickle` are handed it beside the dict.
+
 the dict is a **managed** one, which python keeps in the pre-header — so the
 struct, its base's prefix and every offset a compiled function reads are
 untouched. what it costs is allocation: the pre-header and the two words a
@@ -261,6 +268,38 @@ without calling it again. an undecorated method is untouched and stays native,
 which is where a compiled class's speed lives. `type(C.g)` then answers
 `function`, which is also what python answers — so the change removed a second
 divergence rather than adding one
+
+the exception is a decorator known to do nothing but mark what it is handed:
+`typing.override`, `typing.final` and `abc.abstractmethod`, their
+`typing_extensions` spellings, and the `override`, `final` and `abstract`
+modifiers the transpiler writes out as them. each hands back the very function
+it was given with one attribute written onto it, so the body's answer differs
+from a fresh `def` only in its `__dict__`. the compiled method takes a copy of
+that dict and is installed in its place, so an idiomatic override is compiled,
+answers `__override__` as python's does, and is reached by the same direct
+dispatch an undecorated method is. which decorator it is comes from what the
+decorator expression resolves to, never from how it is spelled: a module's own
+`def override(f)` is an arbitrary decorator like any other. on a class built by
+calling its metaclass, the body's marked function is still what goes into the
+namespace — so `ABCMeta` counts an `@abstractmethod` exactly as it does off a
+`class` statement — and the compiled method replaces it on the finished type
+
+a method whose name the class body binds a second time takes the body's answer
+too, with or without decorators. `m = other` below `def m`, `x = (m := other)`
+anywhere in the body, and `m = other` *above* `def m` all leave python's class
+holding what the last binding left — `other` for the first two, the `def`'s own
+function for the third — and that object is copied across the way a class-level
+constant is, so the class answers with it and a call through a typed receiver
+looks the name up instead of calling the compiled `def`. `m = n`, naming a
+sibling method, therefore publishes the compiled `n` under both names. a dunder
+the body binds again declines instead, because its type slot is filled from the
+`def` whatever the dict ends up holding
+
+the report counts such a method where it runs. its body is still lowered and
+emitted, and it used to be counted as compiled with it; `--annotate`, the
+decline count `by compile` prints and `require-native` now all list it as left
+to the interpreted definition, along with the closures and generator frames only
+it makes, since a frame that never runs builds none of them
 
 ### boxed classes and interpreted fallbacks
 
@@ -657,6 +696,13 @@ though it could. so every published class writes a row — `installed`,
 environment variable, and a build that compares those rows against the report is
 holding the report to what ran. `scripts/native-sweeps/installcensus.sh` does
 exactly that over the corpus.
+
+a property is recorded on its own, as `Class.name` with `property-compiled` or
+`property-interpreted`. a class on a base from outside whose metaclass is not
+`type` — `class X(abc.ABC)` — installs, but it is built by calling that metaclass,
+which is handed the interpreted `property` and keeps it, so the halves the report
+counts compiled never run. what the base's name meant is only known at import,
+which is why the report cannot say so and the census does.
 
 the check runs once per module at import, never per call, and
 `by compile --no-verify-install` leaves it out.
@@ -1096,16 +1142,52 @@ def patch() -> None:
     Sealed.late = lambda self: 3
 
 
-patch()  # python: None; compiled: TypeError: cannot set 'late' attribute of immutable type
-
-
-# from another module
+# from another module, once this one is imported
+mod.patch()  # python: None; compiled: TypeError: cannot set 'late' attribute of immutable type
 mod.Sealed.other = 5  # python: stored; compiled: TypeError
 del mod.Sealed.read  # python: deleted; compiled: TypeError
 ```
 
 a class the module extends, or one the source decorates, is a mutable type and takes the
 write as python's does
+
+what the module body writes *over* something the compiled class already answers is not
+carried, though. a call, a property read or a field access on such a class goes straight
+to the compiled body with no lookup — nothing can change what the class answers once init
+is over — so a value the body wrote over a method, a property or a field, or a `del` of
+one, would sit in the type's dict where none of those accesses looks. the compiled code
+reading the class is fixed by the time the body has run, so the whole module is left as
+its interpreted definition built it instead:
+
+```python
+class Sealed:
+    def read(self) -> int:
+        return 1
+
+
+def call(s: Sealed) -> int:
+    return s.read()
+
+
+Sealed.read = lambda self: 2  # the module runs interpreted: call(Sealed()) is 2 in both
+```
+
+a dunder is the same on every class, extended or not: it is what a type slot answers, and
+the compiled type's slot is its compiled body. `C.__len__ = f` written in the module body
+declines `C` where it is written, and `setattr(C, "__len__", f)`, or a helper the body
+calls, is seen once the body has run and leaves the whole module interpreted. a write the
+compiled class does answer for — a name the `class` statement never wrote, a class-level
+constant, or a method of a class the module extends — is carried, and the module stays
+compiled. `type(mod.Other.method).__name__` for a class nothing wrote to tells the two
+apart: `function` where the module was left interpreted, `method_descriptor` where it was
+not
+
+a `data class` is read the same way, against the class its statement bound rather than the
+body the statement wrote: `@dataclass` makes the class again, writing every dunder it
+generates and a slot for every field, so what counts as written afterwards is what differs
+from the class the decorator handed back. `setattr(Point, "__repr__", f)` after a
+`data class Point`, or a write over one of its fields, leaves the module interpreted, and
+what the decorator wrote itself does not
 
 ### an interpreted subclass whose `__init_subclass__` does not chain up
 
@@ -1313,6 +1395,49 @@ alive() is not None  # python: False; compiled: True, for as long as `kept` live
 
 a cell for each captured name would close this, and that is a different shape for every
 closure a compiled frame makes
+
+### a frozen field written through `object.__setattr__`
+
+python's `frozen data class` refuses a write in `__setattr__` and leaves each field
+writable underneath it, and compiled code reads a frozen field once and keeps the answer
+across any call. so a field is written through `object.__setattr__` only while the
+instance does not have it yet, which is how `copy` and `pickle` restore one onto an
+instance `__new__` made. a second write raises where python stores it:
+
+```python
+frozen data class Fixed:
+    n: int
+
+
+f = Fixed(1)
+object.__setattr__(f, "n", 2)  # python: stored; compiled: AttributeError: attribute 'n' of 'mod.Fixed' objects is not writable
+object.__delattr__(f, "n")  # python: deleted; compiled: the same AttributeError
+```
+
+### the state of an instance that holds slots
+
+python pickles an instance holding slots through `object.__getstate__`, which first checks
+that the instance is no bigger than a dict, a weak-reference list and one word a slot, and
+refuses it otherwise. an emitted instance can be bigger without holding more: a base keeps
+the words a subclass keeps its dict and weak references in whether or not it uses them,
+and a field that may be absent keeps a byte. such a class — where it neither reduces itself
+nor hands `__new__` arguments, which is the one path python checks — publishes a
+`__getstate__` of its own that answers exactly what python's does, so `copy` and `pickle`
+agree. what can tell the two apart is the class's own dict, and pickling protocols 0 and 1,
+which python refuses for any class with `__slots__` and no `__getstate__` of its own:
+
+```python
+data class Point:
+    x: int
+
+
+class Loose(Point):
+    pass
+
+
+"__getstate__" in Point.__dict__  # python: False; compiled: True
+pickle.dumps(Point(1), protocol=1)  # python: TypeError; compiled: pickled
+```
 
 ### a nested function's annotations
 
