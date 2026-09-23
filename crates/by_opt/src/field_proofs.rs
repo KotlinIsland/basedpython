@@ -213,7 +213,7 @@ fn prove(function: &mut Function, layouts: &Layouts) {
 mod tests {
     use by_ir::builder::FunctionBuilder;
     use by_ir::function::{ClassIr, FieldDecl, ModuleIr};
-    use by_ir::ops::{BinOp, Op, Terminator, Value};
+    use by_ir::ops::{BinOp, Mutation, Op, Terminator, Value};
     use by_ir::rtype::RType;
 
     fn class(fields: &[(&str, bool)]) -> ClassIr {
@@ -299,6 +299,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(first),
             rhs: Value::Register(second),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
         let mut module = ModuleIr::new("app");

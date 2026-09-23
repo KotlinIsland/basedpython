@@ -202,7 +202,7 @@ mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
     use by_ir::function::CallConvention;
-    use by_ir::ops::{BinOp, Op, Terminator, Value};
+    use by_ir::ops::{BinOp, Mutation, Op, Terminator, Value};
     use by_ir::rtype::RType;
 
     #[test]
@@ -243,6 +243,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(index),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Goto(header));
         builder.switch_to(exit);

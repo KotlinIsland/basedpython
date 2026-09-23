@@ -708,7 +708,7 @@ fn reachable(function: &Function, start: BlockId) -> HashSet<BlockId> {
 mod tests {
     use by_ir::builder::FunctionBuilder;
     use by_ir::function::{Function, ModuleIr};
-    use by_ir::ops::{BinOp, CmpOp, Op, Terminator, Value};
+    use by_ir::ops::{BinOp, CmpOp, Mutation, Op, Terminator, Value};
     use by_ir::rtype::{IntWidth, RType};
     use by_ir::verify::verify;
 
@@ -815,6 +815,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(i),
             rhs: Value::Fixed(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Goto(header));
 
@@ -1032,6 +1033,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Register(b),
+            mutation: Mutation::Fresh,
         });
         add.terminate(Terminator::Return(Value::Register(sum)));
 

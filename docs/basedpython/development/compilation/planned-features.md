@@ -48,11 +48,12 @@ and `local` together are the complete precondition: `local` proves it does not
 escape, `final` proves how big it is. neither is sufficient alone, and the
 existing design only had the first
 
-**a semantic delta gets smaller.** [plan](plan.md#semantic-deltas) records that
-an `int`-typed register loses the `True`/`1` distinction, because the tagged
-representation has no room for it. `final int` rejects `True` at the checker, so
-a `final int` place cannot observe the divergence at all. the delta survives, but
-it now has a spelling that opts out of it
+**an exactness test goes away.** an `int`-typed register holds a `bool` or an
+`int` subclass as the object itself, and an operation on a value behind the pointer
+asks whether it is an exact `int` before it takes the value's arithmetic
+([runtime](runtime.md#bool-and-int-subclasses)). `final int` rejects `True` at the
+checker, so a `final int` place is exact, and once its check is in place (below)
+those tests have nothing left to ask
 
 ### the trap: exactness is checked, not proven
 
@@ -365,7 +366,7 @@ representation carries `single` unchanged, which is the pleasant part
     classes; `final` + `local` is the complete `StackAlloc` precondition;
     `literal` adds a value-keyed monomorphization axis; `single` extends the
     tagged-union representation to generics
-- [plan](plan.md) — the `True`/`1` delta acquires an opt-out; the shared member
+- [plan](plan.md) — an exact `int` place drops the subclass tests; the shared member
     cutoff is a new cross-component invariant to test
 - nothing in [technology](technology.md) or [runtime](runtime.md) moves. all five
     modifiers are erase-only, so the transpiled python is unchanged and the

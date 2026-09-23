@@ -343,9 +343,7 @@ fn print_op(function: &Function, op: &Op) -> String {
             op.symbol(),
             value(rhs)
         ),
-        Op::IntBinary { dest, op, lhs, rhs }
-        | Op::FloatBinary { dest, op, lhs, rhs }
-        | Op::FloatObjectBinary { dest, op, lhs, rhs } => {
+        Op::FloatBinary { dest, op, lhs, rhs } | Op::FloatObjectBinary { dest, op, lhs, rhs } => {
             format!(
                 "{} = {} {} {}",
                 name(*dest),
@@ -354,7 +352,14 @@ fn print_op(function: &Function, op: &Op) -> String {
                 value(rhs)
             )
         }
-        Op::ObjectBinary {
+        Op::IntBinary {
+            dest,
+            op,
+            lhs,
+            rhs,
+            mutation,
+        }
+        | Op::ObjectBinary {
             dest,
             op,
             lhs,
@@ -392,6 +397,8 @@ fn print_op(function: &Function, op: &Op) -> String {
                 UnaryOp::Neg => "-",
                 UnaryOp::Not => "not ",
                 UnaryOp::Invert => "~",
+                UnaryOp::Pos => "+",
+                UnaryOp::Index => "index ",
             };
             format!("{} = {}{}", name(*dest), symbol, value(operand))
         }
@@ -1001,7 +1008,7 @@ fn print_terminator(function: &Function, terminator: &Terminator) -> String {
 mod tests {
     use super::*;
     use crate::function::{BasicBlock, CallConvention, Declined, RegisterDecl};
-    use crate::ops::{BinOp, BlockId, CmpOp};
+    use crate::ops::{BinOp, BlockId, CmpOp, Mutation};
     use crate::rtype::RType;
 
     fn sample() -> Function {
@@ -1022,6 +1029,7 @@ mod tests {
             op: BinOp::Sub,
             lhs: Value::Int(0),
             rhs: Value::Register(RegisterId(0)),
+            mutation: Mutation::Fresh,
         });
         let identity = BasicBlock::new(Terminator::Return(Value::Register(RegisterId(0))));
 

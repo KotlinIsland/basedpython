@@ -384,7 +384,7 @@ fn retarget(op: &mut Op, new_dest: RegisterId) {
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BinOp, Terminator};
+    use by_ir::ops::{BinOp, Mutation, Terminator};
     use by_ir::print::print_function;
     use by_ir::rtype::RType;
     use by_ir::verify::verify;
@@ -417,6 +417,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(x, Value::Register(temp));
         builder.terminate(Terminator::Return(Value::Register(x)));
@@ -444,6 +445,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(x, Value::Register(temp));
         // the second read makes the copy load-bearing
@@ -452,6 +454,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(x),
             rhs: Value::Register(temp),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(x)));
         let mut m = module(builder.finish());
@@ -471,6 +474,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(x, Value::Register(named));
         builder.terminate(Terminator::Return(Value::Register(x)));
@@ -507,6 +511,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(x),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(x, Value::Register(temp));
         builder.terminate(Terminator::Return(Value::Register(x)));
@@ -528,6 +533,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(other, Value::Int(9));
         builder.assign(x, Value::Register(temp));
@@ -573,12 +579,14 @@ mod tests {
                     op: BinOp::Add,
                     lhs: Value::Register(a),
                     rhs: Value::Int(1),
+                    mutation: Mutation::Fresh,
                 });
                 builder.push(Op::IntBinary {
                     dest: t2,
                     op: BinOp::Mul,
                     lhs: Value::Register(t1),
                     rhs: Value::Int(2),
+                    mutation: Mutation::Fresh,
                 });
                 builder.assign(x, Value::Register(t2));
                 builder.terminate(Terminator::Return(Value::Register(x)));

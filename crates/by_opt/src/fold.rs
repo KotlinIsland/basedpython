@@ -229,6 +229,7 @@ fn fold_op(op: &Op) -> Option<Op> {
             op: binop,
             lhs: Value::Int(lhs),
             rhs: Value::Int(rhs),
+            ..
         } => fold_int_binary(*binop, *lhs, *rhs).map(|value| Op::Assign {
             dest: *dest,
             src: Value::Int(value),
@@ -241,6 +242,14 @@ fn fold_op(op: &Op) -> Option<Op> {
         } => Some(Op::Assign {
             dest: *dest,
             src: Value::Bit(compare_ints(*cmp, *lhs, *rhs)),
+        }),
+        // an immediate is an exact `int`, whose truth is whether it is zero
+        Op::Truthy {
+            dest,
+            src: Value::Int(value),
+        } => Some(Op::Assign {
+            dest: *dest,
+            src: Value::Bit(*value != 0),
         }),
         Op::FloatBinary {
             dest,
@@ -285,6 +294,14 @@ fn fold_op(op: &Op) -> Option<Op> {
         } => Some(Op::Assign {
             dest: *dest,
             src: Value::Int(!value),
+        }),
+        Op::Unary {
+            dest,
+            op: UnaryOp::Pos | UnaryOp::Index,
+            operand: Value::Int(value),
+        } => Some(Op::Assign {
+            dest: *dest,
+            src: Value::Int(*value),
         }),
         _ => None,
     }
@@ -575,7 +592,7 @@ fn compare_ints(op: CmpOp, lhs: i64, rhs: i64) -> bool {
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BlockId, RegisterId};
+    use by_ir::ops::{BlockId, Mutation, RegisterId};
     use by_ir::print::print_function;
     use by_ir::rtype::RType;
     use by_ir::verify::verify;
@@ -606,6 +623,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Int(2),
             rhs: Value::Int(3),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut m = module(builder.finish());
@@ -626,6 +644,7 @@ mod tests {
             op: BinOp::Mul,
             lhs: Value::Int(i64::MAX),
             rhs: Value::Int(2),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(out)));
         let mut m = module(builder.finish());

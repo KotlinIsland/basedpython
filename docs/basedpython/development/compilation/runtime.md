@@ -392,10 +392,58 @@ integer is a plain `int8_t`…`int64_t` with no tag and no overflow branch. this
 is the representation the numeric loops actually want, and the annotations that
 select it are ordinary basedpython
 
-one observable consequence, inherited from mypyc: an `int`-typed register loses
-the distinction between `True` and `1`, because `bool` is an `int` subclass and
-the tagged form has no room for it. covered in
-[semantic deltas](plan.md#semantic-deltas)
+### `bool` and `int` subclasses
+
+a short is always an exact `int`. a `bool`, or an instance of any other `int`
+subclass, is held behind the pointer as the object itself, whatever its value — so
+the pointer means "an exact `int` too wide to be short, or a subclass", never just
+"too wide". that is what keeps python's answers:
+
+```python
+class Id(int):
+    def __repr__(self) -> str:
+        return f"Id({int(self)})"
+
+def first(xs: list[int]) -> int:
+    return xs[0]
+
+first([True])   # True, not 1
+first([Id(5)])  # Id(5), not 5
+```
+
+and every operation on such a value is its type's own method: `+`, `-`, `==`, `<`,
+`hash`, `repr`, `str`, a format, `-x`, `+x`, `~x`, truthiness (`__bool__`, never
+`!= 0`), and an `int` on the left of a mixed `int`/`float` operation. a short never
+reaches any of them, so the fast paths are unchanged. a counted `range` reads its
+bounds through `operator.index`, which copies a subclass to the plain `int` of its
+value, as `range` itself does
+
+mypyc narrows every `int` to its value at the boundary and so answers `1` and `5`
+above; this compiler used to do the same
+
+an augmented assignment asks for the in-place method first, as python does. `int`
+and `bool` have no in-place methods, so `x += 1` is the plain operator's fast path
+while both sides are shorts, and only the slow path offers the left operand its
+`__iadd__` — or `__isub__`, `__imul__` and the rest — before its `__add__`:
+
+```python
+class Acc(int):
+    def __add__(self, other: int) -> "Acc":
+        return Acc(int(self) + other)
+
+    def __iadd__(self, other: int) -> "Acc":
+        return Acc(int(self) + 2 * other)
+
+def bump(xs: list[int]) -> int:
+    x = xs[0]
+    x += 1          # Acc.__iadd__, as in python: Acc(3)
+    return x
+
+bump([Acc(1)])
+```
+
+`//=`, `%=`, `**=`, `<<=` and `>>=` ask whether the left operand is an exact `int`
+before they take the plain operator's path, which is one more test on a short
 
 ## floats, strings, tuples
 
@@ -1177,6 +1225,49 @@ root(-4.0)  # python: (1.2246467991473532e-16+2j); compiled: TypeError
 
 an augmented assignment is not one of these: `x **= 0.5` binds the power's result, and the
 local is chosen to hold whatever that can be
+
+### a `float` subclass read into a place declared `float`
+
+a place declared `float` holds an unboxed double, and a double has nothing to point at: an
+`int` subclass is kept behind the tagged word's pointer (see
+[`bool` and `int` subclasses](#bool-and-int-subclasses)), but a `float` has no such arm. so
+an instance of a `float` subclass read out of an object into such a place is narrowed to
+its value, and it loses its type and every method it overrides:
+
+```python
+class Money(float):
+    def __add__(self, other: float) -> "Money":
+        return Money(float(self) + other)
+
+
+def first(xs: list[float]) -> float:
+    return xs[0]
+
+
+def bump(xs: list[float]) -> float:
+    return xs[0] + 1.0
+
+
+first([Money(1.0)])  # python: Money(1.0); compiled: 1.0
+bump([Money(1.0)])  # python: Money(2.0); compiled: 2.0
+```
+
+the places that narrow are every read of a `float` out of an object: a list, tuple or dict
+element, a loop over one, an unpacking, a comprehension that rebuilds one, a call's result,
+an attribute, a field of a class the module lays out, and a method's or a nested function's
+parameter. a module-level function's parameter does not: its boundary tests each call and
+hands one passing a subclass to the interpreted definition
+
+`numpy.float64` is a `float` subclass, and the commonest one: its arithmetic is the same
+IEEE arithmetic, so a compiled answer has the same value and is a `float` where python's is a
+`numpy.float64`
+
+holding each such read as an object instead was priced with a `.py` module built without
+`strict-float`, whose `float` places are `int | float` and held that way, against the same
+module with it, in instructions retired: `dot` 5.5x, `prefix` 10x, `objects` 7.7x, `generic`
+15x and `comp` 1.17x, where `mandel`, `mandel_inline` and `calls`, which read no float out of
+an object, are unchanged. without `strict-float` a place is only held as an object until
+it meets a `float` in an arithmetic operation, which unboxes it there
 
 ### what a closure keeps alive
 

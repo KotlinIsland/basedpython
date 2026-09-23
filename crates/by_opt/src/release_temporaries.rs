@@ -438,7 +438,7 @@ fn entered_dead(
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::Terminator;
+    use by_ir::ops::{Mutation, Terminator};
     use by_ir::rtype::RType;
     use by_ir::verify::verify;
 
@@ -690,6 +690,7 @@ mod tests {
             op: by_ir::ops::BinOp::Add,
             lhs: Value::Register(made),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(answer)));
 
