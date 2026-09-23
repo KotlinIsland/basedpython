@@ -8,6 +8,7 @@
 //! the "why not" half is the point. a compiler whose failures are silent is a
 //! compiler nobody can tune against.
 
+use std::collections::HashSet;
 use std::fmt::Write;
 
 use by_ir::function::{Function, ModuleIr};
@@ -17,17 +18,28 @@ use by_ir::print::print_function;
 pub(crate) fn report(module: &ModuleIr) -> String {
     let mut out = format!("# {}\n", module.name.dotted());
 
-    let native: Vec<&Function> = module.all_functions().collect();
+    // a function that compiled and is never installed is counted where it runs, and
+    // that is the interpreted definition
+    let unreached: HashSet<String> = module
+        .unreached()
+        .into_iter()
+        .map(|unreached| unreached.name)
+        .collect();
+    let native: Vec<&Function> = module
+        .all_functions()
+        .filter(|function| !unreached.contains(&function.qualified_name()))
+        .collect();
+    let left = crate::left_interpreted(module);
     let _ = writeln!(
         out,
         "\n{} compiled, {} left interpreted\n",
         native.len(),
-        module.declined.len()
+        left.len()
     );
 
-    if !module.declined.is_empty() {
+    if !left.is_empty() {
         out.push_str("## left to the interpreted definition\n\n");
-        for declined in &module.declined {
+        for declined in &left {
             let _ = writeln!(out, "- {}: {}", declined.name, declined.reason);
         }
         out.push('\n');
@@ -276,6 +288,116 @@ def total(xs: list[float], k: float) -> float:
         );
         let text = report(&module);
         assert!(!text.contains("numeric promotion cost"), "{text}");
+    }
+
+    #[test]
+    fn a_method_whose_class_installs_the_body_answer_is_counted_as_interpreted() {
+        // the class holds what the interpreted body's `@mark` handed back, so neither the
+        // compiled `get` nor the closure only it makes ever runs
+        let module = lowered(
+            "\
+def mark(f):
+    return f
+
+class Box:
+    @mark
+    def get(self, x: int) -> int:
+        def add(k: int) -> int:
+            return k + x
+
+        return add(1)
+
+    def plain(self) -> int:
+        return 1
+",
+        );
+        let text = report(&module);
+        assert!(text.contains("2 compiled, 2 left interpreted"), "{text}");
+        assert!(
+            text.contains("- Box.get: decorated in the class body"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- Box$get$env.add: only `Box.get` reaches this"),
+            "{text}"
+        );
+        assert!(!text.contains("### Box.get"), "{text}");
+        assert!(text.contains("### Box.plain"), "{text}");
+    }
+
+    #[test]
+    fn a_method_the_class_body_binds_again_is_reported_for_that() {
+        // the class holds what `get = other` left, and the report says so rather than
+        // blaming a decorator the method does not have
+        let module = lowered(
+            "\
+def other(self) -> int:
+    return 2
+
+class Box:
+    def get(self) -> int:
+        return 1
+
+    get = other
+",
+        );
+        let text = report(&module);
+        assert!(text.contains("1 compiled, 1 left interpreted"), "{text}");
+        assert!(
+            text.contains(
+                "- Box.get: its name is bound again in the class body, so the class holds what that binding left and this one is never installed"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_property_on_a_class_its_metaclass_builds_is_counted_as_interpreted() {
+        // `Number` writes a metaclass, so `Real`'s type spec is refused and `ABCMeta` is
+        // called instead — with the `property` the interpreted body built, which is what
+        // the class keeps. `Plain` stands on nothing of the kind, and its own is compiled
+        let mut module = by_irbuild::module_from_source(
+            "\
+from abc import ABCMeta
+
+
+class Number(metaclass=ABCMeta):
+    pass
+
+
+class Real(Number):
+    @property
+    def real(self) -> int:
+        return 1
+
+    def plain(self) -> int:
+        return 2
+
+
+class Root:
+    pass
+
+
+class Plain(Root):
+    @property
+    def real(self) -> int:
+        return 1
+",
+            "app",
+            by_irbuild::Language::Python,
+        );
+        by_opt::optimize(&mut module).expect("the pipeline verifies");
+        let text = report(&module);
+        assert!(
+            text.contains(
+                "- Real.real$get: a half of a property on a class built by calling its metaclass"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("### Real.real$get"), "{text}");
+        assert!(text.contains("### Real.plain"), "{text}");
+        assert!(text.contains("### Plain.real$get"), "{text}");
+        assert!(!text.contains("- Plain.real$get"), "{text}");
     }
 
     #[test]

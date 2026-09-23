@@ -293,11 +293,20 @@ pub fn build_module(
     // the signature of every method of every emitted class. a direct call needs
     // the callee's representations *before* the callee is lowered, because a
     // method may call a sibling — or itself
-    // a class emitted as a mutable *heap* type — one with a decorator, one another
-    // extends, or one that extends another — gives up the direct method call: python
-    // can rebind a method on it, or override it in a subclass, and a direct call
-    // would see neither. a plain class is a static type that can be neither modified
-    // nor subclassed, which is what licenses the direct call
+    // a class emitted as a mutable *heap* type gives up the direct method call: python
+    // can rebind a method on it, or override it in a subclass, and a direct call would
+    // see neither. a plain class is a static type that can be neither modified nor
+    // subclassed, which is what licenses the direct call. this set is the whole
+    // decision — the emitter reads it back off `ClassIr::mutable` rather than working
+    // it out again — so every reason the emitter needs a mutable type is here:
+    //
+    // - a decorator, which may write onto the class it is handed, and a name a frame
+    //   declares `global`, which may be bound to something else — `decorated` holds both
+    // - a base, and being one: a subclass may override a method, and a direct call on a
+    //   receiver typed as the base would not see it
+    // - a written `__new__`, which is published by *assigning* it onto the finished
+    //   type, the only way to reach the slot fixup a class statement runs and a type
+    //   spec does not. an immutable type refuses that assignment
     let declared: Vec<&ast::StmtClassDef> = suite
         .iter()
         .filter_map(|stmt| match stmt {
@@ -307,7 +316,7 @@ pub fn build_module(
         .collect();
     let mut mutable: HashSet<&str> = HashSet::new();
     for class in &declared {
-        if decorated.contains(class.name.as_str()) {
+        if decorated.contains(class.name.as_str()) || writes_new(class) {
             mutable.insert(class.name.as_str());
         }
         if let Some(base) = base_class(db, env, model, suite, class, &layouts)
@@ -343,7 +352,17 @@ pub fn build_module(
                 .body
                 .iter()
                 .filter_map(|member| match member {
-                    Stmt::FunctionDef(method) if method.decorator_list.is_empty() => {
+                    // a method whose decorators only mark it is published compiled, marks
+                    // copied on, so a call may reach it as directly as an undecorated one.
+                    // one whose name the body binds again is not what the class holds, for
+                    // either kind, and a call has to ask the class
+                    Stmt::FunctionDef(method)
+                        if bound_only_by(&class.body, method)
+                            && method
+                                .decorator_list
+                                .iter()
+                                .all(|decorator| marks_only(db, model, decorator)) =>
+                    {
                         let mut signature = signature(
                             db,
                             env,
@@ -569,7 +588,7 @@ pub fn build_module(
 
     let slotted: HashSet<String> = declared
         .iter()
-        .filter(|class| declared_slots(class).is_some())
+        .filter(|class| declares_slots(class))
         .map(|class| class.name.to_string())
         .collect();
 
@@ -594,7 +613,7 @@ pub fn build_module(
         .iter()
         .filter_map(|statement| match statement {
             Stmt::ClassDef(class)
-                if layouts.contains_key(class.name.as_str()) && declared_slots(class).is_none() =>
+                if layouts.contains_key(class.name.as_str()) && !declares_slots(class) =>
             {
                 Some((class.name.to_string(), class_method_names(class)))
             }
@@ -605,20 +624,10 @@ pub fn build_module(
     // read off the source rather than off the lowered methods: a `__new__` python never
     // reaches the method table for — one carrying a decorator, one whose class declined —
     // is still the constructor a `C(...)` in this module has to run
-    let constructs: HashSet<String> = suite
+    let constructs: HashSet<String> = declared
         .iter()
-        .filter_map(|stmt| {
-            match stmt {
-            Stmt::ClassDef(class) => class
-                .body
-                .iter()
-                .any(|member| {
-                    matches!(member, Stmt::FunctionDef(method) if method.name.as_str() == "__new__")
-                })
-                .then(|| class.name.to_string()),
-            _ => None,
-        }
-        })
+        .filter(|class| writes_new(class))
+        .map(|class| class.name.to_string())
         .collect();
 
     let no_directs: HashSet<String> = HashSet::new();
@@ -1564,8 +1573,7 @@ fn lower_generator(
         constructor,
         vec![by_ir::function::ClassIr {
             exported: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             name: class,
             // the machine is the same; only the surface differs. a coroutine answers
             // `__await__` and is deliberately *not* iterable
@@ -1593,6 +1601,8 @@ fn lower_generator(
             dataclass: false,
             immutable: false,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             keywords: Vec::new(),
         }]
         .into_iter()
@@ -2881,6 +2891,7 @@ fn lower_class<'a>(
     let mut constants = Vec::new();
     let mut slot_aliases = Vec::new();
     let mut published = Vec::new();
+    let mut rebound_dunders = Vec::new();
     for group in &properties {
         let mut published_group = by_ir::function::PropertyIr {
             name: mangled(Some(&class.name), group.name),
@@ -2973,7 +2984,23 @@ fn lower_class<'a>(
                     )));
                 }
                 defined_once(&class.body, method)?;
-                let (method, produced) = lower_method(unit, method, &class.name)?;
+                let rebound = !bound_only_by(&class.body, method);
+                if rebound && method.name.starts_with("__") && method.name.ends_with("__") {
+                    rebound_dunders.push(method.name.as_str());
+                }
+                let (mut method, produced) = lower_method(unit, method, &class.name)?;
+                if rebound {
+                    for decorator in &mut method.decorators {
+                        let Decorator::Path { marks_only, .. } = decorator;
+                        *marks_only = false;
+                    }
+                    // the class holds what the last binding left, and that is taken off
+                    // the body as a constant is — which also covers a binding above the
+                    // `def`, and a `:=`, neither of which is otherwise one
+                    if !constants.contains(&method.name) {
+                        constants.push(method.name.clone());
+                    }
+                }
                 if method.name == "__new__" {
                     new_answers_its_own_class(&method, &class.name)?;
                 }
@@ -3069,6 +3096,19 @@ fn lower_class<'a>(
             _ => return Err(Decline::new("only fields and methods are lowered yet")),
         }
     }
+    // a `:=` binds a class-level name as an assignment does, and the value is taken off
+    // the body the same way
+    for name in walrus_bindings(&class.body) {
+        if name.starts_with("__") && name.ends_with("__") {
+            return Err(Decline::new(format!(
+                "`{name}` is bound by `:=` in the class body, and a dunder is settled before one runs"
+            )));
+        }
+        let name = mangled(Some(&class.name), name);
+        if !constants.contains(&name) {
+            constants.push(name);
+        }
+    }
 
     // the two questions a metaclass construction raises are asked while the layouts
     // settle, in `metaclass_carries_the_body`, so that a class they turn down leaves the
@@ -3107,6 +3147,13 @@ fn lower_class<'a>(
             clash.name
         )));
     }
+    // and whatever else binds a dunder's name again, since its type slot is filled from
+    // the `def` whatever the body left under the name
+    if let Some(name) = rebound_dunders.first() {
+        return Err(Decline::new(format!(
+            "`{name}` is bound again by the class body, and a dunder is settled from its `def`"
+        )));
+    }
     // a property is written into the type's dict under its name, and a field's descriptor
     // is already sitting under its own name there — the same collision a class-level
     // constant has with one, and the same answer
@@ -3138,6 +3185,7 @@ fn lower_class<'a>(
             "a property half named `{clash}` reaches the same symbol as a method of this class"
         )));
     }
+    let slots = class_slots(class, &fields, inherited)?;
     Ok((
         by_ir::function::ClassIr {
             resume: None,
@@ -3145,6 +3193,8 @@ fn lower_class<'a>(
             name: class.name.to_string(),
             immutable,
             environment: false,
+            mutable: unit.mutable.contains(class.name.as_str()),
+            unchecked_licences: unit.sealed.contains(class.name.as_str()),
             base,
             // neither written nor generated: a `data class` always gets one, a written
             // `__init__` is a method of its own, and an accessor block's storage is
@@ -3159,8 +3209,7 @@ fn lower_class<'a>(
             fields,
             decorators: class_decorators,
             generic: class.type_params.is_some(),
-            declares_slots: declared_slots(class).is_some(),
-            slots_weak_references: slots_ask_for_weak_references(class)?,
+            slots,
             constants,
             slot_aliases,
             methods: lowered,
@@ -3196,6 +3245,13 @@ fn getattr_hook_stands_alone(base: Option<&ClassBase>) -> Lowered<()> {
         ));
     }
     Ok(())
+}
+
+/// whether the class body writes a `def __new__`
+fn writes_new(class: &ast::StmtClassDef) -> bool {
+    class.body.iter().any(
+        |member| matches!(member, Stmt::FunctionDef(method) if method.name.as_str() == "__new__"),
+    )
 }
 
 /// whether the emitter can publish this class's written `__new__`
@@ -3842,12 +3898,34 @@ fn declared_slots(class: &ast::StmtClassDef) -> Option<&Expr> {
         })
 }
 
-/// whether a class's `__slots__` names `__weakref__`
-fn slots_ask_for_weak_references(class: &ast::StmtClassDef) -> Lowered<bool> {
-    let Some(value) = declared_slots(class) else {
-        return Ok(false);
-    };
-    Ok(slot_names(value)?.contains(&"__weakref__"))
+/// the names a class's `__slots__` declares — see `ClassIr::slots`
+///
+/// a `data class` declares one without writing it: `@dataclass(slots=True)` names each
+/// field the class adds past those its base already holds
+fn class_slots(
+    class: &ast::StmtClassDef,
+    fields: &[by_ir::function::FieldDecl],
+    inherited: &[by_ir::function::FieldDecl],
+) -> Lowered<Option<Vec<String>>> {
+    if let Some(value) = declared_slots(class) {
+        // mangled, for the reason `slot_fields` gives
+        return Ok(Some(
+            slot_names(value)?
+                .into_iter()
+                .map(|name| mangled(Some(&class.name), name))
+                .collect(),
+        ));
+    }
+    if !carries_the_data_class_marker(class) {
+        return Ok(None);
+    }
+    Ok(Some(
+        fields
+            .iter()
+            .filter(|field| !inherited.iter().any(|held| held.name == field.name))
+            .map(|field| field.name.clone())
+            .collect(),
+    ))
 }
 
 /// the attribute names a `__slots__` value declares
@@ -4025,6 +4103,7 @@ fn decorator_path(expression: &Expr) -> Lowered<Decorator> {
                 return Ok(Decorator::Path {
                     root: name.id.to_string(),
                     attributes,
+                    marks_only: false,
                 });
             }
             Expr::Attribute(attribute) => {
@@ -4292,6 +4371,55 @@ pub fn without_init_decorators(source: &str, module: &ModuleIr) -> Result<String
     }
     String::from_utf8(out)
         .map_err(|error| format!("blanking a decorator split a character: {error}"))
+}
+
+/// the interpreted twin's source with the outermost decorator of each class that records
+/// what its statement bound written `@__build_class__(...)` around
+///
+/// module init reads such a class against the class its statement bound, after every
+/// decorator — see [`ClassIr::records_what_it_bound`](by_ir::function::ClassIr::records_what_it_bound).
+/// nothing runs between the last decorator and the binding, so the statement itself has to
+/// hand the class over. while the twin runs, `__build_class__` is module init's capture,
+/// and called with the one argument python's own refuses it answers a decorator that
+/// applies this one and records what came of it.
+///
+/// the call is written inside the decorator's own line, so no line of the twin moves
+pub fn with_bound_records(source: &str, module: &ModuleIr) -> Result<String, String> {
+    let wanted: HashSet<&str> = module
+        .classes
+        .iter()
+        .filter(|class| class.records_what_it_bound())
+        .map(|class| class.name.as_str())
+        .collect();
+    if wanted.is_empty() {
+        return Ok(source.to_string());
+    }
+    let parsed = ruff_python_parser::parse_module(source)
+        .map_err(|error| format!("the interpreted fallback does not parse: {error}"))?;
+    let mut wrapped: Vec<(usize, usize)> = Vec::new();
+    let mut found: HashSet<&str> = HashSet::new();
+    for statement in parsed.suite() {
+        if let Stmt::ClassDef(class) = statement
+            && let Some(name) = wanted.get(class.name.as_str())
+            && let Some(outermost) = class.decorator_list.first()
+        {
+            let range = outermost.expression.range();
+            wrapped.push((range.start().to_usize(), range.end().to_usize()));
+            found.insert(name);
+        }
+    }
+    if let Some(missing) = wanted.iter().find(|name| !found.contains(*name)) {
+        return Err(format!(
+            "the interpreted fallback writes no decorated `class {missing}` to record"
+        ));
+    }
+    let mut out = source.to_string();
+    wrapped.sort_unstable();
+    for (start, end) in wrapped.into_iter().rev() {
+        out.insert(end, ')');
+        out.insert_str(start, "__build_class__(");
+    }
+    Ok(out)
 }
 
 /// the attributes each emitted class publishes as a `property`
@@ -4836,6 +4964,23 @@ fn defined_once(scope: &[Stmt], function: &ast::StmtFunctionDef) -> Lowered<()> 
     Ok(())
 }
 
+/// whether `function` is the only statement of its class body that binds or unbinds its
+/// name
+///
+/// a method whose decorators only mark it is published as the compiled method with the
+/// marks copied off whatever the body left under its name, which is the `def`'s own
+/// function only where nothing below rebound the name. `m = other` under a marked `def m`
+/// leaves `other` there, and publishing the compiled `m` in its place would answer with the
+/// body python discarded
+fn bound_only_by(body: &[Stmt], function: &ast::StmtFunctionDef) -> bool {
+    let name = function.name.as_str();
+    body.iter().all(|statement| match statement {
+        Stmt::FunctionDef(other) if std::ptr::eq(other, function) => true,
+        Stmt::Delete(node) => !node.targets.iter().any(|target| binds_name(target, name)),
+        _ => !class_body_binds(std::slice::from_ref(statement), name),
+    })
+}
+
 /// whether a class body binds this name
 ///
 /// a decorator is resolved out of the *module* namespace at module init, and a class
@@ -4843,6 +4988,9 @@ fn defined_once(scope: &[Stmt], function: &ast::StmtFunctionDef) -> Lowered<()> 
 /// two statements up, which is nowhere init can look — so the method keeps its
 /// interpreted definition, and with it the whole class
 fn class_body_binds(body: &[Stmt], name: &str) -> bool {
+    if walrus_bindings(body).contains(&name) {
+        return true;
+    }
     body.iter().any(|statement| match statement {
         Stmt::FunctionDef(node) => node.name.as_str() == name,
         Stmt::ClassDef(node) => node.name.as_str() == name,
@@ -4870,6 +5018,47 @@ fn class_body_binds(body: &[Stmt], name: &str) -> bool {
         }
         _ => false,
     })
+}
+
+/// the names a `:=` binds in the class namespace, anywhere in the class body
+///
+/// a walrus binds in the scope it runs in, and every expression a class body evaluates
+/// runs in the class namespace: a value, a method's default or decorator, an annotation
+/// python 3.13 evaluates, a subscript in a target, a block's condition. a method's own
+/// body is a scope of its own and is not looked into
+fn walrus_bindings<'a>(body: &'a [Stmt]) -> Vec<&'a str> {
+    let mut names = Vec::new();
+    let mut look = |expr: &'a Expr| {
+        closures::visit_expressions(expr, &mut |child| {
+            if let Expr::Named(node) = child
+                && let Expr::Name(name) = node.target.as_ref()
+            {
+                names.push(name.id.as_str());
+            }
+        });
+    };
+    for statement in walk(body) {
+        for expr in closures::statement_expressions(statement) {
+            look(expr);
+        }
+        match statement {
+            Stmt::Assign(node) => node.targets.iter().for_each(&mut look),
+            Stmt::AnnAssign(node) => {
+                look(&node.target);
+                look(&node.annotation);
+            }
+            Stmt::For(node) => look(&node.target),
+            Stmt::FunctionDef(node) => {
+                node.parameters
+                    .iter()
+                    .filter_map(ast::AnyParameterRef::annotation)
+                    .for_each(&mut look);
+                node.returns.iter().for_each(|returns| look(returns));
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 /// the names a block nested in a class body could bind into the class namespace
@@ -5196,6 +5385,48 @@ fn class_modifier(
             "this class modifier changes what the class is, which an emitted type cannot follow",
         )),
     }
+}
+
+/// the standard-library decorators that hand back the very function they were given,
+/// having done nothing to it but write one attribute, each paired with the module it is
+/// written in
+///
+/// `typing.override` and `typing.final` set `__override__` and `__final__`, swallowing
+/// the error an object that takes no attributes raises; `abc.abstractmethod` sets
+/// `__isabstractmethod__`. the `typing_extensions` spellings are the `typing` functions
+/// themselves on every version this compiler targets, and the same body where they are
+/// not. so everything one of these did to a function is in that function's `__dict__`,
+/// and a class can publish its compiled method with the dict copied across — see
+/// [`Decorator::marks_only`]
+///
+/// the module is half of the entry for the reason [`FRAME_WALKERS`] gives: `final` and
+/// `override` are names a module may bind to something of its own
+const MARKING_DECORATORS: &[(&str, &str)] = &[
+    ("typing", "override"),
+    ("typing_extensions", "override"),
+    ("typing", "final"),
+    ("typing_extensions", "final"),
+    ("abc", "abstractmethod"),
+];
+
+/// whether `decorator` resolves to one of [`MARKING_DECORATORS`]
+///
+/// resolved rather than read: `@override` is only the stdlib's where the name is bound to
+/// it, and `@typing.override` names it under a spelling of its own. a *modifier* is a
+/// language keyword the transpiler writes out as one of these under its own import, and is
+/// asked the same question of what it resolves to
+fn marks_only(
+    db: &dyn ty_python_semantic::Db,
+    model: &SemanticModel<'_>,
+    decorator: &ast::Decorator,
+) -> bool {
+    let env = &model.program_environment();
+    let Some(resolved) = decorator.expression.inferred_type(model) else {
+        return false;
+    };
+    MARKING_DECORATORS.iter().any(|(module, name)| {
+        ty_python_semantic::basedpython_module_symbol(db, env, module, name) == Some(resolved)
+    })
 }
 
 /// the same for a function or a method
@@ -6241,12 +6472,23 @@ fn metaclass_carries_the_body(
 fn is_a_data_class(suite: &[Stmt], name: &str) -> bool {
     suite.iter().any(|statement| {
         matches!(statement, Stmt::ClassDef(candidate)
-        if candidate.name.as_str() == name
-            && candidate.decorator_list.iter().any(|decorator| {
-                matches!(&decorator.expression, Expr::Name(marker)
-                    if matches!(marker.id.as_str(), "data_class" | "frozen_data_class"))
-            }))
+        if candidate.name.as_str() == name && carries_the_data_class_marker(candidate))
     })
+}
+
+/// whether `class` carries the `data class` marker
+fn carries_the_data_class_marker(class: &ast::StmtClassDef) -> bool {
+    class.decorator_list.iter().any(|decorator| {
+        matches!(&decorator.expression, Expr::Name(marker)
+            if matches!(marker.id.as_str(), "data_class" | "frozen_data_class"))
+    })
+}
+
+/// whether `class` declares `__slots__` — see `ClassIr::slots`
+///
+/// a `data class` does so without writing one: its twin is `@dataclass(slots=True)`
+fn declares_slots(class: &ast::StmtClassDef) -> bool {
+    declared_slots(class).is_some() || carries_the_data_class_marker(class)
 }
 
 /// an annotation in a `data class` body that declares something other than a field
@@ -7366,11 +7608,18 @@ fn lower_function_with_receiver(
     let mut decorators = Vec::with_capacity(function.decorator_list.len());
     let mut wrote_a_decorator = false;
     for decorator in function.decorator_list.iter().filter(|_| !nested) {
+        let marking = |name: Decorator| {
+            if marks_only(db, model, decorator) {
+                name.marking()
+            } else {
+                name
+            }
+        };
         match function_modifier(db, model, decorator)? {
-            Modifier::Apply(name) => decorators.push(name),
+            Modifier::Apply(name) => decorators.push(marking(name)),
             Modifier::Written(name) => {
                 wrote_a_decorator = true;
-                decorators.push(name);
+                decorators.push(marking(name));
             }
             Modifier::Erased | Modifier::DataClass => {}
         }
@@ -8031,8 +8280,7 @@ fn lower_function_with_receiver(
                     resume: None,
                     keywords: Vec::new(),
                     exported: false,
-                    declares_slots: false,
-                    slots_weak_references: false,
+                    slots: None,
                     decorators: Vec::new(),
                     constants: Vec::new(),
                     slot_aliases: Vec::new(),
@@ -8047,14 +8295,15 @@ fn lower_function_with_receiver(
                     dataclass: false,
                     immutable: false,
                     environment: true,
+                    mutable: false,
+                    unchecked_licences: false,
                 })
                 .collect();
             all.push(by_ir::function::ClassIr {
                 resume: None,
                 keywords: Vec::new(),
                 exported: false,
-                declares_slots: false,
-                slots_weak_references: false,
+                slots: None,
                 decorators: Vec::new(),
                 constants: Vec::new(),
                 slot_aliases: Vec::new(),
@@ -8069,6 +8318,8 @@ fn lower_function_with_receiver(
                 dataclass: false,
                 immutable: false,
                 environment: true,
+                mutable: false,
+                unchecked_licences: false,
             });
             all.extend(inner_environments);
             all
@@ -8162,8 +8413,8 @@ struct Unit<'a> {
     /// one is exactly that layout. it is what licenses a class pattern to read fields —
     /// see [`class_pattern_reads`]
     sealed: &'a HashSet<String>,
-    /// the classes whose body declares `__slots__`, and whose instances therefore have
-    /// no dict to hold a value shadowing a method — see
+    /// the classes that declare `__slots__`, a `data class` among them, and whose
+    /// instances therefore have no dict to hold a value shadowing a method — see
     /// [`Lowering::keeps_instance_dict`]
     slotted: &'a HashSet<String>,
     /// the classes whose body writes a `__new__`, which is what a construction of one
@@ -15582,6 +15833,11 @@ impl Lowering<'_, '_> {
             Expr::Name(node) => {
                 let name = node.id.as_str();
                 match self.place(name) {
+                    None if name == "__class__"
+                        && let Some(owner) = self.owner.clone() =>
+                    {
+                        self.class_cell(owner)
+                    }
                     Some(Place::Global { .. }) | None => {
                         // a name this frame does not have is a global, resolved the way
                         // `LOAD_GLOBAL` resolves it — and a name it *declares* `global`
@@ -17830,6 +18086,21 @@ impl Lowering<'_, '_> {
             name,
         });
         self.narrow_call_result(dest, &Expr::Attribute(node.clone()))
+    }
+
+    /// `__class__` read in a frame written inside the body of `owner`, which python
+    /// answers out of a cell holding the class the `def` is written in — the class the
+    /// `class` statement made, whatever the receiver's own class is and however the
+    /// function is bound. a nested function and a comprehension close over the same cell
+    fn class_cell(&mut self, owner: String) -> Lowered<(Value, RType)> {
+        if !self.layouts.contains_key(&owner) {
+            return Err(Decline::new(format!(
+                "`__class__` names `{owner}`, which this module does not emit a type for"
+            )));
+        }
+        let dest = self.builder.temp(RType::OBJECT);
+        self.builder.push(Op::LoadClass { dest, class: owner });
+        Ok((Value::Register(dest), RType::OBJECT))
     }
 
     /// `super()`, as the `super(__class__, <slot zero>)` python's compiler writes

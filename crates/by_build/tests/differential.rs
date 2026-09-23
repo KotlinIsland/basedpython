@@ -1183,12 +1183,13 @@ def _rebound(m):
 
 # the traceback entries an exception carries, for the frames written in the module: the
 # function each names and its line. only the base name of the file, for the reason
-# `_warned_into` gives, and the harness's own frames left out, since the snippet runs
-# from a string
+# `_warned_into` gives. the snippet's own frames are left out, and so is any frame named
+# `<string>`, the name the compiled leg's fallback source runs under
 def _frames(e):
     import traceback
     return [(f.filename.replace('\\\\', '/').rsplit('/', 1)[-1], f.name, f.lineno)
-            for f in traceback.extract_tb(e.__traceback__) if f.filename != '<string>']
+            for f in traceback.extract_tb(e.__traceback__)
+            if f.filename not in ('<string>', __file__)]
 
 def _chain(e):
     out = []
@@ -1403,6 +1404,16 @@ fn agree(tag: &str, source: &str, calls: &[&str]) {
 /// as [`agree`], but the source is expected to contain declined functions
 fn agree_with_declines(tag: &str, source: &str, calls: &[&str]) {
     agree_inner(tag, source, calls, true);
+}
+
+/// what a build left to the interpreted definition, by name: each function that declined,
+/// and each that compiled and is never installed
+fn left_interpreted(built: &by_build::Built) -> Vec<&str> {
+    built
+        .declined
+        .iter()
+        .map(|declined| declined.name.as_str())
+        .collect()
 }
 
 /// as [`agree`], but the source is ordinary python
@@ -6707,7 +6718,7 @@ def pick(_: int, _: str) -> int:
             &python,
             &compiled,
             "import by_diff_underscorecheck as m\n\
-             assert m.__file__.endswith('.so'), m.__file__\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
              print(m.pick(1, 'a'))\n",
         ),
         "1"
@@ -7752,7 +7763,7 @@ class C:
 /// twice
 #[test]
 fn a_method_decorator_runs_once() {
-    agree_python(
+    agree_python_with_declines(
         "methoddecoratoronce",
         MARKED_METHODS,
         &[
@@ -7796,7 +7807,8 @@ fn a_decorated_method_is_the_interpreted_one_and_its_siblings_are_not() {
             return;
         }
     };
-    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    // the two decorated methods compiled, and neither is installed
+    assert_eq!(left_interpreted(&built), ["C.g", "C.doubled"]);
     let out = run(
         &python,
         &dir,
@@ -7809,6 +7821,510 @@ fn a_decorated_method_is_the_interpreted_one_and_its_siblings_are_not() {
     // back the interpreted function it was given, `double` hands back its wrapper —
     // and the untouched sibling is still the compiled type's own
     assert_eq!(out, "function function method_descriptor");
+}
+
+/// the source the marking-decorator tests below compile
+///
+/// `typing.override`, `typing.final` and `abc.abstractmethod` hand back the function they
+/// were given with one attribute written onto it, which is all a class body's decorated
+/// function has that a fresh `def` lacks. `Cube` overrides an override and reaches both
+/// bodies above it through `super()`; `total` dispatches over all three through a
+/// base-typed element, which is the call a compiled override is worth having for
+const MARKING_METHODS: &str = "\
+import typing
+from abc import ABC, abstractmethod
+from typing import final, override
+
+
+class Shape:
+    def area(self) -> int:
+        return 1
+
+    def describe(self) -> str:
+        return 'shape'
+
+
+class Square(Shape):
+    def __init__(self, side: int) -> None:
+        self.side = side
+
+    @override
+    def area(self) -> int:
+        return self.side * self.side
+
+    @typing.override
+    def describe(self) -> str:
+        return 'square of ' + str(self.side) + ' on a ' + super().describe()
+
+
+class Cube(Square):
+    @override
+    @final
+    def area(self) -> int:
+        return super().area() * self.side
+
+
+class Base(ABC):
+    @abstractmethod
+    def size(self) -> int:
+        raise NotImplementedError
+
+
+class Sized(Base):
+    @override
+    def size(self) -> int:
+        return 3
+
+
+def total(shapes: list[Shape]) -> int:
+    running = 0
+    for shape in shapes:
+        running = running + shape.area()
+    return running
+";
+
+/// a method whose decorators only mark it answers as python's does, marks included
+#[test]
+fn a_method_whose_decorators_only_mark_it_agrees() {
+    agree_python(
+        "markingdeco",
+        MARKING_METHODS,
+        &[
+            "m.total([m.Shape(), m.Square(3), m.Cube(2)])",
+            "(m.Square(3).describe(), m.Cube(2).describe())",
+            // the mark is on the class's entry, on what binding it hands back, and absent
+            // where no decorator wrote one
+            "[getattr(c.__dict__.get(n), '__override__', None) for c in (m.Shape, m.Square, m.Cube) for n in ('area', 'describe')]",
+            "(m.Square(1).area.__override__, m.Cube.area.__final__, getattr(m.Square.area, '__final__', None))",
+            "(m.Base.size.__isabstractmethod__, sorted(m.Base.__abstractmethods__), sorted(m.Sized.__abstractmethods__))",
+            "type(_capture(m.Base)).__name__",
+            "m.Sized().size()",
+            // a subclass written in the interpreter overrides again, and the dispatch
+            // over the base-typed element reaches its body rather than the compiled one
+            "m.total([type('Tile', (m.Square,), {'area': lambda self: 99})(1), m.Cube(1)])",
+            "type('Tile', (m.Cube,), {})(2).area()",
+        ],
+    );
+}
+
+/// …and the method that answers is the compiled one
+///
+/// the test above agrees whichever leg answered, and a marked method used to be the
+/// interpreted definition: the class took the function its body decorated rather than
+/// calling the decorator a second time. `type` is what tells the two apart
+#[test]
+fn a_method_whose_decorators_only_mark_it_is_the_compiled_one() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = Scratch::new("by_diff_markingdeco_t");
+    let built = match build_source(
+        MARKING_METHODS,
+        "by_diff_markingdeco_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_markingdeco_t as m\n\
+         print(m.__file__.endswith(('.so', '.pyd')))\n\
+         print(type(m.Shape.area).__name__, type(m.Square.area).__name__,\n\
+         \x20     type(m.Square.describe).__name__, type(m.Cube.area).__name__,\n\
+         \x20     type(m.Base.size).__name__, type(m.Sized.size).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "True\n\
+         method_descriptor method_descriptor method_descriptor method_descriptor \
+         method_descriptor method_descriptor"
+    );
+}
+
+/// a marked method whose name the class body binds again keeps the body's answer
+///
+/// python's class holds whatever the last binding left, and here that is `other`, not the
+/// function the marked `def` made. copying marks onto the compiled `m` and publishing it
+/// would answer with the body python threw away
+#[test]
+fn a_marked_method_the_class_body_rebinds_answers_with_the_rebinding() {
+    agree_python_with_declines(
+        "markedrebound",
+        "\
+from typing import final
+
+
+def other(self) -> int:
+    return 2
+
+
+class A:
+    @final
+    def m(self) -> int:
+        return 1
+
+    m = other
+
+
+def call(a: A) -> int:
+    return a.m()
+",
+        &["(m.call(m.A()), m.A().m(), m.A.m is m.other)"],
+    );
+}
+
+/// a method whose name the class body binds again, with no decorator at all
+///
+/// python's class holds what the last binding left: another function, a lambda, a sibling
+/// method, a value that is not callable, the `staticmethod`, `classmethod` or `property`
+/// older code wraps its own `def` in by name, or — where the binding stands *above* the
+/// `def` — the `def`'s own function. the class publishes that, and a call through a typed receiver
+/// asks the class rather than calling the compiled `def` it holds nothing of
+const REBOUND_METHODS: &str = "\
+def other(self) -> int:
+    return 2
+
+
+class Func:
+    def m(self) -> int:
+        return 1
+
+    m = other
+
+    def kept(self) -> int:
+        return 8
+
+
+class Lam:
+    def m(self) -> int:
+        return 1
+
+    m = lambda self: 3
+
+
+class Sibling:
+    def m(self) -> int:
+        return 1
+
+    def n(self) -> int:
+        return 4
+
+    m = n
+
+
+class Value:
+    def m(self) -> int:
+        return 1
+
+    m = 5
+
+
+class Above:
+    m = other
+
+    def m(self) -> int:
+        return 6
+
+
+class Walrus:
+    def m(self) -> int:
+        return 1
+
+    x = (m := other)
+
+
+class Private:
+    def __m(self) -> int:
+        return 1
+
+    __m = other
+
+    def m(self) -> int:
+        return self.__m() * 10
+
+
+class Based(Func):
+    def m(self) -> int:
+        return 1
+
+    m = lambda self: 7
+
+
+class OldStyle:
+    def m(x) -> int:
+        return 1 if x is None else 2
+
+    m = staticmethod(m)
+
+    def c(cls) -> str:
+        return cls.__name__
+
+    c = classmethod(c)
+
+    def p(self) -> int:
+        return 9
+
+    p = property(p)
+
+
+def through_func(a: Func) -> int:
+    return a.m() + a.kept()
+
+
+def through_lam(a: Lam) -> int:
+    return a.m()
+
+
+def through_sibling(a: Sibling) -> int:
+    return a.m()
+
+
+def through_above(a: Above) -> int:
+    return a.m()
+
+
+def through_walrus(a: Walrus) -> int:
+    return a.m()
+
+
+def through_private(a: Private) -> int:
+    return a.m()
+
+
+def through_based(a: Based) -> int:
+    return a.m()
+
+
+def value_of(a: Value) -> object:
+    return a.m
+
+
+def through_old_style(a: OldStyle) -> object:
+    return (a.m(None), a.c(), a.p)
+";
+
+#[test]
+fn a_method_the_class_body_rebinds_answers_with_the_rebinding() {
+    agree_python_with_declines(
+        "reboundmethods",
+        REBOUND_METHODS,
+        &[
+            "(m.through_func(m.Func()), m.through_lam(m.Lam()), m.through_sibling(m.Sibling()))",
+            "(m.through_above(m.Above()), m.through_walrus(m.Walrus()), m.through_private(m.Private()))",
+            "(m.through_based(m.Based()), m.value_of(m.Value()), m.Walrus.x is m.other)",
+            "(m.Func.m is m.other, m.Sibling.m is m.Sibling.n, m.Private._Private__m is m.other)",
+            "str(_capture(lambda: m.Value().m()))",
+            "(m.Lam.m.__name__, m.Above.m.__name__, m.Above.m.__qualname__)",
+            "(m.through_old_style(m.OldStyle()), m.OldStyle.m(None), m.OldStyle.c())",
+        ],
+    );
+}
+
+/// …and the compiled class is what answers, with only the rebound `def`s left out
+///
+/// the test above agrees whichever leg answered, and a class that fell back to its
+/// interpreted definition would agree too. `type` is what tells the two apart: the sibling
+/// the class copied under the rebound name is the compiled method, and so is every method
+/// nothing rebinds
+#[test]
+fn a_method_the_class_body_rebinds_is_the_only_one_left_out() {
+    let Some((python, toolchain)) = environment() else {
+        return;
+    };
+    let dir = Scratch::new("by_diff_reboundmethods_t");
+    let built = match build_source(
+        REBOUND_METHODS,
+        "by_diff_reboundmethods_t",
+        &toolchain,
+        &dir,
+        &Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+    ) {
+        Ok(built) => built,
+        Err(error) => {
+            assert!(missing_toolchain(&error), "failed to build: {error:#}");
+            eprintln!("skipping: no working C toolchain ({error})");
+            return;
+        }
+    };
+    assert_eq!(
+        left_interpreted(&built),
+        [
+            "Func.m",
+            "Lam.m",
+            "Sibling.m",
+            "Value.m",
+            "Above.m",
+            "Walrus.m",
+            "Private._Private__m",
+            "Based.m",
+            "OldStyle.m",
+            "OldStyle.c",
+            "OldStyle.p"
+        ]
+    );
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_reboundmethods_t as m\n\
+         print(m.__file__.endswith(('.so', '.pyd')))\n\
+         print(type(m.Func.kept).__name__, type(m.Sibling.m).__name__,\n\
+         \x20     type(m.Sibling.n).__name__, type(m.Private.m).__name__)\n\
+         print(m.through_sibling(m.Sibling()), m.through_above(m.Above()))\n",
+    );
+    assert_eq!(
+        out,
+        "True\n\
+         method_descriptor method_descriptor method_descriptor method_descriptor\n\
+         4 6"
+    );
+}
+
+/// a marked dunder, which a type slot answers as well as its name
+///
+/// the name is where the mark has to be, and the class holds a slot wrapper there for an
+/// undecorated dunder, which takes no attributes. so the marked one stands under its name
+/// as the compiled method with the mark copied on, while the slot keeps calling the same
+/// compiled body
+const MARKED_DUNDERS: &str = "\
+from typing import override
+
+
+class Money:
+    amount: int
+
+    def __init__(self, amount: int) -> None:
+        self.amount = amount
+
+    @override
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Money) and self.amount == other.amount
+
+    @override
+    def __hash__(self) -> int:
+        return self.amount
+
+    @override
+    def __repr__(self) -> str:
+        return 'Money(' + str(self.amount) + ')'
+
+
+class Cents(Money):
+    @override
+    def __init__(self, amount: int) -> None:
+        super().__init__(amount * 100)
+
+    @override
+    def __repr__(self) -> str:
+        return 'Cents:' + super().__repr__()
+
+
+def same(a: Money, b: Money) -> bool:
+    return a == b
+";
+
+#[test]
+fn a_marked_dunder_agrees() {
+    agree_python(
+        "markeddunder",
+        MARKED_DUNDERS,
+        &[
+            "(m.Money(3) == m.Money(3), m.Money(3) != m.Money(4), m.Money(3).__eq__(m.Money(3)))",
+            "(hash(m.Money(3)), repr(m.Money(3)), str(m.Cents(2)), m.Cents(1) == m.Money(100))",
+            "m.same(m.Money(2), m.Cents(0))",
+            "[getattr(m.Money.__dict__[n], '__override__', None) for n in ('__eq__', '__hash__', '__repr__')]",
+            "(m.Cents.__init__.__override__, m.Money.__hash__ is m.Money.__dict__['__hash__'])",
+        ],
+    );
+}
+
+/// …and the name answers with the compiled method
+#[test]
+fn a_marked_dunder_is_the_compiled_method() {
+    let Some((_dir, answers)) = compiled_answers(
+        "markeddunder_t",
+        MARKED_DUNDERS,
+        Options {
+            language: by_irbuild::Language::Python,
+            ..Options::default()
+        },
+        &[
+            "[type(m.Money.__dict__[n]).__name__ for n in ('__eq__', '__hash__', '__repr__')] + [type(m.Cents.__dict__['__init__']).__name__]",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(
+        answers,
+        ["['method_descriptor', 'method_descriptor', 'method_descriptor', 'method_descriptor']"]
+    );
+}
+
+/// the `override` and `final` modifiers, which the transpiler writes out as the `typing`
+/// decorators under an import of its own
+const MARKING_MODIFIERS: &str = "\
+class Shape:
+    def area(self) -> int:
+        return 1
+
+class Square(Shape):
+    side: int
+
+    def __init__(self, side: int):
+        self.side = side
+
+    override def area(self) -> int:
+        return self.side * self.side
+
+class Cube(Square):
+    override final def area(self) -> int:
+        return super().area() * self.side
+
+def total(shapes: list[Shape]) -> int:
+    running = 0
+    for shape in shapes:
+        running = running + shape.area()
+    return running
+";
+
+#[test]
+fn an_override_modifier_agrees() {
+    agree(
+        "overridemodifier",
+        MARKING_MODIFIERS,
+        &[
+            "m.total([m.Shape(), m.Square(3), m.Cube(2)])",
+            "(m.Square.area.__override__, m.Cube.area.__override__, m.Cube.area.__final__)",
+        ],
+    );
+}
+
+/// …and the method it marks is the compiled one
+#[test]
+fn an_override_modifier_is_the_compiled_method() {
+    let Some((_dir, answers)) = compiled_answers(
+        "overridemodifier_t",
+        MARKING_MODIFIERS,
+        Options::default(),
+        &["(type(m.Square.area).__name__, type(m.Cube.area).__name__)"],
+    ) else {
+        return;
+    };
+    assert_eq!(answers, ["('method_descriptor', 'method_descriptor')"]);
 }
 
 /// the source both class-decorator tests below compile
@@ -8063,11 +8579,11 @@ def probe() -> int:
 /// the differential legs agree whichever one answered, so a decorator test passes with
 /// the codegen path switched off. this is where it is pinned.
 ///
-/// a *decorated method* is deliberately not one of the things `type` can pin any more: it
-/// is the interpreted definition on purpose, because a decorator is handed whatever the
-/// class body gave it and applying it again to the native method would run it twice. so
-/// the class is pinned by its undecorated sibling, which is still the compiled type's own
-/// `method_descriptor`, and the decorator by the effect it had
+/// `abc.abstractmethod` only writes `__isabstractmethod__` onto what it is handed, so the
+/// method it marks is the compiled one with that attribute copied on, and `type` pins it
+/// like its undecorated sibling. a decorator that does anything else leaves the
+/// interpreted definition standing on purpose — see
+/// `a_decorated_method_is_the_interpreted_one_and_its_siblings_are_not`
 #[test]
 fn a_path_decorated_definition_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
@@ -8141,7 +8657,7 @@ class Held:
     assert_eq!(
         out,
         "_lru_cache_wrapper native\n\
-         function method_descriptor method_descriptor\n\
+         method_descriptor method_descriptor method_descriptor\n\
          8 True seen"
     );
 }
@@ -9919,7 +10435,7 @@ def drop() -> None:
         &dir,
         "import importlib, sys\n\
          import by_diff_reimport as first\n\
-         assert first.__file__.endswith('.so'), first.__file__\n\
+         assert first.__file__.endswith(('.so', '.pyd')), first.__file__\n\
          first.setup()\n\
          print(first.total())\n\
          del sys.modules['by_diff_reimport']\n\
@@ -9978,7 +10494,7 @@ def total(n: int) -> int:
         &dir,
         "import gc, sys\n\
          import by_diff_reimportleak as first\n\
-         assert first.__file__.endswith('.so'), first.__file__\n\
+         assert first.__file__.endswith(('.so', '.pyd')), first.__file__\n\
          def again():\n\
          \x20   del sys.modules['by_diff_reimportleak']\n\
          \x20   import by_diff_reimportleak\n\
@@ -10003,9 +10519,10 @@ fn a_native_class_has_a_fixed_layout() {
     };
     let dir = Scratch::new("by_diff_layout");
     let source = "\
-data class Point:
-    x: int
-    y: int
+class Point:
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
 ";
     if build_source(
         source,
@@ -13020,6 +13537,313 @@ def referenced(t: Tight) -> bool:
             "(lambda t: len(__import__('weakref').WeakSet([t])))(m.Tighter(6))",
         ],
     );
+}
+
+/// a `data class` is `@dataclass(slots=True)`, so the emitted class is slotted exactly as
+/// the twin is: no dict unless a base gave one, no weak-reference list unless a base gave
+/// one, and a `__slots__` naming the fields it adds
+const SLOTTED_DATA_CLASSES: &str = "\
+data class Point:
+    x: int
+    y: int
+
+
+data class Point3(Point):
+    z: int
+
+
+frozen data class Fixed:
+    n: int
+
+
+class Plain:
+    pass
+
+
+data class OnPlain(Plain):
+    q: int
+
+
+class Loose(Point):
+    def __init__(self, x: int, y: int) -> None:
+        super().__init__(x, y)
+        self.w = x + y
+
+
+class Bare(Point):
+    pass
+
+
+data class Defaulted:
+    x: int
+    y: int = 3
+";
+
+#[test]
+fn a_data_class_is_slotted_as_its_twin_is() {
+    // the exception's type rather than its text: the emitted type's name is qualified by
+    // its module, and python words both refusals with it
+    let dir = agree_in(
+        "dcslots",
+        SLOTTED_DATA_CLASSES,
+        &[
+            "[type(_capture(setattr, o, 'extra', 5)).__name__ \
+             for o in (m.Point(1, 2), m.Point3(1, 2, 3), m.Fixed(1))]",
+            "[c.__dict__.get('__slots__') for c in m.Point3.__mro__]",
+            "(m.Fixed.__slots__, m.OnPlain.__slots__)",
+            "[hasattr(o, '__dict__') \
+             for o in (m.Point(1, 2), m.Fixed(1), m.OnPlain(4), m.Loose(1, 2))]",
+            "[type(_outcome(vars, o)).__name__ for o in (m.Point(1, 2), m.Fixed(1))]",
+            "[type(_outcome(__import__('weakref').ref, o)).__name__ \
+             for o in (m.Point(1, 2), m.Fixed(1), m.OnPlain(4), m.Loose(1, 2))]",
+            // a slot is not in the dict a base gave the instance, and `copyreg` hands it
+            // over beside that dict
+            "(lambda o: (setattr(o, 'extra', 5), vars(o), o.__getstate__())[1:])(m.OnPlain(4))",
+            "(lambda o: (setattr(o, 'extra', 5), vars(o), o.__getstate__())[1:])(m.Loose(1, 2))",
+            // python caches what `copyreg` reads on a class only once one is copied
+            "['__slotnames__' in c.__dict__ for c in (m.Point, m.Point3, m.OnPlain, m.Bare)]",
+            // `Point` keeps the words `Loose` keeps its dict and weak references in, which
+            // python's own `__getstate__` would take for state it cannot see
+            "[o.__getstate__() for o in (m.Point(1, 2), m.Point3(1, 2, 3), m.Fixed(1), \
+             m.Defaulted(1), m.Bare(1, 2))]",
+            "[__import__('pickle').loads(__import__('pickle').dumps(o)) == o \
+             for o in (m.Point(1, 2), m.Point3(1, 2, 3), m.Fixed(1), m.OnPlain(4), \
+             m.Defaulted(1, 5), m.Bare(1, 2))]",
+            "[__import__('copy').copy(o) == o and __import__('copy').deepcopy(o) == o \
+             for o in (m.Point(1, 2), m.Point3(1, 2, 3), m.Fixed(1), m.OnPlain(4), \
+             m.Defaulted(1, 5), m.Bare(1, 2))]",
+            "(lambda o: (setattr(o, 'extra', 5), o.__getstate__(), \
+             vars(__import__('pickle').loads(__import__('pickle').dumps(o))))[1:])(m.Bare(1, 2))",
+            "(lambda o: (setattr(o, 'extra', 5), \
+             vars(__import__('pickle').loads(__import__('pickle').dumps(o))), \
+             vars(__import__('copy').copy(o)))[1:])(m.Loose(1, 2))",
+            // a frozen data class restores a copy through `object.__setattr__`, onto an
+            // instance `__new__` made with nothing written
+            "(lambda f: (object.__setattr__(f, 'n', 7), f)[1])(m.Fixed.__new__(m.Fixed))",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    );
+    let (Some(dir), Some((python, _))) = (dir, environment()) else {
+        return;
+    };
+    // `wrapper_descriptor` says the emitted types answered rather than the twins. a write
+    // over a frozen field already written is the one refusal python does not make — see
+    // `runtime.md`
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_dcslots as m\n\
+         print(*(type(c.__dict__[n]).__name__ for c, n in ((m.Point, '__repr__'),\n\
+         \x20   (m.Point3, '__repr__'), (m.Fixed, '__repr__'), (m.OnPlain, '__repr__'),\n\
+         \x20   (m.Loose, '__init__'))))\n\
+         f = m.Fixed(1)\n\
+         try:\n\
+         \x20   object.__setattr__(f, 'n', 2)\n\
+         except AttributeError as e:\n\
+         \x20   print(e, f.n)\n",
+    );
+    assert_eq!(
+        out,
+        "wrapper_descriptor wrapper_descriptor wrapper_descriptor wrapper_descriptor \
+         wrapper_descriptor\n\
+         attribute 'n' of 'by_diff_dcslots.Fixed' objects is not writable 1"
+    );
+}
+
+#[test]
+fn a_decorated_data_class_is_slotted_as_its_twin_is() {
+    // `@dataclass(slots=True)` is the twin's innermost decorator, so what the one written
+    // above it is handed has no dict in python either
+    agree(
+        "dcslotdeco",
+        "\
+def mark(cls: type) -> type:
+    return cls
+
+
+@mark
+data class Marked:
+    x: int
+",
+        &[
+            "type(_capture(setattr, m.Marked(1), 'extra', 5)).__name__",
+            "(m.Marked.__slots__, hasattr(m.Marked(1), '__dict__'))",
+        ],
+    );
+}
+
+#[test]
+fn a_slotted_class_copies_whatever_its_layout_keeps_for_a_subclass() {
+    // a base keeps the words a subclass keeps its dict and weak references in, and python's
+    // own `__getstate__` takes an object bigger than its slots account for as C state it
+    // cannot see, and refuses to copy it. `collections._Link` is this shape. a class that
+    // reduces itself never reaches that check, and keeps `object`'s `__getstate__`
+    agree_python(
+        "slotcopy",
+        "\
+class Link:
+    __slots__ = ('prev', 'key')
+
+
+class Tagged(Link):
+    pass
+
+
+class Reduced:
+    __slots__ = ('v',)
+
+    def __init__(self, v: int) -> None:
+        self.v = v
+
+    def __reduce__(self):
+        return (Reduced, (self.v,))
+
+
+class Wider(Reduced):
+    pass
+",
+        &[
+            "(lambda l: (setattr(l, 'key', 3), __import__('copy').copy(l).key, \
+             __import__('pickle').loads(__import__('pickle').dumps(l)).key, \
+             l.__getstate__()))(m.Link())",
+            "(__import__('copy').copy(m.Reduced(4)).v, '__getstate__' in m.Reduced.__dict__)",
+        ],
+    );
+}
+
+#[test]
+fn a_slot_over_a_base_that_keeps_a_dict_stays_out_of_it() {
+    // python keeps a declared slot in the slot even where a base gave the instance a dict,
+    // so `vars()` does not name it and `copyreg` hands it over beside the dict. an
+    // attribute the declaration left out goes into that dict like any other
+    agree_python(
+        "slotvars",
+        "\
+class Plain:
+    pass
+
+
+class Mixed(Plain):
+    __slots__ = ('a',)
+
+    def __init__(self, a: int) -> None:
+        self.a = a
+        self.b = a + 1
+",
+        &[
+            "(lambda o: (setattr(o, 'extra', 5), vars(o), o.__getstate__())[1:])(m.Mixed(1))",
+            "(lambda o: (o.a, o.b, vars(o)))(__import__('pickle').loads(\
+             __import__('pickle').dumps(m.Mixed(1))))",
+            "(lambda o: (o.a, o.b, vars(o)))(__import__('copy').copy(m.Mixed(1)))",
+        ],
+    );
+}
+
+#[test]
+fn reading_a_class_s_annotations_leaves_the_module_compiled() {
+    // from python 3.14 a class's annotations are worked out when they are first read, and
+    // the read writes its answer back onto the class: the mapping, and `None` under
+    // `__annotate_func__` where the class has no function computing one. `@dataclass`
+    // reads a base's that way, so a `data class` over a class of the module used to leave
+    // the whole module interpreted, as if its body had rewritten a dunder
+    let dir = agree_in(
+        "annotread",
+        "\
+class Base:
+    def describe(self) -> str:
+        return 'base'
+
+
+data class Child(Base):
+    x: int
+
+    override def describe(self) -> str:
+        return 'child'
+
+
+class Bare:
+    def describe(self) -> str:
+        return 'bare'
+
+
+seen = getattr(Bare, '__annotations__')
+",
+        &[
+            "(m.Child(1).describe(), repr(m.Child(1)), m.Base().describe())",
+            "(m.seen, m.Bare.__annotations__, m.Base.__annotations__, m.Child.__annotations__)",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    );
+    let (Some(dir), Some((python, _))) = (dir, environment()) else {
+        return;
+    };
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_annotread as m\n\
+         print(*(type(c.__dict__['describe']).__name__ for c in (m.Base, m.Child, m.Bare)))\n",
+    );
+    assert_eq!(out, "method_descriptor method_descriptor method_descriptor");
+}
+
+#[test]
+fn a_module_body_rewriting_a_class_s_annotations_leaves_the_module_interpreted() {
+    // what a read writes is told apart from what the body wrote by what the `class`
+    // statement left: a class with no annotations had nothing under `__annotate_func__`,
+    // and a read leaves `None` there. a function written there instead, or `None` over
+    // the one an annotated class was built with, is the body's own write — and the
+    // compiled type would go on answering the annotations the statement wrote
+    for (tag, write, read) in [
+        (
+            "annotwritefn",
+            "setattr(Bare, '__annotate__', lambda format: {'q': int})",
+            "m.Bare.__annotations__",
+        ),
+        (
+            "annotwritenone",
+            "setattr(Tagged, '__annotate__', None)",
+            "m.Tagged.__annotations__",
+        ),
+    ] {
+        let source = format!(
+            "\
+class Bare:
+    def describe(self) -> str:
+        return 'bare'
+
+
+class Tagged:
+    x: int
+
+    def describe(self) -> str:
+        return 'tagged'
+
+
+{write}
+"
+        );
+        let dir = agree_in(
+            tag,
+            &source,
+            &[read, "(m.Bare().describe(), m.Tagged().describe())"],
+            false,
+            by_irbuild::Language::BasedPython,
+        );
+        let (Some(dir), Some((python, _))) = (dir, environment()) else {
+            return;
+        };
+        let out = run(
+            &python,
+            &dir,
+            &format!(
+                "import by_diff_{tag} as m\n\
+                 print(*(type(c.__dict__['describe']).__name__ for c in (m.Bare, m.Tagged)))\n"
+            ),
+        );
+        assert_eq!(out, "function function", "{tag}");
+    }
 }
 
 #[test]
@@ -17542,7 +18366,7 @@ def calls_every_kind() -> int:
             &python,
             &compiled,
             "import by_diff_underscores as m\n\
-             assert m.__file__.endswith('.so'), m.__file__\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
              print([f.__code__.co_filename for f in (m.pair, m.labelled, m.every_kind, m.counted, m.written_slash)])\n\
              print(type(m.Holder.__dict__['method']).__name__)\n",
         ),
@@ -17601,7 +18425,7 @@ def through_the_base(a: A) -> int:
             &python,
             &compiled,
             "import by_diff_underscorebase as m\n\
-             assert m.__file__.endswith('.so'), m.__file__\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
              print([type(m.B.__dict__[name]).__name__ for name in ('m', 'n')])\n",
         ),
         "['method_descriptor', 'method_descriptor']"
@@ -17642,7 +18466,7 @@ class C(A):
             &python,
             &compiled,
             "import by_diff_underscorebaseread as m\n\
-             assert m.__file__.endswith('.so'), m.__file__\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
              print(type(m.C.__dict__['m']).__name__, m.C.m.__code__.co_filename)\n",
         ),
         "function <string>"
@@ -17723,7 +18547,7 @@ def use() -> int:
             &python,
             &compiled,
             "import by_diff_underscorecallable as m\n\
-             assert m.__file__.endswith('.so'), m.__file__\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
              print([f.__code__.co_filename for f in (m.apply, m.ask, m.use)])\n",
         ),
         "['<by native forwarder>', '<by native forwarder>', '<by native forwarder>']"
@@ -17766,7 +18590,7 @@ def reads(_: int, _: int) -> list[int]:
             &python,
             &compiled,
             "import by_diff_underscorenames as m\n\
-             assert m.__file__.endswith('.so'), m.__file__\n\
+             assert m.__file__.endswith(('.so', '.pyd')), m.__file__\n\
              print(m.defaulted(1, 2), m.reads(1, 2))\n",
         ),
         "[9] [9]"
@@ -18315,6 +19139,61 @@ class Box:
          method_descriptor None None\n\
          'put something else in it'"
     );
+}
+
+#[test]
+fn a_property_a_metaclass_built_class_keeps_is_the_interpreted_one_the_report_names() {
+    // `Real` stands on a class of this module that writes `metaclass=ABCMeta`, so its type
+    // spec is refused and the metaclass is handed the `property` the interpreted body
+    // built — which is what the class keeps. `--annotate` counts that getter as left to
+    // the interpreted definition, and this is the runtime half of that claim: a report
+    // counting it compiled was counting code no import runs. `Plain` stands on nothing of
+    // the kind and keeps its compiled getter
+    let Some(compiled) = agree_in(
+        "metaprop",
+        "\
+from abc import ABCMeta
+
+
+class Number(metaclass=ABCMeta):
+    pass
+
+
+class Complex(Number):
+    pass
+
+
+class Real(Complex):
+    @property
+    def real(self) -> int:
+        return 1
+
+
+class Root:
+    pass
+
+
+class Plain(Root):
+    @property
+    def real(self) -> int:
+        return 2
+",
+        &["m.Real().real", "m.Plain().real"],
+        true,
+        by_irbuild::Language::Python,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_metaprop as m\n\
+         print(type(m.Real.__dict__['real'].fget).__name__, type(m.Plain.__dict__['real'].fget).__name__)\n",
+    );
+    assert_eq!(out, "function method_descriptor");
 }
 
 /// a `@property` over an abstract one is not still abstract on the emitted class
@@ -19333,7 +20212,7 @@ data class Point:
 /// spec out and the same value goes into the namespace the metaclass is handed instead
 #[test]
 fn a_mutating_method_decorator_agrees() {
-    agree_python(
+    agree_python_with_declines(
         "mutatingdeco",
         "\
 from abc import ABC, abstractmethod
@@ -22080,7 +22959,7 @@ fn a_class_keyed_over_a_base_this_module_emits_is_the_compiled_type() {
 /// the value the interpreted body already produced
 #[test]
 fn a_decorated_method_on_a_class_built_through_its_metaclass_agrees() {
-    agree_python(
+    agree_python_with_declines(
         "metadeco",
         "\
 from abc import ABCMeta, abstractmethod
@@ -22159,7 +23038,9 @@ class Filled(Marked):
 /// class that fell back to its interpreted definition answers every one of those calls
 /// identically. the undecorated sibling is what says which leg ran — a compiled type
 /// holds a `method_descriptor` where the interpreted class holds a plain function — and
-/// the carried methods stand beside it as what the body gave them
+/// the carried method stands beside it as what the body gave it. the `abstractmethod` one
+/// is carried into the namespace the metaclass reads and then replaced by the compiled
+/// method with its mark copied on, so `ABCMeta` counts it and the compiled body answers
 #[test]
 fn a_class_carrying_a_decorated_method_is_the_compiled_one() {
     let Some((python, toolchain)) = environment() else {
@@ -22207,7 +23088,7 @@ class Marked(metaclass=ABCMeta):
             return;
         }
     };
-    assert!(built.declined.is_empty(), "declined: {:?}", built.declined);
+    assert_eq!(left_interpreted(&built), ["Marked.counted"]);
     let out = run(
         &python,
         &dir,
@@ -22221,7 +23102,7 @@ class Marked(metaclass=ABCMeta):
         out,
         // the plain method is the compiled entry, so this class is not the twin
         "method_descriptor classmethod\n\
-         function function\n\
+         method_descriptor function\n\
          ['area'] ABCMeta"
     );
 }
@@ -25315,6 +26196,445 @@ def extra(t: Trimmed) -> str:
     );
 }
 
+/// agree on `calls` over `source` with a class `Kept` added below it, which nothing writes
+/// to, and hand back what `Kept.m` is on the compiled leg: `function` where init left the
+/// module as its interpreted definition built it, `method_descriptor` where the compiled
+/// class stands
+fn kept_after(tag: &str, source: &str, calls: &[&str]) -> Option<String> {
+    let source = format!("{source}\n\nclass Kept:\n    def m(self) -> int:\n        return 0\n");
+    let compiled = agree_python_built(tag, &source, calls)?;
+    let (python, _) = environment()?;
+    Some(run(
+        &python,
+        &compiled,
+        &format!("import by_diff_{tag} as m\nprint(type(m.Kept.m).__name__)\n"),
+    ))
+}
+
+#[test]
+fn a_member_the_module_body_rewrites_on_a_class_nothing_can_rebind_leaves_the_module_interpreted() {
+    // a class nothing extends or decorates is an immutable type, so a call, a property read
+    // or a field access on it goes straight to the compiled body with no lookup. the module
+    // body runs before that type exists, though, and what it writes over a member lands on
+    // the twin and is carried into the type's dict — where none of those accesses looks. a
+    // typed `call_p` answered 1 where python answers 2, with nothing to report it, and a
+    // compiled module function as the new value failed the import instead
+    //
+    // the compiled code reading the class is fixed by then, so init leaves the whole module
+    // as its interpreted definition built it. each shape is its own module, so each is seen
+    // to be enough on its own
+    let method = "\
+class P:
+    def m(self) -> int:
+        return 1
+
+    def n(self) -> int:
+        return 5
+
+
+def call_p(p: P) -> int:
+    return p.m()
+";
+    let shapes = [
+        ("outgrowattr", "P.m = lambda self: 2"),
+        ("outgrowsetattr", "setattr(P, 'm', lambda self: 2)"),
+        (
+            "outgrowcompiled",
+            "def two(self: object) -> int:\n    return 2\n\n\nP.m = two",
+        ),
+        (
+            "outgrowhelper",
+            "def install() -> None:\n    P.m = lambda self: 2\n\n\ninstall()",
+        ),
+        ("outgrowdel", "del P.m"),
+    ];
+    for (tag, write) in shapes {
+        let Some(kept) = kept_after(
+            tag,
+            &format!("{method}\n\n{write}\n"),
+            &[
+                "str(_capture(m.call_p, m.P()))",
+                "str(_capture(lambda: m.P().m()))",
+                "'m' in vars(m.P)",
+            ],
+        ) else {
+            return;
+        };
+        assert_eq!(kept, "function", "{tag}");
+    }
+
+    // the same for a class whose instances keep no dict, which reaches the method without
+    // even the question about the instance
+    let Some(kept) = kept_after(
+        "outgrowslotted",
+        "\
+class P:
+    __slots__ = ('x',)
+
+    def __init__(self) -> None:
+        self.x = 0
+
+    def m(self) -> int:
+        return 1
+
+
+P.m = lambda self: 2
+
+
+def call_p(p: P) -> int:
+    return p.m()
+",
+        &["m.call_p(m.P())", "m.P().m()"],
+    ) else {
+        return;
+    };
+    assert_eq!(kept, "function");
+
+    // a property half and a field are reached the same way
+    let Some(kept) = kept_after(
+        "outgrowprop",
+        "\
+class P:
+    def __init__(self) -> None:
+        self._v = 1
+
+    @property
+    def v(self) -> int:
+        return self._v
+
+
+P.v = property(lambda self: 2)
+
+
+def read_v(p: P) -> int:
+    return p.v
+",
+        &["m.read_v(m.P())", "m.P().v"],
+    ) else {
+        return;
+    };
+    assert_eq!(kept, "function");
+    let Some(kept) = kept_after(
+        "outgrowfield",
+        "\
+class P:
+    def __init__(self) -> None:
+        self.x = 1
+
+
+P.x = 5
+
+
+def read_x(p: P) -> int:
+    return p.x
+",
+        &["m.read_x(m.P())", "m.P.x"],
+    ) else {
+        return;
+    };
+    assert_eq!(kept, "function");
+}
+
+#[test]
+fn a_method_the_module_body_rewrites_on_a_data_class_leaves_the_module_interpreted() {
+    // a `data class`'s twin is the class `@dataclass(slots=True)` made again out of what the
+    // statement built, so the twin is not the statement's class and the rewrite was neither
+    // carried nor noticed: `P(1).m()` answered 1 where python answers 2, typed call or not.
+    // the decorator copies every method across as the same object, which is what still says
+    // the module body wrote over one
+    let source = "\
+data class P:
+    x: int
+
+    def m(self) -> int:
+        return 1
+
+
+P.m = lambda self: 2
+
+
+def call_p(p: P) -> int:
+    return p.m()
+
+
+class Kept:
+    def m(self) -> int:
+        return 0
+";
+    let Some(compiled) = agree_in(
+        "outgrowdata",
+        source,
+        &["m.call_p(m.P(1))", "m.P(1).m()", "m.P(1)"],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_outgrowdata as m\nprint(type(m.Kept.m).__name__)\n",
+    );
+    assert_eq!(out, "function");
+
+    // and a data class nothing wrote to stays compiled
+    let Some(compiled) = agree_in(
+        "outgrowdatakept",
+        "\
+data class P:
+    x: int
+
+    def m(self) -> int:
+        return 1
+
+
+def call_p(p: P) -> int:
+    return p.m()
+",
+        &["m.call_p(m.P(1))", "m.P(1)"],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_outgrowdatakept as m\nprint(type(m.P.m).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor");
+}
+
+#[test]
+fn a_dunder_or_a_field_the_module_body_writes_on_a_data_class_leaves_the_module_interpreted() {
+    // the decorator writes every dunder it generates onto the class it makes, and a slot
+    // for every field, so the body the statement left cannot say whether one of those was
+    // the decorator's or the module body's. the class the statement bound, after the
+    // decorator, can. each write is a module of its own, since any one of them leaves the
+    // whole module interpreted and would hide the rest
+    let cases: [(&str, &str, &str); 3] = [
+        // `repr` answered `Point(x=1)` where python answers `point`
+        (
+            "outgrowdunder",
+            "\
+data class Point:
+    x: int
+
+
+setattr(Point, '__repr__', lambda self: 'point')
+",
+            "repr(m.Point(1))",
+        ),
+        // `==` answered False where python answers True
+        (
+            "outgrowhelper",
+            "\
+def install(cls: type) -> None:
+    setattr(cls, '__eq__', lambda self, other: True)
+
+
+frozen data class Pair:
+    a: int
+
+
+install(Pair)
+",
+            "m.Pair(1) == m.Pair(2)",
+        ),
+        // a field read at its offset answered 1 where python cannot build the instance
+        (
+            "outgrowfield",
+            "\
+data class Held:
+    v: int
+
+
+setattr(Held, 'v', property(lambda self: 42))
+
+
+def read_v(h: Held) -> int:
+    return h.v
+",
+            "str(_capture(lambda: m.read_v(m.Held(1))))",
+        ),
+    ];
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    for (tag, source, call) in cases {
+        let source =
+            format!("{source}\n\nclass Kept:\n    def m(self) -> int:\n        return 0\n");
+        let Some(compiled) = agree_in(
+            tag,
+            &source,
+            &[call],
+            false,
+            by_irbuild::Language::BasedPython,
+        ) else {
+            return;
+        };
+        let out = run(
+            &python,
+            &compiled,
+            &format!("import by_diff_{tag} as m\nprint(type(m.Kept.m).__name__)\n"),
+        );
+        assert_eq!(out, "function", "{tag}");
+    }
+
+    // and the dunders the decorator wrote itself, on a frozen data class and on one standing
+    // on another, leave the module compiled
+    let Some(compiled) = agree_in(
+        "outgrowdunderkept",
+        "\
+data class Base:
+    x: int
+
+
+data class Point(Base):
+    y: int
+
+
+frozen data class Pair:
+    a: int
+",
+        &[
+            "repr(m.Point(1, 2))",
+            "m.Pair(1) == m.Pair(1)",
+            "hash(m.Pair(1)) == hash(m.Pair(1))",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_outgrowdunderkept as m\n\
+         print(type(m.Point.__dict__['__repr__']).__name__, type(m.Pair.__dict__['__eq__']).__name__)\n",
+    );
+    assert_eq!(out, "wrapper_descriptor wrapper_descriptor");
+}
+
+#[test]
+fn a_dunder_the_module_body_writes_without_naming_it_leaves_the_module_interpreted() {
+    // a dunder is what a type slot answers, and the emitted type's slot is its compiled body
+    // — so a dunder the module body writes onto the twin is never carried. `C.__repr__ = f`
+    // is declined where it is written, but `setattr` and a helper the body calls are not
+    // shapes the source says anything about: `repr` answered 'compiled' where python answers
+    // 'rewritten', and `len` raised where python answers 4. a class another extends has the
+    // same slot, so it is the same answer
+    let Some(kept) = kept_after(
+        "outgrowdunderset",
+        "\
+class D:
+    def __repr__(self) -> str:
+        return 'compiled'
+
+
+setattr(D, '__repr__', lambda self: 'rewritten')
+
+
+def show(d: D) -> str:
+    return repr(d)
+",
+        &["repr(m.D())", "m.show(m.D())"],
+    ) else {
+        return;
+    };
+    assert_eq!(kept, "function");
+    let Some(kept) = kept_after(
+        "outgrowdunderhelper",
+        "\
+class D:
+    def m(self) -> int:
+        return 1
+
+
+def give() -> None:
+    D.__len__ = lambda self: 4
+
+
+give()
+",
+        &["str(_capture(len, m.D()))"],
+    ) else {
+        return;
+    };
+    assert_eq!(kept, "function");
+    let Some(kept) = kept_after(
+        "outgrowdunderbase",
+        "\
+class Base:
+    def __repr__(self) -> str:
+        return 'compiled'
+
+
+class Derived(Base):
+    pass
+
+
+setattr(Base, '__repr__', lambda self: 'rewritten')
+",
+        &["repr(m.Base())", "repr(m.Derived())"],
+    ) else {
+        return;
+    };
+    assert_eq!(kept, "function");
+}
+
+#[test]
+fn a_write_the_compiled_module_answers_for_leaves_it_compiled() {
+    // what `By_CarryRewrittenMembers` carries is enough wherever every access to the member
+    // asks the class: a method of a class another extends is called behind a licence armed
+    // after the carry, a name the class statement never wrote is reached by lookup, and so
+    // is a class constant. none of those leaves the module interpreted
+    let Some(kept) = kept_after(
+        "outgrowkept",
+        "\
+class Base:
+    def m(self) -> int:
+        return 1
+
+
+class Derived(Base):
+    pass
+
+
+class Plain:
+    LIMIT = 3
+
+    def m(self) -> int:
+        return 1
+
+
+Base.m = lambda self: 2
+Plain.extra = lambda self: 9
+Plain.LIMIT = 4
+
+
+def call_base(b: Base) -> int:
+    return b.m()
+
+
+def limit(p: Plain) -> int:
+    return p.LIMIT
+",
+        &[
+            "m.call_base(m.Base())",
+            "m.call_base(m.Derived())",
+            "m.Plain().extra()",
+            "m.limit(m.Plain())",
+        ],
+    ) else {
+        return;
+    };
+    assert_eq!(kept, "method_descriptor");
+}
+
 #[test]
 fn a_class_keeps_what_a_factory_installed_on_it_after_the_class_statement() {
     // `multiprocessing.managers` is the case this is drawn from. it defines `SyncManager`
@@ -27003,6 +28323,112 @@ class Dec(Base):
         "Wrapped Dec method_descriptor\n\
          dec->base"
     );
+}
+
+/// every shape of function python gives the `__class__` cell to: a method, a static and
+/// a class method, a generator, and a nested function, a lambda and a comprehension
+/// inside a method — each written in the body of `A`, so each reads `A` whatever class
+/// the receiver is. a method that binds `__class__` itself reads its own local, and a
+/// function outside any class body has no cell at all
+const CLASS_CELL_READS: &str = "\
+class A:
+    def me(self) -> object:
+        return __class__
+
+    def name(self) -> str:
+        return __class__.__name__
+
+    def nested(self) -> object:
+        def inner() -> object:
+            return __class__
+        return inner()
+
+    def lam(self) -> object:
+        return (lambda: __class__)()
+
+    def comp(self) -> list[object]:
+        return [__class__ for _ in range(2)]
+
+    @staticmethod
+    def st() -> object:
+        return __class__
+
+    @classmethod
+    def cm(cls) -> object:
+        return __class__
+
+    def local(self) -> object:
+        __class__ = 5
+        return __class__
+
+    def gen(self):
+        yield __class__
+
+
+class B(A):
+    def mine(self) -> object:
+        return __class__
+
+
+def outside() -> object:
+    try:
+        return __class__
+    except NameError as e:
+        return str(e)
+";
+
+#[test]
+fn a_method_reads_the_class_it_is_written_in_as_its_class_cell() {
+    let dir = agree_python_built(
+        "classcell",
+        CLASS_CELL_READS,
+        &[
+            "(m.A().me() is m.A, m.A().name(), m.B().me() is m.A, m.B().mine() is m.B)",
+            "(m.B().nested() is m.A, m.B().lam() is m.A, [c is m.A for c in m.B().comp()])",
+            "(m.A.st() is m.A, m.B.cm() is m.A, next(m.B().gen()) is m.A, m.B().local())",
+            "m.outside()",
+        ],
+    );
+    let (Some(dir), Some((python, _))) = (dir, environment()) else {
+        return;
+    };
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_classcell as m\n\
+         print(*(type(m.A.__dict__[n]).__name__ for n in ('me', 'nested', 'lam', 'comp', 'gen')),\n\
+         \x20     type(m.A.__dict__['st'].__func__).__name__, type(m.A.__dict__['cm'].__func__).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor ".repeat(7).trim_end());
+}
+
+#[test]
+fn a_data_class_method_reads_the_emitted_type_as_its_class_cell() {
+    // `@dataclass(slots=True)` makes the class again and moves each method's cell onto
+    // the class it made, which is the one the name holds — and here the emitted type
+    let dir = agree_in(
+        "classcelldc",
+        "\
+data class Point:
+    x: int
+
+    def owner(self) -> object:
+        return __class__
+",
+        &["m.Point(1).owner() is m.Point"],
+        false,
+        by_irbuild::Language::BasedPython,
+    );
+    let (Some(dir), Some((python, _))) = (dir, environment()) else {
+        return;
+    };
+    let out = run(
+        &python,
+        &dir,
+        "import by_diff_classcelldc as m\n\
+         print(type(m.Point.__dict__['owner']).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor");
 }
 
 #[test]
@@ -34791,6 +36217,66 @@ data class OnPlain(Plain):
             "[f.name for f in __import__('dataclasses').fields(m.OnPlain)]",
         ],
     );
+}
+
+#[test]
+fn a_zero_argument_super_in_a_data_class_reaches_the_base() {
+    // below 3.13 `dataclass(slots=True)` makes the class again and leaves each method's
+    // `__class__` cell on the class it replaced, so the twin is slotted another way there.
+    // a compiled method names its class outright, and `tag` is left to the twin: its cell
+    // has to end up on the emitted type, or `super()` refuses the instance. run this on
+    // 3.11 and 3.12 as well as the versions ci pins
+    let Some(compiled) = agree_built(
+        "dcsuper",
+        "\
+def keep(f: object) -> object:
+    return f
+
+
+data class Child:
+    x: int
+
+    def describe(self) -> str:
+        return 'child ' + super().__format__('')
+
+    @property
+    def label(self) -> str:
+        return 'label ' + super().__format__('')
+
+    @property
+    @keep
+    def tag(self) -> str:
+        return 'tag ' + super().__format__('')
+
+
+frozen data class Point:
+    x: int
+
+    def describe(self) -> str:
+        return 'point ' + super().__format__('')
+",
+        &[
+            "m.Child(1).describe()",
+            "m.Child(1).label",
+            "m.Child(1).tag",
+            "m.Point(2).describe()",
+        ],
+        true,
+        by_irbuild::Language::BasedPython,
+        Config::default(),
+    ) else {
+        return;
+    };
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_dcsuper as m\n\
+         print(type(m.Child.__dict__['describe']).__name__, type(m.Point.__dict__['describe']).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor method_descriptor");
 }
 
 #[test]
@@ -42592,6 +44078,56 @@ def through():
 }
 
 #[test]
+fn a_class_writing_new_is_reached_through_what_a_subclass_or_a_rebinding_left() {
+    // a written `__new__` is published by assigning it onto the finished type, so the type
+    // is one python can subclass and write to. compiled code reaching `m` or `v` on such a
+    // class has to see an interpreted subclass's override and a method rebound after import,
+    // as a class with a base does. the last call rebinds `m`, so it stays last
+    let Some(compiled) = agree_python_built(
+        "newsubclassed",
+        "\
+class N:
+    def __new__(cls) -> 'N':
+        return object.__new__(cls)
+
+    def m(self) -> int:
+        return 1
+
+    @property
+    def v(self) -> int:
+        return 10
+
+
+def call_m(n: N) -> int:
+    return n.m()
+
+
+def read_v(n: N) -> int:
+    return n.v
+",
+        &[
+            "m.call_m(m.N())",
+            "m.call_m(type('S', (m.N,), {'m': lambda self: 2})())",
+            "m.read_v(type('S', (m.N,), {'v': property(lambda self: 20)})())",
+            "(setattr(m.N, 'm', lambda self: 3), m.call_m(m.N()))[1]",
+        ],
+    ) else {
+        return;
+    };
+    // the interpreted leg holds functions, so the answers above only say something where
+    // the compiled leg holds its own method
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    let out = run(
+        &python,
+        &compiled,
+        "import by_diff_newsubclassed as m\nprint(type(m.N.__dict__['m']).__name__)\n",
+    );
+    assert_eq!(out, "method_descriptor");
+}
+
+#[test]
 fn a_new_that_answers_another_class_is_declined() {
     // python lets `__new__` answer with anything and runs `__init__` only where the answer
     // is an instance of the class asked for. the checker does not follow it, so every
@@ -43754,30 +45290,18 @@ fn refused_import(tag: &str, source: &str) -> Option<(Scratch, String)> {
         eprintln!("skipping {tag}: no working C toolchain ({error})");
         return None;
     }
-    let out = Command::new(&python)
-        .env("PYTHONIOENCODING", "utf-8")
-        .args([
-            "-c",
-            &format!(
-                "import sys\n\
-                 sys.path.insert(0, {:?})\n\
-                 try:\n\
-                 \x20   import {module}\n\
-                 except ImportError as error:\n\
-                 \x20   print(error)\n\
-                 else:\n\
-                 \x20   print('the import was not refused')\n",
-                dir.display().to_string()
-            ),
-        ])
-        .output()
-        .expect("the interpreter runs");
-    assert!(
-        out.status.success(),
-        "the snippet failed:\n{}",
-        String::from_utf8_lossy(&out.stderr)
+    let message = run(
+        &python,
+        &dir,
+        &format!(
+            "try:\n\
+             \x20   import {module}\n\
+             except ImportError as error:\n\
+             \x20   print(error)\n\
+             else:\n\
+             \x20   print('the import was not refused')\n"
+        ),
     );
-    let message = String::from_utf8_lossy(&out.stdout).trim().to_string();
     Some((dir, message))
 }
 
@@ -43848,6 +45372,50 @@ class Mixin(Root, Extra):
         "by_diff_orphanpair.Mixin stands on an orphaned base: by_diff_orphanpair.Root is \
          what this module's own base of that name means and is not among its __bases__, \
          so isinstance answers False where python answers True"
+    );
+}
+
+#[test]
+fn a_property_the_metaclass_kept_is_counted_interpreted() {
+    // a class on a base from outside whose metaclass is not `type` installs, but it is built
+    // by calling that metaclass, which is handed the interpreted `property` and keeps it. the
+    // report counts `OnAbc.v`'s getter compiled all the same: only the import knows what
+    // `abc.ABC` meant. so each published property writes a census row of its own, and the
+    // getter it names is the one that runs
+    let source = "\
+import abc
+
+
+class OnAbc(abc.ABC):
+    @property
+    def v(self) -> int:
+        return 1
+
+
+class Plain:
+    @property
+    def p(self) -> int:
+        return 2
+";
+    let Some((python, dir, report)) = built_python("installprop", source) else {
+        return;
+    };
+    assert!(report.contains("property v: get"), "{report}");
+    assert!(report.contains("property p: get"), "{report}");
+
+    let out = install_census(
+        &python,
+        &dir,
+        "by_diff_installprop",
+        "print(type(m.OnAbc.__dict__['v'].fget).__name__, type(m.Plain.__dict__['p'].fget).__name__)\n",
+    );
+    assert_eq!(
+        out,
+        "function method_descriptor\n\
+         by_diff_installprop\tOnAbc.v\tproperty-interpreted\n\
+         by_diff_installprop\tPlain.p\tproperty-compiled\n\
+         by_diff_installprop\tOnAbc\tinstalled\n\
+         by_diff_installprop\tPlain\tinstalled"
     );
 }
 

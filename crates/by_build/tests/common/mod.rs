@@ -68,12 +68,26 @@ impl Drop for Scratch {
     }
 }
 
+/// what [`python_output`] names the program it runs, in the directory it runs it against
+///
+/// both legs of a comparison run a program of this name, so a frame or a warning that
+/// names the program names it the same way in each
+const SNIPPET: &str = "by_snippet.py";
+
 /// run `body` with `dir` on `sys.path` and hand back what it printed
+///
+/// the program is written to [`SNIPPET`] in `dir` and run from there rather than passed
+/// with `-c`: windows caps a command line at 32767 characters, and the helpers a
+/// differential snippet carries are past that on their own. a failing test keeps `dir`,
+/// so the program that failed is there to run again
 pub(crate) fn python_output(python: &str, dir: &Path, body: &str) -> String {
     let prelude = format!(
         "import sys\nsys.path.insert(0, {:?})\n",
         dir.display().to_string()
     );
+    std::fs::create_dir_all(dir).expect("the snippet's directory is made");
+    let program = dir.join(SNIPPET);
+    std::fs::write(&program, prelude + body).expect("the snippet is written");
     let output = Command::new(python)
         // a redirected stdout otherwise takes the platform's own code page,
         // which on windows is `cp1252` and cannot spell an astral character at
@@ -83,7 +97,7 @@ pub(crate) fn python_output(python: &str, dir: &Path, body: &str) -> String {
         // what either build computed — `repr` escapes anything utf-8 could not
         // carry before it is ever written
         .env("PYTHONIOENCODING", "utf-8")
-        .args(["-c", &(prelude + body)])
+        .arg(&program)
         .output()
         .expect("the interpreter runs");
     assert!(

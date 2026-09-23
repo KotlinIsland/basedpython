@@ -50,6 +50,12 @@
 #error "a basedpython extension needs python 3.11 or later"
 #endif
 
+/* 3.13 made the fastcall-with-keywords function type public; below it the same type is
+ * only spelled with a leading underscore */
+#if PY_VERSION_HEX < 0x030D0000
+typedef _PyCFunctionFastWithKeywords PyCFunctionFastWithKeywords;
+#endif
+
 /* the major and minor at the front of a cpython version string
  *
  * `Py_GetVersion` answers the whole banner — `"3.14.0a1 (main, ...) [Clang ...]"` — and
@@ -1772,6 +1778,14 @@ BY_COLD void By_FieldMissing(PyObject *o, const char *name, int qualified) {
     }
 }
 
+/* raise the `AttributeError` a descriptor with no setter raises, for a field that
+ * cannot be written */
+BY_COLD int By_FieldNotWritable(PyObject *o, const char *name) {
+    PyErr_Format(PyExc_AttributeError, "attribute '%s' of '%s' objects is not writable", name,
+                 Py_TYPE(o)->tp_name);
+    return -1;
+}
+
 /* python truthiness, which can raise from a user `__bool__` or `__len__` */
 static inline char By_Truthy(PyObject *o) {
     int result = PyObject_IsTrue(o);
@@ -3121,7 +3135,15 @@ static inline char By_LookupGlobalBitSite(ByGlobalUnboxedSite *site, ByGlobalSit
  * good: the compiled callers call the function object, and the function's own python
  * entry hands the call to the interpreted definition, given the defaults the published
  * function holds now. an edit made *inside* the `__kwdefaults__` dict is not a
- * reassignment and nothing reports it, so that one is not seen */
+ * reassignment and nothing reports it, so that one is not seen.
+ *
+ * python before 3.12 has no watchers to register, and a free-threaded build registers
+ * none, so there the question is asked at each call instead: whether the name still holds
+ * the published function, and whether that function still holds the code, defaults and
+ * keyword defaults the site was armed with. the one answer that differs is for a function
+ * given back the very tuple or dict it was armed with after a reassignment: the watchers
+ * keep it moved, where this finds it standing again, so an edit made inside that
+ * `__kwdefaults__` dict in the meantime is not seen */
 
 /* what a watcher registered by any compiled module writes. its layout is fixed, because
  * the watcher is registered once per interpreter by whichever module gets there first,
@@ -3141,6 +3163,10 @@ typedef struct {
     ByFunctionFlags *flags;
 } ByFunctionName;
 
+#if !defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030C0000
+#define BY_FUNCTION_SITES 1
+#endif
+
 typedef struct {
     ByFunctionFlags flags;
     /* the function this module published under the name, and the interpreted
@@ -3155,13 +3181,17 @@ typedef struct {
     /* both watchers answer for this site, so a call that finds the published function
      * under its name again may go straight to the native entry again */
     char watched;
+#ifndef BY_FUNCTION_SITES
+    /* what the published function held when the site was armed, which a build with no
+     * watchers compares against at each call. held strongly, so a replacement can never
+     * be allocated where one of these was and compare equal to it */
+    PyObject *code;
+    PyObject *defaults;
+    PyObject *kwdefaults;
+#endif
 } ByFunctionSite;
 
 #define BY_FUNCTION_SITE_INIT { { 0, 0 }, NULL, NULL, NULL, { NULL, NULL }, 0 }
-
-#if !defined(Py_GIL_DISABLED) && PY_VERSION_HEX >= 0x030C0000
-#define BY_FUNCTION_SITES 1
-#endif
 
 #ifdef BY_FUNCTION_SITES
 
@@ -3340,10 +3370,11 @@ static void By_FindFunctionWatch(void) {
  * being told about it
  *
  * a site that cannot be watched is left not standing, which sends every compiled call
- * through the function object: slower, and the same program. a build with no function
- * watchers — before 3.12, or free-threaded — is always in that state. `called` says
- * whether any compiled call asks the site: one nobody asks needs no word of writes to its
- * name, only of what happens to the function its own python entry stands for */
+ * through the function object: slower, and the same program. a build with no watchers
+ * at all — before 3.12, or free-threaded — takes note of what the function holds
+ * instead, and asks again at each call. `called` says whether any compiled call asks the
+ * site: one nobody asks needs no word of writes to its name, only of what happens to the
+ * function its own python entry stands for */
 static int By_ArmFunctionSite(ByFunctionSite *site, PyObject *dict, const char *name, int called) {
     if (site->name == NULL) site->name = By_InternedStr(name, (Py_ssize_t)strlen(name));
     if (site->name == NULL) return -1;
@@ -3406,9 +3437,27 @@ static int By_ArmFunctionSite(ByFunctionSite *site, PyObject *dict, const char *
         site->watched = 1;
         site->flags.stands = 1;
     }
+#else
+    (void)called;
+    if (site->twin != NULL) {
+        site->code = Py_NewRef(PyFunction_GET_CODE(forwarder));
+        site->defaults = Py_XNewRef(PyFunction_GET_DEFAULTS(forwarder));
+        site->kwdefaults = Py_XNewRef(PyFunction_GET_KW_DEFAULTS(forwarder));
+    }
 #endif
     return 0;
 }
+
+#ifndef BY_FUNCTION_SITES
+/* whether the published function holds what it held when the site was armed. a site
+ * that is not armed, or published something other than a function, has nothing to hold */
+static inline char By_FunctionUnmoved(ByFunctionSite *site) {
+    PyObject *forwarder = site->forwarder;
+    return site->twin != NULL && PyFunction_GET_CODE(forwarder) == site->code
+           && PyFunction_GET_DEFAULTS(forwarder) == site->defaults
+           && PyFunction_GET_KW_DEFAULTS(forwarder) == site->kwdefaults;
+}
+#endif
 
 /* what `By_ResolveFunction` answers where the read failed. an address nothing can be, so
  * NULL is left free to say the native entry stands */
@@ -3441,14 +3490,69 @@ BY_COLD PyObject *By_ResolveFunctionSlow(ByFunctionSite *site, PyObject *dict, c
 /* NULL where the native entry may stand in for the function object, the object under the
  * name as a new reference where it may not, or `BY_RESOLVE_FAILED` with the error set */
 static inline PyObject *By_ResolveFunction(ByFunctionSite *site, PyObject *dict, const char *name) {
+#ifdef BY_FUNCTION_SITES
     if (BY_LIKELY(site->flags.stands)) return NULL;
+#else
+    /* only compared, so a name another thread rebinds meanwhile cannot hand back a
+     * reference that is gone */
+    if (BY_LIKELY(By_FunctionUnmoved(site))) {
+        PyObject *held = PyDict_GetItemWithError(dict, site->name);
+        if (BY_LIKELY(held == site->forwarder)) return NULL;
+        if (held == NULL && PyErr_Occurred()) return BY_RESOLVE_FAILED;
+    }
+#endif
     return By_ResolveFunctionSlow(site, dict, name);
 }
 
-/* whether a compiled call may go straight to the native entry: nothing can fail, and a
- * call that may not goes through the function object, which raises what python raises */
+/* whether a compiled call may go straight to the native entry, asked just after the name
+ * was resolved: nothing can fail, and a call that may not goes through the function
+ * object, which raises what python raises
+ *
+ * with no watchers the resolution has read the name itself, and nothing has run since,
+ * so what is left to ask is whether the function it found has moved */
 static inline char By_FunctionStands(ByFunctionSite *site) {
+#ifdef BY_FUNCTION_SITES
     return site->flags.stands;
+#else
+    return By_FunctionUnmoved(site);
+#endif
+}
+
+/* whether a module function stands, asked on the way into a loop that asks nothing again
+ * until it reaches code that can run python
+ *
+ * as for a builtin, only python code can rebind the name or move the function, so the
+ * answer stands only while no other thread can run either, and a build without the GIL
+ * answers no. a failed read answers no too, and leaves no error behind: the loop as
+ * written reads the name again where python would, and raises what python raises */
+static inline char By_FunctionStandsOnEntry(ByFunctionSite *site, PyObject *dict) {
+#if defined(Py_GIL_DISABLED)
+    (void)site;
+    (void)dict;
+    return 0;
+#elif defined(BY_FUNCTION_SITES)
+    (void)dict;
+    return site->flags.stands;
+#else
+    PyObject *held;
+    if (!By_FunctionUnmoved(site)) return 0;
+    held = PyDict_GetItemWithError(dict, site->name);
+    if (held == NULL) {
+        PyErr_Clear();
+        return 0;
+    }
+    return held == site->forwarder;
+#endif
+}
+
+/* whether the published function's code or defaults have moved since the module installed
+ * it, which sends a call its own python entry makes to the interpreted definition */
+static inline char By_FunctionMoved(ByFunctionSite *site) {
+#ifdef BY_FUNCTION_SITES
+    return site->flags.moved;
+#else
+    return site->twin != NULL && !By_FunctionUnmoved(site);
+#endif
 }
 
 /* the object a call the native entry was turned away from goes through, as a new
@@ -6982,6 +7086,13 @@ static inline int By_CarryDataclassMembers(PyObject *twin, PyObject *type) {
         /* `@dataclass` writes the class's signature here where the body wrote no
          * docstring, and leaves the docstring alone where it did */
         "__doc__",
+        /* the field names `slots=True` declares, which `copyreg` reads to learn what an
+         * instance with no dict holds — and so what `copy` and `pickle` hand over */
+        "__slots__",
+        /* what `slots=True` adds to a frozen class, which pickles through them: python's
+         * own state protocol would set each field back through the `__setattr__` that
+         * refuses every write */
+        "__getstate__", "__setstate__",
         NULL};
     const char *const *name;
     PyObject *source, *target;
@@ -7429,6 +7540,17 @@ static void By_RecordInstall(const char *module, const char *name, const char *v
     fclose(out);
 }
 
+/* one census row for a published property, named `Class.name` so it can never be taken for
+ * a class's own row. nothing is formatted unless the census was asked for */
+static void By_RecordProperty(const char *module, const char *owner, const char *name,
+                              const char *verdict) {
+    char qualified[512];
+    const char *path = getenv(BY_INSTALL_CENSUS_ENV);
+    if (path == NULL || path[0] == '\0') return;
+    PyOS_snprintf(qualified, sizeof qualified, "%s.%s", owner, name);
+    By_RecordInstall(module, qualified, verdict);
+}
+
 /* whether `wanted` is among the type's own bases, by identity */
 static int By_HasBase(PyObject *type, PyObject *wanted) {
     PyObject *chain = ((PyTypeObject *)type)->tp_bases;
@@ -7588,6 +7710,51 @@ static int By_RecordClassBody(PyObject *state, PyObject *name, PyObject *body, P
     return PyDict_SetItem(statements, name, cls);
 }
 
+/* the class a `class` statement bound, after every one of its decorators, recorded with
+ * what its dict held at that moment
+ *
+ * `pair` is `(state, decorator)`, where `decorator` is the outermost one the statement
+ * wrote. its answer is what the name is bound to, so the dict read here is exactly what the
+ * decorators left and nothing the module body did afterwards — see `By_BodyOutgrewClass` */
+static PyObject *By_RecordBound(PyObject *pair, PyObject *written) {
+    PyObject *state = PyTuple_GET_ITEM(pair, 0);
+    PyObject *decorator = PyTuple_GET_ITEM(pair, 1);
+    PyObject *bound = PyDict_GetItemString(state, "bound");
+    PyObject *cls, *name, *snapshot, *record;
+    int failed;
+    if (bound == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "module body capture lost its record");
+        return NULL;
+    }
+    cls = PyObject_CallOneArg(decorator, written);
+    if (cls == NULL || !PyType_Check(cls) || ((PyTypeObject *)cls)->tp_dict == NULL) return cls;
+    name = PyObject_GetAttrString(cls, "__name__");
+    snapshot = name == NULL ? NULL : PyDict_Copy(((PyTypeObject *)cls)->tp_dict);
+    record = snapshot == NULL ? NULL : PyTuple_Pack(2, cls, snapshot);
+    /* a record that cannot be kept is raised out of the statement, as a body that cannot
+     * be is: init would otherwise leave the module interpreted without saying why */
+    failed = record == NULL || PyDict_SetItem(bound, name, record) < 0;
+    Py_XDECREF(record);
+    Py_XDECREF(snapshot);
+    Py_XDECREF(name);
+    if (failed) {
+        Py_DECREF(cls);
+        return NULL;
+    }
+    return cls;
+}
+
+/* the decorator `__build_class__(decorator)` hands back in place of `decorator`: the same
+ * call, recorded by `By_RecordBound` */
+static PyObject *By_BoundRecorder(PyObject *state, PyObject *decorator) {
+    static PyMethodDef record = {"__build_class__", (PyCFunction)By_RecordBound, METH_O, NULL};
+    PyObject *pair = PyTuple_Pack(2, state, decorator), *recorder;
+    if (pair == NULL) return NULL;
+    recorder = PyCFunction_New(&record, pair);
+    Py_DECREF(pair);
+    return recorder;
+}
+
 /* `__build_class__`, recording what each module-level `class` statement wrote
  *
  * `state` holds `delegate` (the `__build_class__` this one displaced), `bodies` (the
@@ -7611,6 +7778,14 @@ static PyObject *By_CaptureClassBody(PyObject *state, PyObject *args, PyObject *
     if (delegate == NULL || held == NULL) {
         PyErr_SetString(PyExc_RuntimeError, "module body capture lost its `__build_class__`");
         return NULL;
+    }
+    /* `@__build_class__(decorator)` is what the twin writes around the outermost decorator
+     * of a class init checks against what its statement bound. python's own refuses a
+     * single argument, so the form means nothing else — and the frame asking is what says
+     * whether it was written in this module or reached this hook from another run's */
+    if (PyTuple_GET_SIZE(args) == 1 && (kwds == NULL || PyDict_GET_SIZE(kwds) == 0)
+        && PyEval_GetGlobals() == held) {
+        return By_BoundRecorder(state, PyTuple_GET_ITEM(args, 0));
     }
     cls = PyObject_Call(delegate, args, kwds);
     if (cls == NULL || PyTuple_GET_SIZE(args) < 2 || !PyType_Check(cls)) return cls;
@@ -7834,20 +8009,26 @@ static inline PyObject *By_ExecModuleBody(const By_Fallback *fallback, PyObject 
  * hands back `{name: body}` for the classes the body wrote at module level, as a new
  * reference, or NULL with an exception set where the body raised. `*statements` is given
  * `{name: class}` alongside it, the class each of those statements built before any
- * decorator was handed it, as a new reference or NULL */
+ * decorator was handed it, and `*bound` is given `{name: (class, dict)}` for each statement
+ * the twin wrote `@__build_class__(...)` over — see `By_RecordBound` — each as a new
+ * reference or NULL */
 static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *dict,
-                                         PyObject **statements) {
+                                         PyObject **statements, PyObject **bound) {
     static PyMethodDef capture = {"__build_class__",
                                   (PyCFunction)(void (*)(void))By_CaptureClassBody,
                                   METH_VARARGS | METH_KEYWORDS, NULL};
     PyObject *bodies, *stood, *mapping, *displaced, *state, *wrapper, *result;
     int failed;
     *statements = NULL;
+    *bound = NULL;
     bodies = PyDict_New();
     if (bodies == NULL) return NULL;
     *statements = PyDict_New();
-    if (*statements == NULL) {
+    *bound = PyDict_New();
+    if (*statements == NULL || *bound == NULL) {
         Py_DECREF(bodies);
+        Py_CLEAR(*statements);
+        Py_CLEAR(*bound);
         return NULL;
     }
     /* an emitted module's dict has no `__builtins__` of its own, and python would then
@@ -7863,6 +8044,7 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
         Py_XDECREF(stood);
         Py_DECREF(bodies);
         Py_CLEAR(*statements);
+        Py_CLEAR(*bound);
         if (!PyErr_Occurred()) {
             PyErr_SetString(PyExc_RuntimeError,
                             "no builtins `__build_class__` to run the module body against");
@@ -7874,6 +8056,7 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
     failed = state == NULL || PyDict_SetItemString(state, "delegate", displaced) < 0
              || PyDict_SetItemString(state, "bodies", bodies) < 0
              || PyDict_SetItemString(state, "statements", *statements) < 0
+             || PyDict_SetItemString(state, "bound", *bound) < 0
              || PyDict_SetItemString(state, "globals", dict) < 0;
     wrapper = failed ? NULL : PyCFunction_New(&capture, state);
     failed = failed || wrapper == NULL
@@ -7900,6 +8083,7 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
     if (failed || result == NULL) {
         Py_DECREF(bodies);
         Py_CLEAR(*statements);
+        Py_CLEAR(*bound);
         return NULL;
     }
     return bodies;
@@ -7909,6 +8093,109 @@ static inline PyObject *By_RunModuleBody(const By_Fallback *fallback, PyObject *
 static inline PyObject *By_ClassBody(PyObject *bodies, const char *name) {
     if (bodies == NULL) return NULL;
     return PyDict_GetItemString(bodies, name);
+}
+
+/* whether `a` and `b` hold different objects under `key`, absence included */
+static inline int By_HoldsApart(PyObject *a, PyObject *b, PyObject *key) {
+    return PyDict_GetItem(a, key) != PyDict_GetItem(b, key);
+}
+
+/* whether reading the class wrote `key` into `now`, where the `class` statement left
+ * `body` without it
+ *
+ * 3.14 works a class's annotations out on demand, and two reads write the answer back:
+ * `__annotations__` keeps the mapping under `BY_ANNOTATIONS`, which is carried, and
+ * `__annotate__` — which the first also asks — keeps `None` under `__annotate_func__`
+ * where the class has no function computing them. a class with one holds it from the
+ * statement on, so anything else under that key, or its going, is a write the body made */
+static inline int By_ReadWrote(PyObject *now, PyObject *body, PyObject *key) {
+#if PY_VERSION_HEX >= 0x030E0000
+    return PyUnicode_CompareWithASCIIString(key, "__annotate_func__") == 0
+           && PyDict_GetItem(body, key) == NULL && PyDict_GetItem(now, key) == Py_None;
+#else
+    (void)now;
+    (void)body;
+    (void)key;
+    return 0;
+#endif
+}
+
+/* whether `key` is a dunder the class as it stands, `now`, and the dict its statement
+ * left, `body`, hold different objects under — the annotations aside, which are carried
+ * (see `By_CarryAnnotations`), and so is what a read writes (see `By_ReadWrote`) */
+static inline int By_DunderApart(PyObject *now, PyObject *body, PyObject *key) {
+    return PyUnicode_CheckExact(key) && By_IsDunder(key)
+           && PyUnicode_CompareWithASCIIString(key, BY_ANNOTATIONS) != 0
+           && !By_ReadWrote(now, body, key) && By_HoldsApart(now, body, key);
+}
+
+/* whether the module body changed a class after its `class` statement in a way the type
+ * replacing it cannot answer for, so that init has to leave the module as its interpreted
+ * definition built it. both kinds of change are read off the twin against the dict the
+ * statement left — see `By_CaptureClassBody`:
+ *
+ * - a dunder added, rewritten or deleted, on any class. `By_AdoptTwinAttributes` says why
+ *   none is carried: a dunder is what a type slot answers, and the slot would go on
+ *   answering the compiled body. the frontend declines a class the module body writes a
+ *   dunder onto by name, `C.__len__ = f`, and this is the same refusal for the shapes no
+ *   reading of the source can see — `setattr(C, name, f)`, or a helper the body calls. the
+ *   annotations are carried, so they are left out
+ * - anything written over one of `members`, which names what compiled code reaches on the
+ *   class with no lookup at all: a method called, a property half run, a field read at its
+ *   offset. that is sound only because nothing can write to the class once import is over,
+ *   and a write the body made before then is carried into the type's dict, where none of
+ *   those accesses looks. NULL for a class whose every access is checked, which copes with
+ *   a rewrite as it copes with one made after import
+ *
+ * a class whose name no longer holds what its statement built is left alone, as
+ * `By_CarryRewrittenMembers` leaves it. `rebuilt` says the twin is a `data class`, which
+ * `@dataclass(slots=True)` made again out of what the statement built and wrote every
+ * dunder it generates onto — so what that class is read against is not the body but what
+ * the statement *bound*, after its decorators, which `bound` recorded (see
+ * `By_RecordBound`). a dunder the module body wrote afterwards is then told apart from the
+ * decorator's own exactly, whatever the decorator wrote. a data class with no record says
+ * nothing about what its decorator left, and is answered the way that cannot be wrong.
+ * the keys are exact strings because nothing that can run python may be asked while a dict
+ * is being walked */
+static inline int By_BodyOutgrewClass(PyObject *bodies, PyObject *statements, PyObject *bound,
+                                      PyObject *dict, const char *name,
+                                      const char *const *members, int rebuilt) {
+    PyObject *body = By_ClassBody(bodies, name);
+    PyObject *statement = By_ClassBody(statements, name);
+    PyObject *twin = PyDict_GetItemString(dict, name);
+    PyObject *now, *key, *value, *member;
+    Py_ssize_t position = 0, at;
+    int apart;
+    if (rebuilt) {
+        PyObject *record = By_ClassBody(bound, name);
+        if (record == NULL || !PyTuple_Check(record) || PyTuple_GET_SIZE(record) != 2) return 1;
+        statement = PyTuple_GET_ITEM(record, 0);
+        body = PyTuple_GET_ITEM(record, 1);
+    }
+    if (body == NULL || twin == NULL || twin != statement) return 0;
+    if (!PyDict_Check(body) || !PyType_Check(twin)) return 0;
+    now = ((PyTypeObject *)twin)->tp_dict;
+    if (now == NULL) return 0;
+    /* both dicts, so that a dunder only one of them holds is seen whichever it is */
+    while (PyDict_Next(now, &position, &key, &value)) {
+        if (By_DunderApart(now, body, key)) return 1;
+    }
+    position = 0;
+    while (PyDict_Next(body, &position, &key, &value)) {
+        if (By_DunderApart(now, body, key)) return 1;
+    }
+    for (at = 0; members != NULL && members[at] != NULL; at++) {
+        member = PyUnicode_FromString(members[at]);
+        if (member == NULL) {
+            /* a question that cannot be asked is answered the way that cannot be wrong */
+            PyErr_Clear();
+            return 1;
+        }
+        apart = By_HoldsApart(now, body, member);
+        Py_DECREF(member);
+        if (apart) return 1;
+    }
+    return 0;
 }
 
 /* the answer a class pattern gives when the attribute it named is simply absent
@@ -9112,20 +9399,211 @@ static void By_ReleaseInstanceDict(PyObject **slot) {
     Py_DECREF(dict);
 }
 
+/* `object.__getstate__` as python's own answers it for an instance holding slots, less the
+ * one refusal it makes about the layout
+ *
+ * python pickles such an instance as a pair: its dict, or `None` where that is empty, and
+ * the slots it has written, which `copyreg._slotnames` names. before that it checks that the
+ * instance is no bigger than `object`, a dict, a weak-reference list and one word a slot —
+ * and refuses the object otherwise, taking the rest for C state it cannot see. an emitted
+ * instance can be bigger without holding any: a base keeps the word a subclass keeps its
+ * dict in whether or not it has one itself, and a field that may be absent keeps a byte.
+ * see `By_PublishSlottedState` for where this stands in for python's */
+static PyObject *By_SlottedGetState(PyObject *self, PyObject *unused) {
+    PyTypeObject *type = Py_TYPE(self);
+    PyObject *state = Py_None, *copyreg, *names, *held, *pair;
+    Py_ssize_t index;
+    (void)unused;
+    if (type->tp_dictoffset > 0) {
+        PyObject *dict = *(PyObject **)((char *)self + type->tp_dictoffset);
+        if (dict != NULL && PyDict_Check(dict) && PyDict_GET_SIZE(dict) > 0) state = dict;
+    }
+    Py_INCREF(state);
+    copyreg = PyImport_ImportModule("copyreg");
+    names = copyreg == NULL ? NULL
+                            : PyObject_CallMethod(copyreg, "_slotnames", "O", (PyObject *)type);
+    Py_XDECREF(copyreg);
+    if (names == NULL || !PyList_Check(names)) {
+        if (names != NULL) PyErr_SetString(PyExc_TypeError, "copyreg._slotnames didn't return a list");
+        Py_XDECREF(names);
+        Py_DECREF(state);
+        return NULL;
+    }
+    held = PyDict_New();
+    if (held == NULL) goto failed;
+    for (index = 0; index < PyList_GET_SIZE(names); index++) {
+        PyObject *name = PyList_GET_ITEM(names, index);
+        PyObject *value = PyObject_GetAttr(self, name);
+        if (value == NULL) {
+            if (!PyErr_ExceptionMatches(PyExc_AttributeError)) goto failed;
+            PyErr_Clear();
+            continue;
+        }
+        if (PyDict_SetItem(held, name, value) < 0) {
+            Py_DECREF(value);
+            goto failed;
+        }
+        Py_DECREF(value);
+    }
+    Py_DECREF(names);
+    if (PyDict_GET_SIZE(held) == 0) {
+        Py_DECREF(held);
+        return state;
+    }
+    pair = PyTuple_Pack(2, state, held);
+    Py_DECREF(state);
+    Py_DECREF(held);
+    return pair;
+failed:
+    Py_DECREF(names);
+    Py_XDECREF(held);
+    Py_DECREF(state);
+    return NULL;
+}
+
+static PyMethodDef By_SlottedGetStateDef = {"__getstate__", By_SlottedGetState, METH_NOARGS,
+                                             NULL};
+
+/* how many names `copyreg._slotnames` would list for `type`, or -1 with an exception set
+ *
+ * counted the way it walks them — every class in the mro whose own dict holds `__slots__`,
+ * a string standing for one name, `__dict__` and `__weakref__` left out — rather than by
+ * calling it: it caches its answer in the class's dict and needs `copyreg` imported, and
+ * python does neither to a class until one of its instances is pickled */
+static inline Py_ssize_t By_SlotNameCount(PyTypeObject *type) {
+    PyObject *mro = type->tp_mro, *cached;
+    Py_ssize_t index, count = 0;
+    cached = PyDict_GetItemString(type->tp_dict, "__slotnames__");
+    if (cached != NULL && PyList_Check(cached)) return PyList_GET_SIZE(cached);
+    if (mro == NULL || !PyTuple_Check(mro)) return 0;
+    for (index = 0; index < PyTuple_GET_SIZE(mro); index++) {
+        PyObject *base = PyTuple_GET_ITEM(mro, index), *slots, *iterator, *name;
+        if (!PyType_Check(base) || ((PyTypeObject *)base)->tp_dict == NULL) continue;
+        slots = PyDict_GetItemString(((PyTypeObject *)base)->tp_dict, "__slots__");
+        if (slots == NULL) continue;
+        if (PyUnicode_Check(slots)) {
+            count++;
+            continue;
+        }
+        iterator = PyObject_GetIter(slots);
+        if (iterator == NULL) return -1;
+        while ((name = PyIter_Next(iterator)) != NULL) {
+            if (!PyUnicode_Check(name)
+                || (PyUnicode_CompareWithASCIIString(name, "__dict__") != 0
+                    && PyUnicode_CompareWithASCIIString(name, "__weakref__") != 0)) {
+                count++;
+            }
+            Py_DECREF(name);
+        }
+        Py_DECREF(iterator);
+        if (PyErr_Occurred()) return -1;
+    }
+    return count;
+}
+
+/* whether `type` answers `name` with `object`'s own, or -1 with an exception set */
+static inline int By_AnswersAsObject(PyObject *type, const char *name) {
+    PyObject *standing = PyObject_GetAttrString(type, name);
+    PyObject *object_s = standing == NULL
+                             ? NULL
+                             : PyObject_GetAttrString((PyObject *)&PyBaseObject_Type, name);
+    int same = standing != NULL && standing == object_s;
+    Py_XDECREF(standing);
+    Py_XDECREF(object_s);
+    if (PyErr_Occurred()) return -1;
+    return same;
+}
+
+/* give `type` [`By_SlottedGetState`] where python's own `__getstate__` would refuse it
+ *
+ * only there. python makes the check on one path alone — `object.__reduce_ex__` asking for
+ * the state of an object that is not a `list` or a `dict` and hands `__new__` nothing — so a
+ * class that reduces itself, a container, and one with `__getnewargs__` are never refused,
+ * and a direct call never is. where the layout is the size python expects, its own answer
+ * is already the right one, and a class answering `__getstate__` with anything but
+ * `object`'s — the source's own, or the one `@dataclass(frozen=True, slots=True)` writes —
+ * keeps what it has */
+static inline int By_PublishSlottedState(PyObject *type) {
+    PyTypeObject *owner = (PyTypeObject *)type;
+    static const char *const asked[] = {"__getstate__", "__reduce_ex__", "__reduce__", NULL};
+    const char *const *name;
+    PyObject *method;
+    Py_ssize_t expected = PyBaseObject_Type.tp_basicsize, names;
+    if (PyType_IsSubtype(owner, &PyList_Type) || PyType_IsSubtype(owner, &PyDict_Type)) return 0;
+    for (name = asked; *name != NULL; name++) {
+        int same = By_AnswersAsObject(type, *name);
+        if (same <= 0) return same;
+    }
+    if (PyObject_HasAttrString(type, "__getnewargs_ex__")
+        || PyObject_HasAttrString(type, "__getnewargs__")) {
+        return 0;
+    }
+    names = By_SlotNameCount(owner);
+    if (names < 0) return -1;
+    expected += (Py_ssize_t)sizeof(PyObject *) * names;
+    if (owner->tp_dictoffset != 0) expected += (Py_ssize_t)sizeof(PyObject *);
+    if (owner->tp_weaklistoffset > 0) expected += (Py_ssize_t)sizeof(PyObject *);
+    if (owner->tp_basicsize <= expected) return 0;
+    method = PyDescr_NewMethod(owner, &By_SlottedGetStateDef);
+    if (method == NULL) return -1;
+    if (PyDict_SetItemString(owner->tp_dict, "__getstate__", method) < 0) {
+        Py_DECREF(method);
+        return -1;
+    }
+    Py_DECREF(method);
+    PyType_Modified(owner);
+    return 0;
+}
+
 /* `object.__getstate__`, over the whole of an instance's state
  *
  * python's own reads the dict word straight out of the instance, which on an emitted one
  * is the half holding the *extra* attributes — so `copy` and `pickle` are handed a state
  * naming none of the class's own fields, and handed it quietly. `None` is python's own
- * answer where there is nothing in it */
-static inline PyObject *By_InstanceState(PyObject *owner, const By_DictField *fields) {
+ * answer where there is nothing in it.
+ *
+ * `slots` names what the class holds in a slot, as `copyreg._slotnames` lists it, and
+ * NULL where it holds nothing there. python hands those over beside the mapping, as a
+ * pair, wherever the instance has one written; one it has not is left out */
+static inline PyObject *By_InstanceState(PyObject *owner, const By_DictField *fields,
+                                         const char *const *slots) {
     PyObject *state = By_InstanceMapping(owner, fields);
+    PyObject *held, *pair;
     if (state == NULL) return NULL;
     if (PyDict_Size(state) == 0) {
-        Py_DECREF(state);
-        Py_RETURN_NONE;
+        Py_SETREF(state, By_NewRef(Py_None));
     }
-    return state;
+    if (slots == NULL) return state;
+    held = PyDict_New();
+    if (held == NULL) {
+        Py_DECREF(state);
+        return NULL;
+    }
+    for (; *slots != NULL; slots++) {
+        PyObject *value = PyObject_GetAttrString(owner, *slots);
+        if (value == NULL) {
+            if (!PyErr_ExceptionMatches(PyExc_AttributeError)) goto failed;
+            PyErr_Clear();
+            continue;
+        }
+        if (PyDict_SetItemString(held, *slots, value) < 0) {
+            Py_DECREF(value);
+            goto failed;
+        }
+        Py_DECREF(value);
+    }
+    if (PyDict_Size(held) == 0) {
+        Py_DECREF(held);
+        return state;
+    }
+    pair = PyTuple_Pack(2, state, held);
+    Py_DECREF(state);
+    Py_DECREF(held);
+    return pair;
+failed:
+    Py_DECREF(state);
+    Py_DECREF(held);
+    return NULL;
 }
 
 /* `obj.__dict__ = mapping`, which python takes as replacing the whole of an object's
@@ -9398,17 +9876,23 @@ static PyObject *By_InitSubclass(PyObject *owner, allocfunc alloc, PyObject *con
  *
  * so a group on a class python's own metaclass machinery built keeps running interpreted.
  * that is the same answer it had before any of this, and it is reached without the class
- * having to decline */
-static inline int By_PublishProperty(PyObject *type, PyObject *module_dict, const char *owner,
-                                     const char *name, PyMethodDef *get, PyMethodDef *set,
-                                     PyMethodDef *del) {
+ * having to decline.
+ *
+ * which of the two it was is only known here, at import: whether a base's metaclass is
+ * `type` is a question about what the base's name meant. so each property writes a census
+ * row of its own — `property-compiled` or `property-interpreted` under `Class.name`, see
+ * `By_RecordProperty` — and the report's count of compiled halves is held to that */
+static inline int By_PublishProperty(const char *module, PyObject *type, PyObject *module_dict,
+                                     const char *owner, const char *name, PyMethodDef *get,
+                                     PyMethodDef *set, PyMethodDef *del) {
     PyMethodDef *defs[3];
     PyObject *halves[3];
     PyObject *published, *named, *dict;
     int at, stored;
-    if (type == PyDict_GetItemString(module_dict, owner)) return 0;
-    if (PyType_Check(type) && ((PyTypeObject *)type)->tp_dict != NULL
-        && PyDict_GetItemString(((PyTypeObject *)type)->tp_dict, name) != NULL) {
+    if (type == PyDict_GetItemString(module_dict, owner)
+        || (PyType_Check(type) && ((PyTypeObject *)type)->tp_dict != NULL
+            && PyDict_GetItemString(((PyTypeObject *)type)->tp_dict, name) != NULL)) {
+        By_RecordProperty(module, owner, name, "property-interpreted");
         return 0;
     }
     defs[0] = get;
@@ -9445,6 +9929,7 @@ static inline int By_PublishProperty(PyObject *type, PyObject *module_dict, cons
     stored = PyDict_SetItemString(dict, name, published);
     Py_DECREF(published);
     PyType_Modified((PyTypeObject *)type);
+    if (stored == 0) By_RecordProperty(module, owner, name, "property-compiled");
     return stored;
 }
 
@@ -10730,6 +11215,61 @@ static inline int By_DecoratedMethod(PyObject *body, PyTypeObject *type, PyObjec
         return By_CopyClassConstant(body, type, name, twins);
     }
     return By_ApplyMethodDecorators(type, dict, owner, name, decorators, count);
+}
+
+/* a method every decorator of which only marks what it was handed, published compiled
+ *
+ * `typing.override`, `typing.final` and `abc.abstractmethod` hand back the very function
+ * they were given, having written one attribute onto it. so the body's answer is the
+ * function its `def` made, and all it holds beyond what a fresh `def` holds is its
+ * `__dict__`. the compiled method takes a copy of that dict and stands under the name,
+ * which is what `By_DecoratedMethod` could not do: no decorator runs a second time, and
+ * the method that answers is the compiled one.
+ *
+ * the entry the type holds is the method table's own `def` where the type came from its
+ * spec, and the body's function where it was built by handing its metaclass a namespace —
+ * the body's function is carried into that namespace so a metaclass reads the marks the
+ * way it reads them off a `class` statement's, `abc.ABCMeta` collecting
+ * `__abstractmethods__` above all. either way what is published is `def`.
+ *
+ * a body holding something other than a function under the name did not get it from one
+ * of these, and its answer is taken as `By_DecoratedMethod` takes it. where there is no
+ * body answer at all the decorators never ran, and are applied: that is their only
+ * application */
+static inline int By_MarkedMethod(PyObject *body, PyTypeObject *type, PyObject *dict,
+                                  const char *owner, PyMethodDef *def,
+                                  const char *const *decorators, Py_ssize_t count,
+                                  const By_Twins *twins) {
+    PyObject *answer, *found, *descriptor, *method, *marks, *own;
+    int failed;
+    if ((PyObject *)type == PyDict_GetItemString(dict, owner)) return 0;
+    answer = body == NULL ? NULL : PyDict_GetItemString(body, def->ml_name); /* borrowed */
+    if (answer == NULL) {
+        return By_ApplyMethodDecorators(type, dict, owner, def->ml_name, decorators, count);
+    }
+    if (!PyFunction_Check(answer)) {
+        return By_DecoratedMethod(body, type, dict, owner, def->ml_name, decorators, count, twins);
+    }
+    found = PyDict_GetItemString(type->tp_dict, def->ml_name); /* borrowed */
+    descriptor = By_MethodDescriptorOf(found);
+    if (descriptor != NULL && ((PyMethodDescrObject *)descriptor)->d_method == def) {
+        method = By_Method(found);
+    } else {
+        descriptor = By_MethodDescriptor(type, def);
+        method = By_Method(descriptor);
+        Py_XDECREF(descriptor);
+    }
+    if (method == NULL) return -1;
+    marks = PyObject_GetAttrString(answer, "__dict__");
+    own = marks == NULL ? NULL : PyObject_GenericGetDict(method, NULL);
+    failed = own == NULL || PyDict_Update(own, marks) < 0
+             || PyDict_SetItemString(type->tp_dict, def->ml_name, method) < 0;
+    Py_XDECREF(own);
+    Py_XDECREF(marks);
+    Py_DECREF(method);
+    if (failed) return -1;
+    PyType_Modified(type);
+    return 0;
 }
 
 /* apply the decorator `decorator` names to `dict[name]`, in place. this is what
