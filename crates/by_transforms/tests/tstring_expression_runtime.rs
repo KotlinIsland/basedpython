@@ -18,6 +18,9 @@ use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
+mod interpreters;
+use interpreters::Interpreter;
+
 /// basedpython whose t-string fields hold expressions that lower
 const PROGRAM: &str = r#"
 from string.templatelib import Template
@@ -82,28 +85,8 @@ show(3, 7, {"k": 5})
 print("ok")
 "#;
 
-/// An interpreter that has t-strings. `$PYTHON` is taken only when it is one, because
-/// the suite's usual interpreter is older and would skip every assertion here silently.
-fn python_314() -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Ok(python) = std::env::var("PYTHON") {
-        candidates.push(python);
-    }
-    candidates.extend(["python3.14", "python3"].map(String::from));
-    candidates.into_iter().find(|python| {
-        Command::new(python)
-            .args([
-                "-c",
-                "import sys; sys.exit(0 if sys.version_info >= (3, 14) else 1)",
-            ])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    })
-}
-
-fn run(python: &str, source: &str, what: &str) {
-    let output = Command::new(python)
+fn run(python: &Interpreter, source: &str, what: &str) {
+    let output = Command::new(&python.command)
         .arg("-c")
         .arg(source)
         .output()
@@ -117,13 +100,9 @@ fn run(python: &str, source: &str, what: &str) {
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn a_field_reports_the_source_the_author_wrote() {
-    let Some(python) = python_314() else {
-        eprintln!("skipping t-string `expression` runtime test: needs python 3.14 or later");
+    // an interpreter that has t-strings
+    let Some(python) = interpreters::oldest(PythonVersion::PY314, "", "") else {
         return;
     };
 
@@ -135,4 +114,5 @@ fn a_field_reports_the_source_the_author_wrote() {
     };
     let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
     run(&python, &transpiled, "the transpiled program");
+    interpreters::ran(&python, PythonVersion::PY314);
 }

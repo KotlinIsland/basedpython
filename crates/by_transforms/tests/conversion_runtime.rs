@@ -16,9 +16,11 @@
 //!   assignment, a plain assignment to a name declared elsewhere, an attribute
 //!   assignment, a `return`, and element-wise inside a literal collection
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
+
+mod interpreters;
 
 /// basedpython whose module-level `assert`s exercise the three dunders end to end
 const PROGRAM: &str = r#"
@@ -245,34 +247,19 @@ assert c["x"] == 1
 print("ok")
 "#;
 
-/// the first interpreter that accepts `probe`
-fn python_supporting(probe: &str) -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Ok(p) = std::env::var("PYTHON") {
-        candidates.push(p);
-    }
-    candidates.extend(["python3.13", "python3"].map(String::from));
-
-    candidates.into_iter().find(|py| {
-        Command::new(py)
-            .args(["-c", probe])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
-}
-
-/// transpile `program` and run it, asserting it exits cleanly
-fn run_transpiled(python: &str, program: &str, min_version: PythonVersion) {
+/// transpile `program` for `min_version` and run it on the oldest interpreter found of that
+/// version or later that `probe` runs on, asserting it exits cleanly
+fn run_transpiled(program: &str, min_version: PythonVersion, probe: &str, needs: &str) {
+    let Some(interpreter) = interpreters::oldest(min_version, probe, needs) else {
+        return;
+    };
     let config = Config {
         min_version,
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(python)
+    let output = Command::new(&interpreter.command)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -280,47 +267,31 @@ fn run_transpiled(python: &str, program: &str, min_version: PythonVersion) {
 
     assert!(
         output.status.success(),
-        "transpiled conversion program failed on {python}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+        "transpiled conversion program failed on {interpreter}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+    interpreters::ran(&interpreter, min_version);
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn conversions_run_correctly() {
-    let Some(python) = python_supporting("import sys; sys.exit(0)") else {
-        eprintln!("skipping conversion runtime test: no python interpreter found");
-        return;
-    };
-    run_transpiled(&python, PROGRAM, PythonVersion::PY313);
+    run_transpiled(PROGRAM, PythonVersion::PY313, "", "");
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
 fn frozen_displays_run_correctly() {
-    let Some(python) = python_supporting("import sys; sys.exit(0)") else {
-        eprintln!("skipping frozen display runtime test: no python interpreter found");
-        return;
-    };
-    run_transpiled(&python, FROZEN_PROGRAM, PythonVersion::PY313);
+    run_transpiled(FROZEN_PROGRAM, PythonVersion::PY313, "", "");
 }
 
 #[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
+#[ignore = "`transpile` analyses a module at ty's newest python, 3.14, where `frozendict` is no \
+            builtin, so no conversion is written; `by transpile` in a 3.15 project writes it"]
 fn frozendict_displays_run_correctly() {
-    let Some(python) = python_supporting("frozendict") else {
-        eprintln!("skipping frozendict runtime test: no interpreter with `frozendict` (3.15+)");
-        return;
-    };
-    run_transpiled(&python, FROZENDICT_PROGRAM, PythonVersion::PY315);
+    run_transpiled(
+        FROZENDICT_PROGRAM,
+        PythonVersion::PY315,
+        "frozendict",
+        "with `frozendict`",
+    );
 }

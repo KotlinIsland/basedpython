@@ -1246,7 +1246,8 @@ pub(crate) fn run_against_source<'a>(
     // to `LiteralString` rather than being erased with the other markers. it has
     // to be collected from the db's own (marker-bearing) parse, since the
     // blanked copy the passes walk no longer has a `literal` keyword in it
-    let literal_string_rewrites = literal_string::collect(parsed_handle.suite(), &semantic_model);
+    let literal_string_rewrites =
+        literal_string::collect(parsed_handle.suite(), &semantic_model, written);
 
     // a static resource import has no python spelling at all, so the document it
     // names is read now — from the db's own parse, which is the one the checker
@@ -1256,13 +1257,14 @@ pub(crate) fn run_against_source<'a>(
         source_ref,
     );
 
-    let symbolic_folds = symbolic_type_op::collect_symbolic_folds(
+    let mut symbolic_folds = symbolic_type_op::collect_symbolic_folds(
         parsed_handle.suite(),
         &semantic_model,
+        written,
         config.float_literals,
+        config.min_version,
     );
-    let symbolic_needs_literal_import = symbolic_folds.needs_literal_import;
-    let symbolic_needs_any_import = symbolic_folds.needs_any_import;
+    let symbolic_imports = std::mem::take(&mut symbolic_folds.imports);
     ctx.claimed_type_op_ranges = symbolic_folds.claimed_ranges();
     ctx.symbolic_substitutions = symbolic_folds.substitutions();
     let symbolic_pass = symbolic_type_op::SymbolicTypeOp::new(symbolic_folds);
@@ -1276,7 +1278,8 @@ pub(crate) fn run_against_source<'a>(
         &ctx.claimed_type_op_ranges,
     );
     ctx.structural_typeof_ranges.clone_from(&typeof_skip);
-    let typeof_inner = typeof_keyword::TypeofFold::new(typeof_skip);
+    let typeof_inner =
+        typeof_keyword::TypeofFold::new(typeof_skip, written.imported("ty_extensions", "TypeOf"));
     let typeof_pass = VisitorPass {
         inner: &typeof_inner,
         changed_cell: typeof_inner.changed_cell(),
@@ -1288,9 +1291,9 @@ pub(crate) fn run_against_source<'a>(
 
     let tuple_index_pass = tuple_index::TupleIndexPass::new();
 
-    let decorated_binding_pass = decorated_binding::DecoratedBindingPass::new(source_ref);
+    let decorated_binding_pass = decorated_binding::DecoratedBindingPass::new(source_ref, written);
 
-    let sentinel_inner = sentinel::Sentinel::new();
+    let sentinel_inner = sentinel::Sentinel::new(written.imported("typing_extensions", "Sentinel"));
     let sentinel_pass = VisitorPass {
         inner: &sentinel_inner,
         changed_cell: sentinel_inner.changed_cell(),
@@ -1314,11 +1317,11 @@ pub(crate) fn run_against_source<'a>(
     };
 
     let export_import_pass = export_import::ExportImport::new(source_ref);
-    let dynamic_keyword_pass = dynamic_keyword::DynamicKeywordPass::new();
+    let dynamic_keyword_pass = dynamic_keyword::DynamicKeywordPass::new(written);
     let character_type_pass = character_type::CharacterTypePass::new();
-    let grapheme_string_pass = grapheme_string::GraphemeStringPass::new();
-    let type_is_pass = type_is::TypeIs::new(source_ref);
-    let top_star_pass = top_star::TopStar::new();
+    let grapheme_string_pass = grapheme_string::GraphemeStringPass::new(written);
+    let type_is_pass = type_is::TypeIs::new(source_ref, written);
+    let top_star_pass = top_star::TopStar::new(written);
     let identity_swap_pass = identity_swap::IdentitySwap::new(source_ref);
     let compat_pass = compat::CompatRewrite::new(source_ref, config.clone());
     let string_tag_pass = string_tag::StringTagPass::new(source_ref, config.clone());
@@ -1335,8 +1338,12 @@ pub(crate) fn run_against_source<'a>(
         config.inject_future_annotations,
     );
     let init_method_pass = init_method::InitMethod::new(source_ref, written, config.clone());
-    let properties_pass =
-        properties::PropertiesPass::new(source_ref, accessor_value_ranges, config.min_version);
+    let properties_pass = properties::PropertiesPass::new(
+        source_ref,
+        written,
+        accessor_value_ranges,
+        config.min_version,
+    );
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
     let return_value_use_pass = return_value_use::ReturnValueUsePass::new(
@@ -1346,12 +1353,12 @@ pub(crate) fn run_against_source<'a>(
     let raises_guard_pass =
         raises_clause::RaisesGuardPass::new(source_ref, config.runtime_raises_checks);
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
-    let match_type_pass = match_type::MatchTypePass::new(source_ref);
-    let modifiers_pass = modifiers::ModifiersPass::new(source_ref, config.is_stub);
+    let match_type_pass = match_type::MatchTypePass::new(source_ref, written);
+    let modifiers_pass = modifiers::ModifiersPass::new(source_ref, written, config);
     let main_function_pass = main_function::MainFunction::new(source_ref, written);
     let build_stamps_pass = build_stamps::BuildStampsPass::new(source_ref, config.stamps.clone());
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
-    let overload_pass = overload::Overload::new(source_ref, config.is_stub);
+    let overload_pass = overload::Overload::new(source_ref, written, config.is_stub);
     let decorator_keyword_pass = decorator_keyword::DecoratorKeyword::new(
         source_ref,
         written,
@@ -1363,6 +1370,7 @@ pub(crate) fn run_against_source<'a>(
         ),
     );
     let unpack_pass = unpack::UnpackSyntax::new(
+        written,
         config.clone(),
         unpack::collect_type_subscripts(parsed_handle.suite(), &semantic_model),
     );
@@ -1373,23 +1381,25 @@ pub(crate) fn run_against_source<'a>(
         parsed_handle.suite(),
         &semantic_model,
     );
-    let just_float_pass = just_float::JustFloatPass::new();
+    let just_float_pass = just_float::JustFloatPass::new(written);
     let float_const_pass = float_const::FloatConstPass::new();
-    let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(source_ref, config.min_version);
+    let kw_subscript_pass =
+        kw_subscript::KwSubscriptPass::new(source_ref, written, config.min_version);
     let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
     let reified_class_pass = reified_class::ReifiedClassPass::new(source_ref, config.min_version);
     let type_reification_pass = type_reification::TypeReificationPass::new(config.min_version);
-    let visibility_rename_pass = visibility_rename::VisibilityRenamePass;
-    let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref);
+    let visibility_rename_pass = visibility_rename::VisibilityRenamePass { written };
+    let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref, written);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let inferred_annotation_pass =
-        inferred_annotation::InferredAnnotationPass::new(config.min_version);
-    let template_type_pass = template_type::TemplateTypePass;
+        inferred_annotation::InferredAnnotationPass::new(written, config.min_version);
+    let template_type_pass = template_type::TemplateTypePass { written };
     let tuple_types_pass =
         annotation::TupleLiteralTypePass::new(source_ref, written, config.clone());
-    let literal_types_pass = literal_types::LiteralTypePass::new(source_ref, config.float_literals);
+    let literal_types_pass =
+        literal_types::LiteralTypePass::new(source_ref, written, config.float_literals);
     let callable_pass = callable::CallableSyntaxPass::new(source_ref, written, config.clone());
     let protocol_type_pass =
         protocol_type::ProtocolTypePass::new(source_ref, written, config.clone());
@@ -1397,26 +1407,27 @@ pub(crate) fn run_against_source<'a>(
     let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);
     let flexible_keyword_pass = flexible_keyword::FlexibleKeywordPass;
     let some_ctor_pass = some_ctor::SomeCtorPass::new();
-    let propagate_pass = propagate::PropagatePass::new(source_ref);
+    let propagate_pass = propagate::PropagatePass::new(source_ref, written);
     let none_chain_pass = none_chain::NoneChainPass::new(source_ref);
-    let optional_type_pass = optional_type::OptionalTypePass::new(source_ref, config.min_version);
-    let runtime_union_pass = runtime_union::RuntimeUnionPass::new(config.min_version);
+    let optional_type_pass =
+        optional_type::OptionalTypePass::new(source_ref, written, config.min_version);
+    let runtime_union_pass = runtime_union::RuntimeUnionPass::new(written, config.min_version);
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, written, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, written, config);
-    let checked_cast_pass = checked_cast::CheckedCastPass;
+    let checked_cast_pass = checked_cast::CheckedCastPass { written };
     let module_api_pass = module_api::ModuleApiPass::new(source_ref);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let if_let_pass = if_let::IfLetPass::new(source_ref);
     let class_pattern_star_pass = class_pattern_star::ClassPatternStarPass::new(source_ref);
     let destructure_pass = destructure::DestructurePass::new(source_ref);
     let statement_expression_pass = statement_expression::StatementExpressionPass::new(source_ref);
-    let context_params_pass = context_params::ContextParamsPass::new(source_ref);
+    let context_params_pass = context_params::ContextParamsPass::new(source_ref, written);
     let extension_block_pass =
         extension::ExtensionBlockPass::new(source_ref, written, config.is_stub);
-    let extension_call_pass = extension::ExtensionCallPass;
+    let extension_call_pass = extension::ExtensionCallPass { written };
     let witness_dispatch_pass = conformance::WitnessDispatchPass;
     let conversion_pass = conversion::ConversionPass::new(source_ref);
-    let implicit_receiver_pass = implicit_receiver::ImplicitReceiverPass;
+    let implicit_receiver_pass = implicit_receiver::ImplicitReceiverPass { written };
     let django_lookup_pass = django_lookup::DjangoLookupPass;
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
@@ -1726,27 +1737,17 @@ pub(crate) fn run_against_source<'a>(
     // collect import requests the inner passes raised at the end of their run
     if typeof_inner.ever_changed() {
         ctx.required_imports
-            .push("from ty_extensions import TypeOf".to_owned());
+            .push(written.import_from("ty_extensions", &["TypeOf"]));
     }
-    // symbolic folds that produced a `Literal[..]` need the import, unless the
-    // source already binds `Literal`
-    if symbolic_needs_literal_import && !literal_types::literal_already_imported(&semantic_model) {
-        ctx.required_imports
-            .push("from typing import Literal".to_owned());
-    }
-    // symbolic folds that produced `Any` (e.g. `dynamic + 1`) need the import,
-    // unless the source already binds `Any`
-    if symbolic_needs_any_import && !semantic_model.is_bound_globally("Any") {
-        ctx.required_imports
-            .push("from typing import Any".to_owned());
-    }
+    // symbolic folds that produced a `Literal[..]` or an `Any` (`dynamic + 1`) need the import
+    ctx.required_imports.extend(symbolic_imports);
     // typed lambdas are removed as source deletions so the statement around
     // them is never re-rendered (see `typed_lambda`); collect them here
     ctx.text_edits.extend(typed_lambda_inner.take_edits());
     authorship.finished(Author::driver(typed_lambda_pass.name(), None), &ctx);
     if sentinel_inner.ever_changed() {
         ctx.required_imports
-            .push("from typing_extensions import Sentinel".to_owned());
+            .push(written.import_from("typing_extensions", &["Sentinel"]));
     }
 
     // collapse the padding `blank` left behind. these are ordinary edits, so a
@@ -1774,7 +1775,7 @@ pub(crate) fn run_against_source<'a>(
     authorship.finished(Author::driver("literal string", None), &ctx);
     if literal_string_rewrites.needs_import {
         ctx.required_imports
-            .push("from typing import LiteralString".to_owned());
+            .push(written.import_from("typing", &["LiteralString"]));
     }
 
     // the last thing written into the tree: a soundness check made in a statement an
@@ -1851,6 +1852,8 @@ pub(crate) fn run_against_source<'a>(
     // so only a checker ever reads the name, and a real import would give the
     // output an import edge — and a possible cycle — the source never had
     if !ctx.type_only_imports.is_empty() {
+        // the one typing name a lowering writes under its own name whatever the module
+        // binds: the block reads it where it binds it, ahead of anything the module runs
         let mut block = String::from("from typing import TYPE_CHECKING\nif TYPE_CHECKING:");
         for line in std::mem::take(&mut ctx.type_only_imports) {
             block.push_str("\n    ");
@@ -2086,6 +2089,15 @@ pub(crate) fn run_against_source<'a>(
     for (start, end, repl) in edits {
         out.replace_range(start..end, repl.text());
     }
+    // a builtin a lowering wrote where the module binds its name to something else is read
+    // under a name of the lowering's own, bound here, ahead of everything that reads it
+    let everything_written = std::iter::once(out.as_str())
+        .chain(ctx.required_imports.iter().map(String::as_str))
+        .chain(ctx.epilogue.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let builtins = written.builtin_imports(&everything_written, config.min_version.minor);
+    ctx.required_imports.splice(0..0, builtins);
     // a name the module already imports from the same place goes on its line rather than on
     // one of ours. done here and not against `required_imports` alone, because the statement
     // it joins is the module's own

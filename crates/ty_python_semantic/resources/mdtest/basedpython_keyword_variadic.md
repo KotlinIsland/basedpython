@@ -339,6 +339,67 @@ info:  - as part of a type parameter list when defining a generic class
 info:  - or as part of an argument list when specializing a generic class
 ```
 
+## a pack defaults to another pack
+
+a pack's default may name an earlier pack of its list, whose fields it takes when nothing
+specializes it — as a `ParamSpec`'s default may name an earlier `ParamSpec`. python sees both packs
+as `ParamSpec`s
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```by
+class A[**P, **Q = P]:
+    def second(self) -> (**Q) -> None:
+        raise NotImplementedError
+
+def f(a: A[foo=int]):
+    reveal_type(a.second())  # revealed: (*, foo: int) -> None
+```
+
+## a pack's default cannot spell fields
+
+a pack's fields are named, and none of the forms a `ParamSpec`'s default may spell — a list of
+types, `...` — names them. nor does the empty tuple, so a pack's default can only name another pack
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```by
+# error: [invalid-type-variable-default] "The default of a keyword-variadic pack must name another pack"
+class A[**P = [int]]: ...
+
+# error: [invalid-type-variable-default] "The default of a keyword-variadic pack must name another pack"
+class B[**P = ...]: ...
+
+# error: [invalid-type-variable-default] "The default of a keyword-variadic pack must name another pack"
+class C[**P = ()]: ...
+```
+
+## a class with two packs
+
+every keyword argument names a field of a class's first pack, so no specialization spells a second
+one by keyword. each pack of such a class reads back as the parameter list it unpacks to, which
+keeps the two apart
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```by
+class A[**P, **Q = P]:
+    def second(self) -> (**Q) -> None:
+        raise NotImplementedError
+
+def f(a: A[foo=int]):
+    reveal_type(a)  # revealed: A[(*, foo: int), (*, foo: int)]
+```
+
 ## `**kwargs: T` in an arrow is still a catch-all
 
 an annotated `**name: T` is an ordinary keyword-variadic parameter, not a pack unpacking

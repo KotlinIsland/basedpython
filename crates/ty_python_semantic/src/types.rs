@@ -180,6 +180,7 @@ mod callable;
 pub mod character;
 mod class;
 mod class_base;
+pub mod classinfo_spelling;
 pub(crate) mod composition;
 pub(crate) mod conformance;
 mod constraints;

@@ -326,6 +326,29 @@ def _(x: object, y: type):
     isinstance(x, (bytes, IntOrStr))
 ```
 
+`isinstance()` also accepts a tuple nested inside the tuple of classes, and a union inside one is
+written as a tuple too, however deep it stands. So is an optional around a union, and an optional
+among a union's arms:
+
+```by
+def _(x: object):
+    isinstance(x, (bytes, (float, int | str)))
+    isinstance(x, (int | str)?)
+    isinstance(x, int | str?)
+    # error: [invalid-argument-type] "A union cannot be used with `isinstance()` before Python 3.10"
+    isinstance(x, (bytes, (float, IntOrStr)))
+```
+
+What decides is the function called, not the name it is called by: `isinstance()` reached through
+another name is written the same way:
+
+```by
+from builtins import isinstance as is_instance
+
+def _(x: object):
+    is_instance(x, int | str)
+```
+
 ## `Optional` as `classinfo`
 
 ```py

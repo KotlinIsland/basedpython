@@ -1437,3 +1437,99 @@ def _by_match_attr(subject, name):
         return getattr(subject, name)
     except AttributeError:
         return _by_match_miss
+
+
+# --- slotted dataclasses below python 3.10 -----------------------------------
+# a `data class` is a slotted dataclass, and `dataclass(slots=True)` is new in
+# 3.10. this is what that option does, to a class `dataclass` has already
+# processed: a class cannot take `__slots__` once it exists, so an identical one
+# is made with them, its fields' class-level defaults left out (`dataclass` has
+# them already) and every zero-argument `super()` pointed at it
+
+
+def _by_dataclass_getstate(self):
+    import dataclasses
+    return [getattr(self, f.name) for f in dataclasses.fields(self)]
+
+
+def _by_dataclass_setstate(self, state):
+    import dataclasses
+    for f, value in zip(dataclasses.fields(self), state):
+        # a frozen dataclass refuses a plain assignment
+        object.__setattr__(self, f.name, value)
+
+
+def _by_dataclass_slots_of(cls):
+    slots = cls.__dict__.get("__slots__")
+    if slots is None:
+        found = []
+        if getattr(cls, "__weakrefoffset__", -1) != 0:
+            found.append("__weakref__")
+        if getattr(cls, "__dictoffset__", -1) != 0:
+            found.append("__dict__")
+        return found
+    if isinstance(slots, str):
+        return [slots]
+    if hasattr(slots, "__next__"):
+        raise TypeError(f"Slots of '{cls.__name__}' cannot be determined")
+    return list(slots)
+
+
+def _by_dataclass_class_cell(f, old, new):
+    if f is None:
+        return False
+    try:
+        index = f.__code__.co_freevars.index("__class__")
+    except ValueError:
+        return False
+    cell = f.__closure__[index]
+    try:
+        contents = cell.cell_contents
+    except ValueError:
+        return False
+    if contents is old:
+        cell.cell_contents = new
+        return True
+    return False
+
+
+def _by_dataclass_slots(cls):
+    import dataclasses, inspect, types
+    if "__slots__" in cls.__dict__:
+        raise TypeError(f"{cls.__name__} already specifies __slots__")
+    namespace = dict(cls.__dict__)
+    field_names = tuple(f.name for f in dataclasses.fields(cls))
+    inherited = set()
+    for base in cls.__mro__[1:-1]:
+        inherited.update(_by_dataclass_slots_of(base))
+    namespace["__slots__"] = tuple(name for name in field_names if name not in inherited)
+    for name in field_names:
+        namespace.pop(name, None)
+    namespace.pop("__dict__", None)
+    namespace.pop("__weakref__", None)
+    qualname = getattr(cls, "__qualname__", None)
+    new = type(cls)(cls.__name__, cls.__bases__, namespace)
+    if qualname is not None:
+        new.__qualname__ = qualname
+    if cls.__dataclass_params__.frozen:
+        if "__getstate__" not in namespace:
+            new.__getstate__ = _by_dataclass_getstate
+        if "__setstate__" not in namespace:
+            new.__setstate__ = _by_dataclass_setstate
+    for member in new.__dict__.values():
+        # a static or class method keeps its function where 3.10 and later let
+        # `unwrap` find it
+        if isinstance(member, (staticmethod, classmethod)):
+            member = member.__func__
+        member = inspect.unwrap(member)
+        if isinstance(member, types.FunctionType):
+            if _by_dataclass_class_cell(member, cls, new):
+                break
+        elif isinstance(member, property):
+            if (
+                _by_dataclass_class_cell(member.fget, cls, new)
+                or _by_dataclass_class_cell(member.fset, cls, new)
+                or _by_dataclass_class_cell(member.fdel, cls, new)
+            ):
+                break
+    return new

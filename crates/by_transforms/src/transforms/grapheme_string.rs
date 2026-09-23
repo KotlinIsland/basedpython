@@ -51,6 +51,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::coalesce::is_trivially_pure;
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 #[expect(
@@ -59,6 +60,7 @@ use crate::type_info::TypeInfo;
 )]
 struct GraphemeString<'src> {
     types: &'src dyn TypeInfo,
+    written: WrittenNames<'src>,
     /// attribute nodes that are the direct callee of a call — the grapheme
     /// properties are not callable there, so they pass through untouched
     callee_attrs: HashSet<TextRange>,
@@ -131,7 +133,7 @@ impl<'ast> Visitor<'ast> for GraphemeString<'_> {
                 self.template(
                     expr,
                     vec![
-                        Fragment::Lit("len(_by_graphemes(".to_owned()),
+                        Fragment::Lit(format!("{}(_by_graphemes(", self.written.builtin("len"))),
                         Fragment::Src(receiver),
                         Fragment::Lit("))".to_owned()),
                     ],
@@ -171,7 +173,7 @@ impl<'ast> Visitor<'ast> for GraphemeString<'_> {
             "unicode_scalars" => self.template(
                 expr,
                 vec![
-                    Fragment::Lit("iter(".to_owned()),
+                    Fragment::Lit(format!("{}(", self.written.builtin("iter"))),
                     Fragment::Src(receiver),
                     Fragment::Lit(")".to_owned()),
                 ],
@@ -279,18 +281,21 @@ impl GraphemeString<'_> {
     }
 }
 
-pub(crate) struct GraphemeStringPass;
+pub(crate) struct GraphemeStringPass<'src> {
+    written: WrittenNames<'src>,
+}
 
-impl GraphemeStringPass {
-    pub(crate) fn new() -> Self {
-        Self
+impl<'src> GraphemeStringPass<'src> {
+    pub(crate) fn new(written: WrittenNames<'src>) -> Self {
+        Self { written }
     }
 }
 
-impl TypeAwarePass for GraphemeStringPass {
+impl TypeAwarePass for GraphemeStringPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = GraphemeString {
             types,
+            written: self.written,
             callee_attrs: HashSet::new(),
             needs_grapheme_helper: false,
             needs_character_class: false,

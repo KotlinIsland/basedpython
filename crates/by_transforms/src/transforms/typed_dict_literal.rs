@@ -29,6 +29,7 @@
 //!
 //! field types are emitted as forward references — see [`quote_type`]
 
+use std::collections::BTreeSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
@@ -67,10 +68,12 @@ impl Shape {
         format!("_TypedDict_{truncated:08x}")
     }
 
-    fn class_def(&self, name: &str) -> String {
+    /// the class declaring this shape as `name`, `typing_extensions.TypedDict` written as
+    /// `typed_dict`
+    fn class_def(&self, name: &str, typed_dict: &str) -> String {
         let bases = match &self.extra_items {
-            Some(ty) => format!("TypedDict, extra_items={}", quote_type(ty)),
-            None => "TypedDict, closed=True".to_owned(),
+            Some(ty) => format!("{typed_dict}, extra_items={}", quote_type(ty)),
+            None => format!("{typed_dict}, closed=True"),
         };
         let mut out = format!("class {name}({bases}):\n");
         if self.fields.is_empty() {
@@ -114,6 +117,7 @@ fn quote_type(type_source: &str) -> String {
 
 pub(crate) struct TypedDictLiteral<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     edits: Vec<Fix>,
     errors: Vec<String>,
     /// Insertion-ordered map of shape → synthesized class name so emitted
@@ -124,10 +128,9 @@ pub(crate) struct TypedDictLiteral<'src> {
     /// spans with their class names.
     range_to_class: Vec<(ruff_text_size::TextRange, String)>,
     needs_import: bool,
-    /// Whether any field rendering used basedpython literal-type promotion.
-    /// Lib's preamble step turns this into the `from typing import Literal`
-    /// import.
-    needs_literal_import: bool,
+    /// the `(module, name)` of each name a field type this pass writes itself reads: the
+    /// `Literal` of a promoted literal type, the `Intersection` of an intersection
+    field_imports: BTreeSet<(&'static str, &'static str)>,
     /// set when a nested `T??` field needs the runtime `Optional[...]` wrapper
     needs_optional_runtime: bool,
     /// the shared type-expression lowerer, which prints every field type this pass does
@@ -145,21 +148,23 @@ impl<'src> TypedDictLiteral<'src> {
     ) -> Self {
         Self {
             source,
+            written,
             callable: CallableSyntax::new(source, written, config).with_types(types),
             edits: Vec::new(),
             errors: Vec::new(),
             shapes: IndexMap::new(),
             range_to_class: Vec::new(),
             needs_import: false,
-            needs_literal_import: false,
+            field_imports: BTreeSet::new(),
             needs_optional_runtime: false,
         }
     }
 
     fn class_defs(&self) -> String {
         let mut out = String::new();
+        let typed_dict = self.written.imported("typing_extensions", "TypedDict");
         for (shape, name) in &self.shapes {
-            out.push_str(&shape.class_def(name));
+            out.push_str(&shape.class_def(name, &typed_dict));
             out.push('\n');
         }
         out
@@ -212,7 +217,7 @@ impl<'src> TypedDictLiteral<'src> {
                     // erases type arguments anyway, so the shape lowers to a
                     // `TypedDict` that admits the pack's keys as extra items
                     if matches!(&item.value, Expr::Name(_)) && extra_items.is_none() {
-                        extra_items = Some("object".to_owned());
+                        extra_items = Some(self.written.builtin("object"));
                         continue;
                     }
                     return None;
@@ -277,11 +282,16 @@ impl<'src> TypedDictLiteral<'src> {
                 let parts = flatten_bitand(expr);
                 let rendered: Vec<String> =
                     parts.iter().map(|p| self.render_field_type(p)).collect();
-                format!("Intersection[{}]", rendered.join(", "))
+                self.field_imports.insert(("ty_extensions", "Intersection"));
+                format!(
+                    "{}[{}]",
+                    self.written.imported("ty_extensions", "Intersection"),
+                    rendered.join(", ")
+                )
             }
             Expr::Tuple(t) if t.parenthesized && !t.elts.is_empty() => {
                 let parts: Vec<String> = t.elts.iter().map(|e| self.render_field_type(e)).collect();
-                format!("tuple[{}]", parts.join(", "))
+                format!("{}[{}]", self.written.builtin("tuple"), parts.join(", "))
             }
             // `T?` → `T | None` (nested `T??` → `Optional[T | None]`) so an
             // optional field type composes instead of leaking `?`
@@ -306,8 +316,12 @@ impl<'src> TypedDictLiteral<'src> {
                 )
             }
             _ if is_literal_value(expr) => {
-                self.needs_literal_import = true;
-                format!("Literal[{}]", self.render_subbed(expr.range()))
+                self.field_imports.insert(("typing", "Literal"));
+                format!(
+                    "{}[{}]",
+                    self.written.imported("typing", "Literal"),
+                    self.render_subbed(expr.range())
+                )
             }
             _ => self.callable.lower_type_expr(expr),
         }
@@ -319,15 +333,16 @@ impl<'src> TypedDictLiteral<'src> {
         let parts = flatten_bitor(expr);
         let mut out_groups: Vec<String> = Vec::new();
         let mut pending_list: Vec<String> = Vec::new();
+        let literal = self.written.imported("typing", "Literal");
         let flush = |pending: &mut Vec<String>, out: &mut Vec<String>| {
             if !pending.is_empty() {
-                out.push(format!("Literal[{}]", pending.join(", ")));
+                out.push(format!("{literal}[{}]", pending.join(", ")));
                 pending.clear();
             }
         };
         for p in parts {
             if is_literal_value(p) {
-                self.needs_literal_import = true;
+                self.field_imports.insert(("typing", "Literal"));
                 pending_list.push(self.render_subbed(p.range()));
             } else {
                 flush(&mut pending_list, &mut out_groups);
@@ -493,9 +508,9 @@ impl AstPass for TypedDictLiteralPass<'_> {
         // information the field lowerer asks is about those nodes, and the edits are keyed
         // on the source ranges both share
         walk_type_positions(self.suite, None, &mut inner);
-        if inner.needs_literal_import {
+        for (module, name) in &inner.field_imports {
             ctx.required_imports
-                .push("from typing import Literal".to_owned());
+                .push(self.written.import_from(module, &[name]));
         }
         if inner.needs_optional_runtime {
             ctx.runtime.insert(crate::runtime::OPTIONAL);
@@ -505,8 +520,10 @@ impl AstPass for TypedDictLiteralPass<'_> {
             // which the stdlib `typing.TypedDict` rejects on every released
             // python. source from `typing_extensions` so the generated class
             // body actually executes at runtime
-            ctx.required_imports
-                .push("from typing_extensions import TypedDict".to_owned());
+            ctx.required_imports.push(
+                self.written
+                    .import_from("typing_extensions", &["TypedDict"]),
+            );
             // synthesized class defs are raw multi-line python source. push
             // them into required_imports as a single non-`from` line so
             // merge_from_imports leaves them untouched and they end up in
@@ -532,9 +549,9 @@ impl AstPass for TypedDictLiteralPass<'_> {
     }
 }
 
-/// AST-pass wrapper around [`TypedDictLiteral`] that surfaces its
-/// `needs_literal_import` flag back to the driver so the literal-types
-/// import is emitted alongside the synthesized class definitions
+/// AST-pass wrapper around [`TypedDictLiteral`] that surfaces the imports its
+/// field types read back to the driver, so they are emitted alongside the
+/// synthesized class definitions
 pub(crate) struct TypedDictLiteralPass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
@@ -593,6 +610,25 @@ mod tests {
         assert!(out.contains("    name: \"str\"\n"), "got: {out}");
         assert!(out.contains("    age: \"int\"\n"), "got: {out}");
         assert!(out.contains("a: _TypedDict_"), "got: {out}");
+    }
+
+    /// a field's type is read when the class's hints are, so the name it reads is imported
+    #[test]
+    fn an_intersection_field_imports_intersection() {
+        let out = transpile(
+            indoc! {"
+                class A: ...
+                class B: ...
+                a: {\"x\": A & B}
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("    x: \"Intersection[A, B]\"\n")
+                && out.contains("from ty_extensions import Intersection"),
+            "got: {out}"
+        );
     }
 
     #[test]

@@ -67,7 +67,7 @@ use ruff_python_ast::{
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use super::repeated_underscore::WrittenNames;
+use super::repeated_underscore::{CodeNames, WrittenNames};
 use super::source_util::{preamble_offset, temporary_name};
 use crate::Config;
 
@@ -88,8 +88,13 @@ pub(crate) fn lower(source: String, config: &Config) -> String {
     }
 
     let parsed = ruff_python_parser::parse_unchecked_source(&source, PySourceType::Python);
+    // the builtins the tests call are read under names of their own where the module binds
+    // theirs, as every lowering's are ([`WrittenNames::builtin`])
+    let code = CodeNames::of(parsed.suite());
+    let written = WrittenNames::new(&source).with_code(&code);
     let mut lower = Lower {
         source: &source,
+        written,
         edits: Vec::new(),
         counter: 0,
         needs: Needs::default(),
@@ -108,7 +113,12 @@ pub(crate) fn lower(source: String, config: &Config) -> String {
         .iter()
         .any(|(_, replacement)| replacement.contains(MISS));
     let body = apply(&source, edits);
-    let preamble = crate::runtime_preamble(config, &helpers(&needs, sentinel));
+    let mut preamble = String::new();
+    for import in written.builtin_imports(&body, config.min_version.minor) {
+        preamble.push_str(&import);
+        preamble.push('\n');
+    }
+    preamble.push_str(&crate::runtime_preamble(config, &helpers(&needs, sentinel)));
     let at = preamble_offset(&body);
     format!("{}{preamble}{}", &body[..at], &body[at..])
 }
@@ -149,6 +159,7 @@ struct Needs {
 
 struct Lower<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     edits: Vec<(TextRange, String)>,
     /// monotonic across the file, so every temporary is distinct
     counter: usize,
@@ -342,11 +353,19 @@ impl Lower<'_> {
         let star = sequence.patterns.iter().position(Pattern::is_match_star);
         let fixed = match star {
             None => {
-                parts.push(format!("len({subject}) == {}", sequence.patterns.len()));
+                parts.push(format!(
+                    "{}({subject}) == {}",
+                    self.written.builtin("len"),
+                    sequence.patterns.len()
+                ));
                 sequence.patterns.len()
             }
             Some(star) => {
-                parts.push(format!("len({subject}) >= {}", sequence.patterns.len() - 1));
+                parts.push(format!(
+                    "{}({subject}) >= {}",
+                    self.written.builtin("len"),
+                    sequence.patterns.len() - 1
+                ));
                 star
             }
         };
@@ -375,7 +394,11 @@ impl Lower<'_> {
                 } else {
                     format!("{subject}[{star}:-{after}]")
                 };
-                parts.push(format!("({} := list({slice})) is not {MISS}", name.id));
+                parts.push(format!(
+                    "({} := {}({slice})) is not {MISS}",
+                    name.id,
+                    self.written.builtin("list")
+                ));
             }
         }
         conjoin(parts)
@@ -414,7 +437,8 @@ impl Lower<'_> {
     fn compile_class(&mut self, class: &PatternMatchClass, subject: &str) -> String {
         let class_name = self.fresh();
         let mut parts = vec![format!(
-            "isinstance({subject}, ({class_name} := {}))",
+            "{}({subject}, ({class_name} := {}))",
+            self.written.builtin("isinstance"),
             self.expr_src(class.cls.range())
         )];
 

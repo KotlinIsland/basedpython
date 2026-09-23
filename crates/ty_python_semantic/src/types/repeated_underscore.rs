@@ -47,14 +47,15 @@ impl<'src> WrittenNames<'src> {
         Self { source }
     }
 
-    /// a name the module spells nowhere, `stem` itself when the module does not spell it
-    /// and `stem2`, `stem3`, … when it does
+    /// a name the module spells nowhere and `taken` does not answer for: `stem` itself when
+    /// it is free, and `stem2`, `stem3`, … when it is not
     ///
     /// a binding the lowering writes under a name the source wrote would shadow it — the
     /// `inner` a `decorator def` writes standing where an option of that name is declared,
     /// which the dispatcher then passed the dispatcher itself for
-    pub fn fresh(self, stem: &str) -> String {
-        if !self.spells(stem) {
+    pub fn fresh_outside(self, stem: &str, taken: impl Fn(&str) -> bool) -> String {
+        let free = |name: &str| !self.spells(name) && !taken(name);
+        if free(stem) {
             return stem.to_owned();
         }
         // candidates only ever count up, so one never repeats an earlier one. a module
@@ -62,7 +63,7 @@ impl<'src> WrittenNames<'src> {
         // of them is free long before the numbers run out
         (2u32..u32::MAX)
             .map(|number| format!("{stem}{number}"))
-            .find(|candidate| !self.spells(candidate))
+            .find(|candidate| free(candidate))
             .unwrap_or_else(|| stem.to_owned())
     }
 

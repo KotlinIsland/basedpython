@@ -72,6 +72,8 @@ pub(crate) enum Guard {
         name: String,
         sentinel: String,
         function: String,
+        /// the name the builtin `TypeError` is written under
+        type_error: String,
     },
     /// bind `_` to the parameter that was the first `_`, for a body that reads it. a
     /// repeated `_` that takes its name from an overridden method leaves no parameter
@@ -107,9 +109,10 @@ impl PrologueStatement for Guard {
                 name,
                 sentinel,
                 function,
+                type_error,
             } => {
                 frags.push(Fragment::Lit(format!(
-                    "if {name} is {sentinel}:\n{base}    raise TypeError(\"{function}() missing required argument: '{name}'\")"
+                    "if {name} is {sentinel}:\n{base}    raise {type_error}(\"{function}() missing required argument: '{name}'\")"
                 )));
             }
             Guard::Rebind { parameter } => {
@@ -149,10 +152,10 @@ fn sentinel_edit(default: TextRange, sentinel: &str) -> (TextRange, Vec<Fragment
 /// The name the sentinel goes into the output under.
 ///
 /// It stands for "no argument was given", so it has to be a value nothing else can be —
-/// which a name the module binds itself is not. Taken past whatever `source` spells, so a
+/// which a name the module binds itself is not. Taken past whatever the module spells, so a
 /// module that writes `_MISSING` of its own keeps it and the sentinel goes somewhere else.
-pub(crate) fn sentinel_name(source: &str) -> String {
-    WrittenNames::new(source).fresh("_MISSING")
+pub(crate) fn sentinel_name(written: WrittenNames) -> String {
+    written.fresh("_MISSING")
 }
 
 /// The lines the output needs before it can use the sentinel: the sentinel itself, and the
@@ -163,10 +166,15 @@ pub(crate) fn sentinel_name(source: &str) -> String {
 /// says so. Declaring it `Any` is how typeshed declares its own sentinels, and it costs the
 /// output nothing: the value never reaches the body, whose guard replaces it before anything
 /// reads it.
-pub(crate) fn sentinel_definition(source: &str) -> [String; 2] {
+pub(crate) fn sentinel_definition(written: WrittenNames) -> [String; 2] {
     [
-        "from typing import Any".to_owned(),
-        format!("{}: Any = object()", sentinel_name(source)),
+        written.import_from("typing", &["Any"]),
+        format!(
+            "{}: {} = {}()",
+            sentinel_name(written),
+            written.imported("typing", "Any"),
+            written.builtin("object")
+        ),
     ]
 }
 
@@ -258,6 +266,7 @@ pub(crate) fn parameter_guards(
                         .to_string(),
                     sentinel: sentinel.to_owned(),
                     function: f.name.id.to_string(),
+                    type_error: written_names.builtin("TypeError"),
                 });
             }
             None => {}
@@ -370,7 +379,7 @@ impl MutableDefaults<'_> {
         } = parameter_guards(
             f,
             self.written,
-            &sentinel_name(self.source),
+            &sentinel_name(self.written),
             self.types,
             self.is_stub,
         );
@@ -457,7 +466,7 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
         }
         if inner.used {
             ctx.required_imports
-                .extend(sentinel_definition(self.source));
+                .extend(sentinel_definition(self.written));
         }
         ctx.template_edits.extend(inner.edits);
         ctx.relocating_edits.extend(inner.relocating);
