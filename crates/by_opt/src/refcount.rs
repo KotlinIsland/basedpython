@@ -96,7 +96,7 @@ fn release_sets(function: &Function) -> Vec<BTreeSet<RegisterId>> {
 mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BinOp, Op, Terminator, Value};
+    use by_ir::ops::{BinOp, Mutation, Op, Terminator, Value};
     use by_ir::rtype::RType;
     use by_ir::verify::verify;
 
@@ -228,6 +228,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(index),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Goto(header));
         builder.switch_to(exit);
@@ -254,6 +255,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
         let mut m = module(builder.finish());

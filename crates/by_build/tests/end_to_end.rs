@@ -20,7 +20,7 @@ use by_build::{Options, Toolchain, build_module, build_source};
 
 use by_ir::builder::FunctionBuilder;
 use by_ir::function::{CallConvention, FallbackCode, ModuleIr, ModuleName};
-use by_ir::ops::{BinOp, CmpOp, Op, Terminator, Value};
+use by_ir::ops::{BinOp, CmpOp, Mutation, Op, Terminator, Value};
 use by_ir::rtype::RType;
 
 mod common;
@@ -116,18 +116,21 @@ fn arith_module() -> ModuleIr {
         op: BinOp::Add,
         lhs: Value::Register(a),
         rhs: Value::Register(b),
+        mutation: Mutation::Fresh,
     });
     builder.push(Op::IntBinary {
         dest: scaled,
         op: BinOp::Mul,
         lhs: Value::Register(sum),
         rhs: Value::Register(a),
+        mutation: Mutation::Fresh,
     });
     builder.push(Op::IntBinary {
         dest: result,
         op: BinOp::Sub,
         lhs: Value::Register(scaled),
         rhs: Value::Register(b),
+        mutation: Mutation::Fresh,
     });
     builder.terminate(Terminator::Return(Value::Register(result)));
 
@@ -185,6 +188,7 @@ fn fib_module() -> ModuleIr {
         op: BinOp::Add,
         lhs: Value::Register(a),
         rhs: Value::Register(b),
+        mutation: Mutation::Fresh,
     });
     builder.assign(a, Value::Register(b));
     builder.assign(b, Value::Register(next));
@@ -193,6 +197,7 @@ fn fib_module() -> ModuleIr {
         op: BinOp::Add,
         lhs: Value::Register(i),
         rhs: Value::Int(1),
+        mutation: Mutation::Fresh,
     });
     builder.terminate(Terminator::Goto(header));
 
@@ -352,6 +357,7 @@ fn division_floors_like_python_and_raises_on_zero() {
         op: BinOp::FloorDiv,
         lhs: Value::Register(a),
         rhs: Value::Register(b),
+        mutation: Mutation::Fresh,
     });
     builder.terminate(Terminator::Return(Value::Register(out)));
     let module = ModuleIr {
@@ -468,6 +474,7 @@ fn calls_between_compiled_functions_stay_native() {
         op: BinOp::Add,
         lhs: Value::Register(d),
         rhs: Value::Register(d),
+        mutation: Mutation::Fresh,
     });
     double.terminate(Terminator::Return(Value::Register(doubled)));
 

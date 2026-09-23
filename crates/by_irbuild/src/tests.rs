@@ -157,7 +157,8 @@ def total(n: int) -> int:
     acc += n
     return acc
 ");
-    assert!(ir.contains("acc = acc + n"), "{ir}");
+    // in place: an `int` register may hold a subclass with an `__iadd__` of its own
+    assert!(ir.contains("acc = acc += n"), "{ir}");
 }
 
 #[test]
@@ -738,14 +739,17 @@ def before(a: str, b: object) -> bool:
 }
 
 #[test]
-fn an_int_condition_compares_against_zero() {
+fn an_int_condition_asks_the_int_for_its_truth() {
+    // not `n != 0`: an `int` subclass answers a condition with its `__bool__`, and a
+    // comparison with its `__ne__`
     let ir = ir("\
 def f(n: int) -> int:
     if n:
         return 1
     return 0
 ");
-    assert!(ir.contains("n != 0"), "{ir}");
+    assert!(ir.contains("truthy n"), "{ir}");
+    assert!(!ir.contains("n != 0"), "{ir}");
 }
 
 #[test]
@@ -5938,9 +5942,12 @@ def f(n: int) -> int:
         !ir.contains("i < n"),
         "the comparison must not re-read the mutated local: {ir}"
     );
+    // through `operator.index`, which is how `range` reads a bound, into a register of
+    // its own
     assert!(
-        ir.lines()
-            .any(|line| line.trim_start().starts_with('r') && line.trim_end().ends_with("= n")),
+        ir.lines().any(
+            |line| line.trim_start().starts_with('r') && line.trim_end().ends_with("= index n")
+        ),
         "the bound is copied to its own register: {ir}"
     );
 }
@@ -10142,6 +10149,38 @@ class Cell:
         assert!(!field.optional);
         assert_eq!(field.defaulted_by, None);
     });
+}
+
+/// a literal written into a place that cannot hold it as itself is not the object python
+/// holds: the `int` 4 in a double reads back as `4.0`, and before this was refused it
+/// read back as `8.0`, the tagged word taken for a double. a field has no interpreted
+/// definition to hand the default to, and a nested function's environment would unbox it
+/// into the same double, so both decline
+#[test]
+fn a_literal_default_its_place_cannot_hold_as_itself_declines() {
+    let reasons = declines(
+        "\
+class Cell:
+    var v: float = 4
+        get() = field
+        set(given):
+            field = given
+
+def outer() -> float:
+    def inner(x: float = 1) -> float:
+        return x
+    return inner()
+",
+    );
+    for name in ["Cell", "outer"] {
+        assert!(
+            reasons
+                .iter()
+                .any(|(declined, reason)| declined == name
+                    && reason.contains("cannot hold as itself")),
+            "{name}: {reasons:?}"
+        );
+    }
 }
 
 /// a read-only accessor block declares the storage nothing writes

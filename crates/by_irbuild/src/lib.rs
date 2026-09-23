@@ -169,12 +169,11 @@ pub fn build_module(
     // where the interpreted build checks a value it cannot trust, decided once for the
     // whole module, so every frame lowered below makes the same checks in the same places
     let source = ruff_db::source::source_text(db, model.file());
-    let soundness = by_transforms::soundness_sites(
-        model,
-        by_transforms::WrittenNames::new(source.as_str()),
-        suite,
-        soundness,
-    );
+    // the names and the `/` a parameter list that repeats `_` is lowered to are ty's answer,
+    // the one the interpreted build is transpiled with
+    let underscores = by_transforms::repeated_underscore_lowerings(model, suite);
+    let written = by_transforms::WrittenNames::new(source.as_str()).with_lowerings(&underscores);
+    let soundness = by_transforms::soundness_sites(model, written, suite, soundness);
 
     // a call is only lowered natively when the callee is a module-level function
     // in this same unit, so the set has to be known before any body is lowered
@@ -349,6 +348,7 @@ pub fn build_module(
                             db,
                             env,
                             model,
+                            written,
                             method,
                             &layouts,
                             Some(Receiver::Explicit(&receiver)),
@@ -406,6 +406,7 @@ pub fn build_module(
                         db,
                         env,
                         model,
+                        written,
                         accessor,
                         &layouts,
                         Some(Receiver::Explicit(&receiver)),
@@ -436,7 +437,7 @@ pub fn build_module(
         .filter_map(|stmt| match stmt {
             Stmt::FunctionDef(function) => {
                 let mut signature =
-                    signature(db, env, model, function, &layouts, None, &[]).ok()?;
+                    signature(db, env, model, written, function, &layouts, None, &[]).ok()?;
                 resumable_return(function, &mut signature);
                 Some((function.name.to_string(), signature))
             }
@@ -518,6 +519,7 @@ pub fn build_module(
                     db,
                     env,
                     model,
+                    written,
                     init,
                     &layouts,
                     Some(Receiver::Explicit(&receiver)),
@@ -550,7 +552,8 @@ pub fn build_module(
                 _ => None,
             })
             .filter_map(|function| {
-                let signature = signature(db, env, model, function, &layouts, None, &[]).ok()?;
+                let signature =
+                    signature(db, env, model, written, function, &layouts, None, &[]).ok()?;
                 Some((generators::direct_name(&function.name), signature))
             }),
     );
@@ -630,6 +633,7 @@ pub fn build_module(
         accessors: &accessors,
         language,
         soundness: &soundness,
+        written: &written,
         recheck_licences,
         bind_functions_early,
         db,
@@ -1321,11 +1325,18 @@ fn lower_generator(
         .map(|(name, _)| name.clone())
         .collect();
     // the constructor seeds every one of them, so they are as assigned as a parameter
-    let source = ruff_db::source::source_text(db, model.file());
-    let written = by_transforms::WrittenNames::new(source.as_str());
-    let mut assigned = generators::definitely_assigned(function, written);
+    let mut assigned = generators::definitely_assigned(function, *unit.written);
     assigned.extend(captured.iter().cloned());
-    let mut signed = signature(db, env, model, function, layouts, receiver, &[])?;
+    let mut signed = signature(
+        db,
+        env,
+        model,
+        *unit.written,
+        function,
+        layouts,
+        receiver,
+        &[],
+    )?;
     takes_the_first_iterator(captures, &mut signed);
     let parameters = signed.params;
     let representation = |name: &str| {
@@ -1336,7 +1347,7 @@ fn lower_generator(
             .map(|(_, rtype)| rtype.clone())
     };
     let names = {
-        let mut names = generators::state_names(function, written, &locals);
+        let mut names = generators::state_names(function, *unit.written, &locals);
         if captures.is_some_and(|nested| nested.generator_expression.is_some()) {
             assigned.insert(closures::GENERATOR_ITERATOR.to_string());
             names.push(closures::GENERATOR_ITERATOR.to_string());
@@ -1461,6 +1472,7 @@ fn lower_generator(
                     db,
                     env,
                     model,
+                    *unit.written,
                     &entry.def,
                     &layouts_with_state,
                     Some(Receiver::Implicit(&state)),
@@ -1611,7 +1623,16 @@ fn lower_generator_constructor(
         layouts,
         ..
     } = unit;
-    let mut signed = signature(db, env, model, function, layouts, receiver, &[])?;
+    let mut signed = signature(
+        db,
+        env,
+        model,
+        *unit.written,
+        function,
+        layouts,
+        receiver,
+        &[],
+    )?;
     takes_the_first_iterator(nested, &mut signed);
     let Signature {
         params,
@@ -5926,6 +5947,7 @@ fn class_fields(
             }
             Some(at) => {
                 let field = &mut fields[at];
+                field_default_stands(&name, Some(&default), &field.ty)?;
                 field.default = Some(default);
                 field.optional = false;
             }
@@ -5935,10 +5957,12 @@ fn class_fields(
                 let ty = target.inferred_type(model).ok_or_else(|| {
                     Decline::new("an accessor block's storage has no inferred type")
                 })?;
+                let ty = map_type_with(db, env, ty, layouts)?;
+                field_default_stands(&name, Some(&default), &ty)?;
                 fields.push(by_ir::function::FieldDecl {
                     cell: false,
                     name,
-                    ty: map_type_with(db, env, ty, layouts)?,
+                    ty,
                     default: Some(default),
                     optional: false,
                     defaulted_by: None,
@@ -6313,10 +6337,12 @@ fn data_fields(
                     .target
                     .inferred_type(model)
                     .ok_or_else(|| Decline::new("a field has no inferred type"))?;
+                let ty = map_type_with(db, env, ty, layouts)?;
+                field_default_stands(&name, default.as_ref(), &ty)?;
                 fields.push(by_ir::function::FieldDecl {
                     cell: false,
                     name,
-                    ty: map_type_with(db, env, ty, layouts)?,
+                    ty,
                     default,
                     optional: false,
                     defaulted_by: None,
@@ -7406,7 +7432,16 @@ fn lower_function_with_receiver(
         ret,
         deferring,
         computed_defaults,
-    } = signature(db, env, model, function, layouts, receiver, arrays)?;
+    } = signature(
+        db,
+        env,
+        model,
+        *unit.written,
+        function,
+        layouts,
+        receiver,
+        arrays,
+    )?;
 
     // a boundary that hands the call on takes the twin off the interpreted class, and
     // for a class method that is already *bound* — to the interpreted class, not to the
@@ -7617,6 +7652,7 @@ fn lower_function_with_receiver(
                     db,
                     env,
                     model,
+                    *unit.written,
                     &entry.def,
                     &layouts_with_env,
                     Some(Receiver::Implicit(&receiver)),
@@ -8080,6 +8116,9 @@ struct Unit<'a> {
     /// the runtime soundness checks the interpreted build makes — see
     /// [`LowerOptions::soundness`]
     soundness: &'a by_transforms::SoundnessSites,
+    /// the names the module spells, and how each parameter list in it that repeats `_` is
+    /// lowered, which is what every parameter is published under
+    written: &'a by_transforms::WrittenNames<'a>,
     /// whether each licensed direct call re-asks the lookup it skips — see
     /// [`LowerOptions::recheck_licences`]
     recheck_licences: bool,
@@ -8619,18 +8658,21 @@ fn supplied_arrays(
     seen
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a signature is read before any `Unit` exists, from the parts one is made of"
+)]
 fn signature(
     db: &dyn ty_python_semantic::Db,
     env: &ProgramEnvironment<'_>,
     model: &SemanticModel<'_>,
+    written: by_transforms::WrittenNames,
     function: &ast::StmtFunctionDef,
     layouts: &Layouts,
     receiver: Option<Receiver<'_>>,
     arrays: &[(usize, RType)],
 ) -> Lowered<Signature> {
     let parameters = &function.parameters;
-    let source = ruff_db::source::source_text(db, model.file());
-    let written = by_transforms::WrittenNames::new(source.as_str());
 
     let mut params = Vec::with_capacity(parameters.args.len() + 1);
     let mut defaults: Vec<Option<Value>> = Vec::with_capacity(parameters.args.len() + 1);
@@ -8708,7 +8750,6 @@ fn signature(
                 }
             },
         };
-        defaults.push(default);
         let rtype = match (index, receiver) {
             (0, Some(Receiver::Explicit(receiver))) => receiver.clone(),
             // the unboxed edition takes the buffer itself. it is never reached from
@@ -8768,6 +8809,24 @@ fn signature(
             }
             None => rtype,
         };
+        // an immediate the parameter's representation cannot hold as itself is one the
+        // boundary cannot write either: `x: float = 1` leaves python holding the `int`,
+        // and a double would read it back as `1.0`. whoever holds a computed default
+        // holds this one as the object python made — except the environment of a nested
+        // function, which parks it only to unbox it into that same representation
+        let default = match default {
+            Some(value) if !value.stands_as_itself_in(&rtype) => {
+                if matches!(receiver, Some(Receiver::Implicit(_))) {
+                    return Err(Decline::new(format!(
+                        "the default of `{name}` is a literal its `{rtype}` place cannot hold as itself"
+                    )));
+                }
+                computed_defaults.push(params.len());
+                None
+            }
+            default => default,
+        };
+        defaults.push(default);
         params.push((name.to_string(), rtype));
     }
 
@@ -8801,7 +8860,7 @@ fn signature(
         // counted from `params[0]`, which for a synthetic receiver is a slot no
         // keyword can reach either — a boundary reads this against the parameters it
         // has, not against the ones that were written
-        posonly: parameters.posonlyargs.len()
+        posonly: by_transforms::positional_only_count(parameters, written)
             + usize::from(matches!(receiver, Some(Receiver::Implicit(_)))),
         kwonly: parameters.kwonlyargs.len(),
         ret: return_type(db, env, model, function, layouts)?,
@@ -12709,8 +12768,10 @@ impl Lowering<'_, '_> {
         // each way writes what only the other reads as well, because nothing that checks
         // the function can see the two never cross
         self.builder.switch_to(counting);
+        let start_value = self.range_bound(start_value);
         self.builder.assign(index, start_value);
-        self.builder.assign(limit, stop_value.clone());
+        let stop_bound = self.range_bound(stop_value.clone());
+        self.builder.assign(limit, stop_bound);
         self.builder.push(Op::Box {
             dest: iterator,
             src: Value::None,
@@ -12798,6 +12859,7 @@ impl Lowering<'_, '_> {
             op: BinOp::Add,
             lhs: Value::Register(index),
             rhs: Value::Int(step_value),
+            mutation: Mutation::Fresh,
         });
         self.builder.terminate(Terminator::Goto(header));
 
@@ -12892,6 +12954,7 @@ impl Lowering<'_, '_> {
             op: BinOp::Add,
             lhs: Value::Register(counter),
             rhs: Value::Fixed(1),
+            mutation: Mutation::Fresh,
         });
         self.builder.assign(counter, Value::Register(stepped));
         self.builder.terminate(Terminator::Goto(header));
@@ -14175,6 +14238,22 @@ impl Lowering<'_, '_> {
             })
     }
 
+    /// a bound of a counted `range` as `range` itself reads it: the exact `int` an `int`
+    /// subclass stands for, so the loop counts in plain `int`s and never asks the
+    /// subclass's own `__add__` or `__lt__`. an immediate is one already
+    fn range_bound(&mut self, value: Value) -> Value {
+        if !matches!(value, Value::Register(_)) {
+            return value;
+        }
+        let dest = self.builder.temp(RType::INT);
+        self.builder.push(Op::Unary {
+            dest,
+            op: UnaryOp::Index,
+            operand: value,
+        });
+        Value::Register(dest)
+    }
+
     /// convert `value` from `from` to `to`, or decline if there is no free
     /// conversion between the two representations
     fn coerce(&mut self, value: Value, from: &RType, to: &RType) -> Lowered<Value> {
@@ -15154,14 +15233,10 @@ impl Lowering<'_, '_> {
                 });
                 Value::Register(dest)
             }
+            // not `x != 0`: an `int` subclass answers truthiness with its own `__bool__`
             RType::Primitive(Primitive::Int) => {
                 let dest = self.builder.temp(RType::BIT);
-                self.builder.push(Op::IntCompare {
-                    dest,
-                    op: CmpOp::Ne,
-                    lhs: value,
-                    rhs: Value::Int(0),
-                });
+                self.builder.push(Op::Truthy { dest, src: value });
                 Value::Register(dest)
             }
             RType::Primitive(Primitive::Float) => {
@@ -15682,7 +15757,27 @@ impl Lowering<'_, '_> {
                 });
                 Ok((Value::Register(dest), ty))
             }
-            AstUnaryOp::UAdd => Ok((operand, ty)),
+            // an exact `float` is its own `+`, and a double holds nothing else
+            AstUnaryOp::UAdd if ty == RType::FLOAT => Ok((operand, ty)),
+            AstUnaryOp::UAdd => {
+                if !matches!(ty, RType::Primitive(Primitive::Int | Primitive::Object)) {
+                    let operand = self.widen_to_object(operand, &ty);
+                    let dest = self.builder.temp(RType::OBJECT);
+                    self.builder.push(Op::Unary {
+                        dest,
+                        op: UnaryOp::Pos,
+                        operand,
+                    });
+                    return Ok((Value::Register(dest), RType::OBJECT));
+                }
+                let dest = self.builder.temp(ty.clone());
+                self.builder.push(Op::Unary {
+                    dest,
+                    op: UnaryOp::Pos,
+                    operand,
+                });
+                Ok((Value::Register(dest), ty))
+            }
             // `~`, and the basedpython postfix operators `?` / `!` / `!!`
             other => Err(Decline::new(format!(
                 "unary `{}` is not lowered yet",
@@ -15804,8 +15899,10 @@ impl Lowering<'_, '_> {
         Ok((Value::Register(dest), result_ty))
     }
 
-    /// `mutation` only reaches the object protocol: an unboxed pair has no method to
-    /// offer, so `x += 1` on an `int` register *is* `x = x + 1`
+    /// `mutation` reaches whatever may hold an object that has in-place methods: the
+    /// object protocol, a `str` concatenation, and the slow path of an `int` operation,
+    /// where a subclass stands behind the pointer. a double has no method to offer, so
+    /// `x += 1.0` on a `float` register *is* `x = x + 1.0`
     fn emit_binary(
         &mut self,
         dest: RegisterId,
@@ -15819,7 +15916,13 @@ impl Lowering<'_, '_> {
             (RType::Primitive(Primitive::Int), RType::Primitive(Primitive::Int))
                 if !power_may_be_fractional(op, (&lhs, lhs_ty), (&rhs, rhs_ty)) =>
             {
-                self.builder.push(Op::IntBinary { dest, op, lhs, rhs });
+                self.builder.push(Op::IntBinary {
+                    dest,
+                    op,
+                    lhs,
+                    rhs,
+                    mutation,
+                });
             }
             (RType::Primitive(Primitive::Str), RType::Primitive(Primitive::Str))
                 if matches!(op, BinOp::Add) =>
@@ -15845,6 +15948,10 @@ impl Lowering<'_, '_> {
             // conversion this emits. so the double operation *is* the operation,
             // not an approximation of one, right down to the `OverflowError` an
             // integer with no float at all raises
+            //
+            // an `int` on the *left* is asked first, though, and an `int` subclass may
+            // answer with a method of its own. so that side stays tagged, and the
+            // operation converts it only once it knows it holds an exact `int`
             (RType::Primitive(Primitive::Float), RType::Primitive(Primitive::Int))
             | (RType::Primitive(Primitive::Int), RType::Primitive(Primitive::Float))
                 if !matches!(
@@ -15852,7 +15959,6 @@ impl Lowering<'_, '_> {
                     BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr
                 ) && !power_may_be_complex(op, (&lhs, lhs_ty), (&rhs, rhs_ty)) =>
             {
-                let lhs = self.widen_to_float(lhs, lhs_ty);
                 let rhs = self.widen_to_float(rhs, rhs_ty);
                 self.builder.push(Op::FloatBinary { dest, op, lhs, rhs });
             }
@@ -17171,7 +17277,9 @@ impl Lowering<'_, '_> {
             None => Value::Int(0),
             Some((value, ty)) => self.coerce(value.clone(), ty, &RType::INT)?,
         };
+        let first = self.range_bound(first);
         let last = self.coerce(stop.0.clone(), &stop.1, &RType::INT)?;
+        let last = self.range_bound(last);
         self.store(counter, first, &RType::INT)?;
         self.store(bound, last, &RType::INT)?;
         // each way writes what only the other reads as well, because nothing that checks
@@ -17277,6 +17385,7 @@ impl Lowering<'_, '_> {
             op: BinOp::Add,
             lhs: Value::Register(counter),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         self.builder.assign(counter, Value::Register(stepped));
         self.builder.terminate(Terminator::Goto(header));
@@ -19239,6 +19348,18 @@ fn inherited_default(
         .and_then(|parsed| literal_value(parsed.expr()))
         .map(Some)
         .ok_or_else(|| Decline::new("a parameter inherits a default that is not an immediate"))
+}
+
+/// refuse a field whose literal default its representation cannot hold as itself — see
+/// [`Value::stands_as_itself_in`]. a constructor writes the default straight into the
+/// field, and there is no interpreted definition to hand the object to instead
+fn field_default_stands(name: &str, default: Option<&Value>, ty: &RType) -> Lowered<()> {
+    match default {
+        Some(value) if !value.stands_as_itself_in(ty) => Err(Decline::new(format!(
+            "the default of field `{name}` is a literal its `{ty}` place cannot hold as itself"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 fn literal_value(expr: &Expr) -> Option<Value> {

@@ -234,7 +234,7 @@ fn hold(function: &mut Function, header: BlockId, body: &[BlockId], array: Regis
 #[cfg(test)]
 mod tests {
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::CmpOp;
+    use by_ir::ops::{CmpOp, Mutation};
     use by_ir::verify::verify;
 
     use super::*;
@@ -291,6 +291,7 @@ mod tests {
             op: by_ir::ops::BinOp::Add,
             lhs: Value::Register(i),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Goto(header));
         builder.switch_to(exit);

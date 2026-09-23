@@ -74,6 +74,21 @@ impl Value {
             Self::Bytes(_) => Some(RType::OBJECT),
         }
     }
+
+    /// whether a place of `ty` holds this immediate as the very object python holds, so
+    /// that writing it there — as a default, say — changes nothing a program can see
+    ///
+    /// an `object` place holds every immediate, boxed. any other place holds only the
+    /// immediates of its own representation, and an `int` place a `bool` as well, which
+    /// it keeps as the object itself. `x: float = 1` does not qualify: the `int` written
+    /// into a double reads back as `1.0`, where python goes on holding the `int`
+    pub fn stands_as_itself_in(&self, ty: &RType) -> bool {
+        match self {
+            Self::Register(_) => false,
+            Self::Bool(_) | Self::Bit(_) if *ty == RType::INT => true,
+            _ => *ty == RType::OBJECT || self.immediate_type().as_ref() == Some(ty),
+        }
+    }
 }
 
 /// whether an operation is the augmented form
@@ -199,6 +214,13 @@ pub enum UnaryOp {
     Neg,
     Not,
     Invert,
+    /// `+x`: an `int`'s or an object's `__pos__`, which an exact `int` answers with
+    /// itself and a `Counter`, say, with a copy that drops what is not positive
+    Pos,
+    /// `operator.index(x)` of an `int`: the exact `int` it stands for, which is how
+    /// `range` reads its bounds. an `int` subclass is copied by value, and no method of
+    /// its own is asked
+    Index,
 }
 
 /// which lookup a [`Op::LicenceHolds`] re-asks
@@ -280,13 +302,22 @@ pub enum Op {
     /// `dest = src`, with no representation change
     Assign { dest: RegisterId, src: Value },
     /// arithmetic on tagged integers
+    ///
+    /// an `int` register may hold a subclass behind the pointer, and python offers such a
+    /// left operand of `x += y` its own `__iadd__` first. an exact `int` has no in-place
+    /// methods, so `mutation` only ever changes what the slow path asks
     IntBinary {
         dest: RegisterId,
         op: BinOp,
         lhs: Value,
         rhs: Value,
+        mutation: Mutation,
     },
     /// arithmetic on unboxed doubles
+    ///
+    /// the left operand may be an `int` instead, tagged or a machine integer: python
+    /// asks an `int` on the left first, so the operation is its method's — the double
+    /// arithmetic for an exact `int`, and the subclass's own for anything else
     FloatBinary {
         dest: RegisterId,
         op: BinOp,
@@ -2528,6 +2559,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(RegisterId(0)),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         };
         assert_eq!(op.dest(), Some(RegisterId(2)));
         assert_eq!(op.operands().len(), 2);

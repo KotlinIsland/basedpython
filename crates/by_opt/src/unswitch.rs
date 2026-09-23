@@ -288,7 +288,7 @@ fn reachable(function: &Function, start: BlockId, reverse: bool) -> Vec<BlockId>
 pub(crate) mod tests {
     use super::*;
     use by_ir::builder::FunctionBuilder;
-    use by_ir::ops::{BinOp, CmpOp, RegisterId, Value};
+    use by_ir::ops::{BinOp, CmpOp, Mutation, RegisterId, Value};
     use by_ir::rtype::RType;
     use by_ir::verify::verify;
 
@@ -339,6 +339,7 @@ pub(crate) mod tests {
             op: BinOp::Add,
             lhs: Value::Register(index),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(index, Value::Register(next));
         if body_writes_bound {
@@ -347,6 +348,7 @@ pub(crate) mod tests {
                 op: BinOp::Mul,
                 lhs: Value::Register(bound),
                 rhs: Value::Int(1),
+                mutation: Mutation::Fresh,
             });
         }
         builder.terminate(Terminator::Goto(header));
@@ -560,6 +562,7 @@ pub(crate) mod tests {
                 op: BinOp::Mul,
                 lhs: Value::Register(rows),
                 rhs: Value::Int(1),
+                mutation: Mutation::Fresh,
             });
         }
         builder.terminate(Terminator::Goto(inner));
@@ -593,6 +596,7 @@ pub(crate) mod tests {
             op: BinOp::Add,
             lhs: Value::Register(x),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(x, Value::Register(next_x));
         builder.terminate(Terminator::Goto(inner));
@@ -603,6 +607,7 @@ pub(crate) mod tests {
             op: BinOp::Add,
             lhs: Value::Register(y),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.assign(y, Value::Register(next_y));
         builder.terminate(Terminator::Goto(outer));
@@ -707,6 +712,7 @@ pub(crate) mod tests {
                 op: BinOp::Add,
                 lhs: Value::Register(index),
                 rhs: Value::Int(1),
+                mutation: Mutation::Fresh,
             });
             builder.assign(index, Value::Register(next));
         };
@@ -719,6 +725,7 @@ pub(crate) mod tests {
             op: BinOp::Mul,
             lhs: Value::Register(index),
             rhs: Value::Int(2),
+            mutation: Mutation::Fresh,
         });
         if !stepped_first {
             step(&mut builder);

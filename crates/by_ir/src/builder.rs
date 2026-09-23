@@ -454,7 +454,7 @@ impl FunctionBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ops::BinOp;
+    use crate::ops::{BinOp, Mutation};
     use crate::verify::verify;
 
     #[test]
@@ -468,6 +468,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(a),
             rhs: Value::Register(b),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
         assert_eq!(verify(&builder.finish()), Ok(()));

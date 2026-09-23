@@ -646,8 +646,9 @@ fn is_inert(function: &Function, op: &Op) -> bool {
         // pure double arithmetic touches no reference at all, and neither does asking
         // whether an instance has a field: a load and a comparison, and a raise at worst,
         // which leaves before any later use of what is borrowed
-        Op::FloatBinary { .. }
-        | Op::FloatCompare { .. }
+        // an `int` on the left of a double operation is asked for its own method
+        Op::FloatBinary { lhs, .. } => function.value_type(lhs) != Some(RType::INT),
+        Op::FloatCompare { .. }
         | Op::RequireField { .. }
         | Op::FieldIsSet { .. }
         | Op::HoldsLayout { .. } => true,
@@ -730,6 +731,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(read),
             rhs: Value::Register(k),
+            mutation: Mutation::Fresh,
         };
         let copy = builder.new_block();
         builder.push(field.clone());
@@ -795,6 +797,7 @@ mod tests {
                 op: BinOp::Add,
                 lhs: Value::Register(field),
                 rhs: Value::Register(k),
+                mutation: Mutation::Fresh,
             });
             sum = dest;
         }
@@ -883,6 +886,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(field),
             rhs: Value::Register(k),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
         let mut m = module(builder.finish());
@@ -1339,6 +1343,7 @@ mod tests {
             op: BinOp::Add,
             lhs: Value::Register(part),
             rhs: Value::Int(1),
+            mutation: Mutation::Fresh,
         });
         builder.terminate(Terminator::Return(Value::Register(sum)));
         let mut m = module(builder.finish());
