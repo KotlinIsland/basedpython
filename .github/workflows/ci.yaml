@@ -503,7 +503,12 @@ jobs:
     # work — and the 1942s run reached 45m mid-way through the dogfood steps and was killed.
     # Nextest's own total is the number to compare here: it stays flat across the merge, so the
     # budget is for the runner's variance, not for the suite growing.
-    timeout-minutes: 75
+    #
+    # 75 in turn was overrun on 2026-09-23 by two runs of the same code a few hours apart:
+    # one finished in 46 minutes, and the other, on a newer runner image, summed 244 minutes
+    # of test time against 125 for the fast one and was killed at test 15000 of 15397. A
+    # machine half as fast is within the variance seen, and it takes the job past 90 minutes
+    timeout-minutes: 120
     env:
       # Line-tables-only debug info: faster builds, backtraces still work.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -660,7 +665,12 @@ jobs:
     # windows is the slow half of this matrix and came within two minutes of the previous
     # 45-minute budget on 2026-08-13 (42m54s, against 24m56s for macos on the same run), so it
     # gets the same headroom the linux job needed for the same reason
-    timeout-minutes: 75
+    #
+    # that figure predates windows pinning an interpreter, which is what lets `by_build`
+    # compile anything there. with it, `by_build` alone is 77 of the 249 minutes of test time,
+    # and a whole run took 74m50s on 2026-09-23 on an ordinary runner — no headroom left at
+    # 75 for the variance the linux job sees
+    timeout-minutes: 120
     env:
       # Line-tables-only debug info: faster builds, backtraces still work.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
