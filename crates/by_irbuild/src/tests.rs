@@ -3067,6 +3067,109 @@ class Marked(metaclass=ABCMeta):
     );
 }
 
+/// each method of one emitted class, with whether each decorator it keeps only marks
+/// what it was handed
+fn method_marks(source: &str, class: &str) -> Vec<(String, Vec<bool>)> {
+    with_source(source, |db, env, model, suite| {
+        let module =
+            crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+        assert!(module.declined.is_empty(), "{:?}", module.declined);
+        module
+            .classes
+            .iter()
+            .find(|candidate| candidate.name == class)
+            .unwrap_or_else(|| panic!("{class} is emitted"))
+            .methods
+            .iter()
+            .map(|method| {
+                (
+                    method.name.clone(),
+                    method
+                        .decorators
+                        .iter()
+                        .map(by_ir::function::Decorator::marks_only)
+                        .collect(),
+                )
+            })
+            .collect()
+    })
+}
+
+#[test]
+fn a_decorator_only_marks_where_it_resolves_to_a_marking_one() {
+    // written with an `@` under its own name, under a spelling of its own, and as a
+    // language modifier, which the transpiler writes out as the `typing` one
+    assert_eq!(
+        method_marks(
+            "\
+import abc
+import typing
+import typing_extensions
+from typing import final, override
+
+
+class Base:
+    def area(self) -> int:
+        return 0
+
+    def name(self) -> str:
+        return \"\"
+
+    def perimeter(self) -> int:
+        return 0
+
+
+class Square(Base):
+    @override
+    def area(self) -> int:
+        return 1
+
+    @typing.override
+    @final
+    def name(self) -> str:
+        return \"square\"
+
+    @abc.abstractmethod
+    def edges(self) -> int:
+        return 4
+
+    override def perimeter(self) -> int:
+        return 4
+
+    @typing_extensions.final
+    def sides(self) -> int:
+        return 4
+",
+            "Square"
+        ),
+        vec![
+            ("area".to_string(), vec![true]),
+            ("name".to_string(), vec![true, true]),
+            ("edges".to_string(), vec![true]),
+            ("perimeter".to_string(), vec![true]),
+            ("sides".to_string(), vec![true]),
+        ]
+    );
+    // a module's own `override` is whatever it wrote, and a decorator that happens to
+    // return its argument is not known to by being read
+    assert_eq!(
+        method_marks(
+            "\
+def override(f):
+    return f
+
+
+class Box:
+    @override
+    def size(self) -> int:
+        return 1
+",
+            "Box"
+        ),
+        vec![("size".to_string(), vec![false])]
+    );
+}
+
 #[test]
 fn a_class_level_constant_beside_a_base_of_ours_keeps_that_base_emitted() {
     // the shape the stdlib is made of: no keyword at all, a base this module emits
@@ -5449,6 +5552,7 @@ def f(n: int) -> int:
             [by_ir::function::Decorator::Path {
                 root: "functools".to_string(),
                 attributes: vec!["cache".to_string()],
+                marks_only: false,
             }]
         );
     });
@@ -6513,9 +6617,10 @@ fn a_method_call_on_an_emitted_class_is_direct() {
     // and there is no other reason for one to appear
     with_source(
         "\
-data class Point:
-    x: int
-    y: int
+class Point:
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
 
     def total(self) -> int:
         return self.x + self.y
@@ -6564,6 +6669,39 @@ class Cell:
 
     def __init__(self, n: int) -> None:
         self.n = n
+
+    def doubled(self) -> int:
+        return self.n * 2
+
+def use(c: Cell) -> int:
+    return c.doubled()
+",
+        |db, env, model, suite| {
+            let module =
+                crate::build_module(db, env, model, suite, "app", crate::Language::BasedPython);
+            assert!(module.declined.is_empty(), "{:?}", module.declined);
+            let function = &module.functions[0];
+            let text = print_function(function);
+            assert!(text.contains("call Cell.doubled"), "{text}");
+            assert!(
+                !has_op(function, |op| matches!(
+                    op,
+                    Op::DictShadows { .. } | Op::CallMethod { .. }
+                )),
+                "{text}"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_data_class_reaches_its_body_with_nothing_asked() {
+    // a `data class` is `@dataclass(slots=True)`, which declares its fields as its
+    // `__slots__` — so it has no dict for a shadowing value either
+    with_source(
+        "\
+data class Cell:
+    n: int
 
     def doubled(self) -> int:
         return self.n * 2
@@ -8644,6 +8782,44 @@ class Table:
 }
 
 #[test]
+fn a_dunder_the_class_body_binds_again_declines() {
+    // a dunder is settled from its `def`: a type slot is filled from it, and a name python
+    // looks up on the type is published beside it. an assignment to a dunder with a slot
+    // declines as a slot alias clashing with the `def`, which `__format__` has none of,
+    // and a `:=` makes no assignment at all
+    let reasons = declines(
+        "\
+def other(self) -> int:
+    return 2
+
+
+class Formatted:
+    def __format__(self, spec: str) -> str:
+        return \"one\"
+
+    __format__ = other
+
+
+class Walrused:
+    def __len__(self) -> int:
+        return 1
+
+    x = (__len__ := other)
+",
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Formatted"
+            && reason == "`__format__` is bound again by the class body, and a dunder is settled from its `def`"),
+        "{reasons:?}"
+    );
+    assert!(
+        reasons.iter().any(|(name, reason)| name == "Walrused"
+            && reason == "`__len__` is bound by `:=` in the class body, and a dunder is settled before one runs"),
+        "{reasons:?}"
+    );
+}
+
+#[test]
 fn a_conditional_dunder_declines() {
     let reasons = declines(
         "\
@@ -8904,6 +9080,26 @@ data class B(A):
     assert!(ir.contains("r2 = builtin-stands super"), "{ir}");
     assert!(ir.contains("callobj r1(r5, r4)"), "{ir}");
     assert!(ir.contains("callobj r1()"), "{ir}");
+}
+
+#[test]
+fn a_class_cell_read_is_the_class_the_body_was_written_in() {
+    // `__class__` is the cell `super()` reads its pivot from, so it is the same `class B`
+    // rather than a global named `__class__`, which is what it used to be read as — and
+    // raised `NameError` at every call
+    let ir = method_ir(
+        &format!(
+            "{A_BASE}
+data class B(A):
+    def owner(self) -> object:
+        return __class__
+"
+        ),
+        "B",
+        "owner",
+    );
+    assert!(ir.contains("= class B"), "{ir}");
+    assert!(!ir.contains("__class__"), "{ir}");
 }
 
 #[test]

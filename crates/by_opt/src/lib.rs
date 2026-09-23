@@ -386,14 +386,15 @@ mod tests {
             properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             base: None,
             inherited_init: false,
             fields_are_parameters: true,
             dataclass: false,
             immutable: false,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
         });
 
         assert_eq!(optimize(&mut module), Ok(()));

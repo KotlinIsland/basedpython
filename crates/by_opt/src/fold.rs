@@ -1021,6 +1021,8 @@ mod tests {
             name: "Vec2".to_string(),
             immutable: true,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             resume: None,
             keywords: Vec::new(),
             exported: true,
@@ -1041,8 +1043,7 @@ mod tests {
             properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -1091,6 +1092,8 @@ mod tests {
             name: "Loose".to_string(),
             immutable: false,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             resume: None,
             keywords: Vec::new(),
             exported: true,
@@ -1111,8 +1114,7 @@ mod tests {
             properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -1152,6 +1154,8 @@ mod tests {
             name: "Vec2".to_string(),
             immutable: true,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             resume: None,
             keywords: Vec::new(),
             exported: true,
@@ -1172,8 +1176,7 @@ mod tests {
             properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             methods: Vec::new(),
         });
         run(&mut m);
@@ -1215,6 +1218,8 @@ mod tests {
             name: "Vec2".to_string(),
             immutable: true,
             environment: false,
+            mutable: false,
+            unchecked_licences: false,
             resume: None,
             keywords: Vec::new(),
             exported: true,
@@ -1235,8 +1240,7 @@ mod tests {
             properties: Vec::new(),
             slot_aliases: Vec::new(),
             generic: false,
-            declares_slots: false,
-            slots_weak_references: false,
+            slots: None,
             methods: Vec::new(),
         });
         run(&mut m);
