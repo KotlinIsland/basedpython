@@ -5470,6 +5470,10 @@ struct ArgumentMatcher<'a, 'db> {
     /// This is used to prevent variadic arguments from greedily matching parameters that will be
     /// explicitly provided via keyword arguments.
     explicit_keyword_parameters: FxHashSet<usize>,
+
+    /// basedpython: whether the matches being made now are ones the argument may not make at
+    /// runtime. see [`MatchedParameter::conditional`]
+    conditional: bool,
 }
 
 impl<'a, 'db> ArgumentMatcher<'a, 'db> {
@@ -5502,6 +5506,7 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
             variable_length_positional_arguments: SmallVec::new(),
             variadic_argument_matched_to_variadic_parameter: false,
             explicit_keyword_parameters,
+            conditional: false,
         }
     }
 
@@ -5573,6 +5578,7 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
             argument_type,
             expected_type: None,
             provenance,
+            conditional: self.conditional,
         });
         matched_argument.matched = true;
         self.parameter_info[parameter_index].matched = true;
@@ -5660,6 +5666,20 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
 
     /// Match a variadic argument to the remaining positional, standard or variadic parameters.
     fn match_variadic(
+        &mut self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        argument_index: usize,
+        argument: Argument<'a>,
+        argument_type: Option<Type<'db>>,
+    ) -> Result<(), ()> {
+        let result =
+            self.match_variadic_positions(db, env, argument_index, argument, argument_type);
+        self.conditional = false;
+        result
+    }
+
+    fn match_variadic_positions(
         &mut self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
@@ -5823,6 +5843,8 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
                 is_variable,
             )?;
         }
+        // every position past the guaranteed minimum is only there for some of the values
+        self.conditional = true;
 
         // For a union of fixed-length tuples, positions beyond the guaranteed minimum are only
         // present in the longer union members. They therefore cannot satisfy a required
@@ -5915,6 +5937,7 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
 
             // Special case TypedDict-shaped values because we know which keys are present.
             for (name, unpacked_key) in unpacked.keys {
+                self.conditional = !unpacked_key.is_required;
                 let _ = self.match_keyword(
                     argument_index,
                     Argument::Keywords,
@@ -5922,8 +5945,11 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
                     name.as_str(),
                 );
             }
+            self.conditional = false;
             self.match_typed_dict_openness(argument_index, openness);
         } else {
+            // a mapping of unknown keys may hold any of them, or none
+            self.conditional = true;
             for (parameter_index, parameter) in self.parameters.iter().enumerate() {
                 if self.parameter_info[parameter_index].matched && !parameter.is_keyword_variadic()
                 {
@@ -5961,6 +5987,7 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
                     true,
                 );
             }
+            self.conditional = false;
         }
     }
 
@@ -5993,6 +6020,8 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
                     argument_type: Some(extra_items_ty),
                     expected_type: None,
                     provenance: InvalidArgumentTypeProvenance::Argument,
+                    // an extra item may or may not be there
+                    conditional: true,
                 });
             }
         }
@@ -6220,6 +6249,10 @@ struct ArgumentTypeChecker<'a, 'db> {
     /// See [`typevars_reached_by_arguments`].
     typevars_reached_by_arguments: Box<[BoundTypeVarIdentity<'db>]>,
 
+    /// basedpython: the parameters the call may leave out whose defaults take part in it as if
+    /// they had been passed. see [`initialising_defaults`]
+    initialising_defaults: Box<[DefaultRelation<'db>]>,
+
     /// Argument indices for which specialization inference has already produced a sufficiently
     /// precise argument mismatch. We can then silence `check_argument_type` for those arguments to
     /// avoid duplicate diagnostics.
@@ -6265,6 +6298,67 @@ impl<'db> ArgumentRelation<'db> {
             has_starred_annotation: parameter.has_starred_annotation(),
         }
     }
+}
+
+/// basedpython: a parameter the call may leave out, whose default is passed in its place because
+/// it initialises a type variable of the parameter's annotation. see
+/// [`initialising_default_type`](crate::types::signatures::initialising_default_type)
+#[derive(Clone, Copy, Debug)]
+struct DefaultRelation<'db> {
+    parameter_index: usize,
+    declared_type: Type<'db>,
+    default_type: Type<'db>,
+}
+
+/// basedpython: the parameters the call may leave out whose defaults initialise a type variable,
+/// as `1` initialises `T` in `def f[T](t: T = 1)`
+///
+/// such a default only fits some specializations of the annotation, so the call that falls back
+/// on it has to pick one it fits: `f()` solves `T` from the default, and `f(names)` with
+/// `names: list[str]` on `def f[T](x: list[T], t: T = 1)` is rejected, because the invariant
+/// `list[T]` leaves no `T` that both fit
+///
+/// a parameter only an unpacked argument reaches may still be left out — `f(*names)` is `f()`
+/// when `names` is empty — so its default takes part alongside what the unpacking supplies. a
+/// partial application is solved the same way, since the call it makes later may leave the
+/// parameter out too
+fn initialising_defaults<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    signature: &Signature<'db>,
+    argument_matches: &[MatchedArgument<'db>],
+) -> Box<[DefaultRelation<'db>]> {
+    let parameters = signature.parameters();
+    let mut supplied = vec![false; parameters.len()];
+    for matched in argument_matches.iter().flat_map(MatchedArgument::iter) {
+        if !matched.conditional
+            && let Some(supplied) = supplied.get_mut(matched.index)
+        {
+            *supplied = true;
+        }
+    }
+    parameters
+        .iter()
+        .zip(supplied)
+        .enumerate()
+        .filter(|(_, (_, supplied))| !supplied)
+        .filter_map(|(parameter_index, (parameter, _))| {
+            Some(DefaultRelation {
+                parameter_index,
+                declared_type: parameter.annotated_type().erase_overlapping(db, env),
+                default_type: parameter.initialising_default_type(db)?,
+            })
+        })
+        .collect()
+}
+
+/// basedpython: a default the call falls back on that was solved together with an argument whose
+/// check failed. see [`BindingError::InvalidArgumentType`]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DefaultInSolve<'db> {
+    name: Name,
+    parameter_index: usize,
+    default_ty: Type<'db>,
 }
 
 /// Result of checking only the key type of a keyword-unpack argument.
@@ -6345,6 +6439,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             inferable_typevars: TypeVarSet::None,
             inference: None,
             typevars_reached_by_arguments,
+            initialising_defaults: initialising_defaults(db, env, signature, argument_matches),
             constraint_set_errors: vec![false; arguments.len()],
         }
     }
@@ -6897,7 +6992,12 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             Ok(inference) => inference,
             Err(()) => builder.build_diagnostic_inference_with(
                 self.argument_relations()
-                    .map(|relation| (relation.declared_type, relation.argument_type)),
+                    .map(|relation| (relation.declared_type, relation.argument_type))
+                    .chain(
+                        self.initialising_defaults
+                            .iter()
+                            .map(|relation| (relation.declared_type, relation.default_type)),
+                    ),
                 choose,
             ),
         };
@@ -7111,6 +7211,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                     provided_ty: actual,
                     provenance: InvalidArgumentTypeProvenance::Argument,
                     parameter_source: None,
+                    defaults_in_solve: Box::default(),
                 });
             }
 
@@ -7350,6 +7451,12 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             }
         }
 
+        // a default that can't join the solve is reported against the specialization the call
+        // settles on, by `check_initialising_defaults`
+        for relation in &self.initialising_defaults {
+            let _ = builder.infer(relation.declared_type, relation.default_type);
+        }
+
         if let Some((parameter_index, kind)) = keyword_aggregate {
             let aggregate_value = match kind {
                 KeywordAggregateKind::ParameterPack => Type::paramspec_value_callable(
@@ -7559,6 +7666,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                 provided_ty: argument_type,
                 provenance: matched_parameter.provenance,
                 parameter_source: None,
+                defaults_in_solve: self.defaults_sharing_typevars_with(declared_type),
             });
         }
         // We still update the actual type of the parameter in this binding to match the argument,
@@ -7841,6 +7949,79 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                         self.check_argument_type(constraints, argument, relation);
                     }
                 }
+            }
+        }
+
+        self.check_initialising_defaults(constraints);
+    }
+
+    /// basedpython: the defaults the call falls back on that name one of the type variables in
+    /// `declared`, so were solved together with an argument for it
+    fn defaults_sharing_typevars_with(&self, declared: Type<'db>) -> Box<[DefaultInSolve<'db>]> {
+        if self.initialising_defaults.is_empty() {
+            return Box::default();
+        }
+        let db = self.db;
+        let mentions = |ty: Type<'db>| {
+            let typevars = std::cell::RefCell::new(FxHashSet::default());
+            any_over_type(db, self.env, ty, false, |ty: Type<'db>| {
+                if let Type::TypeVar(typevar) = ty {
+                    typevars.borrow_mut().insert(typevar.identity(db));
+                }
+                false
+            });
+            typevars.into_inner()
+        };
+        let declared = mentions(declared);
+        self.initialising_defaults
+            .iter()
+            .filter(|relation| !mentions(relation.declared_type).is_disjoint(&declared))
+            .filter_map(|relation| {
+                let name = self.signature.parameters()[relation.parameter_index].name()?;
+                Some(DefaultInSolve {
+                    name: name.clone(),
+                    parameter_index: relation.parameter_index,
+                    default_ty: relation.default_type,
+                })
+            })
+            .collect()
+    }
+
+    /// basedpython: reports each default the call falls back on that does not fit the
+    /// specialization the call settled on
+    ///
+    /// that is a specialization the call is given — by the receiver, as `box.replace()` is on a
+    /// `Box[str]`, or explicitly, as `Box[str]()` is — or one solved from arguments the default
+    /// can't be reconciled with. when an argument's own check fails first over the same type
+    /// variable, the conflict is reported against the argument instead, with a note naming the
+    /// default (see [`Self::defaults_sharing_typevars_with`])
+    fn check_initialising_defaults(&mut self, constraints: &ConstraintSetBuilder<'db>) {
+        let db = self.db;
+        for index in 0..self.initialising_defaults.len() {
+            let relation = self.initialising_defaults[index];
+            let default_ty = relation.default_type;
+            let expected_ty = match self.argument_specialization() {
+                Some(specialization) => relation
+                    .declared_type
+                    .apply_specialization(db, specialization),
+                None => relation.declared_type,
+            };
+            if default_ty
+                .when_assignable_to(
+                    db,
+                    self.env,
+                    expected_ty,
+                    constraints,
+                    self.inferable_typevars,
+                )
+                .is_never_satisfied(db, self.env)
+            {
+                let parameter = &self.signature.parameters()[relation.parameter_index];
+                self.errors.push(BindingError::InvalidDefaultArgument {
+                    parameter: ParameterContext::new(parameter, relation.parameter_index, false),
+                    expected_ty,
+                    default_ty,
+                });
             }
         }
     }
@@ -8155,6 +8336,11 @@ pub struct MatchedParameter<'db> {
 
     /// Why this parameter match exists.
     provenance: InvalidArgumentTypeProvenance,
+
+    /// basedpython: whether the argument may not supply this parameter at runtime — an unpacked
+    /// argument of unknown length or with keys that may be missing. a call that leaves the
+    /// parameter to such an argument may still fall back on its default
+    conditional: bool,
 }
 
 impl<'db> MatchedArgument<'db> {
@@ -8382,7 +8568,9 @@ fn precise_unsolved_typevars<'db>(db: &'db dyn Db, signature: &Signature<'db>) -
 /// genuinely holds nothing.
 ///
 /// A gradual parameter puts every type variable in the set: the argument went somewhere the
-/// annotation does not describe, so nothing about it has been established.
+/// annotation does not describe, so nothing about it has been established. A parameter whose
+/// initialising default the call falls back on reaches its type variables the same way an
+/// argument does (see [`initialising_defaults`]).
 fn typevars_reached_by_arguments<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -8427,6 +8615,14 @@ fn typevars_reached_by_arguments<'db>(
                 .collect();
         }
         any_over_type(db, env, annotated_type, false, |ty: Type<'db>| {
+            if let Type::TypeVar(typevar) = ty {
+                reached.borrow_mut().insert(typevar.identity(db));
+            }
+            false
+        });
+    }
+    for relation in initialising_defaults(db, env, signature, argument_matches) {
+        any_over_type(db, env, relation.declared_type, false, |ty: Type<'db>| {
             if let Type::TypeVar(typevar) = ty {
                 reached.borrow_mut().insert(typevar.identity(db));
             }
@@ -10162,6 +10358,9 @@ pub(crate) enum BindingError<'db> {
         provenance: InvalidArgumentTypeProvenance,
         /// The callable that actually declared the parameter, when reached through a `ParamSpec`.
         parameter_source: Option<ForwardedParameterSource<'db>>,
+        /// basedpython: the parameters the call left out whose defaults were solved together with
+        /// this one, which the argument may be failing to fit rather than the other way round
+        defaults_in_solve: Box<[DefaultInSolve<'db>]>,
     },
     /// The type of the keyword-variadic argument's key is not `str`.
     InvalidKeyType {
@@ -10224,6 +10423,14 @@ pub(crate) enum BindingError<'db> {
         parameter: ParameterContext,
         expected_ty: Type<'db>,
         provided_ty: Type<'db>,
+    },
+    /// basedpython: the call left out a parameter whose default does not fit the specialization
+    /// the call settled on. see
+    /// [`initialising_default_type`](crate::types::signatures::initialising_default_type)
+    InvalidDefaultArgument {
+        parameter: ParameterContext,
+        expected_ty: Type<'db>,
+        default_ty: Type<'db>,
     },
     /// Multiple arguments were provided for a single parameter.
     ParameterAlreadyAssigned {
@@ -10295,6 +10502,7 @@ impl BindingError<'_> {
         matches!(
             self,
             Self::InvalidArgumentType { .. }
+                | Self::InvalidDefaultArgument { .. }
                 | Self::InvalidKeyType { .. }
                 | Self::UnknownArgument { .. }
                 | Self::UnknownKeywordVariadicArgument { .. }
@@ -10374,6 +10582,7 @@ impl BindingError<'_> {
             | BindingError::InvalidDataclassApplication(..)
             | BindingError::InvalidDataclassArgument(..)
             | BindingError::MissingArguments { .. }
+            | BindingError::InvalidDefaultArgument { .. }
             | BindingError::NoContextArgument { .. }
             | BindingError::AmbiguousContextArgument { .. }
             | BindingError::RepeatedUnderscoreContextArgument { .. }
@@ -10451,6 +10660,7 @@ impl<'db> BindingError<'db> {
 
             // Matching errors: the overload doesn't apply to these arguments
             Self::InvalidArgumentType { .. }
+            | Self::InvalidDefaultArgument { .. }
             | Self::InvalidKeyType { .. }
             | Self::MissingArguments { .. }
             | Self::NoContextArgument { .. }
@@ -10496,6 +10706,7 @@ impl<'db> BindingError<'db> {
                 provided_ty,
                 provenance,
                 parameter_source,
+                defaults_in_solve,
             } => {
                 // TODO: Ideally we would not emit diagnostics for `TypedDict` literal arguments
                 // here (see `diagnostic::is_invalid_typed_dict_literal`). However, we may have
@@ -10578,6 +10789,25 @@ impl<'db> BindingError<'db> {
 
                 let error_context = provided_ty.assignability_error_context(db, env, *expected_ty);
                 error_context.attach_to(db, env, &mut diag);
+
+                for default in defaults_in_solve {
+                    let mut sub = SubDiagnostic::new(
+                        SubDiagnosticSeverity::Info,
+                        format_args!(
+                            "no argument is passed for `{}`, so its default of type `{}` takes \
+                             part in solving this call",
+                            default.name,
+                            default.default_ty.display(db, env)
+                        ),
+                    );
+                    if let Some((_, parameter_span)) = callable_ty.parameter_span(
+                        db,
+                        Some(default.parameter_index + source_parameter_index_offset),
+                    ) {
+                        sub.annotate(Annotation::primary(parameter_span));
+                    }
+                    diag.sub(sub);
+                }
 
                 if let Some(parameter_source) = parameter_source {
                     let (name_span, parameter_span) =
@@ -10813,6 +11043,45 @@ impl<'db> BindingError<'db> {
                                  could represent any set of parameters at runtime"
                             ),
                         ));
+                    }
+                }
+            }
+
+            Self::InvalidDefaultArgument {
+                parameter,
+                expected_ty,
+                default_ty,
+            } => {
+                let range = all_arguments_range(node);
+                if let Some(builder) = context.report_lint(&INVALID_ARGUMENT_TYPE, range) {
+                    let display_settings = DisplaySettings::from_possibly_ambiguous_types(
+                        db,
+                        env,
+                        [*default_ty, *expected_ty],
+                    );
+                    let mut diag = builder.into_diagnostic(format_args!(
+                        "Default value of parameter {parameter}{} does not fit this call",
+                        callable_description
+                            .map(|description| format!(" of {description}"))
+                            .unwrap_or_default()
+                    ));
+                    diag.set_primary_annotation_message(format_args!(
+                        "Expected `{}`, found `{}`",
+                        expected_ty.display_with(db, env, display_settings.clone()),
+                        default_ty.display_with(db, env, display_settings),
+                    ));
+                    if let Some(compound_diag) = compound_diag {
+                        compound_diag.add_context(db, env, &mut diag);
+                    } else if let Some((_, parameter_span)) = callable_ty.parameter_span(
+                        db,
+                        Some(parameter.signature_parameter_index + source_parameter_index_offset),
+                    ) {
+                        let mut sub = SubDiagnostic::new(
+                            SubDiagnosticSeverity::Info,
+                            "Parameter declared here",
+                        );
+                        sub.annotate(Annotation::primary(parameter_span));
+                        diag.sub(sub);
                     }
                 }
             }

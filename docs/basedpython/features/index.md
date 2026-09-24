@@ -135,6 +135,7 @@ type parameters — their bounds, their variance, and what survives to runtime
 - [safe variance](safe-variance.md)
 - [overlapping](overlapping.md)
 - [explicit generic call sites](generic-calls.md)
+- [defaults that initialise type parameters](parameter-defaults.md)
 - [reified type parameters](reified-generics.md)
 - [reified class type parameters](reified-class-generics.md)
 - [type reification](type-reification.md)

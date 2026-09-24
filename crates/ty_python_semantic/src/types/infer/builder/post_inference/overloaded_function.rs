@@ -232,6 +232,7 @@ fn check_overload_set<'db>(
             implementation,
             &implementation_callables,
         );
+        check_overload_initialising_defaults(context, overloads, implementation);
     }
 
     // Check that the overloaded function has at least two overloads
@@ -566,6 +567,81 @@ fn check_non_generic_overload_implementation_consistency<'db>(
                 .secondary(implementation.focus_range(db, context.module()))
                 .message(format_args!("Implementation defined here")),
         );
+    }
+}
+
+/// basedpython: check that the implementation runs with a default each overload's initialising
+/// default describes
+///
+/// a call that matches `@overload def f[T](t: T = 1) -> T` and leaves `t` out is solved from the
+/// overload's `1`, but it is the implementation that runs, with its own default. that default
+/// has to be a value the overload's describes, or the call's type says nothing about its result.
+/// the overload consistency check above leaves generic overloads alone, and an initialising
+/// default only occurs on a generic one, so this is checked here for every overload
+fn check_overload_initialising_defaults<'db>(
+    context: &InferContext<'db, '_>,
+    overloads: &'db [OverloadLiteral<'db>],
+    implementation: OverloadLiteral<'db>,
+) {
+    let db = context.db();
+    let env = context.program_environment();
+    let implementation_signature = implementation.signature(db);
+    let implementation_parameters = implementation_signature.parameters();
+    for overload in overloads {
+        let signature = overload.signature(db);
+        let mut position = 0;
+        for (index, parameter) in signature.parameters().iter().enumerate() {
+            let counterpart = if parameter.is_positional() {
+                position += 1;
+                implementation_parameters.positional().nth(position - 1)
+            } else {
+                None
+            }
+            .or_else(|| {
+                implementation_parameters
+                    .keyword_by_name(parameter.keyword_name()?)
+                    .map(|(_, counterpart)| counterpart)
+            });
+            let Some(promised) = parameter.initialising_default_type(db) else {
+                continue;
+            };
+            let Some(counterpart) = counterpart else {
+                continue;
+            };
+            let runs_with = counterpart.default_type(db);
+            if runs_with.is_some_and(|runs_with| runs_with.is_assignable_to(db, env, promised)) {
+                continue;
+            }
+            let function_node = overload.node(db, context.file(), context.module());
+            let Some(builder) = context.report_lint(&INVALID_OVERLOAD, &function_node.name) else {
+                continue;
+            };
+            let name = parameter
+                .name()
+                .map(ToString::to_string)
+                .unwrap_or_default();
+            let mut diagnostic = match runs_with {
+                Some(runs_with) => builder.into_diagnostic(format_args!(
+                    "Implementation's default for parameter `{name}` does not fit this overload's \
+                     default: expected `{}`, found `{}`",
+                    promised.display(db, env),
+                    runs_with.display(db, env),
+                )),
+                None => builder.into_diagnostic(format_args!(
+                    "Implementation has no default for parameter `{name}`, which this overload \
+                     lets a call leave out"
+                )),
+            };
+            let (_, parameter_span) = overload.parameter_span(db, Some(index));
+            diagnostic.annotate(
+                Annotation::secondary(parameter_span).message("Overload's default declared here"),
+            );
+            diagnostic.annotate(
+                context
+                    .secondary(implementation.focus_range(db, context.module()))
+                    .message(format_args!("Implementation defined here")),
+            );
+        }
     }
 }
 

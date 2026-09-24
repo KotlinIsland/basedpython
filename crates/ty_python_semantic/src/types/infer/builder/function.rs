@@ -41,7 +41,10 @@ use crate::{
         inferred_signature::{can_implicitly_return_none, return_type_from_body},
         lifetimes::InheritedBorrow,
         relation::TypeRelation,
-        signatures::{ReturnCallableTypeVarScope, function_signature_expression_type},
+        signatures::{
+            DefaultFit, ReturnCallableTypeVarScope, default_fit,
+            function_signature_expression_type, relate_default,
+        },
         trailing_lambda::{
             BlockCallee, UnbindableParameters, block_callee, trailing_lambda_it_borrow,
             trailing_lambda_it_type,
@@ -1962,17 +1965,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // Avoid duplicate diagnostics: invalid TypedDict literals already emit specific errors.
                 let suppress_invalid_default =
                     is_invalid_typed_dict_literal(db, env, declared_ty, default_expr.into());
+                // basedpython: a default that fits only some specializations of the annotation's
+                // type variables initialises them, and each call that leaves the argument out
+                // is checked against the specialization it settles on
                 if !default_ty.is_assignable_to(db, env, declared_ty)
                     && !suppress_invalid_default
-                    && !((self.in_stub()
-                        || self.in_function_overload_or_abstractmethod()
-                        || self.is_in_type_checking_block(self.scope(), default_expr)
-                        || self
-                            .class_context_of_current_method()
-                            .is_some_and(|class| class.is_protocol(db)))
-                        && default
-                            .as_ref()
-                            .is_some_and(|d| d.is_ellipsis_literal_expr()))
+                    && default_fit(db, definition) == DefaultFit::Never
                 {
                     if let Some(builder) = self
                         .context
@@ -1986,6 +1984,24 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         ));
                     }
                 }
+            }
+
+            // basedpython: an override that leaves the default out takes the overridden method's,
+            // which was written against the base's annotation rather than this one
+            if default_expr.is_none()
+                && self.is_basedpython_file()
+                && let Some(inherited) = self.inherited_parameter_default(parameter)
+                && relate_default(db, env, definition, declared_ty, inherited) == DefaultFit::Never
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&INVALID_PARAMETER_DEFAULT, parameter_with_default)
+            {
+                builder.into_diagnostic(format_args!(
+                    "Inherited default value of type `{}` is not assignable \
+                     to annotated parameter type `{}`",
+                    inherited.display(db, env),
+                    declared_ty.display(db, env)
+                ));
             }
 
             self.add_declaration_with_binding(
@@ -2077,6 +2093,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn inferred_parameter_hole(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
         let ty = self.signature_parameter_type(parameter)?;
         ty.is_inferred_parameter_hole(self.db()).then_some(ty)
+    }
+
+    /// basedpython: the default the enclosing override takes for `parameter` from the method it
+    /// overrides, when it writes none of its own
+    fn inherited_parameter_default(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
+        let db = self.db();
+        let enclosing = nearest_enclosing_function(db, self.index, self.scope())?;
+        enclosing
+            .last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public)
+            .parameters()
+            .iter()
+            .find(|candidate| candidate.name() == Some(&parameter.name.id))?
+            .eager_default_type()
     }
 
     /// The type the enclosing function's signature gives `parameter`, when that type was not

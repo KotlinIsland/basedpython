@@ -2137,8 +2137,6 @@ converter will use the default:
 ```py
 from typing_extensions import Any
 
-# TODO: no error here (https://github.com/astral-sh/ty/issues/592)
-# error: [invalid-parameter-default]
 def field_with_default_converter[T, R](*, converter: Callable[[T], R] = str_to_int, default: T | None = None) -> R:
     raise NotImplementedError
 

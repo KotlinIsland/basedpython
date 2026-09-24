@@ -534,8 +534,6 @@ from typing import Any
 
 class Foo[T]: ...
 
-# TODO: This should not error.
-# error: [invalid-parameter-default] "Default value of type `<class 'Foo'>` is not assignable to annotated parameter type `type[T@f]`"
 def f[T: Foo[Any]](x: type[T] = Foo): ...
 ```
 

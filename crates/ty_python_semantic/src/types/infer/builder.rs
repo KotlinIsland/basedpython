@@ -116,8 +116,8 @@ use crate::types::exceptions::CallSolution;
 use crate::types::extensions;
 use crate::types::format;
 use crate::types::function::{
-    FunctionDecorators, FunctionType, KnownFunction, OverloadLiteral, report_revealed_type,
-    same_module_uncached_raw_signature,
+    FunctionDecorators, FunctionType, KnownFunction, OverloadLiteral,
+    is_overload_or_abstractmethod, report_revealed_type, same_module_uncached_raw_signature,
 };
 use crate::types::generics::{
     GenericContext, Specialization, SpecializationBuilder, bind_typevar, enclosing_binding_contexts,
@@ -2701,20 +2701,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         self.function_type(self.current_function_definition()?)
     }
 
-    fn function_decorator_types<'a>(
-        &'a self,
-        function: &'a ast::StmtFunctionDef,
-    ) -> impl Iterator<Item = Type<'db>> + 'a {
-        let definition = self.index.expect_single_definition(function);
-
-        let definition_types = infer_definition_types(self.db(), definition);
-
-        function
-            .decorator_list
-            .iter()
-            .map(move |decorator| definition_types.expression_type(&decorator.expression))
-    }
-
     /// Returns `true` if the current scope is the function body scope of a function overload (that
     /// is, the stub declaration decorated with `@overload`, not the implementation), or an
     /// abstract method (decorated with `@abstractmethod`.)
@@ -2722,24 +2708,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let Some(function) = self.current_function_definition() else {
             return false;
         };
-
-        self.function_decorator_types(function)
-            .any(|decorator_type| {
-                match decorator_type {
-                    Type::FunctionLiteral(function) => matches!(
-                        function.known(self.db()),
-                        Some(KnownFunction::Overload | KnownFunction::AbstractMethod)
-                    ),
-                    Type::Never => {
-                        // In unreachable code, we infer `Never` for decorators like `typing.overload`.
-                        // Return `true` here to avoid false positive `invalid-return-type` lints for
-                        // `@overload`ed functions without a body in unreachable code.
-                        true
-                    }
-                    Type::Divergent(_) => true,
-                    _ => false,
-                }
-            })
+        is_overload_or_abstractmethod(
+            self.db(),
+            self.index.expect_single_definition(function),
+            function,
+        )
     }
 
     fn infer_body(&mut self, suite: &[ast::Stmt]) {

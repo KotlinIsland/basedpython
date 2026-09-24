@@ -69,6 +69,46 @@ class C(B):
 C().f()
 ```
 
+## a default that initialises the override's type parameter
+
+the override is what the call binds against, so an inherited default is solved against the
+override's annotation rather than the one the base wrote it for. `1` fits `T` only when `T` is
+something `1` is, so a call that leaves `a` out solves `T` from the default, as it would from a
+default the override wrote itself (see [parameter defaults](generics/parameter_defaults.md)).
+
+```by
+class A:
+    def f(self, a: int = 1) -> int:
+        return a
+
+class B(A):
+    override def f[T](self, a: T) -> T:
+        return a
+
+n: int = B().f()
+# error: [invalid-assignment]
+s: str = B().f()
+```
+
+## an inherited default the override's annotation can't take
+
+a default the base's annotation takes may fit no specialization of the override's. a call that
+leaves the argument out would still run the override with it, so it is reported where the override
+is written, the same as a default the override wrote itself.
+
+```by
+from typing import Any
+
+class A:
+    def f(self, a: Any = "x") -> object:
+        return a
+
+class B(A):
+    # error: [invalid-parameter-default] "Inherited default value of type `"x"` is not assignable to annotated parameter type `int`"
+    override def f(self, a: int) -> int:
+        return a
+```
+
 ## a parameter the base does not default stays required
 
 ```by

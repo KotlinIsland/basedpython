@@ -35,6 +35,25 @@ def foo() -> None: ...  # error
 def foo(x: int) -> int: ...
 ```
 
+### Implementation default an overload's default doesn't describe
+
+A call matching an overload that leaves an argument out is solved from the overload's default, but
+the implementation runs with its own.
+
+```py
+from typing import TypeVar, overload
+
+T = TypeVar("T")
+
+
+@overload
+def foo(x: T = 1) -> T: ...  # error
+@overload
+def foo(x: int, y: int) -> int: ...
+def foo(x: object = "a", y: int = 0) -> object:
+    return x
+```
+
 ## References
 
 - [Python documentation: `@overload`](https://docs.python.org/3/library/typing.html#typing.overload)
