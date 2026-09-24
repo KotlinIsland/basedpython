@@ -374,6 +374,30 @@ pub struct DataclassTransformerParams<'db> {
 impl get_size2::GetSize for DataclassTransformerParams<'_> {}
 
 /// Whether a function should implicitly be treated as a staticmethod based on its name.
+/// Returns `true` if `function` is decorated with `@overload` (the stub declaration, not the
+/// implementation) or `@abstractmethod`, so that its body, and the `...` it writes for a
+/// parameter's default, stand in for something it does not provide itself.
+pub(crate) fn is_overload_or_abstractmethod<'db>(
+    db: &'db dyn Db,
+    function: Definition<'db>,
+    node: &ast::StmtFunctionDef,
+) -> bool {
+    let decorators = infer_definition_types(db, function);
+    node.decorator_list.iter().any(|decorator| {
+        match decorators.expression_type(&decorator.expression) {
+            Type::FunctionLiteral(decorator) => matches!(
+                decorator.known(db),
+                Some(KnownFunction::Overload | KnownFunction::AbstractMethod)
+            ),
+            // In unreachable code, we infer `Never` for decorators like `typing.overload`. Count
+            // those too, to avoid false positive `invalid-return-type` lints for `@overload`ed
+            // functions without a body in unreachable code.
+            Type::Never | Type::Divergent(_) => true,
+            _ => false,
+        }
+    })
+}
+
 pub(crate) fn is_implicit_staticmethod(function_name: &str) -> bool {
     matches!(function_name, "__new__")
 }

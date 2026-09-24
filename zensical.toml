@@ -151,6 +151,7 @@ features = [
     { "safe variance" = "features/safe-variance.md" },
     { "overlapping" = "features/overlapping.md" },
     { "explicit generic call sites" = "features/generic-calls.md" },
+    { "defaults that initialise type parameters" = "features/parameter-defaults.md" },
     { "reified type parameters" = "features/reified-generics.md" },
     { "reified class type parameters" = "features/reified-class-generics.md" },
     { "type reification" = "features/type-reification.md" },

@@ -3897,6 +3897,26 @@ def foo() -> None: ...  # error
 def foo(x: int) -> int: ...
 ```
 
+**Implementation default an overload's default doesn't describe**
+
+
+A call matching an overload that leaves an argument out is solved from the overload's default, but
+the implementation runs with its own.
+
+```py
+from typing import TypeVar, overload
+
+T = TypeVar("T")
+
+
+@overload
+def foo(x: T = 1) -> T: ...  # error
+@overload
+def foo(x: int, y: int) -> int: ...
+def foo(x: object = "a", y: int = 0) -> object:
+    return x
+```
+
 **References**
 
 
@@ -3955,6 +3975,17 @@ Added in <a href="https://github.com/astral-sh/ty/releases/tag/0.0.1-alpha.1">0.
 
 Checks for default values that can't be assigned to the parameter's annotated type.
 
+A default only needs to fit *some* specialization of the type variables the annotation names: a call
+that leaves the argument out is solved as if the default had been passed. The default is reported
+when no such specialization exists. Only the type variables of the function itself (and, for a
+method, of its class) can be chosen that way; one of an enclosing function is fixed for every call.
+A default whose own type names one of those type variables, such as `[1]` inferred against `list[T]`
+as `list[T | int]`, is reported too: it is a single value shared by every call, so no call can make
+it fit.
+
+In basedpython, a default an override inherits from the method it overrides is checked against the
+override's annotation in the same way.
+
 **Why is this bad?**
 
 
@@ -3965,7 +3996,23 @@ about your code.
 
 
 ```python
+from typing import TypeVar
+
+T = TypeVar("T")
+S = TypeVar("S", bound=str)
+
+
 def f(a: int = ""): ...  # error
+
+
+# fine: `g()` solves `T` from the default
+def g(a: T = 1) -> T:
+    return a
+
+
+# no `S` bounded by `str` holds `1`
+def h(a: S = 1) -> S:  # error
+    return a
 ```
 
 ## `invalid-parametrize`

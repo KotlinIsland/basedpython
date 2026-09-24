@@ -1094,6 +1094,46 @@ fn lazy_parameter_defaults() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// basedpython: a call reads whether a default initialises a type variable of its parameter, which
+/// means inferring a default whose annotation names one. that answer is a query of its own, so
+/// editing such a default leaves the call alone as long as the answer stays the same
+#[test]
+fn lazy_generic_parameter_defaults() -> anyhow::Result<()> {
+    let mut db = setup_db();
+    db.write_files([
+        (
+            "/src/defaults.py",
+            "def f[T](x: T | None = None) -> list[T]: return []",
+        ),
+        ("/src/main.py", "from defaults import f\nresult = f()"),
+    ])?;
+    let main = system_path_to_file(&db, "/src/main.py")?;
+    let result = global_symbol(&db, main, "result").place.expect_type();
+    assert_eq!(
+        result.display(&db, &db.program_environment()).to_string(),
+        "list[Unknown]"
+    );
+
+    db.write_file(
+        "/src/defaults.py",
+        "def f[T](x: T | None = (None)) -> list[T]: return []",
+    )?;
+    db.clear_salsa_events();
+    let result = global_symbol(&db, main, "result").place.expect_type();
+    assert_eq!(
+        result.display(&db, &db.program_environment()).to_string(),
+        "list[Unknown]"
+    );
+    let events = db.take_salsa_events();
+    assert_function_query_was_not_run(
+        &db,
+        infer_definition_types,
+        first_public_binding(&db, main, "result"),
+        &events,
+    );
+    Ok(())
+}
+
 #[test]
 fn parameter_default_presence_invalidates_caller() -> anyhow::Result<()> {
     let mut db = setup_db();

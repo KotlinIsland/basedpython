@@ -23,19 +23,22 @@ use smallvec::{SmallVec, smallvec_inline};
 
 use super::{DynamicType, Type, TypeVarVariance, UnionType, semantic_index};
 use crate::types::UnpackedKwargs;
-use crate::types::callable::CallableTypeKind;
+use crate::types::callable::{CallableTypeKind, walk_callable_type};
 use crate::types::constraints::{
     ConstraintSet, ConstraintSetBuilder, IteratorConstraintsExtension, OwnedConstraintSet,
     PathBounds, Solutions,
 };
 use crate::types::cyclic::ActiveRecursionDetector;
-use crate::types::function::{OverloadLiteral, deferred_assertion_guards};
+use crate::types::function::{
+    FunctionType, OverloadLiteral, deferred_assertion_guards, is_overload_or_abstractmethod,
+    walk_function_type,
+};
 use crate::types::generics::{
     ApplySpecialization, GenericContext, Specialization, SpecializationBuilder, TypeVarInference,
     walk_generic_context,
 };
 use crate::types::infer::{
-    TypeExpressionFlags, infer_deferred_types, infer_function_default_types,
+    TypeExpressionFlags, infer_deferred_types, infer_function_default_types, original_class_type,
 };
 use crate::types::inferred_signature::inferred_parameter_type;
 use crate::types::instance::ProtocolInstanceType;
@@ -49,6 +52,7 @@ use crate::types::typevar::{
     MAX_TYPEVAR_FRESHNESS_DELTA, TypeVarInstance, TypeVarKind, TypeVarSet,
     max_typevar_freshness_matching_generic_context,
 };
+use crate::types::visitor::{TypeCollector, TypeVisitor, walk_type_with_recursion_guard};
 use crate::types::{
     ApplyTypeMappingVisitor, BindingContext, BoundTypeVarIdentity, BoundTypeVarInstance,
     CallableType, ErrorContext, ErrorContextTree, FindLegacyTypeVarsVisitor, KnownClass,
@@ -60,6 +64,7 @@ use crate::{Db, FxOrderSet};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::helpers::ReturnGuardForm;
 use ruff_python_ast::{self as ast, ParameterBorrow, name::Name};
+use ruff_text_size::Ranged;
 use std::borrow::Cow;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
 
@@ -1713,7 +1718,19 @@ impl<'db> Signature<'db> {
             if inherited.display_default_value(db, env).is_none() {
                 continue;
             }
-            parameter.set_default_type(inherited);
+            // the base wrote the default against its own annotation, so whether it initialises a
+            // type variable is a question about the override's, `def f[T](self, a: T)`. one that
+            // fits no specialization of the override's is reported where the override is written
+            let fit = parameter.definition.map(|definition| {
+                let declared = parameter.annotated_type.erase_overlapping(db, env);
+                relate_default(db, env, definition, declared, inherited)
+            });
+            parameter.set_default_type(match fit {
+                Some(DefaultFit::Initialises(inherited)) => {
+                    ParameterDefault::Initialising(inherited)
+                }
+                _ => ParameterDefault::Inferred(inherited),
+            });
         }
     }
 
@@ -3378,6 +3395,9 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                         .and(db, self.constraints, || {
                             checker.check_signature_pair_inner(db, source, target)
                         })
+                        .and(db, self.constraints, || {
+                            checker.check_initialising_defaults(db, source, target)
+                        })
                 })
         });
 
@@ -3460,6 +3480,83 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         } else {
             self.check_type_pair(db, source.return_ty, target)
         }
+    }
+
+    /// basedpython: relates the defaults of `source` to `target` wherever a call to `target` can
+    /// leave the parameter out, so that the call falls back on the default `source` runs with
+    ///
+    /// a parameter every call to `target` supplies never falls back on its default. otherwise:
+    ///
+    /// - when `target` declares the very same default, a call through `target` already checks it
+    ///   against the specialization that call settles on, so it asks nothing more of `source`
+    /// - when `target`'s own default initialises a type variable, a caller of `target` solved the
+    ///   call from that default, so the default `source` runs with has to be a value the target's
+    ///   default describes: an override of `def m[T](self, t: T = 1) -> T` can't default to `"a"`
+    /// - when `source`'s default initialises a type variable of `source`, it constrains that type
+    ///   variable as an argument would: `def f[T](t: T = 1) -> T` is a `() -> int` but not a
+    ///   `() -> str`
+    ///
+    /// this runs once the parameter lists are known to line up, which is what lets a target
+    /// parameter be matched to its source parameter by position or by name alone. a gradual
+    /// target takes any call, and a `ParamSpec` target carries the source's parameters, defaults
+    /// included, on to the calls made through it, so only a standard target is checked
+    fn check_initialising_defaults(
+        &self,
+        db: &'db dyn Db,
+        source: &Signature<'db>,
+        target: &Signature<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        if !matches!(target.parameters().kind(), ParametersKind::Standard) {
+            return self.always();
+        }
+        let target_parameters = target.parameters.expand_starred_variadic_annotations(db);
+        let target_positional = target_parameters
+            .iter()
+            .filter(|parameter| parameter.is_positional())
+            .collect::<SmallVec<[&Parameter<'db>; 4]>>();
+
+        let mut result = self.always();
+        let mut position = 0;
+        for parameter in source.parameters() {
+            let counterpart = if parameter.is_positional() {
+                position += 1;
+                target_positional.get(position - 1).copied()
+            } else {
+                None
+            }
+            .or_else(|| {
+                let name = parameter.keyword_name()?;
+                target_parameters
+                    .iter()
+                    .find(|candidate| candidate.keyword_name() == Some(name))
+            });
+            let Some(default) = parameter.default() else {
+                continue;
+            };
+            let constraint = match counterpart {
+                Some(counterpart) if !counterpart.has_default() => continue,
+                Some(counterpart) if counterpart.default() == Some(default) => continue,
+                counterpart => {
+                    if let Some(promised) = counterpart
+                        .and_then(|counterpart| counterpart.initialising_default_type(db))
+                    {
+                        // a placeholder says nothing about the value the source runs with
+                        if parameter.is_placeholder_default(db) {
+                            continue;
+                        }
+                        (default.ty(db), promised)
+                    } else if let Some(initialising) = parameter.initialising_default_type(db) {
+                        (initialising, parameter.annotated_type())
+                    } else {
+                        continue;
+                    }
+                }
+            };
+            result = result.and(db, self.constraints, || {
+                self.check_type_pair(db, constraint.0, constraint.1)
+            });
+        }
+        result
     }
 
     fn check_signature_pair_inner(
@@ -6777,7 +6874,7 @@ impl<'db> Parameter<'db> {
     }
 
     pub(crate) fn with_default_type(mut self, default: Type<'db>) -> Self {
-        self.set_default_type(default);
+        self.set_default_type(ParameterDefault::Inferred(default));
         self
     }
 
@@ -6785,12 +6882,12 @@ impl<'db> Parameter<'db> {
     ///
     /// A variadic parameter stands for a run of arguments rather than one, so there is nothing
     /// for a caller to leave out and nothing a default would mean.
-    fn set_default_type(&mut self, default: Type<'db>) {
+    fn set_default_type(&mut self, default: ParameterDefault<'db>) {
         match &mut self.kind {
             ParameterKind::PositionalOnly { default_type, .. }
             | ParameterKind::PositionalOrKeyword { default_type, .. }
             | ParameterKind::KeywordOnly { default_type, .. } => {
-                *default_type = Some(ParameterDefault::Inferred(default));
+                *default_type = Some(default);
             }
             ParameterKind::Variadic { .. } | ParameterKind::KeywordVariadic { .. } => {
                 panic!("cannot set default value for variadic parameter")
@@ -6919,7 +7016,9 @@ impl<'db> Parameter<'db> {
             ParameterKind::PositionalOnly { default_type, .. }
             | ParameterKind::PositionalOrKeyword { default_type, .. }
             | ParameterKind::KeywordOnly { default_type, .. } => {
-                if let Some(ParameterDefault::Inferred(ty)) = default_type {
+                if let Some(ParameterDefault::Inferred(ty) | ParameterDefault::Initialising(ty)) =
+                    default_type
+                {
                     *ty = normalize_type(*ty)?;
                 }
             }
@@ -7213,6 +7312,26 @@ impl<'db> Parameter<'db> {
         self.default().and_then(ParameterDefault::eager_type)
     }
 
+    /// basedpython: the type of this parameter's default when a call that leaves the argument out
+    /// has to be specialized to accept it. see [`initialising_default_type`]
+    pub(crate) fn initialising_default_type(&self, db: &'db dyn Db) -> Option<Type<'db>> {
+        match self.default()? {
+            ParameterDefault::Deferred(parameter) => initialising_default_type(db, parameter),
+            ParameterDefault::Initialising(ty) => Some(ty),
+            // a synthesized signature's default has no written parameter it was checked against
+            ParameterDefault::Inferred(_) => None,
+        }
+    }
+
+    /// basedpython: whether this parameter's default is a placeholder `...` rather than a value
+    /// see [`is_placeholder_default`]
+    fn is_placeholder_default(&self, db: &'db dyn Db) -> bool {
+        matches!(
+            self.default(),
+            Some(ParameterDefault::Deferred(parameter)) if is_placeholder_default(db, parameter)
+        )
+    }
+
     /// Rewrites a positional-or-keyword parameter as keyword-only while preserving its metadata.
     fn positional_or_keyword_to_keyword_only(&self) -> Self {
         let mut result = self.clone();
@@ -7234,6 +7353,10 @@ impl<'db> Parameter<'db> {
 pub enum ParameterDefault<'db> {
     /// An already inferred default.
     Inferred(Type<'db>),
+    /// basedpython: an already inferred default that initialises a type variable of the
+    /// parameter's annotation — one an override inherits, where the override's annotation is not
+    /// the one the default was written against. see `initialising_default_type`
+    Initialising(Type<'db>),
     /// A source parameter whose default is inferred on demand.
     Deferred(Definition<'db>),
 }
@@ -7241,14 +7364,14 @@ pub enum ParameterDefault<'db> {
 impl<'db> ParameterDefault<'db> {
     fn ty(self, db: &'db dyn Db) -> Type<'db> {
         match self {
-            Self::Inferred(ty) => ty,
+            Self::Inferred(ty) | Self::Initialising(ty) => ty,
             Self::Deferred(parameter) => parameter_default_type(db, parameter),
         }
     }
 
     fn eager_type(self) -> Option<Type<'db>> {
         match self {
-            Self::Inferred(ty) => Some(ty),
+            Self::Inferred(ty) | Self::Initialising(ty) => Some(ty),
             Self::Deferred(_) => None,
         }
     }
@@ -7256,6 +7379,7 @@ impl<'db> ParameterDefault<'db> {
     fn map_type(self, f: impl FnOnce(Type<'db>) -> Type<'db>) -> Self {
         match self {
             Self::Inferred(ty) => Self::Inferred(f(ty)),
+            Self::Initialising(ty) => Self::Initialising(f(ty)),
             // A source default is a runtime value, not part of the callable's type parameters.
             // Specializing or otherwise transforming the signature must not evaluate it.
             Self::Deferred(_) => self,
@@ -7291,6 +7415,351 @@ fn parameter_default_type<'db>(db: &'db dyn Db, parameter: Definition<'db>) -> T
     infer_function_default_types(db, function)
         .expression_type(default)
         .replace_parameter_defaults(db, &ProgramEnvironment::from_definition(function))
+}
+
+/// whether `parameter`'s default is the `...` a declaration writes in place of a value it does
+/// not have: in a stub, on an `@overload` or `@abstractmethod`, on a protocol method, or under
+/// `if TYPE_CHECKING:`
+///
+/// such a default is not checked against the annotation, and it says nothing about the value a
+/// call that leaves the argument out receives
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn is_placeholder_default<'db>(db: &'db dyn Db, parameter: Definition<'db>) -> bool {
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+        parameter.kind(db)
+    else {
+        return false;
+    };
+    let scope = parameter.scope(db);
+    let Some(function) = scope.node(db).as_function() else {
+        return false;
+    };
+    let program_file = parameter.program_file(db);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let Some(default) = node.node(&module).default() else {
+        return false;
+    };
+    if !default.is_ellipsis_literal_expr() {
+        return false;
+    }
+    if parameter.file(db).is_stub(db) {
+        return true;
+    }
+    let index = semantic_index(db, program_file);
+    let body_scope = scope.file_scope_id(db);
+    index.is_in_type_checking_block(body_scope, default.range())
+        || is_overload_or_abstractmethod(
+            db,
+            index.expect_single_definition(function),
+            function.node(&module),
+        )
+        || index
+            .class_definition_of_method(body_scope)
+            .and_then(|class| original_class_type(db, class))
+            .is_some_and(|class| class.is_protocol(db))
+}
+
+/// basedpython: how a parameter's default relates to the specializations of its annotation
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) enum DefaultFit<'db> {
+    /// the default fits whatever the annotation's type variables are, or there is no default or
+    /// annotation to relate
+    Every,
+    /// the `...` a declaration writes in place of a value. see [`is_placeholder_default`]
+    Placeholder,
+    /// the default fits some specializations of the annotation but not all of them, so a call
+    /// that leaves the argument out has to pick one it fits. see [`default_initialises`]
+    Initialises(Type<'db>),
+    /// no specialization a call can pick fits the default
+    Never,
+}
+
+/// basedpython: how a default of type `default` relates to the annotation `declared` of
+/// `parameter`, which it belongs to either as written or, for an override, as inherited
+pub(crate) fn relate_default<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    parameter: Definition<'db>,
+    declared: Type<'db>,
+    default: Type<'db>,
+) -> DefaultFit<'db> {
+    if default.is_assignable_to(db, env, declared) {
+        DefaultFit::Every
+    } else if default_initialises(db, env, parameter, declared, default) {
+        DefaultFit::Initialises(default)
+    } else {
+        DefaultFit::Never
+    }
+}
+
+/// basedpython: whether a default of type `default` initialises a type variable of the annotation
+/// `declared` on `parameter`: it fits some specialization of the type variables that a call
+/// solves or is given. [`relate_default`] asks this only of a default that does not fit every
+/// one
+///
+/// `1` initialises `T` in `def f[T](t: T = 1)`, which `f()` solves to `Literal[1]`. the type
+/// variables a call supplies are those of the function itself and, for a method, of its class —
+/// a method's call is given its class's by the receiver, as in `A[int]().m()`. a type variable of
+/// an enclosing function is fixed in the body the function is defined in, so no call can
+/// specialize it to fit
+///
+/// a default's type is the type of the value made where the `def` runs, which every call shares,
+/// so a type that names one of those type variables does not describe it: `[1]` against `list[T]`
+/// is inferred as `list[T | int]`, but no call can make the list that is actually there hold its
+/// `T`. such a default initialises nothing
+fn default_initialises<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    parameter: Definition<'db>,
+    declared: Type<'db>,
+    default: Type<'db>,
+) -> bool {
+    let scope = parameter.scope(db);
+    let index = semantic_index(db, parameter.program_file(db));
+    let Some(function) = scope.node(db).as_function() else {
+        return false;
+    };
+    let function = BindingContext::Definition(index.expect_single_definition(function));
+    let class = index
+        .class_definition_of_method(scope.file_scope_id(db))
+        .map(BindingContext::Definition);
+    let is_supplied = |typevar: BoundTypeVarInstance<'db>| {
+        let context = typevar.binding_context(db);
+        context == function || Some(context) == class
+    };
+    if names_free_typevar(db, env, default, &is_supplied) {
+        return false;
+    }
+    let supplied = std::cell::RefCell::new(FxOrderSet::default());
+    any_over_type(db, env, declared, false, |ty: Type<'db>| {
+        if let Type::TypeVar(typevar) = ty
+            && is_supplied(typevar)
+        {
+            // `Callable[P, str]` names `P` through `P.args` and `P.kwargs`, but it is `P` a
+            // call solves
+            let typevar = if typevar.paramspec_attr(db).is_some() {
+                typevar.without_paramspec_attr(db)
+            } else {
+                typevar
+            };
+            supplied.borrow_mut().insert(typevar);
+        }
+        false
+    });
+    let supplied = supplied.into_inner();
+    if supplied.is_empty() {
+        return false;
+    }
+    // solved the way a call that leaves the argument out and passes nothing else is solved, so
+    // that a default this accepts is one such a call accepts too
+    let constraints = ConstraintSetBuilder::new();
+    let mut builder = SpecializationBuilder::new(
+        db,
+        env,
+        &constraints,
+        GenericContext::from_typevar_instances(db, env, supplied),
+    );
+    if builder.infer(declared, default).is_err() {
+        return false;
+    }
+    let Ok(inference) = builder.build_inference_with(|_, _| None) else {
+        return false;
+    };
+    let specialization = inference.merged_specialization(db);
+    default.is_assignable_to(db, env, declared.apply_specialization(db, specialization))
+}
+
+/// whether `ty` names a type variable `is_supplied` accepts where that type variable is free
+///
+/// a generic function or callable inside `ty` binds its own type variables, so the default
+/// `lambda: f` — whose type names `f`'s own generic signature — does not name `f`'s `T` at all
+fn names_free_typevar<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    ty: Type<'db>,
+    is_supplied: &dyn Fn(BoundTypeVarInstance<'db>) -> bool,
+) -> bool {
+    struct FreeTypeVarVisitor<'db, 'a> {
+        env: &'a ProgramEnvironment<'db>,
+        is_supplied: &'a dyn Fn(BoundTypeVarInstance<'db>) -> bool,
+        bound: std::cell::RefCell<Vec<GenericContext<'db>>>,
+        recursion_guard: TypeCollector<'db>,
+        found: std::cell::Cell<bool>,
+    }
+
+    impl<'db> FreeTypeVarVisitor<'db, '_> {
+        /// walks a generic signature with the type variables its own contexts bind set aside
+        fn visit_binding(
+            &self,
+            contexts: impl IntoIterator<Item = GenericContext<'db>>,
+            walk: impl FnOnce(),
+        ) {
+            let depth = self.bound.borrow().len();
+            self.bound.borrow_mut().extend(contexts);
+            walk();
+            self.bound.borrow_mut().truncate(depth);
+        }
+    }
+
+    impl<'db> TypeVisitor<'db> for FreeTypeVarVisitor<'db, '_> {
+        fn program_environment(&self) -> &ProgramEnvironment<'db> {
+            self.env
+        }
+
+        fn should_visit_lazy_type_attributes(&self) -> bool {
+            false
+        }
+
+        fn visit_type(&self, db: &'db dyn Db, ty: Type<'db>) {
+            if self.found.get() {
+                return;
+            }
+            if let Type::TypeVar(typevar) = ty
+                && (self.is_supplied)(typevar)
+                && !self
+                    .bound
+                    .borrow()
+                    .iter()
+                    .any(|context| context.contains(db, typevar.identity(db)))
+            {
+                self.found.set(true);
+                return;
+            }
+            walk_type_with_recursion_guard(db, ty, self, &self.recursion_guard);
+        }
+
+        fn visit_function_type(&self, db: &'db dyn Db, function: FunctionType<'db>) {
+            let contexts = function
+                .signature(db)
+                .overloads
+                .iter()
+                .filter_map(|signature| signature.generic_context)
+                .collect::<SmallVec<[GenericContext<'db>; 1]>>();
+            self.visit_binding(contexts, || walk_function_type(db, function, self));
+        }
+
+        fn visit_callable_type(&self, db: &'db dyn Db, callable: CallableType<'db>) {
+            let contexts = callable
+                .signatures(db)
+                .iter()
+                .filter_map(|signature| signature.generic_context)
+                .collect::<SmallVec<[GenericContext<'db>; 1]>>();
+            self.visit_binding(contexts, || walk_callable_type(db, callable, self));
+        }
+    }
+
+    let visitor = FreeTypeVarVisitor {
+        env,
+        is_supplied,
+        bound: std::cell::RefCell::default(),
+        recursion_guard: TypeCollector::default(),
+        found: std::cell::Cell::new(false),
+    };
+    visitor.visit_type(db, ty);
+    visitor.found.get()
+}
+
+/// the annotation of a written parameter, as its default is related to it
+fn parameter_declared_type<'db>(
+    db: &'db dyn Db,
+    parameter: Definition<'db>,
+) -> Option<(Definition<'db>, Type<'db>)> {
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+        parameter.kind(db)
+    else {
+        return None;
+    };
+    let function = parameter.scope(db).node(db).as_function()?;
+    let program_file = parameter.program_file(db);
+    let function = semantic_index(db, program_file).expect_single_definition(function);
+    let module = parsed_module(db, program_file.python_file(db)).load(db);
+    let node = node.node(&module);
+    node.default()?;
+    let annotation = node.parameter.annotation()?;
+    let env = ProgramEnvironment::from_definition(function);
+    Some((
+        function,
+        function_signature_expression_type(db, function, annotation).erase_overlapping(db, &env),
+    ))
+}
+
+/// basedpython: how `parameter`'s written default relates to its written annotation. this is the
+/// one decision both the definition, which reports a default no specialization fits, and every
+/// call that leaves the argument out, which passes an initialising default in its place, read
+#[salsa::tracked(
+    returns(copy),
+    cycle_initial=|_, id, _| DefaultFit::Initialises(Type::divergent(id)),
+    cycle_fn=|db, cycle, previous: &DefaultFit<'db>, value: DefaultFit<'db>, parameter: Definition<'db>| {
+        // a default can name the function it belongs to, `def g[T](x: T = lambda: g())`, and
+        // then each round of solving `T` from it nests the previous round's answer
+        match (*previous, value) {
+            (DefaultFit::Initialises(previous), DefaultFit::Initialises(value)) => {
+                DefaultFit::Initialises(value.cycle_normalized(
+                    db,
+                    &ProgramEnvironment::from_definition(parameter),
+                    previous,
+                    cycle,
+                ))
+            }
+            _ => value,
+        }
+    },
+    heap_size=ruff_memory_usage::heap_size
+)]
+pub(crate) fn default_fit<'db>(db: &'db dyn Db, parameter: Definition<'db>) -> DefaultFit<'db> {
+    let Some((function, declared)) = parameter_declared_type(db, parameter) else {
+        return DefaultFit::Every;
+    };
+    if is_placeholder_default(db, parameter) {
+        return DefaultFit::Placeholder;
+    }
+    let env = ProgramEnvironment::from_definition(function);
+    relate_default(
+        db,
+        &env,
+        parameter,
+        declared,
+        parameter_default_type(db, parameter),
+    )
+}
+
+/// basedpython: the type of `parameter`'s default, when that default initialises a type variable
+/// of the parameter's annotation — a call that leaves such an argument out is solved and checked
+/// as if the default had been passed in its place. see [`default_fit`]
+///
+/// this is what a call reads, and it is tracked so that the call depends on the answer rather
+/// than on the source it is read from: editing a default that initialises nothing leaves every
+/// call to its function alone
+#[salsa::tracked(
+    returns(copy),
+    cycle_initial=|_, id, _| Some(Type::divergent(id)),
+    cycle_fn=|db, cycle, previous: &Option<Type<'db>>, value: Option<Type<'db>>, parameter: Definition<'db>| {
+        match (*previous, value) {
+            (Some(previous), Some(value)) => Some(value.cycle_normalized(
+                db,
+                &ProgramEnvironment::from_definition(parameter),
+                previous,
+                cycle,
+            )),
+            _ => value,
+        }
+    },
+    heap_size=ruff_memory_usage::heap_size
+)]
+pub(crate) fn initialising_default_type<'db>(
+    db: &'db dyn Db,
+    parameter: Definition<'db>,
+) -> Option<Type<'db>> {
+    let (function, declared) = parameter_declared_type(db, parameter)?;
+    // an annotation without a type variable fits a default for every specialization or none, so
+    // the default need not be inferred at all — which is what most calls come down to
+    if !declared.has_typevar(db, &ProgramEnvironment::from_definition(function)) {
+        return None;
+    }
+    match default_fit(db, parameter) {
+        DefaultFit::Initialises(default) => Some(default),
+        DefaultFit::Every | DefaultFit::Placeholder | DefaultFit::Never => None,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
