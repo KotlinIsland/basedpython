@@ -199,6 +199,44 @@ def g(x: int):
         ...
 ```
 
+## An optional target holds for `None` too
+
+The `?` belongs to the target type, so `x is int?` tests for `int | None`, and `is not` for neither.
+Elsewhere `?` binds looser than a comparison, but an optional marker on a whole comparison would not
+be a type.
+
+```by
+def f(x: int | str | None):
+    if x is int?:
+        reveal_type(x)  # revealed: int | None
+    else:
+        reveal_type(x)  # revealed: str
+    if x is not int?:
+        reveal_type(x)  # revealed: str
+
+class A: ...
+class B: ...
+
+def g(x: A | B | int | None):
+    if x is (A | B)?:
+        reveal_type(x)  # revealed: A | B | None
+    else:
+        reveal_type(x)  # revealed: int & not A & not B
+```
+
+## A result target is the target's type
+
+The result form `T ? E` after a type test is part of the target too, as it would be in an
+annotation, so `x is int ? ValueError` tests for the type `int ? ValueError`. Result types are not
+supported yet, so the target is rejected wherever it is written.
+
+```by
+def f(x: object):
+    # error: [invalid-type-form] "Invalid binary operator `?` in type annotation"
+    if x is int ? ValueError:
+        ...
+```
+
 ## Identity comparisons are left alone
 
 `===` and `!==` keep Python identity semantics, where an always-`False` comparison is already typed

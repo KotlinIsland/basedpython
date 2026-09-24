@@ -18,6 +18,24 @@ o: dict[str, int?]
 p: ((int) -> str)?
 q: (int) -> str?
 
+# a type test's type takes the marker and the result form after it, while a
+# marker after a parenthesized comparison or a value comparison is over the
+# whole comparison
+r = x is int?
+s = x is int ? str
+t = x is not int ? str | bytes
+u = (x is int) ? str
+v = (x is int)?
+w = x == y?
+z = x == (y?)
+if some_long_value_name is SomeRatherLongTypeName ? SomeRatherLongErrorName | AnotherErrorName:
+    pass
+if (some_long_value_name is SomeRatherLongTypeName) ? SomeRatherLongErrorName | AnotherErrorName:
+    pass
+# a type test broken over lines keeps its type and the result form after it on
+# one line, since both are the type the value is tested against
+long_result = some_long_value_name is not SomeRatherLongTypeName ? SomeRatherLongErrorName | AnotherErrorName
+
 
 def f(x: int?) -> None: ...
 
@@ -49,6 +67,32 @@ n: (*: str)?
 o: dict[str, int?]
 p: ((int) -> str)?
 q: (int) -> str?
+
+# a type test's type takes the marker and the result form after it, while a
+# marker after a parenthesized comparison or a value comparison is over the
+# whole comparison
+r = x is int?
+s = x is int ? str
+t = x is not int ? str | bytes
+u = (x is int) ? str
+v = (x is int)?
+w = x == y?
+z = x == (y?)
+if (
+    some_long_value_name
+    is SomeRatherLongTypeName ? SomeRatherLongErrorName | AnotherErrorName
+):
+    pass
+if (
+    some_long_value_name is SomeRatherLongTypeName
+) ? SomeRatherLongErrorName | AnotherErrorName:
+    pass
+# a type test broken over lines keeps its type and the result form after it on
+# one line, since both are the type the value is tested against
+long_result = (
+    some_long_value_name
+    is not SomeRatherLongTypeName ? SomeRatherLongErrorName | AnotherErrorName
+)
 
 
 def f(x: int?) -> None: ...

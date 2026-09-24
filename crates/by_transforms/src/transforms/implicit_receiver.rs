@@ -119,9 +119,8 @@ impl<'ast> Visitor<'ast> for ImplicitReceiverLower<'_> {
                         // to read off the receiver — the reference is its
                         // backing function bound to the block's receiver
                         ImplicitReceiverReference::ExtensionMember(info) => {
-                            if let Some(module) = &info.import_from {
-                                self.imports
-                                    .insert(format!("from {module} import {}", info.function));
+                            if let Some(import) = &info.import {
+                                self.imports.insert(import.statement());
                             }
                             let (fragments, needs_functools) =
                                 super::extension::member_reference_fragments(

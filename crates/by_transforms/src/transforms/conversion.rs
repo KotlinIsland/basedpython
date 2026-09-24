@@ -26,7 +26,9 @@
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::{self as ast, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use ty_python_semantic::{ConversionInfo, ConversionRuntime, PreludeDunderReceiver};
+use ty_python_semantic::{
+    ConversionImport, ConversionInfo, ConversionRuntime, PreludeDunderReceiver,
+};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
@@ -149,21 +151,8 @@ impl TypeAwarePass for ConversionPass<'_> {
                     }
                     None => {}
                 }
-                for import in imports {
-                    // always aliased: the class's own name may already mean
-                    // something else here, and an import that rebinds it — or that
-                    // this file's own class then shadows — would send the call to
-                    // the wrong object at runtime
-                    if import.alias == import.name {
-                        ctx.required_imports
-                            .push(format!("from {} import {}", import.module, import.name));
-                    } else {
-                        ctx.required_imports.push(format!(
-                            "from {} import {} as {}",
-                            import.module, import.name, import.alias
-                        ));
-                    }
-                }
+                ctx.required_imports
+                    .extend(imports.iter().map(ConversionImport::statement));
                 // python binds a class name when its statement executes, so a
                 // conversion that runs at import time cannot precede the class it
                 // converts through. inside a function body the name is resolved at

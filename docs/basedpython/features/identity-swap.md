@@ -54,11 +54,18 @@ from typing import Literal
 
 def f(v: object):
     if v is int | str: ...        # a union
+    if v is int?: ...             # an optional: `int` or `None`
     if v is list: ...             # a class, arguments and all
     if v is Literal[1, 2]: ...    # a set of values
     if v is type[int]: ...        # a class object
     if v is f"item-{int}": ...    # a string pattern
 ```
+
+the `?` of an optional belongs to the type, so `v is int?` tests for `int | None`,
+and so does the error type of a result, so `v is int ? ValueError` tests for
+`int ? ValueError`. anywhere else `?` binds looser than a comparison, so
+`v == t?` marks the whole comparison — write `v == (t?)` to compare with an
+optional type
 
 and anything an annotation rejects, a test rejects with the same message —
 `v is os` names a module, which is not a type in either place

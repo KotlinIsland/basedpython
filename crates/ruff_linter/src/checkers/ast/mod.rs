@@ -33,7 +33,8 @@ use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticTag, IntoDiagnosticM
 use ruff_diagnostics::{Applicability, Fix, IsolationLevel};
 use ruff_notebook::{CellOffsets, NotebookIndex};
 use ruff_python_ast::helpers::{
-    ReturnGuardForm, collect_import_from_member, is_docstring_stmt, return_guards, to_module_path,
+    ReturnGuardForm, collect_import_from_member, is_docstring_stmt, negated_narrowing_predicate,
+    return_guards, to_module_path,
 };
 use ruff_python_ast::identifier::Identifier;
 use ruff_python_ast::name::QualifiedName;
@@ -1430,6 +1431,14 @@ impl<'a> Visitor<'a> for Checker<'a> {
                             ReturnGuardForm::Asserts { .. } => None,
                         })
                         .collect(),
+                    // a negated predicate, `-> x is not T`, is refused by the checker, and
+                    // names its place the same way
+                    (None, Some(returns))
+                        if self.source_type.is_basedpython()
+                            && let Some(negated) = negated_narrowing_predicate(returns) =>
+                    {
+                        negated.comparators.iter().collect()
+                    }
                     (None, Some(returns)) => vec![returns],
                     (None, None) => Vec::new(),
                 };

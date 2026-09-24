@@ -1,0 +1,65 @@
+---
+source: crates/mdtest/src/lib.rs
+expression: snapshot
+---
+
+---
+mdtest name: basedpython_type_guards.md - basedpython: narrowing return annotations - a callable narrowing another parameter is not such a callable
+mdtest path: crates/ty_python_semantic/resources/mdtest/basedpython_type_guards.md
+---
+
+# Source files
+
+## mdtest_snippet.by
+
+```
+ 1 | def want_second(check: (first: object, second: object) -> (second is int)): ...
+ 2 | 
+ 3 | def is_int_first(first: object, second: object) -> first is int:
+ 4 |     return isinstance(first, int)
+ 5 | 
+ 6 | def is_int_second(first: object, second: object) -> second is int:
+ 7 |     return isinstance(second, int)
+ 8 | 
+ 9 | want_second(is_int_second)
+10 | # error: [invalid-argument-type]
+11 | want_second(is_int_first)
+12 | def want_first(check: (first: object, second: object) -> (first is int)): ...
+13 | 
+14 | def f(second_checker: (first: object, second: object) -> (second is int)):
+15 |     want_second(second_checker)
+16 |     # error: [invalid-argument-type]
+17 |     want_first(second_checker)
+```
+
+# Diagnostics
+
+```
+error[invalid-argument-type]: Argument to function `want_second` is incorrect
+  --> src/mdtest_snippet.by:11:13
+   |
+11 | want_second(is_int_first)
+   |             ^^^^^^^^^^^^ Expected `(first: object, second: object) -> TypeIs[int]`, found `def is_int_first(first: object, second: object) -> TypeIs[int]`
+info: the return type narrows `first`, where `second` is expected
+info: Function defined here
+ --> src/mdtest_snippet.by:1:5
+  |
+1 | def want_second(check: (first: object, second: object) -> (second is int)): ...
+  |     ^^^^^^^^^^^ --------------------------------------------------------- Parameter declared here
+
+```
+
+```
+error[invalid-argument-type]: Argument to function `want_first` is incorrect
+  --> src/mdtest_snippet.by:17:16
+   |
+17 |     want_first(second_checker)
+   |                ^^^^^^^^^^^^^^ Expected `(first: object, second: object) -> TypeIs[int]`, found `(first: object, second: object) -> TypeIs[int]`
+info: the return type narrows `second`, where `first` is expected
+info: Function defined here
+  --> src/mdtest_snippet.by:12:5
+   |
+12 | def want_first(check: (first: object, second: object) -> (first is int)): ...
+   |     ^^^^^^^^^^ -------------------------------------------------------- Parameter declared here
+
+```

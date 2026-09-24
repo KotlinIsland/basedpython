@@ -122,15 +122,17 @@ a base parameter that is positional-only stays so, and a default the base gives
 a parameter comes with it, as it does for any override (see
 [inherited default values](inherited-defaults.md))
 
-a base that repeats `_` itself gives the override its own numbered names, the
-first still `_`, and a base that is itself such an override gives the names it
-took
+a base that repeats `_` itself gives the override its first `_`. the names it
+numbers the others with are positional-only, so no call passes one, and the
+override numbers its own `_`s there, clear of every name its module spells —
+the names its body reads among them. a base that is itself such an override
+gives the names it took
 
 where the base has no parameter at some `_`'s position, none of the `_`s take a
 name from it and they are numbered as above. that override is reported as an
 `invalid-method-override` anyway
 
-a name taken from the base would shadow the same name read from an enclosing
+a name the base's author wrote would shadow the same name read from an enclosing
 scope, so an override whose body reads one is refused as
 `invalid-repeated-underscore`
 

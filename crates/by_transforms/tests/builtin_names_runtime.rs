@@ -51,12 +51,55 @@ assert n(10, [1, 2]) == 13 and n(10, [1]) == 0
 print("ok")
 "#;
 
+/// a module that binds a builtin at its top level, read by a type test phase 0 lowers and by
+/// the `match` polyfill and its runtime definitions after it — under one name, imported
+/// ahead of the definitions
+const MODULE_BINDING: &str = r#"
+def isinstance(a: object, b: object) -> str:
+    return "mine"
+
+def f(x: object) -> str:
+    if x is str:
+        return "str"
+    match x:
+        case [a, b]:
+            return "pair"
+        case int():
+            return "int"
+    return "other"
+
+assert f("s") == "str" and f([1, 2]) == "pair" and f(3) == "int" and f(None) == "other"
+assert isinstance(1, int) == "mine"
+print("ok")
+"#;
+
+/// a function that declares a builtin `global` and assigns it rebinds the module's, which the
+/// definitions pasted into the module read through its globals
+const GLOBAL_REBINDING: &str = r#"
+def rebind():
+    global isinstance
+    isinstance = lambda a, b: True
+
+def f(y: int?) -> int:
+    return y!
+
+rebind()
+assert f(2) == 2
+print("ok")
+"#;
+
 fn run_at(interpreter: &Interpreter, target: PythonVersion) {
+    run_program_at(PROGRAM, interpreter, target);
+    run_program_at(MODULE_BINDING, interpreter, target);
+    run_program_at(GLOBAL_REBINDING, interpreter, target);
+}
+
+fn run_program_at(program: &str, interpreter: &Interpreter, target: PythonVersion) {
     let config = Config {
         min_version: target,
         ..Config::default()
     };
-    let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
+    let transpiled = transpile(program, &config).expect("transpile should succeed");
     let output = Command::new(&interpreter.command)
         .arg("-c")
         .arg(&transpiled)

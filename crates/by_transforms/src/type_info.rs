@@ -107,6 +107,33 @@ impl SynthesizedType {
         text
     }
 
+    /// the type written as an annotation, as the module `written` is of writes it.
+    /// `evaluated` is whether python evaluates the annotation as its definition runs
+    /// ([`PassContext::annotations_evaluated`])
+    ///
+    /// a module it qualifies a class with may be one the source never imports as it runs, only
+    /// for a checker, and evaluated as the definition runs the annotation would import that
+    /// module there, into whatever cycle the source kept it out of. such an annotation is
+    /// written as a string, so only `typing.get_type_hints` evaluates it
+    ///
+    /// [`PassContext::annotations_evaluated`]: crate::transforms::ast_driver::PassContext::annotations_evaluated
+    pub(crate) fn annotation_in(&self, written: WrittenNames, evaluated: bool) -> String {
+        let text = self.text_in(written);
+        if evaluated && !self.modules.is_empty() {
+            crate::transforms::source_util::string_repr(&text)
+        } else {
+            text
+        }
+    }
+
+    /// the imports of each `typing` name [`Self::text_in`] reads
+    pub(crate) fn typing_imports_in(&self, written: WrittenNames) -> Vec<String> {
+        self.typing_names
+            .iter()
+            .map(|name| written.import_from("typing", &[name]))
+            .collect()
+    }
+
     /// the imports [`Self::text_in`] reads: each module it qualifies a class with, and each
     /// `typing` name
     pub(crate) fn imports_in(&self, written: WrittenNames) -> Vec<String> {
@@ -726,6 +753,11 @@ pub(crate) trait TypeInfo {
     /// member). the inferred-annotation transform must leave these alone
     fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool;
 
+    /// basedpython: the name of the backing function `member` of the extension `class_def`
+    /// declares lowers to, the name every call of it is rewritten to call. `None` when
+    /// `class_def` is not an extension
+    fn extension_backing_function(&self, class_def: &StmtClassDef, member: &str) -> Option<String>;
+
     /// whether `expr` is a field-specifier call — `pydantic.Field(...)`,
     /// `dataclasses.field(...)`, `attrs.field(...)`, and the like. the checker
     /// models these as assignable to the field's declared type, but their
@@ -847,7 +879,7 @@ impl TypeInfo for SemanticModel<'_> {
         // `final A`, which has no python spelling at all, and the annotation a reader
         // would write for it is `A`
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted, min_version, false)
+        spell_for_python(db, &env, self, promoted, min_version, false, None)
     }
 
     fn is_return_value_marker(&self, name: &ExprName) -> bool {
@@ -1170,7 +1202,7 @@ impl TypeInfo for SemanticModel<'_> {
         let env = self.program_environment();
         let ty = expr.inferred_type(self)?;
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted, min_version, false)
+        spell_for_python(db, &env, self, promoted, min_version, false, None)
     }
 
     fn template_literal_strings(&self, expr: &Expr) -> Option<Vec<String>> {
@@ -1191,6 +1223,8 @@ impl TypeInfo for SemanticModel<'_> {
         if ty.is_dynamic() && !matches!(ty, Type::Dynamic(DynamicType::Any)) {
             return None;
         }
+        // the fold is written where `expr` stands, so a name bound there — a type
+        // parameter of the definition it annotates — is one the output binds
         spell_for_python(
             self.db(),
             &self.program_environment(),
@@ -1198,6 +1232,7 @@ impl TypeInfo for SemanticModel<'_> {
             ty,
             min_version,
             true,
+            Some(expr),
         )
     }
 
@@ -1526,7 +1561,7 @@ impl TypeInfo for SemanticModel<'_> {
         // `<class 'int'>`); `type[int]` is its promoted form, and the type ty
         // itself reads back off the undeclared attribute through an instance
         let promoted = ty.promote(db, &env).promote_class_literals(db, &env);
-        spell_for_python(db, &env, self, promoted, min_version, false)
+        spell_for_python(db, &env, self, promoted, min_version, false, None)
     }
 
     fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool {
@@ -1536,6 +1571,11 @@ impl TypeInfo for SemanticModel<'_> {
             .is_some_and(|class| {
                 ty_python_semantic::types::class_body_annotation_is_semantic(self.db(), class)
             })
+    }
+
+    fn extension_backing_function(&self, class_def: &StmtClassDef, member: &str) -> Option<String> {
+        let class = class_def.inferred_type(self)?.as_class_literal()?;
+        ty_python_semantic::extension_backing_function(self.db(), class, member)
     }
 
     fn static_resource(&self, path: &str, binding: &str) -> Result<String, String> {
@@ -1608,7 +1648,9 @@ fn display_for_python<'db>(
 /// bought an emitted file a `if TYPE_CHECKING: import types` it never read.
 ///
 /// `literal` makes `Literal` a `typing` name like the implicit ones, for a caller that
-/// writes the import it needs: a symbolic fold, whose answer is so often a literal type
+/// writes the import it needs: a symbolic fold, whose answer is so often a literal type.
+/// `written_at` is where the spelling is written, when that is an expression of the source:
+/// a name bound in scope there resolves too
 fn spell_for_python<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -1616,6 +1658,7 @@ fn spell_for_python<'db>(
     ty: Type<'db>,
     min_version: ruff_python_ast::PythonVersion,
     literal: bool,
+    written_at: Option<&Expr>,
 ) -> Option<SynthesizedType> {
     let spelling = ty.source_spelling_in(
         db,
@@ -1642,8 +1685,15 @@ fn spell_for_python<'db>(
         modules,
         typing_names,
     };
-    resolvable_in_output(model, min_version, &spelled, &spelling.bare_classes, &read)
-        .then_some(spelled)
+    resolvable_in_output(
+        model,
+        min_version,
+        &spelled,
+        &spelling.bare_classes,
+        &read,
+        written_at,
+    )
+    .then_some(spelled)
 }
 
 /// the `typing` name `name` is, when ty's display writes it for a special form rather than
@@ -1657,21 +1707,25 @@ fn typing_name(name: &str, literal: bool) -> Option<&'static str> {
 ///
 /// [`spell_for_python`] accounts for two kinds of name it has to import — a qualified
 /// class's module, and a `typing` name basedpython binds implicitly. What is left is fine
-/// only if the output binds it anyway: a builtin, or a name the source's own global scope
-/// binds, which the emitted file keeps. Anything else would reach the output unresolved,
-/// so the spelling is refused rather than written with a name that is not there.
+/// only if the output binds it anyway: a builtin, a name the source's own global scope
+/// binds, which the emitted file keeps, or — when the spelling is written in place of a source
+/// expression — a name bound in scope there, such as the type parameter of a generic
+/// signature it annotates. Anything else would reach the output unresolved, so the spelling
+/// is refused rather than written with a name that is not there.
 fn resolvable_in_output(
     model: &SemanticModel<'_>,
     min_version: ruff_python_ast::PythonVersion,
     spelled: &SynthesizedType,
     bare_classes: &[String],
     read: &[String],
+    written_at: Option<&Expr>,
 ) -> bool {
     read.iter().all(|name| {
         spelled.modules.iter().any(|module| module == name)
             || spelled.typing_names.contains(&name.as_str())
             || bare_classes.contains(name)
             || model.is_bound_globally(name)
+            || written_at.is_some_and(|anchor| !model.is_unbound_at(name, anchor))
             || ruff_python_stdlib::builtins::is_python_builtin(name, min_version.minor, false)
     })
 }

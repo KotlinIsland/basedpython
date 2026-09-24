@@ -64,6 +64,15 @@ enum SemDb<'p> {
     Local(ty_project::TestDb, ruff_db::files::File),
 }
 
+/// what [`run_against_source`]'s type-aware passes analyse the module in
+#[derive(Clone, Copy)]
+pub(crate) enum SemanticSource<'p> {
+    /// the caller's db, which holds the source being lowered
+    Project(&'p dyn ty_python_semantic::Db, ruff_db::files::File),
+    /// a single-file db of its own, analysing the source at this python
+    Fresh(ruff_python_ast::PythonVersion),
+}
+
 /// One fragment of a [`PassContext::template_edits`] replacement: literal text,
 /// or a passthrough span of original source. Passthrough spans are materialized
 /// with any sibling edits inside them applied, so a wide rewrite (e.g.
@@ -103,6 +112,11 @@ pub(crate) struct PassContext {
     /// surrounding context contains basedpython markers a sibling pass
     /// hasn't lowered yet
     pub(crate) text_edits: Vec<(TextRange, String)>,
+    /// Indices into [`text_edits`](Self::text_edits) of the edits a later pass withdrew,
+    /// because a replacement of its own re-renders what they wrote. They stay in the list,
+    /// whose order is how the driver knows which pass wrote each edit, and are left out
+    /// of the output
+    pub(crate) withdrawn_text_edits: Vec<usize>,
     /// Structured sub-statement edits whose replacement is a [`Fragment`] list.
     /// Unlike `text_edits` (whose plain string wins over anything nested inside
     /// it — which is a transpile error unless the pass writes that lowering itself,
@@ -141,13 +155,20 @@ pub(crate) struct PassContext {
     /// Lines to append AFTER the spliced body (e.g. modifiers' auto-
     /// generated `__all__ = [...]`). Driver emits each as its own line
     pub(crate) epilogue: Vec<String>,
-    /// Import lines a *synthesized* type expression needs that the source never
-    /// wrote (`import decimal` for an inferred `decimal.Decimal` annotation).
-    /// The driver emits these under `if TYPE_CHECKING:` — the output always
-    /// carries `from __future__ import annotations`, so the name is only ever
-    /// read by a checker, and a runtime import here would add an import edge the
-    /// source does not have
+    /// The modules a *synthesized* annotation qualifies a class with that the source
+    /// never imported under their own names (`decimal` for an inferred
+    /// `decimal.Decimal` annotation). The annotation is written as a string
+    /// ([`SynthesizedType::annotation_in`]), so the module is read only by a checker
+    /// and by `typing.get_type_hints`
+    ///
+    /// [`SynthesizedType::annotation_in`]: crate::type_info::SynthesizedType::annotation_in
     pub(crate) type_only_imports: BTreeSet<String>,
+    /// The names the extension backing functions are declared under, which the driver
+    /// hoists to the module top once lowering is done
+    pub(crate) extension_backing_functions: BTreeSet<String>,
+    /// Whether python evaluates an annotation as its definition runs
+    /// ([`crate::annotations_evaluated`])
+    pub(crate) annotations_evaluated: bool,
     /// Source ranges of operations that `symbolic_type_op` resolved up front
     /// (e.g. `1 + 1` → `Literal[2]`). Type-aware passes skip these via
     /// [`walk_type_positions_skipping`](super::type_expr_walker::walk_type_positions_skipping)
@@ -1112,11 +1133,11 @@ fn merge_from_imports(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
     let mut groups: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
     let mut other: Vec<String> = Vec::new();
     for line in lines {
-        // an entry that spans lines is not an import line but a block — the
-        // `if TYPE_CHECKING:` one, which opens with a `from typing import`. merged
-        // as though the whole block were a name list, the block's own lines become
-        // a "name" and every later `from typing import` lands after them, inside
-        // the block: `if TYPE_CHECKING:\n    import types, overload`
+        // an entry that spans lines is not an import line but a block, such as a
+        // class a lowering synthesized. one that opens with a `from ... import`
+        // would otherwise be merged as though the whole block were a name list, its
+        // own lines becoming a "name" that every later import of that module lands
+        // after, inside the block
         if !line.contains('\n')
             && let Some(rest) = line.strip_prefix("from ")
             && let Some((module, names)) = rest.split_once(" import ")
@@ -1147,8 +1168,8 @@ fn merge_from_imports(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
 /// statements back into the source text. Returns a borrowed `Cow` when
 /// nothing changed.
 ///
-/// `project`, when `Some`, supplies the real project db + file so type-aware
-/// passes resolve cross-module imports (e.g. an imported generic function for
+/// `project`, when [`SemanticSource::Project`], supplies the real project db + file so
+/// type-aware passes resolve cross-module imports (e.g. an imported generic function for
 /// `generic_call`). The chosen db owns the parse the type-aware passes query:
 /// `inferred_type` does AST node-identity lookups, so the model and the walked
 /// suite must come from one db
@@ -1156,7 +1177,7 @@ pub(crate) fn run_against_source<'a>(
     source: &'a str,
     written: repeated_underscore::WrittenNames,
     config: &Config,
-    project: Option<(&dyn ty_python_semantic::Db, ruff_db::files::File)>,
+    project: SemanticSource<'_>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>) {
     // blank the keyword-prefix type markers — use-site variance and the
     // `literal`/`final` type modifiers — out up front; downstream passes
@@ -1171,9 +1192,9 @@ pub(crate) fn run_against_source<'a>(
     // that's sound precisely because blanking preserves byte positions: the
     // db's parse and the blanked parse below agree on every node's range
     let sem = match project {
-        Some((pdb, pfile)) => SemDb::Project(pdb, pfile),
-        None => {
-            let (db, file) = crate::make_in_memory_db(source);
+        SemanticSource::Project(pdb, pfile) => SemDb::Project(pdb, pfile),
+        SemanticSource::Fresh(python_version) => {
+            let (db, file) = crate::make_in_memory_db_at(source, python_version);
             SemDb::Local(db, file)
         }
     };
@@ -1226,7 +1247,10 @@ pub(crate) fn run_against_source<'a>(
         .iter()
         .map(|s| (usize::from(s.range().start()), usize::from(s.range().end())))
         .collect();
-    let mut ctx = PassContext::default();
+    let mut ctx = PassContext {
+        annotations_evaluated: crate::annotations_evaluated(&module.body, config),
+        ..PassContext::default()
+    };
 
     // how each parameter list that repeats `_` is lowered is ty's answer, which every pass
     // that names a parameter reads through `written` — the ones walking a tree of their own
@@ -1332,11 +1356,7 @@ pub(crate) fn run_against_source<'a>(
         mutable_defaults::MutableDefaultsPass::new(source_ref, written, config.is_stub);
     let unique_loop_bindings_pass =
         unique_loop_bindings::UniqueLoopBindingsPass::new(source_ref, config.unique_loop_bindings);
-    let auto_quote_pass = auto_quote::AutoQuote::new(
-        source_ref,
-        config.min_version,
-        config.inject_future_annotations,
-    );
+    let auto_quote_pass = auto_quote::AutoQuote::new(source_ref);
     let init_method_pass = init_method::InitMethod::new(source_ref, written, config.clone());
     let properties_pass = properties::PropertiesPass::new(
         source_ref,
@@ -1846,20 +1866,29 @@ pub(crate) fn run_against_source<'a>(
         config.min_version >= ruff_python_ast::PythonVersion::PY314,
     );
 
-    // a synthesized annotation may name a class the source never imported. the
-    // import goes under `if TYPE_CHECKING:` as one block: every such annotation
-    // is a string at runtime (the lowering always emits the `__future__` import),
-    // so only a checker ever reads the name, and a real import would give the
-    // output an import edge — and a possible cycle — the source never had
-    if !ctx.type_only_imports.is_empty() {
-        // the one typing name a lowering writes under its own name whatever the module
-        // binds: the block reads it where it binds it, ahead of anything the module runs
-        let mut block = String::from("from typing import TYPE_CHECKING\nif TYPE_CHECKING:");
-        for line in std::mem::take(&mut ctx.type_only_imports) {
-            block.push_str("\n    ");
-            block.push_str(&line);
+    // a synthesized annotation may name a class from a module the source never imports as it
+    // runs — one it imports only for a checker, to keep out of an import cycle. the annotation
+    // is a string, so nothing evaluates it but `typing.get_type_hints`. where imports are
+    // deferred, the module is imported with the others, and runs only when that asks, after
+    // every module is initialized. where they are not, an import would run it as this module
+    // starts, so it is imported for a checker alone, and `get_type_hints` cannot resolve it
+    let modules = std::mem::take(&mut ctx.type_only_imports);
+    if !modules.is_empty() {
+        let imports = modules.iter().map(|module| format!("import {module}"));
+        if config.lazy_imports || config.is_stub {
+            ctx.required_imports.extend(imports);
+        } else {
+            let mut block = format!(
+                "{}\nif {}:",
+                written.import_from("typing", &["TYPE_CHECKING"]),
+                written.imported("typing", "TYPE_CHECKING")
+            );
+            for import in imports {
+                block.push_str("\n    ");
+                block.push_str(&import);
+            }
+            ctx.required_imports.push(block);
         }
-        ctx.required_imports.push(block);
     }
 
     ctx.required_imports.sort();
@@ -1882,7 +1911,11 @@ pub(crate) fn run_against_source<'a>(
             Some(module) => ctx
                 .required_imports
                 .push(crate::runtime::import_line(module, helpers)),
-            None => ctx.required_imports.extend(crate::runtime::inline(helpers)),
+            None => ctx.required_imports.extend(crate::runtime::inline(
+                helpers,
+                parsed_handle.suite(),
+                written,
+            )),
         }
     }
     ctx.required_imports.extend(definitions);
@@ -2022,6 +2055,8 @@ pub(crate) fn run_against_source<'a>(
     // template edit instead *materializes* nested edits within its `Src`
     // passthrough spans, so wide rewrites compose with inner lowerings
     // who wrote each edit, in the order they are chained below
+    let withdrawn: std::collections::HashSet<usize> =
+        ctx.withdrawn_text_edits.iter().copied().collect();
     let origins: Vec<Vec<usize>> = [
         (EditList::Text, ctx.text_edits.len()),
         (EditList::Template, ctx.template_edits.len()),
@@ -2030,13 +2065,16 @@ pub(crate) fn run_against_source<'a>(
     ]
     .into_iter()
     .flat_map(|(list, len)| (0..len).map(move |index| (list, index)))
+    .filter(|&(list, index)| !(matches!(list, EditList::Text) && withdrawn.contains(&index)))
     .map(|(list, index)| authorship.author_of(list, index).into_iter().collect())
     .chain(rerendered_by)
     .collect();
     let sub_edits: Vec<(usize, usize, SubPatch)> = ctx
         .text_edits
         .into_iter()
-        .map(|(r, s)| {
+        .enumerate()
+        .filter(|(index, _)| !withdrawn.contains(index))
+        .map(|(_, (r, s))| {
             (
                 usize::from(r.start()),
                 usize::from(r.end()),
@@ -2162,7 +2200,12 @@ pub(crate) fn run_against_source<'a>(
     // their source ranges for sibling-pass composition); hoist them to the
     // module top now that lowering is done, so a member called before its
     // block's position still resolves
-    let (out, table) = extension::hoist_backing_functions(out, table, preamble_end);
+    let (out, table) = extension::hoist_backing_functions(
+        out,
+        table,
+        preamble_end,
+        &ctx.extension_backing_functions,
+    );
     (Cow::Owned(out), ctx.errors, table)
 }
 
@@ -2364,7 +2407,7 @@ mod driver_tests {
             src,
             repeated_underscore::WrittenNames::new(src),
             &Config::test_default(),
-            None,
+            SemanticSource::Fresh(ruff_python_ast::PythonVersion::latest_ty()),
         );
         assert!(!out.contains("??"), "still has ??: {out}");
     }
@@ -2444,6 +2487,16 @@ mod subsumed_lowerings {
     /// the declared pairs shown written somewhere other than a case here, by the declaring
     /// pass's name: the test of the pass's own that shows it, or why it holds
     const SHOWN_ELSEWHERE: &[(&str, Lowering, &str)] = &[
+        (
+            "TupleLiteralTypePass",
+            Lowering::SymbolicTypeOp,
+            "nested_in_subscript",
+        ),
+        (
+            "CallableSyntaxPass",
+            Lowering::SymbolicTypeOp,
+            "tuple_repetition_unpacked_in_tuple_type",
+        ),
         (
             "GenericPolyfillPass",
             Lowering::MatchType,
@@ -2550,6 +2603,11 @@ mod subsumed_lowerings {
             "ParametricIsPass",
             Lowering::LiteralType,
             "protocol_int_literal_argument",
+        ),
+        (
+            "ParametricIsPass",
+            Lowering::OptionalType,
+            "an_optional_target_tests_for_none_too",
         ),
         // the runtime-union lowering runs only below 3.10, where the cases above never go
         (

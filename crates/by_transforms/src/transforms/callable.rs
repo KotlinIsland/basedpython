@@ -19,12 +19,14 @@
 //!                              and the annotation becomes `_Callable_<hash>`
 
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use ruff_diagnostics::{Edit, Fix};
-use ruff_python_ast::helpers::{is_classvar_marker_id, is_final_marker_id, is_let_marker_id};
+use ruff_python_ast::helpers::{
+    ReturnGuardForm, callable_parameter_label, is_classvar_marker_id, is_final_marker_id,
+    is_let_marker_id, predicate_guard,
+};
 use ruff_python_ast::{Expr, ExprCallableType, Operator, PythonVersion, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
@@ -37,7 +39,8 @@ use crate::config::{Config, FloatLiteralLowering};
 use crate::type_info::{TypeInfo, UnpackedKwargsLowering};
 
 /// the lowerings [`CallableSyntax::lower_type_expr`] writes itself, wherever it prints a type
-/// expression. a pass that prints one through it in place of the source writes these too
+/// expression, a symbolic fold among them when it is handed the fold as a substitution. a
+/// pass that prints one through it in place of the source writes these too
 pub(crate) const TYPE_EXPRESSION: &[Lowering] = &[
     Lowering::Callable,
     Lowering::OptionalType,
@@ -45,6 +48,7 @@ pub(crate) const TYPE_EXPRESSION: &[Lowering] = &[
     Lowering::JustFloat,
     Lowering::DynamicKeyword,
     Lowering::FloatConst,
+    Lowering::SymbolicTypeOp,
 ];
 
 #[expect(
@@ -82,6 +86,7 @@ pub(crate) struct CallableSyntax<'src> {
     needs_typeof_import: bool,
     needs_not_import: bool,
     needs_annotated_import: bool,
+    needs_type_is_import: bool,
     needs_optional_runtime: bool,
     /// shape → synthesized class name. used to dedupe identical
     /// non-denotable callable shapes
@@ -129,6 +134,7 @@ impl<'src> CallableSyntax<'src> {
             needs_typeof_import: false,
             needs_not_import: false,
             needs_annotated_import: false,
+            needs_type_is_import: false,
             needs_optional_runtime: false,
             protocol_shapes: HashMap::new(),
             protocol_class_defs: String::new(),
@@ -218,6 +224,7 @@ impl<'src> CallableSyntax<'src> {
             (self.needs_typeof_import, "ty_extensions", "TypeOf"),
             (self.needs_not_import, "ty_extensions", "Not"),
             (self.needs_annotated_import, "typing", "Annotated"),
+            (self.needs_type_is_import, "typing", "TypeIs"),
             (self.needs_union_import, "typing", "Union"),
         ] {
             if needed {
@@ -263,6 +270,10 @@ impl<'src> CallableSyntax<'src> {
     /// `JustFloat` import. Falls back to verbatim source when no leaf rewrite
     /// applies (or no type info is available).
     fn lower_leaf(&mut self, expr: &Expr) -> String {
+        // a claimed fold this lowerer was handed, inside a wider edit it makes
+        if let Some(name) = self.substitution_for(expr.range()) {
+            return name.to_owned();
+        }
         // a leaf that *contains* an already-lowered subtree is rendered by
         // sweeping the substitutions over its source instead: the per-leaf
         // composers below would re-render the subtree from source and leak the
@@ -315,6 +326,34 @@ impl<'src> CallableSyntax<'src> {
         }
         out.push_str(&self.source[usize::from(cursor)..usize::from(range.end())]);
         out
+    }
+
+    /// the return type of `ct` as python spells it. a narrowing predicate,
+    /// `(x: object) -> (x is int)`, is `TypeIs[int]` where it names one of the callable's
+    /// labelled parameters, and otherwise the `bool` the callable returns, as it is for a
+    /// `def`: `TypeIs` has no spelling for a member or for a place outside the parameters
+    pub(crate) fn render_return(&mut self, ct: &ExprCallableType) -> String {
+        let Some(guard) = predicate_guard(&ct.returns) else {
+            return self.rewrite_or_leaf(&ct.returns);
+        };
+        let ReturnGuardForm::Predicate { ty } = guard.form else {
+            return self.rewrite_or_leaf(&ct.returns);
+        };
+        let (name, members) = guard.place_parts();
+        let names_a_parameter = members.is_empty()
+            && ct
+                .args
+                .iter()
+                .any(|argument| callable_parameter_label(argument) == Some(name));
+        if !names_a_parameter {
+            return self.written.builtin("bool");
+        }
+        self.needs_type_is_import = true;
+        format!(
+            "{}[{}]",
+            self.written.imported("typing", "TypeIs"),
+            self.rewrite_or_leaf(ty)
+        )
     }
 
     /// `rewrite` the expression if it is a callable structural form this pass
@@ -551,11 +590,7 @@ impl<'src> CallableSyntax<'src> {
         if let Some(name) = self.protocol_shapes.get(&shape) {
             return name.clone();
         }
-        let mut hasher = DefaultHasher::new();
-        shape.hash(&mut hasher);
-        #[expect(clippy::cast_possible_truncation)]
-        let truncated = hasher.finish() as u32;
-        let name = format!("_Callable_{truncated:08x}");
+        let name = self.written.synthesized_class("_Callable_", &shape);
         self.protocol_shapes.insert(shape.clone(), name.clone());
         let _ = writeln!(
             self.protocol_class_defs,
@@ -570,7 +605,8 @@ impl<'src> CallableSyntax<'src> {
     fn rewrite(&mut self, expr: &Expr) -> Option<String> {
         // a symbolic-fold-claimed sub-expression is opaque: the fold emits its
         // own edit over this exact range, so re-rendering here (and clobbering
-        // it with a wider edit) must not happen
+        // it with a wider edit) must not happen. a wider edit this lowerer makes
+        // anyway still writes it as the fold, through `lower_leaf`
         if self.claimed_ranges.contains(&expr.range()) {
             return None;
         }
@@ -583,7 +619,7 @@ impl<'src> CallableSyntax<'src> {
             Expr::CallableType(ct) if self.paramspec_tail(ct).is_some() => {
                 self.needs_import = true;
                 let (prefix, paramspec) = self.paramspec_tail(ct)?;
-                let ret_str = self.rewrite_or_leaf(&ct.returns);
+                let ret_str = self.render_return(ct);
                 let ps = self.rewrite_or_leaf(paramspec);
                 // an implicit receiver is the callable's leading positional
                 // parameter, so it joins the `Concatenate` prefix
@@ -616,7 +652,7 @@ impl<'src> CallableSyntax<'src> {
                     )
                 });
                 let params = self.render_protocol_params(ct, false, "self", implicit_receiver);
-                let returns = quote_forward_ref(&self.rewrite_or_leaf(&ct.returns));
+                let returns = quote_forward_ref(&self.render_return(ct));
                 let shape = ProtocolShape { params, returns };
                 Some(self.class_name_for(shape))
             }
@@ -626,31 +662,25 @@ impl<'src> CallableSyntax<'src> {
             // a receiver in front of a gradual parameter list is absorbed by it:
             // `Callable[..., R]` already accepts the receiver-first call, and
             // `Concatenate[T, ...]` is not spellable on every supported version
-            Expr::CallableType(ExprCallableType { args, returns, .. })
-                if matches!(args.as_slice(), [Expr::EllipsisLiteral(_)]) =>
-            {
+            Expr::CallableType(ct) if matches!(ct.args.as_slice(), [Expr::EllipsisLiteral(_)]) => {
                 self.needs_import = true;
-                let ret_str = self.rewrite_or_leaf(returns);
+                let ret_str = self.render_return(ct);
                 Some(format!(
                     "{}[..., {ret_str}]",
                     self.written.imported("typing", "Callable")
                 ))
             }
 
-            Expr::CallableType(ExprCallableType {
-                receiver,
-                args,
-                returns,
-                ..
-            }) => {
+            Expr::CallableType(ct) => {
                 self.needs_import = true;
-                let mut rendered: Vec<String> = receiver
+                let mut rendered: Vec<String> = ct
+                    .receiver
                     .iter()
                     .map(|receiver| self.rewrite_or_leaf(receiver))
                     .collect();
-                rendered.extend(args.iter().map(|a| self.rewrite_or_leaf(a)));
+                rendered.extend(ct.args.iter().map(|a| self.rewrite_or_leaf(a)));
                 let args_str = rendered.join(", ");
-                let ret_str = self.rewrite_or_leaf(returns);
+                let ret_str = self.render_return(ct);
                 Some(format!(
                     "{}[[{args_str}], {ret_str}]",
                     self.written.imported("typing", "Callable")
@@ -1105,8 +1135,9 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
     }
 
     /// a type expression it replaces is printed by the shared lowerer, which writes every
-    /// leaf inside it too, an inline protocol as the name of the class it hoists to, and a
-    /// union the runtime evaluates in the spelling the target can run
+    /// leaf inside it too, an inline protocol as the name of the class it hoists to, a
+    /// union the runtime evaluates in the spelling the target can run, and an operation
+    /// `symbolic_type_op` folded as the fold
     fn subsumes(&self) -> &'static [Lowering] {
         &[
             Lowering::Callable,
@@ -1117,6 +1148,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             Lowering::FloatConst,
             Lowering::ProtocolType,
             Lowering::RuntimeUnion,
+            Lowering::SymbolicTypeOp,
         ]
     }
 
@@ -1129,6 +1161,11 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             .with_types(types)
             .with_claimed_ranges(&claimed)
             .with_owned_typeof(&structural_typeof);
+        // a fold inside a callable type this pass replaces is written as the fold; one
+        // it does not replace keeps its own edit
+        for (range, rendered) in &ctx.symbolic_substitutions {
+            inner.add_substitution(*range, rendered.clone());
+        }
         crate::transforms::type_expr_walker::walk_type_positions_skipping(
             stmts,
             Some(types),
@@ -1190,6 +1227,29 @@ mod tests {
             ..Config::test_default()
         };
         assert_eq!(transpile(input, &config).unwrap(), expected);
+    }
+
+    /// a callable type returns a narrowing predicate as a `def` does: `TypeIs` where it names
+    /// one of the callable's parameters, and the `bool` the callable returns where it names a
+    /// place `TypeIs` has no spelling for. neither is a type test of its own
+    #[test]
+    fn a_predicate_a_callable_type_returns_is_its_return_type() {
+        let out = transpile(
+            indoc! {"
+                def f(check: (first: object, second: object) -> (second is int)): ...
+                def g(check: (object) -> (a is int)): ...
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        for expected in [
+            "from typing_extensions import TypeIs\n",
+            "def __call__(self, first: \"object\", second: \"object\") -> \"TypeIs[int]\": ...",
+            "def g(check: Callable[[object], bool]): ...",
+        ] {
+            assert!(out.contains(expected), "expected `{expected}` in:\n{out}");
+        }
+        assert!(!out.contains("isinstance"), "got:\n{out}");
     }
 
     /// a type written where the runtime evaluates it is spelled with `Union` below 3.10,

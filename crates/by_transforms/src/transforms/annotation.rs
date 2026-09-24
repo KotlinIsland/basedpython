@@ -424,7 +424,7 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
     }
 
     /// each element of a tuple type it replaces is printed by the shared type-expression
-    /// lowerer
+    /// lowerer, and an operation `symbolic_type_op` folded inside one is written as the fold
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
         super::callable::TYPE_EXPRESSION
     }

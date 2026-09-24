@@ -420,6 +420,29 @@ class Point:
 print(Point(1))
 ```
 
+## a `data class` gets one the same way
+
+the keyword stands for `@dataclass(slots=True)`, which writes the `__repr__` just as the plain
+decorator does, and so does a decorator the options were applied to ahead of the class.
+
+```by
+from dataclasses import dataclass
+
+data class Point:
+    x: int
+
+frozen data class Frozen:
+    x: int
+
+slotted = dataclass(slots=True)
+
+@slotted
+class Slotted:
+    x: int
+
+print(Point(1), Frozen(1), Slotted(1))
+```
+
 ## a dataclass that turned its `__repr__` off is reported
 
 ```py

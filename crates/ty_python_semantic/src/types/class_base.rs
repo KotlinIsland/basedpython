@@ -270,6 +270,7 @@ impl<'db> ClassBase<'db> {
                 | KnownInstanceType::UnionType(_)
                 | KnownInstanceType::Literal(_)
                 | KnownInstanceType::WrappedOptional(_)
+                | KnownInstanceType::WrappedOptionalClass(_)
                 | KnownInstanceType::LiteralStringAlias(_)
                 | KnownInstanceType::NamedTupleSpec(_)
                 | KnownInstanceType::Sentinel(_)

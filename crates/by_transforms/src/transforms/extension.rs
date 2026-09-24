@@ -286,10 +286,13 @@ impl<'a> ExtensionBlockPass<'a> {
                 fragments.push(Fragment::Lit("\n".to_owned()));
             }
 
-            fragments.push(Fragment::Lit(format!(
-                "def {}(",
-                backing_name(target, ordinal, func.name.as_str())
-            )));
+            // every call of the member was rewritten to the name ty gives it, so the
+            // backing function is declared under that name too
+            let name = types
+                .extension_backing_function(class, func.name.as_str())
+                .unwrap_or_else(|| backing_name(target, ordinal, func.name.as_str()));
+            fragments.push(Fragment::Lit(format!("def {name}(")));
+            ctx.extension_backing_functions.insert(name);
             parameter_fragments(&func.parameters, self.written, &mut fragments);
             fragments.push(Fragment::Lit(")".to_owned()));
 
@@ -392,9 +395,11 @@ impl TypeAwarePass for ExtensionBlockPass<'_> {
 /// compose their edits inside them. but a member may be *called* before that
 /// position — a plain top-level call resolves left-to-right, so the `def` must
 /// precede every use. this runs on the finished output text: it re-parses,
-/// finds the top-level `_by_ext…` functions, and moves their line blocks to
-/// just after the preamble and the leading imports, permuting the line table
-/// identically so source maps stay aligned
+/// finds the top-level functions named in `backing`, the names the block
+/// lowering declared them under — each one the module spells nowhere, so none
+/// is the module's own — and moves their line blocks to just after the
+/// preamble and the leading imports, permuting the line table identically so
+/// source maps stay aligned
 ///
 /// `preamble_end` is one past the last byte of the generated preamble. the
 /// defs have to stay below it: the preamble carries the runtime helpers a
@@ -404,9 +409,9 @@ pub(crate) fn hoist_backing_functions(
     out: String,
     table: Vec<Option<u32>>,
     preamble_end: usize,
+    backing: &BTreeSet<String>,
 ) -> (String, Vec<Option<u32>>) {
-    // cheap early-out: no backing functions were emitted
-    if !out.contains(EXTENSION_MARKER) {
+    if backing.is_empty() {
         return (out, table);
     }
 
@@ -436,10 +441,11 @@ pub(crate) fn hoist_backing_functions(
     }
 
     // byte ranges of the top-level backing functions (decorators included)
+    let backing_names = backing;
     let mut backing: Vec<(usize, usize)> = Vec::new();
     for stmt in module {
         if let Stmt::FunctionDef(func) = stmt
-            && func.name.starts_with("_by_ext")
+            && backing_names.contains(func.name.as_str())
         {
             let start = func
                 .decorator_list
@@ -620,9 +626,8 @@ impl<'a> ExtensionCallLower<'a> {
     }
 
     fn note_import(&mut self, info: &ty_python_semantic::ExtensionAttributeInfo) {
-        if let Some(module) = &info.import_from {
-            self.imports
-                .insert(format!("from {module} import {}", info.function));
+        if let Some(import) = &info.import {
+            self.imports.insert(import.statement());
         }
     }
 
@@ -1020,6 +1025,56 @@ mod tests {
             out.contains("print(_by_ext2__list__total(words))"),
             "got:\n{out}"
         );
+    }
+
+    /// a backing function is named past what the module spells, as every name a lowering
+    /// binds is: the module's own `_by_ext__list__second` keeps its name, and the member moves
+    /// on to the next ordinal, which the reverse transform reads past
+    #[test]
+    fn a_backing_function_name_the_module_spells_is_passed_over() {
+        let out = check(
+            "def _by_ext__list__second(xs: list[int]) -> str:\n    return \"mine\"\n\nextension list:\n    def second(self) -> Element:\n        return self[1]\n\nprint(_by_ext__list__second([1]))\nprint([1, 2].second())\n",
+        );
+        assert!(
+            out.contains("def _by_ext2__list__second(self):"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("print(_by_ext__list__second([1]))")
+                && out.contains("print(_by_ext2__list__second([1, 2]))"),
+            "got:\n{out}"
+        );
+    }
+
+    /// a `private` symbol is emitted under a name with a leading underscore, which is past what
+    /// the module spells too, so it is kept clear of the backing functions' names
+    #[test]
+    fn a_private_symbol_is_kept_clear_of_a_backing_function() {
+        let out = check(
+            "private def by_ext__list__second() -> str:\n    return \"private\"\n\nextension list:\n    def second(self) -> Element:\n        return self[1]\n\nprint(by_ext__list__second(), [1, 2].second())\n",
+        );
+        assert!(
+            out.contains("def _by_ext__list__second(self):")
+                && out.contains("def _by_ext__list__second2() -> str:"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("print(_by_ext__list__second2(), _by_ext__list__second([1, 2]))"),
+            "got:\n{out}"
+        );
+    }
+
+    /// only the backing functions the block lowering declared move to the module top. a
+    /// function of the module's own whose name happens to start the same way stays where it
+    /// was written, under the decorator it reads
+    #[test]
+    fn a_function_of_the_modules_own_is_not_hoisted() {
+        let out = check(
+            "def my_deco(f):\n    return f\n\n@my_deco\ndef _by_extract() -> int:\n    return 1\n\nextension list:\n    def second(self) -> Element:\n        return self[1]\n\nprint(_by_extract(), [1, 2].second())\n",
+        );
+        let deco = out.find("def my_deco").expect("the decorator");
+        let own = out.find("@my_deco").expect("the decorated function");
+        assert!(deco < own, "got:\n{out}");
     }
 
     #[test]

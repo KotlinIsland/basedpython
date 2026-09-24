@@ -102,6 +102,33 @@ def g(y: object) -> None:
         reveal_type(y)  # revealed: bytes | None | str
 ```
 
+## an optional read as a value of something other than a type
+
+the value is still the union with `None` the program evaluates, so a value without a `| None` is
+rejected. `?` binds looser than a comparison, which makes a comparison a common way to write one:
+`x == y?` marks the whole comparison, and a `bool` has no `| None`
+
+```by
+def f(x: object, y: int):
+    # error: [unsupported-operator] "Unary operator `?` is not supported for object of type `bool`"
+    (x is int)?
+    # error: [unsupported-operator] "Unary operator `?` is not supported for object of type `bool`"
+    x == y?
+    # error: [unsupported-operator] "Unary operator `?` is not supported for object of type `int`"
+    y?
+```
+
+a value that does support `| None` gives what its `__or__` returns
+
+```by
+class Pattern:
+    def __or__(self, other: None) -> str:
+        return "pattern"
+
+def g(p: Pattern):
+    reveal_type(p?)  # revealed: str
+```
+
 ## double optional is a distinct wrapped type
 
 a single `T?` is the lossless union `T | None`, but a nested optional cannot collapse that way (the
@@ -146,6 +173,29 @@ returning the unwrapped value is an error — the wrapper is what preserves the 
 ```by
 def bad[T](t: T) -> T?:
     return t  # error: [invalid-return-type]
+```
+
+## a wrapped optional read as a value is the wrapper class
+
+where a program evaluates a wrapped optional — an alias of `int??`, a `T?` in a function body — it
+gets the runtime class the wrapped values are instances of, the same class whatever it wraps. in a
+type expression, an alias of it is the wrapped optional it was written as
+
+```by
+Alias = int??
+reveal_type(Alias)  # revealed: <special-form 'int??'>
+
+def f(x: Alias, y: Alias | str) -> None:
+    reveal_type(x)  # revealed: int??
+    reveal_type(y)  # revealed: int?? | str
+```
+
+a type parameter read as a value is a `type[T]`, which is not a type expression, so its wrapped
+optional is still the wrapper class but denotes nothing more precise than `Unknown??`
+
+```by
+def g[T](t: T) -> None:
+    reveal_type(T?)  # revealed: <special-form 'Unknown??'>
 ```
 
 ## `Self?` is a plain union

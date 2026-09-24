@@ -78,8 +78,9 @@ evaluated eagerly. it is skipped when:
 - the target is python 3.14 or newer — annotations are deferred natively
     (PEP 649), so the bare name resolves lazily
 - the file already defers every annotation through
-    `from __future__ import annotations`, whether you wrote it yourself or
-    opted into the blanket injection
+    `from __future__ import annotations`, whether you wrote it yourself,
+    opted into the blanket injection, or target a version below 3.10, which
+    always gets it
 
 a subscript base evaluates eagerly on every target, so its self-reference is
 quoted either way

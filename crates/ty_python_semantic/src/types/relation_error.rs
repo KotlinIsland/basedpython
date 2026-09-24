@@ -173,6 +173,11 @@ pub(crate) enum ErrorContext<'db> {
         source: Type<'db>,
         target: Type<'db>,
     },
+    /// basedpython: both return a `TypeIs` / `TypeGuard`, about different arguments
+    NarrowsAnotherArgument {
+        source: String,
+        target: String,
+    },
     IncompatibleParameterTypes {
         source: Type<'db>,
         target: Type<'db>,
@@ -540,6 +545,9 @@ impl<'db> ErrorContext<'db> {
                 relation = relation.description(),
                 target = target.display(db, env),
             ),
+            Self::NarrowsAnotherArgument { source, target } => {
+                format!("the return type narrows {source}, where {target} is expected")
+            }
             Self::IncompatibleParameterTypes {
                 source,
                 target,

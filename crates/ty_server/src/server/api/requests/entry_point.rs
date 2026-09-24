@@ -184,7 +184,9 @@ impl BackgroundRequestHandler for EntryPointHandler {
                                 .as_deref()
                                 .map(|default| text(default.range())),
                             cli: param.spelling.as_ref().map(|spelling| CliParameter {
-                                converter: spelling.converter.map(str::to_owned),
+                                converter: spelling
+                                    .converter
+                                    .map(|converter| converter.name().to_owned()),
                                 choices: spelling.choices.as_ref().map(|choices| {
                                     choices.iter().map(|choice| choice.value.clone()).collect()
                                 }),
@@ -193,7 +195,9 @@ impl BackgroundRequestHandler for EntryPointHandler {
                             }),
                         })
                         .collect(),
-                    extra_arguments: entry.extra_arguments.map(str::to_owned),
+                    extra_arguments: entry
+                        .extra_arguments
+                        .map(|converter| converter.name().to_owned()),
                     docstring: entry.docstring().map(str::to_owned),
                 })
             });

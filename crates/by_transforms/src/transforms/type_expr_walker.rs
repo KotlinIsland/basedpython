@@ -37,13 +37,27 @@
 //!     `NamedTuple` and `TypedDict`. which arguments those are is the type checker's
 //!     answer rather than a list kept here, so a form ty learns to check as a type is
 //!     one this lowers without further change
+//! 14. the type a narrowing predicate `a is T` written as a type tests for — the `T` of
+//!     a return guard `def f(a) -> a is T`
 
 use ruff_python_ast::helpers::declaration_annotation_type;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Operator, Parameters, Stmt, TypeParam, UnaryOp};
+use ruff_python_ast::{CmpOp, Expr, ExprCompare, Operator, Parameters, Stmt, TypeParam, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
 
+use super::type_is::replaced_guard;
 use crate::type_info::{TypeInfo, trailing_name};
+
+/// `a is T` written as a type, the narrowing predicate of a return guard, with its `T`
+fn narrowing_predicate(expr: &Expr) -> Option<(&ExprCompare, &Expr)> {
+    let Expr::Compare(compare) = expr else {
+        return None;
+    };
+    match (&*compare.ops, &*compare.comparators, compare.left.as_ref()) {
+        ([CmpOp::Is], [target], Expr::Name(_)) => Some((compare, target)),
+        _ => None,
+    }
+}
 
 /// the kind of type position currently being visited. lets visitors
 /// distinguish (e.g.) a syntactic annotation from an interior subtree
@@ -84,6 +98,11 @@ pub(crate) enum RootKind {
 
 pub(crate) trait TypeExprVisitor {
     fn visit(&mut self, expr: &Expr, pos: TypePos) -> Recurse;
+
+    /// told of each narrowing predicate `a is T` standing where a type is written, the
+    /// return guard `def f(a) -> a is T`. its `T` is then visited in the predicate's place,
+    /// as the type it is
+    fn visit_predicate(&mut self, _predicate: &ExprCompare) {}
 
     /// told ahead of each root the walk visits what kind of root it is, which holds
     /// for everything nested inside it
@@ -150,6 +169,11 @@ impl TypePosWalker<'_> {
         // a claimed subtree has already been resolved by an earlier pass; don't
         // visit or descend into it
         if self.claimed.iter().any(|c| c.contains_range(expr.range())) {
+            return;
+        }
+        if let Some((predicate, target)) = narrowing_predicate(expr) {
+            self.visitor.visit_predicate(predicate);
+            self.visit_type_expr(target, pos);
             return;
         }
         if self.visitor.visit(expr, pos) == Recurse::Stop {
@@ -346,9 +370,10 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
             }
             Stmt::FunctionDef(f) => {
                 self.visit_parameters(&f.parameters);
-                // `-> asserts x` names a place to narrow; it is not a type position at all
+                // a guard `TypeIs` cannot spell is replaced whole by what the function
+                // returns, so nothing of it is a type
                 if let Some(ret) = &f.returns
-                    && !f.is_asserts_return
+                    && replaced_guard(f).is_none()
                 {
                     self.visit_root(ret, RootKind::Annotation);
                 }

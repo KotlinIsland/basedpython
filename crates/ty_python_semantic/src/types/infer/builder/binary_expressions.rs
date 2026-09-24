@@ -850,7 +850,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     | KnownInstanceType::Callable(_)
                     | KnownInstanceType::TypeVar(_)
                     | KnownInstanceType::TypeAliasType(_)
-                    | KnownInstanceType::NewType(_),
+                    | KnownInstanceType::NewType(_)
+                    | KnownInstanceType::WrappedOptionalClass(_),
                 ),
                 Type::ClassLiteral(..)
                 | Type::SubclassOf(..)
@@ -864,7 +865,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     | KnownInstanceType::Callable(_)
                     | KnownInstanceType::TypeVar(_)
                     | KnownInstanceType::TypeAliasType(_)
-                    | KnownInstanceType::NewType(_),
+                    | KnownInstanceType::NewType(_)
+                    | KnownInstanceType::WrappedOptionalClass(_),
                 ),
                 ast::Operator::BitOr,
             ) => {

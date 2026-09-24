@@ -31,7 +31,7 @@ use ruff_python_ast::helpers::{
     DeclarationMarker, DeclarationMarkerKind, MemberVisibility, declaration_marker_visibility,
     is_classvar_annot_marker_id, is_classvar_marker_id, is_final_marker_id, is_let_marker_id,
 };
-use ruff_python_ast::visitor::{Visitor, walk_stmt};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
     self as ast, Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, StmtTypeAlias,
 };
@@ -112,6 +112,10 @@ pub(crate) struct Modifiers<'src> {
     /// whether a `data class` is given its slots by the runtime helper, on a python whose
     /// `dataclass` has no `slots` option
     slots_by_helper: bool,
+    /// whether a `data class` whose methods reach the class through a `__class__` cell is
+    /// given its slots by the runtime helper, on a python whose `dataclass(slots=True)`
+    /// leaves that cell pointing at the class it replaced
+    slots_by_helper_for_class_cell: bool,
     needs_dataclass_slots: bool,
     /// Names marked `export`/`public` at module level. Used to generate `__all__`.
     exports: Vec<String>,
@@ -154,6 +158,7 @@ impl<'src> Modifiers<'src> {
             needs_classvar: false,
             needs_newtype: false,
             slots_by_helper: false,
+            slots_by_helper_for_class_cell: false,
             needs_dataclass_slots: false,
             exports: Vec::new(),
             private_renames: Vec::new(),
@@ -294,7 +299,9 @@ impl<'src> Modifiers<'src> {
                     self.needs_dataclass = true;
                     let dataclass = self.written.imported("dataclasses", "dataclass");
                     let frozen = name == "frozen_data_class";
-                    let decorators = if self.slots_by_helper {
+                    let decorators = if self.slots_by_helper
+                        || (self.slots_by_helper_for_class_cell && reads_class_cell(&class.body))
+                    {
                         self.needs_dataclass_slots = true;
                         let options = if frozen { "(frozen=True)" } else { "" };
                         format!(
@@ -463,12 +470,11 @@ impl<'src> Modifiers<'src> {
 
     /// `private type X = V` → `type _X = V`. the modifier keyword is not a
     /// synthetic decorator here (a type alias has no decorator list), it is a
-    /// flag on the node, so the prefix is erased from the source directly. the
-    /// definition site is renamed by [`NameRenamer`] along with every reference.
+    /// flag on the node, so the prefix is erased from the source directly. a
+    /// module's alias is renamed, at the definition site and every reference,
+    /// by the visibility rename, which reads the module's private symbols
     ///
-    /// unlike a `private` method, a nested alias gets the same `_` prefix rather
-    /// than `__` name-mangling: an alias is a type, not a member, and mangling
-    /// would not survive the `TypeAliasType` polyfill's whole-statement rewrite
+    /// an alias in a class body is not among them, so it keeps its name
     fn process_type_alias(&mut self, alias: &StmtTypeAlias) {
         if !alias.is_private {
             return;
@@ -773,12 +779,37 @@ pub(crate) fn module_private_name(name: &str) -> String {
     format!("_{name}")
 }
 
+/// whether any function in a class body can reach the class through a `__class__`
+/// cell. python gives a class that cell when a function in its body names `super` or
+/// `__class__`, so a body naming neither has none. a name anywhere in the body counts,
+/// a nested class's included, which can only count a class that has no cell
+fn reads_class_cell(body: &[Stmt]) -> bool {
+    struct Finder(bool);
+    impl<'a> Visitor<'a> for Finder {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Name(name) = expr
+                && matches!(name.id.as_str(), "super" | "__class__")
+            {
+                self.0 = true;
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut finder = Finder(false);
+    finder.visit_body(body);
+    finder.0
+}
+
 pub(crate) struct ModifiersPass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
     is_stub: bool,
     /// whether the python the module targets has `dataclass(slots=True)`
     dataclass_slots: bool,
+    /// whether the `dataclass(slots=True)` of the python the module targets re-points
+    /// the `__class__` cell of the class's methods at the class it makes, which 3.13
+    /// began doing. before it, zero-argument `super()` in a method raises a `TypeError`
+    dataclass_slots_keep_class_cell: bool,
 }
 
 impl<'src> ModifiersPass<'src> {
@@ -788,6 +819,7 @@ impl<'src> ModifiersPass<'src> {
             written,
             is_stub: config.is_stub,
             dataclass_slots: config.min_version >= PythonVersion::PY310,
+            dataclass_slots_keep_class_cell: config.min_version >= PythonVersion::PY313,
         }
     }
 }
@@ -807,6 +839,8 @@ impl AstPass for ModifiersPass<'_> {
         let mut inner = Modifiers::new(self.source, self.written);
         // a stub is never run, so it keeps the option a checker reads
         inner.slots_by_helper = !self.dataclass_slots && !self.is_stub;
+        inner.slots_by_helper_for_class_cell =
+            !self.dataclass_slots_keep_class_cell && !self.is_stub;
         for stmt in &module.body {
             inner.visit_stmt(stmt);
         }
@@ -1175,6 +1209,65 @@ mod tests {
                 && !out.contains("slots=True"),
             "got:\n{out}"
         );
+    }
+
+    /// below 3.13 `dataclass(slots=True)` leaves the `__class__` cell of the class's
+    /// methods pointing at the class it replaced, so a class whose methods name `super` or
+    /// `__class__` is given its slots by the helper, which re-points the cell
+    #[test]
+    fn data_class_reaching_its_class_cell_below_python_313() {
+        let source = indoc! {"
+            class Base:
+                def f(self) -> int:
+                    return 1
+
+            data class Plain:
+                x: int
+
+            data class Calls(Base):
+                x: int
+
+                override def f(self) -> int:
+                    return super().f() + 1
+
+            frozen data class Names:
+                x: int
+
+                def me(self) -> type:
+                    return __class__
+        "};
+        for (target, helper) in [
+            (PythonVersion::PY310, true),
+            (PythonVersion::PY312, true),
+            (PythonVersion::PY313, false),
+        ] {
+            let out = transpile(
+                source,
+                &Config {
+                    min_version: target,
+                    ..Config::test_default()
+                },
+            )
+            .unwrap();
+            assert!(
+                out.contains("@dataclass(slots=True)\nclass Plain:"),
+                "{target}: a class without the cell keeps the option:\n{out}"
+            );
+            let calls = if helper {
+                "@_by_dataclass_slots\n@dataclass\nclass Calls(Base):"
+            } else {
+                "@dataclass(slots=True)\nclass Calls(Base):"
+            };
+            let names = if helper {
+                "@_by_dataclass_slots\n@dataclass(frozen=True)\nclass Names:"
+            } else {
+                "@dataclass(frozen=True, slots=True)\nclass Names:"
+            };
+            assert!(
+                out.contains(calls) && out.contains(names),
+                "{target}: got:\n{out}"
+            );
+        }
     }
 
     #[test]
@@ -1801,6 +1894,70 @@ mod tests {
                 def f(x: _Alias) -> _Alias:
                     return x
             "},
+        );
+    }
+
+    /// below 3.10 the value's union is spelled `Union[...]`, an edit of the value that the
+    /// polyfill's replacement carries along with the `private ` deletion
+    #[test]
+    fn private_type_alias_with_a_union_polyfilled_below_310() {
+        check_at(
+            indoc! {"
+                private type Alias = int | str
+
+                def f(x: Alias) -> Alias:
+                    return x
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from typing import Union
+                from typing_extensions import TypeAliasType
+                _Alias = TypeAliasType(\"_Alias\", Union[int, str])
+
+                def f(x: _Alias) -> _Alias:
+                    return x
+            "},
+            PythonVersion::PY39,
+        );
+    }
+
+    /// a class body's alias is polyfilled at the class body's indentation, and a
+    /// `private` one is a private member there, as it is in the native `type` statement:
+    /// declared as `__W`, and read as the mangled `_A__W`
+    #[test]
+    fn class_body_type_alias_polyfilled() {
+        let source = indoc! {"
+            class A:
+                private type W = int
+                type V = list[W]
+
+                def f(self, w: W) -> V:
+                    return [w]
+        "};
+        check_at(
+            source,
+            indoc! {"
+                from typing_extensions import TypeAliasType
+                class A:
+                    __W = TypeAliasType(\"__W\", int)
+                    V = TypeAliasType(\"V\", list[_A__W])
+
+                    def f(self, w: _A__W) -> V:
+                        return [w]
+            "},
+            PythonVersion::PY310,
+        );
+        check_at(
+            source,
+            indoc! {"
+                class A:
+                    type __W = int
+                    type V = list[_A__W]
+
+                    def f(self, w: _A__W) -> V:
+                        return [w]
+            "},
+            PythonVersion::PY312,
         );
     }
 

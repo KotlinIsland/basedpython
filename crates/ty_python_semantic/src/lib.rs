@@ -51,7 +51,10 @@ pub use types::conformance::{ConformanceRegistration, WitnessDispatch, WitnessKi
 pub use types::conversions::{
     ConversionImport, ConversionInfo, ConversionRuntime, DISCARD_ADAPTER,
 };
-pub use types::extensions::{ExtensionAttributeInfo, ExtensionMemberKind};
+pub use types::extensions::{
+    ExtensionAttributeInfo, ExtensionMemberKind, extension_backing_function,
+    extension_backing_functions,
+};
 pub use types::ide_support::{
     ImplementationsFinder, ImportAliasResolution, OverridableMember, ResolvedDefinition,
     TypeHierarchyClass, contains_identifier, definitions_for_attribute, definitions_for_bin_op,

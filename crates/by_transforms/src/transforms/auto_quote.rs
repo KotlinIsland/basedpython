@@ -17,9 +17,11 @@
 //! not by the point the annotation runs — defined further down, the class the
 //! annotation sits in, or imported only under `if TYPE_CHECKING:`
 //!
-//! annotation quoting is skipped when annotations are not evaluated eagerly:
-//! on python >= 3.14 they are deferred natively (PEP 649), and a user-written
-//! or opt-in `from __future__ import annotations` defers every one. a class
+//! annotation quoting is skipped when annotations are not evaluated eagerly
+//! ([`crate::annotations_evaluated`]): on python >= 3.14 they are deferred
+//! natively (PEP 649), and a `from __future__ import annotations` — written by
+//! the user, opted into, or written for a target below 3.10 — defers every one,
+//! where a quote would reach `__annotations__` as a string inside a string. a class
 //! *base*, and a value-position subscript in a class body (`list[A]()`),
 //! evaluates while the class is being built on every version, so a
 //! self-reference there is always quoted. a direct base (`class A(A):`) is
@@ -33,7 +35,7 @@
 //! cannot be a string, so there only the self-reference itself is quoted
 
 use ruff_python_ast::visitor::{Visitor, walk_expr};
-use ruff_python_ast::{AnyParameterRef, Expr, ExprName, PythonVersion, Stmt, StmtClassDef};
+use ruff_python_ast::{AnyParameterRef, Expr, ExprName, Stmt, StmtClassDef};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
@@ -42,17 +44,11 @@ use crate::type_info::TypeInfo;
 
 pub(crate) struct AutoQuote<'src> {
     source: &'src str,
-    min_version: PythonVersion,
-    inject_future: bool,
 }
 
 impl<'src> AutoQuote<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion, inject_future: bool) -> Self {
-        Self {
-            source,
-            min_version,
-            inject_future,
-        }
+    pub(crate) fn new(source: &'src str) -> Self {
+        Self { source }
     }
 }
 
@@ -64,26 +60,15 @@ impl TypeAwarePass for AutoQuote<'_> {
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let quote_annotations = !(self.min_version.defers_annotations()
-            || self.inject_future
-            || has_future_annotations(stmts));
         let mut walk = Walk {
             source: self.source,
             types,
-            quote_annotations,
+            quote_annotations: ctx.annotations_evaluated,
             edits: Vec::new(),
         };
         walk.block(stmts, Scope::Module);
         ctx.template_edits.extend(walk.edits);
     }
-}
-
-fn has_future_annotations(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(|s| {
-        matches!(s, Stmt::ImportFrom(node)
-            if node.module.as_deref() == Some("__future__")
-                && node.names.iter().any(|a| a.name.as_str() == "annotations"))
-    })
 }
 
 /// the kind of scope a block of statements runs in
@@ -765,6 +750,33 @@ mod tests {
         assert!(
             out.contains("-> A:"),
             "should leave the self-ref bare when future is injected, got: {out}"
+        );
+    }
+
+    /// below 3.10 the output defers every annotation with the future import, and a
+    /// quote there would reach `__annotations__` as a string inside a string. a class
+    /// base is still evaluated as the class is built, so its self-reference is quoted
+    #[test]
+    fn not_quoted_where_the_future_import_is_written() {
+        let config = Config {
+            min_version: PythonVersion::PY39,
+            ..Config::test_default()
+        };
+        let out = transpile_with(
+            "class A(list[A]):\n    item: A\n    def f(self, other: A) -> A: ...\n",
+            &config,
+        );
+        assert!(
+            out.starts_with("from __future__ import annotations\n"),
+            "should write the future import, got: {out}"
+        );
+        assert!(
+            out.contains("item: A\n") && out.contains("def f(self, other: A) -> A:"),
+            "should leave annotations bare under the written future import, got: {out}"
+        );
+        assert!(
+            out.contains("class A(list[\"A\"]):"),
+            "a base self-ref must stay quoted, got: {out}"
         );
     }
 

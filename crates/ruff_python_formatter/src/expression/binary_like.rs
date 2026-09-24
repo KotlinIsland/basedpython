@@ -51,6 +51,7 @@ impl<'a> BinaryLike<'a> {
                     expression: &compare.left,
                     leading_comments,
                 },
+                OperatorPrecedence::Comparator,
                 comments,
                 trivia,
                 parts,
@@ -76,7 +77,13 @@ impl<'a> BinaryLike<'a> {
                         trailing_comments: &[],
                     }));
 
-                    rec(Operand::Middle { expression }, comments, trivia, parts);
+                    rec(
+                        Operand::Middle { expression },
+                        OperatorPrecedence::Comparator,
+                        comments,
+                        trivia,
+                        parts,
+                    );
                 }
 
                 parts.push(OperandOrOperator::Operator(Operator {
@@ -92,6 +99,7 @@ impl<'a> BinaryLike<'a> {
                         expression: last_expression,
                         trailing_comments,
                     },
+                    OperatorPrecedence::Comparator,
                     comments,
                     trivia,
                     parts,
@@ -115,6 +123,7 @@ impl<'a> BinaryLike<'a> {
                         expression: left,
                         leading_comments,
                     },
+                    OperatorPrecedence::BooleanOperation,
                     comments,
                     trivia,
                     parts,
@@ -127,7 +136,13 @@ impl<'a> BinaryLike<'a> {
 
                 if let Some((right, middle)) = rest.split_last() {
                     for expression in middle {
-                        rec(Operand::Middle { expression }, comments, trivia, parts);
+                        rec(
+                            Operand::Middle { expression },
+                            OperatorPrecedence::BooleanOperation,
+                            comments,
+                            trivia,
+                            parts,
+                        );
                         parts.push(OperandOrOperator::Operator(Operator {
                             symbol: OperatorSymbol::Bool(bool_expression.op),
                             trailing_comments: &[],
@@ -139,6 +154,7 @@ impl<'a> BinaryLike<'a> {
                             expression: right,
                             trailing_comments,
                         },
+                        OperatorPrecedence::BooleanOperation,
                         comments,
                         trivia,
                         parts,
@@ -160,6 +176,7 @@ impl<'a> BinaryLike<'a> {
                     leading_comments,
                     expression: &binary.left,
                 },
+                OperatorPrecedence::from(binary.op),
                 comments,
                 trivia,
                 parts,
@@ -175,19 +192,36 @@ impl<'a> BinaryLike<'a> {
                     expression: binary.right.as_ref(),
                     trailing_comments,
                 },
+                OperatorPrecedence::from(binary.op),
                 comments,
                 trivia,
                 parts,
             );
         }
 
+        /// `operand` of an operator of `precedence`, flattened into `parts` when it is itself an
+        /// unparenthesized operation. an operand that binds looser than the operator it belongs
+        /// to is kept whole: python has no such operand without parentheses, but in basedpython
+        /// a type test's type takes a result form, `x is T ? E` being `x is (T ? E)`, and
+        /// flattening would break the line at the `?` as if it were over the whole comparison
         fn rec<'a>(
             operand: Operand<'a>,
+            precedence: OperatorPrecedence,
             comments: &'a Comments,
             trivia: &TriviaRanges,
             parts: &mut SmallVec<[OperandOrOperator<'a>; 8]>,
         ) {
             let expression = operand.expression();
+            let binds_looser = match expression {
+                Expr::BinOp(binary) => OperatorPrecedence::from(binary.op) > precedence,
+                Expr::Compare(_) => OperatorPrecedence::Comparator > precedence,
+                Expr::BoolOp(_) => OperatorPrecedence::BooleanOperation > precedence,
+                _ => false,
+            };
+            if binds_looser {
+                parts.push(OperandOrOperator::Operand(operand));
+                return;
+            }
             match expression {
                 Expr::BinOp(binary) if !trivia.parenthesized().contains(expression.range()) => {
                     let leading_comments = operand

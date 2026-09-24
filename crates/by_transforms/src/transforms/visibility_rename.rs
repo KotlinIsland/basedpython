@@ -516,6 +516,77 @@ mod tests {
         assert!(out.contains("Registry._Registry__made += 1"), "got:\n{out}");
     }
 
+    /// a private type alias in a class body is declared under the name python mangles, and
+    /// read by the mangled name itself, which an annotation python keeps as a string
+    /// still resolves by
+    #[test]
+    fn a_private_class_type_alias_is_declared_mangled() {
+        let source = indoc! {"
+            class Shape:
+                private type Size = int | str
+                type Sizes = list[Size]
+
+                width: Size = 1
+
+                def area(self) -> Size:
+                    return self.width
+
+                def scaled[T](self, by: T) -> Size:
+                    return self.width
+        "};
+        let native = transpile(
+            source,
+            &Config {
+                min_version: crate::PythonVersion::PY312,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            native.contains("    type __Size = int | str\n"),
+            "got:\n{native}"
+        );
+        assert!(
+            native.contains("    type Sizes = list[_Shape__Size]\n"),
+            "got:\n{native}"
+        );
+        assert!(
+            native.contains("    width: _Shape__Size = 1\n"),
+            "got:\n{native}"
+        );
+        assert!(
+            native.contains("    def area(self) -> _Shape__Size:\n"),
+            "got:\n{native}"
+        );
+        // a generic method's signature is its own scope, which reads the class's names
+        assert!(
+            native.contains("    def scaled[T](self, by: T) -> _Shape__Size:\n"),
+            "got:\n{native}"
+        );
+
+        // below 3.12 the statement is a `TypeAliasType` call, which names the alias too
+        let polyfilled = transpile(
+            source,
+            &Config {
+                min_version: crate::PythonVersion::PY310,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            polyfilled.contains("    __Size = TypeAliasType(\"__Size\", int | str)\n"),
+            "got:\n{polyfilled}"
+        );
+        assert!(
+            polyfilled.contains("    Sizes = TypeAliasType(\"Sizes\", list[_Shape__Size])\n"),
+            "got:\n{polyfilled}"
+        );
+        assert!(
+            polyfilled.contains("    width: _Shape__Size = 1\n"),
+            "got:\n{polyfilled}"
+        );
+    }
+
     #[test]
     fn a_module_level_private_variable_is_renamed_where_it_is_the_symbol() {
         let out = out(indoc! {"
@@ -553,7 +624,8 @@ mod tests {
     fn a_member_is_renamed_wherever_the_class_body_declares_it() {
         // a declaration inside a nested block, a decorated method and a nested
         // class are members like any other, and a bare name in the class body
-        // reads the declaration under the spelling python mangles there
+        // reads the declaration under its mangled name, as an annotation python
+        // keeps as a string has to
         let out = out(indoc! {"
             class Shape:
                 if True:
@@ -575,7 +647,10 @@ mod tests {
                     return Shape.Inner()
         "});
         assert!(out.contains("        __sides: int = 3"), "got:\n{out}");
-        assert!(out.contains("doubled: int = __scale * 2"), "got:\n{out}");
+        assert!(
+            out.contains("doubled: int = _Shape__scale * 2"),
+            "got:\n{out}"
+        );
         assert!(out.contains("class __Inner:"), "got:\n{out}");
         assert!(out.contains("    def __make() -> int:"), "got:\n{out}");
         assert!(

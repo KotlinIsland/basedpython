@@ -733,6 +733,8 @@ pub enum ParametricIsPlan {
     /// redundant: python's `1 == True` would otherwise let a `bool` satisfy
     /// `Literal[1]`
     Equality {
+        /// the builtin class the value has, by its name in `builtins`, which the lowering
+        /// reads under a name of its own where the module binds that one
         class: String,
         /// the value to compare against. the source's own literal where it
         /// wrote one — which is already spelled correctly for wherever it sits,
@@ -1372,7 +1374,8 @@ fn literal_target_plan<'db>(
     target_node: Option<&ast::Expr>,
 ) -> ParametricIsPlan {
     let unspellable = ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable);
-    // the guard names a builtin, whose spelling is fixed and always in scope
+    // the guard names a builtin, and the value is the source's own literal where it wrote
+    // one
     let written = target_node
         .is_some_and(|node| node.is_literal_expr() || matches!(node, ast::Expr::UnaryOp(_)));
     let equality = |class: &str, value: String| ParametricIsPlan::Equality {

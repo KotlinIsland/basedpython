@@ -1243,6 +1243,11 @@ declare_lint! {
     /// binds a package no rename can keep. The declaration would read as
     /// restricted while doing something else.
     ///
+    /// The rename can also land on a name the class, a base class or a subclass
+    /// already stores another member under: `protected def m` is stored as `_m`,
+    /// so beside a `def _m` one of the two replaces the other at runtime while
+    /// the checker still sees both.
+    ///
     /// ## Example
     ///
     /// ```by

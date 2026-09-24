@@ -15702,6 +15702,34 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// a `?` outside a type expression over a value that has no `| None`
+    fn report_unsupported_optional_marker(
+        &self,
+        unary: &ast::ExprUnaryOp,
+        operand_type: Type<'db>,
+    ) {
+        let db = self.db();
+        let env = self.program_environment();
+        let Some(builder) = self.context.report_lint(&UNSUPPORTED_OPERATOR, unary) else {
+            return;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "Unary operator `?` is not supported for object of type `{}`",
+            operand_type.display(db, env),
+        ));
+        diagnostic.info("outside a type expression, `T?` is evaluated as `T | None`");
+        // `x == T?` reads as a comparison with an optional type, but the marker takes the
+        // whole comparison. a parenthesized one was written that way on purpose
+        if let ast::Expr::Compare(compare) = &*unary.operand
+            && compare.start() == unary.start()
+        {
+            diagnostic.info(
+                "`?` binds looser than a comparison, so it marks the whole comparison; \
+                 parenthesize the type to compare with an optional, as in `x == (T?)`",
+            );
+        }
+    }
+
     fn report_unsupported_unary_operator(
         &self,
         unary: &ast::ExprUnaryOp,
@@ -15822,6 +15850,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     ) -> Type<'db> {
         let db = self.db();
         let env = self.program_environment();
+        // an optional over an optional, or over a type variable other than `Self`, is the
+        // runtime `Optional` wrapper rather than a union
+        let is_wrapped_optional = move |unary: &ast::ExprUnaryOp, operand_type: Type<'db>| {
+            matches!(
+                &*unary.operand,
+                ast::Expr::UnaryOp(operand) if operand.op == ast::UnaryOp::Optional
+            ) || match operand_type {
+                Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) => !typevar.is_self(db),
+                Type::SubclassOf(subclass_of) => subclass_of
+                    .into_type_var()
+                    .is_some_and(|typevar| !typevar.typevar(db).is_self(db)),
+                _ => false,
+            }
+        };
         let fallback_unary_expression_type = || {
             let unary_dunder_method = match op {
                 ast::UnaryOp::Invert => "__invert__",
@@ -15940,10 +15982,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // to the arm below
             (ast::UnaryOp::Optional, _)
                 if self.is_basedpython_file()
-                    && !matches!(
-                        &*unary.operand,
-                        ast::Expr::UnaryOp(operand) if operand.op == ast::UnaryOp::Optional
-                    )
+                    && !is_wrapped_optional(unary, operand_type)
                     && matches!(
                         operand_type,
                         Type::ClassLiteral(..)
@@ -15951,16 +15990,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             | Type::GenericAlias(..)
                             | Type::SpecialForm(_)
                             | Type::KnownInstance(_)
-                    )
-                    && !match operand_type {
-                        Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) => {
-                            !typevar.is_self(db)
-                        }
-                        Type::SubclassOf(subclass_of) => subclass_of
-                            .into_type_var()
-                            .is_some_and(|typevar| !typevar.typevar(db).is_self(db)),
-                        _ => false,
-                    } =>
+                    ) =>
             {
                 UnionTypeInstance::from_value_expression_types(
                     db,
@@ -15971,9 +16001,63 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 )
             }
 
-            // basedpython postfix `?` and `^` / `!` on non-optional operands.
-            // These are wrapped-type surface syntax that the transpiler lowers
-            // away; ty does not yet model the remaining unwrap/propagate cases
+            // basedpython: over any other value the `?` is still the `| None` the transpiler
+            // writes, which a value that is not a type rarely supports — `(x is int)?` is
+            // `bool | None`, and raises where it runs
+            (ast::UnaryOp::Optional, _)
+                if self.is_basedpython_file() && !is_wrapped_optional(unary, operand_type) =>
+            {
+                let mut state = BinaryInferenceState::default();
+                let union = self.infer_binary_expression_type(
+                    unary.into(),
+                    operand_type,
+                    Type::none(db, env),
+                    ast::Operator::BitOr,
+                    TypeContext::default(),
+                    &mut state,
+                );
+                self.report_deprecated_functions(unary, state.deprecated_functions);
+                union.unwrap_or_else(|| {
+                    self.report_unsupported_optional_marker(unary, operand_type);
+                    Type::unknown()
+                })
+            }
+
+            // basedpython: an optional over an optional, or over a type variable other than
+            // `Self`, is the wrapped optional in a type expression, and the transpiler writes
+            // it as the runtime wrapper class subscripted, which evaluates to the class itself
+            // whatever it wraps. the operand is a type form the program evaluates too, so one
+            // that is not a valid type expression still leaves the class, wrapping what the
+            // type expression falls back to
+            (ast::UnaryOp::Optional, _) if self.is_basedpython_file() => {
+                let inner = operand_type
+                    .in_type_expression(
+                        db,
+                        self.scope(),
+                        self.typevar_binding_context,
+                        self.inference_flags(),
+                    )
+                    .unwrap_or_else(|error| error.fallback_type);
+                let operand_is_optional = matches!(
+                    &*unary.operand,
+                    ast::Expr::UnaryOp(operand) if operand.op == ast::UnaryOp::Optional
+                );
+                let inner = if operand_is_optional {
+                    inner
+                } else {
+                    UnionType::from_elements_leave_aliases(db, env, [inner, Type::none(db, env)])
+                };
+                Type::KnownInstance(KnownInstanceType::WrappedOptionalClass(InternedType::new(
+                    db,
+                    Type::KnownInstance(KnownInstanceType::WrappedOptional(InternedType::new(
+                        db, inner,
+                    ))),
+                )))
+            }
+
+            // basedpython `^` / `!` on non-optional operands. These are wrapped-type
+            // surface syntax that the transpiler lowers away; ty does not yet model the
+            // remaining unwrap/propagate cases
             (ast::UnaryOp::Optional | ast::UnaryOp::Propagate | ast::UnaryOp::Force, _) => {
                 todo_type!("basedpython wrapped-type operator")
             }

@@ -4,8 +4,9 @@ use std::sync::Arc;
 use except_handlers::{ExceptionContextStackManager, ExceptionHandlers};
 use itertools::Itertools;
 use ruff_python_ast::helpers::{
-    BindingKeyword, Truthiness, any_over_expr, binding_keyword, is_dotted_name,
-    last_bound_parameter, parameter_modifiers, return_guards, statement_expression_values,
+    BindingKeyword, Truthiness, any_over_expr, binding_keyword, callable_parameter_label,
+    is_dotted_name, last_bound_parameter, parameter_modifiers, predicate_guard, return_guards,
+    statement_expression_values,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -8119,8 +8120,27 @@ impl<'ast> Visitor<'ast> for GuardTargetCollector<'_> {
         walk_stmt(self, stmt);
     }
 
-    fn visit_expr(&mut self, _expr: &'ast ast::Expr) {
-        // a guard is declared on a statement, and recovered from the `return`s of one
+    /// a callable type narrows what its return predicate names too, `(x: object) -> (x is int)`:
+    /// a labelled parameter's argument, or a place in the calling scope
+    fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+        if let ast::Expr::CallableType(callable) = expr
+            && let Some(guard) = predicate_guard(&callable.returns)
+        {
+            let (name, members) = guard.place_parts();
+            let members: Box<[Name]> = members.into_iter().cloned().collect();
+            if callable
+                .args
+                .iter()
+                .any(|argument| callable_parameter_label(argument) == Some(name))
+            {
+                if !members.is_empty() {
+                    self.targets.member_chains.push(members);
+                }
+            } else {
+                self.targets.scope_places.push((name.clone(), members));
+            }
+        }
+        walk_expr(self, expr);
     }
 }
 

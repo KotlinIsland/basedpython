@@ -363,7 +363,9 @@ double-underscore backing name would break an extension call written in one
 
 when a module declares more than one extension of the same target, later
 ones mangle with an ordinal (`_by_ext2__list__…`) so their members don't
-collide — conditional extensions of the same method name coexist this way
+collide — conditional extensions of the same method name coexist this way.
+a module that already has a `_by_ext__list__second` of its own keeps it, and
+the member takes the next ordinal instead
 
 call sites are rewritten by the type checker. ty already knows the receiver's
 type and which extensions are in scope, so `xs.second()` resolves to the
@@ -413,6 +415,11 @@ _by_ext__str__dedented(greeting)
 
 so the surface stays `import textwrap`, and only the functions actually used are
 imported — the implicit-import convenience costs nothing at runtime
+
+a module that already has the name — its own extension of another class called
+`str` with a `dedented` member, or a variable spelled that way — keeps it, and
+the import is bound under the next name it does not have
+(`from textwrap import _by_ext__str__dedented as _by_ext__str__dedented2`)
 
 ### conformance, lowered
 
