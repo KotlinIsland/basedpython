@@ -583,8 +583,10 @@ impl PropertiesPass<'_> {
                         .flatten()
                         .map(|synthesized| {
                             ctx.type_only_imports
-                                .extend(synthesized.imports_in(self.written));
-                            synthesized.text_in(self.written)
+                                .extend(synthesized.modules.iter().cloned());
+                            ctx.required_imports
+                                .extend(synthesized.typing_imports_in(self.written));
+                            synthesized.annotation_in(self.written, ctx.annotations_evaluated)
                         });
                     Some(Backing {
                         annotation: None,

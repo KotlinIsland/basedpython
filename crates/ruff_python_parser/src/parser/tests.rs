@@ -107,6 +107,108 @@ fn a_trailing_type_test_still_chains() {
     );
 }
 
+/// the single expression statement of `source`, parsed as basedpython
+fn single_expression(source: &str) -> Expr {
+    let parsed = parse_basedpython_module(source);
+    let [Stmt::Expr(statement)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single expression statement: {source}");
+    };
+    *statement.value.clone()
+}
+
+/// how many optional markers wrap `expr`, and what they wrap
+fn peel_optionals(expr: &Expr) -> (usize, &Expr) {
+    let mut depth = 0;
+    let mut inner = expr;
+    while let Expr::UnaryOp(unary) = inner
+        && unary.op == UnaryOp::Optional
+    {
+        depth += 1;
+        inner = &unary.operand;
+    }
+    (depth, inner)
+}
+
+#[test]
+fn a_type_tests_optional_marker_belongs_to_its_type() {
+    // `?` binds looser than a comparison, which would make `x is int?` the
+    // optional of a comparison. the type test's type takes the marker instead
+    for (source, depth) in [
+        ("x is int?\n", 1),
+        ("x is not int?\n", 1),
+        ("x is (A | B)?\n", 1),
+        ("x is A | B?\n", 1),
+        ("x is int??\n", 2),
+    ] {
+        let Expr::Compare(compare) = single_expression(source) else {
+            panic!("expected a comparison: {source}");
+        };
+        let (found, inner) = peel_optionals(&compare.comparators[0]);
+        assert_eq!(found, depth, "{source}");
+        assert!(!inner.is_unary_op_expr(), "{source}");
+    }
+
+    // the type goes on after the marker, as it would in an annotation
+    let Expr::Compare(compare) = single_expression("x is str? | int\n") else {
+        panic!("expected a comparison");
+    };
+    let Expr::BinOp(union) = &compare.comparators[0] else {
+        panic!("expected a union target");
+    };
+    assert_eq!(union.op, Operator::BitOr);
+    assert_eq!(peel_optionals(&union.left).0, 1);
+}
+
+#[test]
+fn a_type_tests_result_form_belongs_to_its_type() {
+    // `?` followed by an error type is the result form, and a type test's type
+    // takes it as it takes the optional marker
+    for source in ["x is int ? str\n", "x is not int ? str | bytes\n"] {
+        let Expr::Compare(compare) = single_expression(source) else {
+            panic!("expected a comparison: {source}");
+        };
+        let Expr::BinOp(result) = &compare.comparators[0] else {
+            panic!("expected a result target: {source}");
+        };
+        assert_eq!(result.op, Operator::Result, "{source}");
+        assert!(result.left.is_name_expr(), "{source}");
+    }
+
+    // an optional marker after the error type is over the whole result, as in an
+    // annotation
+    let Expr::Compare(compare) = single_expression("x is int ? str?\n") else {
+        panic!("expected a comparison");
+    };
+    let (depth, inner) = peel_optionals(&compare.comparators[0]);
+    assert_eq!(depth, 1);
+    assert!(matches!(inner, Expr::BinOp(result) if result.op == Operator::Result));
+
+    // the error type ends where the type test's type would, so a boolean operator
+    // after it still joins the whole type test
+    let Expr::BoolOp(and) = single_expression("x is int ? str and y\n") else {
+        panic!("expected a boolean operation");
+    };
+    assert!(and.values[0].is_compare_expr());
+}
+
+#[test]
+fn only_a_type_test_takes_a_trailing_optional_marker() {
+    // an identity comparison and an equality compare values, so the marker keeps
+    // wrapping the whole comparison, as it always did
+    for source in ["x === y?\n", "x == y?\n"] {
+        let expr = single_expression(source);
+        let (depth, inner) = peel_optionals(&expr);
+        assert_eq!(depth, 1, "{source}");
+        assert!(inner.is_compare_expr(), "{source}");
+    }
+    // a `??` with a right operand is none-coalescing, not a double optional
+    let Expr::BinOp(coalesce) = single_expression("x is int ?? y\n") else {
+        panic!("expected none-coalescing");
+    };
+    assert_eq!(coalesce.op, Operator::Coalesce);
+    assert!(coalesce.left.is_compare_expr());
+}
+
 /// The keyword-argument names of the single call statement in `source`, each
 /// with the way it was spelled.
 fn keyword_names(source: &str) -> Vec<(String, ruff_python_ast::KeywordKey)> {

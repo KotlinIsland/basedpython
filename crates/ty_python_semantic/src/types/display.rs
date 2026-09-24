@@ -4913,6 +4913,12 @@ impl<'db> FmtDetailed<'db> for DisplayKnownInstanceRepr<'_, 'db> {
                 inner.inner(db).display(db, self.env).fmt_detailed(f)?;
                 f.write_str(", <metadata>]'>")
             }
+            KnownInstanceType::WrappedOptionalClass(wrapped) => {
+                f.set_invalid_type_annotation();
+                f.write_str("<special-form '")?;
+                wrapped.inner(db).display(db, self.env).fmt_detailed(f)?;
+                f.write_str("'>")
+            }
             KnownInstanceType::WrappedOptional(inner) => {
                 // render a nested optional in surface `?` notation: count the
                 // wrapper layers, then the innermost `base | None` union adds

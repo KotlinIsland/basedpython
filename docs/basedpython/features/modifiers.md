@@ -47,7 +47,11 @@ ORIGIN: Final = Point(0, 0)
 | `sealed class Foo`      | `class Foo` + `Foo.__sealed_members__ = (...)`      |
 
 `dataclass(slots=True)` is new in python 3.10. below it, a `data class` is
-decorated with a runtime helper that makes it slotted the way that option would
+decorated with a runtime helper that makes it slotted the way that option would.
+the option makes a new class, and before 3.13 it leaves a zero-argument `super()`
+in the class's methods pointing at the class it replaced, where it raises a
+`TypeError`. so below 3.13 a `data class` whose body names `super` or `__class__`
+is given the helper too
 
 `abstract` is a marker for the type checker; it has no runtime decorator.
 `open` is the inverse of `final` — a marker that the class is intended to be
@@ -293,6 +297,25 @@ class Counter:
         return cls.made + cls.LIMIT
 ```
 
+a `type` alias declared in a class body takes `private` too, and is a private
+member like any other: the class's own body and its methods' signatures may name
+it, and nothing else may, a subclass included
+
+```by
+class Shape:
+    private type Size = int | float
+
+    width: Size = 1
+
+    def area(self) -> Size:
+        return self.width ** 2
+
+def measure(shape: Shape) -> Shape.Size: ...  # error: `Size` is private to `Shape`
+```
+
+it is emitted as `type __Size`, and every reference to it as the mangled
+`_Shape__Size`, so an annotation python keeps as a string still names it
+
 ### visibility and inheritance
 
 a visibility keyword decides the name the member is emitted under, so a member
@@ -338,6 +361,23 @@ class Derived(Base):
 
 a `protected` member keeps one name across the hierarchy, so it overrides like
 any other member and is checked like one
+
+the emitted name can already belong to another member — the class's own, a base
+class's or a subclass's. at runtime one of the two would replace the other, while
+both still looked distinct, so that is `invalid-visibility`:
+
+```by
+class A:
+    def _m(self) -> int:
+        return 1
+
+    protected def m(self) -> int:  # error: `m` cannot be `protected` here: `_m` is taken
+        return 2
+```
+
+the same holds for `private` beside a name python mangles to the same attribute
+(`def __m` in `A` is stored as `_A__m`), and for two `private` members of
+classes that share a name
 
 ### names a member is looked up by
 

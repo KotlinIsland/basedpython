@@ -51,6 +51,7 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
+use ruff_python_ast::helpers::{negated_narrowing_predicate, predicate_guard};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, CmpOp, Expr, PySourceType, Stmt};
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
@@ -362,7 +363,7 @@ fn fragments_for_plan(
             vec![
                 Fragment::Lit(format!("({}(", written.builtin("type"))),
                 value_ref(),
-                Fragment::Lit(format!(") is {class} and ")),
+                Fragment::Lit(format!(") is {} and ", written.builtin(&class))),
                 value_ref(),
                 Fragment::Lit(" == ".to_owned()),
                 target_fragment(&value, arm),
@@ -702,6 +703,20 @@ impl<'ast> Visitor<'ast> for ParametricIs<'_, '_> {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
+        // the `x is int` a callable type returns, `(x: object) -> (x is int)`, is the
+        // narrowing predicate the callable lowering writes as `TypeIs`, not a type test
+        if let Expr::CallableType(callable) = expr
+            && (predicate_guard(&callable.returns).is_some()
+                || negated_narrowing_predicate(&callable.returns).is_some())
+        {
+            if let Some(receiver) = &callable.receiver {
+                self.visit_expr(receiver);
+            }
+            for argument in &callable.args {
+                self.visit_expr(argument);
+            }
+            return;
+        }
         if let Expr::Compare(compare) = expr {
             self.process_compare(compare);
         }
@@ -725,9 +740,13 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         Some(super::ast_driver::Lowering::ParametricIs)
     }
 
-    /// the type it tests against is printed as the runtime probe it builds, literals included
+    /// the type it tests against is printed as the runtime probe it builds, literals and
+    /// the `None` of an optional included
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
-        &[super::ast_driver::Lowering::LiteralType]
+        &[
+            super::ast_driver::Lowering::LiteralType,
+            super::ast_driver::Lowering::OptionalType,
+        ]
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
@@ -1331,6 +1350,67 @@ mod tests {
         assert!(
             out.contains("return (isinstance(a, int) or a is None)"),
             "None arm is an identity check: {out}"
+        );
+    }
+
+    /// a literal's class guard names the builtin class the value has, which a module that
+    /// binds the class's name for itself has read under a name of its own
+    #[test]
+    fn a_literal_guard_reads_the_builtin_class_the_module_shadows() {
+        let out = out(indoc! {"
+            class str:
+                pass
+
+            def f(a: object) -> bool:
+                return a is \"x\"
+        "});
+        assert!(
+            out.contains("from builtins import str as str2")
+                && out.contains("return (type(a) is str2 and a == \"x\")"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn an_optional_target_tests_for_none_too() {
+        // `int?` is the union `int | None`, so it lowers as that union does — its
+        // `?` is part of the target, not an operator over the comparison
+        let out = out(indoc! {"
+            def f(a: object) -> bool:
+                return a is int?
+
+            def g(a: object) -> bool:
+                return a is not int?
+        "});
+        assert!(
+            out.contains("return (isinstance(a, int) or a is None)"),
+            "the optional's None is tested too: {out}"
+        );
+        assert!(
+            out.contains("return not (isinstance(a, int) or a is None)"),
+            "`is not` negates the whole union: {out}"
+        );
+    }
+
+    #[test]
+    fn an_optional_target_needs_no_union_operator_below_310() {
+        let out = transpile(
+            indoc! {"
+                class A: ...
+                class B: ...
+
+                def f(a: object) -> bool:
+                    return a is (A | B)?
+            "},
+            &Config {
+                min_version: PythonVersion::PY39,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("return (isinstance(a, A) or isinstance(a, B) or a is None)"),
+            "each arm is tested on its own: {out}"
         );
     }
 

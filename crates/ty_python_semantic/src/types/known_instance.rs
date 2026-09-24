@@ -141,6 +141,13 @@ pub enum KnownInstanceType<'db> {
     /// operator peels one layer.
     WrappedOptional(InternedType<'db>),
 
+    /// basedpython: the runtime class a wrapped optional evaluates to outside a type
+    /// expression — `int??` read as a value, as an alias or `isinstance`'s classes. python
+    /// gets the one wrapper class whatever the layers wrap, so the value is a class, and the
+    /// wrapped optional it was written as (a [`Self::WrappedOptional`] type) is what it
+    /// denotes in a type expression
+    WrappedOptionalClass(InternedType<'db>),
+
     /// An instance of `typing.GenericAlias` representing a `type[...]` expression.
     TypeGenericAlias(InternedType<'db>),
 
@@ -217,6 +224,7 @@ pub(super) fn walk_known_instance_type<'db, V: visitor::TypeVisitor<'db> + ?Size
         | KnownInstanceType::Annotated(ty)
         | KnownInstanceType::TypeGenericAlias(ty)
         | KnownInstanceType::WrappedOptional(ty)
+        | KnownInstanceType::WrappedOptionalClass(ty)
         | KnownInstanceType::LiteralStringAlias(ty) => {
             visitor.visit_type(db, ty.inner(db));
         }
@@ -290,6 +298,9 @@ impl<'db> KnownInstanceType<'db> {
             Self::WrappedOptional(ty) => ty
                 .recursive_type_normalized_impl(db, env, div, true)
                 .map(Self::WrappedOptional),
+            Self::WrappedOptionalClass(ty) => ty
+                .recursive_type_normalized_impl(db, env, div, true)
+                .map(Self::WrappedOptionalClass),
             Self::TypeGenericAlias(ty) => ty
                 .recursive_type_normalized_impl(db, env, div, true)
                 .map(Self::TypeGenericAlias),
@@ -349,6 +360,7 @@ impl<'db> KnownInstanceType<'db> {
             // a wrapped optional has no dedicated runtime class yet (the
             // `Option` prelude is still being settled), so fall back to `object`
             Self::WrappedOptional(_) => KnownClass::Object,
+            Self::WrappedOptionalClass(_) => KnownClass::Type,
             Self::LiteralStringAlias(_) => KnownClass::Str,
             Self::NewType(_) => KnownClass::NewType,
             Self::Sentinel(_) => KnownClass::Sentinel,
@@ -388,9 +400,10 @@ impl<'db> KnownInstanceType<'db> {
         match self {
             Self::TypeAliasType(alias) => Some(Type::TypeAlias(alias)),
             Self::UnionType(instance) => instance.union_type(db).as_ref().ok().copied(),
-            Self::Literal(ty) | Self::Annotated(ty) | Self::LiteralStringAlias(ty) => {
-                Some(ty.inner(db))
-            }
+            Self::Literal(ty)
+            | Self::Annotated(ty)
+            | Self::LiteralStringAlias(ty)
+            | Self::WrappedOptionalClass(ty) => Some(ty.inner(db)),
             Self::TypeGenericAlias(instance) => Some(instance.inner(db).to_meta_type(db, env)),
             Self::Callable(callable) => Some(Type::Callable(callable)),
             Self::NewType(newtype) => Some(Type::NewTypeInstance(newtype)),
@@ -414,6 +427,7 @@ impl<'db> KnownInstanceType<'db> {
                 | Self::LiteralStringAlias(_)
                 | Self::NewType(_)
                 | Self::Sentinel(_)
+                | Self::WrappedOptionalClass(_)
         )
     }
 
@@ -482,6 +496,13 @@ impl<'db> KnownInstanceType<'db> {
             }
             KnownInstanceType::WrappedOptional(ty) => {
                 Type::KnownInstance(KnownInstanceType::WrappedOptional(InternedType::new(
+                    db,
+                    ty.inner(db)
+                        .apply_type_mapping_impl(db, env, type_mapping, tcx, visitor),
+                )))
+            }
+            KnownInstanceType::WrappedOptionalClass(ty) => {
+                Type::KnownInstance(KnownInstanceType::WrappedOptionalClass(InternedType::new(
                     db,
                     ty.inner(db)
                         .apply_type_mapping_impl(db, env, type_mapping, tcx, visitor),

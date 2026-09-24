@@ -12,6 +12,7 @@ use ruff_db::{
 use ruff_python_ast::helpers::{MemberVisibility, is_let_marker_id};
 use ruff_python_ast::{self as ast, PythonVersion, name::Name};
 use ruff_python_stdlib::identifiers::is_mangled_private;
+use ruff_text_size::Ranged;
 use rustc_hash::FxHashSet;
 
 use crate::{
@@ -76,6 +77,8 @@ pub(super) fn check_class<'db>(
     inconsistent_generic_bases: bool,
 ) {
     let db = context.db();
+    check_emitted_name_collisions(context, class);
+
     let configuration = OverrideRulesConfig::from(context);
     if configuration.no_rules_enabled() {
         return;
@@ -1682,6 +1685,184 @@ fn check_member_visibility<'db>(
         keyword = visibility.keyword(),
         renamed = renamed.unwrap_or_default(),
     ));
+}
+
+/// basedpython: reports a member of `class` that is stored under the same attribute
+/// name as a different member of `class` or of a class in its MRO, because a
+/// visibility keyword renamed one of them onto the other's name
+///
+/// ```by
+/// class A:
+///     def _m(self) -> int: ...
+///     protected def m(self) -> int: ...  # stored as `_m`, replacing the method above
+/// ```
+///
+/// the two are different members to the checker, but at runtime whichever the class
+/// body or the MRO reaches first replaces the other. a member redeclared under its
+/// own written name is an override, not a collision, unless it is `private`: a
+/// private member belongs to its declaring class alone, so two classes of the same
+/// name that each declare one still store both under one mangled name
+fn check_emitted_name_collisions<'db>(
+    context: &InferContext<'db, '_>,
+    class: StaticClassLiteral<'db>,
+) {
+    let db = context.db();
+    let env = &context.program_environment();
+    let mro: Vec<ClassType<'db>> = class
+        .identity_specialization(db)
+        .iter_mro(db)
+        .filter_map(ClassBase::into_class)
+        .collect();
+    let is_own = |candidate: ClassType<'db>| candidate.class_literal(db).as_static() == Some(class);
+    let mut reported: FxHashSet<Name> = FxHashSet::default();
+
+    for &declaring in &mro {
+        let Some(declaring_literal) = declaring.class_literal(db).as_static() else {
+            continue;
+        };
+        let mut restricted: Vec<(&Name, MemberVisibility)> = declaring_literal
+            .member_visibilities(db)
+            .iter()
+            .filter(|(_, visibility)| **visibility != MemberVisibility::Public)
+            .map(|(name, visibility)| (name, *visibility))
+            .collect();
+        restricted.sort_unstable_by_key(|(name, _)| *name);
+
+        for (written, visibility) in restricted {
+            let Some(stored) = crate::types::visibility::emitted_member_name(
+                db,
+                visibility,
+                declaring_literal,
+                written,
+            ) else {
+                continue;
+            };
+            for &other in &mro {
+                if !is_own(declaring) && !is_own(other) {
+                    continue;
+                }
+                for candidate in names_stored_as(db, other, &stored) {
+                    let same_declaration = other == declaring && candidate == written.as_str();
+                    if same_declaration
+                        || !defines_member(db, env, other, &candidate)
+                        || stored_member_name(db, other, &candidate) != stored
+                    {
+                        continue;
+                    }
+                    let other_visibility = own_member_visibility(db, other, &candidate);
+                    // the same member redeclared: an override, checked as one elsewhere
+                    if candidate == written.as_str()
+                        && visibility != MemberVisibility::Private
+                        && other_visibility != MemberVisibility::Private
+                    {
+                        continue;
+                    }
+                    let (own_name, message, info) = if is_own(declaring) {
+                        (
+                            written.clone(),
+                            format!(
+                                "`{written}` cannot be `{keyword}` here",
+                                keyword = visibility.keyword()
+                            ),
+                            format!(
+                                "`{keyword}` stores it as `{stored}`, where {other} `{candidate}` is \
+                                 stored too, so one replaces the other at runtime",
+                                keyword = visibility.keyword(),
+                                other = if is_own(other) {
+                                    "this class's".to_owned()
+                                } else {
+                                    format!("the base class `{}`'s", other.name(db))
+                                },
+                            ),
+                        )
+                    } else {
+                        (
+                            Name::new(&candidate),
+                            format!(
+                                "`{candidate}` replaces `{declaring}`'s `{keyword}` member \
+                                 `{written}` at runtime",
+                                declaring = declaring.name(db),
+                                keyword = visibility.keyword(),
+                            ),
+                            format!(
+                                "`{keyword}` stores `{declaring}.{written}` as `{stored}`, and \
+                                 `{candidate}` here is stored under that name too",
+                                declaring = declaring.name(db),
+                                keyword = visibility.keyword(),
+                            ),
+                        )
+                    };
+                    if !reported.insert(own_name.clone()) {
+                        continue;
+                    }
+                    let scope = class.body_scope(db);
+                    let range = place_table(db, scope)
+                        .symbol_id(&own_name)
+                        .and_then(|symbol| symbol_definition(db, scope, symbol))
+                        .map_or_else(
+                            || class.header_range(db),
+                            |definition| definition.focus_range(db, context.module()).range(),
+                        );
+                    let Some(builder) =
+                        context.report_lint(&crate::types::diagnostic::INVALID_VISIBILITY, range)
+                    else {
+                        continue;
+                    };
+                    let mut diagnostic = builder.into_diagnostic(message);
+                    diagnostic.info(info);
+                }
+            }
+        }
+    }
+}
+
+/// basedpython: the names a member of `class` could be written with to be stored
+/// under `stored` — the name itself, the name `protected` prefixes to it, and the
+/// two spellings python and `private` mangle to it in `class`
+fn names_stored_as(db: &dyn Db, class: ClassType<'_>, stored: &str) -> Vec<String> {
+    let mut names = vec![stored.to_owned()];
+    if let Some(unprefixed) = stored.strip_prefix('_') {
+        names.push(unprefixed.to_owned());
+    }
+    let mangle_prefix = crate::types::visibility::mangled_private_name(class.name(db), "");
+    if let Some(member) = stored.strip_prefix(mangle_prefix.as_str()) {
+        names.push(format!("__{member}"));
+        names.push(member.to_owned());
+    }
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// basedpython: whether `class`'s own body or its instances define `name`
+fn defines_member<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassType<'db>,
+    name: &str,
+) -> bool {
+    !class.own_class_member(db, env, None, name).is_undefined()
+        || !class.own_instance_member(db, env, name).is_undefined()
+}
+
+/// basedpython: the attribute `class`'s own member written `name` is stored
+/// under at runtime — renamed by its visibility keyword, and otherwise mangled by
+/// python where the name starts with two underscores
+fn stored_member_name(db: &dyn Db, class: ClassType<'_>, name: &str) -> String {
+    let visibility = own_member_visibility(db, class, name);
+    if visibility != MemberVisibility::Public
+        && let Some(literal) = class.class_literal(db).as_static()
+        && let Some(renamed) =
+            crate::types::visibility::emitted_member_name(db, visibility, literal, name)
+    {
+        return renamed;
+    }
+    match name.strip_prefix("__") {
+        Some(member) if is_mangled_private(name) => {
+            crate::types::visibility::mangled_private_name(class.name(db), member)
+        }
+        _ => name.to_owned(),
+    }
 }
 
 pub(crate) fn is_constructor_like_method(name: &str) -> bool {

@@ -40,8 +40,8 @@ example
 `T ? E` declares a result with value type `T` and error type `E` — a value that
 is either an outcome or a failure, carried in the type rather than raised.
 **not yet implemented** — the `?`-infix result
-form does not parse today (only the `T?` optional form does); the example below
-is the intended design:
+form parses, but is rejected wherever a type is expected; the example below is
+the intended design:
 
 ```by
 def g() -> int ? TypeError:
@@ -50,6 +50,35 @@ def g() -> int ? TypeError:
 ```
 
 both forms compose: `T?? E`, `T ? E?`, etc
+
+### `?` outside a type expression
+
+where a program evaluates `T?` — a type alias, the classes given to
+`isinstance` — it is the union `T | None`. over a value that is not a type the
+marker is an error, as the `| None` would be where it runs:
+
+```by
+Alias = int?                # int | None
+
+def f(x: object, y: int):
+    ok = isinstance(x, int?)
+    flag = x == y?          # error: the marker is over the whole comparison
+```
+
+`?` binds looser than a comparison, so `x == y?` is `(x == y)?`, the optional
+of a `bool`. write `x == (y?)` to compare with an optional type. a type test is
+the exception: its type takes the marker, so `x is int?` tests for `int | None`
+(see [identity swap](identity-swap.md))
+
+a wrapped optional — `int??`, or `T?` over a type variable (below) — has no
+union to evaluate to. read as a value it is the wrapper class, one class for
+every wrapped optional, so an alias of one still means it in an annotation:
+
+```by
+Nested = int??
+
+def f(x: Nested): ...       # x: int??
+```
 
 ### `?` over a type variable is the wrapped form
 

@@ -29,9 +29,8 @@
 //! ```
 
 use std::collections::HashMap;
-use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
@@ -77,14 +76,9 @@ struct Shape {
 }
 
 impl Shape {
-    fn class_name(&self) -> String {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        // 8 hex chars from 64-bit hash is enough to avoid collisions in a
-        // typical module while staying readable
-        #[expect(clippy::cast_possible_truncation)]
-        let truncated = hasher.finish() as u32;
-        format!("_AnonNamedTuple_{truncated:08x}")
+    /// the name of the class declaring this shape, one the module has no other use of
+    fn class_name(&self, written: WrittenNames) -> String {
+        written.synthesized_class("_AnonNamedTuple_", self)
     }
 
     /// the class declaring this shape as `name`, `typing.NamedTuple` written as `named_tuple`
@@ -135,9 +129,13 @@ pub(crate) struct AnonNamedTuple<'src> {
     /// Set when at least one anonymous named tuple was seen, so the preamble
     /// emits the `NamedTuple` import.
     pub(crate) needs_import: bool,
-    /// The imports of the modules and `typing` names a field type reads that the source
-    /// never imported. A shape is built through `&self`, so this collects behind a cell
+    /// The modules a field type qualifies a class with that the source never imported under
+    /// their own names. A shape is built through `&self`, so this collects behind a cell
     type_only_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// The imports of the `typing` names a field type reads, collected the same way
+    typing_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    /// whether python evaluates the synthesized class's field annotations as it is made
+    annotations_evaluated: bool,
     /// Active function-scope return-annotation shape stack. Empty when not
     /// inside a function. The innermost (last) entry governs how a `return`
     /// statement inside the current function is coerced.
@@ -187,6 +185,8 @@ impl<'src> AnonNamedTuple<'src> {
             range_to_value_render: Vec::new(),
             needs_import: false,
             type_only_imports: std::cell::RefCell::default(),
+            typing_imports: std::cell::RefCell::default(),
+            annotations_evaluated: false,
             return_shape_stack: Vec::new(),
             typevar_rename_stack: Vec::new(),
             aliases: HashMap::new(),
@@ -443,8 +443,11 @@ impl<'src> AnonNamedTuple<'src> {
                 };
                 self.type_only_imports
                     .borrow_mut()
-                    .extend(d.imports_in(self.written));
-                d.text_in(self.written)
+                    .extend(d.modules.iter().cloned());
+                self.typing_imports
+                    .borrow_mut()
+                    .extend(d.typing_imports_in(self.written));
+                d.annotation_in(self.written, self.annotations_evaluated)
             };
             fields.push((name, type_display));
         }
@@ -464,7 +467,7 @@ impl<'src> AnonNamedTuple<'src> {
         let name = if let Some(existing) = self.shapes.get(&shape) {
             existing.clone()
         } else {
-            let n = shape.class_name();
+            let n = shape.class_name(self.written);
             self.shapes.insert(shape, n.clone());
             n
         };
@@ -655,7 +658,7 @@ impl<'src> AnonNamedTuple<'src> {
         let name = if let Some(existing) = self.shapes.get(&shape) {
             existing.clone()
         } else {
-            let n = shape.class_name();
+            let n = shape.class_name(self.written);
             self.shapes.insert(shape, n.clone());
             n
         };
@@ -917,6 +920,7 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
     ) {
         let mut inner =
             AnonNamedTuple::new(self.source, self.written, types, self.config.clone(), stmts);
+        inner.annotations_evaluated = ctx.annotations_evaluated;
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -939,6 +943,7 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         ctx.required_imports.extend(imports);
         ctx.runtime.extend(helpers);
         ctx.type_only_imports.extend(inner.type_only_imports.take());
+        ctx.required_imports.extend(inner.typing_imports.take());
         for fix in std::mem::take(&mut inner.edits) {
             for edit in fix.edits() {
                 let range = edit.range();
@@ -952,8 +957,52 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
 #[cfg(test)]
 mod tests {
     use crate::python_passthrough::unchanged;
+    use crate::transforms::repeated_underscore::SynthesizedClasses;
     use crate::{Config, transpile};
     use indoc::indoc;
+
+    /// two one-field shapes, `(<a>: int)` and `(<b>: int)`, whose names hash alike
+    fn colliding_field_names() -> (String, String) {
+        let mut seen = std::collections::HashMap::new();
+        for index in 0u32.. {
+            let name = format!("f{index}");
+            let shape = super::Shape {
+                fields: vec![(name.clone(), "int".to_owned())],
+            };
+            if let Some(earlier) = seen.insert(SynthesizedClasses::hash_of(&shape), name.clone()) {
+                return (earlier, name);
+            }
+        }
+        unreachable!("the hashes of four billion shapes cannot all differ")
+    }
+
+    /// a class is named after 32 bits of its shape's hash, which two shapes can share. the
+    /// second is numbered apart, rather than declared under the first's name, where python
+    /// would read whichever class came last for both
+    #[test]
+    fn two_shapes_hashing_alike_are_named_apart() {
+        let (first, second) = colliding_field_names();
+        let out = transpile(
+            &format!(
+                "def a() -> ({first}: int):\n    return ({first}=1)\n\n\
+                 def b() -> ({second}: int):\n    return ({second}=2)\n"
+            ),
+            &Config::test_default(),
+        )
+        .unwrap();
+        let hash = SynthesizedClasses::hash_of(&super::Shape {
+            fields: vec![(first.clone(), "int".to_owned())],
+        });
+        let name = format!("_AnonNamedTuple_{hash:08x}");
+        for expected in [
+            format!("class {name}(NamedTuple):\n    {first}: int\n"),
+            format!("class {name}2(NamedTuple):\n    {second}: int\n"),
+            format!("def a() -> {name}:\n    return {name}(1)\n"),
+            format!("def b() -> {name}2:\n    return {name}2(2)\n"),
+        ] {
+            assert!(out.contains(&expected), "expected `{expected}` in:\n{out}");
+        }
+    }
 
     fn check(input: &str, expected: &str) {
         assert_eq!(

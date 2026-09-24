@@ -374,13 +374,16 @@ a conversion in the same module as its target spells it by name. one that
 reaches across modules imports it under a mangled alias, always:
 
 ```python
-from temperatures import Fahrenheit as _by_conv__Fahrenheit
+from temperatures import Fahrenheit as _by_conv__temperatures__Fahrenheit
 ```
 
 the alias is not decoration. importing the bare name would rebind whatever this
 file already means by it — and a same-named class of this file's own would then
 shadow the import, sending the call to the wrong object at runtime. a name the
-user never writes cannot do either.
+user never writes cannot do either. the module is part of the alias, so two
+classes of one name from two modules are two bindings, and a file that happens
+to spell a name beginning with `_by_conv__` has its aliases start `_by_conv2__`
+instead.
 
 for the same reason, a conversion whose target is shadowed by a binding between
 it and the module is rejected rather than emitted:

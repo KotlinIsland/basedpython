@@ -1,9 +1,11 @@
 //! Runtime test for the slots a `data class` is given.
 //!
 //! A `data class` is a slotted dataclass. `dataclass(slots=True)` is new in python 3.10, so
-//! below it the runtime's `_by_dataclass_slots` does what that option does. The transform
-//! unit tests pin which of the two a target gets; this test runs both and checks they
-//! behave alike.
+//! below it the runtime's `_by_dataclass_slots` does what that option does. Below 3.13 the
+//! option leaves a method's zero-argument `super()` pointing at the class it replaced, so
+//! there a class whose methods can reach it that way is given the helper too. The
+//! transform unit tests pin which of the two a target gets; this test runs both and checks
+//! they behave alike.
 
 use std::process::Command;
 
@@ -79,6 +81,37 @@ fn a_data_class_is_slotted_below_python_310() {
     ) {
         run_at(&interpreter, PythonVersion::PY39);
     }
+}
+
+/// on 3.10 to 3.12, a class without a zero-argument `super()` keeps `dataclass(slots=True)`,
+/// and the one with it is given the helper. the `override` the program writes is `typing`'s
+/// from 3.12, so an older interpreter needs `typing_extensions`
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_data_class_reaches_its_slotted_self_through_super_below_python_313() {
+    let found = interpreters::interpreters()
+        .into_iter()
+        .find(|interpreter| {
+            interpreter.version >= PythonVersion::PY310
+                && interpreter.version < PythonVersion::PY313
+                && (interpreter.typing_extensions || interpreter.version >= PythonVersion::PY312)
+        });
+    let Some(interpreter) = found else {
+        eprintln!(
+            "skipping: no interpreter of python 3.10 to 3.12 found, with `typing_extensions` \
+             below 3.12"
+        );
+        return;
+    };
+    let target = if interpreter.typing_extensions {
+        PythonVersion::PY310
+    } else {
+        PythonVersion::PY312
+    };
+    run_at(&interpreter, target);
 }
 
 /// `dataclass(slots=True)` itself. the `override` the program writes is `typing`'s from 3.12,

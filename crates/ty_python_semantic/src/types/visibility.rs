@@ -34,10 +34,11 @@ use ruff_text_size::Ranged;
 use rustc_hash::FxHashSet;
 
 use ruff_python_ast::statement_visitor::{StatementVisitor, walk_stmt};
-use ty_python_core::ProgramFile;
 use ty_python_core::ast_ids::HasScopedUseId;
 use ty_python_core::definition::DefinitionState;
+use ty_python_core::place::{PlaceExpr, PlaceExprRef};
 use ty_python_core::scope::{ScopeId, ScopeKind};
+use ty_python_core::{EnclosingSnapshotResult, ProgramFile};
 
 use crate::Db;
 
@@ -254,9 +255,12 @@ fn class_scope_binding<'db>(
 /// after `private x = 1`, `alias = helper`, `@size.setter` over a protected
 /// property. `None` for any other name
 ///
-/// the class body spells the member as it is declared (`__x`, `_x`): python
-/// mangles a class body's names lexically, so `__x` there reaches the same
-/// attribute the declaration made
+/// a binding spells the member as it is declared (`__x`, `_x`): python mangles a
+/// class body's names lexically, so `__x` there makes the attribute the
+/// declaration made. a read is spelled as it is from anywhere (`_A__x`): an
+/// annotation python keeps as a string (`x: __W` under `from __future__ import
+/// annotations`) is evaluated later, against the class's namespace, and the
+/// string was never mangled
 pub(crate) fn class_body_member_name<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
@@ -264,16 +268,74 @@ pub(crate) fn class_body_member_name<'db>(
 ) -> Option<String> {
     let index = crate::semantic_index(db, file);
     let file_scope = index.try_expression_scope_id(&ast::ExprRef::from(reference))?;
-    let class_node = index.scope(file_scope).node().as_class()?;
-    if reference.ctx.is_load()
-        && class_scope_binding(db, file_scope.to_scope_id(db, file), reference)
-            == ClassBinding::Unbound
-    {
-        return None;
-    }
+    let class_scope = match index.scope(file_scope).kind() {
+        ScopeKind::Class => {
+            if reference.ctx.is_load()
+                && class_scope_binding(db, file_scope.to_scope_id(db, file), reference)
+                    == ClassBinding::Unbound
+            {
+                return None;
+            }
+            file_scope
+        }
+        // an annotation scope reads the names of the class body it is in: the value of a
+        // type alias declared there, `type V = list[W]`, and the signature of a generic
+        // method, `def m[T](self) -> W`
+        ScopeKind::TypeParams | ScopeKind::TypeAlias if reference.ctx.is_load() => {
+            let mut scope = file_scope;
+            let mut lazy = false;
+            let class_scope = loop {
+                lazy |= index.scope(scope).kind() == ScopeKind::TypeAlias;
+                // a type parameter of that name is the scope's own
+                if index
+                    .place_table(scope)
+                    .symbol_by_name(&reference.id)
+                    .is_some_and(ty_python_core::symbol::Symbol::is_bound)
+                {
+                    return None;
+                }
+                let parent = index.scope(scope).parent()?;
+                match index.scope(parent).kind() {
+                    ScopeKind::TypeParams | ScopeKind::TypeAlias => scope = parent,
+                    ScopeKind::Class => break parent,
+                    _ => return None,
+                }
+            };
+            // what the class has bound of the name by the time the annotation scope reads it:
+            // as of the definition for an eager scope, and once the body has run for a lazy one
+            let defined = |binding: ty_python_core::BindingWithConstraints<'_, '_>| {
+                matches!(binding.binding, DefinitionState::Defined(_))
+            };
+            let bound = if lazy {
+                let symbol = index.place_table(class_scope).symbol_id(&reference.id)?;
+                index
+                    .use_def_map(class_scope)
+                    .end_of_scope_symbol_bindings(symbol)
+                    .any(defined)
+            } else {
+                let place = PlaceExpr::try_from_expr(reference)?;
+                match index.enclosing_snapshot(class_scope, PlaceExprRef::from(&place), file_scope)
+                {
+                    EnclosingSnapshotResult::FoundBindings(mut bindings) => bindings.any(defined),
+                    EnclosingSnapshotResult::FoundConstraint(_)
+                    | EnclosingSnapshotResult::NotFound
+                    | EnclosingSnapshotResult::NoLongerInEagerContext => false,
+                }
+            };
+            if !bound {
+                return None;
+            }
+            class_scope
+        }
+        _ => return None,
+    };
+    let class_node = index.scope(class_scope).node().as_class()?;
     let definition = index.expect_single_definition(class_node);
     let class = super::infer::original_class_type(db, definition)?.as_static()?;
     let visibility = *class.member_visibilities(db).get(reference.id.as_str())?;
+    if reference.ctx.is_load() {
+        return emitted_member_name(db, visibility, class, reference.id.as_str());
+    }
     ruff_python_stdlib::basedpython::visibility_rename(
         reference.id.as_str(),
         visibility.name_prefix(),
@@ -688,7 +750,7 @@ fn declared_function<'db>(
 ///
 /// The rule is python's: leading underscores are stripped from the class name,
 /// and a class named only with underscores mangles nothing.
-fn mangled_private_name(class: &str, member: &str) -> String {
+pub(crate) fn mangled_private_name(class: &str, member: &str) -> String {
     let class = class.trim_start_matches('_');
     if class.is_empty() {
         return format!("__{member}");

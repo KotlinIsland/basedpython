@@ -41,6 +41,14 @@ def check_empty(x: str | None) -> asserts not x:
 def guard() -> undefined_place is int:
     return True
 
+# a negated predicate is refused by the checker, and names its place the same way:
+# only the type it tests against is a reference
+def not_guard(x: object) -> x is not int:
+    return True
+
+def not_guard_undefined(x: object) -> x is not UndefinedNegatedType:
+    return True
+
 # the type in `asserts x is T` is a real type reference — flagged when undefined
 def check_type(x: object) -> asserts x is UndefinedGuardType:
     raise ValueError

@@ -533,6 +533,171 @@ class B(A):
         return len(n)
 ```
 
+## a renamed member cannot take a name its class already uses
+
+`protected` stores `m` as `_m`, which is where the class's own `_m` is stored too. the checker sees
+two members, but at runtime the later definition replaces the earlier one, so `use` would call the
+protected method.
+
+```by
+class A:
+    def _m(self) -> int:
+        return 1
+
+    # error: [invalid-visibility] "`m` cannot be `protected` here"
+    protected def m(self) -> int:
+        return 2
+
+    def use(self) -> int:
+        return self._m()  # error: [used-underscore-name]
+```
+
+## a class attribute, an instance attribute or a property takes the name too
+
+any member stored under the renamed name collides with it, whatever kind of member it is.
+
+```by
+class Counter:
+    _count = 0
+
+    # error: [invalid-visibility] "`count` cannot be `protected` here"
+    protected def count(self) -> int:
+        return 1
+
+class Label:
+    # error: [invalid-visibility] "`text` cannot be `protected` here"
+    protected text: str = ""
+
+    def reset(self):
+        self._text = 0
+
+class Size:
+    def _width(self) -> int:
+        return 1
+
+    # error: [invalid-visibility] "`width` cannot be `protected` here"
+    protected var width: int
+        get() = 2
+```
+
+## a renamed member cannot take a name a base class uses
+
+the subclass's `_m` would override the base's own `_m`, so the base's `use` would call it.
+
+```by
+class A:
+    def _m(self) -> int:
+        return 1
+
+    def use(self) -> int:
+        return self._m()  # error: [used-underscore-name]
+
+class B(A):
+    # error: [invalid-visibility] "`m` cannot be `protected` here"
+    protected def m(self) -> int:
+        return 2
+```
+
+## a subclass cannot take the name a base's renamed member is stored under
+
+the other way round, a subclass's `_m` overrides the base's protected `m` at runtime, although to
+the checker it is a new member that does not have to match `m`'s signature.
+
+```by
+class A:
+    protected def m(self) -> int:
+        return 1
+
+class B(A):
+    # error: [invalid-visibility] "`_m` replaces `A`'s `protected` member `m` at runtime"
+    def _m(self) -> str:
+        return "x"
+```
+
+an attribute a subclass only assigns in a method has no declaration of its own in the class body, so
+the collision is reported on the class.
+
+```by
+# error: [invalid-visibility] "`_m` replaces `A`'s `protected` member `m` at runtime"
+class C(A):
+    def __init__(self):
+        self._m = 0
+```
+
+## a private member cannot take the name python mangles another to
+
+python stores a name written with two leading underscores under the mangled name `_A__m`, which is
+also where `private` stores `m`.
+
+```by
+class A:
+    # error: [invalid-visibility] "`m` cannot be `private` here"
+    private def m(self) -> int:
+        return 1
+
+    def __m(self) -> int:
+        return 2
+
+class B:
+    # error: [invalid-visibility] "`m` cannot be `private` here"
+    private def m(self) -> int:
+        return 1
+
+    def _B__m(self) -> int:
+        return 2
+```
+
+## two private members collide when their classes share a name
+
+a private member is mangled with the name of the class that declares it, so a subclass named like
+its base stores its private `m` where the base stores its own, and replaces it.
+
+`named_base.by`:
+
+```by
+class A:
+    private def m(self) -> int:
+        return 1
+
+    def use(self) -> int:
+        return self.m()
+```
+
+`named_subclass.by`:
+
+```by
+import named_base
+
+class A(named_base.A):
+    # error: [invalid-visibility] "`m` cannot be `private` here"
+    private def m(self) -> int:
+        return 2
+```
+
+## redeclaring a member under its own name does not collide
+
+a protected override is stored where the member it overrides is, which is what an override is for. a
+private member of a differently named subclass is stored under a name of its own.
+
+```by
+class A:
+    protected def m(self) -> int:
+        return 1
+
+    private def p(self) -> int:
+        return 1
+
+class B(A):
+    protected override def m(self) -> int:
+        return 2
+
+    private def p(self) -> int:
+        return 2
+
+    def _p(self) -> int:
+        return 3
+```
+
 ## `protected` is only a modifier on a class member
 
 outside a class body there is nothing for the "and its subclasses" half of `protected` to mean.
@@ -723,6 +888,59 @@ class A:
         self.Inner()
 
 A.Inner  # error: [inaccessible-member]
+```
+
+## a private type alias in a class body
+
+A `type` alias declared `private` in a class body is a private member: the class's own body and its
+methods' signatures may name it, and neither a subclass nor any other code may.
+
+```by
+class Shape:
+    private type Size = int | float
+
+    width: Size = 1
+
+    def area(self) -> Size:
+        return self.width
+
+class Square(Shape):
+    def side(self) -> Shape.Size:  # error: [inaccessible-member]
+        return 1
+
+def measure(shape: Shape) -> Shape.Size:  # error: [inaccessible-member]
+    return 1
+```
+
+## a private type alias is emitted under its mangled name
+
+The lowering declares the alias as `__Size`, which python mangles to `_Shape__Size`, and spells
+every reference to it that way, so an annotation that names it resolves wherever python evaluates
+it.
+
+```by
+from typing import get_type_hints
+
+class Shape:
+    private type Size = int | float
+    type Sizes = list[Size]
+
+    width: Size = 1
+    widths: Sizes = [1]
+
+hints = get_type_hints(Shape)
+assert hints["width"].__value__ == int | float
+assert hints["widths"].__value__.__args__ == (hints["width"],)
+assert "Size" not in vars(Shape)
+```
+
+## a private type alias cannot take a name its class stores
+
+```by
+class A:
+    # error: [invalid-visibility] "`Size` cannot be `private` here"
+    private type Size = int
+    __Size: str = "a"
 ```
 
 ## a protected member reached through a union

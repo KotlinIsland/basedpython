@@ -5,7 +5,9 @@
 //! file beside the modules it emits and each module imports the names it calls. a
 //! transpile with nowhere to write it (`by transpile <file>`, the language
 //! server's `by/transpile`) pastes the definitions in instead. both are slices of
-//! the one text, so the two renderings cannot drift apart
+//! the one text, so the two renderings cannot drift apart. the one difference is a
+//! builtin the module binds for itself, which a pasted definition would otherwise
+//! read from the module's globals: it reads it under a name of its own (`inline`)
 //!
 //! # naming a helper
 //!
@@ -115,6 +117,8 @@ helpers! {
     DATACLASS_SLOTS = "_by_dataclass_slots",
 }
 
+mod global_reads;
+
 /// one definition of the runtime, with whatever finishes setting it up
 struct Definition {
     /// its source as the file spells it, newline-terminated like any other
@@ -125,6 +129,10 @@ struct Definition {
     order: usize,
     /// the other definitions its body reads
     needs: Vec<String>,
+    /// each read of a name the runtime does not define, which python looks up in the
+    /// globals of the module the definition runs in before the builtins, by its range in
+    /// [`Self::source`]
+    builtin_reads: Vec<(TextRange, String)>,
 }
 
 /// every definition, indexed by each name it binds
@@ -174,6 +182,11 @@ fn build_index() -> BTreeMap<String, Definition> {
             .collect();
         needs.sort();
         needs.dedup();
+        let builtin_reads: Vec<(TextRange, String)> = global_reads::global_reads(&suite[at..=last])
+            .into_iter()
+            .filter(|(_, name)| !defined.contains(name))
+            .map(|(range, name)| (range - span.start(), name))
+            .collect();
         // `every_name_has_one_definition` keeps a name from being bound twice,
         // so first-wins here never decides anything
         for name in names.into_keys() {
@@ -181,6 +194,7 @@ fn build_index() -> BTreeMap<String, Definition> {
                 source: source.clone(),
                 order,
                 needs: needs.clone(),
+                builtin_reads: builtin_reads.clone(),
             });
         }
         order += 1;
@@ -201,11 +215,66 @@ fn record(names: &mut Bindings, name: impl Into<String>, range: TextRange) {
     names.entry(name.into()).or_insert(range);
 }
 
-/// the names a top-level statement binds at module scope
+/// the names a statement binds in the scope it stands in
 pub(crate) fn bindings(stmt: &Stmt) -> Bindings {
     let mut names = Bindings::new();
     bind(stmt, &mut names);
     names
+}
+
+/// the names a top-level statement binds at module scope: the ones it binds itself
+/// ([`bindings`]), and the ones a function or class inside it, at any depth, declares
+/// `global` and binds
+pub(crate) fn module_bindings(stmt: &Stmt) -> Bindings {
+    let mut names = bindings(stmt);
+    global_bindings(stmt, &mut names);
+    names
+}
+
+/// the names the scopes `stmt` opens, and the scopes inside those, declare `global` and bind
+fn global_bindings(stmt: &Stmt, names: &mut Bindings) {
+    let body = match stmt {
+        Stmt::FunctionDef(def) => &def.body,
+        Stmt::ClassDef(def) => &def.body,
+        _ => {
+            let mut blocks = Vec::new();
+            push_blocks(stmt, &mut blocks);
+            for block in blocks {
+                for stmt in block {
+                    global_bindings(stmt, names);
+                }
+            }
+            return;
+        }
+    };
+    let mut declared = BTreeSet::new();
+    global_declarations(body, &mut declared);
+    let mut bound = Bindings::new();
+    for stmt in body {
+        bind(stmt, &mut bound);
+        global_bindings(stmt, names);
+    }
+    for (name, range) in bound {
+        if declared.contains(&name) {
+            record(names, name, range);
+        }
+    }
+}
+
+/// the names `body`'s own statements declare `global`, not descending into the scopes they
+/// open
+fn global_declarations(body: &[Stmt], out: &mut BTreeSet<String>) {
+    for stmt in body {
+        if let Stmt::Global(node) = stmt {
+            out.extend(node.names.iter().map(ToString::to_string));
+        } else {
+            let mut blocks = Vec::new();
+            push_blocks(stmt, &mut blocks);
+            for block in blocks {
+                global_declarations(block, out);
+            }
+        }
+    }
 }
 
 /// a block that runs at module scope (an `if`, a `try`, a loop, a `case`) binds what the
@@ -989,12 +1058,65 @@ pub(crate) fn defines(name: &str) -> bool {
     index().contains_key(name)
 }
 
-/// the definitions `helpers` need, as preamble entries for a module that has
-/// nowhere to import them from
-pub(crate) fn inline(helpers: impl IntoIterator<Item = Helper>) -> Vec<String> {
-    closure(helpers)
+/// the definitions `helpers` need, as preamble entries for a module that has nowhere to
+/// import them from, whose top-level statements are `module` and whose names `written`
+/// holds
+///
+/// a definition pasted into a module reads the builtins through the module's globals,
+/// so a builtin the module binds at its top level for itself is read under the name a
+/// lowering reads it by ([`WrittenNames::builtin`]), which the caller imports from
+/// `builtins` ([`WrittenNames::builtin_imports`]). a star import may bind any of them,
+/// so it counts as binding each
+///
+/// [`WrittenNames::builtin`]: crate::transforms::repeated_underscore::WrittenNames::builtin
+/// [`WrittenNames::builtin_imports`]: crate::transforms::repeated_underscore::WrittenNames::builtin_imports
+pub(crate) fn inline(
+    helpers: impl IntoIterator<Item = Helper>,
+    module: &[Stmt],
+    written: crate::transforms::repeated_underscore::WrittenNames,
+) -> Vec<String> {
+    let definitions = closure(helpers);
+    let read: BTreeSet<&str> = definitions
+        .iter()
+        .flat_map(|definition| &definition.builtin_reads)
+        .map(|(_, name)| name.as_str())
+        .collect();
+    let bound = if read.is_empty() {
+        Bindings::new()
+    } else {
+        let mut bound = Bindings::new();
+        for stmt in module {
+            for (name, range) in module_bindings(stmt) {
+                record(&mut bound, name, range);
+            }
+        }
+        bound
+    };
+    let renamed: BTreeMap<&str, String> = read
         .into_iter()
-        .map(|definition| definition.source.clone())
+        .filter(|name| bound.contains_key(*name) || bound.contains_key("*"))
+        .map(|name| (name, written.builtin(name)))
+        .filter(|(name, local)| name != local)
+        .collect();
+
+    definitions
+        .into_iter()
+        .map(|definition| {
+            let mut source = definition.source.clone();
+            let mut reads: Vec<&(TextRange, String)> = definition
+                .builtin_reads
+                .iter()
+                .filter(|(_, name)| renamed.contains_key(name.as_str()))
+                .collect();
+            reads.sort_by_key(|(range, _)| std::cmp::Reverse(range.start()));
+            for (range, name) in reads {
+                source.replace_range(
+                    std::ops::Range::<usize>::from(*range),
+                    &renamed[name.as_str()],
+                );
+            }
+            source
+        })
         .collect()
 }
 
@@ -1076,7 +1198,12 @@ mod tests {
     /// the class it patches, or the proxy is left with no operators at all
     #[test]
     fn set_up_code_travels_with_its_definition() {
-        let pasted = inline([LAZY_ATTR]).concat();
+        let pasted = inline(
+            [LAZY_ATTR],
+            &[],
+            crate::transforms::repeated_underscore::WrittenNames::new(""),
+        )
+        .concat();
         assert!(pasted.contains("class _LazyAttr:"), "{pasted}");
         assert!(
             pasted.contains("_by_forward_operators(_LazyAttr)"),
@@ -1091,7 +1218,12 @@ mod tests {
     /// runs on 3.9 — so each carries the suppression the decorator would have been
     #[test]
     fn the_proxies_overrides_do_not_report_in_the_emitted_python() {
-        let pasted = inline([LAZY_ATTR]).concat();
+        let pasted = inline(
+            [LAZY_ATTR],
+            &[],
+            crate::transforms::repeated_underscore::WrittenNames::new(""),
+        )
+        .concat();
         for member in ["__class__", "__setattr__", "__delattr__"] {
             let line = pasted
                 .lines()
@@ -1102,5 +1234,108 @@ mod tests {
                 "`{member}` lost its suppression: {line}"
             );
         }
+    }
+
+    /// the reads a pasted definition renames are the names python itself looks up in the
+    /// module's globals: its compiler's symbol table answers the same question, so the two
+    /// are held to agree over the whole runtime. with no python to ask, there is nothing
+    /// to compare against
+    #[test]
+    fn the_global_reads_are_the_ones_python_finds() {
+        const SYMTABLE: &str = r#"
+import symtable, sys
+table = symtable.symtable(sys.stdin.read(), "_by_runtime.py", "exec")
+defined = {s.get_name() for s in table.get_symbols() if s.is_assigned() or s.is_imported() or s.is_namespace()}
+found = set()
+def walk(scope):
+    for symbol in scope.get_symbols():
+        global_read = symbol.is_global() and not symbol.is_declared_global() if scope.get_type() != "module" else True
+        if global_read and symbol.is_referenced() and symbol.get_name() not in defined:
+            found.add(symbol.get_name())
+    for child in scope.get_children():
+        walk(child)
+walk(table)
+print(" ".join(sorted(found)))
+"#;
+        let Ok(mut child) = std::process::Command::new("python3")
+            .args(["-c", SYMTABLE])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            return;
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            std::io::Write::write_all(&mut stdin, SOURCE.as_bytes()).expect("write the runtime");
+        }
+        let output = child.wait_with_output().expect("run python");
+        assert!(output.status.success(), "{output:?}");
+        let python: BTreeSet<String> = String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect();
+        let ours: BTreeSet<String> = index()
+            .values()
+            .flat_map(|definition| &definition.builtin_reads)
+            .map(|(_, name)| name.clone())
+            .collect();
+        assert_eq!(ours, python);
+    }
+
+    /// a module that binds a builtin at its top level for itself has the pasted definitions
+    /// read that builtin under the name a lowering would, and a module that binds it only
+    /// in a function of its own leaves them reading it as written
+    #[test]
+    fn a_pasted_definition_reads_a_builtin_the_module_binds_under_its_own_name() {
+        let module = "def getattr(o, n): return 42\ndef f(format): return format\n";
+        let parsed = ruff_python_parser::parse_unchecked_source(
+            module,
+            ruff_python_ast::PySourceType::Python,
+        );
+        let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
+        let written =
+            crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
+        let pasted = inline([LAZY_ATTR], parsed.suite(), written).concat();
+        assert!(
+            pasted.contains("v = getattr2(m, self._by_attr)") && !pasted.contains("getattr(m,"),
+            "{pasted}"
+        );
+        assert!(
+            pasted.contains("lambda s, f: format(s._by_resolve(), f)"),
+            "{pasted}"
+        );
+    }
+
+    /// a function or class that declares a builtin's name `global` and binds it rebinds the
+    /// module's, at any depth, which the pasted definitions would then read
+    #[test]
+    fn a_pasted_definition_reads_a_builtin_a_global_declaration_rebinds_under_its_own_name() {
+        let module = concat!(
+            "def outer():\n",
+            "    class C:\n",
+            "        def rebind(self):\n",
+            "            global getattr\n",
+            "            for getattr in [len]:\n",
+            "                pass\n",
+            "def local():\n",
+            "    format = 1\n",
+        );
+        let parsed = ruff_python_parser::parse_unchecked_source(
+            module,
+            ruff_python_ast::PySourceType::Python,
+        );
+        let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
+        let written =
+            crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
+        let pasted = inline([LAZY_ATTR], parsed.suite(), written).concat();
+        assert!(
+            pasted.contains("v = getattr2(m, self._by_attr)") && !pasted.contains("getattr(m,"),
+            "{pasted}"
+        );
+        // a local binding leaves the module's alone
+        assert!(
+            pasted.contains("lambda s, f: format(s._by_resolve(), f)"),
+            "{pasted}"
+        );
     }
 }

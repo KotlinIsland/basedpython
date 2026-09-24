@@ -18,7 +18,8 @@
 //!   - relative imports (`from .pkg import x`)
 //!   - `import a.b` without an alias (binds the top package, which
 //!     `LazyLoader` does not register)
-//!   - bootstrap modules (`sys`, `importlib*`) — the helpers depend on them
+//!   - bootstrap modules (`sys`, `importlib*`) — the helpers depend on them — and
+//!     `builtins`, which is loaded before any module runs
 //!
 //! A multi-name `import a, b` mixing the two is split, keeping a plain import
 //! for the names that stay eager.
@@ -154,8 +155,12 @@ impl<'src> LazyImport<'src> {
         self.eager.iter().any(|module| module == name)
     }
 
+    /// a module the polyfill leaves eager. the helpers run on `sys` and `importlib`, and
+    /// `builtins` is loaded before any module runs, so deferring it defers nothing — while
+    /// its proxy would stand where a lowering reads a builtin under a name of its own, and
+    /// fail an identity test such as `type(x) is str2`
     fn is_bootstrap(name: &str) -> bool {
-        matches!(name, "sys" | "importlib") || name.starts_with("importlib.")
+        matches!(name, "sys" | "importlib" | "builtins") || name.starts_with("importlib.")
     }
 
     fn process_import(&mut self, node: &StmtImport) {
@@ -955,6 +960,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, "import sys\n");
+    }
+
+    /// a builtin read under a name of its own is the builtin itself, which an identity test
+    /// against it — the class guard of a literal's type test — needs
+    #[test]
+    fn polyfill_builtins_import_unchanged() {
+        let out = transpile(
+            "class str:\n    pass\n\ndef f(a: object) -> bool:\n    return a is \"x\"\n",
+            &Config {
+                lazy_imports: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.starts_with("from builtins import str as str2\n")
+                && out.contains("return (type(a) is str2 and a == \"x\")"),
+            "{out}"
+        );
     }
 
     #[test]

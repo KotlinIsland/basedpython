@@ -1237,6 +1237,25 @@ pub fn return_guards(function: &ast::StmtFunctionDef) -> Option<Vec<ReturnGuard<
         return terms.into_iter().map(asserted_guard).collect();
     }
 
+    predicate_guard(returns).map(|guard| vec![guard])
+}
+
+/// basedpython: the name a callable type's parameter is labelled with: `x` of `x: int`,
+/// `*args: int` and `**kwargs: int`. A bare type labels nothing.
+pub fn callable_parameter_label(argument: &Expr) -> Option<&Name> {
+    let Expr::Named(named) = argument else {
+        return None;
+    };
+    let mut target = named.target.as_ref();
+    while let Expr::Starred(starred) = target {
+        target = &starred.value;
+    }
+    target.as_name_expr().map(|name| &name.id)
+}
+
+/// basedpython: the narrowing predicate a return type spells, `place is T` — a function's
+/// return annotation, or the return of a callable type, `(x: object) -> (x is int)`.
+pub fn predicate_guard(returns: &Expr) -> Option<ReturnGuard<'_>> {
     let Expr::Compare(compare) = returns else {
         return None;
     };
@@ -1246,10 +1265,27 @@ pub fn return_guards(function: &ast::StmtFunctionDef) -> Option<Vec<ReturnGuard<
     let [ty] = &*compare.comparators else {
         return None;
     };
-    Some(vec![ReturnGuard {
+    Some(ReturnGuard {
         place: &compare.left,
         form: ReturnGuardForm::Predicate { ty },
-    }])
+    })
+}
+
+/// basedpython: the comparison of an annotation that negates a narrowing predicate,
+/// `-> a is not T`.
+///
+/// A predicate lowers to `TypeIs[T]`, which narrows its argument to `T` where the call returns
+/// true and away from `T` where it returns false. Python's typing has no form that narrows the
+/// other way round, so a negated predicate has no meaning to lower to, and the checker and the
+/// transpiler both refuse one. `-> asserts a is not T` is a different annotation, and allowed.
+pub fn negated_narrowing_predicate(annotation: &Expr) -> Option<&ast::ExprCompare> {
+    let Expr::Compare(compare) = annotation else {
+        return None;
+    };
+    (matches!(&*compare.ops, [ast::CmpOp::IsNot])
+        && compare.comparators.len() == 1
+        && is_guard_place(&compare.left))
+    .then_some(compare)
 }
 
 /// One term of an `asserts` annotation: a place, a negated place, or a place tested with `is`.

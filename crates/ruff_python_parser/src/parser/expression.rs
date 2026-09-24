@@ -2356,6 +2356,7 @@ impl<'src> Parser<'src> {
             }
         }
         record_identity(&mut identity_ops, 0, self.at_identity_operator(op));
+        let mut at_type_test = self.at_type_test(op);
         self.bump_cmp_op(op);
 
         let comparators_snapshot = self.expr_scratch.snapshot();
@@ -2366,13 +2367,15 @@ impl<'src> Parser<'src> {
         loop {
             progress.assert_progressing(self);
 
-            let comparator = self
-                .parse_binary_expression_or_higher(
-                    OperatorPrecedence::ComparisonsMembershipIdentity,
-                    context,
-                )
-                .expr;
-            self.expr_scratch.push(comparator);
+            let comparator_start = self.node_start();
+            let mut comparator = self.parse_binary_expression_or_higher(
+                OperatorPrecedence::ComparisonsMembershipIdentity,
+                context,
+            );
+            if at_type_test {
+                comparator = self.parse_type_test_optional(comparator, comparator_start, context);
+            }
+            self.expr_scratch.push(comparator.expr);
 
             let next_token = self.current_token_kind();
             if matches!(next_token, TokenKind::In) && context.is_in_excluded() {
@@ -2390,6 +2393,7 @@ impl<'src> Parser<'src> {
                 operators.len(),
                 self.at_identity_operator(next_op),
             );
+            at_type_test = self.at_type_test(next_op);
             self.bump_cmp_op(next_op);
             operators.push(next_op);
         }
@@ -2423,6 +2427,101 @@ impl<'src> Parser<'src> {
             identity_ops: ast::IdentityOperators::into_stored(identity_ops, operator_count),
             range,
             node_index: AtomicNodeIndex::NONE,
+        }
+    }
+
+    /// basedpython: whether the comparison operator the parser is positioned at
+    /// is a type test — `is` or `is not` written as keywords, whose right-hand side
+    /// is a type
+    fn at_type_test(&self, op: CmpOp) -> bool {
+        self.options.is_basedpython
+            && matches!(op, CmpOp::Is | CmpOp::IsNot)
+            && !self.at_identity_operator(op)
+    }
+
+    /// basedpython: the `?` and `??` optional markers written after a type test's
+    /// type, and the rest of the type after them. they belong to the type, so
+    /// `x is int?` tests for `int | None`, and `x is str? | int` for what the
+    /// annotation `str? | int` means
+    ///
+    /// everywhere else `?` binds looser than a comparison — it takes a whole union
+    /// as its operand — so without this the marker would wrap the comparison
+    /// instead, as `(x is int)?`, which is not a type at all. the same goes for a
+    /// `?` followed by an expression, the result form `T ? E`: `x is int ? E` tests
+    /// for `int ? E`. its error type ends where the type test's type would, so
+    /// `x is int ? E and y` is still a type test joined to `y`. a `??` followed by
+    /// an expression is the none-coalescing operator, and is left to the caller
+    fn parse_type_test_optional(
+        &mut self,
+        mut target: ParsedExpr,
+        start: TextSize,
+        context: ExpressionContext,
+    ) -> ParsedExpr {
+        loop {
+            if self.at(TokenKind::Question)
+                && self.options.mode != Mode::Ipython
+                && (EXPR_SET.contains(self.peek())
+                    || self.peek().is_soft_keyword()
+                    || self.peek() == TokenKind::At)
+            {
+                self.bump(TokenKind::Question);
+                let error = self.parse_binary_expression_or_higher(
+                    OperatorPrecedence::ComparisonsMembershipIdentity,
+                    context,
+                );
+                target = ParsedExpr {
+                    expr: Expr::BinOp(ast::ExprBinOp {
+                        left: Box::new(target.expr),
+                        op: ast::Operator::Result,
+                        right: Box::new(error.expr),
+                        range: self.node_range(start),
+                        node_index: AtomicNodeIndex::NONE,
+                    }),
+                    is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
+                };
+                continue;
+            }
+            let layers = match self.current_token_kind() {
+                TokenKind::Question
+                    if !(EXPR_SET.contains(self.peek())
+                        || self.peek().is_soft_keyword()
+                        || self.peek() == TokenKind::At) =>
+                {
+                    1
+                }
+                TokenKind::DoubleQuestion
+                    if !(EXPR_SET.contains(self.peek())
+                        || self.peek().is_soft_keyword()
+                        || starts_statement_expression(self.peek())) =>
+                {
+                    2
+                }
+                _ => return target,
+            };
+            if self.options.mode == Mode::Ipython {
+                return target;
+            }
+            self.bump(self.current_token_kind());
+            let mut wrapped = target.expr;
+            for _ in 0..layers {
+                wrapped = Expr::UnaryOp(ast::ExprUnaryOp {
+                    op: ast::UnaryOp::Optional,
+                    operand: Box::new(wrapped),
+                    range: self.node_range(start),
+                    node_index: AtomicNodeIndex::NONE,
+                });
+            }
+            target = self.parse_binary_expression_or_higher_recursive(
+                ParsedExpr {
+                    expr: wrapped,
+                    is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
+                },
+                OperatorPrecedence::ComparisonsMembershipIdentity,
+                context,
+                start,
+            );
         }
     }
 

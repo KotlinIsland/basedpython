@@ -13,7 +13,7 @@ test-group = 'serial'
 # on, or that it found none and ran nothing, and a passing test's output is
 # otherwise hidden, so a skip would read as a pass
 [[profile.default.overrides]]
-filter = 'binary(polyfill_runtime) | binary(grapheme_runtime) | binary(conversion_runtime) | binary(lazy_import_runtime) | binary(fstring_debug_runtime) | binary(tstring_expression_runtime) | binary(visibility_runtime) | binary(data_class_runtime) | binary(builtin_names_runtime)'
+filter = 'binary(polyfill_runtime) | binary(grapheme_runtime) | binary(conversion_runtime) | binary(lazy_import_runtime) | binary(fstring_debug_runtime) | binary(tstring_expression_runtime) | binary(visibility_runtime) | binary(data_class_runtime) | binary(builtin_names_runtime) | binary(inferred_annotation_runtime) | binary(forward_reference_runtime) | binary(imported_extension_runtime) | binary(imported_conversion_class_runtime)'
 success-output = "final"
 
 [profile.ci]

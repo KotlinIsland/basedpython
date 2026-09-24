@@ -28,9 +28,8 @@
 //! ahead of everything the module defines, so an unquoted annotation naming a
 //! later class would be evaluated at class-body time and `NameError`
 
-use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use std::collections::HashMap;
 
@@ -57,12 +56,9 @@ struct Shape {
 }
 
 impl Shape {
-    fn class_name(&self) -> String {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        #[expect(clippy::cast_possible_truncation)]
-        let truncated = hasher.finish() as u32;
-        format!("_Protocol_{truncated:08x}")
+    /// the name of the class declaring this shape, one the module has no other use of
+    fn class_name(&self, written: WrittenNames) -> String {
+        written.synthesized_class("_Protocol_", self)
     }
 
     /// the class declaring this shape as `name`, `typing.Protocol` written as `protocol`
@@ -192,7 +188,7 @@ impl<'src> ProtocolTypeLowering<'src> {
             // a protocol method's receiver is its `self` parameter, never an implicit one
             None,
         );
-        let returns = self.callable.lower_type_expr(&signature.returns);
+        let returns = self.callable.render_return(signature);
         let line = format!(
             "def {name}({params}) -> {returns}: ...",
             name = method.name.id,
@@ -245,7 +241,7 @@ impl<'src> ProtocolTypeLowering<'src> {
         let name = if let Some(existing) = self.shapes.get(&shape) {
             existing.clone()
         } else {
-            let name = shape.class_name();
+            let name = shape.class_name(self.written);
             self.shapes.insert(shape, name.clone());
             name
         };
@@ -441,7 +437,7 @@ pub(crate) fn cleanup(
     let (imports, helpers) = inner.callable.take_requirements();
     for line in imports
         .into_iter()
-        .chain(crate::runtime_entries(config, &helpers))
+        .chain(crate::runtime_entries(config, &helpers, source))
     {
         push_missing(&mut preamble, line.trim_end_matches('\n'));
     }

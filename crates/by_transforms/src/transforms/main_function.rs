@@ -54,7 +54,10 @@ impl AstPass for MainFunction<'_> {
         }
 
         ctx.epilogue.push("if __name__ == \"__main__\":".to_owned());
-        let spec: Vec<String> = entry.exposed().map(EntryParameter::spec_entry).collect();
+        let spec: Vec<String> = entry
+            .exposed()
+            .map(|parameter| parameter.spec_entry(self.written))
+            .collect();
         let extra = entry.extra_arguments;
         let call = if spec.is_empty() && extra.is_none() {
             "main()".to_owned()
@@ -66,7 +69,7 @@ impl AstPass for MainFunction<'_> {
                 ctx.epilogue.push(format!("        {entry},"));
             }
             let close = match extra {
-                Some(converter) => format!("    ], {converter})"),
+                Some(converter) => format!("    ], {})", converter.spelled(self.written)),
                 None => "    ])".to_owned(),
             };
             ctx.epilogue.push(close);
@@ -105,7 +108,7 @@ pub struct EntryPoint<'a> {
     pub parameters: Vec<EntryParameter<'a>>,
     /// the converter for the arguments the interface does not claim, when a
     /// leading `*rest` asks for them — see `extra_arguments_converter`
-    pub extra_arguments: Option<&'static str>,
+    pub extra_arguments: Option<Converter>,
 }
 
 impl EntryPoint<'_> {
@@ -216,10 +219,15 @@ impl EntryParameter<'_> {
 
     /// the `(name, converter, kind, required, choices)` tuple `_by_main_args`
     /// consumes; only an exposed parameter has one
-    fn spec_entry(&self) -> String {
+    fn spec_entry(&self, written: WrittenNames) -> String {
         let (converter, choices) = match &self.spelling {
-            Some(spelling) => (spelling.converter.unwrap_or("None"), &spelling.choices),
-            None => ("None", &None),
+            Some(spelling) => (
+                spelling
+                    .converter
+                    .map_or_else(|| "None".to_owned(), |converter| converter.spelled(written)),
+                &spelling.choices,
+            ),
+            None => ("None".to_owned(), &None),
         };
         let required = if self.is_required() { "True" } else { "False" };
         let name = self.name();
@@ -244,7 +252,7 @@ impl EntryParameter<'_> {
 pub struct CliSpelling {
     /// the callable that converts the argument, as the source names it; `None`
     /// for a `--name` / `--no-name` flag pair, which takes no value
-    pub converter: Option<&'static str>,
+    pub converter: Option<Converter>,
     /// the values the annotation admits, when it is a literal union — argparse
     /// rejects anything else before `main` runs
     pub choices: Option<Vec<Choice>>,
@@ -333,10 +341,36 @@ fn parameters<'a>(params: &'a Parameters, written: WrittenNames) -> Vec<EntryPar
 
 /// how a `main` parameter is spelled on the command line
 enum CliType {
-    /// takes a value, converted by the named callable
-    Value(&'static str),
+    /// takes a value, converted by the callable
+    Value(Converter),
     /// a `--name` / `--no-name` flag pair
     Flag,
+}
+
+/// the callable a command-line value is converted by
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Converter {
+    /// the name the annotation is written with, which reads whatever the module binds it to
+    Written(&'static str),
+    /// a builtin the lowering chose for a literal's values, or for arguments nothing
+    /// annotates, which is read as the builtin whatever the module binds under its name
+    Builtin(&'static str),
+}
+
+impl Converter {
+    /// the callable's name as the command line reads it
+    pub fn name(self) -> &'static str {
+        match self {
+            Converter::Written(name) | Converter::Builtin(name) => name,
+        }
+    }
+
+    fn spelled(self, written: WrittenNames) -> String {
+        match self {
+            Converter::Written(name) => name.to_owned(),
+            Converter::Builtin(name) => written.builtin(name),
+        }
+    }
 }
 
 /// The command-line spelling of an annotation — its converter and, for a
@@ -350,17 +384,17 @@ fn cli_type(annotation: &Expr) -> Option<(CliType, Option<Vec<Choice>>)> {
         Expr::Name(name) => {
             let ty = match name.id.as_str() {
                 "bool" => CliType::Flag,
-                "str" => CliType::Value("str"),
-                "int" => CliType::Value("int"),
-                "float" => CliType::Value("float"),
-                "Path" => CliType::Value("Path"),
+                "str" => CliType::Value(Converter::Written("str")),
+                "int" => CliType::Value(Converter::Written("int")),
+                "float" => CliType::Value(Converter::Written("float")),
+                "Path" => CliType::Value(Converter::Written("Path")),
                 _ => return None,
             };
             Some((ty, None))
         }
         Expr::Attribute(attr) => (attr.attr.as_str() == "Path"
             && matches!(&*attr.value, Expr::Name(name) if name.id.as_str() == "pathlib"))
-        .then_some((CliType::Value("pathlib.Path"), None)),
+        .then_some((CliType::Value(Converter::Written("pathlib.Path")), None)),
         // `T?` — an absent argument is what the `None` stands for, so the
         // spelling is `T`'s
         Expr::UnaryOp(unary) if matches!(unary.op, ast::UnaryOp::Optional) => {
@@ -393,7 +427,10 @@ fn cli_type(annotation: &Expr) -> Option<(CliType, Option<Vec<Choice>>)> {
                 // `T | None` — the `None` is what leaving the argument out means
                 (Some(spelling), None) => Some(spelling),
                 // every operand a literal of one kind: the values it admits
-                (None, Some(converter)) => Some((CliType::Value(converter), Some(literals))),
+                (None, Some(converter)) => Some((
+                    CliType::Value(Converter::Builtin(converter)),
+                    Some(literals),
+                )),
                 // a named type beside a literal (`int | "a"`) admits neither the
                 // type's values nor the literal's, so nothing on the command
                 // line could satisfy both. nothing but `None`s says nothing
@@ -412,7 +449,10 @@ fn cli_type(annotation: &Expr) -> Option<(CliType, Option<Vec<Choice>>)> {
                 }
                 literals.push(rendered);
             }
-            Some((CliType::Value(converter?), Some(literals)))
+            Some((
+                CliType::Value(Converter::Builtin(converter?)),
+                Some(literals),
+            ))
         }
         _ => None,
     }
@@ -431,13 +471,13 @@ fn cli_type(annotation: &Expr) -> Option<(CliType, Option<Vec<Choice>>)> {
 /// vararg's annotation converts them, exactly as a declared parameter's does.
 /// An annotation with no command-line spelling has nothing to convert with, and
 /// the vararg goes back to being one nothing fills.
-fn extra_arguments_converter(params: &Parameters) -> Option<&'static str> {
+fn extra_arguments_converter(params: &Parameters) -> Option<Converter> {
     let vararg = params.vararg.as_ref()?;
     if !(params.posonlyargs.is_empty() && params.args.is_empty()) {
         return None;
     }
     match vararg.annotation.as_deref() {
-        None => Some("str"),
+        None => Some(Converter::Builtin("str")),
         Some(annotation) => match cli_type(annotation) {
             Some((CliType::Value(converter), None)) => Some(converter),
             // a flag is not a value, and a literal union's `choices` have no
@@ -875,6 +915,28 @@ mod tests {
         "});
         assert!(
             out.contains("(\"mode\", str, \"any\", False, (\"fast\", \"slow\",)),"),
+            "got:\n{out}"
+        );
+    }
+
+    /// the converter for a literal's values is the lowering's choice, not a name the
+    /// source wrote, so it is the builtin even where the module binds the name itself
+    #[test]
+    fn a_literal_union_converts_with_the_builtin_the_module_shadows() {
+        let out = transpile(
+            indoc! {"
+                def str(o: object) -> int:
+                    return 7
+
+                def main(mode: \"fast\" | \"slow\" = \"fast\"):
+                    pass
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.starts_with("from builtins import str as str2\n")
+                && out.contains("(\"mode\", str2, \"any\", False, (\"fast\", \"slow\",)),"),
             "got:\n{out}"
         );
     }

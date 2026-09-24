@@ -340,9 +340,10 @@ Override().f()
 
 ## an override of a method whose `_`s are numbered
 
-A base that repeats `_` numbers its own, and an override takes those names and kinds as it takes any
-other. The first is `_` in both, so a read of `_` in the override's body is its first parameter, as
-it is in any definition that repeats `_`:
+A base that repeats `_` numbers its own. The first is `_` in the base, and the override's `_` in
+that position takes that name as it takes any other, so a read of `_` in the override's body is its
+first parameter, as it is in any definition that repeats `_`. The numbered ones are positional-only,
+so no call passes one by name, and the override numbers its own there:
 
 ```by
 class Base:
@@ -368,6 +369,36 @@ class Variadic(Base):
 reveal_type(Variadic.f)  # revealed: def f(self, _: int, _: int, /, *_: int) -> int
 
 assert Variadic().f(1, 2, 3) == 20
+```
+
+## a name the base numbered is the override's to number
+
+The name the base's lowering gives a `_` is no name a caller passes, so the override does not take
+it. Its own `_` there is numbered clear of the names its module spells, which include every name its
+body reads:
+
+`base.by`:
+
+```by
+class Base:
+    def f(self, _: int, _: int) -> int:
+        return 1
+```
+
+`main.by`:
+
+```by
+from base import Base
+
+_2 = 5
+
+class Override(Base):
+    override def f(self, _: int, _: int) -> int:
+        return _2  # error: [used-underscore-name]
+
+reveal_type(Override.f)  # revealed: def f(self, _: int, _: int, /) -> int
+
+assert Override().f(1, 2) == 5
 ```
 
 ## an override of an override

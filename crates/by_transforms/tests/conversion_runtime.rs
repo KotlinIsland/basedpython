@@ -18,7 +18,7 @@
 
 use std::process::Command;
 
-use by_transforms::{Config, PythonVersion, transpile};
+use by_transforms::{Config, PythonVersion, transpile_analysed_at};
 
 mod interpreters;
 
@@ -247,8 +247,9 @@ assert c["x"] == 1
 print("ok")
 "#;
 
-/// transpile `program` for `min_version` and run it on the oldest interpreter found of that
-/// version or later that `probe` runs on, asserting it exits cleanly
+/// transpile `program` for `min_version`, analysed at that version as a project requiring it
+/// is, and run it on the oldest interpreter found of that version or later that `probe` runs
+/// on, asserting it exits cleanly
 fn run_transpiled(program: &str, min_version: PythonVersion, probe: &str, needs: &str) {
     let Some(interpreter) = interpreters::oldest(min_version, probe, needs) else {
         return;
@@ -257,7 +258,8 @@ fn run_transpiled(program: &str, min_version: PythonVersion, probe: &str, needs:
         min_version,
         ..Config::default()
     };
-    let transpiled = transpile(program, &config).expect("transpile should succeed");
+    let transpiled =
+        transpile_analysed_at(program, &config, min_version).expect("transpile should succeed");
 
     let output = Command::new(&interpreter.command)
         .arg("-c")
@@ -285,8 +287,6 @@ fn frozen_displays_run_correctly() {
 }
 
 #[test]
-#[ignore = "`transpile` analyses a module at ty's newest python, 3.14, where `frozendict` is no \
-            builtin, so no conversion is written; `by transpile` in a 3.15 project writes it"]
 fn frozendict_displays_run_correctly() {
     run_transpiled(
         FROZENDICT_PROGRAM,

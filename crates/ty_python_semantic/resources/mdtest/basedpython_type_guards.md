@@ -798,6 +798,239 @@ def f(a: object):
     reveal_type(ok)  # revealed: TypeIs[str @ a]
 ```
 
+## a callable type narrows what its predicate names
+
+A callable type returns a predicate the way a `def` does, parenthesized: its return binds tighter
+than a comparison. Calling a value of the type narrows the argument matched to the parameter the
+predicate names, and a `def` whose predicate names the same parameter is such a callable.
+
+```by
+def f(check: (first: object, second: object) -> (second is int), a: int | str, b: int | str):
+    if check(a, b):
+        reveal_type(a)  # revealed: int | str
+        reveal_type(b)  # revealed: int
+    else:
+        reveal_type(b)  # revealed: str
+
+def is_int(first: object, second: object) -> second is int:
+    return isinstance(second, int)
+
+f(is_int, 1, "b")
+```
+
+## a callable type's predicate can name a place
+
+A name that is not one of the callable's parameters is a place, narrowed where the call is written,
+as it is for a `def`.
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+
+def f(check: (x: object) -> (a is int)):
+    if check(1):
+        reveal_type(a)  # revealed: int
+```
+
+## a callable narrowing another parameter is not such a callable
+
+<!-- snapshot-diagnostics -->
+
+A caller narrows the argument the expected callable type names, so a function that tests a different
+one would have it narrow an argument nothing was checked about. The two have to name the same
+parameter, not just the same type.
+
+```by
+def want_second(check: (first: object, second: object) -> (second is int)): ...
+
+def is_int_first(first: object, second: object) -> first is int:
+    return isinstance(first, int)
+
+def is_int_second(first: object, second: object) -> second is int:
+    return isinstance(second, int)
+
+want_second(is_int_second)
+# error: [invalid-argument-type]
+want_second(is_int_first)
+```
+
+A callable type is held to the same rule, in both directions.
+
+```by
+def want_first(check: (first: object, second: object) -> (first is int)): ...
+
+def f(second_checker: (first: object, second: object) -> (second is int)):
+    want_second(second_checker)
+    # error: [invalid-argument-type]
+    want_first(second_checker)
+```
+
+## a parameter a caller passes by keyword is matched by name
+
+A keyword-only parameter is reached only by its name, so the function has to narrow the parameter of
+that name, wherever it is declared.
+
+```by
+def want_key(check: (*, key: object, other: object) -> (key is int)): ...
+
+def by_key(*, other: object, key: object) -> key is int:
+    return isinstance(key, int)
+
+def by_other(*, other: object, key: object) -> other is int:
+    return isinstance(other, int)
+
+want_key(by_key)
+# error: [invalid-argument-type]
+want_key(by_other)
+```
+
+## a `TypeIs` that names no parameter narrows the first
+
+PEP 742 narrows the first positional parameter, so that is the parameter such a function is matched
+on.
+
+```by
+from typing_extensions import TypeIs
+
+def want_first(check: (first: object, second: object) -> (first is int)): ...
+def want_second(check: (first: object, second: object) -> (second is int)): ...
+
+def is_int(first: object, second: object) -> TypeIs[int]:
+    return isinstance(first, int)
+
+want_first(is_int)
+# error: [invalid-argument-type]
+want_second(is_int)
+```
+
+## a `Callable` narrows the first argument
+
+A `Callable` has no parameter names, so what it narrows is the first argument a caller passes.
+
+```by
+from typing import Callable
+from typing_extensions import TypeIs
+
+def want_first_argument(check: Callable[[object, object], TypeIs[int]]): ...
+
+def is_int_first(first: object, second: object) -> first is int:
+    return isinstance(first, int)
+
+def is_int_second(first: object, second: object) -> second is int:
+    return isinstance(second, int)
+
+want_first_argument(is_int_first)
+# error: [invalid-argument-type]
+want_first_argument(is_int_second)
+```
+
+A method's `TypeIs` narrows the parameter after `self`, which a caller of the unbound method passes
+second.
+
+```by
+class Checker:
+    def is_int(self, value: object) -> TypeIs[int]:
+        return isinstance(value, int)
+
+def want_checker_first(check: Callable[[Checker, object], TypeIs[int]]): ...
+def want_value_first(check: Callable[[object], TypeIs[int]]): ...
+
+# error: [invalid-argument-type]
+want_checker_first(Checker.is_int)
+want_value_first(Checker().is_int)
+```
+
+## a function stored on a class narrows its receiver
+
+A plain function read off an instance is bound to it, so the parameter its `TypeIs` narrows is the
+receiver, not the first argument the call writes.
+
+```py
+from typing_extensions import TypeIs
+
+def is_int(first: object, second: object) -> TypeIs[int]:
+    return isinstance(first, int)
+
+class K:
+    check = is_int
+
+def f(v: int | str):
+    if K().check(v):
+        reveal_type(v)  # revealed: int | str
+```
+
+## a callable naming a place narrows that place
+
+```by
+def src() -> int | None:
+    return 1
+
+a = src()
+b = src()
+
+def on_a() -> a is int:
+    return a is not None
+
+def on_b() -> b is int:
+    return b is not None
+
+def want_a(check: () -> (a is int)): ...
+
+want_a(on_a)
+# error: [invalid-argument-type]
+want_a(on_b)
+```
+
+## an override narrows what the base narrows
+
+A call through the base narrows the argument the base names, so an override has to test the same
+one.
+
+```by
+from typing import override
+
+class Base:
+    def check(self, first: object, second: object) -> first is int:
+        return isinstance(first, int)
+
+class Sub(Base):
+    @override
+    # error: [invalid-method-override]
+    def check(self, first: object, second: object) -> second is int:
+        return isinstance(second, int)
+```
+
+## a callable type's predicate is parenthesized
+
+Unparenthesized, `is` takes the whole callable type.
+
+```by
+# error: [invalid-type-form] "`is` takes the whole callable type here: a callable type's return binds tighter than a comparison"
+def f(check: (x: object) -> x is int): ...
+```
+
+## a predicate cannot be negated
+
+A predicate is PEP 742 narrowing, which narrows to the type it names where the call is truthy.
+Nothing in Python's typing narrows to everything but a type there, so `-> x is not T` has no meaning
+to give it. `asserts x is not T` is allowed: an assertion removes a type once the call returns, and
+has no truthy side.
+
+```by
+# error: [invalid-type-form] "A narrowing predicate cannot be negated: `is not` would narrow to everything but the type, which `TypeIs` cannot express"
+def not_str(x: object) -> x is not str:
+    return not isinstance(x, str)
+```
+
+Nor can a callable type's.
+
+```by
+# error: [invalid-type-form] "A narrowing predicate cannot be negated: `is not` would narrow to everything but the type, which `TypeIs` cannot express"
+def f(check: (x: object) -> (x is not str)): ...
+```
+
 ## `asserts` must name a place
 
 ```by

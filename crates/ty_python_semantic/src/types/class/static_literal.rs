@@ -989,9 +989,13 @@ impl<'db> StaticClassLiteral<'db> {
                 .as_call_expr()
                 .map_or(&decorator.expression, |call| &call.func);
 
-            definition_expression_type(db, class_definition, decorator_callable)
-                .as_function_literal()
-                .is_some_and(|function| function.is_known(db, KnownFunction::Dataclass))
+            match definition_expression_type(db, class_definition, decorator_callable) {
+                Type::FunctionLiteral(function) => function.is_known(db, KnownFunction::Dataclass),
+                // `dataclass(...)` already applied to its options, as basedpython's `data
+                // class` keyword is
+                Type::DataclassDecorator(_) => true,
+                _ => false,
+            }
         })
     }
 
@@ -4587,6 +4591,17 @@ impl<'a> StatementVisitor<'a> for MemberVisibilityCollector {
                         self.members.insert(attribute.attr.id.clone(), visibility);
                     }
                     _ => {}
+                }
+            }
+            ast::Stmt::TypeAlias(alias) => {
+                if !self.in_method
+                    && alias.is_private
+                    && let ast::Expr::Name(name) = alias.name.as_ref()
+                {
+                    self.members.insert(
+                        name.id.clone(),
+                        ruff_python_ast::helpers::MemberVisibility::Private,
+                    );
                 }
             }
             // a compound statement's bodies are still the class's body

@@ -9357,6 +9357,7 @@ impl<'db> Type<'db> {
                 KnownInstanceType::WrappedOptional(ty) => {
                     Ok(Type::KnownInstance(KnownInstanceType::WrappedOptional(*ty)))
                 }
+                KnownInstanceType::WrappedOptionalClass(ty) => Ok(ty.inner(db)),
                 KnownInstanceType::TypeGenericAlias(instance) => {
                     // When `type[…]` appears in a value position (e.g. in an implicit type alias),
                     // we infer its argument as a type expression. This ensures that we can emit
@@ -11021,7 +11022,9 @@ impl<'db> Type<'db> {
                         );
                     }
                 }
-                KnownInstanceType::Annotated(ty) | KnownInstanceType::WrappedOptional(ty) => {
+                KnownInstanceType::Annotated(ty)
+                | KnownInstanceType::WrappedOptional(ty)
+                | KnownInstanceType::WrappedOptionalClass(ty) => {
                     ty.inner(db).find_legacy_typevars_impl(
                         db,
                         env,
