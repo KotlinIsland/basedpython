@@ -45,7 +45,7 @@ use crate::types::class::{ClassLiteral, ClassType, StaticClassLiteral};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::INVALID_CONFORMANCE;
 use crate::types::extensions::{
-    applicable_extensions, backing_function_name, extended_class, extension_applies,
+    applicable_extensions, backing_function_reference, extended_class, extension_applies,
     extensions_in_module, own_member,
 };
 use ty_module_resolver::ImportingFile;
@@ -257,11 +257,12 @@ pub(crate) fn is_conformable<'db>(db: &'db dyn Db, interface: ClassType<'db>) ->
 pub(crate) struct WitnessEntry {
     /// the requirement being satisfied
     pub(crate) member: String,
-    /// the module-level backing function that implements it
+    /// the name the module registering the table refers to the backing function that
+    /// implements it by
     pub(crate) function: String,
-    /// the module to import that function from, when it comes from an extension
-    /// declared elsewhere
-    pub(crate) import_from: Option<String>,
+    /// the import that binds the function under that name, when it comes from an
+    /// extension declared elsewhere
+    pub(crate) import: Option<super::conversions::ConversionImport>,
 }
 
 /// the witness table one conformance registers at runtime: every requirement an
@@ -288,20 +289,16 @@ pub(crate) fn witness_table<'db>(
         let Some(supplier) = supplier else {
             continue;
         };
-        let import_from = if supplier.file(db) == from_file {
-            None
-        } else {
-            match super::conversions::imported_module_spelling(db, from_file, supplier.file(db)) {
-                Some(module) => Some(module),
-                // the extension is not reachable from here; the checker has
-                // already declined to make the conformance applicable
-                None => continue,
-            }
+        // the extension is not reachable from here; the checker has already declined to
+        // make the conformance applicable
+        let Some((function, import)) = backing_function_reference(db, from_file, supplier, name)
+        else {
+            continue;
         };
         entries.push(WitnessEntry {
             member: name.to_owned(),
-            function: backing_function_name(db, supplier, name),
-            import_from,
+            function,
+            import,
         });
     }
     entries
@@ -365,7 +362,7 @@ pub struct ConformanceRegistration {
     /// `(requirement, the backing function that answers it)`, for every
     /// requirement an extension supplies
     pub entries: Vec<(String, String)>,
-    /// the `from <module> import <function>` lines those functions need
+    /// the `from <module> import <function>` statements those functions need
     pub imports: Vec<String>,
 }
 

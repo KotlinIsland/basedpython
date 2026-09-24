@@ -829,6 +829,118 @@ impl<'db> NarrowingGuard<'db> {
     }
 }
 
+/// basedpython: what a call narrows through a `TypeIs` / `TypeGuard` return, described by how
+/// the caller reaches it rather than by name, so that two signatures can be compared: a
+/// `def f(first, second) -> first is int` narrows a different argument than a
+/// `(first, second) -> (second is int)` does, whatever its return type says
+#[derive(Debug, PartialEq, Eq)]
+enum NarrowedArgument<'a> {
+    /// the argument a call passes for a parameter
+    Parameter {
+        /// where a positional argument lands on it, if one can
+        position: Option<usize>,
+        /// the keyword that reaches it, if one can
+        keyword: Option<&'a Name>,
+        /// whether it is the `**kwargs` that catches an unmatched keyword
+        keyword_variadic: bool,
+        members: &'a [Name],
+    },
+    /// the receiver a bound method was called on, which is not among its parameters
+    Receiver { members: &'a [Name] },
+    /// a place in the calling scope, which is not an argument at all
+    Place { name: &'a Name, members: &'a [Name] },
+    /// a signature with no parameter to narrow
+    Nothing,
+}
+
+impl<'a> NarrowedArgument<'a> {
+    fn of_parameter(index: usize, parameter: &'a Parameter<'_>, members: &'a [Name]) -> Self {
+        Self::Parameter {
+            position: (parameter.is_positional() || parameter.is_variadic()).then_some(index),
+            keyword: parameter.keyword_name(),
+            keyword_variadic: parameter.is_keyword_variadic(),
+            members,
+        }
+    }
+
+    /// whether a call made through a signature narrowing `self` narrows what `source`, the
+    /// signature actually called, tests: every way a caller can reach the argument `self` names
+    /// has to reach the one `source` names
+    fn is_narrowed_by(&self, source: &NarrowedArgument<'a>) -> bool {
+        match (self, source) {
+            (Self::Nothing, _) => true,
+            (
+                Self::Parameter {
+                    position,
+                    keyword,
+                    keyword_variadic,
+                    members,
+                },
+                Self::Parameter {
+                    position: source_position,
+                    keyword: source_keyword,
+                    keyword_variadic: source_keyword_variadic,
+                    members: source_members,
+                },
+            ) => {
+                position.is_none_or(|position| *source_position == Some(position))
+                    && keyword.is_none_or(|keyword| *source_keyword == Some(keyword))
+                    && (!keyword_variadic || *source_keyword_variadic)
+                    && members == source_members
+            }
+            (
+                Self::Receiver { members },
+                Self::Receiver {
+                    members: source_members,
+                },
+            ) => members == source_members,
+            (
+                Self::Place { name, members },
+                Self::Place {
+                    name: source_name,
+                    members: source_members,
+                },
+            ) => name == source_name && members == source_members,
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Display for NarrowedArgument<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let path = |root: &str, members: &[Name]| {
+            std::iter::once(root)
+                .chain(members.iter().map(Name::as_str))
+                .join(".")
+        };
+        match self {
+            Self::Parameter {
+                keyword: Some(keyword),
+                members,
+                ..
+            } => write!(f, "`{}`", path(keyword, members)),
+            Self::Parameter {
+                position: Some(position),
+                members,
+                ..
+            } => {
+                write!(f, "the argument in position {}", position + 1)?;
+                if !members.is_empty() {
+                    write!(f, " at `{}`", path("", members))?;
+                }
+                Ok(())
+            }
+            Self::Parameter { members, .. } => write!(f, "`{}`", path("**kwargs", members)),
+            Self::Receiver { members: [] } => f.write_str("the receiver"),
+            Self::Receiver { members } => {
+                write!(f, "the receiver at `{}`", path("", members))
+            }
+            Self::Place { name, members } => write!(f, "the place `{}`", path(name, members)),
+            Self::Nothing => f.write_str("nothing"),
+        }
+    }
+}
+
 /// Whether one callable signature's parameters are compatible with another's.
 pub(crate) enum ParameterConsistency<'db> {
     /// The parameters are compatible.
@@ -1084,6 +1196,70 @@ impl<'db> Signature<'db> {
             narrowing_guards,
             deferred_assertions: None,
         }
+    }
+
+    /// basedpython: names the parameter a `TypeIs` / `TypeGuard` return narrows when the
+    /// annotation names none: PEP 742's first positional parameter, after `self` / `cls` when
+    /// `skips_receiver`
+    ///
+    /// it is recorded as the guard `-> x is T` would have written, so a bound call, an unbound
+    /// call and a comparison with another signature all resolve it by name — once the receiver
+    /// is bound away, its position no longer says which parameter it was
+    pub(crate) fn name_implicitly_narrowed_parameter(&mut self, skips_receiver: bool) {
+        if !self.narrowing_guards.is_empty()
+            || !matches!(self.return_ty, Type::TypeIs(_) | Type::TypeGuard(_))
+        {
+            return;
+        }
+        let index = usize::from(skips_receiver);
+        let Some(name) = self
+            .parameters
+            .positional()
+            .nth(index)
+            .and_then(Parameter::name)
+        else {
+            return;
+        };
+        self.narrowing_guards = Box::new([NarrowingGuard {
+            name: name.clone(),
+            members: Box::default(),
+            root_is_first_parameter: index == 0,
+            kind: NarrowingGuardKind::Predicate,
+        }]);
+    }
+
+    /// basedpython: what a call narrows through this signature's `TypeIs` / `TypeGuard`
+    /// return, or `None` for any other return. a guard names it; without one, a call narrows
+    /// whatever it passes first, as the call site resolves it
+    fn narrowed_argument(&self) -> Option<NarrowedArgument<'_>> {
+        if !matches!(self.return_ty, Type::TypeIs(_) | Type::TypeGuard(_)) {
+            return None;
+        }
+        let Some(guard) = self.narrowing_guards.first() else {
+            return Some(match self.parameters.iter().next() {
+                Some(parameter) => NarrowedArgument::of_parameter(0, parameter, &[]),
+                None => NarrowedArgument::Nothing,
+            });
+        };
+        Some(
+            match self
+                .parameters
+                .iter()
+                .enumerate()
+                .find(|(_, parameter)| parameter.name() == Some(&guard.name))
+            {
+                Some((index, parameter)) => {
+                    NarrowedArgument::of_parameter(index, parameter, &guard.members)
+                }
+                None if guard.root_is_first_parameter => NarrowedArgument::Receiver {
+                    members: &guard.members,
+                },
+                None => NarrowedArgument::Place {
+                    name: &guard.name,
+                    members: &guard.members,
+                },
+            },
+        )
     }
 
     /// Returns the binding referenced by a direct `P.args` or `P.kwargs` variadic parameter.
@@ -3526,7 +3702,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         } else {
             self.check_type_pair(db, source.return_ty, target.return_ty)
         };
-        let return_type_checks = !result
+        let mut return_type_checks = !result
             .intersect(db, self.constraints, return_type_constraints)
             .is_never_satisfied(db, env);
         if let Some(context) = self.report_context()
@@ -3536,6 +3712,23 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 source: source.return_ty,
                 target: target.return_ty,
             });
+        }
+
+        // a `TypeIs` / `TypeGuard` is about one argument, so a caller narrowing the one `target`
+        // names relies on `source` testing that same one
+        if return_type_checks
+            && let Some(target_narrows) = target.narrowed_argument()
+            && let Some(source_narrows) = source.narrowed_argument()
+            && !target_narrows.is_narrowed_by(&source_narrows)
+        {
+            if let Some(context) = self.report_context() {
+                context.push(ErrorContext::NarrowsAnotherArgument {
+                    source: source_narrows.to_string(),
+                    target: target_narrows.to_string(),
+                });
+            }
+            result.intersect(db, self.constraints, self.never());
+            return_type_checks = false;
         }
 
         // basedpython: a variadic parameter that takes whole repetitions of several types,

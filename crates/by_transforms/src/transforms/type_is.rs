@@ -11,19 +11,18 @@
 //! traversal is delegated to [`type_expr_walker`] (with `types = None`): the
 //! `a is T` written in a *return guard* is what this rewrites, and the same
 //! pair written in a body is a type test that [`parametric_is`] lowers. this
-//! pass claims the guard first, so the two never rewrite the same span
+//! pass claims the guard first, so the two never rewrite the same span. the
+//! walker hands every other pass the `T` in the guard's place, as the type it
+//! is, so `TypeIs[...]` passes it through with everything they lower inside it
 
-use ruff_python_ast::helpers::{ReturnGuardForm, return_guards};
-use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{
-    AtomicNodeIndex, CmpOp, Expr, ExprContext, ExprName, ExprSubscript, ModModule, Stmt,
-    StmtFunctionDef, name::Name,
-};
+use ruff_python_ast::helpers::{ReturnGuardForm, negated_narrowing_predicate, return_guards};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
+use ruff_python_ast::{Expr, ExprCompare, ModModule, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use super::ast_driver::{AstPass, PassContext, render_expr};
+use super::ast_driver::{AstPass, Fragment, PassContext};
 use super::repeated_underscore::WrittenNames;
-use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping};
+use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 
 pub(crate) struct TypeIs<'src> {
     src: &'src str,
@@ -46,27 +45,28 @@ impl AstPass for TypeIs<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut state = State {
             type_is: self.written.imported("typing", "TypeIs"),
-            edits: Vec::new(),
+            templates: Vec::new(),
             needs_import: false,
         };
         let body: &[Stmt] = &module.body;
 
         // narrowing annotations that name a place python can't: an assertion guard, and a
         // predicate on something other than a parameter. both lower to what the function
-        // returns, and their ranges are claimed so the `TypeIs[T]` rewrite below skips them
+        // returns, and the type walk below skips them
         let mut guards = ReturnGuards {
             src: self.src,
             bool_: self.written.builtin("bool"),
             edits: Vec::new(),
-            claimed: Vec::new(),
+            errors: Vec::new(),
         };
         for stmt in body {
             guards.visit_stmt(stmt);
         }
-        state.edits.append(&mut guards.edits);
+        ctx.text_edits.append(&mut guards.edits);
+        ctx.errors.append(&mut guards.errors);
 
-        walk_type_positions_skipping(body, None, &guards.claimed, &mut state);
-        ctx.text_edits.extend(state.edits);
+        walk_type_positions(body, None, &mut state);
+        ctx.template_edits.extend(state.templates);
         if state.needs_import {
             // typing.TypeIs landed in 3.13 (PEP 742). on older runtimes the
             // typing_redirect pass switches the import to typing_extensions
@@ -79,8 +79,46 @@ impl AstPass for TypeIs<'_> {
 struct State {
     /// the name `typing.TypeIs` is written under
     type_is: String,
-    edits: Vec<(TextRange, String)>,
+    /// `TypeIs[T]` over each predicate, passing `T`'s own source through so the
+    /// lowerings inside it apply
+    templates: Vec<(TextRange, Vec<Fragment>)>,
     needs_import: bool,
+}
+
+/// a narrowing return annotation with no `TypeIs` spelling, which is lowered to what the
+/// function returns
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplacedGuard {
+    /// `def f(x) -> asserts x` raises when the assertion doesn't hold, and returns `None`
+    /// when it does
+    Asserts,
+    /// `def f() -> a is int` narrows a place rather than an argument, and
+    /// `-> self.data is str` narrows a member of one. `TypeIs` can only name a bare
+    /// parameter, so these lower to the `bool` the function returns
+    Predicate,
+}
+
+/// how `function`'s return annotation is replaced whole, when it is a guard `TypeIs` cannot
+/// spell. nothing of such an annotation is a type in the output
+pub(crate) fn replaced_guard(function: &StmtFunctionDef) -> Option<ReplacedGuard> {
+    function.returns.as_ref()?;
+    if function.is_asserts_return {
+        return Some(ReplacedGuard::Asserts);
+    }
+    let guards = return_guards(function)?;
+    let [guard] = guards.as_slice() else {
+        return None;
+    };
+    if !matches!(guard.form, ReturnGuardForm::Predicate { .. }) {
+        return None;
+    }
+    let (name, members) = guard.place_parts();
+    let narrows_a_parameter = members.is_empty()
+        && function
+            .parameters
+            .iter()
+            .any(|parameter| parameter.name().id == *name);
+    (!narrows_a_parameter).then_some(ReplacedGuard::Predicate)
 }
 
 /// lowers the narrowing return annotations that have no `TypeIs` spelling
@@ -89,7 +127,7 @@ struct ReturnGuards<'src> {
     /// the name the builtin `bool` is written under
     bool_: String,
     edits: Vec<(TextRange, String)>,
-    claimed: Vec<TextRange>,
+    errors: Vec<String>,
 }
 
 impl ReturnGuards<'_> {
@@ -97,40 +135,33 @@ impl ReturnGuards<'_> {
         let Some(returns) = function.returns.as_deref() else {
             return;
         };
-
-        // `def f(x) -> asserts x` raises when the assertion doesn't hold, and returns
-        // `None` when it does. the keyword is not part of `returns`, so the edit starts
-        // at the keyword itself
-        if function.is_asserts_return {
-            let keyword_start = self.src[..usize::from(returns.range().start())]
-                .rfind("asserts")
-                .map(|offset| TextSize::try_from(offset).expect("offset fits u32"))
-                .unwrap_or_else(|| returns.range().start());
-            self.edits.push((
-                TextRange::new(keyword_start, returns.range().end()),
-                "None".to_owned(),
+        // nothing narrows to everything but a type, so there is no annotation to lower it to
+        if !function.is_asserts_return && negated_narrowing_predicate(returns).is_some() {
+            self.errors.push(format!(
+                "`{}` of `{}` cannot be lowered: a narrowing predicate cannot be negated, \
+                 since `TypeIs` cannot narrow to everything but a type. write the predicate \
+                 as `is` and negate the call where it is used",
+                &self.src[returns.range()],
+                function.name,
             ));
-            self.claimed.push(returns.range());
             return;
         }
-
-        // `def f() -> a is int` narrows a place rather than an argument, and
-        // `-> self.data is str` narrows a member of one. `TypeIs` can only name a bare
-        // parameter, so anything else lowers to the `bool` the function returns
-        if let Some(guards) = return_guards(function)
-            && let [guard] = guards.as_slice()
-            && matches!(guard.form, ReturnGuardForm::Predicate { .. })
-        {
-            let (name, members) = guard.place_parts();
-            let narrows_a_parameter = members.is_empty()
-                && function
-                    .parameters
-                    .iter()
-                    .any(|parameter| parameter.name().id == *name);
-            if !narrows_a_parameter {
-                self.edits.push((returns.range(), self.bool_.clone()));
-                self.claimed.push(returns.range());
+        match replaced_guard(function) {
+            // the keyword is not part of `returns`, so the edit starts at the keyword itself
+            Some(ReplacedGuard::Asserts) => {
+                let keyword_start = self.src[..usize::from(returns.range().start())]
+                    .rfind("asserts")
+                    .map(|offset| TextSize::try_from(offset).expect("offset fits u32"))
+                    .unwrap_or_else(|| returns.range().start());
+                self.edits.push((
+                    TextRange::new(keyword_start, returns.range().end()),
+                    "None".to_owned(),
+                ));
             }
+            Some(ReplacedGuard::Predicate) => {
+                self.edits.push((returns.range(), self.bool_.clone()));
+            }
+            None => {}
         }
     }
 }
@@ -142,34 +173,40 @@ impl<'ast> Visitor<'ast> for ReturnGuards<'_> {
         }
         walk_stmt(self, stmt);
     }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if let Expr::CallableType(callable) = expr
+            && negated_narrowing_predicate(&callable.returns).is_some()
+        {
+            self.errors.push(format!(
+                "`{}` cannot be lowered: a narrowing predicate cannot be negated, since \
+                 `TypeIs` cannot narrow to everything but a type. write the predicate as `is` \
+                 and negate the call where it is used",
+                &self.src[callable.range()],
+            ));
+        }
+        walk_expr(self, expr);
+    }
 }
 
 impl TypeExprVisitor for State {
-    fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
-        if let Expr::Compare(c) = expr
-            && c.ops.len() == 1
-            && matches!(c.ops[0], CmpOp::Is)
-            && matches!(c.left.as_ref(), Expr::Name(_))
-            && let Some(target) = c.comparators.first()
-        {
-            let new_node = Expr::Subscript(ExprSubscript {
-                node_index: AtomicNodeIndex::NONE,
-                range: TextRange::default(),
-                value: Box::new(Expr::Name(ExprName {
-                    node_index: AtomicNodeIndex::NONE,
-                    range: TextRange::default(),
-                    id: Name::from(self.type_is.as_str()),
-                    ctx: ExprContext::Load,
-                })),
-                slice: Box::new(target.clone()),
-                ctx: ExprContext::Load,
-                is_typeof: false,
-                is_type_decoration: false,
-            });
-            self.needs_import = true;
-            self.edits.push((expr.range(), render_expr(&new_node)));
-        }
+    fn visit(&mut self, _expr: &Expr, _pos: TypePos) -> Recurse {
         Recurse::Descend
+    }
+
+    fn visit_predicate(&mut self, predicate: &ExprCompare) {
+        let [target] = &*predicate.comparators else {
+            return;
+        };
+        self.needs_import = true;
+        self.templates.push((
+            predicate.range(),
+            vec![
+                Fragment::Lit(format!("{}[", self.type_is)),
+                Fragment::Src(target.range()),
+                Fragment::Lit("]".to_owned()),
+            ],
+        ));
     }
 }
 
@@ -183,6 +220,42 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// `TypeIs` narrows to the type it names, and nothing in python's typing narrows to
+    /// everything but one, so a negated predicate is refused rather than lowered to the
+    /// `not isinstance(...)` a negated type test in a body is. the assertion form negates
+    #[test]
+    fn a_negated_predicate_is_refused() {
+        let error = transpile(
+            "def not_int(a: object) -> a is not int:\n    return not isinstance(a, int)\n",
+            &Config::test_default(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("a narrowing predicate cannot be negated"),
+            "got: {error}"
+        );
+        let out = transpile(
+            "def check(a: object) -> asserts a is not int:\n    assert not isinstance(a, int)\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(out.contains("-> None:"), "got: {out}");
+    }
+
+    /// a callable type's predicate cannot be negated either
+    #[test]
+    fn a_negated_predicate_a_callable_type_returns_is_refused() {
+        let error = transpile(
+            "def f(check: (x: object) -> (x is not int)): ...\n",
+            &Config::test_default(),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("a narrowing predicate cannot be negated"),
+            "got: {error}"
         );
     }
 
@@ -204,6 +277,66 @@ mod tests {
             indoc! {"
                 from typing_extensions import TypeIs
                 def f(a) -> TypeIs[int]: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn lowerings_inside_the_target_apply() {
+        // the target keeps its own source, so what is lowered inside it, like an
+        // optional's `?`, is lowered here too
+        check_py312(
+            "def f(a) -> a is int?: ...\n",
+            indoc! {"
+                from typing_extensions import TypeIs
+                def f(a) -> TypeIs[int | None]: ...
+            "},
+        );
+        let below_310 = Config {
+            min_version: PythonVersion::PY39,
+            ..Config::test_default()
+        };
+        let out = transpile("def f(a) -> a is int?: ...\n", &below_310).unwrap();
+        assert!(
+            out.contains("def f(a) -> TypeIs[Union[int, None]]: ..."),
+            "the optional is spelled without `|`: {out}"
+        );
+    }
+
+    #[test]
+    fn every_type_form_in_the_target_is_lowered() {
+        // the target is lowered as the type it is, as it would be written in any annotation
+        check_py312(
+            indoc! {"
+                def f(a) -> a is (int) -> str: ...
+                def g(a) -> a is (int, str): ...
+                def h(a) -> a is \"x\": ...
+                def k(a) -> a is list[(int) -> str]?: ...
+            "},
+            indoc! {"
+                from typing import Callable, Literal
+                from typing_extensions import TypeIs
+                def f(a) -> TypeIs[Callable[[int], str]]: ...
+                def g(a) -> TypeIs[tuple[int, str]]: ...
+                def h(a) -> TypeIs[Literal[\"x\"]]: ...
+                def k(a) -> TypeIs[list[Callable[[int], str]] | None]: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn a_guard_lowered_to_what_it_returns_holds_no_type() {
+        // the whole annotation is replaced, so nothing inside it is lowered
+        check(
+            indoc! {"
+                a = 1
+                def f() -> a is (int) -> str:
+                    return True
+            "},
+            indoc! {"
+                a = 1
+                def f() -> bool:
+                    return True
             "},
         );
     }

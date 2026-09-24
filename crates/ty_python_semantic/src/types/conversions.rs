@@ -28,6 +28,7 @@
 //! picking one silently would make the output depend on a rule nobody reads.
 
 use ruff_db::files::File;
+use ruff_db::source::source_text;
 use ruff_python_ast as ast;
 use ruff_text_size::{Ranged, TextRange};
 use ty_module_resolver::{ModuleName, file_to_module, resolve_module};
@@ -42,6 +43,7 @@ use crate::types::context::InferContext;
 use crate::types::diagnostic::{AMBIGUOUS_CONVERSION, INVALID_CONVERSION};
 use crate::types::extensions::{self, ExtensionMemberKind, ExtensionMemberResolution};
 use crate::types::function::FunctionType;
+use crate::types::repeated_underscore::WrittenNames;
 use crate::types::signatures::Parameters;
 use crate::types::{MemberLookupPolicy, Type, TypeContext};
 use ty_module_resolver::ImportingFile;
@@ -1044,6 +1046,20 @@ pub struct ConversionImport {
     pub alias: String,
 }
 
+impl ConversionImport {
+    /// the `from <module> import <name>` statement, `as <alias>` when the two differ
+    pub fn statement(&self) -> String {
+        if self.alias == self.name {
+            format!("from {} import {}", self.module, self.name)
+        } else {
+            format!(
+                "from {} import {} as {}",
+                self.module, self.name, self.alias
+            )
+        }
+    }
+}
+
 /// the name of the adapter [`ConversionRuntime::DiscardReturn`] defines, which
 /// is what the emitted `prefix` spells. The definition itself lives with the
 /// transpiler's other injected helpers, and is built from this
@@ -1223,23 +1239,16 @@ fn backing_call_info<'db>(
     extension: StaticClassLiteral<'db>,
     dunder: &str,
 ) -> ConversionInfo {
-    let function = extensions::backing_function_name(db, extension, dunder);
-    let extension_file = extension.file(db);
-    let mut imports = Vec::new();
-    if extension_file != from_file {
-        let Some(module) = imported_module_spelling(db, from_file, extension_file) else {
-            return ConversionInfo::Rejected(
-                "the conversion this value needs comes from an `extension` in a module this \
-                 file does not import; import it, or convert the value explicitly"
-                    .to_owned(),
-            );
-        };
-        imports.push(ConversionImport {
-            module,
-            name: function.clone(),
-            alias: function.clone(),
-        });
-    }
+    let Some((function, function_import)) =
+        extensions::backing_function_reference(db, from_file, extension, dunder)
+    else {
+        return ConversionInfo::Rejected(
+            "the conversion this value needs comes from an `extension` in a module this \
+             file does not import; import it, or convert the value explicitly"
+                .to_owned(),
+        );
+    };
+    let mut imports: Vec<ConversionImport> = function_import.into_iter().collect();
     let (receiver, class_import) = match class_reference(db, env, from_file, model, anchor, class) {
         Ok(spelling) => spelling,
         Err(reason) => return ConversionInfo::Rejected(reason),
@@ -1267,9 +1276,48 @@ fn backing_call_info<'db>(
 /// is not safe: the binding may be conditional (`if TYPE_CHECKING:`) or come
 /// after the site, and the end-of-scope type a symbol lookup reports says
 /// nothing about either. One leading underscore, not two, so a reference inside
-/// a class body is not python name-mangled
-fn conversion_alias(name: &str) -> String {
-    format!("_by_conv__{name}")
+/// a class body is not python name-mangled.
+///
+/// the module is part of the alias, so two classes of one name imported from two
+/// modules are two bindings: `metric.Length` is `_by_conv__metric__Length` and
+/// `imperial.Length` is `_by_conv__imperial__Length`. a `_` in the module is
+/// written `_u` and a `.` `_d`, which leaves the first `__` after the prefix
+/// marking where the class name starts, so no two imports share an alias. and no
+/// name the file spells begins with the prefix ([`conversion_alias_prefix`]), so
+/// none of them is an alias either
+fn conversion_alias(db: &dyn Db, from_file: File, module: &str, name: &str) -> String {
+    let mut alias = conversion_alias_prefix(db, from_file).clone();
+    for character in module.chars() {
+        match character {
+            '_' => alias.push_str("_u"),
+            '.' => alias.push_str("_d"),
+            character => alias.push(character),
+        }
+    }
+    alias.push_str("__");
+    alias.push_str(name);
+    alias
+}
+
+/// the first of `_by_conv__`, `_by_conv2__`, `_by_conv3__`, … that no name `file`
+/// spells begins with — see [`conversion_alias`]
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+fn conversion_alias_prefix(db: &dyn Db, file: File) -> String {
+    let source = source_text(db, file);
+    let written = WrittenNames::new(source.as_str());
+    let prefix = |number: u32| {
+        if number == 1 {
+            "_by_conv__".to_owned()
+        } else {
+            format!("_by_conv{number}__")
+        }
+    };
+    // a module spells finitely many names, so one of the candidates is free long
+    // before the numbers run out
+    (1u32..u32::MAX)
+        .map(prefix)
+        .find(|candidate| !written.spells_a_name_beginning(candidate))
+        .unwrap_or_else(|| prefix(1))
 }
 
 /// how the conversion site spells `class`: its own name when this file declares
@@ -1318,7 +1366,7 @@ pub(crate) fn class_reference<'db>(
              module this file does not import; import it, or convert the value explicitly"
         )
     })?;
-    let alias = conversion_alias(&name);
+    let alias = conversion_alias(db, from_file, &module, &name);
     Ok((
         alias.clone(),
         Some(ConversionImport {

@@ -241,9 +241,11 @@ mod tests {
     fn polyfilled(input: &str, expected_body: &str) {
         let out = transpile(input, &Config::test_default()).unwrap();
         let mut body = out.as_str();
-        for definition in
-            crate::runtime::inline([crate::runtime::TEMPLATE, crate::runtime::INTERPOLATION])
-        {
+        for definition in crate::runtime::inline(
+            [crate::runtime::TEMPLATE, crate::runtime::INTERPOLATION],
+            &[],
+            crate::transforms::repeated_underscore::WrittenNames::new(input),
+        ) {
             body = body
                 .strip_prefix(definition.as_str())
                 .and_then(|rest| rest.strip_prefix('\n'))

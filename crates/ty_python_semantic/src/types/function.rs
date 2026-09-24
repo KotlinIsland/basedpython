@@ -1463,6 +1463,8 @@ impl<'db> OverloadLiteral<'db> {
             });
         }
 
+        raw_signature.name_implicitly_narrowed_parameter(self.has_implicit_receiver(db));
+
         raw_signature
     }
 

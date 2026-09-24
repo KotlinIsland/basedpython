@@ -150,7 +150,9 @@ impl AstPass for DecoratorKeyword<'_> {
             errors: RefCell::new(Vec::new()),
             needs_callable: false,
             needs_overload: false,
+            synthesized_modules: RefCell::new(Vec::new()),
             synthesized_imports: RefCell::new(Vec::new()),
+            annotations_evaluated: ctx.annotations_evaluated,
             class_depth: 0,
         };
         for stmt in &module.body {
@@ -164,15 +166,19 @@ impl AstPass for DecoratorKeyword<'_> {
             ctx.required_imports
                 .push(self.written.import_from("typing", &["overload"]));
         }
-        // the emitted overloads are read and never run, so a name only they need is
-        // imported where only a checker sees it
         ctx.type_only_imports
+            .extend(state.synthesized_modules.into_inner());
+        ctx.required_imports
             .extend(state.synthesized_imports.into_inner());
         ctx.template_edits.extend(state.templates.into_inner());
         ctx.errors.extend(state.errors.into_inner());
     }
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the module and the imports the visit needs"
+)]
 struct State<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
@@ -182,8 +188,13 @@ struct State<'src> {
     errors: RefCell<Vec<String>>,
     needs_callable: bool,
     needs_overload: bool,
-    /// the imports a written-out return type names that the source never wrote
+    /// the modules a written-out return type qualifies a class with that the source never
+    /// imported under their own names
+    synthesized_modules: RefCell<Vec<String>>,
+    /// the imports of the `typing` names a written-out return type reads
     synthesized_imports: RefCell<Vec<String>>,
+    /// whether python evaluates an overload's annotations as it is defined
+    annotations_evaluated: bool,
     class_depth: u32,
 }
 
@@ -287,11 +298,15 @@ impl State<'_> {
         // says less than the truth rather than something else
         let inferred_return = self.return_types.by_function.get(&func.range());
         if let Some(inferred) = inferred_return {
+            self.synthesized_modules
+                .borrow_mut()
+                .extend(inferred.modules.iter().cloned());
             self.synthesized_imports
                 .borrow_mut()
-                .extend(inferred.imports_in(self.written));
+                .extend(inferred.typing_imports_in(self.written));
         }
-        let inferred_return = inferred_return.map(|inferred| inferred.text_in(self.written));
+        let inferred_return = inferred_return
+            .map(|inferred| inferred.annotation_in(self.written, self.annotations_evaluated));
         let return_type = |frags: &mut Vec<Fragment>| match (&func.returns, &inferred_return) {
             (Some(returns), _) => frags.push(Fragment::Src(returns.range())),
             (None, Some(inferred)) => frags.push(Fragment::Lit(inferred.clone())),

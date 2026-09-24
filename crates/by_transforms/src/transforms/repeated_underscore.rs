@@ -142,6 +142,74 @@ pub struct WrittenNames<'src> {
     /// the names the module's `private` symbols are emitted under, which no other name a
     /// lowering writes may take
     private: Option<&'src PrivateNames>,
+    /// the names of the classes the module's lowerings synthesize for a shape
+    synthesized: Option<&'src SynthesizedClasses>,
+}
+
+/// the name of each class a lowering synthesizes for a shape — an anonymous named tuple, a
+/// typed dict literal, an inline protocol, a callable type python has no spelling for —
+/// decided once for the module, however many lowerings meet the shape and in whatever order
+///
+/// a class is named after a 32-bit hash of its shape, `_TypedDict_1a2b3c4d`, and two shapes
+/// can hash alike. the first of them takes the name and each later one the next name nothing
+/// has, `_TypedDict_1a2b3c4d2`, so two shapes are never declared under one name, which would
+/// leave whichever class came last read for both
+#[derive(Default)]
+pub(crate) struct SynthesizedClasses {
+    /// each shape named so far, by the prefix and hash its name was made from
+    named: RefCell<HashMap<(&'static str, u32), NamedShapes>>,
+}
+
+/// the shapes named after one prefix and hash, each with its name
+type NamedShapes = Vec<(Box<dyn std::any::Any>, String)>;
+
+impl std::fmt::Debug for SynthesizedClasses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let named = self.named.borrow();
+        f.debug_set()
+            .entries(named.values().flatten().map(|(_, name)| name))
+            .finish()
+    }
+}
+
+impl SynthesizedClasses {
+    /// the 32 bits of `shape`'s hash a synthesized class is named after
+    pub(crate) fn hash_of(shape: &impl std::hash::Hash) -> u32 {
+        use std::hash::Hasher;
+
+        let mut hasher = std::hash::DefaultHasher::new();
+        shape.hash(&mut hasher);
+        // the low half: eight hex digits keep the name readable, and a collision is
+        // numbered apart
+        let [a, b, c, d, ..] = hasher.finish().to_le_bytes();
+        u32::from_le_bytes([a, b, c, d])
+    }
+
+    /// the name of the class declaring `shape`, its hash spelled after `prefix`, which
+    /// `written` has no other use of
+    fn name<S: std::hash::Hash + PartialEq + Clone + 'static>(
+        &self,
+        written: WrittenNames,
+        prefix: &'static str,
+        shape: &S,
+        hash: u32,
+    ) -> String {
+        let mut named = self.named.borrow_mut();
+        let bucket = named.entry((prefix, hash)).or_default();
+        if let Some((_, name)) = bucket
+            .iter()
+            .find(|(named, _)| named.downcast_ref::<S>() == Some(shape))
+        {
+            return name.clone();
+        }
+        // a numbered name is longer than every name made from a hash alone, so only the
+        // names in this bucket can be one it would take
+        let name = written.fresh_outside(&format!("{prefix}{hash:08x}"), |candidate| {
+            bucket.iter().any(|(_, name)| name == candidate)
+        });
+        bucket.push((Box::new(shape.clone()), name.clone()));
+        name
+    }
 }
 
 /// the name each module-level `private` symbol is emitted under
@@ -168,8 +236,15 @@ pub(crate) struct PrivateNames {
 impl PrivateNames {
     /// how each of `symbols`, the module-level names a module declares `private`, is emitted.
     /// `sources` are the texts of the module the lowering reads — as written, and as the
-    /// passes that run before the name is decided left it
-    pub(crate) fn decide<'a>(symbols: impl IntoIterator<Item = &'a str>, sources: &[&str]) -> Self {
+    /// passes that run before the name is decided left it. `reserved` are names the lowering
+    /// binds at module level that were decided before these, which the module spells nowhere
+    /// either: the backing functions of its extensions
+    pub(crate) fn decide<'a>(
+        symbols: impl IntoIterator<Item = &'a str>,
+        sources: &[&str],
+        reserved: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let reserved: std::collections::HashSet<&str> = reserved.into_iter().collect();
         let mut symbols: Vec<&str> = symbols.into_iter().collect();
         // the order a name is taken in decides who gets `_helper` and who `_helper2`, so it
         // must not be the order of a hash set
@@ -184,6 +259,7 @@ impl PrivateNames {
             let stem = format!("_{symbol}");
             let emitted = decision::WrittenNames::new("").fresh_outside(&stem, |candidate| {
                 crate::runtime::defines(candidate)
+                    || reserved.contains(candidate)
                     || private.claimed.contains(candidate)
                     || sources
                         .iter()
@@ -207,6 +283,13 @@ pub(crate) struct CodeNames {
     bindings: std::collections::HashMap<String, Vec<Binding>>,
     /// whether the module imports `*` from somewhere, which binds names it never spells
     star_import: bool,
+    /// each builtin the module's top level imports under a name of its own, with the names
+    /// it is imported under — `from builtins import str as str2`
+    builtin_aliases: std::collections::HashMap<String, Vec<String>>,
+    /// the names of those imported by the imports a preamble is spliced after, which
+    /// whatever is spliced there can read as it is defined
+    /// ([`super::source_util::preamble_offset`])
+    leading_builtin_aliases: std::collections::HashSet<String>,
 }
 
 /// one way a module binds a name
@@ -214,6 +297,9 @@ pub(crate) struct CodeNames {
 enum Binding {
     /// `from <module> import <name>`, which binds the name to what `module` exports as it
     From(String),
+    /// `from <module> import <name> as <other>`, which binds `other` to what `module`
+    /// exports as `name`
+    FromAs { module: String, name: String },
     /// `import <name>`, which binds the name to the module of that name
     Module,
     /// anything else
@@ -276,6 +362,13 @@ impl CodeNames {
                                 (None, Some(module)) if import.level == 0 => {
                                     self.bind(&alias.name, Binding::From(module.to_string()));
                                 }
+                                (Some(asname), Some(module)) if import.level == 0 => self.bind(
+                                    asname,
+                                    Binding::FromAs {
+                                        module: module.to_string(),
+                                        name: alias.name.to_string(),
+                                    },
+                                ),
                                 (asname, _) => self
                                     .bind(asname.as_ref().unwrap_or(&alias.name), Binding::Other),
                             }
@@ -334,10 +427,48 @@ impl CodeNames {
         }
 
         let mut collect = Collect::default();
-        for stmt in suite {
+        // the statements before the first that is neither a docstring nor a leading import
+        let mut leading = true;
+        for (index, stmt) in suite.iter().enumerate() {
             collect.visit_stmt(stmt);
+            let docstring = index == 0
+                && matches!(stmt, Stmt::Expr(expr) if expr.value.is_string_literal_expr());
+            leading &= docstring || super::source_util::is_leading_import(stmt);
+            // an import in a nested scope binds its name there alone
+            if let Stmt::ImportFrom(import) = stmt
+                && import.level == 0
+                && import.module.as_deref() == Some("builtins")
+            {
+                for alias in &import.names {
+                    if let Some(asname) = &alias.asname {
+                        collect
+                            .0
+                            .builtin_aliases
+                            .entry(alias.name.to_string())
+                            .or_default()
+                            .push(asname.to_string());
+                        if leading {
+                            collect.0.leading_builtin_aliases.insert(asname.to_string());
+                        }
+                    }
+                }
+            }
         }
         collect.0
+    }
+
+    /// a name the module's top level imports the builtin `name` under, and binds to nothing
+    /// else anywhere — the first of them, when there are several
+    fn builtin_alias(&self, name: &str) -> Option<&str> {
+        let binding = Binding::FromAs {
+            module: "builtins".to_owned(),
+            name: name.to_owned(),
+        };
+        self.builtin_aliases
+            .get(name)?
+            .iter()
+            .find(|alias| self.only_binds(alias, &binding))
+            .map(String::as_str)
     }
 
     /// whether every binding of `name` is `binding`, so a lowering can read the module's own
@@ -359,6 +490,22 @@ impl<'src> WrittenNames<'src> {
             lowerings: None,
             code: None,
             private: None,
+            synthesized: None,
+        }
+    }
+
+    /// these names, with `synthesized` the names of the classes the module's lowerings
+    /// synthesize for a shape
+    pub(crate) fn with_synthesized<'a>(
+        self,
+        synthesized: &'a SynthesizedClasses,
+    ) -> WrittenNames<'a>
+    where
+        'src: 'a,
+    {
+        WrittenNames {
+            synthesized: Some(synthesized),
+            ..self
         }
     }
 
@@ -372,6 +519,7 @@ impl<'src> WrittenNames<'src> {
             lowerings: self.lowerings,
             code: Some(code),
             private: self.private,
+            synthesized: self.synthesized,
         }
     }
 
@@ -385,6 +533,7 @@ impl<'src> WrittenNames<'src> {
             lowerings: self.lowerings,
             code: self.code,
             private: Some(private),
+            synthesized: self.synthesized,
         }
     }
 
@@ -399,6 +548,7 @@ impl<'src> WrittenNames<'src> {
             lowerings: Some(lowerings),
             code: self.code,
             private: self.private,
+            synthesized: self.synthesized,
         }
     }
 
@@ -414,6 +564,27 @@ impl<'src> WrittenNames<'src> {
     pub(crate) fn fresh(self, stem: &str) -> String {
         self.names
             .fresh_outside(stem, |name| self.lowering_binds(name))
+    }
+
+    /// [`Self::fresh`], also passing over every name `taken` answers for
+    fn fresh_outside(self, stem: &str, taken: impl Fn(&str) -> bool) -> String {
+        self.names
+            .fresh_outside(stem, |name| self.lowering_binds(name) || taken(name))
+    }
+
+    /// the name of the class a lowering synthesizes for `shape`, named after its hash
+    /// behind `prefix` ([`SynthesizedClasses`]). without the module's decision, two shapes
+    /// hashing alike share a name
+    pub(crate) fn synthesized_class<S: std::hash::Hash + PartialEq + Clone + 'static>(
+        self,
+        prefix: &'static str,
+        shape: &S,
+    ) -> String {
+        let hash = SynthesizedClasses::hash_of(shape);
+        match self.synthesized {
+            Some(synthesized) => synthesized.name(self, prefix, shape, hash),
+            None => self.fresh(&format!("{prefix}{hash:08x}")),
+        }
     }
 
     /// whether `name` is one a lowering cannot bind: the module spells it, a runtime
@@ -457,20 +628,37 @@ impl<'src> WrittenNames<'src> {
     /// module binds that name to something else, anywhere — a parameter named `type`, a
     /// class attribute named `staticmethod` — and then a name of the lowering's own, which
     /// [`Self::builtin_imports`] binds
+    ///
+    /// a module that already imports the builtin under a name of its own has it read under
+    /// that name. a lowering run over the output of an earlier one finds the earlier one's
+    /// import there, so every lowering of a module reads a builtin under one name
     pub(crate) fn builtin(self, name: &str) -> String {
+        if let Some(code) = self.code
+            && !code.only_binds(name, &Binding::From("builtins".to_owned()))
+            && let Some(alias) = code.builtin_alias(name)
+            && !self.lowering_binds(alias)
+        {
+            return alias.to_owned();
+        }
         self.imported("builtins", name)
     }
 
     /// the import that binds each builtin `output`, python a lowering wrote, reads under a
     /// name of the lowering's own ([`Self::builtin`]), on a python of `minor`
     ///
-    /// such a name is spelled nowhere in the module, so only a lowering can have written it
+    /// such a name is spelled nowhere in the module, so only a lowering can have written it.
+    /// one the module imports among the imports a preamble is spliced after has its import
+    /// already, ahead of anything a lowering adds. imported anywhere else, it is imported
+    /// again, since a definition spliced ahead of that import may read it as it is defined
     pub(crate) fn builtin_imports(self, output: &str, minor: u8) -> Vec<String> {
         let written = decision::WrittenNames::new(output);
         ruff_python_stdlib::builtins::python_builtins(minor, false)
             .filter_map(|name| {
                 let local = self.builtin(name);
-                (local != name && written.spells(&local))
+                let imported = self
+                    .code
+                    .is_some_and(|code| code.leading_builtin_aliases.contains(&local));
+                (local != name && !imported && written.spells(&local))
                     .then(|| format!("from builtins import {name} as {local}"))
             })
             .collect()
@@ -858,8 +1046,48 @@ impl Transformer for Lowerer<'_, '_> {
 mod tests {
     use indoc::indoc;
 
+    use super::{SynthesizedClasses, WrittenNames};
     use crate::python_passthrough::unchanged;
     use crate::{Config, transpile};
+
+    /// a shape every other one of its kind hashes alike with
+    #[derive(Clone, PartialEq)]
+    struct Collides(&'static str);
+
+    impl std::hash::Hash for Collides {
+        fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+    }
+
+    /// a shape keeps the name it was first given, and one hashing alike with it takes the
+    /// next name the module has no use of, whichever lowering asks
+    #[test]
+    fn shapes_hashing_alike_are_named_apart_once_for_the_module() {
+        let stem = format!("_S_{:08x}", SynthesizedClasses::hash_of(&Collides("")));
+        // the module spells the name the second shape would otherwise take
+        let source = format!("{stem}2 = 1\n");
+        let synthesized = SynthesizedClasses::default();
+        let one = WrittenNames::new(&source).with_synthesized(&synthesized);
+        let other = WrittenNames::new(&source).with_synthesized(&synthesized);
+        assert_eq!(one.synthesized_class("_S_", &Collides("a")), stem);
+        assert_eq!(
+            other.synthesized_class("_S_", &Collides("b")),
+            format!("{stem}3")
+        );
+        assert_eq!(other.synthesized_class("_S_", &Collides("a")), stem);
+        assert_eq!(
+            one.synthesized_class("_S_", &Collides("c")),
+            format!("{stem}4")
+        );
+        assert_eq!(
+            one.synthesized_class("_S_", &Collides("b")),
+            format!("{stem}3")
+        );
+        // another kind of class is named apart by its prefix alone
+        assert_eq!(
+            one.synthesized_class("_T_", &Collides("b")),
+            format!("_T_{:08x}", SynthesizedClasses::hash_of(&Collides("")))
+        );
+    }
 
     fn check(input: &str, expected: &str) {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);

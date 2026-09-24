@@ -60,27 +60,34 @@ pub(crate) fn docstring_end(text: &str) -> usize {
 
 /// The byte offset generated lines must be spliced at: past the BOM, the module
 /// docstring, and any `from __future__ import` — each of which is only valid
-/// where it already is.
+/// where it already is — and past the imports from `builtins` that follow them,
+/// which bind builtins under the names a lowering reads them by, so that what is
+/// spliced here can read them as it is defined.
 pub(crate) fn preamble_offset(text: &str) -> usize {
-    let mut at = docstring_end(text);
+    let start = docstring_end(text);
     let parsed = ruff_python_parser::parse_unchecked_source(
-        &text[at..],
+        &text[start..],
         ruff_python_ast::PySourceType::Python,
     );
+    let mut at = start;
     for stmt in parsed.suite() {
-        let Stmt::ImportFrom(import) = stmt else {
-            break;
-        };
-        if import
-            .module
-            .as_ref()
-            .is_none_or(|m| m.as_str() != "__future__")
-        {
+        if !is_leading_import(stmt) {
             break;
         }
-        at += line_end(&text[at..], usize::from(import.range().end()));
+        at = start + line_end(&text[start..], usize::from(stmt.range().end()));
     }
     at
+}
+
+/// whether `stmt` is one of the imports a preamble is spliced after
+/// ([`preamble_offset`]): one from `__future__`, or one from `builtins`
+pub(crate) fn is_leading_import(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::ImportFrom(import)
+            if import.level == 0
+                && matches!(import.module.as_deref(), Some("__future__" | "builtins"))
+    )
 }
 
 /// Render `value` as a python string literal.
@@ -701,4 +708,26 @@ pub(crate) fn header_end(f: &StmtFunctionDef) -> TextSize {
             .as_ref()
             .map_or(TextSize::new(0), |r| r.range().end()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preamble_offset;
+
+    /// a preamble goes after the imports binding a builtin under the name a lowering reads
+    /// it by, too, so what it defines can read that name as it is defined
+    ///
+    /// every statement's range is measured from where the parse began, so each import's
+    /// line end is too. measured from the one before it, the offset overshot the second
+    /// import, and a preamble landed in the middle of the module
+    #[test]
+    fn a_preamble_goes_after_every_leading_import() {
+        for text in [
+            "from __future__ import annotations\nfrom __future__ import generator_stop\nx = 1\n",
+            "from __future__ import annotations\nfrom builtins import str as str2\nx = 1\n",
+            "\"\"\"doc\"\"\"\nfrom __future__ import annotations\nfrom __future__ import generator_stop\nx = 1\n",
+        ] {
+            assert_eq!(&text[preamble_offset(text)..], "x = 1\n", "{text}");
+        }
+    }
 }

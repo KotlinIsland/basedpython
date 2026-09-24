@@ -30,7 +30,7 @@ use crate::types::repeated_underscore::{
     LoweredParameters, ParameterSlot, WrittenNames, callable_parameter_slots,
     lower_repeated_underscores,
 };
-use crate::types::signatures::{ConcatenateTail, Signature};
+use crate::types::signatures::{ConcatenateTail, NarrowingGuard, NarrowingGuardKind, Signature};
 use crate::types::special_form::{AliasSpec, LegacyStdlibAlias};
 use crate::types::string_annotation::parse_string_annotation;
 use crate::types::template::{Promotable, TemplateLiteralType, TemplatePart};
@@ -1637,6 +1637,53 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     }
                     return crate::types::TypeIsType::from_type_expression(self.db(), narrowed);
                 }
+                // basedpython: `a is not T` reads like the predicate negated, but nothing in
+                // python's typing narrows to everything but a type. the place is a label, as
+                // in the predicate, so only the type is inferred
+                if self.is_basedpython_file()
+                    && let Some(negated) =
+                        ruff_python_ast::helpers::negated_narrowing_predicate(expression)
+                {
+                    for comparator in &negated.comparators {
+                        self.infer_type_expression(comparator);
+                    }
+                    if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, expression)
+                    {
+                        let mut diagnostic = builder.into_diagnostic(
+                            "A narrowing predicate cannot be negated: `is not` would narrow to \
+                             everything but the type, which `TypeIs` cannot express",
+                        );
+                        diagnostic.info(
+                            "write the predicate as `is` and negate the call where it is used",
+                        );
+                    }
+                    return Type::unknown();
+                }
+                // basedpython: a callable type's return binds tighter than a comparison, as it
+                // does than `|`, so `(x: object) -> x is int` tests the callable type `(x:
+                // object) -> x` rather than narrowing `x`. its return names a parameter, which
+                // is no type, so only the type tested for is inferred
+                if self.is_basedpython_file()
+                    && matches!(&*compare.ops, [ast::CmpOp::Is | ast::CmpOp::IsNot])
+                    && let ast::Expr::CallableType(callable) = compare.left.as_ref()
+                    && is_narrowing_predicate_place(&callable.returns)
+                {
+                    for comparator in &compare.comparators {
+                        self.infer_type_expression(comparator);
+                    }
+                    if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, expression)
+                    {
+                        let mut diagnostic = builder.into_diagnostic(
+                            "`is` takes the whole callable type here: a callable type's return \
+                             binds tighter than a comparison",
+                        );
+                        diagnostic.info(
+                            "parenthesize the narrowing predicate the callable returns, as in \
+                             `(x: object) -> (x is int)`",
+                        );
+                    }
+                    return Type::unknown();
+                }
                 // basedpython: a rich comparison in a type expression folds like it
                 // does on values (`1 < 2` → `Literal[True]`), and is kept symbolic
                 // while an operand still mentions a type parameter so `I < 2` can
@@ -1918,7 +1965,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 }
                 None => Parameters::gradual_form(),
             };
-            return Type::single_callable(db, Signature::new(parameters, return_type));
+            let signature = self
+                .with_callable_narrowing_guard(callable, Signature::new(parameters, return_type));
+            return Type::single_callable(db, signature);
         }
 
         // basedpython: a trailing bare `**P` unpacks a parameter pack —
@@ -1972,7 +2021,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             .map(|tail| Parameters::concatenate(db, prefix_params, tail))
                             .unwrap_or_else(Parameters::unknown)
                     };
-                return Type::single_callable(db, Signature::new(parameters, return_type));
+                let signature = self.with_callable_narrowing_guard(
+                    callable,
+                    Signature::new(parameters, return_type),
+                );
+                return Type::single_callable(db, signature);
             }
         }
 
@@ -1999,7 +2052,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let previous = self
             .inference_flags()
             .replace(InferenceFlags::CHECK_UNBOUND_TYPEVARS, false);
-        let result = Type::single_callable(db, Signature::new(parameters, return_type));
+        let signature =
+            self.with_callable_narrowing_guard(callable, Signature::new(parameters, return_type));
+        let result = Type::single_callable(db, signature);
         self.inference_flags()
             .set(InferenceFlags::CHECK_UNBOUND_TYPEVARS, previous);
         result
@@ -2010,6 +2065,37 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     /// follows, so a call is checked against the `__call__` or method the transpiler
     /// declares. a shape the lowering refuses is reported, and its parameters are left
     /// as written
+    /// basedpython: `signature`, the signature of `callable`, narrowing what its return
+    /// predicate names — `(x: object) -> (x is int)` — the way a `def` whose return annotation
+    /// is that predicate narrows it: the argument matched to a parameter of that name, and
+    /// otherwise a place of that name in the calling scope
+    fn with_callable_narrowing_guard(
+        &self,
+        callable: &ast::ExprCallableType,
+        mut signature: Signature<'db>,
+    ) -> Signature<'db> {
+        if !self.is_basedpython_file() || !matches!(signature.return_ty, Type::TypeIs(_)) {
+            return signature;
+        }
+        let Some(guard) = ruff_python_ast::helpers::predicate_guard(&callable.returns) else {
+            return signature;
+        };
+        let (name, members) = guard.place_parts();
+        let root_is_first_parameter = signature
+            .parameters()
+            .iter()
+            .next()
+            .and_then(Parameter::name)
+            .is_some_and(|first| first == name);
+        signature.narrowing_guards = Box::new([NarrowingGuard {
+            name: name.clone(),
+            members: members.into_iter().cloned().collect(),
+            root_is_first_parameter,
+            kind: NarrowingGuardKind::Predicate,
+        }]);
+        signature
+    }
+
     fn lower_callable_repeated_underscores(
         &mut self,
         callable: &ast::ExprCallableType,
@@ -3385,7 +3471,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     }
                     Type::unknown()
                 }
-                KnownInstanceType::WrappedOptional(_) => {
+                KnownInstanceType::WrappedOptional(_)
+                | KnownInstanceType::WrappedOptionalClass(_) => {
                     if !self.in_string_annotation() {
                         self.infer_expression(slice, TypeContext::default());
                     }

@@ -24,7 +24,10 @@
 //! [`ClassDef`]: ruff_python_ast::StmtClassDef
 
 use ruff_db::files::File;
+use ruff_db::source::source_text;
 use ruff_python_ast as ast;
+use ruff_python_ast::name::Name;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{ModuleName, resolve_module};
 use ty_python_core::{global_scope, place_table, semantic_index};
 
@@ -36,10 +39,11 @@ use crate::types::class::{ClassLiteral, ClassType, KnownClass, StaticClassLitera
 use crate::types::class_base::ClassBase;
 use crate::types::conformance;
 use crate::types::context::InferContext;
-use crate::types::conversions::CONVERSION_DUNDERS;
+use crate::types::conversions::{CONVERSION_DUNDERS, ConversionImport, imported_module_spelling};
 use crate::types::diagnostic::INVALID_EXTENSION;
 use crate::types::generics::Specialization;
 use crate::types::member::class_member;
+use crate::types::repeated_underscore::WrittenNames;
 use crate::types::typevar::{BoundTypeVarInstance, TypeVarBoundOrConstraints};
 use crate::types::{MemberLookupPolicy, Type};
 use ty_module_resolver::ImportingFile;
@@ -321,12 +325,12 @@ pub enum ExtensionMemberKind {
 /// extension member
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtensionAttributeInfo {
-    /// the module-level backing function the member lowers to
+    /// the name the module being transpiled refers to the member's backing function by
     pub function: String,
     pub kind: ExtensionMemberKind,
-    /// the module to import the backing function from, when the extension is
+    /// the import that binds the backing function under that name, when the extension is
     /// declared in a module other than the one being transpiled
-    pub import_from: Option<String>,
+    pub import: Option<ConversionImport>,
     /// whether the receiver is the class object itself (`str.parse(…)`) rather
     /// than an instance — decides what a `class def` member receives
     pub receiver_is_class: bool,
@@ -335,8 +339,7 @@ pub struct ExtensionAttributeInfo {
 /// the backing-function name an extension member lowers to:
 /// `_by_ext__list__second`. when a module declares more than one extension
 /// of the same target name, later ones carry an ordinal (`_by_ext2__…`) so
-/// their members do not collide. the transpiler's block lowering computes the
-/// same name from the extension file's AST alone.
+/// their members do not collide ([`backing_function_names`]).
 ///
 /// exactly one leading underscore: python private-name-mangles any `__name`
 /// reference inside a class body, so a two-underscore name would break an
@@ -346,17 +349,176 @@ pub(crate) fn backing_function_name<'db>(
     extension: StaticClassLiteral<'db>,
     member: &str,
 ) -> String {
+    if let Some((_, _, name)) = backing_function_names(db, extension.file(db))
+        .iter()
+        .find(|(candidate, name, _)| *candidate == extension && name == member)
+    {
+        return name.clone();
+    }
+    // a member the extension's body does not bind has no backing function, and is named
+    // as the first candidate for it would be
     let target = extension.name(db);
     let ordinal = extensions_in_module(db, extension.file(db))
         .iter()
         .filter(|candidate| candidate.name(db) == target)
         .position(|candidate| *candidate == extension)
         .unwrap_or(0);
+    backing_function_candidate(target, ordinal, member)
+}
+
+/// the name a member's backing function is given when the extension is the `ordinal`th of
+/// the module's extensions of `target`
+fn backing_function_candidate(target: &str, ordinal: usize, member: &str) -> String {
     if ordinal == 0 {
         format!("_by_ext__{target}__{member}")
     } else {
         format!("_by_ext{}__{target}__{member}", ordinal + 1)
     }
+}
+
+/// the name of the backing function each member of each extension `file` declares lowers
+/// to, in the order the module declares them
+///
+/// each is the first candidate ([`backing_function_candidate`]) from the extension's own
+/// ordinal up that the module spells nowhere and that no backing function before it has
+/// taken, so the module's own `_by_ext__list__second` keeps its name and the member is
+/// `_by_ext2__list__second`. the reverse transform reads past the ordinal, so it still finds
+/// the target and the member
+#[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
+fn backing_function_names(
+    db: &dyn Db,
+    file: File,
+) -> Box<[(StaticClassLiteral<'_>, Name, String)]> {
+    let extensions = extensions_in_module(db, file);
+    if extensions.is_empty() {
+        return Box::default();
+    }
+    let source = source_text(db, file);
+    let written = WrittenNames::new(source.as_str());
+    let mut ordinals: FxHashMap<&Name, usize> = FxHashMap::default();
+    let mut taken: FxHashSet<String> = FxHashSet::default();
+    let mut names = Vec::new();
+    for &extension in extensions {
+        let target = extension.name(db);
+        let ordinal = *ordinals
+            .entry(target)
+            .and_modify(|ordinal| *ordinal += 1)
+            .or_insert(0);
+        for symbol in place_table(db, extension.body_scope(db)).symbols() {
+            if !symbol.is_bound() {
+                continue;
+            }
+            let member = symbol.name();
+            // candidates only ever count up, and the module spells and the functions before
+            // this one take finitely many of them, so one is free long before the end
+            let name = (ordinal..usize::MAX)
+                .map(|candidate| backing_function_candidate(target, candidate, member))
+                .find(|candidate| !written.spells(candidate) && !taken.contains(candidate))
+                .unwrap_or_else(|| backing_function_candidate(target, ordinal, member));
+            taken.insert(name.clone());
+            names.push((extension, member.clone(), name));
+        }
+    }
+    names.into_boxed_slice()
+}
+
+/// the name `file` binds the backing function of each member of each extension it imports
+/// under, in the order [`applicable_extensions`] lists the extensions
+///
+/// the declaring module names its backing functions clear of what it spells, and nothing
+/// else: two modules extending classes of the same name with members of the same name both
+/// declare `_by_ext__Foo__bar`, and the module importing one may declare the other, or spell
+/// the name itself. so each imported function is bound under the first of its own name,
+/// `…2`, `…3`, … that the module spells nowhere, that none of its own backing functions is
+/// declared under, and that no function imported before it has taken
+#[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
+fn imported_backing_function_names(
+    db: &dyn Db,
+    file: File,
+) -> Box<[(StaticClassLiteral<'_>, Name, String)]> {
+    let source = source_text(db, file);
+    let written = WrittenNames::new(source.as_str());
+    let mut taken: FxHashSet<String> = backing_function_names(db, file)
+        .iter()
+        .map(|(_, _, name)| name.clone())
+        .collect();
+    let mut aliases: Vec<(StaticClassLiteral<'_>, Name, String)> = Vec::new();
+    for &extension in applicable_extensions(db, file) {
+        let declaring = extension.file(db);
+        if declaring == file {
+            continue;
+        }
+        for (candidate, member, name) in backing_function_names(db, declaring) {
+            if *candidate != extension {
+                continue;
+            }
+            let alias = written.fresh_outside(name, |alias| taken.contains(alias));
+            taken.insert(alias.clone());
+            aliases.push((extension, member.clone(), alias));
+        }
+    }
+    aliases.into_boxed_slice()
+}
+
+/// how `from_file` refers to the backing function of `member` of `extension`: by the name it
+/// is declared under when `from_file` declares the extension, and otherwise by the name
+/// `from_file` imports it under ([`imported_backing_function_names`]), with the import that
+/// binds it. `None` when `from_file` has no import spelling for the declaring module
+pub(crate) fn backing_function_reference<'db>(
+    db: &'db dyn Db,
+    from_file: File,
+    extension: StaticClassLiteral<'db>,
+    member: &str,
+) -> Option<(String, Option<ConversionImport>)> {
+    let name = backing_function_name(db, extension, member);
+    let declaring = extension.file(db);
+    if declaring == from_file {
+        return Some((name, None));
+    }
+    // spelled the way this file already imports the module: ty's absolute module name can be
+    // one the interpreter cannot resolve (a file under a directory that is not an importable
+    // package), and a relative import has no absolute spelling at all
+    let module = imported_module_spelling(db, from_file, declaring)?;
+    // a member the extension's body does not bind has no backing function to import, and
+    // keeps the name it would have been declared under
+    let alias = imported_backing_function_names(db, from_file)
+        .iter()
+        .find(|(candidate, candidate_member, _)| {
+            *candidate == extension && candidate_member == member
+        })
+        .map_or_else(|| name.clone(), |(_, _, alias)| alias.clone());
+    Some((
+        alias.clone(),
+        Some(ConversionImport {
+            module,
+            name,
+            alias,
+        }),
+    ))
+}
+
+/// every name `file` binds a backing function under once lowered: the ones its extensions
+/// declare, then the ones it imports from the modules declaring the others
+pub fn extension_backing_functions(db: &dyn Db, file: File) -> impl Iterator<Item = &str> {
+    backing_function_names(db, file)
+        .iter()
+        .chain(imported_backing_function_names(db, file))
+        .map(|(_, _, name)| name.as_str())
+}
+
+/// the name of the backing function `member` of `extension` lowers to, or `None` when
+/// `extension` is not an extension
+pub fn extension_backing_function<'db>(
+    db: &'db dyn Db,
+    extension: ClassLiteral<'db>,
+    member: &str,
+) -> Option<String> {
+    let ClassLiteral::Static(extension) = extension else {
+        return None;
+    };
+    extension
+        .is_extension(db)
+        .then(|| backing_function_name(db, extension, member))
 }
 
 /// a successful extension-member resolution

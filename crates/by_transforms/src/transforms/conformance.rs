@@ -31,7 +31,6 @@ use std::collections::BTreeSet;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
-use ty_python_semantic::ConversionImport;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::extension::spine_has_optional;
@@ -49,19 +48,6 @@ pub(crate) const WITNESS_HELPERS: &[crate::runtime::Helper] = &[
     crate::runtime::WITNESS_CLASS,
     crate::runtime::WITNESS_GET,
 ];
-
-/// the `from <module> import <name> as <alias>` a cross-module interface
-/// spelling needs
-fn import_line(import: &ConversionImport) -> String {
-    if import.alias == import.name {
-        format!("from {} import {}", import.module, import.name)
-    } else {
-        format!(
-            "from {} import {} as {}",
-            import.module, import.name, import.alias
-        )
-    }
-}
 
 /// the `_by_conform(...)` registrations a conformance extension emits, appended
 /// to its block's lowering so they run once the backing functions and the
@@ -85,7 +71,7 @@ pub(crate) fn registration_fragments(
     let mut first = !had_members;
     for registration in registrations {
         if let Some(import) = &registration.import {
-            ctx.required_imports.push(import_line(import));
+            ctx.required_imports.push(import.statement());
         }
         ctx.required_imports.extend(registration.imports);
         if !first {
@@ -143,7 +129,7 @@ impl<'ast> Visitor<'ast> for WitnessDispatchLower<'_> {
                 ));
             } else {
                 if let Some(import) = &dispatch.import {
-                    self.imports.insert(import_line(import));
+                    self.imports.insert(import.statement());
                 }
                 let dispatcher = match dispatch.kind {
                     ty_python_semantic::WitnessKind::Property => "_by_witness_get(",

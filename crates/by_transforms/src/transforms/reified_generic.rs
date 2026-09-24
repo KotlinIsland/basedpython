@@ -258,7 +258,12 @@ mod tests {
         // reading `T` in the body is what makes the function reified. the
         // wrapper's own source is `_by_runtime.py`'s to specify, so the expected
         // preamble is read from there rather than repeated here
-        let mut preamble = crate::runtime::inline([crate::runtime::GENERIC]).join("\n");
+        let mut preamble = crate::runtime::inline(
+            [crate::runtime::GENERIC],
+            &[],
+            crate::transforms::repeated_underscore::WrittenNames::new(""),
+        )
+        .join("\n");
         preamble.push('\n');
         check_at(
             indoc! {"

@@ -330,20 +330,25 @@ impl<'src> GenericPolyfill<'src> {
         }
     }
 
-    /// pre-scan for `private type` aliases so a reference inside a later
-    /// alias's value can be renamed as the value is re-rendered
+    /// pre-scan for the module's `private type` aliases so a reference inside a
+    /// later alias's value can be renamed as the value is re-rendered. like the
+    /// module's other private symbols, they are the ones declared outside any class
+    /// or function body
     fn collect_private_aliases(&mut self, stmts: &[Stmt]) {
         struct Collect<'a, 'src>(&'a mut HashMap<String, String>, WrittenNames<'src>);
         impl<'ast> Visitor<'ast> for Collect<'_, '_> {
             fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-                if let Stmt::TypeAlias(alias) = stmt
-                    && alias.is_private
-                    && let Expr::Name(name) = alias.name.as_ref()
-                {
-                    self.0
-                        .insert(name.id.to_string(), self.1.module_private(&name.id));
+                match stmt {
+                    Stmt::TypeAlias(alias)
+                        if alias.is_private
+                            && let Expr::Name(name) = alias.name.as_ref() =>
+                    {
+                        self.0
+                            .insert(name.id.to_string(), self.1.module_private(&name.id));
+                    }
+                    Stmt::ClassDef(_) | Stmt::FunctionDef(_) => {}
+                    _ => ruff_python_ast::visitor::walk_stmt(self, stmt),
                 }
-                ruff_python_ast::visitor::walk_stmt(self, stmt);
             }
         }
         let mut collect = Collect(&mut self.private_aliases, self.written);
@@ -989,8 +994,16 @@ impl<'src> GenericPolyfill<'src> {
 
         // this replacement subsumes `modifiers`' `private ` deletion and the
         // rename of the definition site, so the private name has to be applied
-        // here instead
-        let name_src = if alias.is_private {
+        // here instead: a module's own symbol as the module renames it, and a
+        // class's own member as the class body spells it. any other alias keeps
+        // its name, as the native `type` statement of a class body does
+        let class_member_name = match alias.name.as_ref() {
+            Expr::Name(name) => self.types.class_body_member_name(name),
+            _ => None,
+        };
+        let name_src = if let Some(renamed) = class_member_name {
+            renamed
+        } else if alias.is_private && self.enclosing_renames.is_empty() {
             self.written.module_private(self.src(alias.name.range()))
         } else {
             self.src(alias.name.range()).to_owned()
@@ -998,8 +1011,10 @@ impl<'src> GenericPolyfill<'src> {
         let raw_value_src = self.src(alias.value.range()).to_owned();
 
         // references to a `private type` alias declared elsewhere in the module
-        // also sit inside the subsumed value, so they are renamed here too
+        // also sit inside the subsumed value, so they are renamed here too, and so
+        // is a reference to a restricted member of the class the alias is in
         let mut rename_map = self.private_aliases.clone();
+        rename_map.extend(class_member_references(&alias.value, self.types));
 
         let (type_params_arg, defs) = if let Some(tp) = &alias.type_params
             && let Some(names) = names
@@ -1039,7 +1054,7 @@ impl<'src> GenericPolyfill<'src> {
                 self.written.builtin("object")
             );
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                replacement,
+                at_statement_start(&replacement, &indent),
                 alias.range(),
             )));
             return;
@@ -1092,10 +1107,17 @@ impl<'src> GenericPolyfill<'src> {
         );
 
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            replacement,
+            at_statement_start(&replacement, &indent),
             alias.range(),
         )));
     }
+}
+
+/// `lines`, each written with the statement's `indent`, as a replacement for a statement:
+/// its range starts after the indent the source already wrote, so the first line leaves
+/// its own out
+fn at_statement_start(lines: &str, indent: &str) -> String {
+    lines.strip_prefix(indent).unwrap_or(lines).to_owned()
 }
 
 impl GenericPolyfill<'_> {
@@ -2088,8 +2110,14 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
         // an edit we re-rendered with the typevar rename applied has to lose its
         // original, or the un-renamed text can still win the overlap race
         let superseded = std::mem::take(&mut inner.superseded);
-        ctx.text_edits
-            .retain(|(range, _)| !superseded.contains(range));
+        let withdrawn: Vec<usize> = ctx
+            .text_edits
+            .iter()
+            .enumerate()
+            .filter(|(_, (range, _))| superseded.contains(range))
+            .map(|(index, _)| index)
+            .collect();
+        ctx.withdrawn_text_edits.extend(withdrawn);
         let emits_any = inner.needed_imports_any;
         for line in
             std::mem::take(&mut inner.needed_imports).into_lines(&inner.constructors, self.written)
@@ -2112,6 +2140,31 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
             }
         }
     }
+}
+
+/// each name `value`, the value of a type alias, reads that is a restricted member of the
+/// class the alias is declared in, with the spelling a read of it takes
+fn class_member_references(value: &Expr, types: &dyn TypeInfo) -> HashMap<String, String> {
+    struct Collect<'a> {
+        types: &'a dyn TypeInfo,
+        found: HashMap<String, String>,
+    }
+    impl<'ast> Visitor<'ast> for Collect<'_> {
+        fn visit_expr(&mut self, expr: &'ast Expr) {
+            if let Expr::Name(name) = expr
+                && let Some(renamed) = self.types.class_body_member_name(name)
+            {
+                self.found.insert(name.id.to_string(), renamed);
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut collect = Collect {
+        types,
+        found: HashMap::new(),
+    };
+    collect.visit_expr(value);
+    collect.found
 }
 
 #[cfg(test)]

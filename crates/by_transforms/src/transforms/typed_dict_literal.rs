@@ -30,9 +30,8 @@
 //! field types are emitted as forward references — see [`quote_type`]
 
 use std::collections::BTreeSet;
-use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 
 use indexmap::IndexMap;
 use ruff_diagnostics::{Edit, Fix};
@@ -60,12 +59,9 @@ struct Shape {
 }
 
 impl Shape {
-    fn class_name(&self) -> String {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        #[expect(clippy::cast_possible_truncation)]
-        let truncated = hasher.finish() as u32;
-        format!("_TypedDict_{truncated:08x}")
+    /// the name of the class declaring this shape, one the module has no other use of
+    fn class_name(&self, written: WrittenNames) -> String {
+        written.synthesized_class("_TypedDict_", self)
     }
 
     /// the class declaring this shape as `name`, `typing_extensions.TypedDict` written as
@@ -357,7 +353,7 @@ impl<'src> TypedDictLiteral<'src> {
         let name = if let Some(existing) = self.shapes.get(&shape) {
             existing.clone()
         } else {
-            let n = shape.class_name();
+            let n = shape.class_name(self.written);
             self.shapes.insert(shape, n.clone());
             n
         };

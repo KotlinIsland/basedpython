@@ -228,13 +228,19 @@ mod tests {
     #[test]
     fn a_stub_needs_nothing_installed() {
         let source = "from typing import Self\n";
-        let (_, needed) = crate::transpile_with_report(source, &Config::test_default()).unwrap();
+        let (_, needed) = crate::transpile_with_report(
+            source,
+            &Config::test_default(),
+            crate::PythonVersion::latest_ty(),
+        )
+        .unwrap();
         assert_eq!(needed.specifiers(), ["typing_extensions>=4.12"]);
         let stub = Config {
             is_stub: true,
             ..Config::test_default()
         };
-        let (out, needed) = crate::transpile_with_report(source, &stub).unwrap();
+        let (out, needed) =
+            crate::transpile_with_report(source, &stub, crate::PythonVersion::latest_ty()).unwrap();
         assert_eq!(out, "from typing_extensions import Self\n");
         assert!(needed.specifiers().is_empty());
     }

@@ -254,6 +254,30 @@ assert typing.get_type_hints(half)["value"] === fractions.Fraction, "the string 
 print("ok")
 "#;
 
+/// a module that binds names of builtins the proxy reads when it resolves, formats and
+/// iterates. the proxy is pasted into the module and reads the builtins through its
+/// globals, so it reads them under names of its own
+const BUILTIN_NAMES_MAIN: &str = r#"
+from decimal import Decimal
+from math import pi
+from string import digits
+
+def getattr(o: object, name: str) -> int:
+    return 42
+
+def format(value: object, spec: str) -> str:
+    return "shadowed"
+
+def iter(o: object) -> int:
+    return 0
+
+assert Decimal(1) + 1 == Decimal(2), "resolving the proxy calls `getattr`"
+assert f"{pi:.2f}" == "3.14", "formatting the proxy calls `format`"
+assert [c for c in digits][:2] == ["0", "1"], "iterating the proxy calls `iter`"
+assert getattr(1, "x") == 42 and format(1, "") == "shadowed" and iter(1) == 0
+print("ok")
+"#;
+
 /// the interpreter to run the transpiled output on: the oldest found that runs what the
 /// transpiler targets by default, 3.10 — a dataclass's `KW_ONLY` among it. none is a skip, said so
 fn python() -> Option<Interpreter> {
@@ -377,5 +401,14 @@ fn a_string_annotation_resolves_to_the_imported_object() {
         "lazy_future_annotations",
         &[("main", FUTURE_ANNOTATIONS_MAIN)],
     );
+    run_main(&python, &dir);
+}
+
+#[test]
+fn the_proxy_reads_builtins_the_module_binds_for_itself() {
+    let Some(python) = python() else {
+        return;
+    };
+    let dir = build_case("lazy_builtin_names", &[("main", BUILTIN_NAMES_MAIN)]);
     run_main(&python, &dir);
 }

@@ -37,3 +37,8 @@ type Commented = (
     # own-line between parameters
     str,
 ) -> bool
+
+
+# a callable type's return binds tighter than a comparison, so the narrowing
+# predicate it returns keeps its parentheses
+def narrows(check: (first: object, second: object) -> (second is int)): ...

@@ -303,8 +303,8 @@ impl<'db> SemanticModel<'db> {
             let mut imports = Vec::new();
             let mut entries = Vec::new();
             for entry in table {
-                if let Some(module) = &entry.import_from {
-                    imports.push(format!("from {module} import {}", entry.function));
+                if let Some(import) = &entry.import {
+                    imports.push(import.statement());
                 }
                 entries.push((entry.member, entry.function));
             }
@@ -652,28 +652,16 @@ impl<'db> SemanticModel<'db> {
         }) {
             return None;
         }
-        let extension_file = resolution.extension.file(db);
-        let import_from = if extension_file == self.file.file(db) {
-            None
-        } else {
-            // spelled the way this file already imports the module: ty's absolute
-            // module name can be one the interpreter cannot resolve (a file under a
-            // directory that is not an importable package), and a relative import has
-            // no absolute spelling at all
-            Some(crate::types::conversions::imported_module_spelling(
-                db,
-                self.file.file(db),
-                extension_file,
-            )?)
-        };
+        let (function, import) = crate::types::extensions::backing_function_reference(
+            db,
+            self.file.file(db),
+            resolution.extension,
+            member,
+        )?;
         Some(crate::types::extensions::ExtensionAttributeInfo {
-            function: crate::types::extensions::backing_function_name(
-                db,
-                resolution.extension,
-                member,
-            ),
+            function,
             kind: resolution.kind,
-            import_from,
+            import,
             receiver_is_class,
         })
     }

@@ -113,14 +113,19 @@ pub(crate) fn lower(source: String, config: &Config) -> String {
         .iter()
         .any(|(_, replacement)| replacement.contains(MISS));
     let body = apply(&source, edits);
-    let mut preamble = String::new();
+    let mut imports = String::new();
     for import in written.builtin_imports(&body, config.min_version.minor) {
-        preamble.push_str(&import);
-        preamble.push('\n');
+        imports.push_str(&import);
+        imports.push('\n');
     }
-    preamble.push_str(&crate::runtime_preamble(config, &helpers(&needs, sentinel)));
+    // the runtime definitions the tests call are decided against the module with those
+    // imports in it, so a builtin they read is read under the same name, and spliced after
+    // them
     let at = preamble_offset(&body);
-    format!("{}{preamble}{}", &body[..at], &body[at..])
+    let body = format!("{}{imports}{}", &body[..at], &body[at..]);
+    let runtime = crate::runtime_preamble(config, &helpers(&needs, sentinel), &body);
+    let at = preamble_offset(&body);
+    format!("{}{runtime}{}", &body[..at], &body[at..])
 }
 
 /// Apply disjoint replacements, ascending by start.
@@ -825,5 +830,43 @@ mod tests {
             out.matches("__by_match").count() > 0 && !out.contains("_by_match_0 "),
             "got:\n{out}"
         );
+    }
+
+    /// a builtin the module binds is read under one name of the lowering's own, whichever
+    /// lowering reads it: the type test before this phase, and the tests and the runtime
+    /// definitions this one writes, all read the one `isinstance2`, imported once, ahead of
+    /// the definitions that read it
+    #[test]
+    fn a_builtin_is_read_under_one_name_by_every_lowering() {
+        let out = lowered(indoc! {r#"
+            def len(a: object) -> int:
+                return 99
+
+            def isinstance(a: object, b: object) -> str:
+                return "mine"
+
+            def f(x: object):
+                print(x is int)
+                match x:
+                    case [a, b]:
+                        print(a, b)
+                    case int():
+                        print("int")
+        "#});
+        assert!(
+            !out.contains("isinstance3") && !out.contains("len3"),
+            "got:\n{out}"
+        );
+        for import in [
+            "from builtins import isinstance as isinstance2\n",
+            "from builtins import len as len2\n",
+        ] {
+            assert_eq!(out.matches(import).count(), 1, "`{import}` once in:\n{out}");
+            let definitions = out.find("def _by_match_seq").expect("the sequence test");
+            assert!(
+                out.find(import) < Some(definitions),
+                "imported first:\n{out}"
+            );
+        }
     }
 }

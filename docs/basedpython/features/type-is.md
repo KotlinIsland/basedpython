@@ -24,6 +24,11 @@ argument has type `T` when it returns `True`, and the checker narrows
 accordingly at call sites. the name is lost in lowering (`TypeIs` doesn't
 carry it) but is preserved in the source for readers
 
+a predicate cannot be negated. `-> x is not str` would narrow to everything but
+`str` where the call returns `True`, which `TypeIs` has no way to say, so it is
+an error. write `-> x is str` and negate the call instead (`if not is_str(x):`),
+or [assert](#asserting-a-type) with `asserts x is not str`
+
 ## naming the parameter
 
 `TypeIs` always narrows a function's first parameter. the name says which
@@ -41,6 +46,38 @@ def f(a: object, b: object):
 
 the name is matched against the argument the call passes for that parameter,
 so a keyword argument narrows the same place
+
+## callable types
+
+a [callable type](callable.md) returns a predicate the same way, naming
+one of its parameters. its return binds tighter than a comparison, as it does
+than `|`, so the predicate is parenthesized:
+
+```by
+def pick(check: (first: object, second: object) -> (second is int), a: object, b: object):
+    if check(a, b):
+        b  # int
+```
+
+a `def` whose predicate names that parameter is such a callable. a name that
+is not one of the callable's parameters is a [place](#narrowing-a-place), as it
+is for a `def`
+
+a caller narrows the argument the callable type names, so a function that tests
+a different one is not such a callable, even when the narrowed type is the same:
+
+```by
+def is_int(first: object, second: object) -> first is int:
+    return isinstance(first, int)
+
+pick(is_int, 1, "b")  # error: narrows `first`, where `second` is expected
+```
+
+a parameter is matched by position, and by name too where a caller can pass it
+by keyword. a `TypeIs` that names no parameter narrows the first one — after
+`self` for a method — and a `Callable` narrows the first argument it is passed.
+an override is held to the same rule: it narrows what the method it overrides
+narrows
 
 ## narrowing a member
 

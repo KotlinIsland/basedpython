@@ -579,7 +579,12 @@ mod tests {
     /// the preamble holds is still asserted
     fn check_body(input: &str, expected: &str) {
         let out = transpile(input, &Config::test_default()).unwrap();
-        let mut runtime = crate::runtime::inline([crate::runtime::LOOP_BIND]).join("\n");
+        let mut runtime = crate::runtime::inline(
+            [crate::runtime::LOOP_BIND],
+            &[],
+            crate::transforms::repeated_underscore::WrittenNames::new(input),
+        )
+        .join("\n");
         runtime.push('\n');
         let body = out.replacen(&runtime, "", 1);
         assert_eq!(body, crate::python_passthrough::lazify_expected(expected));

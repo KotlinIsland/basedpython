@@ -16,11 +16,12 @@ pub use transforms::soundness::{SoundnessSites, soundness_sites};
 /// guard and its argument parser are generated from.
 pub mod entry_point {
     pub use crate::transforms::main_function::{
-        Choice, CliSpelling, EntryParameter, EntryPoint, ParameterKind, entry_point, main_guards,
+        Choice, CliSpelling, Converter, EntryParameter, EntryPoint, ParameterKind, entry_point,
+        main_guards,
     };
 }
 
-use transforms::repeated_underscore::{CodeNames, PrivateNames};
+use transforms::repeated_underscore::{CodeNames, PrivateNames, SynthesizedClasses};
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -34,15 +35,22 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use salsa::Setter as _;
 use ty_project::{ProjectMetadata, TestDb};
 
-/// Creates a single-file in-memory database for transpilation.
+/// Creates a single-file in-memory database for transpilation, analysing at ty's newest
+/// python.
 ///
 /// The source is registered at `/input.by`.
 pub(crate) fn make_in_memory_db(source: &str) -> (TestDb, File) {
+    make_in_memory_db_at(source, PythonVersion::latest_ty())
+}
+
+/// [`make_in_memory_db`], analysing the source at `python_version`
+pub(crate) fn make_in_memory_db_at(source: &str, python_version: PythonVersion) -> (TestDb, File) {
     let mut db = TestDb::new(ProjectMetadata::new(
         ruff_python_ast::name::Name::new_static(""),
         SystemPathBuf::from("/"),
     ));
-    db.init_program().expect("program init failed");
+    db.init_program_with_python_version(python_version)
+        .expect("program init failed");
     db.write_file("/input.by", source)
         .expect("write file failed");
     let file = system_path_to_file(&db, "/input.by").expect("file not in db");
@@ -141,15 +149,31 @@ fn run_erased_union_phase<'a>(
 /// Transpile `.by` source text to python without a project db (single-file:
 /// type-aware passes see only this file). Used for stdin input and tests; the
 /// file-backed [`transpile_typed`] resolves cross-module types.
+///
+/// the module is analysed at ty's newest python, whatever `config` targets. a
+/// project analyses at its own version, which can differ in what the analysis
+/// finds — a builtin a newer python adds, say — so [`transpile_analysed_at`]
+/// takes one
 pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
-    transpile_with_report(source, config).map(|(output, _)| output)
+    transpile_analysed_at(source, config, PythonVersion::latest_ty())
 }
 
-/// Like [`transpile`], and also reports what the emitted python needs installed
-/// to run.
+/// [`transpile`], analysing the module at `python_version`, as `by transpile`
+/// analyses a project's modules at the project's version
+pub fn transpile_analysed_at(
+    source: &str,
+    config: &Config,
+    python_version: PythonVersion,
+) -> Result<String, String> {
+    transpile_with_report(source, config, python_version).map(|(output, _)| output)
+}
+
+/// Like [`transpile_analysed_at`], and also reports what the emitted python
+/// needs installed to run.
 fn transpile_with_report(
     source: &str,
     config: &Config,
+    python_version: PythonVersion,
 ) -> Result<(String, RuntimeRequirements), String> {
     if config.is_python {
         return Ok((source.to_owned(), RuntimeRequirements::default()));
@@ -158,7 +182,7 @@ fn transpile_with_report(
     // one db over the original source, shared by the qualification phase below
     // and — as long as nothing rewrites the source — by phase 0's type-aware
     // passes, which would otherwise build an identical one of their own
-    let (local_db, local_file) = make_in_memory_db(source);
+    let (local_db, local_file) = make_in_memory_db_at(source, python_version);
     let parsed = ruff_db::parsed::parsed_module(
         &local_db,
         ty_python_semantic::Db::program_file(&local_db, local_file).python_file(&local_db),
@@ -182,7 +206,7 @@ fn transpile_with_report(
 
     // that rewrite edits signatures, so the qualification phase below needs a
     // db over what it is actually editing rather than the pre-rewrite source
-    let rebuilt = reified_changed.then(|| make_in_memory_db(source));
+    let rebuilt = reified_changed.then(|| make_in_memory_db_at(source, python_version));
     let (qualify_db, qualify_file) = match &rebuilt {
         Some((db, file)) => (db as &dyn ty_python_semantic::Db, *file),
         None => (&local_db as &dyn ty_python_semantic::Db, local_file),
@@ -207,8 +231,12 @@ fn transpile_with_report(
             .iter()
             .map(ruff_python_ast::name::Name::as_str),
         &[as_written, source],
+        ty_python_semantic::extension_backing_functions(&local_db, local_file),
     );
-    let written_names = written_names.with_private(&private_names);
+    let synthesized_classes = SynthesizedClasses::default();
+    let written_names = written_names
+        .with_private(&private_names)
+        .with_synthesized(&synthesized_classes);
 
     // --- Phase 0: AST rewrite passes ---
     let unchanged = !reified_changed
@@ -218,7 +246,11 @@ fn transpile_with_report(
         source,
         written_names,
         config,
-        unchanged.then_some((&local_db as &dyn ty_python_semantic::Db, local_file)),
+        if unchanged {
+            transforms::ast_driver::SemanticSource::Project(&local_db, local_file)
+        } else {
+            transforms::ast_driver::SemanticSource::Fresh(python_version)
+        },
     );
     if let Some(first) = ast_errors.first() {
         return Err(first.clone());
@@ -226,7 +258,7 @@ fn transpile_with_report(
     let source = source.as_ref();
 
     // --- Phase 1: basedpython lowering ---
-    let (db, file) = make_in_memory_db(source);
+    let (db, file) = make_in_memory_db_at(source, python_version);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
     let module = ruff_db::parsed::parsed_module(
@@ -389,8 +421,10 @@ pub fn transpile_typed_with_report(
     let reified_changed = matches!(reified, std::borrow::Cow::Owned(_));
 
     // that rewrite edits signatures, so qualification needs a db over what it
-    // is actually editing rather than the project file
-    let rebuilt = reified_changed.then(|| make_in_memory_db(reified.as_ref()));
+    // is actually editing rather than the project file. that db, and any other
+    // this module is analysed in on its own, analyses at the project's version
+    let project_version = db.python_version_with_source(file).version;
+    let rebuilt = reified_changed.then(|| make_in_memory_db_at(reified.as_ref(), project_version));
     let (qualify_db, qualify_file) = match &rebuilt {
         Some((rebuilt_db, rebuilt_file)) => {
             (rebuilt_db as &dyn ty_python_semantic::Db, *rebuilt_file)
@@ -418,8 +452,12 @@ pub fn transpile_typed_with_report(
             .iter()
             .map(ruff_python_ast::name::Name::as_str),
         &[original_source, working_source],
+        ty_python_semantic::extension_backing_functions(db, file),
     );
-    let written_names = written_names.with_private(&private_names);
+    let synthesized_classes = SynthesizedClasses::default();
+    let written_names = written_names
+        .with_private(&private_names)
+        .with_synthesized(&synthesized_classes);
     // two independent facts, deliberately kept apart: `enum_changed` says the
     // enum phase *renumbered lines*, so the final map must compose through its
     // line map (which is empty when it didn't fire, and would map every line to
@@ -442,9 +480,11 @@ pub fn transpile_typed_with_report(
         None
     };
     let project = match &overlaid {
-        Some(overlaid) => Some((&*overlaid.db, overlaid.file)),
-        None if source_changed => None,
-        None => Some((db, file)),
+        Some(overlaid) => {
+            transforms::ast_driver::SemanticSource::Project(&*overlaid.db, overlaid.file)
+        }
+        None if source_changed => transforms::ast_driver::SemanticSource::Fresh(project_version),
+        None => transforms::ast_driver::SemanticSource::Project(db, file),
     };
     // which imports must stay eager, computed against the *project* db: a
     // single-file db cannot resolve the modules that declare the conformances
@@ -630,7 +670,10 @@ fn run_anon_named_tuple_cleanup(
                 &written.import_from("typing", &["NamedTuple"]),
             );
             let (imports, helpers) = anon.callable.take_requirements();
-            for line in imports.into_iter().chain(runtime_entries(config, &helpers)) {
+            for line in imports
+                .into_iter()
+                .chain(runtime_entries(config, &helpers, &source))
+            {
                 push_missing(&mut preamble, line.trim_end_matches('\n'));
             }
             for defs in [anon.callable.class_defs().to_owned(), anon.class_defs()] {
@@ -788,7 +831,7 @@ fn run_lazy_import_phase(
             None => body,
         };
     }
-    let preamble = runtime_preamble(config, &helpers);
+    let preamble = runtime_preamble(config, &helpers, &body);
     if preamble.is_empty() {
         body
     } else {
@@ -796,29 +839,40 @@ fn run_lazy_import_phase(
     }
 }
 
-/// The lines that give a module the runtime helpers it calls: an import of the
-/// module a build wrote them to, or the definitions themselves when this
+/// The lines that give `module`, python, the runtime helpers it calls: an import of
+/// the module a build wrote them to, or the definitions themselves when this
 /// transpile has nowhere to write one.
 ///
 /// Both come out of `_by_runtime.py`, so the pasted-in form and the imported one
 /// are the same code either way.
-fn runtime_preamble(config: &Config, helpers: &[runtime::Helper]) -> String {
-    runtime_entries(config, helpers).concat()
+fn runtime_preamble(config: &Config, helpers: &[runtime::Helper], module: &str) -> String {
+    runtime_entries(config, helpers, module).concat()
 }
 
 /// The same lines, one per entry and each newline-terminated, for a caller that
-/// prepends them one at a time.
-fn runtime_entries(config: &Config, helpers: &[runtime::Helper]) -> Vec<String> {
+/// prepends them one at a time. Pasted in, the definitions read a builtin `module`
+/// binds for itself under a name of their own, imported ahead of them.
+fn runtime_entries(config: &Config, helpers: &[runtime::Helper], module: &str) -> Vec<String> {
     if helpers.is_empty() {
         return Vec::new();
     }
-    match config.runtime_module.as_deref() {
-        Some(module) => vec![format!(
+    if let Some(runtime_module) = config.runtime_module.as_deref() {
+        return vec![format!(
             "{}\n",
-            runtime::import_line(module, helpers.iter().copied())
-        )],
-        None => runtime::inline(helpers.iter().copied()),
+            runtime::import_line(runtime_module, helpers.iter().copied())
+        )];
     }
+    let parsed =
+        ruff_python_parser::parse_unchecked_source(module, ruff_python_ast::PySourceType::Python);
+    let code = transforms::repeated_underscore::CodeNames::of(parsed.suite());
+    let written = transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
+    let definitions = runtime::inline(helpers.iter().copied(), parsed.suite(), written);
+    written
+        .builtin_imports(&definitions.concat(), config.min_version.minor)
+        .into_iter()
+        .map(|import| format!("{import}\n"))
+        .chain(definitions)
+        .collect()
 }
 
 /// Version polyfill phase: rewrite syntax the target python cannot parse into
@@ -878,9 +932,31 @@ fn splice_preamble(body: &str, preamble: &str) -> String {
 /// since the unified parser accepts those — a leftover flag in the output
 /// means a transform passed responsibility for invalid Python down the chain
 /// and we abort here.
+/// whether the lowering preamble writes `from __future__ import annotations`
+/// over a module: asked for, or on a target below 3.10, whose runtime cannot
+/// evaluate the `X | Y` annotations the optional lowering itself produces —
+/// unless the module is a stub or spells the import itself
+pub(crate) fn writes_future_annotations(stmts: &[Stmt], config: &Config) -> bool {
+    (config.inject_future_annotations || config.min_version < PythonVersion::PY310)
+        && !config.is_stub
+        && !has_future_annotations(stmts)
+}
+
+/// whether python evaluates the output's annotations as their definitions run:
+/// not in a stub, not on a version that defers them (3.14), and not under a
+/// `from __future__ import annotations` the module spells or the preamble writes.
+/// every pass that quotes an annotation asks this, so a forward reference is
+/// quoted exactly when nothing else defers it
+pub(crate) fn annotations_evaluated(stmts: &[Stmt], config: &Config) -> bool {
+    !config.is_stub
+        && !config.min_version.defers_annotations()
+        && !has_future_annotations(stmts)
+        && !writes_future_annotations(stmts, config)
+}
+
 /// True when the user source already imports `annotations` from
 /// `__future__`, so the lowering doesn't emit a duplicate
-fn has_future_annotations(stmts: &[Stmt]) -> bool {
+pub(crate) fn has_future_annotations(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| {
         let Stmt::ImportFrom(node) = s else {
             return false;
@@ -1097,8 +1173,8 @@ impl AuthorNames {
             std::collections::HashMap::new();
         for stmt in suite {
             // the range is the binding's own, so a refusal points at the `x` of `x = 1`
-            // rather than at the whole statement
-            for (name, range) in runtime::bindings(stmt) {
+            // rather than at the whole statement. a function's `global` binds here too
+            for (name, range) in runtime::module_bindings(stmt) {
                 binds_at_module_scope
                     .entry(name)
                     .and_modify(|(count, _)| *count += 1)
@@ -1136,7 +1212,7 @@ impl AuthorNames {
 fn verify_no_helper_name_clash(suite: &[Stmt], author: &AuthorNames) -> Result<(), TranspileError> {
     let mut provided: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for stmt in suite {
-        for name in runtime::bindings(stmt).into_keys() {
+        for name in runtime::module_bindings(stmt).into_keys() {
             if runtime::defines(&name) {
                 *provided.entry(name).or_insert(0) += 1;
             }
@@ -1434,12 +1510,7 @@ fn run_lowering_phase(source: &str, stmts: &[Stmt], config: &Config) -> Lowering
     // BOM, just a character python refuses to tokenize
     let (bom, source) = source.split_at(usize::from(source.bom_start_offset()));
     output.push_str(bom);
-    // below 3.10 the runtime cannot evaluate pep 604 `X | Y` annotations —
-    // which the optional lowering itself produces — so annotation evaluation
-    // must always be deferred on those targets
-    let needs_lazy_annotations =
-        config.inject_future_annotations || config.min_version < PythonVersion::PY310;
-    if needs_lazy_annotations && !config.is_stub && !has_future_annotations(stmts) {
+    if writes_future_annotations(stmts, config) {
         // a string is the module's `__doc__` only while it is the first statement,
         // so the import goes after it rather than over it — a module whose
         // annotations had to be deferred used to read back no docstring at all.
@@ -2420,11 +2491,11 @@ mod cross_file {
         ]);
         let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
-            out.contains("from ui.geometry import Dp as _by_conv__Dp"),
+            out.contains("from ui.geometry import Dp as _by_conv__ui_dgeometry__Dp"),
             "the declaring module is spelled through the imported package, got:\n{out}"
         );
         assert!(
-            out.contains("print(pad(_by_conv__Dp.__of__(8)))"),
+            out.contains("print(pad(_by_conv__ui_dgeometry__Dp.__of__(8)))"),
             "the literal converts through the alias, got:\n{out}"
         );
     }
@@ -2446,10 +2517,13 @@ mod cross_file {
         ]);
         let out = transpile_file(&project, "/ui/widgets.by", &Config::test_default());
         assert!(
-            out.contains("from .geometry import Dp as _by_conv__Dp"),
+            out.contains("from .geometry import Dp as _by_conv___dgeometry__Dp"),
             "got:\n{out}"
         );
-        assert!(out.contains("_by_conv__Dp.__of__(8)"), "got:\n{out}");
+        assert!(
+            out.contains("_by_conv___dgeometry__Dp.__of__(8)"),
+            "got:\n{out}"
+        );
     }
     /// `f[int](1)` must lower to `f(1)` only because ty resolves the imported
     /// `f` to a generic *function* (constructor calls like `Foo[int](1)` keep
@@ -2605,6 +2679,33 @@ mod cross_file {
         assert!(
             ext_out.contains("def _by_ext__list__second(self):"),
             "defining module should lower the block, got:\n{ext_out}"
+        );
+    }
+
+    /// an importing module calls a backing function by the name the declaring module declares
+    /// it under, which is past what the declaring module spells
+    #[test]
+    fn an_imported_backing_function_is_called_by_its_declared_name() {
+        let project = project_db(&[
+            (
+                "/ext.by",
+                "def _by_ext__list__second() -> None: ...\n\nextension list:\n    def second(self) -> Element:\n        return self[1]\n",
+            ),
+            (
+                "/main.by",
+                "import ext\n\nxs = [1, 2, 3]\nprint(xs.second())\n",
+            ),
+        ]);
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from ext import _by_ext2__list__second")
+                && out.contains("print(_by_ext2__list__second(xs))"),
+            "got:\n{out}"
+        );
+        let ext_out = transpile_file(&project, "/ext.by", &Config::test_default());
+        assert!(
+            ext_out.contains("def _by_ext2__list__second(self):"),
+            "got:\n{ext_out}"
         );
     }
 
@@ -2800,18 +2901,22 @@ mod cross_file {
         ]);
         let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
-            out.contains("return _by_witness(value, _by_conv__Show, \"show\")()"),
+            out.contains("return _by_witness(value, _by_conv__iface__Show, \"show\")()"),
             "the requirement should dispatch through the table, got:\n{out}"
         );
         // the conformance is not this file's to register
-        assert!(!out.contains("_by_conform(_by_conv__Show,"), "got:\n{out}");
+        assert!(
+            !out.contains("_by_conform(_by_conv__iface__Show,"),
+            "got:\n{out}"
+        );
 
         // the declaring module emits both halves, naming the backing function it
         // lowered itself
         let adapters_out = transpile_file(&project, "/adapters.by", &Config::test_default());
         assert!(
-            adapters_out
-                .contains("_by_conform(_by_conv__Show, str, {\"show\": _by_ext__str__show})"),
+            adapters_out.contains(
+                "_by_conform(_by_conv__iface__Show, str, {\"show\": _by_ext__str__show})"
+            ),
             "the declaring module should register the table, got:\n{adapters_out}"
         );
     }
@@ -2837,7 +2942,9 @@ mod cross_file {
             "the default's backing function must be imported, got:\n{out}"
         );
         assert!(
-            out.contains("_by_conform(_by_conv__Show, str, {\"show\": _by_ext__Show__show})"),
+            out.contains(
+                "_by_conform(_by_conv__iface__Show, str, {\"show\": _by_ext__Show__show})"
+            ),
             "got:\n{out}"
         );
     }
@@ -2863,11 +2970,13 @@ mod cross_file {
         ]);
         let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
-            out.contains("from temps import Celsius, report, Fahrenheit as _by_conv__Fahrenheit"),
+            out.contains(
+                "from temps import Celsius, report, Fahrenheit as _by_conv__temps__Fahrenheit"
+            ),
             "the target class should be imported under its alias, got:\n{out}"
         );
         assert!(
-            out.contains("report(_by_conv__Fahrenheit.__from__(Celsius()))"),
+            out.contains("report(_by_conv__temps__Fahrenheit.__from__(Celsius()))"),
             "argument should be converted, got:\n{out}"
         );
     }
@@ -2893,7 +3002,7 @@ mod cross_file {
         ]);
         let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
-            out.contains("report(_by_conv__Fahrenheit.__from__(Celsius()))"),
+            out.contains("report(_by_conv__temps__Fahrenheit.__from__(Celsius()))"),
             "argument should be converted through the alias, got:\n{out}"
         );
         assert!(
@@ -2923,12 +3032,115 @@ mod cross_file {
         ]);
         let out = transpile_file(&project, "/main.by", &Config::test_default());
         assert!(
-            out.contains("from temps import Celsius, report, Fahrenheit as _by_conv__Fahrenheit"),
+            out.contains(
+                "from temps import Celsius, report, Fahrenheit as _by_conv__temps__Fahrenheit"
+            ),
             "the alias keeps the local class intact, got:\n{out}"
         );
         assert!(
-            out.contains("report(_by_conv__Fahrenheit.__from__(Celsius()))"),
+            out.contains("report(_by_conv__temps__Fahrenheit.__from__(Celsius()))"),
             "the conversion must not go through the local class, got:\n{out}"
+        );
+    }
+
+    /// two classes of one name from two modules are two conversion targets, so they are
+    /// imported under two aliases: under one, the second import would rebind the first and
+    /// both conversions would go through whichever class was imported last
+    #[test]
+    fn same_named_targets_from_two_modules_get_two_aliases() {
+        let length = |factor: u32| {
+            format!(
+                "frozen data class Length:\n    value: float\n\n    \
+                 class def __of__(cls, value: int) -> Length:\n        \
+                 return Length(float(value * {factor}))\n"
+            )
+        };
+        let metric = length(1000);
+        let imperial = length(12);
+        let project = project_db(&[
+            ("/metric.by", metric.as_str()),
+            ("/imperial.by", imperial.as_str()),
+            (
+                "/main.by",
+                "import metric\nimport imperial\n\n\
+                 def m(amount: metric.Length) -> float:\n    return amount.value\n\n\
+                 def i(amount: imperial.Length) -> float:\n    return amount.value\n\n\
+                 print(m(2), i(2))\n",
+            ),
+        ]);
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from metric import Length as _by_conv__metric__Length"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("from imperial import Length as _by_conv__imperial__Length"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "print(m(_by_conv__metric__Length.__of__(2)), i(_by_conv__imperial__Length.__of__(2)))"
+            ),
+            "got:\n{out}"
+        );
+    }
+
+    /// a module and a class name are written into an alias so that no two imports share one:
+    /// a `_` in the module is `_u` and a `.` is `_d`, so `a_b.c` and `a.b_c` stay apart
+    #[test]
+    fn a_module_path_is_written_into_its_alias_unambiguously() {
+        let length = "frozen data class Length:\n    value: float\n\n    \
+                      class def __of__(cls, value: int) -> Length:\n        \
+                      return Length(float(value))\n";
+        let project = project_db(&[
+            ("/a_b/__init__.by", ""),
+            ("/a_b/c.by", length),
+            ("/a/__init__.by", ""),
+            ("/a/b_c.by", length),
+            (
+                "/main.by",
+                "import a_b.c\nimport a.b_c\n\n\
+                 def f(x: a_b.c.Length, y: a.b_c.Length) -> float:\n    return x.value + y.value\n\n\
+                 print(f(1, 2))\n",
+            ),
+        ]);
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from a_b.c import Length as _by_conv__a_ub_dc__Length"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("from a.b_c import Length as _by_conv__a_db_uc__Length"),
+            "got:\n{out}"
+        );
+    }
+
+    /// a file that spells a name beginning with the alias prefix gets another prefix, so no
+    /// alias can rebind a name of the file's own, nor be rebound by it
+    #[test]
+    fn a_file_spelling_the_alias_prefix_gets_another() {
+        let project = project_db(&[
+            (
+                "/temps.by",
+                "class Celsius:\n    degrees: float = 0.0\n\n\
+                 class Fahrenheit:\n    degrees: float = 0.0\n\n    \
+                 @classmethod\n    def __from__(cls, value: Celsius) -> Self:\n        return cls()\n\n\
+                 def report(t: Fahrenheit) -> None: ...\n",
+            ),
+            (
+                "/main.by",
+                "from temps import Celsius, report\n\n\
+                 _by_conv__temps__Fahrenheit = 1\n\nreport(Celsius())\n",
+            ),
+        ]);
+        let out = transpile_file(&project, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("report(_by_conv2__temps__Fahrenheit.__from__(Celsius()))"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("_by_conv__temps__Fahrenheit = 1"),
+            "got:\n{out}"
         );
     }
 
@@ -3165,6 +3377,25 @@ mod runtime_helper_check {
             &checked_config(),
         );
         assert!(error.contains("`_soundness_check`"), "{error}");
+    }
+
+    /// a function that declares a helper's name `global` binds it at module scope, as a
+    /// module-level assignment would
+    #[test]
+    fn a_global_binding_in_a_function_is_reported() {
+        let error = clash(
+            concat!(
+                "def rebind():\n",
+                "    if True:\n",
+                "        global _force_unwrap\n",
+                "        _force_unwrap = lambda v: 99\n",
+                "\n",
+                "def f(y: int?) -> int:\n",
+                "    return y!\n",
+            ),
+            &Config::test_default(),
+        );
+        assert!(error.contains("`_force_unwrap`"), "{error}");
     }
 
     /// a binding in a nested scope shadows the helper for that scope alone, so it is reported
@@ -3483,5 +3714,49 @@ mod runtime_helper_check {
             &checked_config(),
         )
         .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod synthesized_class_names {
+    use super::{Config, transpile};
+
+    /// the name of the class `out` declares under `prefix`, a name a lowering synthesized
+    fn synthesized(out: &str, prefix: &str) -> String {
+        let at = out
+            .find(&format!("class {prefix}"))
+            .unwrap_or_else(|| panic!("no `{prefix}` class in:\n{out}"))
+            + "class ".len();
+        out[at..]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect()
+    }
+
+    /// a class a lowering synthesizes for a shape is named after the shape, and a module
+    /// that already spells that name has it passed over, as every name a lowering binds
+    /// is. otherwise the module's own definition and the synthesized one would be one
+    /// name, and whichever came last would be read for both
+    #[test]
+    fn a_synthesized_class_name_the_module_spells_is_passed_over() {
+        for (source, prefix) in [
+            (
+                "def f() -> (a: int, b: str):\n    return (a=1, b=\"x\")\n",
+                "_AnonNamedTuple_",
+            ),
+            ("def f(d: {\"a\": int}): ...\n", "_TypedDict_"),
+            ("def f(p: protocol(a: int)): ...\n", "_Protocol_"),
+            ("def f(c: (a: int) -> str): ...\n", "_Callable_"),
+        ] {
+            let config = Config::test_default();
+            let name = synthesized(&transpile(source, &config).unwrap(), prefix);
+            let with_own = format!("{source}class {name}: ...\n");
+            let out = transpile(&with_own, &config).unwrap();
+            assert_eq!(
+                synthesized(&out, prefix),
+                format!("{name}2"),
+                "the module's own `{name}` is passed over:\n{out}"
+            );
+        }
     }
 }

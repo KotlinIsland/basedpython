@@ -60,14 +60,17 @@ impl TypeAwarePass for InferredAnnotationPass<'_> {
             types,
             written: self.written,
             min_version: self.min_version,
+            evaluated: ctx.annotations_evaluated,
             edits: Vec::new(),
+            modules: BTreeSet::new(),
             imports: BTreeSet::new(),
         };
         for stmt in stmts {
             state.visit_stmt(stmt);
         }
         ctx.text_edits.extend(state.edits);
-        ctx.type_only_imports.extend(state.imports);
+        ctx.type_only_imports.extend(state.modules);
+        ctx.required_imports.extend(state.imports);
     }
 }
 
@@ -75,9 +78,13 @@ struct State<'a> {
     types: &'a dyn TypeInfo,
     written: WrittenNames<'a>,
     min_version: ruff_python_ast::PythonVersion,
+    /// whether python evaluates a class body's annotations as the class is made
+    evaluated: bool,
     edits: Vec<(TextRange, String)>,
-    /// the modules and `typing` names a synthesized annotation reads but the source never
-    /// imported, as the import lines that bind them
+    /// the modules a synthesized annotation qualifies a class with that the source never
+    /// imported under their own names
+    modules: BTreeSet<String>,
+    /// the imports of the `typing` names a synthesized annotation reads
     imports: BTreeSet<String>,
 }
 
@@ -120,9 +127,14 @@ impl State<'_> {
         let pos = name.range().end();
         self.edits.push((
             TextRange::new(pos, pos),
-            format!(": {}", annotation.text_in(self.written)),
+            format!(
+                ": {}",
+                annotation.annotation_in(self.written, self.evaluated)
+            ),
         ));
-        self.imports.extend(annotation.imports_in(self.written));
+        self.modules.extend(annotation.modules.iter().cloned());
+        self.imports
+            .extend(annotation.typing_imports_in(self.written));
     }
 }
 
@@ -308,8 +320,10 @@ mod tests {
     #[test]
     fn a_class_the_file_does_not_bind_is_qualified() {
         // `Decimal` is bound here as `Dec`, so the bare name ty displays would
-        // be unresolved in the output — the spelling names the module instead,
-        // and the module is imported for the checker that reads it
+        // be unresolved in the output — the spelling names the module instead.
+        // the module may be one the source imports only for a checker, so the
+        // annotation is a string the class body does not evaluate, and with
+        // imports not deferred the module is imported for a checker alone
         check(
             indoc! {"
                 from decimal import Decimal as Dec
@@ -322,9 +336,48 @@ mod tests {
                     import decimal
                 from decimal import Decimal as Dec
                 class A:
-                    d: decimal.Decimal = Dec(1)
+                    d: \"decimal.Decimal\" = Dec(1)
             "},
         );
+    }
+
+    /// where imports are deferred, the module is imported with the others, so it runs only
+    /// when `typing.get_type_hints` reads the annotation
+    #[test]
+    fn a_module_a_synthesized_annotation_names_is_deferred_with_the_other_imports() {
+        let out = transpile(
+            indoc! {"
+                from decimal import Decimal as Dec
+                class A:
+                    d = Dec(1)
+            "},
+            &Config::default(),
+        )
+        .unwrap();
+        assert!(out.contains("decimal = _lazy_module(\"decimal\")"), "{out}");
+        assert!(out.contains("d: \"decimal.Decimal\" = Dec(1)"), "{out}");
+        assert!(!out.contains("TYPE_CHECKING"), "{out}");
+    }
+
+    /// below 3.10 the output defers every annotation, and from 3.14 python does, so the
+    /// annotation is written as it is
+    #[test]
+    fn a_deferred_synthesized_annotation_is_not_a_string() {
+        for min_version in [crate::PythonVersion::PY39, crate::PythonVersion::PY314] {
+            let out = transpile(
+                indoc! {"
+                    from decimal import Decimal as Dec
+                    class A:
+                        d = Dec(1)
+                "},
+                &Config {
+                    min_version,
+                    ..Config::test_default()
+                },
+            )
+            .unwrap();
+            assert!(out.contains("d: decimal.Decimal = Dec(1)"), "{out}");
+        }
     }
 
     /// and the block stays a block. it opens with a `from typing import TYPE_CHECKING`,
@@ -349,7 +402,7 @@ mod tests {
 
                 @final
                 class A:
-                    d: decimal.Decimal = Dec(1)
+                    d: \"decimal.Decimal\" = Dec(1)
             "},
         );
     }
@@ -386,9 +439,7 @@ mod tests {
             "},
             // the import redirect retargets `Never` for the 3.10 default
             indoc! {"
-                from typing import TYPE_CHECKING
-                if TYPE_CHECKING:
-                    from typing_extensions import Never
+                from typing_extensions import Never
                 def boom():
                     raise ValueError
                 class A:
@@ -410,9 +461,7 @@ mod tests {
                     n = boom()
             "},
             indoc! {"
-                from typing import TYPE_CHECKING
-                if TYPE_CHECKING:
-                    from typing_extensions import Never as Never2
+                from typing_extensions import Never as Never2
                 Never = 4
                 def boom():
                     raise ValueError
@@ -424,8 +473,7 @@ mod tests {
 
     /// ty reports the modules a *type* lives in, which is not the same question as which
     /// ones its spelling names: the type spelled `None` is reported as living in `types`,
-    /// and importing it bought the emitted file a `if TYPE_CHECKING: import types` block
-    /// that nothing in it read
+    /// and importing it bought the emitted file an `import types` that nothing in it read
     #[test]
     fn a_module_the_spelling_does_not_name_is_not_imported() {
         check(
