@@ -204,6 +204,9 @@ pub(super) fn request(req: server::Request) -> Task {
                 BackgroundSchedule::LatencySensitive,
             )
         }
+        requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
+            requests::SuperMembersRequestHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::PrepareTypeHierarchyRequestHandler::METHOD => background_document_request_task::<
             requests::PrepareTypeHierarchyRequestHandler,
         >(
