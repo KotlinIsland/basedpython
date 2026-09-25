@@ -387,6 +387,25 @@ the pairing is read off the parse tree, so `match = 1` is an assignment and
 nothing lights up on it. a position that is not a keyword is answered the way it
 always was
 
+## go to super
+
+`textDocument/implementation` on a method goes down, to the methods that
+override it. `by/superMembers` goes up: given a position on the name a class
+member is declared with — a `def`, or a name the class body assigns or
+annotates — it answers the superclass members that member overrides, each with
+its class, its file and the name to land on. a class goes up with
+`typeHierarchy/supertypes`
+
+what counts as an override is the override checks' own walk up the MRO, so a
+member goes to exactly what `invalid-method-override` compares it with: the
+nearest declaration along each branch, in MRO order. a method overriding `B.f`,
+where `B.f` overrides `A.f`, goes to `B.f`; a class with two bases that each
+declare the method goes to both. a `private` member overrides nothing, since
+python mangles it into a name of its own, and a member a superclass synthesizes
+rather than writes — a dataclass's `__init__` — goes to that superclass, marked
+`synthesized`. the answer is `null` when no class member is declared at the
+position, and an empty list for one that overrides nothing
+
 ## the program model
 
 a run configuration, a test list and a "go to generated file" are all questions

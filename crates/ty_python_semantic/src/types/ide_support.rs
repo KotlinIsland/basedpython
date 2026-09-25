@@ -22,16 +22,18 @@ use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
 use crate::types::infer::{infer_definition_types, nearest_enclosing_function};
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::literal::LiteralValueTypeKind;
-use crate::types::overrides::is_constructor_like_method;
+use crate::types::overrides::{
+    OverriddenDeclaration, OverrideStep, is_constructor_like_method, overridden_declarations,
+};
 use crate::types::receivers;
 use crate::types::repeated_underscore::{UnderscoreLowering, UnderscoreRefusal};
 use crate::types::signatures::{
     Parameter, ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
 };
 use crate::types::{
-    CallDunderError, CallableTypes, ClassBase, ClassLiteral, KnownClass, KnownFunction, KnownUnion,
-    PropertyAccessorRole, SpecialFormType, Type, TypeContext, TypeVarBoundOrConstraints,
-    TypeVarVariance, binding_type,
+    CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType, KnownClass, KnownFunction,
+    KnownUnion, PropertyAccessorRole, SpecialFormType, Type, TypeContext,
+    TypeVarBoundOrConstraints, TypeVarVariance, binding_type,
 };
 use crate::{Db, HasDefinition, HasType, ProgramEnvironment, SemanticModel};
 use ruff_db::files::{File, FileRange};
@@ -2948,6 +2950,102 @@ pub fn inferred_override<'db>(
                 .is_undefined()
         })
         .map(Type::from)
+}
+
+/// A class-body member, as the tree spells it: a `def`, or a name a class body
+/// assigns or declares.
+#[derive(Debug, Clone, Copy)]
+pub enum ClassMemberNode<'a> {
+    Function(&'a ast::StmtFunctionDef),
+    Name(&'a ast::ExprName),
+}
+
+/// A superclass member that a class member overrides.
+#[derive(Debug, Clone)]
+pub struct OverriddenMember<'db> {
+    /// The superclass that declares the member.
+    pub superclass: ClassLiteral<'db>,
+    /// The superclass's name.
+    pub superclass_name: Name,
+    /// Where the superclass declares it. For a property, the accessors that play
+    /// the overriding `def`'s part when it plays one — a setter's is the
+    /// setter. Empty when the superclass synthesizes the member rather than
+    /// writing it, as a dataclass does its `__init__`.
+    pub definitions: Vec<ResolvedDefinition<'db>>,
+}
+
+/// basedpython: the superclass members that the class member `member`
+/// overrides directly, in MRO order, or `None` when `member` is not a member of
+/// a class body.
+///
+/// What counts as an override is the override checks' own walk up the MRO,
+/// [`overridden_declarations`], so a member is said to override exactly what
+/// `invalid-method-override` and `missing-override-decorator` hold it to.
+/// "Directly" is what that walk finds less what is reached through what it
+/// found first: a member overriding `B.f`, where `B.f` overrides `A.f`,
+/// overrides `B.f` — `A.f` is `B.f`'s to override. A class with several bases
+/// that each declare the member overrides each of them.
+///
+/// Empty for a member that overrides nothing — including a `private` one, which
+/// python mangles into a name of its own.
+pub fn overridden_members<'db>(
+    model: &SemanticModel<'db>,
+    member: ClassMemberNode<'_>,
+) -> Option<Vec<OverriddenMember<'db>>> {
+    let db = model.db();
+    let env = model.program_environment();
+    let (definition, name) = match member {
+        ClassMemberNode::Function(function) => (function.definition(model), &function.name.id),
+        ClassMemberNode::Name(name) => (
+            semantic_index(db, db.program_file(model.file())).try_definition(name)?,
+            &name.id,
+        ),
+    };
+
+    let scope = definition.scope(db);
+    let class_node = scope.node(db).as_class()?;
+    let class_definition =
+        semantic_index(db, scope.program_file(db)).expect_single_definition(class_node);
+    let class = extract_class_literal(db, &env, binding_type(db, class_definition))?
+        .default_specialization(db);
+
+    // a getter overrides a getter and a setter a setter
+    let accessor_role = matches!(definition.kind(db), DefinitionKind::Function(_))
+        .then(|| {
+            binding_type(db, definition)
+                .as_property_instance()
+                .and_then(|property| property.accessor_role(db, definition))
+        })
+        .flatten();
+
+    let mut members: Vec<OverriddenMember<'db>> = Vec::new();
+    let mut found: Vec<ClassType<'db>> = Vec::new();
+    for step in overridden_declarations(db, &env, class, name) {
+        let OverrideStep::Overrides(OverriddenDeclaration { superclass, .. }) = step else {
+            continue;
+        };
+        // reached through a member already found, which overrides it in turn
+        if found
+            .iter()
+            .any(|nearer| nearer.is_subclass_of(db, &env, superclass))
+        {
+            continue;
+        }
+        found.push(superclass);
+        let superclass = superclass.class_literal(db);
+        let definitions = own_member_definitions(db, superclass, name, accessor_role)
+            .filter(|definitions| !definitions.is_empty())
+            // a setter overriding a property whose superclass has only a getter
+            // overrides that property all the same
+            .or_else(|| own_member_definitions(db, superclass, name, None))
+            .unwrap_or_default();
+        members.push(OverriddenMember {
+            superclass,
+            superclass_name: superclass.name(db).clone(),
+            definitions,
+        });
+    }
+    Some(members)
 }
 
 /// The enum members `target` admits under their bare name, each as its name

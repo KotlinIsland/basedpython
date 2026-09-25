@@ -35,6 +35,7 @@ mod selection_range;
 mod semantic_tokens;
 mod signature_help;
 mod stub_mapping;
+mod super_members;
 mod symbols;
 mod syntax_outline;
 mod type_hierarchy;
@@ -87,6 +88,7 @@ pub use semantic_tokens::{
     semantic_tokens,
 };
 pub use signature_help::{ParameterDetails, SignatureDetails, SignatureHelpInfo, signature_help};
+pub use super_members::{SuperMember, super_members};
 pub use symbols::{FlatSymbols, HierarchicalSymbols, SymbolId, SymbolInfo, SymbolKind};
 pub use syntax_outline::{
     OutlineCall, OutlineClause, OutlineModifier, OutlineStatement, OutlineString, SyntaxOutline,
