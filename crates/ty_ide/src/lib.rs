@@ -81,7 +81,7 @@ pub use module_rename::{
 };
 pub use refactor::{Refactor, RefactorKind, RefactorOffer, refactor, refactors};
 pub use references::ReferencesMode;
-pub use rename::{can_rename, rename};
+pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, rename};
 pub use selection_range::selection_range;
 pub use semantic_tokens::{
     Fragments, SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens,

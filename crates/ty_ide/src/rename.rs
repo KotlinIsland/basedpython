@@ -1,55 +1,148 @@
-use crate::goto::find_goto_target;
+use crate::goto::{GotoTarget, find_goto_target};
 use crate::references::{ReferencesMode, references};
 use crate::{Db, ReferenceTarget};
 use ruff_db::files::File;
-use ruff_text_size::{Ranged, TextSize};
+use ruff_python_ast as ast;
+use ruff_python_stdlib::identifiers::is_identifier;
+use ruff_python_stdlib::keyword::is_keyword;
+use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_core::ProgramFile;
-use ty_python_semantic::SemanticModel;
+use ty_python_semantic::{ResolvedDefinition, SemanticModel};
 
 /// Returns the range of the symbol if it can be renamed, None if not.
-pub fn can_rename(
-    db: &dyn Db,
-    file: ProgramFile<'_>,
-    offset: TextSize,
-) -> Option<ruff_text_size::TextRange> {
+pub fn can_rename(db: &dyn Db, file: ProgramFile<'_>, offset: TextSize) -> Option<TextRange> {
+    match prepare_rename(db, file, offset) {
+        PreparedRename::Ready { range, .. } => Some(range),
+        PreparedRename::Refused(_) | PreparedRename::NoSymbol => None,
+    }
+}
+
+/// what a rename at an offset would be, worked out before an editor offers one
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparedRename {
+    /// the name the editor offers to rename
+    Ready {
+        /// what the rename replaces
+        range: TextRange,
+        /// the name as the editor offers it for editing, which is not always the
+        /// text at `range`: a `.by` keyword argument named with a string, as in
+        /// `f("timeout"=1)`, is offered as `timeout`, and the rename replaces the
+        /// quotes along with it
+        placeholder: String,
+    },
+    /// there is a name here, and this is why it cannot be renamed
+    ///
+    /// said rather than kept quiet: an editor asked to rename `print` that
+    /// hears nothing back does nothing, and leaves the user to guess whether
+    /// the key was pressed at all
+    Refused(String),
+    /// there is nothing here a rename could be about: whitespace, punctuation,
+    /// a literal
+    NoSymbol,
+}
+
+/// whether the symbol at `offset` can be renamed, and if it cannot, why not
+pub fn prepare_rename(db: &dyn Db, file: ProgramFile<'_>, offset: TextSize) -> PreparedRename {
     let parsed = ruff_db::parsed::parsed_module(db, file.python_file(db));
     let module = parsed.load(db);
     let source_file = file.file(db);
     let model = SemanticModel::new(db, file);
 
     // Get the definitions for the symbol at the offset
-    let goto_target = find_goto_target(&model, &module, offset)?;
+    let Some(goto_target) = find_goto_target(&model, &module, offset) else {
+        return PreparedRename::NoSymbol;
+    };
+
+    // `None`, `True` and `False` are goto targets like any name, but nothing
+    // declares them that a rename could reach
+    if let GotoTarget::Expression(expression)
+    | GotoTarget::Call {
+        callable: expression,
+        ..
+    } = &goto_target
+        && let Some(keyword) = keyword_literal(*expression)
+    {
+        return PreparedRename::Refused(format!("`{keyword}` is a keyword"));
+    }
+
+    // this is the name `references` searches for, so a target without one is
+    // nothing a rename could be about: a literal, an operator. a string may yet
+    // be one of the django names a module writes as plain text, which is
+    // answered once this declines
+    let Some(name) = goto_target.to_string() else {
+        return PreparedRename::NoSymbol;
+    };
 
     // Don't allow renaming of import module components
-    if matches!(
-        goto_target,
-        crate::goto::GotoTarget::ImportModuleComponent { .. }
-    ) {
-        return None;
+    if matches!(goto_target, GotoTarget::ImportModuleComponent { .. }) {
+        return PreparedRename::Refused(format!(
+            "`{name}` names a module, which is renamed by renaming its file"
+        ));
     }
 
     let current_file_in_project = is_file_in_project(db, source_file);
 
-    let declaration_targets = goto_target
-        .definitions(&model, ReferencesMode::Rename.to_import_alias_resolution())?
-        .goto_declaration(&model, &goto_target)?
-        .into_navigation_targets(model.db());
+    let Some(declarations) = goto_target
+        .definitions(&model, ReferencesMode::Rename.to_import_alias_resolution())
+        .and_then(|definitions| definitions.goto_declaration(&model, &goto_target))
+    else {
+        // with no declaration there is nothing to rename, and renaming every
+        // other use of the same spelling would be a guess
+        return PreparedRename::Refused(format!("cannot find where `{name}` is declared"));
+    };
 
-    for target in &declaration_targets {
-        let target_file = target.file();
+    for declaration in &declarations {
+        let target_file = match declaration {
+            ResolvedDefinition::Definition(definition) => definition.file(db),
+            ResolvedDefinition::Module(module) => module.file(db),
+            ResolvedDefinition::FileWithRange(range) => range.file(),
+        };
 
         // If definition is outside the project, refuse rename
         if !is_file_in_project(db, target_file) {
-            return None;
+            return PreparedRename::Refused(match declaration {
+                ResolvedDefinition::Module(_) => {
+                    format!("`{name}` names a module outside this project")
+                }
+                ResolvedDefinition::Definition(_) | ResolvedDefinition::FileWithRange(_) => {
+                    format!("`{name}` is declared outside this project")
+                }
+            });
         }
 
         // If current file is not in project and any definition is outside current file, refuse rename
         if !current_file_in_project && target_file != source_file {
-            return None;
+            return PreparedRename::Refused(format!(
+                "`{name}` is declared in another file, and this file is not part of the project"
+            ));
         }
     }
 
-    Some(goto_target.range())
+    PreparedRename::Ready {
+        range: goto_target.range(),
+        placeholder: name.into_owned(),
+    }
+}
+
+/// why a symbol cannot be renamed to `new_name`, if it cannot: a name that is
+/// not an identifier, or is a keyword, would leave the code unable to parse
+pub fn invalid_new_name(new_name: &str) -> Option<String> {
+    if is_keyword(new_name) {
+        Some(format!("`{new_name}` is a keyword"))
+    } else if is_identifier(new_name) {
+        None
+    } else {
+        Some(format!("`{new_name}` is not a valid name"))
+    }
+}
+
+/// the keyword a `None`, `True` or `False` literal is spelled with
+fn keyword_literal(expression: ast::ExprRef<'_>) -> Option<&'static str> {
+    match expression {
+        ast::ExprRef::NoneLiteral(_) => Some("None"),
+        ast::ExprRef::BooleanLiteral(literal) => Some(if literal.value { "True" } else { "False" }),
+        _ => None,
+    }
 }
 
 /// Perform a rename operation on the symbol at the given position.
@@ -101,21 +194,27 @@ mod tests {
     use insta::assert_snapshot;
     use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticId, LintName, Severity, Span};
     use ruff_db::files::FileRange;
+    use ruff_ranged_value::ValueSource;
     use ruff_text_size::Ranged;
+    use ty_project::metadata::options::Options;
 
     impl CursorTest {
         fn prepare_rename(&self) -> String {
-            let Some(range) = salsa::attach(&self.db, || {
-                can_rename(
+            let prepared = salsa::attach(&self.db, || {
+                prepare_rename(
                     &self.db,
                     self.program_file(self.cursor.file),
                     self.cursor.offset,
                 )
-            }) else {
-                return "Cannot rename".to_string();
-            };
+            });
 
-            format!("Can rename symbol at range {range:?}")
+            match prepared {
+                PreparedRename::Ready { range, placeholder } => {
+                    format!("Can rename symbol `{placeholder}` at range {range:?}")
+                }
+                PreparedRename::Refused(why) => format!("Cannot rename: {why}"),
+                PreparedRename::NoSymbol => "Cannot rename".to_string(),
+            }
         }
 
         fn rename(&self, new_name: &str) -> String {
@@ -352,7 +451,7 @@ value = 0
 ",
         );
 
-        assert_snapshot!(test.prepare_rename(), @"Can rename symbol at range 10..15");
+        assert_snapshot!(test.prepare_rename(), @"Can rename symbol `value` at range 10..15");
     }
 
     #[test]
@@ -1051,7 +1150,7 @@ x = os.path.join('a', 'b')
 ",
         );
 
-        assert_snapshot!(test.prepare_rename(), @"Cannot rename");
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename: `os` names a module, which is renamed by renaming its file");
     }
 
     #[test]
@@ -1064,7 +1163,7 @@ result = join('a', 'b')
 ",
         );
 
-        assert_snapshot!(test.prepare_rename(), @"Cannot rename");
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename: `path` names a module, which is renamed by renaming its file");
     }
 
     #[test]
@@ -1078,7 +1177,7 @@ x = <CURSOR>os.path.join('a', 'b')
 ",
         );
 
-        assert_snapshot!(test.prepare_rename(), @"Cannot rename");
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename: `os` names a module outside this project");
     }
 
     #[test]
@@ -1267,7 +1366,7 @@ def process_value(value):
 ",
         );
 
-        assert_snapshot!(test.prepare_rename(), @"Cannot rename");
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename: `None` is a keyword");
     }
 
     #[test]
@@ -1280,7 +1379,7 @@ def convert_to_number(value):
 ",
         );
 
-        assert_snapshot!(test.prepare_rename(), @"Cannot rename");
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename: `int` is declared outside this project");
     }
 
     /// basedpython: a name that means a `typing` member without an import is a
@@ -1292,7 +1391,51 @@ def convert_to_number(value):
             .source("main.by", "a: M<CURSOR>apping\n")
             .build();
 
-        assert_snapshot!(test.prepare_rename(), @"Cannot rename");
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename: `Mapping` is declared outside this project");
+    }
+
+    /// a file the project leaves out is renamed in on its own, so a name it takes
+    /// from another file cannot be renamed from it
+    #[test]
+    fn cannot_rename_from_a_file_outside_the_project() {
+        let test = CursorTest::builder()
+            .options(
+                Options::from_toml_str("[src]\nexclude = [\"main.py\"]\n", ValueSource::Cli)
+                    .expect("valid options"),
+            )
+            .source("lib.py", "def f(): ...\n")
+            .source("main.py", "from lib import f\n\n<CURSOR>f()\n")
+            .build();
+
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename: `f` is declared in another file, and this file is not part of the project");
+    }
+
+    /// basedpython: a keyword argument may be named with a string, and that name is
+    /// renamed like any other keyword argument's, quotes and all
+    #[test]
+    fn rename_quoted_keyword_argument() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                "
+def f(timeout: int): ...
+
+f(\"<CURSOR>timeout\"=1)
+",
+            )
+            .build();
+
+        assert_snapshot!(test.prepare_rename(), @"Can rename symbol `timeout` at range 29..38");
+        assert_snapshot!(test.rename("retries"), @r#"
+        info[rename]: Rename symbol (found 2 locations)
+         --> main.by:2:7
+          |
+        2 | def f(timeout: int): ...
+          |       ^^^^^^^
+        3 |
+        4 | f("timeout"=1)
+          |   ---------
+        "#);
     }
 
     #[test]
@@ -1304,7 +1447,7 @@ def convert_to_number(value):
             .source("main.py", "<CURSOR>_T_co\n")
             .build();
 
-        assert_snapshot!(test.prepare_rename(), @"Cannot rename");
+        assert_snapshot!(test.prepare_rename(), @"Cannot rename: cannot find where `_T_co` is declared");
     }
 
     #[test]
