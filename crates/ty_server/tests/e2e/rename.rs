@@ -3,7 +3,7 @@ use std::time::Duration;
 use lsp_types::ShowMessageNotification;
 
 use crate::notebook::NotebookBuilder;
-use crate::{AwaitResponseError, TestServerBuilder};
+use crate::{AwaitResponseError, TestServer, TestServerBuilder};
 use insta::assert_json_snapshot;
 
 #[test]
@@ -117,6 +117,32 @@ fn a_builtin_is_refused_with_the_reason() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// a client that renames without asking first is refused just the same, rather
+/// than handed an edit renaming every use of `print` in the project
+#[test]
+fn a_rename_of_a_builtin_is_refused_without_asking_first() -> anyhow::Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_file("foo.py", "")?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document("foo.py", "print(1)\n", 1);
+
+    let response = rename_at(
+        &mut server,
+        "foo.py",
+        lsp_types::Position::new(0, 2),
+        "show",
+    );
+
+    assert_eq!(
+        refusal(response),
+        "`print` is declared outside this project"
+    );
+
+    Ok(())
+}
+
 /// where there is no name at all there is nothing to explain, and the answer
 /// stays `null`
 #[test]
@@ -181,4 +207,114 @@ fn prepare_rename_params(
         },
         work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
     }
+}
+
+/// the quotes are part of what is replaced, so the argument is left written
+/// the plain way, matching the parameter
+#[test]
+fn a_quoted_keyword_argument_is_renamed_to_a_bare_name() -> anyhow::Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_file("foo.by", QUOTED_KEYWORD)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document("foo.by", QUOTED_KEYWORD, 1);
+
+    let edit = rename_at(
+        &mut server,
+        "foo.by",
+        lsp_types::Position::new(2, 4),
+        "retries",
+    )
+    .expect("the rename is carried out")
+    .expect("an edit");
+
+    let edits = edit
+        .changes
+        .expect("edits by file")
+        .remove(&server.file_uri("foo.by"))
+        .expect("edits to foo.by");
+
+    assert_eq!(
+        apply(QUOTED_KEYWORD, edits),
+        "def f(retries: int): ...\n\nf(retries=1)\n"
+    );
+
+    Ok(())
+}
+
+/// a new name that is not a name, or is a keyword, would leave the code unable
+/// to parse, so the rename is refused rather than written
+#[test]
+fn a_new_name_that_is_not_a_name_is_refused() -> anyhow::Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_file("foo.by", QUOTED_KEYWORD)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document("foo.by", QUOTED_KEYWORD, 1);
+
+    let quoted = rename_at(
+        &mut server,
+        "foo.by",
+        lsp_types::Position::new(2, 4),
+        "\"retries\"",
+    );
+    assert_eq!(refusal(quoted), "`\"retries\"` is not a valid name");
+
+    let keyword = rename_at(
+        &mut server,
+        "foo.by",
+        lsp_types::Position::new(2, 4),
+        "class",
+    );
+    assert_eq!(refusal(keyword), "`class` is a keyword");
+
+    Ok(())
+}
+
+fn rename_at(
+    server: &mut TestServer,
+    path: &str,
+    position: lsp_types::Position,
+    new_name: &str,
+) -> Result<Option<lsp_types::WorkspaceEdit>, AwaitResponseError> {
+    let id = server.send_request::<lsp_types::RenameRequest>(lsp_types::RenameParams {
+        text_document_position_params: lsp_types::TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier {
+                uri: server.file_uri(path),
+            },
+            position,
+        },
+        new_name: new_name.to_string(),
+        work_done_progress_params: lsp_types::WorkDoneProgressParams::default(),
+    });
+    server.try_await_response::<lsp_types::RenameRequest>(&id, None)
+}
+
+/// the reason a request was refused, asserting that it was
+#[track_caller]
+fn refusal<T: std::fmt::Debug>(response: Result<T, AwaitResponseError>) -> String {
+    let Err(AwaitResponseError::RequestFailed(failure)) = response else {
+        panic!("expected a refusal, got {response:?}");
+    };
+    assert_eq!(failure.code, lsp_server::ErrorCode::RequestFailed as i32);
+    failure.message
+}
+
+/// `source` with `edits` applied, for edits that each stay on one line of
+/// ascii text
+fn apply(source: &str, mut edits: Vec<lsp_types::TextEdit>) -> String {
+    let mut lines: Vec<String> = source.split_inclusive('\n').map(str::to_string).collect();
+    edits
+        .sort_by_key(|edit| std::cmp::Reverse((edit.range.start.line, edit.range.start.character)));
+    for edit in edits {
+        assert_eq!(edit.range.start.line, edit.range.end.line);
+        let line = &mut lines[edit.range.start.line as usize];
+        line.replace_range(
+            edit.range.start.character as usize..edit.range.end.character as usize,
+            &edit.new_text,
+        );
+    }
+    lines.concat()
 }
