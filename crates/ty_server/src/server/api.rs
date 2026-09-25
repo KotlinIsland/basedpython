@@ -658,7 +658,12 @@ fn respond<Req>(
     Req: RequestHandler,
 {
     if let Err(err) = &result {
-        tracing::error!("An error occurred with request ID {id}: {err}");
+        // a deliberate refusal is an answer, not a failure of the server
+        if matches!(err.code, ErrorCode::RequestFailed) {
+            tracing::debug!("Request ID {id} was refused: {err}");
+        } else {
+            tracing::error!("An error occurred with request ID {id}: {err}");
+        }
         report_unexpected_failure(client, err, log_guidance);
     }
     client.respond(id, result);

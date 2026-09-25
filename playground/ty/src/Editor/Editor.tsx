@@ -265,11 +265,11 @@ class PlaygroundServer
   signatureHelpTriggerCharacters: string[] = ["(", ","];
   signatureHelpRetriggerCharacters: string[] = [")"];
 
-  private renameRejection<T>(): T & languages.Rejection {
+  private renameRejection<T>(reason?: string): T & languages.Rejection {
     // This assertion is intentionally unchecked: Monaco checks `rejectReason`
     // before reading the success fields, but its RenameProvider declaration
     // models rejections as part of the success type.
-    return { rejectReason: "this element can't be renamed" } as T &
+    return { rejectReason: reason ?? "this element can't be renamed" } as T &
       languages.Rejection;
   }
 
@@ -879,20 +879,21 @@ class PlaygroundServer
       return this.renameRejection();
     }
 
-    const range = this.props.workspace.prepareRename(
+    const prepared = this.props.workspace.prepareRename(
       fileHandle,
       new TyPosition(position.lineNumber, position.column),
     );
+    const range = prepared.range;
 
     if (range == null) {
-      return this.renameRejection();
+      return this.renameRejection(prepared.refusal);
     }
 
     const monacoRange = tyRangeToMonacoRange(range);
 
     return {
       range: monacoRange,
-      text: model.getValueInRange(monacoRange),
+      text: prepared.placeholder ?? model.getValueInRange(monacoRange),
     };
   }
 
@@ -908,11 +909,19 @@ class PlaygroundServer
       return this.renameRejection();
     }
 
-    const renameEdits = this.props.workspace.rename(
-      fileHandle,
-      new TyPosition(position.lineNumber, position.column),
-      newName,
-    );
+    let renameEdits;
+    try {
+      renameEdits = this.props.workspace.rename(
+        fileHandle,
+        new TyPosition(position.lineNumber, position.column),
+        newName,
+      );
+    } catch (error) {
+      // a new name that is not a valid name is refused with the reason
+      return this.renameRejection(
+        error instanceof Error ? error.message : undefined,
+      );
+    }
 
     if (renameEdits.length === 0) {
       return this.renameRejection();

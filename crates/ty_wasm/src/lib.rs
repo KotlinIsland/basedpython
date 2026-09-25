@@ -20,7 +20,7 @@ use ruff_text_size::{Ranged, TextSize};
 use ty_ide::{
     CompletionCapabilities, Hint as IdeHint, InlayHintSettings, MarkupKind, RangedValue,
     can_rename, document_highlights, find_references, goto_declaration, goto_definition,
-    goto_type_definition, hover, inlay_hints, rename,
+    goto_type_definition, hover, inlay_hints, invalid_new_name, prepare_rename, rename,
 };
 use ty_ide::{NavigationTarget, NavigationTargets, hints, signature_help};
 use ty_project::metadata::options::Options;
@@ -444,22 +444,36 @@ impl Workspace {
         &self,
         file_id: &FileHandle,
         position: Position,
-    ) -> Result<Option<Range>, Error> {
+    ) -> Result<PreparedRename, Error> {
         let source = source_text(&self.db, file_id.file);
         let index = line_index(&self.db, file_id.file);
 
         let offset = position.to_text_size(&source, &index, self.position_encoding)?;
 
-        let Some(range) = can_rename(&self.db, self.db.program_file(file_id.file), offset) else {
-            return Ok(None);
-        };
-
-        Ok(Some(Range::from_text_range(
-            range,
-            &index,
-            &source,
-            self.position_encoding,
-        )))
+        Ok(
+            match prepare_rename(&self.db, self.db.program_file(file_id.file), offset) {
+                ty_ide::PreparedRename::Ready { range, placeholder } => PreparedRename {
+                    range: Some(Range::from_text_range(
+                        range,
+                        &index,
+                        &source,
+                        self.position_encoding,
+                    )),
+                    placeholder: Some(placeholder),
+                    refusal: None,
+                },
+                ty_ide::PreparedRename::Refused(why) => PreparedRename {
+                    range: None,
+                    placeholder: None,
+                    refusal: Some(why),
+                },
+                ty_ide::PreparedRename::NoSymbol => PreparedRename {
+                    range: None,
+                    placeholder: None,
+                    refusal: None,
+                },
+            },
+        )
     }
 
     #[wasm_bindgen]
@@ -477,6 +491,10 @@ impl Workspace {
 
         if can_rename(&self.db, program_file, offset).is_none() {
             return Ok(Vec::new());
+        }
+
+        if let Some(why) = invalid_new_name(new_name) {
+            return Err(Error::new(&why));
         }
 
         let Some(rename_results) = rename(&self.db, program_file, offset, new_name) else {
@@ -1448,6 +1466,19 @@ pub struct TextEdit {
     pub range: Range,
     #[wasm_bindgen(getter_with_clone)]
     pub new_text: String,
+}
+
+/// what a rename at a position would be: the range of the name to rename and
+/// the name as it is offered for editing, or, when there is a name that cannot
+/// be renamed, why not
+#[wasm_bindgen]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedRename {
+    pub range: Option<Range>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub placeholder: Option<String>,
+    #[wasm_bindgen(getter_with_clone)]
+    pub refusal: Option<String>,
 }
 
 #[wasm_bindgen]

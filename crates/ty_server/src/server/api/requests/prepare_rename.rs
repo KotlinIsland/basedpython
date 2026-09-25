@@ -5,7 +5,7 @@ use lsp_server::ErrorCode;
 use lsp_types::{
     PrepareRenameParams, PrepareRenamePlaceholder, PrepareRenameRequest, PrepareRenameResult, Uri,
 };
-use ty_ide::{PreparedTemplateRename, can_rename, django_prepare_rename};
+use ty_ide::{PreparedRename, PreparedTemplateRename, django_prepare_rename, prepare_rename};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::document::{PositionExt, ToRangeExt};
@@ -55,16 +55,27 @@ impl BackgroundDocumentRequestHandler for PrepareRenameRequestHandler {
 
         let template = snapshot.is_django_template();
 
-        // a python symbol is answered exactly as it was; the django names a
-        // module writes as plain strings are what is left over once it declines
-        if !template && let Some(range) = can_rename(db, db.program_file(file), offset) {
+        // a template holds no python symbol, so only the django names are asked
+        // about there. in a module, the django names it writes as plain strings
+        // are what is left over once the python symbol is not one
+        let python = (!template).then(|| prepare_rename(db, db.program_file(file), offset));
+        if let Some(PreparedRename::Ready { range, placeholder }) = python {
             return Ok(range
                 .to_lsp_range(db, file, snapshot.encoding())
-                .map(|lsp_range| lsp_range.local_range().into()));
+                .map(|lsp_range| {
+                    PrepareRenamePlaceholder::new(lsp_range.local_range(), placeholder).into()
+                }));
         }
 
         match django_prepare_rename(db, file, offset, template) {
-            None => Ok(None),
+            // the editor shows why rather than doing nothing, which from where
+            // the user sits cannot be told apart from the key not working
+            None => match python {
+                Some(PreparedRename::Refused(why)) => {
+                    Err(Error::new(anyhow!(why), ErrorCode::RequestFailed))
+                }
+                Some(PreparedRename::Ready { .. } | PreparedRename::NoSymbol) | None => Ok(None),
+            },
             // the editor shows this rather than offering a rename it could not
             // finish, which is the whole point of asking first
             Some(PreparedTemplateRename::Refused(why)) => {
