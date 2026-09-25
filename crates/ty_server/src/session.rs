@@ -116,6 +116,10 @@ pub(crate) struct Session {
     /// to see if there are now changes and, if so, respond to the client.
     suspended_workspace_diagnostics_request: Option<SuspendedWorkspaceDiagnosticRequest>,
 
+    /// Document requests about a text the session does not hold yet, each waiting for the session
+    /// to change. See [`HeldRequest`].
+    held_requests: Vec<HeldRequest>,
+
     /// Registrations is a set of LSP methods that have been dynamically registered with the
     /// client.
     registrations: HashSet<String>,
@@ -204,6 +208,7 @@ impl Session {
             shutdown_requested: false,
             in_test,
             suspended_workspace_diagnostics_request: None,
+            held_requests: Vec::new(),
             revision: 0,
             registrations: HashSet::new(),
             client_name,
@@ -226,6 +231,11 @@ impl Session {
 
     fn initialization_options(&self) -> &InitializationOptions {
         &self.initialization_options
+    }
+
+    /// The session's revision: how many times it has changed in a way an answer could see.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub(crate) fn is_shutdown_requested(&self) -> bool {
@@ -277,6 +287,82 @@ impl Session {
 
                 request.resume_if_revision_changed(self.revision, client)
             });
+    }
+
+    /// Keeps `request` until the session changes, because what it asks about is a text the session
+    /// did not hold at `revision`.
+    ///
+    /// Asked again at once if the session has changed since then: the change may be the one it
+    /// waits for, and nothing would wake it otherwise.
+    pub(crate) fn hold_request(
+        &mut self,
+        request: lsp_server::Request,
+        revision: u64,
+        client: &Client,
+    ) {
+        if !self.request_queue.incoming().is_pending(&request.id) {
+            tracing::debug!("Not holding request {}: it was cancelled", request.id);
+            return;
+        }
+        if revision == self.revision {
+            tracing::debug!(
+                "Holding request id={} method={} until the session holds the text it asks about",
+                request.id,
+                request.method
+            );
+            self.held_requests.push(HeldRequest { request, revision });
+        } else {
+            client.retry(request);
+        }
+    }
+
+    /// Asks every held request again whose session has changed since it was held, and answers
+    /// those that have waited longer than [`HOLD_LIMIT`]. Forgets the ones the client cancelled.
+    pub(crate) fn release_held_requests(&mut self, client: &Client) {
+        if self.held_requests.is_empty() {
+            return;
+        }
+        let revision = self.revision;
+        let incoming = self.request_queue.incoming();
+        let mut expired = Vec::new();
+        self.held_requests.retain_mut(|held| {
+            let Some(started) = incoming.started(&held.request.id) else {
+                // cancelled, and answered as cancelled already
+                return false;
+            };
+            if held.revision != revision {
+                client.retry(held.request.clone());
+                false
+            } else if started.elapsed() >= HOLD_LIMIT {
+                expired.push(held.request.id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        for id in expired {
+            tracing::debug!(
+                "Request {id} waited {HOLD_LIMIT:?} for a text the session never held; giving up"
+            );
+            client.respond_err(
+                id,
+                lsp_server::ResponseError {
+                    code: lsp_server::ErrorCode::ServerCancelled as i32,
+                    message: "the document never held the text the request asked about".to_string(),
+                    data: None,
+                },
+            );
+        }
+    }
+
+    /// When the longest-held request is due an answer anyway, if any request is held.
+    pub(crate) fn held_requests_deadline(&self) -> Option<std::time::Instant> {
+        let incoming = self.request_queue.incoming();
+        self.held_requests
+            .iter()
+            .filter_map(|held| incoming.started(&held.request.id))
+            .min()
+            .map(|started| started + HOLD_LIMIT)
     }
 
     /// Returns each project's background uv synchronization wakeups.
@@ -1420,6 +1506,32 @@ impl Session {
         })
     }
 
+    /// A snapshot of a document the client has not opened, as the file it names reads now.
+    ///
+    /// Only for a request that has said which text it is about — see
+    /// [`crate::document::TextHash`] — and only for a file on disk: a document with no path is
+    /// nothing until the client opens it. The handle carries version `0`: the client never gave
+    /// the document a version, and the handlers that answer a closed document read none.
+    pub(crate) fn snapshot_closed_document(&self, uri: &Uri) -> Option<DocumentSnapshot> {
+        let path = DocumentKey::from_uri(uri).file_path()?.clone();
+        let path = AnySystemPath::System(path);
+        Some(DocumentSnapshot {
+            resolved_client_capabilities: self.resolved_client_capabilities,
+            global_settings: self.global_settings.clone(),
+            workspace_settings: self
+                .workspace_settings_for_document(&path)
+                .unwrap_or_else(|| Arc::new(WorkspaceSettings::default())),
+            position_encoding: self.position_encoding,
+            document: DocumentHandle::Text {
+                uri: uri.clone(),
+                language_id: LanguageId::of_path(&path),
+                path,
+                version: 0,
+            },
+            client_name: self.client_name,
+        })
+    }
+
     fn workspace_settings_for_document(
         &self,
         path: &AnySystemPath,
@@ -2067,6 +2179,27 @@ impl SuspendedWorkspaceDiagnosticRequest {
 
         None
     }
+}
+
+/// How long a request may wait for its text before it is answered with `ServerCancelled`.
+///
+/// A backstop, not a timing anyone should meet. What a request waits for is a notification the
+/// client has already decided to send — a `didOpen` behind the edit that made the request, or the
+/// file system reporting a write — and it arrives in milliseconds. A client that gives up sooner
+/// cancels the request, as it cancels any other.
+const HOLD_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A document request that named a text the session did not hold, waiting for it.
+///
+/// Asked again, whole, each time the session changes, rather than told what changed: the check
+/// that holds it is the same one that lets it through, and it runs against a fresh snapshot.
+#[derive(Debug)]
+pub(crate) struct HeldRequest {
+    /// The request as the client sent it, the named text included.
+    request: lsp_server::Request,
+
+    /// The session's revision when the request found its text missing.
+    revision: u64,
 }
 
 /// A handle to a document stored within [`Index`].

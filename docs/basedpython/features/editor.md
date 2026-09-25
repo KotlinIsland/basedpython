@@ -406,6 +406,23 @@ much indentation a triple-quoted string has stripped
 and `*_test.by` — because a `.by` transpiles to the `.py` of the same stem, and
 that is the file pytest sees
 
+### asking about the text you have
+
+a client that keeps an answer against its own revision of a document can say
+which text a document request is about, by adding `textHash` to the request's
+params: FNV-1a, 64 bits, over the text's UTF-16 code units with every line ending
+counted as one `\n`, written as sixteen lowercase hex digits. for a notebook cell
+that is the cell's own text. the request is then answered about that text and no
+other. when the server already holds it — the
+open buffer, or for `by/syntaxOutline`, `by/injections`,
+`textDocument/semanticTokens/full` and `textDocument/documentSymbol` the file on
+disk of a document the client has not opened — it answers at once; otherwise the
+request waits for the `didOpen`, `didChange` or file write that brings the text,
+and is answered with `ServerCancelled` if nothing has after ten seconds. so a
+client need not know whether its `didOpen` has gone out before it asks, and an
+answer never describes text it did not ask about. a request without `textHash` is
+answered as before, and refused for a document that is not open
+
 ## debugger facts
 
 while a program is stopped, an editor knows something no checker does: what the

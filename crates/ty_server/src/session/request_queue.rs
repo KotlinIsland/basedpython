@@ -80,6 +80,13 @@ impl Incoming {
         self.pending.contains_key(request_id)
     }
 
+    /// When the request with the given id was registered, if it is still pending.
+    pub(crate) fn started(&self, request_id: &RequestId) -> Option<Instant> {
+        self.pending
+            .get(request_id)
+            .map(|pending| pending.start_time)
+    }
+
     /// Returns the cancellation token for the given request id if the request is still pending.
     pub(crate) fn cancellation_token(
         &self,

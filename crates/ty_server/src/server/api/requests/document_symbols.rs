@@ -25,6 +25,9 @@ impl RequestHandler for DocumentSymbolRequestHandler {
 }
 
 impl BackgroundDocumentRequestHandler for DocumentSymbolRequestHandler {
+    // a parse and what is read off it: the same for a file read from disk as for a buffer
+    const ANSWERS_CLOSED_DOCUMENTS: bool = true;
+
     fn document_uri(params: &DocumentSymbolParams) -> Cow<'_, Uri> {
         Cow::Borrowed(&params.text_document.uri)
     }

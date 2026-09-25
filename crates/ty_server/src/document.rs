@@ -1,5 +1,6 @@
 //! Types and utilities for working with text, modifying source files, and `ty <-> LSP` type conversion.
 
+mod asked_text;
 mod location;
 mod notebook;
 mod range;
@@ -9,6 +10,7 @@ use lsp_types::{PositionEncodingKind, Uri};
 use ruff_db::system::{SystemPathBuf, SystemVirtualPath, SystemVirtualPathBuf};
 
 use crate::system::AnySystemPath;
+pub(crate) use asked_text::TextHash;
 pub(crate) use location::ToLink;
 pub use notebook::NotebookDocument;
 pub(crate) use range::{

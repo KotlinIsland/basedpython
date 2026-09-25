@@ -77,6 +77,9 @@ impl RequestHandler for InjectionsRequestHandler {
 }
 
 impl BackgroundDocumentRequestHandler for InjectionsRequestHandler {
+    // a parse and what is read off it: the same for a file read from disk as for a buffer
+    const ANSWERS_CLOSED_DOCUMENTS: bool = true;
+
     fn document_uri(params: &InjectionsParams) -> Cow<'_, Uri> {
         Cow::Borrowed(&params.text_document.uri)
     }

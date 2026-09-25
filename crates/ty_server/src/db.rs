@@ -1,6 +1,7 @@
 use crate::NotebookDocument;
 use crate::session::index::Document;
 use crate::system::LSPSystem;
+use lsp_types::Uri;
 use ruff_db::Db as _;
 use ruff_db::files::{File, FilePath};
 use ty_project::{Db as ProjectDb, ProjectDatabase};
@@ -10,6 +11,10 @@ pub(crate) trait Db: ProjectDb {
     /// Returns the LSP [`Document`] corresponding to `File` or
     /// `None` if the file isn't open in the editor.
     fn document(&self, file: File) -> Option<&Document>;
+
+    /// Returns the LSP [`Document`] the client opened at `uri`, a notebook cell included, or
+    /// `None` if the client has not opened it.
+    fn document_at_uri(&self, uri: &Uri) -> Option<&Document>;
 
     /// Returns the LSP [`NotebookDocument`] corresponding to `File` or
     /// `None` if the file isn't open in the editor or if it isn't a notebook.
@@ -29,5 +34,12 @@ impl Db for ProjectDatabase {
                 FilePath::SystemVirtual(path) => system.system_virtual_path_to_document(path),
                 FilePath::Vendored(_) => None,
             })
+    }
+
+    fn document_at_uri(&self, uri: &Uri) -> Option<&Document> {
+        self.system()
+            .as_any()
+            .downcast_ref::<LSPSystem>()
+            .and_then(|system| system.uri_to_document(uri))
     }
 }
