@@ -18,7 +18,7 @@ use ty_project::metadata::options::{EnvironmentOptions, Options, SrcOptions};
 use ty_project::metadata::pyproject::{PyProject, Tool};
 use ty_project::metadata::python_version::SupportedPythonVersion;
 use ty_project::metadata::value::{RelativeGlobPattern, RelativePathBuf};
-use ty_project::watch::{ChangeEvent, ProjectWatcher, directory_watcher};
+use ty_project::watch::{ChangeEvent, CreatedKind, DeletedKind, ProjectWatcher, directory_watcher};
 use ty_project::{ChangeResult, Db, ProjectDatabase, ProjectMetadata};
 use ty_python_core::platform::PythonPlatform;
 use ty_static::EnvVars;
@@ -971,6 +971,52 @@ fn changed_file() -> anyhow::Result<()> {
 
     assert_eq!(source_text(case.db(), foo).as_str(), "print('Version 2')");
     case.assert_indexed_project_files([foo]);
+
+    Ok(())
+}
+
+/// a manifest written into a directory of the project makes the directory a build's output,
+/// which is not part of the project
+#[test]
+fn a_build_manifest_created_takes_its_directory_out_of_the_project() -> anyhow::Result<()> {
+    let mut case = setup([("app.py", ""), ("build/app.py", "")])?;
+    let app = case.system_file(case.project_path("app.py"))?;
+    let built = case.system_file(case.project_path("build/app.py"))?;
+    case.assert_indexed_project_files([app, built]);
+
+    let manifest = case.project_path("build/.by-manifest");
+    std::fs::write(manifest.as_std_path(), "app.py\n")?;
+    case.apply_changes(&[ChangeEvent::Created {
+        path: manifest,
+        kind: CreatedKind::File,
+    }]);
+
+    case.assert_indexed_project_files([app]);
+
+    Ok(())
+}
+
+/// a build's output whose manifest is deleted is a directory like any other, and part of the
+/// project again
+#[test]
+fn a_build_manifest_deleted_returns_its_directory_to_the_project() -> anyhow::Result<()> {
+    let mut case = setup([
+        ("app.py", ""),
+        ("build/.by-manifest", "app.py\n"),
+        ("build/app.py", ""),
+    ])?;
+    let app = case.system_file(case.project_path("app.py"))?;
+    case.assert_indexed_project_files([app]);
+
+    let manifest = case.project_path("build/.by-manifest");
+    std::fs::remove_file(manifest.as_std_path())?;
+    case.apply_changes(&[ChangeEvent::Deleted {
+        path: manifest,
+        kind: DeletedKind::File,
+    }]);
+
+    let built = case.system_file(case.project_path("build/app.py"))?;
+    case.assert_indexed_project_files([app, built]);
 
     Ok(())
 }

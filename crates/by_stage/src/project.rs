@@ -5,8 +5,10 @@
 //! project reports errors for files the project deliberately excludes — and, when
 //! this was first written, wrote nothing for them either. So the file set is the
 //! project's own (`Project::files`), narrowed only by things a *build* has to
-//! exclude and a check does not: a hidden directory holding copies, and the last
-//! build's own output.
+//! exclude and a check does not: a hidden directory holding copies, and the
+//! directory this build writes to. Every tree a build already wrote carries a
+//! manifest, and the project leaves those out itself — see
+//! [`ty_project::build_output`].
 //!
 //! It lives here rather than in the `by` binary because the language server needs
 //! the same answers. A single file re-staged into a build tree has to land where
@@ -14,13 +16,11 @@
 //! build would have transpiled it, and the only way to guarantee that is for there
 //! to be one implementation of each.
 
-use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use ruff_db::Db as _;
-use ruff_db::system::{OsSystem, System, SystemPath, SystemPathBuf};
+use ruff_db::system::{OsSystem, SystemPath, SystemPathBuf};
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
 
 /// Everything needed to build a project db a second time.
@@ -310,8 +310,7 @@ pub(crate) fn project_sources(
     root: &Path,
     output: Option<&Path>,
 ) -> Vec<(PathBuf, ruff_db::files::File)> {
-    let candidates: Vec<(PathBuf, ruff_db::files::File)> = db
-        .project()
+    db.project()
         .files(db)
         .into_iter()
         .filter(|file| {
@@ -327,77 +326,14 @@ pub(crate) fn project_sources(
         // dependencies, not this project's sources — emitting them would write
         // a parallel tree nobody asked for
         .filter(|(path, _)| !is_hidden_within(path, root))
-        // nor is the last build's output. it holds a copy of every `.by` source
-        // this build is about to read, and reading those instead would build the
-        // project into itself, one directory deeper each time
+        // nor is the directory this build writes to. it holds a copy of every
+        // `.by` source this build is about to read, and reading those instead
+        // would build the project into itself, one directory deeper each time.
+        // a tree a build finished carries a manifest and is never among the
+        // project's files to begin with, whatever `--out` called it; this is for
+        // the one this run was told to write to, which may not have one yet
         .filter(|(path, _)| output.is_none_or(|output| !path.starts_with(output)))
-        .collect();
-    // and nor is any *other* build's output. `--out` can name any directory, and
-    // a project can have several, so the one this run was given is not the only
-    // one that has to be turned away
-    let mut known = HashMap::new();
-    candidates
-        .into_iter()
-        .filter(|(path, _)| !inside_build_output(db.system(), path, root, &mut known))
         .collect()
-}
-
-/// Whether `path` sits inside a tree that some build already wrote.
-///
-/// A build output is self-describing: it holds a `.by-manifest` naming everything
-/// that build put there. That marker is what identifies it, rather than the
-/// directory's name. [`NON_SOURCE_DIRS`] already turns away the two default names,
-/// but `--out` can say anything, and only the tree this run was *given* is known
-/// to be an output from the arguments — a project that builds into two of them has
-/// to have the other recognised on sight.
-///
-/// It has to be turned away because the tree holds a *copy* of the project: every
-/// hand-written `.py`, and every `.by` too when `build.sources` is on. Reading one
-/// back means each of those modules is claimed twice — once where it was written
-/// and once where it was copied — and the build stops, telling the author that two
-/// files they never put side by side would compile to the same module.
-///
-/// The project root is never itself an output, whatever it holds: a `.by-manifest`
-/// left at the root would otherwise empty the project of every file it has.
-fn inside_build_output(
-    system: &dyn System,
-    path: &Path,
-    root: &Path,
-    known: &mut HashMap<PathBuf, bool>,
-) -> bool {
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    let mut current = parent;
-    while current != root && current.starts_with(root) {
-        let is_output = match known.get(current) {
-            Some(answer) => *answer,
-            None => {
-                let answer = holds_manifest(system, current);
-                known.insert(current.to_path_buf(), answer);
-                answer
-            }
-        };
-        if is_output {
-            return true;
-        }
-        match current.parent() {
-            Some(next) => current = next,
-            None => return false,
-        }
-    }
-    false
-}
-
-/// Whether `directory` carries the manifest that marks it a build output.
-///
-/// Asked of the db's [`System`] rather than of `std::fs`, so that it is the same
-/// file system every other question in a build is asked — the language server's
-/// re-stage runs this on a warm db, and an in-memory test system has to be able
-/// to answer it.
-pub(crate) fn holds_manifest(system: &dyn System, directory: &Path) -> bool {
-    SystemPath::from_std_path(directory)
-        .is_some_and(|path| system.is_file(&path.join(crate::staging::MANIFEST_FILENAME)))
 }
 
 /// The project's first-party module roots, longest first, as absolute paths.
@@ -420,59 +356,8 @@ pub fn module_roots(db: &ProjectDatabase, cwd: &Path) -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{inside_build_output, is_hidden_within};
-    use ruff_db::system::{OsSystem, SystemPath};
-    use std::collections::HashMap;
+    use super::is_hidden_within;
     use std::path::Path;
-
-    /// `--out` can name any directory and a project can hold several, so a build
-    /// output is recognised by the manifest it carries rather than by its name.
-    #[test]
-    fn a_directory_holding_a_manifest_is_a_build_output() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let root = directory.path();
-        let output = root.join("anything");
-        std::fs::create_dir_all(output.join("pkg")).expect("create");
-        std::fs::write(output.join(".by-manifest"), "").expect("write");
-        let plain = root.join("src");
-        std::fs::create_dir_all(&plain).expect("create");
-
-        let system =
-            OsSystem::new(SystemPath::from_std_path(root).expect("the temp directory is utf-8"));
-        let mut known = HashMap::new();
-        assert!(inside_build_output(
-            &system,
-            &output.join("a.by"),
-            root,
-            &mut known
-        ));
-        assert!(
-            inside_build_output(&system, &output.join("pkg").join("a.by"), root, &mut known),
-            "a file deeper inside the output is inside it too"
-        );
-        assert!(
-            !inside_build_output(&system, &plain.join("a.by"), root, &mut known),
-            "a directory with no manifest is ordinary source"
-        );
-    }
-
-    /// A manifest at the root would otherwise empty the project of every file.
-    #[test]
-    fn the_project_root_is_never_itself_an_output() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let root = directory.path();
-        std::fs::write(root.join(".by-manifest"), "").expect("write");
-
-        let system =
-            OsSystem::new(SystemPath::from_std_path(root).expect("the temp directory is utf-8"));
-        let mut known = HashMap::new();
-        assert!(!inside_build_output(
-            &system,
-            &root.join("a.by"),
-            root,
-            &mut known
-        ));
-    }
 
     #[test]
     fn a_hidden_directory_is_not_project_source() {

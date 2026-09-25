@@ -18,10 +18,11 @@ use std::path::{Path, PathBuf};
 
 use ruff_db::Db as _;
 use ruff_db::system::SystemPath;
+use ty_project::build_output::is_build_output;
 use ty_project::{Db, ProjectDatabase};
 use walkdir::WalkDir;
 
-use crate::project::{holds_manifest, may_hold_build_content};
+use crate::project::may_hold_build_content;
 use crate::staging::{Staging, relative_destination};
 
 /// One file carried into the output unchanged.
@@ -62,11 +63,14 @@ fn verbatim_files(
             // copy of every file this walk carries, so one that was not turned
             // away would be copied into the next wholesale, a tree deep in a
             // tree. it is recognised by the manifest it carries rather than by
-            // its name, because `--out` can say anything. the root is exempt:
-            // a manifest there would otherwise carry nothing over at all
+            // its name, because `--out` can say anything, and asked of the db's
+            // file system, which the language server's re-stage and an in-memory
+            // test system answer too. the root is exempt: a manifest there would
+            // otherwise carry nothing over at all
             if entry.file_type().is_dir()
                 && entry.path() != root
-                && holds_manifest(db.system(), entry.path())
+                && SystemPath::from_std_path(entry.path())
+                    .is_some_and(|path| is_build_output(db.system(), path))
             {
                 return false;
             }

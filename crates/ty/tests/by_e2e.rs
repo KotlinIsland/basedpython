@@ -6847,3 +6847,101 @@ fn a_restaged_module_finds_a_helper_the_build_never_used() {
         String::from_utf8_lossy(&restaged.stderr)
     );
 }
+
+/// `by check` in `dir`, as the path, relative to `dir`, of each diagnostic it reports
+fn checked_paths(dir: &Path, extra: &[&str]) -> Vec<String> {
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["check", "--output-format", "concise"])
+        .args(extra)
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut paths: Vec<String> = stdout
+        .lines()
+        .filter(|line| !line.starts_with("Found ") && !line.trim().is_empty())
+        .filter_map(|line| {
+            line.split_once(':')
+                .map(|(path, _)| path.replace('\\', "/"))
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// a project whose one `.by` module and one hand-written `.py` module each assign a `str` to an
+/// `int`, so that a copy of either in a build output would be reported again
+fn project_with_an_error_in_each_module(name: &str) -> Scratch {
+    let dir = Scratch::new(name);
+    fs::create_dir_all(dir.join("pkg")).unwrap();
+    fs::write(
+        dir.join("pyproject.toml"),
+        "[project]\nname=\"s\"\nversion=\"0\"\nrequires-python=\">=3.13\"\n",
+    )
+    .unwrap();
+    fs::write(dir.join("pkg").join("__init__.py"), "").unwrap();
+    fs::write(dir.join("pkg").join("main.by"), "x: int = \"by\"\n").unwrap();
+    fs::write(dir.join("pkg").join("helper.py"), "y: int = \"py\"\n").unwrap();
+    dir
+}
+
+/// `by build` in `dir` with `args`, which has to write `pkg/main.py` into `out`
+///
+/// the build reports the project's type errors and exits non-zero for them, and writes the tree
+/// all the same, which is the tree these tests are about
+fn build_into(dir: &Path, out: &str, args: &[&str]) {
+    let build = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .arg("build")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by");
+    assert!(
+        dir.join(out).join("pkg").join("main.py").exists(),
+        "by build wrote no tree:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+}
+
+#[test]
+fn check_does_not_check_the_tree_a_build_wrote() {
+    // the build output is a copy of the project: a `.py` for every `.by` and every hand-written
+    // `.py` carried over. checked as part of the project, each copy is checked again and every
+    // diagnostic is reported twice, once at a path nobody edits — in a project that imports
+    // torch that was most of what a check cost
+    let dir = project_with_an_error_in_each_module("by_cli_check_skips_build");
+    build_into(&dir, "build", &[]);
+
+    assert_eq!(
+        checked_paths(&dir, &[]),
+        ["pkg/helper.py", "pkg/main.by"],
+        "only the sources are checked, not their copies under build/"
+    );
+
+    // a tree asked for by name is still checked: naming it is asking for it
+    let named = checked_paths(&dir, &["build"]);
+    assert!(
+        named.iter().any(|path| path.starts_with("build/")),
+        "the output named on the command line was not checked: {named:?}"
+    );
+}
+
+#[test]
+fn check_follows_the_build_to_another_directory_and_keeps_a_package_called_build() {
+    // the output is recognised by the manifest the build leaves, not by its name: `--out` can
+    // write anywhere, and a directory of the author's own that happens to be called `build` is
+    // part of the project when the build writes somewhere else
+    let dir = project_with_an_error_in_each_module("by_cli_check_skips_out");
+    fs::create_dir_all(dir.join("build")).unwrap();
+    fs::write(dir.join("build").join("tool.py"), "z: int = \"mine\"\n").unwrap();
+
+    build_into(&dir, "elsewhere", &["--out", "elsewhere"]);
+
+    assert_eq!(
+        checked_paths(&dir, &[]),
+        ["build/tool.py", "pkg/helper.py", "pkg/main.by"],
+        "the sources and the author's own `build/`, and nothing the build wrote"
+    );
+}
