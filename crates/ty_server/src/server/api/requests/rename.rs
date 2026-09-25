@@ -5,7 +5,10 @@ use anyhow::anyhow;
 use lsp_server::ErrorCode;
 use lsp_types::RenameRequest;
 use lsp_types::{RenameParams, TextEdit, Uri, WorkspaceEdit};
-use ty_ide::{TemplateRename, TemplateRenameOutcome, django_rename, rename};
+use ty_ide::{
+    PreparedRename, TemplateRename, TemplateRenameOutcome, django_rename, invalid_new_name,
+    prepare_rename, rename,
+};
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
 use crate::document::{FileRangeExt, LspRange, PositionExt, ToLink};
@@ -55,9 +58,18 @@ impl BackgroundDocumentRequestHandler for RenameRequestHandler {
 
         let template = snapshot.is_django_template();
 
-        // a python symbol is renamed exactly as it was; the django names a module
-        // writes as plain strings are what is left over once it declines
-        if !template
+        // a rename is checked as `textDocument/prepareRename` checks it, since a
+        // client need not ask that first. the django names a module writes as
+        // plain strings are what is left over once the python symbol is not one
+        let python = (!template).then(|| prepare_rename(db, db.program_file(file), offset));
+        // only a python symbol's new name must be an identifier: a django rename
+        // may be naming a template file
+        if let Some(PreparedRename::Ready { .. }) = python
+            && let Some(why) = invalid_new_name(&params.new_name)
+        {
+            return Err(Error::new(anyhow!(why), ErrorCode::RequestFailed));
+        }
+        if let Some(PreparedRename::Ready { .. }) = python
             && let Some(rename_results) =
                 rename(db, db.program_file(file), offset, &params.new_name)
         {
@@ -87,7 +99,12 @@ impl BackgroundDocumentRequestHandler for RenameRequestHandler {
         }
 
         match django_rename(db, file, offset, &params.new_name, template) {
-            None => Ok(None),
+            None => match python {
+                Some(PreparedRename::Refused(why)) => {
+                    Err(Error::new(anyhow!(why), ErrorCode::RequestFailed))
+                }
+                Some(PreparedRename::Ready { .. } | PreparedRename::NoSymbol) | None => Ok(None),
+            },
             Some(TemplateRenameOutcome::Refused(why)) => {
                 Err(Error::new(anyhow!(why), ErrorCode::RequestFailed))
             }
