@@ -192,7 +192,7 @@ impl Server {
                     }
 
                     Action::SuspendWorkspaceDiagnostics(suspended_request) => {
-                        self.session.set_suspended_workspace_diagnostics_request(
+                        self.session.add_suspended_workspace_diagnostics_request(
                             *suspended_request,
                             &client,
                         );

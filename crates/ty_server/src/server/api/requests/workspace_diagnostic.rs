@@ -29,7 +29,7 @@ use crate::server::api::traits::{
     BackgroundRequestHandler, RequestHandler, RetriableRequestHandler,
 };
 use crate::server::lazy_work_done_progress::LazyWorkDoneProgress;
-use crate::server::{Action, Result};
+use crate::server::{Action, Result, SuspendedWorkspaceRequestKind};
 use crate::session::client::Client;
 use crate::session::index::Index;
 use crate::session::{GlobalSettings, SessionSnapshot, SuspendedWorkspaceDiagnosticRequest};
@@ -115,49 +115,13 @@ impl BackgroundRequestHandler for WorkspaceDiagnosticRequestHandler {
         client: &Client,
         params: WorkspaceDiagnosticParams,
     ) -> Result<WorkspaceDiagnosticReport> {
-        if !snapshot.global_settings().diagnostic_mode().is_workspace() {
-            tracing::debug!("Workspace diagnostics is disabled; returning empty report");
-            return Ok(WorkspaceDiagnosticReport { items: vec![] });
-        }
-
-        if snapshot
-            .projects()
-            .iter()
-            .any(|db| db.uv_environments().has_pending_initializations())
-        {
-            tracing::debug!(
-                "Deferring workspace diagnostics until script initialization completes"
-            );
-            // Returning an empty workspace report makes `handle_request` suspend the request.
-            // Skip the response writer: it would clear diagnostics for previous result IDs
-            // that we have not checked yet. Suspension retains the request, not this snapshot.
-            return Ok(WorkspaceDiagnosticReport { items: vec![] });
-        }
-
-        let writer = ResponseWriter::new(
-            params.partial_result_params.partial_result_token,
-            params.previous_result_ids,
-            snapshot,
-            client,
-        );
-
-        // Use the work done progress token from the client request, if provided
-        // Note: neither VS Code nor Zed currently support this,
-        // see https://github.com/microsoft/vscode-languageserver-node/issues/528
-        // That's why we fall back to server-initiated progress if no token is provided.
-        let work_done_progress = LazyWorkDoneProgress::new(
-            client,
-            params.work_done_progress_params.work_done_token,
-            "Checking",
-            snapshot.resolved_client_capabilities(),
-        );
-        let mut reporter = WorkspaceDiagnosticsProgressReporter::new(work_done_progress, writer);
-
-        for db in snapshot.projects() {
-            db.check_with_reporter(&mut reporter);
-        }
-
-        Ok(reporter.into_final_report())
+        Ok(match check_workspace(snapshot, client, params) {
+            WorkspaceCheck::Checked(report) => report,
+            // an empty report, which `handle_request` holds open
+            WorkspaceCheck::NotReady | WorkspaceCheck::Disabled => {
+                WorkspaceDiagnosticReport::default()
+            }
+        })
     }
 
     fn handle_request(
@@ -195,6 +159,7 @@ impl BackgroundRequestHandler for WorkspaceDiagnosticRequestHandler {
                 client.queue_action(Action::SuspendWorkspaceDiagnostics(Box::new(
                     SuspendedWorkspaceDiagnosticRequest {
                         id: id.clone(),
+                        kind: SuspendedWorkspaceRequestKind::LongPoll,
                         params: json!(&params),
                         revision: snapshot.revision(),
                     },
@@ -207,6 +172,71 @@ impl BackgroundRequestHandler for WorkspaceDiagnosticRequestHandler {
 
         client.respond(id, result);
     }
+}
+
+/// what checking the workspace for a workspace diagnostics request came to
+pub(crate) enum WorkspaceCheck {
+    /// the workspace was checked, and this is the report
+    Checked(WorkspaceDiagnosticReport),
+
+    /// the workspace was not checked because a script's initial environment is still being set
+    /// up, and a report now would describe the script against an environment it does not have
+    /// yet. the request waits for it, held open like a long poll
+    NotReady,
+
+    /// the workspace was not checked because the diagnostic mode does not report it
+    Disabled,
+}
+
+/// checks the workspace for a request with `params`, streaming the reports that changed when the
+/// params carry a partial result token
+///
+/// shared by `workspace/diagnostic` and `by/checkWorkspace`, which differ in when they answer
+pub(crate) fn check_workspace(
+    snapshot: &SessionSnapshot,
+    client: &Client,
+    params: WorkspaceDiagnosticParams,
+) -> WorkspaceCheck {
+    if !snapshot.global_settings().diagnostic_mode().is_workspace() {
+        tracing::debug!("Workspace diagnostics is disabled; not checking the workspace");
+        return WorkspaceCheck::Disabled;
+    }
+
+    if snapshot
+        .projects()
+        .iter()
+        .any(|db| db.uv_environments().has_pending_initializations())
+    {
+        tracing::debug!("Deferring workspace diagnostics until script initialization completes");
+        // Skip the response writer: it would clear diagnostics for previous result IDs
+        // that we have not checked yet. Suspension retains the request, not this snapshot.
+        return WorkspaceCheck::NotReady;
+    }
+
+    let writer = ResponseWriter::new(
+        params.partial_result_params.partial_result_token,
+        params.previous_result_ids,
+        snapshot,
+        client,
+    );
+
+    // Use the work done progress token from the client request, if provided
+    // Note: neither VS Code nor Zed currently support this,
+    // see https://github.com/microsoft/vscode-languageserver-node/issues/528
+    // That's why we fall back to server-initiated progress if no token is provided.
+    let work_done_progress = LazyWorkDoneProgress::new(
+        client,
+        params.work_done_progress_params.work_done_token,
+        "Checking",
+        snapshot.resolved_client_capabilities(),
+    );
+    let mut reporter = WorkspaceDiagnosticsProgressReporter::new(work_done_progress, writer);
+
+    for db in snapshot.projects() {
+        db.check_with_reporter(&mut reporter);
+    }
+
+    WorkspaceCheck::Checked(reporter.into_final_report())
 }
 
 impl RetriableRequestHandler for WorkspaceDiagnosticRequestHandler {

@@ -2,7 +2,6 @@ use crate::Session;
 use crate::server::api::traits::{RequestHandler, SyncRequestHandler};
 use crate::session::client::Client;
 
-use lsp_types::WorkspaceDiagnosticReport;
 use salsa::Database;
 
 pub(crate) struct ShutdownHandler;
@@ -16,13 +15,8 @@ impl SyncRequestHandler for ShutdownHandler {
         tracing::debug!("Received shutdown request, waiting for exit notification");
 
         // Respond to any pending workspace diagnostic requests
-        if let Some(suspended_workspace_request) =
-            session.take_suspended_workspace_diagnostic_request()
-        {
-            client.respond(
-                &suspended_workspace_request.id,
-                Ok(WorkspaceDiagnosticReport::default()),
-            );
+        for suspended_workspace_request in session.take_suspended_workspace_diagnostic_requests() {
+            suspended_workspace_request.answer_at_shutdown(client);
         }
 
         session.set_shutdown_requested(true);

@@ -31,6 +31,7 @@ mod alignment_groups;
 mod build_output;
 mod build_trees;
 mod call_hierarchy;
+mod check_workspace;
 mod code_actions;
 mod commands;
 mod completions;

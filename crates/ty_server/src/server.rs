@@ -24,6 +24,7 @@ mod script_progress;
 use crate::project_server::Listener as ProjectServerListener;
 use crate::session::client::Client;
 pub(crate) use api::Error;
+pub(crate) use api::SuspendedWorkspaceRequestKind;
 pub(crate) use api::{
     publish_all_document_diagnostics, publish_diagnostics_if_needed, publish_settings_diagnostics,
 };

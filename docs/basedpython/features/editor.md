@@ -430,6 +430,44 @@ overrides, and `by/superMembers` still answers one. like the other document
 requests it takes `textHash`, and answers a document the client has not opened
 from the file on disk
 
+## the whole project's diagnostics
+
+with `diagnosticMode` set to `workspace`, the server checks every file in the
+project, open or not, and reports what it finds two ways:
+
+| request                | answers                                                                |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `workspace/diagnostic` | once something differs from the result ids sent — held open until then |
+| `by/checkWorkspace`    | as soon as the check is done, whether or not anything differs          |
+
+both take the same parameters and report the same thing, file by file, with an
+unchanged report for a file whose result id still matches. `workspace/diagnostic`
+is the one an editor keeps a problems list current with: it asks again as soon
+as it is answered, and the server answers when an edit or a change on disk
+changes something. `by/checkWorkspace` is for a client that asks once — an
+inspection over the whole project, a batch run with no editor — and would
+otherwise wait forever on a project with nothing wrong in it. it is refused,
+rather than answered empty, when the diagnostic mode does not check the
+workspace
+
+they differ in how the report arrives. `workspace/diagnostic` streams it as
+partial results when the client sends a `partialResultToken`, and reports
+progress under the client's `workDoneToken`. `by/checkWorkspace` ignores both
+tokens: its report comes whole, in the response, and its progress, when the
+client supports `window/workDoneProgress`, comes under a token the server
+creates
+
+`by/checkWorkspace` can take a while to answer, for two reasons:
+
+- an edit or a change on disk that lands while the workspace is being checked
+    starts the check again, on the changed workspace. the answer describes the
+    workspace as it was when a check finished, and a workspace that never stops
+    changing is never answered
+- while a PEP 723 script's environment is being set up for the first time, the
+    workspace is not checked, and the request waits until the environment is
+    there. the first setup installs the script's dependencies, so it can take as
+    long as that does
+
 ## the program model
 
 a run configuration, a test list and a "go to generated file" are all questions

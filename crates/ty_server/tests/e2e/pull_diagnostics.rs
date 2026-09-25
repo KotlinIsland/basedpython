@@ -1346,6 +1346,52 @@ def hello() -> str:
     Ok(())
 }
 
+/// every long-polling request held open at once is answered when something changes, not only the
+/// last one held
+#[test]
+fn workspace_diagnostic_long_polling_answers_every_held_request() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let file_path = SystemPath::new("src/test.py");
+    let file_content_no_error = "\
+def hello() -> str:
+    return \"world\"
+";
+    let file_content_with_error = "\
+def hello() -> str:
+    return 42
+";
+
+    let mut server =
+        create_workspace_server_with_file(workspace_root, file_path, file_content_no_error)?;
+    server.open_text_document(file_path, file_content_no_error, 1);
+
+    let first = send_workspace_diagnostic_request(&mut server);
+    assert_workspace_diagnostics_suspends_for_long_polling(&mut server, &first);
+    let second = send_workspace_diagnostic_request(&mut server);
+    assert_workspace_diagnostics_suspends_for_long_polling(&mut server, &second);
+
+    server.change_text_document(
+        file_path,
+        vec![
+            lsp_types::TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                TextDocumentContentChangeWholeDocument {
+                    text: file_content_with_error.to_string(),
+                },
+            ),
+        ],
+        2,
+    );
+
+    for id in [first, second] {
+        let report = server
+            .try_await_response::<WorkspaceDiagnosticRequest>(&id, Some(Duration::from_secs(10)))
+            .unwrap_or_else(|err| panic!("request {id} was not answered: {err}"));
+        assert_eq!(report.items.len(), 1, "{report:#?}");
+    }
+
+    Ok(())
+}
+
 /// Regression test for diagnostics disappearing in some cases.
 ///
 /// The specific way this fails is when a file that was never in the "open

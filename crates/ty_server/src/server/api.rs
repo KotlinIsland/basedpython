@@ -27,6 +27,7 @@ use crate::session::client::Client;
 pub(crate) use diagnostics::{
     publish_all_document_diagnostics, publish_diagnostics_if_needed, publish_settings_diagnostics,
 };
+pub(crate) use requests::SuspendedWorkspaceRequestKind;
 use ruff_db::panic::PanicError;
 
 /// Processes a request from the client to the server.
@@ -58,6 +59,9 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        requests::CheckWorkspaceRequestHandler::METHOD => background_request_task::<
+            requests::CheckWorkspaceRequestHandler,
+        >(req, BackgroundSchedule::Worker),
         requests::GotoTypeDefinitionRequestHandler::METHOD => background_document_request_task::<
             requests::GotoTypeDefinitionRequestHandler,
         >(
@@ -568,7 +572,7 @@ fn sync_notification_task<N: traits::SyncNotificationHandler>(
 
         // If there's a pending workspace diagnostic long-polling request,
         // resume it, but only if the session revision changed (e.g. because some document changed).
-        session.resume_suspended_workspace_diagnostic_request(client);
+        session.resume_suspended_workspace_diagnostic_requests(client);
     }))
 }
 
