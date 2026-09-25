@@ -67,6 +67,7 @@ pub fn run_server() -> anyhow::Result<()> {
         fallback_system,
         false,
         project_server_directory,
+        true,
     )
     .context("Failed to start server")?
     .run();

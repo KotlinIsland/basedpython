@@ -24,7 +24,7 @@ use ruff_db::system::{System, SystemPath, SystemPathBuf};
 use ruff_python_ast::PySourceType;
 use ty_combine::Combine;
 use ty_project::metadata::Options;
-use ty_project::watch::ChangeEvent;
+use ty_project::watch::{ChangeEvent, ProjectWatcher};
 use ty_project::{
     ChangeResult, Db as _, ProjectDatabase, ProjectMetadata, ProjectReloadResult,
     ScriptEnvironmentAvailability, UseUv, UvSyncChanges,
@@ -122,6 +122,18 @@ pub(crate) struct Session {
 
     /// The name of the client (editor) that connected to this server.
     client_name: ClientName,
+
+    /// Whether this session learns of file system changes by watching the file system itself.
+    ///
+    /// Cleared when the watcher cannot be started, which leaves the client's watcher as the
+    /// only source of changes.
+    watch_file_system: bool,
+
+    /// The session's own file system watcher, over every project's paths.
+    ///
+    /// `None` until the first projects exist, and for good when [`Self::watch_file_system`] is
+    /// off.
+    file_watcher: Option<ProjectWatcher>,
 }
 
 /// LSP State for a Project
@@ -151,6 +163,10 @@ pub(crate) struct ProjectState {
 }
 
 impl Session {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one caller, which has each of these to hand"
+    )]
     pub(crate) fn new(
         resolved_client_capabilities: ResolvedClientCapabilities,
         position_encoding: PositionEncoding,
@@ -159,6 +175,7 @@ impl Session {
         native_system: Arc<dyn System + 'static + Send + Sync + RefUnwindSafe>,
         client_name: ClientName,
         in_test: bool,
+        watch_file_system: bool,
     ) -> crate::Result<Self> {
         let index = Arc::new(Index::new());
 
@@ -190,6 +207,8 @@ impl Session {
             revision: 0,
             registrations: HashSet::new(),
             client_name,
+            watch_file_system,
+            file_watcher: None,
         })
     }
 
@@ -309,6 +328,8 @@ impl Session {
 
         if changes.project.is_some() {
             publish_settings_diagnostics(self, client, project_root.to_path_buf());
+            // a synchronized environment is new search paths to watch
+            self.update_file_watcher(client);
         }
 
         self.bump_revision();
@@ -687,7 +708,81 @@ impl Session {
             }
         }
 
+        self.watch_projects(client);
         self.register_capabilities(client);
+    }
+
+    /// Brings the session's own file system watcher up to date with the projects, and asks
+    /// the client to watch instead wherever it cannot.
+    ///
+    /// Called after anything that can change what there is to watch. Cheap when nothing did.
+    pub(crate) fn update_file_watcher(&mut self, client: &Client) {
+        let client_was_needed = self.needs_client_file_watcher();
+        self.watch_projects(client);
+        if client_was_needed != self.needs_client_file_watcher()
+            && self.workspaces.all_initialized()
+        {
+            self.register_capabilities(client);
+        }
+    }
+
+    /// Watches what every project needs watched: its root, its included paths, the module
+    /// search paths outside it, and its configuration files.
+    ///
+    /// ## why the server watches, when the client offers to
+    ///
+    /// A client's `workspace/didChangeWatchedFiles` says a file changed, and the only thing
+    /// the server can do with that is read the file. That is only right if the change is
+    /// on disk by the time the notification is read, and the protocol does not say it has to
+    /// be. PyCharm's client sends the notification when its virtual file system takes a save,
+    /// while the bytes can still be queued to be written: the server then reads the old text,
+    /// nothing tells it again once the write lands, and every open file depending on the saved
+    /// one keeps its diagnostics, hover, and types from before the save.
+    ///
+    /// The operating system reports a write after it happens, so a change reaches the session
+    /// no earlier than the bytes do.
+    ///
+    /// The client is not asked to watch as well while this one works; see
+    /// [`Self::needs_client_file_watcher`].
+    fn watch_projects(&mut self, client: &Client) {
+        if !self.watch_file_system {
+            return;
+        }
+        if self.projects.is_empty() {
+            // the last workspace folder was removed: nothing left to watch
+            self.file_watcher = None;
+            return;
+        }
+
+        let dbs = self.projects.values().map(|project| &project.db);
+        if let Some(watcher) = &mut self.file_watcher {
+            watcher.update_projects(dbs);
+            return;
+        }
+
+        match ty_project::watch::directory_watcher(client.file_system_changes()) {
+            Ok(watcher) => self.file_watcher = Some(ProjectWatcher::for_projects(watcher, dbs)),
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to start watching the file system, asking the client to report changes instead: {error}"
+                );
+                self.watch_file_system = false;
+            }
+        }
+    }
+
+    /// Whether the client has to report file changes, because the session's own watcher is not
+    /// running or could not watch every path.
+    ///
+    /// Not both. A client that reports a change before it is on disk makes the session read the
+    /// old text, which this watcher then corrects when the write lands: a second pass over the
+    /// same change, and a second refresh of everything the editor shows, for every save. A caller
+    /// that has to be answered from the new text at once cannot rely on either watcher, and has
+    /// to say so itself: write the file, then send `workspace/didChangeWatchedFiles`, then ask.
+    fn needs_client_file_watcher(&self) -> bool {
+        self.file_watcher
+            .as_ref()
+            .is_none_or(ProjectWatcher::has_errored_paths)
     }
 
     /// Initializes a single workspace folder with the given URI
@@ -1037,6 +1132,7 @@ impl Session {
             self.clear_diagnostics_if_needed(&doc, client);
         }
 
+        self.update_file_watcher(client);
         self.bump_revision();
 
         Ok(())
@@ -1143,16 +1239,18 @@ impl Session {
             }
         }
 
-        if let Some(register_options) = self.file_watcher_registration_options() {
-            if self
-                .registrations
-                .contains(DidChangeWatchedFilesNotification::METHOD.as_str())
-            {
-                unregistrations.push(Unregistration {
-                    id: FILE_WATCHER_REGISTRATION_ID.into(),
-                    method: DidChangeWatchedFilesNotification::METHOD.into(),
-                });
-            }
+        let file_watcher_options = self.file_watcher_registration_options();
+        if self
+            .registrations
+            .contains(DidChangeWatchedFilesNotification::METHOD.as_str())
+        {
+            // withdrawn as well as replaced: the session may have taken over watching
+            unregistrations.push(Unregistration {
+                id: FILE_WATCHER_REGISTRATION_ID.into(),
+                method: DidChangeWatchedFilesNotification::METHOD.into(),
+            });
+        }
+        if let Some(register_options) = file_watcher_options {
             registrations.push(Registration {
                 id: FILE_WATCHER_REGISTRATION_ID.into(),
                 method: DidChangeWatchedFilesNotification::METHOD.into(),
@@ -1247,6 +1345,11 @@ impl Session {
                         | lsp_types::WatchKind::Create,
                 ),
             }
+        }
+
+        if !self.needs_client_file_watcher() {
+            tracing::debug!("Not asking the client to watch files: the server watches them itself");
+            return None;
         }
 
         if !self.client_capabilities().supports_file_watcher() {

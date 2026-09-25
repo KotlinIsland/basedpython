@@ -5008,6 +5008,7 @@ dependencies = [
  "colored",
  "compact_str",
  "crossbeam",
+ "dunce",
  "get-size2",
  "globset",
  "insta",

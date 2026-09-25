@@ -74,6 +74,24 @@ impl Client {
             .unwrap();
     }
 
+    /// Where the session's own file system watcher delivers what it saw: to the main loop, to be
+    /// applied as a client's watched-files notification is.
+    pub(crate) fn file_system_changes(
+        &self,
+    ) -> impl Fn(Vec<ty_project::watch::ChangeEvent>) + Send + 'static {
+        let sender = self.main_loop_sender.clone();
+        move |changes| {
+            // the main loop is gone only once the server is shutting down, and a change it
+            // would have applied no longer matters
+            if sender
+                .send(Event::Action(Action::ApplyFileSystemChanges(changes)))
+                .is_err()
+            {
+                tracing::debug!("Dropped file system changes because the main loop is closed");
+            }
+        }
+    }
+
     /// Asks the main loop to re-read the file system for every project.
     ///
     /// This is for a background task that changed something outside the editor —

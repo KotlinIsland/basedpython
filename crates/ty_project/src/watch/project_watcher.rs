@@ -10,7 +10,7 @@ use ty_module_resolver::system_module_search_paths;
 use crate::db::{Db, ProjectDatabase};
 use crate::watch::Watcher;
 
-/// Wrapper around a [`Watcher`] that watches the relevant paths of a project.
+/// Wrapper around a [`Watcher`] that watches the relevant paths of one or more projects.
 pub struct ProjectWatcher {
     watcher: Watcher,
 
@@ -27,6 +27,17 @@ pub struct ProjectWatcher {
 impl ProjectWatcher {
     /// Create a new project watcher.
     pub fn new(watcher: Watcher, db: &ProjectDatabase) -> Self {
+        Self::for_projects(watcher, [db])
+    }
+
+    /// Create a watcher over every project in `dbs`, with one set of watched paths for all of them.
+    ///
+    /// For a process that holds several projects at once, such as a language server with several
+    /// workspace folders.
+    pub fn for_projects<'a>(
+        watcher: Watcher,
+        dbs: impl IntoIterator<Item = &'a ProjectDatabase>,
+    ) -> Self {
         let mut watcher = Self {
             watcher,
             watched_paths: Vec::new(),
@@ -34,17 +45,45 @@ impl ProjectWatcher {
             has_errored_paths: false,
         };
 
-        watcher.update(db);
+        watcher.update_projects(dbs);
 
         watcher
     }
 
     pub fn update(&mut self, db: &ProjectDatabase) {
-        let environment = db.project().program(db).resolver_environment(db);
-        let search_paths: Vec<_> = system_module_search_paths(db, environment).collect();
-        let project_path = db.project().root(db);
+        self.update_projects([db]);
+    }
 
-        let new_cache_key = Self::compute_cache_key(project_path, &search_paths);
+    /// Watches what every project in `dbs` needs watched, and stops watching anything else.
+    pub fn update_projects<'a>(&mut self, dbs: impl IntoIterator<Item = &'a ProjectDatabase>) {
+        let dbs: Vec<&ProjectDatabase> = dbs.into_iter().collect();
+
+        let mut project_paths = Vec::new();
+        let mut search_paths = Vec::new();
+        let mut config_paths = Vec::new();
+        for db in &dbs {
+            let project = db.project();
+            let project_path = project.root(*db);
+            project_paths.push(project_path);
+            project_paths.extend(
+                project
+                    .included_paths_list(*db)
+                    .iter()
+                    .map(SystemPathBuf::as_path),
+            );
+
+            // Module search paths are already canonicalized. The ones under the project root
+            // are covered by watching the root.
+            let environment = project.program(*db).resolver_environment(*db);
+            search_paths.extend(
+                system_module_search_paths(*db, environment)
+                    .filter(|path| !path.starts_with(project_path)),
+            );
+
+            config_paths.extend(project.metadata(*db).extra_configuration_paths());
+        }
+
+        let new_cache_key = Self::compute_cache_key(&project_paths, &search_paths, &config_paths);
 
         if self.cache_key == Some(new_cache_key) {
             return;
@@ -70,29 +109,20 @@ impl ProjectWatcher {
 
         self.has_errored_paths = false;
 
-        let config_paths = db.project().metadata(db).extra_configuration_paths();
-
-        // Watch both the project root and any paths provided by the user on the CLI (removing any redundant nested paths).
+        // Watch both the project roots and any paths provided by the user on the CLI (removing any redundant nested paths).
         // This is necessary to observe changes to files that are outside the project root.
         // We always need to watch the project root to observe changes to its configuration.
-        let included_paths = ruff_db::system::deduplicate_nested_paths(
-            std::iter::once(project_path).chain(
-                db.project()
-                    .included_paths_list(db)
-                    .iter()
-                    .map(SystemPathBuf::as_path),
-            ),
-        );
+        let included_paths = ruff_db::system::deduplicate_nested_paths(project_paths);
 
-        // Find the non-overlapping module search paths and filter out paths that are already covered by the project.
-        // Module search paths are already canonicalized.
-        let unique_module_paths = ruff_db::system::deduplicate_nested_paths(
-            search_paths
-                .into_iter()
-                .filter(|path| !path.starts_with(project_path)),
-        );
+        // Find the non-overlapping module search paths. Those under a project's own root were
+        // filtered out above; a search path of one project can still be another project's root.
+        let unique_module_paths =
+            ruff_db::system::deduplicate_nested_paths(search_paths).filter(|path| {
+                !dbs.iter()
+                    .any(|db| path.starts_with(db.project().root(*db)))
+            });
 
-        // Now add the new paths, first starting with the project path and then
+        // Now add the new paths, first starting with the project paths and then
         // adding the library search paths, and finally the paths for configurations.
         for path in included_paths
             .chain(unique_module_paths)
@@ -127,10 +157,15 @@ impl ProjectWatcher {
         self.cache_key = Some(new_cache_key);
     }
 
-    fn compute_cache_key(project_root: &SystemPath, search_paths: &[&SystemPath]) -> u64 {
+    fn compute_cache_key(
+        project_paths: &[&SystemPath],
+        search_paths: &[&SystemPath],
+        config_paths: &[&SystemPath],
+    ) -> u64 {
         let mut cache_key_hasher = CacheKeyHasher::new();
         search_paths.cache_key(&mut cache_key_hasher);
-        project_root.cache_key(&mut cache_key_hasher);
+        project_paths.cache_key(&mut cache_key_hasher);
+        config_paths.cache_key(&mut cache_key_hasher);
 
         cache_key_hasher.finish()
     }
