@@ -11,6 +11,8 @@ use ruff_text_size::{TextRange, TextSize};
 use ty_project::Db;
 
 use crate::InlayHintSettings;
+use crate::inlay_hints::hint_switches;
+use strum_macros::EnumIter;
 
 use super::index::{BindingOrigin, TemplateIndex, TemplateReference};
 use super::lexer::TokenKind;
@@ -30,13 +32,18 @@ pub struct TemplateInlayHint {
 }
 
 /// what a template hint says
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter)]
 pub enum TemplateInlayHintKind {
     /// the type of a name the template binds
     Type,
     /// the file a template name resolves to
     Template,
 }
+
+hint_switches!(TemplateInlayHintKind, template_enabled, set_template_enabled, {
+    Type => template_binding_types = "templateBindingTypes",
+    Template => resolved_templates = "resolvedTemplates",
+});
 
 /// every hint `range` of the template `file` shows
 pub(crate) fn inlay_hints(
@@ -50,11 +57,11 @@ pub(crate) fn inlay_hints(
 ) -> Vec<TemplateInlayHint> {
     let mut hints = Vec::new();
 
-    if settings.template_binding_types {
+    if settings.template_enabled(TemplateInlayHintKind::Type) {
         binding_types(db, env, file, index, source, range, &mut hints);
     }
 
-    if settings.resolved_templates {
+    if settings.template_enabled(TemplateInlayHintKind::Template) {
         for reference in index.extends().into_iter().chain(index.includes()) {
             resolved_template(db, index, range, reference, &mut hints);
         }

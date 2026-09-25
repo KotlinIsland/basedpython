@@ -229,6 +229,18 @@ on
 | `templateBindingTypes`       | a django template `{% for %}` binding's element type            |
 | `resolvedTemplates`          | the file a django `{% extends %}` name resolves to              |
 
+every hint also carries its setting's name as `data.kind` —
+`{"kind": "revealedTypes"}` — so an editor can show each kind in its own way,
+or only while a key is held, without telling kinds apart by their text. lsp's
+own `kind` is only `Type` or `Parameter`, and a revealed `list[int]` and a
+call's `[int]` differ by a bracket
+
+a hint is shown or hidden by its own setting alone, but one setting also
+changes what other hints say: in a `.by` file, `typeArgumentNames` names the
+type arguments of the types that `variableTypes` and `callTypeArguments` hints
+show, so `x = identity({"a": 1})` is hinted `: dict[Key=str, Value=int]` with it
+on and `: dict[str, int]` with it off
+
 ### keeping a hand-aligned block aligned
 
 a hint takes up room. drawn after the name, it pushes the rest of the line along

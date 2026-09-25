@@ -1115,6 +1115,17 @@ fn a_template_hints_a_loop_binding_and_the_file_an_include_resolves_to() -> Resu
         ["11 : Book", "50  → blog/templates/blog/card.html"]
     );
 
+    // each is tagged with the `inlayHints` option that switches it, as a python
+    // hint is
+    let kinds: Vec<_> = hints.iter().map(|hint| hint.data.clone()).collect();
+    assert_eq!(
+        kinds,
+        [
+            Some(serde_json::json!({ "kind": "templateBindingTypes" })),
+            Some(serde_json::json!({ "kind": "resolvedTemplates" })),
+        ]
+    );
+
     Ok(())
 }
 
