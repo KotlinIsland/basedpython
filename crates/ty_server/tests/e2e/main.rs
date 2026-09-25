@@ -29,6 +29,7 @@
 
 mod alignment_groups;
 mod build_output;
+mod build_trees;
 mod call_hierarchy;
 mod code_actions;
 mod commands;

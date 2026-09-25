@@ -1325,6 +1325,10 @@ pub(crate) fn cmd_compile(
     // manifest left describing the run before it would have the *next* run prune
     // against a tree that no longer exists
     let compiling: anyhow::Result<()> = 'compiling: {
+        // `by_build` writes each artifact before it is recorded, so the tree is marked first
+        if let Err(error) = staging.mark_as_output() {
+            break 'compiling Err(error);
+        }
         for ((path, file), name) in planned {
             let source = match fs::read_to_string(path)
                 .with_context(|| format!("could not read {}", path.display()))

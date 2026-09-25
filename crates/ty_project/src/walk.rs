@@ -1,3 +1,4 @@
+use crate::build_output::is_build_output;
 use crate::files::IndexedFile;
 use crate::glob::IncludeExcludeFilter;
 use crate::script::script_tag;
@@ -78,8 +79,8 @@ impl<'a> ProjectFilesFilter<'a> {
     /// ## Note
     ///
     /// This method may return `true` for files that don't end up being included when walking the
-    /// project tree because it doesn't consider `.gitignore` and other ignore files when deciding
-    /// if a file's included.
+    /// project tree because it doesn't consider `.gitignore` and other ignore files, or the build
+    /// outputs the walk skips (see [`crate::build_output`]), when deciding if a file's included.
     pub(crate) fn is_file_included(
         &self,
         path: &SystemPath,
@@ -210,6 +211,21 @@ impl ProjectFilesWalker {
                                         GlobFilterCheckMode::TopDown,
                                     );
                                     return match directory_included {
+                                        // a tree a build wrote is a copy of the project, not part
+                                        // of it. a walk root is never skipped for it: the project
+                                        // root is never an output, and a directory named on the
+                                        // command line was asked for. see `crate::build_output`
+                                        IncludeResult::Included { .. }
+                                            if entry.depth() > 0
+                                                && is_build_output(db.system(), entry.path()) =>
+                                        {
+                                            tracing::debug!(
+                                                "Skipping directory `{path}` because a build \
+                                                wrote it",
+                                                path = entry.path()
+                                            );
+                                            WalkState::Skip
+                                        }
                                         IncludeResult::Included { .. } => WalkState::Continue,
                                         IncludeResult::Excluded => {
                                             tracing::debug!(

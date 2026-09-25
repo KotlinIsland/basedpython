@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -20,7 +21,13 @@ use anyhow::Context;
 /// until one shadows a module that moved. The manifest is what makes the output a
 /// mirror rather than a pile: what the previous build wrote and this one did not
 /// is deleted.
-pub(crate) const MANIFEST_FILENAME: &str = ".by-manifest";
+///
+/// Being there is also what marks the tree as a build output: the project the build
+/// was made from leaves it out of its own files — see [`ty_project::build_output`].
+const MANIFEST_FILENAME: &str = ty_project::build_output::BUILD_MANIFEST;
+
+/// the line a manifest starts with, before the paths it records
+const MANIFEST_HEADER: &str = "# written by `by build`; delete it and stale output stays\n";
 
 /// An output tree being written.
 pub struct Staging {
@@ -30,6 +37,8 @@ pub struct Staging {
     /// destinations another writer produced, held apart from `written` so a
     /// source that would land on one is reported rather than overwriting it
     recorded: BTreeSet<PathBuf>,
+    /// whether the tree is known to carry a manifest already — see [`Self::mark_as_output`]
+    marked: bool,
 }
 
 impl Staging {
@@ -38,7 +47,44 @@ impl Staging {
             out: out.to_path_buf(),
             written: BTreeMap::new(),
             recorded: BTreeSet::new(),
+            marked: false,
         }
+    }
+
+    /// mark the tree as a build output before the first file lands in it
+    ///
+    /// the manifest [`Self::finish`] writes is also what tells the project this tree is not
+    /// part of it. a first build writes into a directory that has none yet, and a language
+    /// server watching the project would otherwise see a copy of every source appear, take them
+    /// for the project's own, and check each one until the build finished and the manifest
+    /// arrived. an empty manifest says the same as a missing one to the next build (nothing
+    /// was written here before), and one already there is left for `finish` to read
+    ///
+    /// writing and copying through the staging mark it themselves, and so does [`Self::record`].
+    /// a writer that lays files out itself, as `by compile` does, calls this before it writes
+    pub fn mark_as_output(&mut self) -> anyhow::Result<()> {
+        if self.marked {
+            return Ok(());
+        }
+        let manifest = self.out.join(MANIFEST_FILENAME);
+        create_parent(&manifest)?;
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&manifest)
+        {
+            Ok(mut file) => {
+                file.write_all(MANIFEST_HEADER.as_bytes())
+                    .with_context(|| format!("could not write {}", manifest.display()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("could not write {}", manifest.display()));
+            }
+        }
+        self.marked = true;
+        Ok(())
     }
 
     pub(crate) fn out(&self) -> &Path {
@@ -76,6 +122,7 @@ impl Staging {
         contents: &str,
     ) -> anyhow::Result<()> {
         self.claim(relative, source)?;
+        self.mark_as_output()?;
         let destination = self.out.join(relative);
         create_parent(&destination)?;
         fs::write(&destination, contents)
@@ -104,6 +151,7 @@ impl Staging {
                 claimant(source.as_deref()),
             );
         }
+        self.mark_as_output()?;
         self.recorded.insert(relative.to_path_buf());
         Ok(())
     }
@@ -111,6 +159,7 @@ impl Staging {
     /// Copy `source` to `relative` verbatim.
     pub(crate) fn copy(&mut self, relative: &Path, source: &Path) -> anyhow::Result<()> {
         self.claim(relative, Some(source))?;
+        self.mark_as_output()?;
         let destination = self.out.join(relative);
         create_parent(&destination)?;
         fs::copy(source, &destination).with_context(|| {
@@ -190,8 +239,7 @@ impl Staging {
         }
 
         create_parent(&manifest)?;
-        let mut rendered =
-            String::from("# written by `by build`; delete it and stale output stays\n");
+        let mut rendered = String::from(MANIFEST_HEADER);
         for path in current {
             rendered.push_str(&portable(path));
             rendered.push('\n');
@@ -424,6 +472,69 @@ mod tests {
 
         assert!(directory.path().join("theirs.txt").exists());
         assert!(!directory.path().join("mine.py").exists());
+    }
+
+    /// the manifest is what keeps the tree out of the project it was built from, so it is
+    /// there before the first file is, not only once the build is done
+    #[test]
+    fn a_first_build_marks_its_output_before_writing_into_it() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let out = directory.path().join("build");
+        let mut staging = Staging::new(&out);
+        staging
+            .write(Path::new("a.py"), None, "x = 1\n")
+            .expect("write");
+        assert!(
+            ty_project::build_output::is_build_output(
+                &ruff_db::system::OsSystem::new(
+                    ruff_db::system::SystemPath::from_std_path(directory.path()).expect("utf-8")
+                ),
+                ruff_db::system::SystemPath::from_std_path(&out).expect("utf-8"),
+            ),
+            "a tree being written is an output before the build finishes"
+        );
+        staging.finish().expect("finish");
+        assert!(read_manifest(&out.join(MANIFEST_FILENAME)).contains(Path::new("a.py")));
+    }
+
+    /// a file another writer put into the tree marks it too
+    #[test]
+    fn recording_an_artifact_marks_the_output() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let out = directory.path().join("build");
+        let mut staging = Staging::new(&out);
+        staging.record(Path::new("a.so")).expect("record");
+        assert!(
+            ty_project::build_output::is_build_output(
+                &ruff_db::system::OsSystem::new(
+                    ruff_db::system::SystemPath::from_std_path(directory.path()).expect("utf-8")
+                ),
+                ruff_db::system::SystemPath::from_std_path(&out).expect("utf-8"),
+            ),
+            "a tree with an artifact recorded in it is an output before the build finishes"
+        );
+    }
+
+    /// marking a tree the last build left does not forget what that build wrote
+    #[test]
+    fn marking_an_output_keeps_the_previous_manifest() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut first = Staging::new(directory.path());
+        first
+            .write(Path::new("gone.py"), None, "x = 1\n")
+            .expect("write");
+        first.finish().expect("finish");
+
+        let mut second = Staging::new(directory.path());
+        second
+            .write(Path::new("kept.py"), None, "x = 1\n")
+            .expect("write");
+        assert!(
+            read_manifest(&directory.path().join(MANIFEST_FILENAME)).contains(Path::new("gone.py")),
+            "the previous build's record survives until this one replaces it"
+        );
+        second.finish().expect("finish");
+        assert!(!directory.path().join("gone.py").exists());
     }
 
     #[test]

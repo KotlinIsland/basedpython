@@ -1,3 +1,4 @@
+use crate::build_output::{is_build_manifest, is_within_build_output};
 use crate::db::{Db, ProjectDatabase};
 use crate::metadata::CONFIG_FILE_NAMES;
 use crate::script::script_tag;
@@ -134,9 +135,13 @@ impl ProjectDatabase {
         // over to the `ignore` crate, since the `ignore` crate will respect
         // the settings provided in `create_walker`. ---AG
         let respect_ignore_files = project.settings(self).src().respect_ignore_files;
-        let ignore_walk_roots =
-            respect_ignore_files.then(|| project.included_paths_or_root(self).to_vec());
-        let mut ignore_files = ignore_walk_roots.as_deref().and_then(|walk_roots| {
+        // also what decides what the walk would skip as a build's output, for one changed path at
+        // a time. a build writes a copy of every source it read, and none of it is the project's:
+        // the writes are synced like any file's, but they neither join the project nor set off a
+        // walk
+        let walk_roots = project.included_paths_or_root(self).to_vec();
+        let ignore_walk_roots = respect_ignore_files.then_some(walk_roots.as_slice());
+        let mut ignore_files = ignore_walk_roots.and_then(|walk_roots| {
             Some(create_walker_builder(self, walk_roots)?.incremental_matcher())
         });
 
@@ -147,6 +152,37 @@ impl ProjectDatabase {
                 if configuration_paths.is_configuration(path, &project_root) {
                     File::sync_path(self, path);
                     reload_project = true;
+
+                    continue;
+                }
+
+                // a build's manifest appearing or going away turns the directory into an output or
+                // back into part of the project, as an ignore file saying `*` would. walking it
+                // again settles which: a walk skips an output. a manifest a build only rewrites
+                // changes nothing
+                if is_build_manifest(path, &walk_roots)
+                    && matches!(
+                        change,
+                        ChangeEvent::Created { .. } | ChangeEvent::Deleted { .. }
+                    )
+                {
+                    File::sync_path(self, path);
+                    file_system_changed = true;
+                    if let Some(directory) = path.parent()
+                        && !is_within_build_output(self.system(), directory, &walk_roots)
+                        && project.is_directory_included(self, directory)
+                    {
+                        tracing::debug!(
+                            manifest = %path,
+                            directory = %directory,
+                            "Queueing project-file reindex for a build output's manifest"
+                        );
+                        removed_paths.insert(directory.to_path_buf());
+                        result.changed_files.mark_unknown();
+                        if self.system().is_directory(directory) {
+                            added_paths.insert(directory.to_path_buf());
+                        }
+                    }
 
                     continue;
                 }
@@ -166,6 +202,7 @@ impl ProjectDatabase {
                             );
                             reload_project_files = true;
                         } else if project.is_directory_included(self, directory)
+                            && !is_within_build_output(self.system(), path, &walk_roots)
                             && ignore_files.as_mut().is_none_or(|ignore_files| {
                                 !ignore_files.is_ignored(directory, true)
                             })
@@ -242,6 +279,7 @@ impl ProjectDatabase {
                             if !project
                                 .is_file_included(self, path)
                                 .should_index_file(self.system(), path)
+                                || is_within_build_output(self.system(), path, &walk_roots)
                             {
                                 continue;
                             }
@@ -271,6 +309,7 @@ impl ProjectDatabase {
                             }
                         } else if change.is_created()
                             && project.is_directory_included(self, path)
+                            && !is_within_build_output(self.system(), path, &walk_roots)
                             && ignore_files
                                 .as_mut()
                                 .is_none_or(|ignore_files| !ignore_files.is_ignored(path, true))

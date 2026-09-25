@@ -37,6 +37,7 @@ use ty_python_semantic::lint::RuleSelection;
 use uv::DependencyMetadataError;
 pub use uv::{ScriptEnvironmentAvailability, UseUv, UvEnvironments, UvSyncChanges};
 
+pub mod build_output;
 mod db;
 mod files;
 pub mod glob;
