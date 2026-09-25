@@ -373,6 +373,111 @@ fn a_file_never_opened_that_does_not_check_refuses_the_set() -> Result<()> {
     Ok(())
 }
 
+/// **An edit landing while a reload is answered is not a panic.** Typing and then pressing Reload
+/// sends the request first and the keystrokes' `didChange` after it, and the change arrives while
+/// the transpile is still reading the database it writes to. Salsa cancels the reader by unwinding
+/// it; the request is asked again against the edit, and answered about the text the editor now
+/// holds rather than refused as a transpiler panic.
+///
+/// The race is made certain rather than hoped for: the tree's `_by_sourcemap.py` is a pipe, so the
+/// server — which reads it after taking its snapshot and before transpiling anything — waits on it
+/// until the test has sent the edit.
+#[cfg(unix)]
+#[test]
+fn an_edit_arriving_while_a_reload_is_answered_is_answered_against_the_edit() -> Result<()> {
+    use std::io::Write as _;
+    use std::time::Duration;
+
+    use lsp_types::{TextDocumentContentChangeEvent, TextDocumentContentChangeWholeDocument};
+
+    let before = "def go() -> int:\n    return 42\n";
+    let after = "def go() -> int:\n    return 43\n";
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("project"), None)?
+        .with_file("project/main.by", before)?
+        .with_file("project/other.by", "def other() -> int:\n    return 6\n")?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document(SystemPath::new("project/main.by"), before, 1);
+    let build = stale_build(&server, SystemPath::new("build"))?;
+
+    let pipe = build.join("_by_sourcemap.py").into_std_path_buf();
+    let map = std::fs::read_to_string(&pipe)?;
+    std::fs::remove_file(&pipe)?;
+    let made = std::process::Command::new("mkfifo").arg(&pipe).status()?;
+    assert!(made.success(), "mkfifo failed: {made}");
+
+    let id = server.send_request::<TranspileForBuild>(TranspileForBuildParams {
+        text_documents: vec![TextDocumentIdentifier {
+            uri: server.file_uri("project/main.by"),
+        }],
+        build_directory: build.as_std_path().to_path_buf(),
+    });
+    server.change_text_document(
+        SystemPath::new("project/main.by"),
+        vec![
+            TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                TextDocumentContentChangeWholeDocument {
+                    text: after.to_string(),
+                },
+            ),
+        ],
+        2,
+    );
+    // Long enough for the server to take the change in and begin writing it, which it cannot
+    // finish while the request holds the revision it replaces. The server has nothing to show that
+    // it has begun, so this is a wait; if it is ever too short, the answer is about `before` and
+    // the assertion below says so rather than passing.
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Opening a pipe to write waits for its reader, so once this returns the server is holding the
+    // pipe open. The path then becomes an ordinary file holding the same map, before the pipe is
+    // written — so the server's read is fed exactly once, and whatever reads the map after it,
+    // which is only ever an attempt made after the edit, reads the file.
+    let fed = {
+        let (pipe, staged) = (
+            pipe.clone(),
+            build.join("_by_sourcemap.py.next").into_std_path_buf(),
+        );
+        std::fs::write(&staged, &map)?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let fed = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&pipe)
+                .and_then(|mut writer| {
+                    std::fs::rename(&staged, &pipe)?;
+                    writer.write_all(map.as_bytes())
+                });
+            let _ = sender.send(fed);
+        });
+        receiver.recv_timeout(Duration::from_secs(60))
+    };
+    let Ok(fed) = fed else {
+        // let the feeder go, which is waiting for a reader that never came
+        let _ = std::fs::read(&pipe);
+        panic!("the server never read the tree's map");
+    };
+    fed?;
+
+    let answer = server
+        .try_await_response::<TranspileForBuild>(&id, Some(Duration::from_secs(60)))
+        .unwrap_or_else(|error| panic!("the reload was not answered: {error}"));
+    let files = answer["files"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the reload was refused: {answer}"));
+    let content = files[0]["content"].as_str().unwrap();
+    // The request's first attempt holds the revision from before the edit, and nothing can show it
+    // the edit — the change's write waits for that attempt to let go. So an answer about the edit is
+    // an answer from a second attempt, made against the new revision.
+    assert!(
+        content.contains("return 43"),
+        "the answer is about the text before the edit, so the edit never reached the \
+         request while it was running:\n{content}"
+    );
+    Ok(())
+}
+
 /// A tree nothing says is a build is refused for the whole set, not file by file.
 #[test]
 fn a_directory_that_is_not_a_build_refuses_the_set() -> Result<()> {
