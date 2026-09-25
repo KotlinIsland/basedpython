@@ -189,6 +189,29 @@ pub(crate) fn scoped_definitions_for_name<'db>(
     alias_resolution: ImportAliasResolution,
 ) -> Vec<ResolvedDefinition<'db>> {
     let env = ProgramEnvironment::from_scope(scope);
+    let all_definitions = visible_definitions_for_name(db, scope, name_str);
+
+    // Resolve import definitions to their targets
+    let mut resolved_definitions = Vec::new();
+
+    for definition in &all_definitions {
+        let resolved = resolve_definition(db, &env, *definition, Some(name_str), alias_resolution);
+        resolved_definitions.extend(resolved);
+    }
+
+    resolved_definitions
+}
+
+/// The definitions a use of `name_str` in `scope` can refer to, from the nearest visible scope
+/// that has any, without following imports and without falling back to implicit builtins.
+///
+/// This reads only the semantic index: every binding and declaration of the name in that scope,
+/// whether or not it is reachable from the use.
+pub(crate) fn visible_definitions_for_name<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+    name_str: &str,
+) -> FxIndexSet<Definition<'db>> {
     let file = scope.program_file(db);
     let index = semantic_index(db, file);
     let file_scope = scope.file_scope_id(db);
@@ -282,15 +305,7 @@ pub(crate) fn scoped_definitions_for_name<'db>(
         }
     }
 
-    // Resolve import definitions to their targets
-    let mut resolved_definitions = Vec::new();
-
-    for definition in &all_definitions {
-        let resolved = resolve_definition(db, &env, *definition, Some(name_str), alias_resolution);
-        resolved_definitions.extend(resolved);
-    }
-
-    resolved_definitions
+    all_definitions
 }
 
 /// Resolves a symbol in an implicit builtins scope.

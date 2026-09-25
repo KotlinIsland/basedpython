@@ -89,7 +89,7 @@ pub(crate) fn inferred_return_type<'db>(
         body_scope,
         node,
         file_scope_id.is_generator_function(index),
-        can_implicitly_return_none(db, index.use_def_map(file_scope_id)),
+        index.use_def_map(file_scope_id),
         |expr| inference.expression_type(expr),
     )
 }
@@ -136,19 +136,25 @@ fn divergence_bounded<'db>(
 /// runs from inside the very scope that would be re-entered. The two share this so they cannot
 /// drift: the lint advises deleting an annotation, and a body type it disagreed with would make
 /// that advice silently change the function's type.
+///
+/// A `return` that can never be reached hands nothing back, so its value is left out, as the end
+/// of the body is when control cannot fall off it. A body whose every `return` and whose end are
+/// unreachable returns `Never`: a call to it cannot return, and the checker ends the flow there.
 pub(crate) fn return_type_from_body<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     body_scope: ScopeId<'db>,
     node: &ast::StmtFunctionDef,
     is_generator: bool,
-    can_implicitly_return_none: bool,
+    use_def: &UseDefMap<'db>,
     expression_type: impl Fn(&Expr) -> Type<'db>,
 ) -> Type<'db> {
+    let can_implicitly_return_none = can_implicitly_return_none(db, use_def);
     let mut collector = BodyValueCollector {
         db,
         env: env.clone(),
         body_scope,
+        use_def,
         // a `type def` hands back a type rather than a value, so there is no value whose members
         // a caller could read and nothing for a structural claim about them to describe
         carries_member_narrowing: !ast::helpers::is_type_def(node),
@@ -2396,17 +2402,18 @@ pub(crate) fn can_implicitly_return_none<'db>(db: &'db dyn Db, use_def: &UseDefM
 ///
 /// A nested function or lambda has its own body scope and its own returns, so
 /// this never descends into one. A class body is skipped for the same reason.
-struct BodyValueCollector<'db, F> {
+struct BodyValueCollector<'a, 'db, F> {
     db: &'db dyn Db,
     env: ProgramEnvironment<'db>,
     body_scope: ScopeId<'db>,
+    use_def: &'a UseDefMap<'db>,
     carries_member_narrowing: bool,
     expression_type: F,
     returns: Vec<Type<'db>>,
     yields: Vec<Type<'db>>,
 }
 
-impl<'db, F> Visitor<'_> for BodyValueCollector<'db, F>
+impl<'db, F> Visitor<'_> for BodyValueCollector<'_, 'db, F>
 where
     F: Fn(&Expr) -> Type<'db>,
 {
@@ -2419,6 +2426,15 @@ where
             Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
 
             Stmt::Return(ret) => {
+                let reachability = self.use_def.return_reachability(ret.range());
+                if self
+                    .use_def
+                    .reachability_constraints()
+                    .evaluate(self.db, self.use_def.predicates(), reachability)
+                    .is_always_false()
+                {
+                    return;
+                }
                 let returned = match ret.value.as_deref() {
                     Some(value) => {
                         self.visit_expr(value);

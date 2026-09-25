@@ -344,7 +344,7 @@ contradiction at every call site and never where it lives
 ## unannotated return types
 
 a function with no return annotation returns what its body returns: the union of every `return`
-expression, plus `None` when control can also fall off the end
+expression that can be reached, plus `None` when control can also fall off the end
 
 ```python
 def f():
@@ -360,6 +360,25 @@ is what running it would do. a body that always raises returns `Never`
 class X(Protocol):
     def f(self): ...   # (self) -> None
 ```
+
+a statement that calls a function which returns `Never` ends the flow, as a call to a `NoReturn`
+function does, and the code after it is unreachable. a function returns `Never` when no path through
+its body reaches a `return` or its end without passing a `raise`, a loop that never exits, or a
+call that cannot return either. a function that only ever calls itself never returns, since each
+call makes another until `RecursionError`
+
+```python
+import sys
+
+def die():
+    sys.exit(1)
+
+def f() -> int:
+    die()           # no `invalid-return-type`: the end of `f` is unreachable
+```
+
+a `return` whose value never finishes evaluating, such as `return sys.exit(1)`, is the exception: the
+function returns `Never`, but a call to it is still treated as one that can return
 
 a generator returns a generator: its `yield` expressions supply the yield type and its `return`
 statements the third type argument. the send type is the one thing the body does not determine, so

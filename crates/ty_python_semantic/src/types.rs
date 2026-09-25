@@ -223,6 +223,7 @@ pub(crate) mod name_fallback;
 pub(crate) mod narrow;
 pub(crate) mod narrowing_guards;
 mod newtype;
+pub(crate) mod normal_completion;
 mod overlapping;
 mod overrides;
 mod protocol_class;
