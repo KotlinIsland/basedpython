@@ -136,9 +136,53 @@ fn directory_listing_query(
 
 #[cfg(test)]
 mod tests {
-    use crate::files::directory_listing;
-    use crate::system::{DbWithWritableSystem as _, SystemPath};
+    use crate::files::{File, Files, directory_listing};
+    use crate::system::{DbWithWritableSystem as _, SystemPath, WritableSystem as _};
     use crate::tests::TestDb;
+
+    fn names(db: &TestDb, directory: &str) -> Vec<String> {
+        directory_listing(db, SystemPath::new(directory))
+            .unwrap()
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .collect()
+    }
+
+    /// a change is often reported for a file alone, as a client watching `**/*.py` reports it,
+    /// and not for the directory that was made for it: the directory above the new one is still
+    /// the one whose entries changed
+    #[test]
+    fn a_file_written_into_a_new_directory_changes_the_listing_above_it() -> std::io::Result<()> {
+        let mut db = TestDb::new();
+        db.write_file("src/a.py", "")?;
+        assert_eq!(names(&db, "src"), ["a.py"]);
+
+        let file = SystemPath::new("src/pkg/module.py");
+        db.writable_system()
+            .create_directory_all(SystemPath::new("src/pkg"))?;
+        db.writable_system().write_file(file, "")?;
+        File::sync_path(&mut db, file);
+
+        assert_eq!(names(&db, "src"), ["a.py", "pkg"]);
+
+        Ok(())
+    }
+
+    /// the same holds of a directory reported alone, without the new directory it was made in
+    #[test]
+    fn a_directory_made_in_a_new_directory_changes_the_listing_above_it() -> std::io::Result<()> {
+        let mut db = TestDb::new();
+        db.write_file("src/a.py", "")?;
+        assert_eq!(names(&db, "src"), ["a.py"]);
+
+        let directory = SystemPath::new("src/pkg/sub");
+        db.writable_system().create_directory_all(directory)?;
+        Files::sync_all_recursive(&mut db, [directory]);
+
+        assert_eq!(names(&db, "src"), ["a.py", "pkg"]);
+
+        Ok(())
+    }
 
     #[test]
     fn listing_is_sorted() -> std::io::Result<()> {

@@ -278,6 +278,122 @@ fn a_template_created_during_the_session_is_offered_to_an_extends() -> Result<()
     Ok(())
 }
 
+/// a client watching for files reports the file alone, and not the directory it was
+/// written into along with it: the walk that found the templates listed the directory
+/// above the new one, and that is the directory whose entries changed
+#[test]
+fn a_template_created_in_a_new_directory_is_offered_to_an_extends() -> Result<()> {
+    let mut server = server("{% extends '' %}\n")?;
+    let uri = template_uri(&server);
+
+    let offered = |server: &mut TestServer| -> Vec<String> {
+        server
+            .completion_request(&uri, Position::new(0, 12))
+            .iter()
+            .map(|completion| completion.label.clone())
+            .collect()
+    };
+
+    assert!(!offered(&mut server).contains(&"blog/cards/card.html".to_string()));
+
+    let created = SystemPath::new("src/blog/templates/blog/cards/card.html");
+    server.write_file(created, "<p>a card</p>\n")?;
+    server.did_change_watched_files(vec![FileEvent {
+        uri: server.file_uri(created),
+        kind: FileChangeType::Created,
+    }]);
+
+    assert!(
+        offered(&mut server).contains(&"blog/cards/card.html".to_string()),
+        "a template in a directory created after the server started is still a template"
+    );
+
+    Ok(())
+}
+
+const BUILD_MANIFEST: &str = "src/build/.by-manifest";
+
+/// a project holding a build's output, with a template of its own under `build/`
+fn server_with_a_build_output() -> Result<TestServer> {
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(SystemPath::new("src/blog/views.py"), VIEWS)?
+        .with_file(SystemPath::new("src/blog/templates/blog/base.html"), BASE)?
+        .with_file(
+            SystemPath::new("src/blog/templates/blog/post.html"),
+            "{% extends '' %}\n",
+        )?
+        .with_file(SystemPath::new(BUILD_MANIFEST), "blog/views.py\n")?
+        .with_file(
+            SystemPath::new("src/build/blog/templates/blog/built.html"),
+            BASE,
+        )?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    server.open_text_document_as(
+        SystemPath::new("src/blog/templates/blog/post.html"),
+        "{% extends '' %}\n",
+        1,
+        LanguageKind::new("django-html"),
+    );
+    Ok(server)
+}
+
+/// the names an `{% extends '' %}` in the template under test is offered
+fn offered_to_the_extends(server: &mut TestServer) -> Vec<String> {
+    let uri = template_uri(server);
+    server
+        .completion_request(&uri, Position::new(0, 12))
+        .iter()
+        .map(|completion| completion.label.clone())
+        .collect()
+}
+
+/// a build's output is a copy of the project, templates and all, and none of it is the
+/// project's own: a template there is not one the project can load by that name
+#[test]
+fn a_template_in_a_build_output_is_not_offered_to_an_extends() -> Result<()> {
+    let mut server = server_with_a_build_output()?;
+
+    let offered = offered_to_the_extends(&mut server);
+    assert!(
+        offered.contains(&"blog/base.html".to_string()),
+        "{offered:#?}"
+    );
+    assert!(
+        !offered.contains(&"blog/built.html".to_string()),
+        "{offered:#?}"
+    );
+
+    Ok(())
+}
+
+/// deleting the manifest makes the directory an ordinary one of the project's, and the
+/// templates in it the project's own
+#[test]
+fn a_template_in_a_former_build_output_is_offered_to_an_extends() -> Result<()> {
+    let mut server = server_with_a_build_output()?;
+    let offered = offered_to_the_extends(&mut server);
+    assert!(
+        !offered.contains(&"blog/built.html".to_string()),
+        "{offered:#?}"
+    );
+
+    std::fs::remove_file(server.file_path(BUILD_MANIFEST).as_std_path())?;
+    server.did_change_watched_files(vec![FileEvent {
+        uri: server.file_uri(BUILD_MANIFEST),
+        kind: FileChangeType::Deleted,
+    }]);
+
+    let offered = offered_to_the_extends(&mut server);
+    assert!(
+        offered.contains(&"blog/built.html".to_string()),
+        "{offered:#?}"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn a_template_is_never_type_checked_as_python() -> Result<()> {
     // every line of this would be a python syntax error

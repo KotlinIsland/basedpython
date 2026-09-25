@@ -718,6 +718,7 @@ assert_type("test", list[str])
 fn on_did_change_watched_files() -> Result<()> {
     let workspace_root = SystemPath::new("src");
     let foo = SystemPath::new("src/foo.py");
+    let bar = SystemPath::new("src/bar.py");
     let foo_content = "\
 def foo() -> str:
     print(a)
@@ -726,14 +727,16 @@ def foo() -> str:
     let mut server = TestServerBuilder::new()?
         .with_workspace(workspace_root, None)?
         .with_file(foo, "")?
+        .with_file(bar, "")?
         .enable_pull_diagnostics(false)
         .build()
         .wait_until_workspaces_are_initialized();
 
     let foo = server.file_path(foo);
     let foo_uri = server.file_uri(&foo);
+    let bar = server.file_path(bar);
 
-    server.open_text_document(&foo, "", 1);
+    server.open_text_document(&foo, "import bar\n", 1);
 
     let _open_diagnostics = server.await_notification::<PublishDiagnosticsNotification>();
 
@@ -744,11 +747,19 @@ def foo() -> str:
     server.collect_publish_diagnostic_notifications(2);
 
     std::fs::write(&foo, foo_content)?;
+    // a module the open document imports, which the editor does not hold
+    std::fs::write(&bar, "x = 1\n")?;
 
-    server.did_change_watched_files(vec![FileEvent {
-        uri: foo_uri.clone(),
-        kind: FileChangeType::Changed,
-    }]);
+    server.did_change_watched_files(vec![
+        FileEvent {
+            uri: foo_uri.clone(),
+            kind: FileChangeType::Changed,
+        },
+        FileEvent {
+            uri: server.file_uri(&bar),
+            kind: FileChangeType::Changed,
+        },
+    ]);
 
     let mut diagnostics = collect_publish_diagnostic_notifications_with_versions(&mut server, 3);
     assert_eq!(diagnostics[&first_cell].version, Some(0));
@@ -772,6 +783,39 @@ def foo() -> str:
     // from the `didOpen` notification but we don't have any notification
     // that we can use here.
     insta::assert_json_snapshot!(diagnostics);
+
+    Ok(())
+}
+
+/// A change on disk to a document the editor holds changes nothing the server answers from: the
+/// editor's text is what it checks. Publishing every open document's diagnostics again would
+/// tell the client nothing it did not already have.
+#[test]
+fn on_did_change_watched_files_for_an_open_document_publishes_nothing() -> Result<()> {
+    let foo = SystemPath::new("src/foo.py");
+
+    let mut server = TestServerBuilder::new()?
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(foo, "")?
+        .enable_pull_diagnostics(false)
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, "", 1);
+    let _open_diagnostics = server.await_notification::<PublishDiagnosticsNotification>();
+
+    server.write_file(foo, "def foo() -> str:\n    print(a)\n")?;
+    server.did_change_watched_files(vec![FileEvent {
+        uri: server.file_uri(foo),
+        kind: FileChangeType::Changed,
+    }]);
+
+    let diagnostics = server
+        .try_await_notification::<PublishDiagnosticsNotification>(Some(Duration::from_millis(500)));
+    assert!(
+        diagnostics.is_err(),
+        "a change to the disk copy of an open document is not a change: {diagnostics:?}"
+    );
 
     Ok(())
 }

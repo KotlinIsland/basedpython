@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use dashmap::mapref::entry::Entry;
-pub use directory::{DirectoryListing, DirectoryListingError, directory_listing};
+pub use directory::{
+    DirectoryListing, DirectoryListingError, directory_listing, system_path_to_directory,
+};
 pub use file_root::{FileRoot, FileRootKind};
 pub use path::FilePath;
 use ruff_notebook::{Notebook, NotebookError};
@@ -270,7 +272,9 @@ impl Files {
     /// Refreshing the state of files recursively is expensive. It requires iterating over all known files
     /// and making system calls to get the latest status of matching files.
     /// That's why [`File::sync_path`] is preferred if it is known that the path is a file.
-    pub fn sync_all_recursive<P, I>(db: &mut dyn Db, paths: I)
+    ///
+    /// Returns whether it changed anything in the database.
+    pub fn sync_all_recursive<P, I>(db: &mut dyn Db, paths: I) -> bool
     where
         P: AsRef<SystemPath>,
         I: IntoIterator<Item = P>,
@@ -284,14 +288,10 @@ impl Files {
         .collect::<BTreeSet<_>>();
 
         if paths.is_empty() {
-            return;
+            return false;
         }
 
-        let parents = paths
-            .iter()
-            .filter_map(|path| path.parent().map(SystemPath::to_path_buf))
-            .collect::<BTreeSet<_>>();
-
+        let mut wrote = false;
         let inner = Arc::clone(&db.files().inner);
         for entry in inner.system_by_path.iter_mut() {
             let path = entry.key();
@@ -299,11 +299,25 @@ impl Files {
                 .range(..=path.to_path_buf())
                 .next_back()
                 .is_some_and(|candidate| path.starts_with(candidate.as_path()))
-                || parents.contains(path)
             {
-                File::sync_system_path(db, path, Some(*entry.value()));
+                wrote |= File::sync_system_path(db, path, Some(*entry.value())).wrote;
             }
         }
+
+        // each of `paths` appeared or went away, which changed its parent's entries the way a
+        // file's appearing does
+        for path in &paths {
+            wrote |= File::touch_parent_directory_after_sync(
+                db,
+                path,
+                SyncPathResult {
+                    status_changed: true,
+                    wrote: false,
+                },
+            );
+        }
+
+        wrote
     }
 
     /// Refreshes the state of all known files.
@@ -314,12 +328,16 @@ impl Files {
     /// # Performance
     /// Refreshing the state of every file is expensive. It requires iterating over all known files and
     /// issuing a system call to get the latest status of each file.
-    pub fn sync_all(db: &mut dyn Db) {
+    ///
+    /// Returns whether it changed anything in the database.
+    pub fn sync_all(db: &mut dyn Db) -> bool {
         tracing::debug!("Syncing all files");
+        let mut wrote = false;
         let inner = Arc::clone(&db.files().inner);
         for entry in inner.system_by_path.iter_mut() {
-            File::sync_system_path(db, entry.key(), Some(*entry.value()));
+            wrote |= File::sync_system_path(db, entry.key(), Some(*entry.value())).wrote;
         }
+        wrote
     }
 }
 
@@ -395,6 +413,8 @@ impl get_size2::GetSize for File {}
 
 struct SyncPathResult {
     status_changed: bool,
+    /// whether the sync set any of the file's fields
+    wrote: bool,
 }
 
 impl File {
@@ -453,25 +473,33 @@ impl File {
     ///
     /// Directory listings are invalidated if the path's file status changed, its prior status is
     /// unknown, or if `path` is itself a directory.
-    pub fn sync_path(db: &mut dyn Db, path: &SystemPath) {
+    ///
+    /// Returns whether it changed anything in the database.
+    pub fn sync_path(db: &mut dyn Db, path: &SystemPath) -> bool {
         let absolute = SystemPath::absolute(path, db.system().current_directory());
         let result = Self::sync_system_path(db, &absolute, None);
-        Self::touch_parent_directory_after_sync(db, &absolute, result);
+        let wrote = result.wrote;
+        Self::touch_parent_directory_after_sync(db, &absolute, result) || wrote
     }
 
     /// Refreshes *only* the file metadata by querying the file system if needed.
     ///
-    /// This specifically does not invalidate any directory listings.
-    pub fn sync_path_only(db: &mut dyn Db, path: &SystemPath) {
+    /// This specifically does not invalidate any directory listings. Returns whether it changed
+    /// anything in the database.
+    pub fn sync_path_only(db: &mut dyn Db, path: &SystemPath) -> bool {
         let absolute = SystemPath::absolute(path, db.system().current_directory());
-        Self::sync_system_path(db, &absolute, None);
+        Self::sync_system_path(db, &absolute, None).wrote
     }
 
     /// Increments the revision for the virtual file at `path`.
-    pub fn sync_virtual_path(db: &mut dyn Db, path: &SystemVirtualPath) {
-        if let Some(virtual_file) = db.files().try_virtual_file(path) {
-            virtual_file.sync(db);
-        }
+    ///
+    /// Returns whether there is a virtual file at `path`.
+    pub fn sync_virtual_path(db: &mut dyn Db, path: &SystemVirtualPath) -> bool {
+        let Some(virtual_file) = db.files().try_virtual_file(path) else {
+            return false;
+        };
+        virtual_file.sync(db);
+        true
     }
 
     /// Syncs the [`File`]'s state with the state of the file on the system.
@@ -498,6 +526,7 @@ impl File {
         let Some(file) = file.or_else(|| db.files().try_system(db, path)) else {
             return SyncPathResult {
                 status_changed: true,
+                wrote: false,
             };
         };
 
@@ -532,28 +561,49 @@ impl File {
             clear_override = true;
         }
 
+        let mut permissions_changed = false;
         if file.permissions(db) != permission {
             tracing::debug!("Updating the permissions of `{}`", file.path(db));
             file.set_permissions(db).to(permission);
+            permissions_changed = true;
         }
 
         if clear_override && file.source_text_override(db).is_some() {
             file.set_source_text_override(db).to(None);
         }
 
-        SyncPathResult { status_changed }
+        SyncPathResult {
+            status_changed,
+            wrote: clear_override || permissions_changed,
+        }
     }
 
+    /// syncs the directories whose entries a sync of `path` shows to have changed, and returns
+    /// whether that changed anything in the database
+    ///
+    /// a path that appeared or went away changed its parent's entries. so did the parent, if it
+    /// appeared or went away with it (a file written into a directory made for it), or if
+    /// nothing had read it, when nothing can say it did not. up from there, to the first
+    /// directory that was there before and after: the only one whose entries changed without
+    /// its own existence changing
+    ///
+    /// all the way, and not only to the parent, because a change is often reported for the
+    /// path alone: a client watching `**/*.py` says nothing of the directories a new file
+    /// brought with it, and a query that listed the directory above them would never be told
     fn touch_parent_directory_after_sync(
         db: &mut dyn Db,
-        path: &SystemPath,
-        result: SyncPathResult,
-    ) {
-        if result.status_changed
+        mut path: &SystemPath,
+        mut result: SyncPathResult,
+    ) -> bool {
+        let mut wrote = false;
+        while result.status_changed
             && let Some(parent) = path.parent()
         {
-            Self::sync_system_path(db, parent, None);
+            result = Self::sync_system_path(db, parent, None);
+            wrote |= result.wrote;
+            path = parent;
         }
+        wrote
     }
 
     /// Returns `true` if the file exists.

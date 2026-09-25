@@ -642,6 +642,19 @@ impl TestServer {
         self.send(Message::Response(Response::new_ok(id, ())));
     }
 
+    /// Acknowledges a diagnostic refresh if the server requests one within `timeout`, and says
+    /// whether it did.
+    pub(crate) fn try_await_diagnostic_refresh(&mut self, timeout: Duration) -> bool {
+        match self.try_await_request::<lsp_types::DiagnosticRefreshRequest>(Some(timeout)) {
+            Ok((id, ())) => {
+                self.send(Message::Response(Response::new_ok(id, ())));
+                true
+            }
+            Err(ServerMessageError::Timeout) => false,
+            Err(error) => panic!("Failed to receive a diagnostic refresh: {error}"),
+        }
+    }
+
     /// Checks server-created progress with matching begin, report, and end notifications.
     #[cfg(feature = "test-uv")]
     #[track_caller]

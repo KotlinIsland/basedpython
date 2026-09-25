@@ -12,10 +12,10 @@
 //! type checker has already populated for every project file, the ast work is
 //! shared rather than duplicated.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use compact_str::{CompactString, ToCompactString};
-use ruff_db::files::{File, FilePath, system_path_to_file};
+use ruff_db::files::{File, FilePath, system_path_to_directory, system_path_to_file};
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_db::system::walk_directory::WalkState;
@@ -28,6 +28,7 @@ use ty_module_resolver::ImportingFile;
 use ty_module_resolver::{
     Module, ModuleName, file_to_module, resolve_module_confident, resolve_real_module,
 };
+use ty_project::build_output::is_build_output;
 use ty_project::{Db, Project};
 use ty_python_core::definition::DefinitionKind;
 use ty_python_semantic::ProgramEnvironment;
@@ -1634,11 +1635,6 @@ fn discover(
     directory: &str,
     order: &SearchOrder,
 ) -> Box<[DiscoveredFile]> {
-    // walking the file system is invisible to salsa, so the callers' queries would
-    // hand back their first answer forever. reading the revision the project bumps
-    // on every create and delete is what makes a template added mid-session show up
-    let _ = project.file_system_revision(db);
-
     let mut found = discover_by_convention(db, project, directory, order);
 
     // a directory the settings name is under no obligation to be called
@@ -1692,13 +1688,18 @@ fn discover_by_convention(
 ) -> Vec<DiscoveredFile> {
     let root = project.root(db);
     let found = Mutex::new(Vec::new());
+    let listed = Mutex::new(Vec::new());
 
     db.system()
         .walk_directory(root)
         .standard_filters(project.settings(db).src().respect_ignore_files)
         .ignore_hidden(true)
         .run(|| {
-            Box::new(|entry| {
+            // a walk visits from threads of its own, which each need a handle on the database
+            let db = Db::dyn_clone(db);
+            let found = &found;
+            let listed = &listed;
+            Box::new(move |entry| {
                 let Ok(entry) = entry else {
                     return WalkState::Continue;
                 };
@@ -1715,6 +1716,14 @@ fn discover_by_convention(
                         if !inside && entry.depth() >= DISCOVERY_DEPTH {
                             return WalkState::Skip;
                         }
+                        list(&*db, listed, entry.path());
+                        // a build's output is a copy of the project, templates and all, and
+                        // not the project's own (see `ty_project::build_output`). its manifest
+                        // is one of the entries of the directory just listed, so writing or
+                        // deleting it is a change to what the walk read
+                        if entry.depth() > 0 && is_build_output(db.system(), entry.path()) {
+                            return WalkState::Skip;
+                        }
                         WalkState::Continue
                     }
                     FileType::File => {
@@ -1722,15 +1731,17 @@ fn discover_by_convention(
                             && let Some((under, name)) =
                                 relative_to_directory(entry.path(), directory)
                         {
-                            found.lock().unwrap().push(DiscoveredFile {
-                                name,
-                                path: entry.path().to_path_buf(),
-                                precedence: order.rank(under),
-                                // the walk starts at the project root and
-                                // respects its ignore rules, so whatever it
-                                // reaches is the project's own
-                                own: true,
-                            });
+                            found.lock().unwrap_or_else(PoisonError::into_inner).push(
+                                DiscoveredFile {
+                                    name,
+                                    path: entry.path().to_path_buf(),
+                                    precedence: order.rank(under),
+                                    // the walk starts at the project root and
+                                    // respects its ignore rules, so whatever it
+                                    // reaches is the project's own
+                                    own: true,
+                                },
+                            );
                         }
                         WalkState::Continue
                     }
@@ -1739,9 +1750,45 @@ fn discover_by_convention(
             })
         });
 
-    found
-        .into_inner()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    depend_on_entries(
+        db,
+        listed.into_inner().unwrap_or_else(PoisonError::into_inner),
+    );
+
+    found.into_inner().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// note that a walk is about to read the entries of `directory`, for [`depend_on_entries`]
+///
+/// the database reads a directory's revision the first time it is asked about the directory,
+/// and it is asked here, before the walk reads the entries. a revision first read after them
+/// could already take in an entry created in between that the walk never saw, and the change
+/// the watcher then reports would find the revision as it was and leave the answer missing it
+fn list(db: &dyn Db, listed: &Mutex<Vec<SystemPathBuf>>, directory: &SystemPath) {
+    let _ = system_path_to_directory(db, directory);
+    listed
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(directory.to_path_buf());
+}
+
+/// make the calling query depend on which entries each of `directories` holds
+///
+/// walking the file system is invisible to salsa, so a query that walks would hand back its
+/// first answer forever. a directory's revision changes when an entry is created in it, deleted
+/// from it or renamed, and the file watcher's changes sync the directory holding each path they
+/// name, so depending on the revision of every directory a walk read, and on whether a root it
+/// was asked to walk exists, is what makes a template added mid-session show up. and only that:
+/// a write anywhere the walk did not go, inside a build's output or an ignored directory,
+/// changes nothing the query read
+fn depend_on_entries(db: &dyn Db, directories: Vec<SystemPathBuf>) {
+    for directory in directories {
+        // an `Err` still read the path's status: a root that is not there yet is depended on
+        // being absent
+        if let Ok(directory) = system_path_to_directory(db, &directory) {
+            let _ = directory.revision(db);
+        }
+    }
 }
 
 /// add every file under `root` to `found`, named the way django would name it
@@ -1754,36 +1801,56 @@ fn collect_under(
     found: &mut Vec<DiscoveredFile>,
 ) {
     let collected = Mutex::new(Vec::new());
+    let listed = Mutex::new(Vec::new());
+    // before the walk, and whether or not it is there: a root that does not exist yet is
+    // depended on being absent
+    list(db, &listed, root);
 
     db.system()
         .walk_directory(root)
         .standard_filters(project.settings(db).src().respect_ignore_files)
         .ignore_hidden(true)
         .run(|| {
-            Box::new(|entry| {
+            // a walk visits from threads of its own, which each need a handle on the database
+            let db = Db::dyn_clone(db);
+            let collected = &collected;
+            let listed = &listed;
+            Box::new(move |entry| {
                 let Ok(entry) = entry else {
                     return WalkState::Continue;
                 };
 
+                if entry.file_type().is_directory() && entry.depth() > 0 {
+                    list(&*db, listed, entry.path());
+                }
+
                 if matches!(entry.file_type(), FileType::File)
                     && let Some(name) = relative_to_root(entry.path(), root)
                 {
-                    collected.lock().unwrap().push(DiscoveredFile {
-                        name,
-                        path: entry.path().to_path_buf(),
-                        precedence,
-                        own,
-                    });
+                    collected
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push(DiscoveredFile {
+                            name,
+                            path: entry.path().to_path_buf(),
+                            precedence,
+                            own,
+                        });
                 }
 
                 WalkState::Continue
             })
         });
 
+    depend_on_entries(
+        db,
+        listed.into_inner().unwrap_or_else(PoisonError::into_inner),
+    );
+
     found.extend(
         collected
             .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
+            .unwrap_or_else(PoisonError::into_inner),
     );
 }
 

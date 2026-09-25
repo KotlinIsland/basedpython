@@ -266,7 +266,16 @@ impl IndexedMut<'_> {
     }
 
     pub(super) fn set_diagnostics(&mut self, diagnostics: Vec<Diagnostic>) {
-        self.inner_mut().diagnostics = diagnostics;
+        if self.indexed.diagnostics != diagnostics {
+            self.inner_mut().diagnostics = diagnostics;
+            self.did_change = true;
+        }
+    }
+
+    /// whether anything this view was asked to do changed the index, which it then writes back
+    /// to the database when it is dropped
+    pub(super) fn did_change(&self) -> bool {
+        self.did_change
     }
 
     fn inner_mut(&mut self) -> &mut IndexedInner {
