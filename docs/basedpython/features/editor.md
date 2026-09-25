@@ -391,32 +391,42 @@ always was
 
 `textDocument/implementation` on a method goes down, to the methods that
 override it. `by/superMembers` goes up: given a position on the name a class
-member is declared with — a `def`, or a name the class body assigns or
-annotates — it answers the superclass members that member overrides, each with
-its class, its file and the name to land on. a class goes up with
-`typeHierarchy/supertypes`
+member is declared with — a `def` or a nested class, a name the class body
+assigns, annotates or captures, or an import's alias — it answers the
+superclass members that member overrides, each with its class, its file and the
+name to land on. a class goes up with `typeHierarchy/supertypes`
 
-what counts as an override is the override checks' own walk up the MRO, so a
-member goes to exactly what `invalid-method-override` compares it with: the
-nearest declaration along each branch, in MRO order. a method overriding `B.f`,
-where `B.f` overrides `A.f`, goes to `B.f`; a class with two bases that each
-declare the method goes to both. a `private` member overrides nothing, since
-python mangles it into a name of its own, and a member a superclass synthesizes
-rather than writes — a dataclass's `__init__` — goes to that superclass, marked
-`synthesized`. each is marked `abstract` when it is abstract where it is
-declared — an `@abstractmethod`, or a protocol method with no implementation —
-so that a member overriding it implements it. the answer is `null` when no class
-member is declared at the position, and an empty list for one that overrides
-nothing
+what counts as an override is the override checks' own walk up the MRO, from
+the class as it is written rather than as a decorator returns it. of what that
+walk finds, a member goes to the nearest declaration along each branch, in MRO
+order: a method overriding `B.f`, where `B.f` overrides `A.f`, goes to `B.f`,
+and a class with two bases that each declare the method goes to both. the first
+of them is the one `missing-override-decorator` names. a `private` member
+overrides nothing, since it is emitted under a name of its own, and a member a
+superclass synthesizes rather than writes — a dataclass's `__init__` — goes to
+that superclass, marked `synthesized`. each is marked `abstract` when it is
+abstract where it is declared — an `@abstractmethod`, or a protocol method with
+no implementation — so that a member overriding it implements it. the answer is
+`null` when no class member is declared at the position, and an empty list for
+one that overrides nothing
+
+an answer depends on more than the text of the document it is about: on every
+file the document's classes inherit from, and the server announces no change to
+it. a client that keeps one asks again after it opens, edits or closes any
+document of the workspace, not only that one, and on
+`workspace/inlayHint/refresh`, which the server sends, to a client that supports
+it, after a change on disk or to the environment changes what it answers from
 
 `by/documentSuperMembers` answers the same for a whole document in one request,
 from the same code: every class member that overrides something, with its
 class, the range of the name it is declared with, whether it is `abstract`
 itself, and its `superMembers` as `by/superMembers` gives them. it is what an
 editor asks to draw an "overrides" marker beside each member, on every pass over
-the document. constructors and the methods they call — `__init__`, `__new__`,
-`__post_init__`, `__init_subclass__` — are left out, as the override checks
-leave them out, and `by/superMembers` still answers one. like the other document
+the document. a property with `get` and `set` blocks is one member, listed once.
+constructors and the methods they call — `__init__`, `__new__`,
+`__post_init__`, `__init_subclass__` — are left out, since neither
+`invalid-method-override` nor `missing-override-decorator` holds one to what it
+overrides, and `by/superMembers` still answers one. like the other document
 requests it takes `textHash`, and answers a document the client has not opened
 from the file on disk
 
@@ -458,11 +468,11 @@ which text a document request is about, by adding `textHash` to the request's
 params: FNV-1a, 64 bits, over the text's UTF-16 code units with every line ending
 counted as one `\n`, written as sixteen lowercase hex digits. for a notebook cell
 that is the cell's own text. the request is then answered about that text and no
-other. when the server already holds it — the
-open buffer, or for `by/syntaxOutline`, `by/injections`,
+other. when the server already holds it — the open buffer, or for
+`by/syntaxOutline`, `by/injections`, `by/superMembers`,
 `by/documentSuperMembers`, `textDocument/semanticTokens/full` and
-`textDocument/documentSymbol` the file on
-disk of a document the client has not opened — it answers at once; otherwise the
+`textDocument/documentSymbol` the file on disk of a document the client has not
+opened — it answers at once; otherwise the
 request waits for the `didOpen`, `didChange` or file write that brings the text,
 and is answered with `ServerCancelled` if nothing has after ten seconds. so a
 client need not know whether its `didOpen` has gone out before it asks, and an

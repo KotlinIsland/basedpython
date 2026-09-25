@@ -7,17 +7,16 @@
 //! member that overrides something with the same members, and the name each is declared with, about
 //! the text the client names
 
-use std::time::Duration;
-
 use anyhow::Result;
 use lsp_types::{
-    LspRequestMethod, MessageDirection, Request, TextDocumentContentChangeEvent,
+    LanguageKind, LspRequestMethod, MessageDirection, Request, TextDocumentContentChangeEvent,
     TextDocumentContentChangeWholeDocument,
 };
 use ruff_db::system::SystemPath;
 use ty_server::ClientOptions;
 
-use crate::{AwaitResponseError, TestServer, TestServerBuilder};
+use crate::notebook::NotebookBuilder;
+use crate::{TestServer, TestServerBuilder, text_hash};
 
 /// the request as a client sends it, in json throughout
 enum SuperMembers {}
@@ -167,8 +166,8 @@ fn a_document_lists_the_members_that_override_something_as_super_members_answers
     Ok(())
 }
 
-/// A protocol member, and a member two classes up: what an editor marks as implemented rather
-/// than overridden, and what it goes to past a class that does not declare it.
+/// a protocol member, and a member two classes up: what an editor marks as implemented rather
+/// than overridden, and what it goes to past a class that does not declare it
 #[test]
 fn a_protocol_member_is_abstract_and_a_member_two_levels_up_is_found() -> Result<()> {
     let main = "\
@@ -244,17 +243,15 @@ fn a_document_request_is_answered_about_the_text_it_names() -> Result<()> {
         "{answer:#}"
     );
 
-    // an edit the server has not been sent moves `speak` down a line, and is waited for
+    // an edit the server has not been sent moves `speak` down a line, and is waited for. the server
+    // takes its messages in order, so an answer made when the request arrived would be about the
+    // text before the edit, with `speak` on line 3
     server.open_text_document(SystemPath::new("src/main.by"), MAIN, 1);
     let edited = format!("\n{MAIN}");
     let id = server.send_request::<DocumentSuperMembers>(serde_json::json!({
         "textDocument": { "uri": server.file_uri(SystemPath::new("src/main.by")) },
         "textHash": text_hash(&edited),
     }));
-    assert!(matches!(
-        server.try_await_response::<DocumentSuperMembers>(&id, Some(Duration::from_millis(500))),
-        Err(AwaitResponseError::Timeout)
-    ));
     server.change_text_document(
         SystemPath::new("src/main.by"),
         vec![
@@ -274,15 +271,93 @@ fn a_document_request_is_answered_about_the_text_it_names() -> Result<()> {
     Ok(())
 }
 
-/// the text hash as a client computes it — see `named_text.rs`, which holds it to the definition
-fn text_hash(text: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let normalised = text.replace("\r\n", "\n").replace('\r', "\n");
-    for unit in normalised.encode_utf16() {
-        for byte in unit.to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-    format!("{hash:016x}")
+/// `by/superMembers` names its text as the document request does: answered from the file for a
+/// document the client has not opened, and held for an edit the server has not been sent
+#[test]
+fn a_member_request_is_answered_about_the_text_it_names() -> Result<()> {
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(&ClientOptions::default())
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(SystemPath::new("src/bases.by"), BASES)?
+        .with_file(SystemPath::new("src/main.by"), MAIN)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+    let uri = server.file_uri(SystemPath::new("src/main.by"));
+
+    // not opened: the file on disk, which is the text named
+    let answer = server
+        .send_request_await::<SuperMembers>(serde_json::json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 3, "character": 17 },
+            "textHash": text_hash(MAIN),
+        }))
+        .expect("the members `speak` overrides");
+    assert_eq!(answer.as_array().map(Vec::len), Some(2), "{answer:#}");
+
+    // `speak` a line down in an edit not sent yet: held until it is. the server takes its messages
+    // in order, so an answer made when the request arrived would be about the text before the
+    // edit, where that position is inside a method body and has no member
+    server.open_text_document(SystemPath::new("src/main.by"), MAIN, 1);
+    let edited = format!("\n{MAIN}");
+    let id = server.send_request::<SuperMembers>(serde_json::json!({
+        "textDocument": { "uri": uri },
+        "position": { "line": 4, "character": 17 },
+        "textHash": text_hash(&edited),
+    }));
+    server.change_text_document(
+        SystemPath::new("src/main.by"),
+        vec![
+            TextDocumentContentChangeEvent::TextDocumentContentChangeWholeDocument(
+                TextDocumentContentChangeWholeDocument { text: edited },
+            ),
+        ],
+        2,
+    );
+    let answer = server
+        .await_response::<SuperMembers>(&id)
+        .expect("the members `speak` overrides, in the edit");
+    assert_eq!(answer.as_array().map(Vec::len), Some(2), "{answer:#}");
+    Ok(())
+}
+
+/// a notebook's ranges are per cell and a template is not python: neither has its members answered
+/// for the whole document, and a template has none at a position either, even one whose text
+/// would read as python
+#[test]
+fn a_notebook_or_a_template_is_answered_null() -> Result<()> {
+    let template = "class A:\n    x = 1\n\nclass B(A):\n    x = 2\n";
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(&ClientOptions::default())
+        .with_workspace(SystemPath::new("src"), None)?
+        .with_file(SystemPath::new("src/templates/page.html"), template)?
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    let mut notebook = NotebookBuilder::virtual_file("test.ipynb");
+    notebook.add_python_cell("class A:\n    def f(self) -> None: ...\n");
+    let cell = notebook.add_python_cell("class B(A):\n    def f(self) -> None: ...\n");
+    notebook.open(&mut server);
+    server.collect_publish_diagnostic_notifications(2);
+    let answer = server.send_request_await::<DocumentSuperMembers>(serde_json::json!({
+        "textDocument": { "uri": cell },
+    }));
+    assert_eq!(answer, None);
+
+    server.open_text_document_as(
+        SystemPath::new("src/templates/page.html"),
+        template,
+        1,
+        LanguageKind::new("django-html"),
+    );
+    let uri = server.file_uri(SystemPath::new("src/templates/page.html"));
+    let answer = server.send_request_await::<DocumentSuperMembers>(serde_json::json!({
+        "textDocument": { "uri": uri },
+    }));
+    assert_eq!(answer, None);
+    let answer = server.send_request_await::<SuperMembers>(serde_json::json!({
+        "textDocument": { "uri": uri },
+        "position": { "line": 4, "character": 4 },
+    }));
+    assert_eq!(answer, None);
+    Ok(())
 }

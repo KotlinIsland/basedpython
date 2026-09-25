@@ -17,7 +17,7 @@ use ruff_db::system::SystemPath;
 use ty_server::ClientOptions;
 
 use crate::notebook::NotebookBuilder;
-use crate::{AwaitResponseError, TestServer, TestServerBuilder};
+use crate::{AwaitResponseError, TestServer, TestServerBuilder, text_hash};
 
 /// `by/syntaxOutline`, in json throughout, as a client sends it.
 enum SyntaxOutline {}
@@ -48,21 +48,6 @@ impl Request for Hover {
     type Result = Option<serde_json::Value>;
     const METHOD: LspRequestMethod<'static> = LspRequestMethod::Custom("textDocument/hover");
     const MESSAGE_DIRECTION: MessageDirection = MessageDirection::ClientToServer;
-}
-
-/// The text hash as a client computes it, written out again here rather than borrowed from the
-/// server, so that the two are held to the definition rather than to each other: FNV-1a, 64
-/// bits, over UTF-16 code units, every line ending counted as one `\n`.
-fn text_hash(text: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let normalised = text.replace("\r\n", "\n").replace('\r', "\n");
-    for unit in normalised.encode_utf16() {
-        for byte in unit.to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-    format!("{hash:016x}")
 }
 
 const MAIN: &str = "src/main.by";

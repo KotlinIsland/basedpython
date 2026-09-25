@@ -121,6 +121,21 @@ fn setup_tracing() {
     });
 }
 
+/// The text hash as a client computes it for a request's `textHash`, written out again here
+/// rather than borrowed from the server, so that the two are held to the definition rather than
+/// to each other: FNV-1a, 64 bits, over UTF-16 code units, every line ending counted as one `\n`.
+pub(crate) fn text_hash(text: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let normalised = text.replace("\r\n", "\n").replace('\r', "\n");
+    for unit in normalised.encode_utf16() {
+        for byte in unit.to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    format!("{hash:016x}")
+}
+
 /// Errors when receiving a notification or request from the server.
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum ServerMessageError {
