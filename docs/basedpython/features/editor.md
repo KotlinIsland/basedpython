@@ -403,8 +403,22 @@ where `B.f` overrides `A.f`, goes to `B.f`; a class with two bases that each
 declare the method goes to both. a `private` member overrides nothing, since
 python mangles it into a name of its own, and a member a superclass synthesizes
 rather than writes — a dataclass's `__init__` — goes to that superclass, marked
-`synthesized`. the answer is `null` when no class member is declared at the
-position, and an empty list for one that overrides nothing
+`synthesized`. each is marked `abstract` when it is abstract where it is
+declared — an `@abstractmethod`, or a protocol method with no implementation —
+so that a member overriding it implements it. the answer is `null` when no class
+member is declared at the position, and an empty list for one that overrides
+nothing
+
+`by/documentSuperMembers` answers the same for a whole document in one request,
+from the same code: every class member that overrides something, with its
+class, the range of the name it is declared with, whether it is `abstract`
+itself, and its `superMembers` as `by/superMembers` gives them. it is what an
+editor asks to draw an "overrides" marker beside each member, on every pass over
+the document. constructors and the methods they call — `__init__`, `__new__`,
+`__post_init__`, `__init_subclass__` — are left out, as the override checks
+leave them out, and `by/superMembers` still answers one. like the other document
+requests it takes `textHash`, and answers a document the client has not opened
+from the file on disk
 
 ## the program model
 
@@ -446,7 +460,8 @@ counted as one `\n`, written as sixteen lowercase hex digits. for a notebook cel
 that is the cell's own text. the request is then answered about that text and no
 other. when the server already holds it — the
 open buffer, or for `by/syntaxOutline`, `by/injections`,
-`textDocument/semanticTokens/full` and `textDocument/documentSymbol` the file on
+`by/documentSuperMembers`, `textDocument/semanticTokens/full` and
+`textDocument/documentSymbol` the file on
 disk of a document the client has not opened — it answers at once; otherwise the
 request waits for the `didOpen`, `didChange` or file write that brings the text,
 and is answered with `ServerCancelled` if nothing has after ten seconds. so a

@@ -88,7 +88,7 @@ pub use semantic_tokens::{
     semantic_tokens,
 };
 pub use signature_help::{ParameterDetails, SignatureDetails, SignatureHelpInfo, signature_help};
-pub use super_members::{SuperMember, super_members};
+pub use super_members::{OverridingMember, SuperMember, document_super_members, super_members};
 pub use symbols::{FlatSymbols, HierarchicalSymbols, SymbolId, SymbolInfo, SymbolKind};
 pub use syntax_outline::{
     OutlineCall, OutlineClause, OutlineModifier, OutlineStatement, OutlineString, SyntaxOutline,

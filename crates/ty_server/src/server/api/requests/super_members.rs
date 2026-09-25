@@ -17,6 +17,7 @@ use lsp_types::{
 use ty_ide::super_members;
 use ty_project::{ProjectDatabase, SemanticDb as _};
 
+use crate::PositionEncoding;
 use crate::document::{PositionExt, ToLink};
 use crate::server::api::traits::{
     BackgroundDocumentRequestHandler, RequestHandler, RetriableRequestHandler,
@@ -59,6 +60,32 @@ pub(crate) struct SuperMember {
     /// Whether the superclass synthesizes the member rather than writing it, as a dataclass does
     /// its `__init__`. The ranges are then the superclass's own.
     synthesized: bool,
+    /// Whether the member is abstract where the superclass declares it — an `@abstractmethod`, or a
+    /// protocol method with no implementation — so that overriding it implements it. What
+    /// `abstract-instantiation` counts as abstract.
+    #[serde(rename = "abstract")]
+    is_abstract: bool,
+}
+
+impl SuperMember {
+    /// The member as a client reads it, or `None` when where it is cannot be said in the client's
+    /// terms.
+    pub(super) fn from_ide(
+        db: &ProjectDatabase,
+        member: &ty_ide::SuperMember,
+        encoding: PositionEncoding,
+    ) -> Option<Self> {
+        let link = member.target.to_link(db, None, encoding)?;
+        Some(SuperMember {
+            name: member.name.to_string(),
+            container_name: member.superclass.to_string(),
+            uri: link.target_uri,
+            range: link.target_range,
+            selection_range: link.target_selection_range,
+            synthesized: member.synthesized,
+            is_abstract: member.is_abstract,
+        })
+    }
 }
 
 pub(crate) struct SuperMembersRequestHandler;
@@ -105,18 +132,8 @@ impl BackgroundDocumentRequestHandler for SuperMembersRequestHandler {
 
         Ok(Some(
             members
-                .into_iter()
-                .filter_map(|member| {
-                    let link = member.target.to_link(db, None, snapshot.encoding())?;
-                    Some(SuperMember {
-                        name: member.name.to_string(),
-                        container_name: member.superclass.to_string(),
-                        uri: link.target_uri,
-                        range: link.target_range,
-                        selection_range: link.target_selection_range,
-                        synthesized: member.synthesized,
-                    })
-                })
+                .iter()
+                .filter_map(|member| SuperMember::from_ide(db, member, snapshot.encoding()))
                 .collect(),
         ))
     }

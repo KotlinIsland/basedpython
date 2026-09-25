@@ -1,0 +1,10 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_override: true, ..InlayHintSettings::none() })"
+---
+
+class A:
+    private def f(self) -> None: ...
+
+class B(A):
+    private def f(self) -> None: ...
