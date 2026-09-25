@@ -8,7 +8,9 @@ use crate::reachability::is_range_reachable;
 use crate::types::EnumLiteralType;
 use crate::types::call::bind::CheckTypesMode;
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
-use crate::types::class::{DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor};
+use crate::types::class::{
+    DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor, type_as_abstract_method,
+};
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::context_sensitive::for_each_candidate;
 use crate::types::dedicated::django;
@@ -19,12 +21,12 @@ use crate::types::extensions::{
 use crate::types::function::FunctionDecorators;
 use crate::types::generics::GenericContext;
 use crate::types::implicit_names::{ImplicitNamePosition, implicit_name};
-use crate::types::infer::{infer_definition_types, nearest_enclosing_function};
+use crate::types::infer::{
+    infer_definition_types, nearest_enclosing_function, original_class_type,
+};
 use crate::types::list_members::all_end_of_scope_members;
 use crate::types::literal::LiteralValueTypeKind;
-use crate::types::overrides::{
-    OverriddenDeclaration, OverrideStep, is_constructor_like_method, overridden_declarations,
-};
+use crate::types::overrides::{OverriddenDeclaration, OverrideStep, overridden_declarations};
 use crate::types::receivers;
 use crate::types::repeated_underscore::{UnderscoreLowering, UnderscoreRefusal};
 use crate::types::signatures::{
@@ -47,7 +49,8 @@ use ty_module_resolver::{
     ImportingFile, Module, ModuleName, ResolverFile, resolve_module_confident,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
-use ty_python_core::scope::FileScopeId;
+use ty_python_core::scope::{FileScopeId, ScopeId};
+use ty_python_core::symbol::ScopedSymbolId;
 use ty_python_core::{ProgramFile, attribute_scopes, semantic_index, use_def_map};
 
 mod data_flow;
@@ -59,6 +62,7 @@ use crate::types::definition_resolution::{
     self, find_symbol_in_scope, resolve_definition, user_visible_definitions,
 };
 pub use crate::types::definition_resolution::{ImportAliasResolution, ResolvedDefinition};
+pub use crate::types::overrides::is_constructor_like_method;
 pub use data_flow::{ConditionVerdict, DataFlow, ValueVerdict, data_flow};
 pub use stub_mapping::map_stub_definition;
 pub use unreachable_code::{UnreachableKind, UnreachableRange, unreachable_ranges};
@@ -2911,117 +2915,175 @@ pub fn implicit_enum_member_value<'db>(
     metadata.value_type(db, env, &name)
 }
 
-/// basedpython: the superclass whose member `name` the class member `member`
-/// overrides, when `member` is a method that is not already marked `override`.
+/// basedpython: the superclass whose member the method `function` overrides,
+/// when it is a method that is not already marked `override`
 ///
-/// Mirrors the `missing-override-decorator` lint's notion of an override, so the
-/// hint appears exactly where writing `override` would silence that lint.
+/// the first superclass the override checks' walk up the MRO,
+/// `overridden_declarations`, finds, which is the one `missing-override-decorator`
+/// names, so the hint appears exactly where writing `override` would silence
+/// that lint
 pub fn inferred_override<'db>(
-    db: &'db dyn Db,
-    env: &ProgramEnvironment<'db>,
-    class: Type<'db>,
-    member: Type<'db>,
-    name: &str,
+    model: &SemanticModel<'db>,
+    function: &ast::StmtFunctionDef,
 ) -> Option<Type<'db>> {
-    let Type::FunctionLiteral(function) = member else {
+    let db = model.db();
+    let env = model.program_environment();
+    let definition = function.definition(model);
+    let Type::FunctionLiteral(function_type) = binding_type(db, definition) else {
         return None;
     };
-    if function.has_known_decorator(db, FunctionDecorators::OVERRIDE)
-        || is_constructor_like_method(name)
-        || is_mangled_private(name)
+    if function_type.has_known_decorator(db, FunctionDecorators::OVERRIDE)
+        || is_constructor_like_method(&function.name)
     {
         return None;
     }
 
-    let Type::ClassLiteral(class) = class else {
-        return None;
-    };
-
-    class
-        .default_specialization(db)
-        .iter_mro(db)
-        .skip(1)
-        .filter_map(ClassBase::into_class)
-        .find(|superclass| {
-            !superclass
-                .own_class_member(db, env, None, name)
-                .inner
-                .place
-                .is_undefined()
+    let class = declaring_class(db, definition)?;
+    overridden_declarations(db, &env, class, &function.name.id)
+        .into_iter()
+        .find_map(|step| match step {
+            OverrideStep::Overrides(OverriddenDeclaration { superclass, .. }) => {
+                Some(Type::from(superclass))
+            }
+            OverrideStep::Dynamic | OverrideStep::TypedDict => None,
         })
-        .map(Type::from)
 }
 
-/// A class-body member, as the tree spells it: a `def`, or a name a class body
-/// assigns or declares.
-#[derive(Debug, Clone, Copy)]
-pub enum ClassMemberNode<'a> {
-    Function(&'a ast::StmtFunctionDef),
-    Name(&'a ast::ExprName),
+/// basedpython: a binding or declaration a class body makes of one of the
+/// class's members: a `def`, a nested class, an import, or any other name the
+/// body binds or declares
+#[derive(Debug, Clone)]
+pub struct ClassMemberDefinition<'db> {
+    definition: Definition<'db>,
+    /// the member's name
+    pub name: Name,
+    /// the name of the class whose body makes the definition
+    pub class_name: Name,
+    /// where the definition names the member
+    pub name_range: TextRange,
 }
 
-/// A superclass member that a class member overrides.
+/// basedpython: every binding and declaration the class bodies of `file` make of
+/// their members, as the semantic index records them, in source order
+///
+/// these are the members the override checks walk: a binding or declaration in
+/// code that is never reached makes no member
+pub fn class_member_definitions<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+) -> Vec<ClassMemberDefinition<'db>> {
+    let index = semantic_index(db, file);
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let mut members = Vec::new();
+    for scope in index.scope_ids() {
+        let Some(class_node) = scope.node(db).as_class() else {
+            continue;
+        };
+        let class_name = &class_node.node(&module).name.id;
+        let file_scope = scope.file_scope_id(db);
+        let table = index.place_table(file_scope);
+        let mut seen = FxHashSet::default();
+        for (symbol, declarations, bindings) in
+            index.use_def_map(file_scope).all_reachable_symbols()
+        {
+            let name = table.symbol(symbol).name();
+            let definitions = declarations
+                .filter_map(|declaration| declaration.declaration.definition())
+                .chain(bindings.filter_map(|binding| binding.binding.definition()));
+            for definition in definitions {
+                if !definition.kind(db).is_user_visible() || !seen.insert(definition) {
+                    continue;
+                }
+                members.push(ClassMemberDefinition {
+                    definition,
+                    name: name.clone(),
+                    class_name: class_name.clone(),
+                    name_range: definition.focus_range(db, &module).range(),
+                });
+            }
+        }
+    }
+    members.sort_by_key(|member| member.name_range.start());
+    members
+}
+
+/// basedpython: the superclass members a class member definition overrides
+/// directly, and whether the member is itself abstract
+#[derive(Debug, Clone, Default)]
+pub struct MemberOverrides<'db> {
+    /// whether the member is itself abstract, in the sense of
+    /// [`OverriddenMember::is_abstract`]: an abstract member that overrides an
+    /// abstract one still leaves it to be implemented
+    pub is_abstract: bool,
+    /// what it overrides directly, in MRO order
+    pub overridden: Vec<OverriddenMember<'db>>,
+}
+
+/// basedpython: a superclass member that a class member overrides
 #[derive(Debug, Clone)]
 pub struct OverriddenMember<'db> {
-    /// The superclass that declares the member.
+    /// the superclass that declares the member
     pub superclass: ClassLiteral<'db>,
-    /// The superclass's name.
+    /// the superclass's name
     pub superclass_name: Name,
-    /// Where the superclass declares it. For a property, the accessors that play
-    /// the overriding `def`'s part when it plays one — a setter's is the
-    /// setter. Empty when the superclass synthesizes the member rather than
-    /// writing it, as a dataclass does its `__init__`.
+    /// where the superclass's body writes it. for a property, the accessors that
+    /// play the overriding `def`'s part when any does: a setter's is the setter.
+    /// empty when the superclass synthesizes the member
     pub definitions: Vec<ResolvedDefinition<'db>>,
+    /// whether the superclass synthesizes the member rather than writing it in
+    /// its body, as a dataclass does its `__init__`
+    pub synthesized: bool,
+    /// whether the member is abstract where the superclass declares it, an
+    /// `@abstractmethod` or a protocol method with no implementation, so that a
+    /// member overriding it implements it rather than replacing an
+    /// implementation: what `abstract-instantiation` counts as abstract
+    pub is_abstract: bool,
 }
 
-/// basedpython: the superclass members that the class member `member`
-/// overrides directly, in MRO order, or `None` when `member` is not a member of
-/// a class body.
+/// basedpython: the superclass members that the class member `member` overrides
+/// directly, in MRO order
 ///
-/// What counts as an override is the override checks' own walk up the MRO,
-/// [`overridden_declarations`], so a member is said to override exactly what
-/// `invalid-method-override` and `missing-override-decorator` hold it to.
-/// "Directly" is what that walk finds less what is reached through what it
-/// found first: a member overriding `B.f`, where `B.f` overrides `A.f`,
-/// overrides `B.f` — `A.f` is `B.f`'s to override. A class with several bases
-/// that each declare the member overrides each of them.
+/// what counts as an override is the override checks' own walk up the MRO,
+/// `overridden_declarations`, from the class as the checks see it:
+/// undecorated, and specialized to its own type parameters. "directly" is what
+/// that walk finds less what is reached through what it found first: a member
+/// overriding `B.f`, where `B.f` overrides `A.f`, overrides `B.f`, as `A.f` is
+/// `B.f`'s to override. a class with several bases that each declare the member
+/// overrides each of them
 ///
-/// Empty for a member that overrides nothing — including a `private` one, which
-/// python mangles into a name of its own.
+/// empty for a member that overrides nothing, including a `private` one, which
+/// python mangles into a name of its own
 pub fn overridden_members<'db>(
-    model: &SemanticModel<'db>,
-    member: ClassMemberNode<'_>,
-) -> Option<Vec<OverriddenMember<'db>>> {
-    let db = model.db();
-    let env = model.program_environment();
-    let (definition, name) = match member {
-        ClassMemberNode::Function(function) => (function.definition(model), &function.name.id),
-        ClassMemberNode::Name(name) => (
-            semantic_index(db, db.program_file(model.file())).try_definition(name)?,
-            &name.id,
-        ),
+    db: &'db dyn Db,
+    member: &ClassMemberDefinition<'db>,
+) -> MemberOverrides<'db> {
+    let ClassMemberDefinition {
+        definition, name, ..
+    } = member;
+    let env = ProgramEnvironment::from_scope(definition.scope(db));
+    let Some(class) = declaring_class(db, *definition) else {
+        return MemberOverrides::default();
     };
 
-    let scope = definition.scope(db);
-    let class_node = scope.node(db).as_class()?;
-    let class_definition =
-        semantic_index(db, scope.program_file(db)).expect_single_definition(class_node);
-    let class = extract_class_literal(db, &env, binding_type(db, class_definition))?
-        .default_specialization(db);
-
     // a getter overrides a getter and a setter a setter
-    let accessor_role = matches!(definition.kind(db), DefinitionKind::Function(_))
-        .then(|| {
-            binding_type(db, definition)
-                .as_property_instance()
-                .and_then(|property| property.accessor_role(db, definition))
-        })
-        .flatten();
+    let accessor_role = if matches!(definition.kind(db), DefinitionKind::Function(_))
+        && let Some(property) = binding_type(db, *definition).as_property_instance()
+    {
+        property.accessor_role(db, *definition)
+    } else {
+        None
+    };
 
-    let mut members: Vec<OverriddenMember<'db>> = Vec::new();
+    let mut overridden: Vec<OverriddenMember<'db>> = Vec::new();
     let mut found: Vec<ClassType<'db>> = Vec::new();
     for step in overridden_declarations(db, &env, class, name) {
-        let OverrideStep::Overrides(OverriddenDeclaration { superclass, .. }) = step else {
+        let OverrideStep::Overrides(OverriddenDeclaration {
+            superclass,
+            scope,
+            symbol,
+            ..
+        }) = step
+        else {
             continue;
         };
         // reached through a member already found, which overrides it in turn
@@ -3032,20 +3094,86 @@ pub fn overridden_members<'db>(
             continue;
         }
         found.push(superclass);
-        let superclass = superclass.class_literal(db);
-        let definitions = own_member_definitions(db, superclass, name, accessor_role)
-            .filter(|definitions| !definitions.is_empty())
-            // a setter overriding a property whose superclass has only a getter
-            // overrides that property all the same
-            .or_else(|| own_member_definitions(db, superclass, name, None))
+        let is_abstract = is_abstract_in(db, &env, superclass, name);
+        let definitions = symbol
+            .map(|symbol| {
+                let written = written_member_definitions(db, scope, symbol, accessor_role);
+                if written.is_empty() {
+                    // a setter overriding a property whose superclass has only a
+                    // getter overrides that property all the same
+                    written_member_definitions(db, scope, symbol, None)
+                } else {
+                    written
+                }
+            })
             .unwrap_or_default();
-        members.push(OverriddenMember {
+        let superclass = superclass.class_literal(db);
+        overridden.push(OverriddenMember {
             superclass,
             superclass_name: superclass.name(db).clone(),
             definitions,
+            synthesized: symbol.is_none(),
+            is_abstract,
         });
     }
-    Some(members)
+    MemberOverrides {
+        is_abstract: is_abstract_in(db, &env, class, name),
+        overridden,
+    }
+}
+
+/// where a superclass's body, `scope`, writes its member `symbol`: each `def`,
+/// nested class, import or name the body binds or declares it with, a `def`
+/// with overloads as its implementation. for a property, only the accessors
+/// that play `accessor_role`'s part
+fn written_member_definitions<'db>(
+    db: &'db dyn Db,
+    scope: ScopeId<'db>,
+    symbol: ScopedSymbolId,
+    accessor_role: Option<PropertyAccessorRole>,
+) -> Vec<ResolvedDefinition<'db>> {
+    let use_def = use_def_map(db, scope);
+    reachable_implementation_definitions(
+        db,
+        use_def
+            .reachable_symbol_declarations(symbol)
+            .filter_map(|declaration| declaration.declaration.definition())
+            .chain(
+                use_def
+                    .reachable_symbol_bindings(symbol)
+                    .filter_map(|binding| binding.binding.definition()),
+            ),
+    )
+    .into_iter()
+    .filter(|definition| property_accessor_role_matches(db, *definition, accessor_role))
+    .filter_map(|definition| match definition.kind(db) {
+        DefinitionKind::Function(_) => member_implementation_definition(db, definition),
+        _ => Some(ResolvedDefinition::Definition(definition)),
+    })
+    .collect()
+}
+
+/// the class whose body makes `definition`, as the override checks see it:
+/// undecorated, and specialized to its own type parameters. `None` when
+/// `definition` is not made in a class body
+fn declaring_class<'db>(db: &'db dyn Db, definition: Definition<'db>) -> Option<ClassType<'db>> {
+    let scope = definition.scope(db);
+    let class_node = scope.node(db).as_class()?;
+    let class = semantic_index(db, scope.program_file(db)).try_definition(class_node)?;
+    Some(original_class_type(db, class)?.identity_specialization(db))
+}
+
+/// whether `class`'s own member `name`, as its body leaves it bound, is abstract
+fn is_abstract_in<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassType<'db>,
+    name: &Name,
+) -> bool {
+    class
+        .own_class_member(db, env, None, name)
+        .ignore_possibly_undefined()
+        .is_some_and(|ty| type_as_abstract_method(db, ty, class).is_some())
 }
 
 /// The enum members `target` admits under their bare name, each as its name

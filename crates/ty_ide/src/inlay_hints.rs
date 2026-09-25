@@ -1659,14 +1659,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        let Some(class_ty) = self.enclosing_class else {
-            return;
-        };
-
-        let Some(superclass) = function
-            .inferred_type(&self.model)
-            .and_then(|ty| inferred_override(self.db, env, class_ty, ty, &function.name))
-        else {
+        let Some(superclass) = inferred_override(&self.model, function) else {
             return;
         };
 
@@ -11242,6 +11235,24 @@ Source with applied edits:
                 override def g(self) -> None: ...
                 def h(self) -> None: ...
                 def __init__(self) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_override: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_inferred_override_of_a_private_member() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                private def f(self) -> None: ...
+
+            class B(A):
+                private def f(self) -> None: ...
             ",
         );
 

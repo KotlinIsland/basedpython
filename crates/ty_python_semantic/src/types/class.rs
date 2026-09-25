@@ -1478,36 +1478,6 @@ impl<'db> ClassType<'db> {
         self,
         db: &'db dyn Db,
     ) -> FxIndexMap<Name, AbstractMethod<'db>> {
-        fn type_as_abstract_method<'db>(
-            db: &'db dyn Db,
-            ty: Type<'db>,
-            defining_class: ClassType<'db>,
-        ) -> Option<AbstractMethodKind> {
-            match ty {
-                Type::FunctionLiteral(function) => function.as_abstract_method(db, defining_class),
-                Type::BoundMethod(method) => {
-                    method.function(db).as_abstract_method(db, defining_class)
-                }
-                Type::PropertyInstance(property) => {
-                    // A property is abstract if any of its accessors is abstract.
-                    property
-                        .getter(db)
-                        .and_then(|getter| type_as_abstract_method(db, getter, defining_class))
-                        .or_else(|| {
-                            property.setter(db).and_then(|setter| {
-                                type_as_abstract_method(db, setter, defining_class)
-                            })
-                        })
-                        .or_else(|| {
-                            property.deleter(db).and_then(|deleter| {
-                                type_as_abstract_method(db, deleter, defining_class)
-                            })
-                        })
-                }
-                _ => None,
-            }
-        }
-
         let mut abstract_methods: FxIndexMap<Name, _> = FxIndexMap::default();
         let env = &ProgramEnvironment::from_file(self.class_literal(db).program_file(db));
 
@@ -3576,4 +3546,38 @@ pub(super) enum MetaclassErrorKind<'db> {
     PartlyNotCallable(Type<'db>),
     /// A cycle was encountered attempting to determine the metaclass
     Cycle,
+}
+
+/// whether `ty`, the type a class body binds a member to in `defining_class`, is an abstract
+/// method, and why: an `@abstractmethod`, or a protocol method with no implementation. a property
+/// is abstract when any of its accessors is
+///
+/// what `abstract-instantiation` counts as abstract, and what an editor asks when it says whether a
+/// member implements what it overrides or overrides an implementation
+pub(in crate::types) fn type_as_abstract_method<'db>(
+    db: &'db dyn Db,
+    ty: Type<'db>,
+    defining_class: ClassType<'db>,
+) -> Option<AbstractMethodKind> {
+    match ty {
+        Type::FunctionLiteral(function) => function.as_abstract_method(db, defining_class),
+        Type::BoundMethod(method) => method.function(db).as_abstract_method(db, defining_class),
+        Type::PropertyInstance(property) => {
+            // A property is abstract if any of its accessors is abstract.
+            property
+                .getter(db)
+                .and_then(|getter| type_as_abstract_method(db, getter, defining_class))
+                .or_else(|| {
+                    property
+                        .setter(db)
+                        .and_then(|setter| type_as_abstract_method(db, setter, defining_class))
+                })
+                .or_else(|| {
+                    property
+                        .deleter(db)
+                        .and_then(|deleter| type_as_abstract_method(db, deleter, defining_class))
+                })
+        }
+        _ => None,
+    }
 }

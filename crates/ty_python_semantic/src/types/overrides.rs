@@ -1932,7 +1932,13 @@ fn stored_member_name(db: &dyn Db, class: ClassType<'_>, name: &str) -> String {
     }
 }
 
-pub(crate) fn is_constructor_like_method(name: &str) -> bool {
+/// whether a member named `name` is a constructor, or a method the constructors
+/// call: `__init__`, `__new__`, `__post_init__`, `__init_subclass__`
+///
+/// the override checks do not hold one to the signature of the member it
+/// overrides, nor ask it to be marked `@override`: a subclass's constructor
+/// takes what that subclass needs
+pub fn is_constructor_like_method(name: &str) -> bool {
     matches!(
         name,
         "__init__" | "__new__" | "__post_init__" | "__init_subclass__"

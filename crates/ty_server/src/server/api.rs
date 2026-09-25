@@ -207,6 +207,11 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),
+        requests::DocumentSuperMembersRequestHandler::METHOD => background_document_request_task::<
+            requests::DocumentSuperMembersRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         requests::PrepareTypeHierarchyRequestHandler::METHOD => background_document_request_task::<
             requests::PrepareTypeHierarchyRequestHandler,
         >(
