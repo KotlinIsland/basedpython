@@ -15,7 +15,13 @@ use crate::session::Session;
 use crate::session::client::Client;
 use crate::system::AnySystemPath;
 
-/// Applies `changes` to every project and refreshes what the client is showing.
+/// applies `changes` to every project and, if that changed anything, refreshes what the client is
+/// showing
+///
+/// only then: a batch of changes is often a write to something no answer depends on (a build's
+/// output, an ignored directory, a file nothing imports), and a refresh makes the client ask again
+/// for the diagnostics and inlay hints of everything it shows, and poll the workspace's
+/// diagnostics again
 pub(crate) fn apply(session: &mut Session, client: &Client, changes: &[ChangeEvent]) {
     if changes.is_empty() {
         return;
@@ -28,16 +34,29 @@ pub(crate) fn apply(session: &mut Session, client: &Client, changes: &[ChangeEve
         .map(|(root, _)| root.clone())
         .collect();
 
+    let mut changed = false;
     for root in roots {
         tracing::debug!("Applying changes to `{root}`");
 
-        session.apply_changes(client, &AnySystemPath::System(root.clone()), changes);
-        publish_settings_diagnostics(session, client, root);
+        let result = session.apply_changes(client, &AnySystemPath::System(root.clone()), changes);
+        if result.database_changed() {
+            changed = true;
+            publish_settings_diagnostics(session, client, root);
+        }
     }
 
     // a change can move what there is to watch: a new virtual environment, a configuration
     // naming other search paths
     session.update_file_watcher(client);
+
+    if !changed {
+        tracing::debug!("The changes changed nothing the session answers from");
+        return;
+    }
+
+    // a workspace diagnostic request waiting for the session to change is answered here rather
+    // than by a notification's handler: most changes come from the session's own watcher
+    session.resume_suspended_workspace_diagnostic_request(client);
 
     if client_capabilities.supports_workspace_diagnostic_refresh() {
         client.send_request::<types::DiagnosticRefreshRequest>(session, (), |_, ()| {});

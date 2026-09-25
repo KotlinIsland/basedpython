@@ -11,7 +11,6 @@ use ruff_db::Db as _;
 use ruff_db::files::{File, Files, system_path_to_file};
 use ruff_db::system::{SystemPath, SystemPathBuf};
 use rustc_hash::FxHashSet;
-use salsa::Setter as _;
 use ty_python_core::program::FallibleStrategy;
 
 /// Represents the result of applying changes to the project database.
@@ -20,6 +19,7 @@ pub struct ChangeResult {
     project_sync_path: Option<SystemPathBuf>,
     custom_stdlib_changed: bool,
     changed_files: ChangedFiles,
+    database_changed: bool,
 }
 
 impl ChangeResult {
@@ -33,6 +33,16 @@ impl ChangeResult {
     /// This may be an ancestor of the previous project root if that directory was deleted.
     pub fn project_sync_path(&self) -> Option<&SystemPath> {
         self.project_sync_path.as_deref()
+    }
+
+    /// whether applying the changes changed anything in the database
+    ///
+    /// when it did not, every query answers as it did before the changes, so nothing a client
+    /// has been shown can be out of date. most file system events are like that: a write to a
+    /// file nothing has read, to a directory nothing has listed, to a build's output or to an
+    /// ignored directory
+    pub fn database_changed(&self) -> bool {
+        self.database_changed
     }
 
     /// Returns `true` if the custom stdlib's VERSIONS file has changed.
@@ -116,6 +126,8 @@ impl ProjectDatabase {
             } else {
                 ChangedFiles::Known(FxHashSet::default())
             },
+            // every write below reports whether it set anything, and each one that did sets this
+            database_changed: false,
         };
         // Paths whose project files should be discovered incrementally.
         let mut added_paths = BTreeSet::default();
@@ -128,9 +140,6 @@ impl ProjectDatabase {
         let mut removed_paths = BTreeSet::default();
         let mut reload_project = false;
         let mut reload_project_files = false;
-        // Whether the shape of the tree changed, as opposed to the contents of a
-        // file that was already there. See `Project::file_system_revision`.
-        let mut file_system_changed = false;
         // TODO: This should be removed once the incremental checker is ported
         // over to the `ignore` crate, since the `ignore` crate will respect
         // the settings provided in `create_walker`. ---AG
@@ -150,7 +159,7 @@ impl ProjectDatabase {
 
             if let Some(path) = change.system_path() {
                 if configuration_paths.is_configuration(path, &project_root) {
-                    File::sync_path(self, path);
+                    result.database_changed |= File::sync_path(self, path);
                     reload_project = true;
 
                     continue;
@@ -166,8 +175,7 @@ impl ProjectDatabase {
                         ChangeEvent::Created { .. } | ChangeEvent::Deleted { .. }
                     )
                 {
-                    File::sync_path(self, path);
-                    file_system_changed = true;
+                    result.database_changed |= File::sync_path(self, path);
                     if let Some(directory) = path.parent()
                         && !is_within_build_output(self.system(), directory, &walk_roots)
                         && project.is_directory_included(self, directory)
@@ -188,7 +196,7 @@ impl ProjectDatabase {
                 }
 
                 if is_ignore_file(path) && project.settings(self).src().respect_ignore_files {
-                    File::sync_path(self, path);
+                    result.database_changed |= File::sync_path(self, path);
                     if let Some(directory) = path.parent() {
                         if project
                             .included_paths_or_root(self)
@@ -240,14 +248,10 @@ impl ProjectDatabase {
                 ChangeEvent::Changed { path, .. }
                 | ChangeEvent::Opened(path)
                 | ChangeEvent::Created { path, .. } => {
-                    if matches!(change, ChangeEvent::Created { .. }) {
-                        file_system_changed = true;
-                    }
-
                     match change {
                         ChangeEvent::Changed { .. } => {
                             if synced_files.insert(path.to_path_buf()) {
-                                File::sync_path_only(self, path);
+                                result.database_changed |= File::sync_path_only(self, path);
                             }
                         }
                         ChangeEvent::Opened(_)
@@ -256,7 +260,7 @@ impl ProjectDatabase {
                             ..
                         } => {
                             if synced_files.insert(path.to_path_buf()) {
-                                File::sync_path(self, path);
+                                result.database_changed |= File::sync_path(self, path);
                             }
                         }
                         _ => {
@@ -296,9 +300,10 @@ impl ProjectDatabase {
                                     && !project.is_file_explicitly_included(self, file);
 
                                 if exclude_script {
-                                    project.remove_file(self, file);
+                                    result.database_changed |= project.remove_file(self, file);
                                 } else {
-                                    project.add_file(self, file, is_script);
+                                    result.database_changed |=
+                                        project.add_file(self, file, is_script);
                                 }
 
                                 if let ChangedFiles::Known(changed_files) =
@@ -323,8 +328,6 @@ impl ProjectDatabase {
                 }
 
                 ChangeEvent::Deleted { kind, path } => {
-                    file_system_changed = true;
-
                     let is_file = match kind {
                         DeletedKind::File => true,
                         DeletedKind::Directory => false,
@@ -336,11 +339,11 @@ impl ProjectDatabase {
 
                     if is_file {
                         if synced_files.insert(path.to_path_buf()) {
-                            File::sync_path(self, path);
+                            result.database_changed |= File::sync_path(self, path);
                         }
 
                         if let Some(file) = self.files().try_system(self, path) {
-                            project.remove_file(self, file);
+                            result.database_changed |= project.remove_file(self, file);
                         }
                     } else {
                         sync_recursively.insert(path.clone());
@@ -364,20 +367,20 @@ impl ProjectDatabase {
                 }
 
                 ChangeEvent::CreatedVirtual(path) | ChangeEvent::ChangedVirtual(path) => {
-                    File::sync_virtual_path(self, path);
+                    result.database_changed |= File::sync_virtual_path(self, path);
                 }
 
                 ChangeEvent::DeletedVirtual(path) => {
                     if let Some(virtual_file) = self.files().try_virtual_file(path) {
                         virtual_file.close(self);
+                        result.database_changed = true;
                     }
                 }
 
                 ChangeEvent::Rescan => {
-                    file_system_changed = true;
                     reload_project = true;
                     reload_project_files = true;
-                    Files::sync_all(self);
+                    result.database_changed |= Files::sync_all(self);
                     sync_recursively.clear();
                     removed_paths.clear();
                     break;
@@ -385,15 +388,7 @@ impl ProjectDatabase {
             }
         }
 
-        Files::sync_all_recursive(self, sync_recursively);
-
-        // Bumped before the reload paths below, some of which return early.
-        if file_system_changed {
-            let revision = project.file_system_revision(self);
-            project
-                .set_file_system_revision(self)
-                .to(revision.wrapping_add(1));
-        }
+        result.database_changed |= Files::sync_all_recursive(self, sync_recursively);
 
         if reload_project {
             // The active project root may have been deleted. Start rediscovery from the closest
@@ -411,8 +406,12 @@ impl ProjectDatabase {
                 // We're not refreshing uv metadata, so use the existing environment.
                 let environment = metadata.environment().clone();
                 match project.rediscover(self, path, environment) {
-                    Ok(ProjectReloadResult::Unchanged) => {}
+                    // a rediscovery that leaves the metadata and settings as they were can still
+                    // replace the program settings or the settings diagnostics, and does not say
+                    // whether it did, so it is taken to have
+                    Ok(ProjectReloadResult::Unchanged) => result.database_changed = true,
                     Ok(ProjectReloadResult::Changed { files_changed }) => {
+                        result.database_changed = true;
                         result.project_changed = true;
                         result.changed_files.mark_unknown();
                         if files_changed {
@@ -427,7 +426,7 @@ impl ProjectDatabase {
                             "Failed to load project, keeping old project configuration: {error:#}"
                         );
                         if reload_project_files {
-                            project.reload_files(self);
+                            result.database_changed |= project.reload_files(self);
                             result.changed_files.mark_unknown();
                             return result;
                         }
@@ -437,7 +436,7 @@ impl ProjectDatabase {
         }
 
         if reload_project_files {
-            project.reload_files(self);
+            result.database_changed |= project.reload_files(self);
             result.changed_files.mark_unknown();
             // A full project-file reload supersedes incremental project-file updates.
             added_paths.clear();
@@ -458,13 +457,14 @@ impl ProjectDatabase {
                             Ok((_, diagnostics)) => diagnostics,
                             Err(error) => vec![error.into_diagnostic()],
                         };
-                    project.update_program(self, program_settings);
+                    result.database_changed |= project.update_program(self, program_settings);
                     settings_diagnostics.extend(
                         program_settings_diagnostics
                             .into_iter()
                             .map(|diagnostic| diagnostic.into_diagnostic(self)),
                     );
-                    project.update_settings_diagnostics(self, settings_diagnostics);
+                    result.database_changed |=
+                        project.update_settings_diagnostics(self, settings_diagnostics);
                 }
                 Err(error) => {
                     tracing::error!("Failed to resolve program settings: {error}");
@@ -472,7 +472,7 @@ impl ProjectDatabase {
             }
         }
 
-        project.remove_files_under(self, removed_paths);
+        result.database_changed |= project.remove_files_under(self, removed_paths);
 
         let diagnostics = if !project.file_set(self).is_lazy() {
             // Use directory walking to discover newly added files.
@@ -480,7 +480,7 @@ impl ProjectDatabase {
             let (files, diagnostics) = walker.collect_vec(self);
 
             for file in files {
-                project.add_file(self, file.file, file.is_script);
+                result.database_changed |= project.add_file(self, file.file, file.is_script);
             }
 
             diagnostics
@@ -493,7 +493,7 @@ impl ProjectDatabase {
         // across revisions doesn't feel essential, considering that they're rare. However, we could
         // implement a `BTreeMap` or similar and only prune the diagnostics from paths that we've
         // re-scanned (or that were removed etc).
-        project.replace_index_diagnostics(self, diagnostics);
+        result.database_changed |= project.replace_index_diagnostics(self, diagnostics);
 
         result
     }

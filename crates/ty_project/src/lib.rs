@@ -136,17 +136,6 @@ pub struct Project {
     #[default]
     #[returns(copy)]
     force_exclude_flag: bool,
-
-    /// A counter bumped whenever a file or directory is created or deleted.
-    ///
-    /// The project's file set holds Python files only, so nothing in the database
-    /// changes when a file of any other kind appears or disappears. A query that
-    /// discovers such files by walking the file system — the template and static
-    /// asset discovery the Django template services do — has nothing else to
-    /// depend on, and would otherwise serve its first answer forever.
-    #[default]
-    #[returns(copy)]
-    pub file_system_revision: u64,
 }
 
 /// A checker for the part of a project the type checker does not read.
@@ -294,7 +283,6 @@ impl Project {
         .durability(Durability::MEDIUM)
         .open_fileset_durability(Durability::LOW)
         .file_set_durability(Durability::LOW)
-        .file_system_revision_durability(Durability::LOW)
         .new(db)
     }
 
@@ -389,11 +377,14 @@ impl Project {
             .map(|metadata| Some(Box::new(metadata)))
     }
 
-    pub fn update_program(self, db: &mut dyn Db, settings: ProgramSettings) {
-        if self.program_settings(db) != &settings {
-            settings.search_paths.try_register_static_roots(db);
-            self.set_program_settings(db).to(settings);
+    /// returns whether the settings differ from the ones the program had
+    pub fn update_program(self, db: &mut dyn Db, settings: ProgramSettings) -> bool {
+        if self.program_settings(db) == &settings {
+            return false;
         }
+        settings.search_paths.try_register_static_roots(db);
+        self.set_program_settings(db).to(settings);
+        true
     }
 
     pub fn root(self, db: &dyn Db) -> &SystemPath {
@@ -539,15 +530,17 @@ impl Project {
     /// Replace stored settings diagnostics after recomputing program settings.
     ///
     /// This is used when a change affects [`ty_python_core::program::ProgramSettings`] without
-    /// reloading the full project.
+    /// reloading the full project. Returns whether the diagnostics changed.
     fn update_settings_diagnostics(
         self,
         db: &mut dyn Db,
         settings_diagnostics: Vec<OptionDiagnostic>,
-    ) {
-        if self.settings_diagnostics(db) != settings_diagnostics {
-            self.set_settings_diagnostics(db).to(settings_diagnostics);
+    ) -> bool {
+        if self.settings_diagnostics(db) == settings_diagnostics {
+            return false;
         }
+        self.set_settings_diagnostics(db).to(settings_diagnostics);
+        true
     }
 
     /// Checks the project and its dependencies according to the project's check mode.
@@ -737,8 +730,9 @@ impl Project {
         self.set_open_fileset(db).to(FxHashSet::default())
     }
 
+    /// returns whether the file was one of the project's
     #[tracing::instrument(level = "debug", skip(self, db))]
-    pub fn remove_file(self, db: &mut dyn Db, file: File) {
+    pub fn remove_file(self, db: &mut dyn Db, file: File) -> bool {
         tracing::debug!(
             "Removing file `{}` from project `{}`",
             file.path(db),
@@ -746,17 +740,17 @@ impl Project {
         );
 
         let Some(mut index) = IndexedFiles::indexed_mut(db, self) else {
-            return;
+            return false;
         };
 
-        index.remove(file);
+        index.remove(file)
     }
 
-    /// Removes all indexed project files under `paths`.
+    /// Removes all indexed project files under `paths`, and returns whether there were any.
     ///
     /// This is a no-op if the project files are still lazily indexed.
     #[tracing::instrument(level = "debug", skip(self, db, paths))]
-    fn remove_files_under<P, I>(self, db: &mut dyn Db, paths: I)
+    fn remove_files_under<P, I>(self, db: &mut dyn Db, paths: I) -> bool
     where
         I: IntoIterator<Item = P>,
         P: AsRef<SystemPath>,
@@ -769,11 +763,11 @@ impl Project {
         .collect::<BTreeSet<_>>();
 
         if paths.is_empty() {
-            return;
+            return false;
         }
 
         if self.file_set(db).is_lazy() {
-            return;
+            return false;
         }
 
         let files_to_remove = {
@@ -792,19 +786,22 @@ impl Project {
         };
 
         if files_to_remove.is_empty() {
-            return;
+            return false;
         }
 
         let Some(mut index) = IndexedFiles::indexed_mut(db, self) else {
-            return;
+            return false;
         };
 
         for file in files_to_remove {
             index.remove(file);
         }
+        index.did_change()
     }
 
-    fn add_file(self, db: &mut dyn Db, file: File, is_script: bool) {
+    /// returns whether the file was not already one of the project's, as a script if `is_script`
+    /// and as a module if not
+    fn add_file(self, db: &mut dyn Db, file: File, is_script: bool) -> bool {
         tracing::debug!(
             "Adding file `{}` to project `{}`",
             file.path(db),
@@ -812,21 +809,24 @@ impl Project {
         );
 
         let Some(mut index) = IndexedFiles::indexed_mut(db, self) else {
-            return;
+            return false;
         };
 
         index.insert(file, is_script);
+        index.did_change()
     }
 
-    /// Replaces the diagnostics from indexing the project files with `diagnostics`.
+    /// Replaces the diagnostics from indexing the project files with `diagnostics`, and returns
+    /// whether they differ from the ones it had.
     ///
     /// This is a no-op if the project files haven't been indexed yet.
-    fn replace_index_diagnostics(self, db: &mut dyn Db, diagnostics: Vec<Diagnostic>) {
+    fn replace_index_diagnostics(self, db: &mut dyn Db, diagnostics: Vec<Diagnostic>) -> bool {
         let Some(mut index) = IndexedFiles::indexed_mut(db, self) else {
-            return;
+            return false;
         };
 
         index.set_diagnostics(diagnostics);
+        index.did_change()
     }
 
     /// Returns whether `file` itself is an explicit check path.
@@ -875,13 +875,16 @@ impl Project {
         }
     }
 
-    fn reload_files(self, db: &mut dyn Db) {
+    /// returns whether the files had been indexed, and so are indexed again when next asked for
+    fn reload_files(self, db: &mut dyn Db) -> bool {
         tracing::debug!("Reloading files for project `{}`", self.name(db));
 
-        if !self.file_set(db).is_lazy() {
-            // Force a re-index of the files in the next revision.
-            self.set_file_set(db).to(IndexedFiles::lazy());
+        if self.file_set(db).is_lazy() {
+            return false;
         }
+        // Force a re-index of the files in the next revision.
+        self.set_file_set(db).to(IndexedFiles::lazy());
+        true
     }
 
     /// Check if the project's settings have any issues

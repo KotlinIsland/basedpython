@@ -74,8 +74,9 @@ fn created_closed_script_is_prepared_after_a_file_event() -> Result<()> {
         kind: lsp_types::FileChangeType::Created,
     }]);
 
-    // The file event and completed synchronization each refresh diagnostics.
-    server.await_diagnostic_refresh();
+    // the finished synchronization refreshes diagnostics. the file event may not: until
+    // something has listed the project's files, a new one changes nothing the server has read.
+    // the workspace request waits for the script's environment either way
     server.await_diagnostic_refresh();
     let report = server.workspace_diagnostic_request(None, None);
     assert_snapshot!(condensed_workspace_diagnostic_snapshot(report), @"

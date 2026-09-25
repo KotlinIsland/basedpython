@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
@@ -18,7 +20,9 @@ use ty_project::metadata::options::{EnvironmentOptions, Options, SrcOptions};
 use ty_project::metadata::pyproject::{PyProject, Tool};
 use ty_project::metadata::python_version::SupportedPythonVersion;
 use ty_project::metadata::value::{RelativeGlobPattern, RelativePathBuf};
-use ty_project::watch::{ChangeEvent, CreatedKind, DeletedKind, ProjectWatcher, directory_watcher};
+use ty_project::watch::{
+    ChangeEvent, ChangedKind, CreatedKind, DeletedKind, ProjectWatcher, directory_watcher,
+};
 use ty_project::{ChangeResult, Db, ProjectDatabase, ProjectMetadata};
 use ty_python_core::platform::PythonPlatform;
 use ty_static::EnvVars;
@@ -975,6 +979,70 @@ fn changed_file() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// a change reported for a file whose content, metadata and place in the project are all as they
+/// were changes nothing, however many times it is reported, and a real change to the file does
+#[test]
+fn a_change_that_changes_nothing_leaves_the_database_as_it_was() -> anyhow::Result<()> {
+    let mut case = setup([("foo.py", "x = 1\n")])?;
+    let foo_path = case.project_path("foo.py");
+    let foo = case.system_file(&foo_path)?;
+    case.assert_indexed_project_files([foo]);
+
+    let unchanged = [ChangeEvent::Changed {
+        path: foo_path.clone(),
+        kind: ChangedKind::Any,
+    }];
+    // applying a batch cancels the database's other readers, and salsa counts cancellations in a
+    // `u8`, starting a new revision with no write in it when the count wraps: enough batches for
+    // it to wrap several times
+    for batch in 0..1024 {
+        let result = case.apply_changes(&unchanged);
+        assert!(
+            !result.database_changed(),
+            "batch {batch} changed the database"
+        );
+    }
+
+    update_file(&foo_path, "x = 2\n")?;
+    assert!(case.apply_changes(&unchanged).database_changed());
+
+    Ok(())
+}
+
+/// a batch whose only effect is to clear a diagnostic the walk reported still changes what a
+/// check of the project says
+#[cfg(unix)]
+#[test]
+fn clearing_a_walk_diagnostic_changes_the_database() -> anyhow::Result<()> {
+    let mut case = setup([("foo.py", ""), ("locked/bar.py", "")])?;
+    let foo_path = case.project_path("foo.py");
+    let locked = case.project_path("locked");
+    let unreadable = |case: &TestCase| {
+        case.db()
+            .check()
+            .iter()
+            .any(|diagnostic| diagnostic.concise_message().to_string().contains("locked"))
+    };
+
+    std::fs::set_permissions(locked.as_std_path(), std::fs::Permissions::from_mode(0o000))?;
+    let foo = case.system_file(&foo_path)?;
+    case.assert_indexed_project_files([foo]);
+    std::fs::set_permissions(locked.as_std_path(), std::fs::Permissions::from_mode(0o755))?;
+    assert!(
+        unreadable(&case),
+        "the walk reports the directory it could not read"
+    );
+
+    let result = case.apply_changes(&[ChangeEvent::Changed {
+        path: foo_path,
+        kind: ChangedKind::Any,
+    }]);
+    assert!(result.database_changed());
+    assert!(!unreadable(&case));
+
+    Ok(())
+}
+
 /// a manifest written into a directory of the project makes the directory a build's output,
 /// which is not part of the project
 #[test]
@@ -986,11 +1054,12 @@ fn a_build_manifest_created_takes_its_directory_out_of_the_project() -> anyhow::
 
     let manifest = case.project_path("build/.by-manifest");
     std::fs::write(manifest.as_std_path(), "app.py\n")?;
-    case.apply_changes(&[ChangeEvent::Created {
+    let result = case.apply_changes(&[ChangeEvent::Created {
         path: manifest,
         kind: CreatedKind::File,
     }]);
 
+    assert!(result.database_changed());
     case.assert_indexed_project_files([app]);
 
     Ok(())
@@ -1010,11 +1079,12 @@ fn a_build_manifest_deleted_returns_its_directory_to_the_project() -> anyhow::Re
 
     let manifest = case.project_path("build/.by-manifest");
     std::fs::remove_file(manifest.as_std_path())?;
-    case.apply_changes(&[ChangeEvent::Deleted {
+    let result = case.apply_changes(&[ChangeEvent::Deleted {
         path: manifest,
         kind: DeletedKind::File,
     }]);
 
+    assert!(result.database_changed());
     let built = case.system_file(case.project_path("build/app.py"))?;
     case.assert_indexed_project_files([app, built]);
 

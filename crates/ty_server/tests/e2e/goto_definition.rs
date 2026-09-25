@@ -251,12 +251,13 @@ from idna import encode
         server.write_file(script, updated)?;
 
         // A watcher notification can arrive after the file is written but before `didSave`.
-        // Synchronization must still wait for the save notification.
+        // Synchronization must still wait for the save notification. the event changes nothing
+        // the server reads, as an open document's text comes from the client, so it asks for no
+        // refresh; the request below is answered after the event is handled
         server.did_change_watched_files(vec![FileEvent {
             uri: server.file_uri(script),
             kind: FileChangeType::Changed,
         }]);
-        server.await_diagnostic_refresh();
 
         assert!(
             server
@@ -267,14 +268,15 @@ from idna import encode
 
         server.save_text_document(script);
 
+        // the finished synchronization refreshes diagnostics, and the save itself may refresh
+        // them before it
         server.await_diagnostic_refresh();
-
-        assert!(
-            server
-                .goto_definition_request(script, Position::new(4, 19))
-                .is_some(),
-            "saving must synchronize newly declared script dependencies"
-        );
+        while server
+            .goto_definition_request(script, Position::new(4, 19))
+            .is_none()
+        {
+            server.await_diagnostic_refresh();
+        }
 
         Ok(())
     }
@@ -493,17 +495,24 @@ from idna import encode
             kind: FileChangeType::Created,
         }]);
 
-        // Watched-file changes refresh diagnostics immediately and again after uv finishes.
-        server.await_diagnostic_refresh();
-        server.await_diagnostic_refresh();
-
-        server.open_text_document(script, updated, 2);
-        assert!(
-            server
+        // the finished synchronization refreshes diagnostics. whether the event refreshes them
+        // before it depends on whether the server read the rewritten file when the document
+        // closed, which races the write, so each refresh is checked until the new dependency
+        // resolves: a closed script is looked at by opening it, and closed again to go on
+        // waiting
+        let mut version = 2;
+        loop {
+            server.await_diagnostic_refresh();
+            server.open_text_document(script, updated, version);
+            if server
                 .goto_definition_request(script, Position::new(4, 19))
-                .is_some(),
-            "watched changes must update environments even while scripts are closed"
-        );
+                .is_some()
+            {
+                break;
+            }
+            server.close_text_document(script);
+            version += 1;
+        }
 
         Ok(())
     }

@@ -660,14 +660,17 @@ impl Session {
         self.projects.values_mut().next().unwrap()
     }
 
+    /// applies `changes` to the project holding `path`
+    ///
+    /// the session's revision moves only if the project's database did: a change that changed
+    /// nothing leaves every answer as it was, and must not wake what waits for the session to
+    /// change
     pub(crate) fn apply_changes(
         &mut self,
         client: &Client,
         path: &AnySystemPath,
         changes: &[ChangeEvent],
     ) -> ChangeResult {
-        self.bump_revision();
-
         let capabilities = self.resolved_client_capabilities;
         let script_progress = self.script_progress.clone();
         let db = self.project_db_mut(path);
@@ -689,6 +692,9 @@ impl Session {
         }
         let scripts = result.scripts_to_synchronize(db);
         Self::synchronize_closed_scripts(db, &scripts, client, capabilities, &script_progress);
+        if result.database_changed() {
+            self.bump_revision();
+        }
         result
     }
 
@@ -2444,6 +2450,8 @@ impl DocumentHandle {
         };
 
         session.apply_changes(client, path, &changes);
+        // the document's text changed, whether or not its file in the database did
+        session.bump_revision();
     }
 
     fn set_version(&mut self, version: DocumentVersion) {
