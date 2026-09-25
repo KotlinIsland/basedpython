@@ -195,10 +195,12 @@
 
 use crate::ProgramEnvironment;
 use std::cell::RefCell;
+use std::ops::ControlFlow;
 
 use crate::types::context_sensitive::case_name_pattern_type;
 use crate::types::function::KnownFunction;
 use crate::types::narrow::pattern_subject_type;
+use crate::types::normal_completion::body_recovered_call_returns;
 use crate::{
     Db,
     dunder_all::dunder_all_names,
@@ -785,30 +787,20 @@ fn evaluate_reachability_path<'db>(
     constraints: &ReachabilityConstraints,
     predicates: &IndexSlice<ScopedPredicateId, Predicate<'db>>,
     call_predicates: Option<&[ScopedPredicateId]>,
-    mut id: ScopedReachabilityConstraintId,
+    id: ScopedReachabilityConstraintId,
     mut use_checkpoint: bool,
 ) -> Truthiness {
     let env = ProgramEnvironment::from_scope(scope);
     let mut visited = 0;
 
-    loop {
-        if let Some(reachability) = terminal_reachability(id) {
-            return reachability;
+    walk_decision_diagram(constraints, id, |id, atom| {
+        if use_checkpoint && is_reachability_checkpoint(call_predicates, atom, visited) {
+            return ControlFlow::Break(evaluate_reachability_checkpoint(db, scope, id));
         }
-
-        let node = constraints.get_interior_node(id);
-        if use_checkpoint && is_reachability_checkpoint(call_predicates, node.atom(), visited) {
-            return evaluate_reachability_checkpoint(db, scope, id);
-        }
-
-        id = match analyze_single(db, &env, &predicates[node.atom()]) {
-            Truthiness::AlwaysTrue => node.if_true(),
-            Truthiness::Ambiguous => node.if_ambiguous(),
-            Truthiness::AlwaysFalse => node.if_false(),
-        };
         use_checkpoint = true;
         visited += 1;
-    }
+        ControlFlow::Continue(analyze_single(db, &env, &predicates[atom]))
+    })
 }
 
 /// Evaluates a canonical suffix of a reachability decision diagram.
@@ -1837,6 +1829,23 @@ fn analyze_non_terminal_call<'db>(
         return Truthiness::AlwaysTrue;
     }
 
+    // basedpython: whether a function whose return type is recovered from its body returns is
+    // first read off the body's control flow. Recovering the type infers the whole body, and a
+    // body reached from a module-level call reads the module's globals, whose visibility depends
+    // on whether this very call returns. Only when the control flow leaves the answer open is the
+    // recovered type read, below. See `normal_completion`.
+    let function = match ty {
+        Type::FunctionLiteral(function) => Some(function),
+        Type::BoundMethod(method) => Some(method.function(db)),
+        _ => None,
+    };
+    if let Some(function) = function
+        && let Some(returns @ (Truthiness::AlwaysTrue | Truthiness::AlwaysFalse)) =
+            body_recovered_call_returns(db, function, is_await)
+    {
+        return returns;
+    }
+
     let overloads_iterator = if let Some(callable) = ty
         .try_upcast_to_callable(db, &env)
         .and_then(CallableTypes::exactly_one)
@@ -1969,19 +1978,122 @@ fn analyze_condition<'db>(db: &'db dyn Db, expression: Expression<'db>) -> Truth
     .unwrap_or(Truthiness::Ambiguous)
 }
 
+/// basedpython: how the predicates of a reachability decision diagram are decided
+///
+/// the checker decides them by inferring the types they test ([`TypeReading`]). whether a call
+/// to a function whose return type is recovered from its body can return is read off the same
+/// diagram without inferring any expression (`normal_completion`), where a predicate only types
+/// decide is ambiguous. both decide each predicate with [`analyze_predicate`]
+pub(crate) trait PredicateReading<'db> {
+    /// the environment types are inferred in, or `None` for a reading that infers no expression
+    ///
+    /// a reading without types answers `Ambiguous` wherever only types could decide, and its
+    /// `Ambiguous` then says that it cannot tell, not that the predicate can go either way
+    fn types(&self) -> Option<&ProgramEnvironment<'db>>;
+
+    /// whether the statement-level call `call` can return
+    fn statement_call(&mut self, call: CallableAndCallExpr<'db>) -> Truthiness;
+
+    /// the reachability of `continuation`, a node of `scope`'s own diagram
+    fn continuation(
+        &mut self,
+        scope: ScopeId<'db>,
+        continuation: ScopedReachabilityConstraintId,
+    ) -> Truthiness;
+}
+
+/// the checker's reading of a diagram: every predicate is decided by the types it tests
+struct TypeReading<'a, 'db> {
+    db: &'db dyn Db,
+    env: &'a ProgramEnvironment<'db>,
+}
+
+impl<'db> PredicateReading<'db> for TypeReading<'_, 'db> {
+    fn types(&self) -> Option<&ProgramEnvironment<'db>> {
+        Some(self.env)
+    }
+
+    fn statement_call(&mut self, call: CallableAndCallExpr<'db>) -> Truthiness {
+        analyze_non_terminal_call(self.db, call.callable, call.call_expr, call.is_await)
+    }
+
+    fn continuation(
+        &mut self,
+        scope: ScopeId<'db>,
+        continuation: ScopedReachabilityConstraintId,
+    ) -> Truthiness {
+        evaluate_finally_continuation(self.db, scope, continuation)
+    }
+}
+
+/// walks `constraints` from `id` to one of its terminals, deciding each predicate on the way with
+/// `reading`
+pub(crate) fn evaluate_with_reading<'db>(
+    db: &'db dyn Db,
+    constraints: &ReachabilityConstraints,
+    predicates: &IndexSlice<ScopedPredicateId, Predicate<'db>>,
+    id: ScopedReachabilityConstraintId,
+    reading: &mut impl PredicateReading<'db>,
+) -> Truthiness {
+    walk_decision_diagram(constraints, id, |_, atom| {
+        ControlFlow::Continue(analyze_predicate(db, reading, &predicates[atom]))
+    })
+}
+
+/// walks `constraints` from `id` to one of its terminals, taking at each node the branch for the
+/// truthiness `decide` gives the node's predicate. `decide` can instead break with the
+/// reachability of the node it was given, which ends the walk there
+fn walk_decision_diagram(
+    constraints: &ReachabilityConstraints,
+    mut id: ScopedReachabilityConstraintId,
+    mut decide: impl FnMut(
+        ScopedReachabilityConstraintId,
+        ScopedPredicateId,
+    ) -> ControlFlow<Truthiness, Truthiness>,
+) -> Truthiness {
+    loop {
+        if let Some(reachability) = terminal_reachability(id) {
+            return reachability;
+        }
+        let node = constraints.get_interior_node(id);
+        id = match decide(id, node.atom()) {
+            ControlFlow::Break(reachability) => return reachability,
+            ControlFlow::Continue(Truthiness::AlwaysTrue) => node.if_true(),
+            ControlFlow::Continue(Truthiness::Ambiguous) => node.if_ambiguous(),
+            ControlFlow::Continue(Truthiness::AlwaysFalse) => node.if_false(),
+        };
+    }
+}
+
 fn analyze_single(db: &dyn Db, env: &ProgramEnvironment<'_>, predicate: &Predicate) -> Truthiness {
-    let _span = tracing::trace_span!("analyze_single", ?predicate).entered();
+    analyze_predicate(db, &mut TypeReading { db, env }, predicate)
+}
+
+/// the truthiness of `predicate`, as `reading` decides it
+fn analyze_predicate<'db>(
+    db: &'db dyn Db,
+    reading: &mut impl PredicateReading<'db>,
+    predicate: &Predicate<'db>,
+) -> Truthiness {
+    let _span = tracing::trace_span!("analyze_predicate", ?predicate).entered();
 
     match predicate.node {
-        PredicateNode::Expression(test_expr) => {
-            infer_same_file_expression_type(db, test_expr, TypeContext::default())
-                .bool(db, env)
-                .negate_if(!predicate.is_positive)
+        PredicateNode::Expression(test_expr) => match reading.types() {
+            Some(env) => {
+                infer_same_file_expression_type(db, test_expr, TypeContext::default()).bool(db, env)
+            }
+            None => analyze_literal_condition(db, test_expr),
         }
-        PredicateNode::Condition(test_expr) => {
-            analyze_condition(db, test_expr).negate_if(!predicate.is_positive)
+        .negate_if(!predicate.is_positive),
+        PredicateNode::Condition(test_expr) => match reading.types() {
+            Some(_) => analyze_condition(db, test_expr),
+            None => analyze_literal_condition(db, test_expr),
         }
+        .negate_if(!predicate.is_positive),
         PredicateNode::ChainedComparisonCondition(test_expr) => {
+            let Some(env) = reading.types() else {
+                return Truthiness::Ambiguous;
+            };
             let inference = infer_expression_types(db, test_expr, TypeContext::default());
             let expression = test_expr.node_ref(db);
             inference
@@ -1992,42 +2104,69 @@ fn analyze_single(db: &dyn Db, env: &ProgramEnvironment<'_>, predicate: &Predica
         PredicateNode::ContextManagerSuppresses {
             expression,
             is_async,
-        } => Truthiness::from(
-            infer_same_file_expression_type(db, expression, TypeContext::default())
-                .can_suppress_exceptions(db, env, EvaluationMode::from_is_async(is_async)),
-        )
-        .negate_if(!predicate.is_positive),
+        } => {
+            let Some(env) = reading.types() else {
+                return Truthiness::Ambiguous;
+            };
+            Truthiness::from(
+                infer_same_file_expression_type(db, expression, TypeContext::default())
+                    .can_suppress_exceptions(db, env, EvaluationMode::from_is_async(is_async)),
+            )
+            .negate_if(!predicate.is_positive)
+        }
         PredicateNode::FinallyNormalPathImpossible {
             scope,
             continuation,
-        } => Truthiness::from(
-            evaluate_finally_continuation(db, scope, continuation).is_always_false(),
-        )
-        .negate_if(!predicate.is_positive),
-        PredicateNode::IsNonTerminalCall(CallableAndCallExpr {
-            callable,
-            call_expr,
-            is_await,
-        }) => analyze_non_terminal_call(db, callable, call_expr, is_await)
+        } => {
+            let decides_every_predicate = reading.types().is_some();
+            match reading.continuation(scope, continuation) {
+                Truthiness::AlwaysFalse => Truthiness::AlwaysTrue,
+                Truthiness::AlwaysTrue => Truthiness::AlwaysFalse,
+                Truthiness::Ambiguous if decides_every_predicate => Truthiness::AlwaysFalse,
+                // basedpython: a continuation a reading without types cannot decide may still be
+                // unreachable once types are read
+                Truthiness::Ambiguous => Truthiness::Ambiguous,
+            }
+            .negate_if(!predicate.is_positive)
+        }
+        PredicateNode::IsNonTerminalCall(call) => reading
+            .statement_call(call)
             .negate_if(!predicate.is_positive),
         // basedpython: an assertion guard is recorded as an unconditional narrowing
         // constraint, so its truth value is the fact that the call returned
         PredicateNode::AssertsCall(_) => Truthiness::AlwaysTrue.negate_if(!predicate.is_positive),
-        PredicateNode::Pattern(inner) => analyze_pattern_predicate(db, inner),
+        PredicateNode::Pattern(inner) => {
+            if reading.types().is_none() {
+                return Truthiness::Ambiguous;
+            }
+            analyze_pattern_predicate(db, inner)
+        }
         PredicateNode::OrPatternAlternative(_) => Truthiness::Ambiguous,
         // basedpython: the capture a bare `case A:` would bind exists only where
         // the name did not resolve to an enum member of the subject
         PredicateNode::CaseNameCapture(capture) => {
+            let Some(env) = reading.types() else {
+                return Truthiness::Ambiguous;
+            };
             Truthiness::from(case_name_pattern_type(db, env, capture.kind(db)).is_none())
                 .negate_if(!predicate.is_positive)
         }
         PredicateNode::SubjectElementPattern(subject_element) => {
+            if reading.types().is_none() {
+                return Truthiness::Ambiguous;
+            }
             analyze_pattern_predicate(db, subject_element.pattern)
         }
         PredicateNode::IsNonEmptyIterable(iterable) => {
+            if reading.types().is_none() {
+                return Truthiness::Ambiguous;
+            }
             analyze_non_empty_iterable(db, iterable).negate_if(!predicate.is_positive)
         }
         PredicateNode::StarImportPlaceholder(star_import) => {
+            let Some(env) = reading.types() else {
+                return Truthiness::Ambiguous;
+            };
             let place_table = place_table(db, star_import.scope(db));
             let symbol = place_table.symbol(star_import.symbol_id(db));
             let program_file = star_import.referenced_file(db);
@@ -2068,6 +2207,27 @@ fn analyze_single(db: &dyn Db, env: &ProgramEnvironment<'_>, predicate: &Predica
             }
         }
     }
+}
+
+/// basedpython: the truthiness of a condition read without types, where only a literal whose
+/// type states its truthiness counts: `True`, `False`, `None`, an integer, a string or bytes.
+/// types would decide those the same way
+fn analyze_literal_condition(db: &dyn Db, condition: Expression<'_>) -> Truthiness {
+    let module = parsed_module(db, condition.python_file(db)).load(db);
+    analyze_condition_expression(condition.node_ref(db).node(&module), &|leaf| {
+        Some(match leaf {
+            ast::Expr::BooleanLiteral(literal) => Truthiness::from(literal.value),
+            ast::Expr::NoneLiteral(_) => Truthiness::AlwaysFalse,
+            ast::Expr::NumberLiteral(ast::ExprNumberLiteral {
+                value: ast::Number::Int(int),
+                ..
+            }) => Truthiness::from(*int != 0),
+            ast::Expr::StringLiteral(literal) => Truthiness::from(!literal.value.is_empty()),
+            ast::Expr::BytesLiteral(literal) => Truthiness::from(!literal.value.is_empty()),
+            _ => Truthiness::Ambiguous,
+        })
+    })
+    .unwrap_or(Truthiness::Ambiguous)
 }
 
 /// Check whether a diagnostic emitted at `range` is in reachable code, considering both

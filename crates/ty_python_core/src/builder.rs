@@ -3179,6 +3179,21 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .record_negated_narrowing_constraint_for_places(predicate_id, &possibly_narrowed);
     }
 
+    /// basedpython: visits the `finally` suite of a `try` statement reached with `try_entry`
+    ///
+    /// the suite is visited once, in a single entry state, but an exception can enter it from
+    /// anywhere in the statement; see `UseDefMapBuilder::try_entries_of_finally_suites`
+    fn visit_finally_suite(
+        &mut self,
+        finalbody: &'ast [ast::Stmt],
+        try_entry: ScopedReachabilityConstraintId,
+    ) {
+        self.current_use_def_map_mut()
+            .enter_finally_suite(try_entry);
+        self.visit_block_body(finalbody);
+        self.current_use_def_map_mut().exit_finally_suite();
+    }
+
     /// Records that all remaining statements in the current block are unreachable.
     fn mark_unreachable(&mut self) {
         self.current_use_def_map_mut().mark_unreachable();
@@ -6484,6 +6499,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 let was_in_finally_statement = self.in_finally_statement;
                 self.in_finally_statement |= !finalbody.is_empty();
                 self.record_ambiguous_reachability();
+                let try_entry = self.current_reachability();
 
                 let exception_handlers = if handlers.is_empty() {
                     ExceptionHandlers::None
@@ -6627,7 +6643,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     for snapshot in snapshots {
                         self.flow_merge(snapshot);
                     }
-                    self.visit_block_body(finalbody);
+                    self.visit_finally_suite(finalbody, try_entry);
                     if !self.flow_snapshot().is_always_unreachable() {
                         if !finalbody.is_empty() && has_escaping_exception {
                             self.record_exception_checkpoint();
@@ -6685,7 +6701,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     }
                     // Mixed normal and terminal entry states are still handled by the normal path
                     // only. See the corresponding TODO tests in `terminal_statements.md`.
-                    self.visit_block_body(finalbody);
+                    self.visit_finally_suite(finalbody, try_entry);
                     if !finalbody.is_empty()
                         && has_escaping_exception
                         && self.current_use_def_map().reachability
@@ -6767,6 +6783,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.record_returned_place_members(value);
                 }
                 self.record_return_exit(stmt);
+                self.current_use_def_map_mut()
+                    .record_return_reachability(stmt.range());
                 self.record_terminal_finally_entry();
                 // Everything in the current block after a terminal statement is unreachable.
                 self.mark_unreachable();

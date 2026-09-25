@@ -674,6 +674,10 @@ struct UseDefMapExtra {
     /// basedpython: the state of a function's parameter places over every way out of its body,
     /// merged.
     normal_exit: Box<[PlaceBindings]>,
+
+    /// basedpython: whether each `return` in this scope can be reached, sorted by range. a
+    /// `return` that is always reachable is left out
+    return_reachability: Box<[(TextRange, ScopedReachabilityConstraintId)]>,
 }
 
 /// basedpython: the state of a function's parameter places where a `return` leaves the body.
@@ -842,6 +846,13 @@ pub struct UseDefMap<'db> {
     ///
     /// This is used by `can_implicitly_return_none` in the `ty_python_semantic` crate.
     end_of_scope_reachability: ScopedReachabilityConstraintId,
+
+    /// Whether control can leave the scope normally: reach a `return`, or the end of the scope.
+    ///
+    /// This is the union of [`Self::end_of_scope_reachability`] and the reachability of every
+    /// `return` statement in the scope. A function body for which it is always false never hands
+    /// control back to its caller.
+    normal_exit_reachability: ScopedReachabilityConstraintId,
 }
 
 /// Shares equivalent scope-local binding and declaration tables within a file.
@@ -961,6 +972,11 @@ impl<'db> UseDefMap<'db> {
         self.end_of_scope_reachability
     }
 
+    /// Whether control can reach a `return` in this scope, or the end of it.
+    pub fn normal_exit_reachability(&self) -> ScopedReachabilityConstraintId {
+        self.normal_exit_reachability
+    }
+
     /// Definitions relevant to usage analysis, including standalone declarations.
     ///
     /// The early declaration part of a combined definition is omitted: its later binding entry
@@ -1068,6 +1084,23 @@ impl<'db> UseDefMap<'db> {
             bindings.as_slice(),
             BoundnessAnalysis::BasedOnUnboundVisibility,
         ))
+    }
+
+    /// basedpython: whether the `return` statement at `range` can be reached
+    ///
+    /// a `return` in a `finally` suite is reached through an exception entering the suite as well
+    /// as through the flow it is visited in; see `UseDefMapBuilder::record_return_reachability`
+    pub fn return_reachability(&self, range: TextRange) -> ScopedReachabilityConstraintId {
+        let returns = self
+            .extra
+            .as_deref()
+            .map(|extra| extra.return_reachability.as_ref())
+            .unwrap_or_default();
+        returns
+            .binary_search_by_key(&range.start(), |(range, _)| range.start())
+            .map_or(ScopedReachabilityConstraintId::ALWAYS_TRUE, |index| {
+                returns[index].1
+            })
     }
 
     fn return_exit_records(&self) -> &[ReturnExit] {
@@ -1958,6 +1991,21 @@ pub(super) struct UseDefMapBuilder<'db> {
     /// start of the scope.
     pub(super) reachability: ScopedReachabilityConstraintId,
 
+    /// The union of the reachability of every `return` recorded so far.
+    return_reachability: ScopedReachabilityConstraintId,
+
+    /// basedpython: the reachability of each `return` recorded so far, when it is not always
+    /// reachable
+    return_reachability_by_range: Vec<(TextRange, ScopedReachabilityConstraintId)>,
+
+    /// basedpython: for each `finally` suite being visited, the reachability of its `try` statement
+    ///
+    /// the suite is visited once, in the state that finishing the `try` statement leaves (or, when
+    /// it cannot finish, the states its `return`s and `raise`s leave). an exception can enter the
+    /// suite from anywhere in the statement, and a `return` in the suite swallows that exception,
+    /// so it is a way out of the scope wherever the statement is reached
+    try_entries_of_finally_suites: Vec<ScopedReachabilityConstraintId>,
+
     /// Tracks the reachability constraint for statements and certain sub-expressions,
     /// keyed by their text range.
     range_reachability: Vec<(TextRange, RangeInfo)>,
@@ -2017,6 +2065,9 @@ impl<'db> UseDefMapBuilder<'db> {
             return_exits: Vec::new(),
             normal_exit: Vec::new(),
             reachability: ScopedReachabilityConstraintId::ALWAYS_TRUE,
+            return_reachability: ScopedReachabilityConstraintId::ALWAYS_FALSE,
+            return_reachability_by_range: Vec::new(),
+            try_entries_of_finally_suites: Vec::new(),
             range_reachability: Vec::new(),
             checkpoint_flow: ScopedReachabilityConstraintId::ALWAYS_TRUE,
             checkpoint_state: ExceptionCheckpointState::default(),
@@ -2674,6 +2725,39 @@ impl<'db> UseDefMapBuilder<'db> {
         }
     }
 
+    /// Record that control can leave the scope through a `return` at the current point.
+    ///
+    /// basedpython: a `return` in a `finally` suite is also reached through an exception entering
+    /// the suite. what the suite does before the `return` is not tracked on that path, so the
+    /// `return` counts as reached wherever the `try` statement is
+    pub(super) fn record_return_reachability(&mut self, range: TextRange) {
+        let reachability = self.try_entries_of_finally_suites.iter().fold(
+            self.reachability,
+            |reachability, &entry| {
+                self.reachability_constraints
+                    .add_or_constraint(reachability, entry)
+            },
+        );
+        self.return_reachability = self
+            .reachability_constraints
+            .add_or_constraint(self.return_reachability, reachability);
+        if reachability != ScopedReachabilityConstraintId::ALWAYS_TRUE {
+            self.return_reachability_by_range
+                .push((range, reachability));
+        }
+    }
+
+    /// basedpython: start visiting the `finally` suite of a `try` statement reached with
+    /// `try_entry`; see [`Self::try_entries_of_finally_suites`]
+    pub(super) fn enter_finally_suite(&mut self, try_entry: ScopedReachabilityConstraintId) {
+        self.try_entries_of_finally_suites.push(try_entry);
+    }
+
+    /// basedpython: finish visiting the `finally` suite [`Self::enter_finally_suite`] started
+    pub(super) fn exit_finally_suite(&mut self) {
+        self.try_entries_of_finally_suites.pop();
+    }
+
     /// basedpython: record the state of `places` where the `return` at `range` leaves the body.
     ///
     /// Unlike a use, this is the state a caller sees once the call has returned, so pending
@@ -3144,6 +3228,11 @@ impl<'db> UseDefMapBuilder<'db> {
             }
         }
         self.reachability_constraints.mark_used(self.reachability);
+        let normal_exit_reachability = self
+            .reachability_constraints
+            .add_or_constraint(self.return_reachability, self.reachability);
+        self.reachability_constraints
+            .mark_used(normal_exit_reachability);
         let symbol_states =
             Self::zip_place_states(end_of_scope_symbols, reachable_definitions_by_symbol);
         let member_states =
@@ -3152,12 +3241,19 @@ impl<'db> UseDefMapBuilder<'db> {
         let loop_headers = self.loop_headers;
         let return_exits = self.return_exits.into_boxed_slice();
         let normal_exit = self.normal_exit.into_boxed_slice();
+        let mut return_reachability = self.return_reachability_by_range;
+        return_reachability.sort_unstable_by_key(|(range, _)| range.start());
+        for &(_, reachability) in &return_reachability {
+            self.reachability_constraints.mark_used(reachability);
+        }
+        let return_reachability = return_reachability.into_boxed_slice();
         let extra = (!bindings_by_use.is_empty()
             || !member_states.is_empty()
             || !enclosing_snapshots.is_empty()
             || !loop_headers.is_empty()
             || !return_exits.is_empty()
-            || !normal_exit.is_empty())
+            || !normal_exit.is_empty()
+            || !return_reachability.is_empty())
         .then(|| {
             Box::new(UseDefMapExtra {
                 bindings_by_use: bindings_by_use.into(),
@@ -3167,6 +3263,7 @@ impl<'db> UseDefMapBuilder<'db> {
                 loop_headers: loop_headers.into(),
                 return_exits,
                 normal_exit,
+                return_reachability,
             })
         });
         let predicates = self.predicates.build();
@@ -3196,6 +3293,7 @@ impl<'db> UseDefMapBuilder<'db> {
             definitions_by_definition,
             extra,
             end_of_scope_reachability: self.reachability,
+            normal_exit_reachability,
         }
     }
 

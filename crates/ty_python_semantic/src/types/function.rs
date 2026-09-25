@@ -482,8 +482,53 @@ pub(crate) struct CallbackParameterModifiers {
     pub(crate) kwarg_once: Option<bool>,
 }
 
+/// basedpython: what a function's `def` line says; see [`OverloadLiteral::header`]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) struct FunctionHeader {
+    /// an `async def`
+    pub(crate) is_async: bool,
+    /// `-> asserts x`
+    pub(crate) is_asserts_return: bool,
+    pub(crate) form: FunctionForm,
+}
+
+/// basedpython: what a `def` defines, where that is more than a function
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) enum FunctionForm {
+    Function,
+    /// the getter of a property with an accessor block
+    PropertyGetter,
+    /// a `decorator def`
+    DecoratorKeyword,
+}
+
+impl FunctionHeader {
+    pub(crate) fn of(function: &ast::StmtFunctionDef) -> Self {
+        let form = if function.property_construct_range().is_some() {
+            FunctionForm::PropertyGetter
+        } else if is_decorator_keyword_def(function) {
+            FunctionForm::DecoratorKeyword
+        } else {
+            FunctionForm::Function
+        };
+        Self {
+            is_async: function.is_async,
+            is_asserts_return: function.is_asserts_return,
+            form,
+        }
+    }
+}
+
 #[salsa::tracked]
 impl<'db> OverloadLiteral<'db> {
+    /// basedpython: what this function's `def` line says, read once so that asking it of a
+    /// function in another module does not tie the asker to that module's syntax tree
+    #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn header(self, db: &'db dyn Db) -> FunctionHeader {
+        let module = parsed_module(db, self.python_file(db)).load(db);
+        FunctionHeader::of(self.node(db, self.file(db), &module))
+    }
+
     /// basedpython: the type an untyped property declares through its initialiser, when this
     /// function is one of that property's accessors
     ///
@@ -1079,11 +1124,7 @@ impl<'db> OverloadLiteral<'db> {
         let program_file = self.program_file(db);
         let module = parsed_module(db, program_file.python_file(db)).load(db);
         let function_node = scope.node(db).expect_function().node(&module);
-        let is_decorator_keyword = function_node.decorator_list.iter().any(|decorator| {
-            matches!(&decorator.expression, ast::Expr::Name(name)
-                if name.ctx.is_invalid() && name.id == "decorator_keyword")
-        });
-        if !is_decorator_keyword {
+        if !is_decorator_keyword_def(function_node) {
             return None;
         }
         let index = semantic_index(db, program_file);
@@ -1336,15 +1377,12 @@ impl<'db> OverloadLiteral<'db> {
                     .declare_unannotated_parameter(&value.parameter.name.id, property_type);
             }
         }
-        let returns_written =
-            function_stmt_node.returns.is_some() || (is_property_getter && property_type.is_some());
 
         // basedpython: if this is the implementation of an overloaded function
         // (i.e. preceded by `@overload` stubs), infer unannotated parameter
-        // types and an unannotated return type from the union of the sibling
-        // overloads. this lets `def foo(i)` after `def foo(i: str) -> int`
-        // and `def foo(i: int) -> str` see `i` as `str | int` and have its
-        // return statements checked against `int | str`
+        // types from the union of the sibling overloads. this lets `def foo(i)`
+        // after `def foo(i: str) -> int` and `def foo(i: int) -> str` see `i` as
+        // `str | int`. the return type is `return_type_source`'s to decide
         if !self.is_overload(db)
             && let Some(previous) = self.previous_overload(db)
         {
@@ -1354,38 +1392,23 @@ impl<'db> OverloadLiteral<'db> {
                     .iter()
                     .map(|ol| ol.raw_signature(db, ReturnCallableTypeVarScope::Public))
                     .collect();
-                raw_signature.inherit_unannotated_from_overloads(
-                    db,
-                    env,
-                    &overload_sigs,
-                    !returns_written,
-                );
+                raw_signature.inherit_unannotated_from_overloads(db, env, &overload_sigs, false);
             }
         }
 
-        // basedpython: an unannotated method inherits its parameter and return types from the
-        // method it overrides, so `def m(self, a)` over `def m(self, a: int) -> bytes` sees
-        // `a: int` and returns `bytes`. this is the first place a missing annotation is recovered
-        // from, so it shares the gate with the body-derived recovery below — reading the body
-        // while skipping this would answer with what the placeholder body happens to do rather
-        // than with what the base already declared
+        // basedpython: an unannotated method inherits its parameter types from the method it
+        // overrides, so `def m(self, a)` over `def m(self, a: int)` sees `a: int`. it shares the
+        // gate with the recovery of a return type, which draws on the same method first; see
+        // `return_type_source`
         if infers_unannotated_signatures(db, self.file(db))
-            && raw_signature.has_inherited_annotations_to_fill(!returns_written)
+            && raw_signature.has_inherited_annotations_to_fill(false)
             && let Some(base_signature) = self.overridden_signature(db, env)
         {
-            // a narrowing return type is the exception. it is a claim about what the body tests,
-            // so an override that tests something else — or nothing — would be handed a claim it
-            // does not make, and every call through it would narrow on the strength of it
-            let inherits_return_type = !returns_written
-                && !matches!(
-                    base_signature.return_ty,
-                    Type::TypeIs(_) | Type::TypeGuard(_)
-                );
             raw_signature.inherit_unannotated_from_overloads(
                 db,
                 env,
                 std::slice::from_ref(&base_signature),
-                inherits_return_type,
+                false,
             );
         }
 
@@ -1402,24 +1425,6 @@ impl<'db> OverloadLiteral<'db> {
             && base.signature(db).overloads.len() == 1
         {
             raw_signature.inherit_defaults_from(db, env, base_raw_signature(db, base));
-        }
-
-        // basedpython: an overridden base that could not supply a whole signature can still
-        // supply its return type
-        //
-        // a narrowing return type is the exception: it is a claim about what the body tests, and
-        // an override that tests something else — or nothing — would be handed a claim it does
-        // not make, and every call through it would narrow on the strength of it. so that one is
-        // left to the override's own body
-        if infers_unannotated_signatures(db, self.file(db))
-            && !returns_written
-            && !function_stmt_node.is_asserts_return
-            && raw_signature.return_ty.is_unknown()
-            && let OverriddenReturnType::Declared(base_return) =
-                self.overridden_return_type(db, env)
-            && !matches!(base_return, Type::TypeIs(_) | Type::TypeGuard(_))
-        {
-            raw_signature.return_ty = base_return;
         }
 
         // basedpython: `@d` on `def f(i)` hands `f` straight to `d`, so a parameter left
@@ -1445,35 +1450,36 @@ impl<'db> OverloadLiteral<'db> {
             );
         }
 
-        // basedpython: a return type nothing else supplied is recovered from the body — the
-        // union of what it returns, and `None` when it can also fall off the end. this runs
-        // last so that an annotation, a sibling overload and an overridden base all still win
-        //
-        // the three blocks above plus this one are the sources a `def` that leaves its return
-        // type out draws on; [`OverloadLiteral::return_type_without_annotation`] mirrors them in
-        // this order, so a change here belongs there too
+        // basedpython: a return type nobody wrote is drawn from the first source that supplies
+        // one; see `return_type_source`. the body is the last of them, and recovering from it
+        // takes the union of what it returns, and `None` when it can also fall off the end
         let mut reads_body_for_guards = false;
-        if infers_unannotated_signatures(db, self.file(db))
-            && !returns_written
-            && !function_stmt_node.is_asserts_return
-            && raw_signature.return_ty.is_unknown()
-            && self.recovers_return_type_from_body(db, env)
-        {
-            raw_signature.return_ty = inferred_return_type(db, self);
-
-            // basedpython: a returned expression says more than its own type does —
-            // `return a is int` tells every caller what a truthy result means about the argument.
-            // That reading is recovered beside the return type and only where it is: a base's
-            // return type stands for its overrides, so a body that answered nothing about the
-            // return type answers nothing about the narrowing either
-            let guards = inferred_predicate_guards(db, self);
-            if !guards.is_empty() {
-                if let Some(narrowed) = Self::symmetric_guard_type(db, env, guards) {
-                    raw_signature.return_ty = TypeIsType::from_type_expression(db, narrowed);
-                }
-                raw_signature.narrowing_guards.clone_from(guards);
+        match self.return_type_source(db, env, false, |base| {
+            Self::overridden_return_type(db, env, base)
+        }) {
+            ReturnTypeSource::Overridden(ty) | ReturnTypeSource::Overloads(ty) => {
+                raw_signature.return_ty = ty;
             }
-            reads_body_for_guards = true;
+            ReturnTypeSource::Body => {
+                raw_signature.return_ty = inferred_return_type(db, self);
+
+                // basedpython: a returned expression says more than its own type does —
+                // `return a is int` tells every caller what a truthy result means about the
+                // argument. That reading is recovered beside the return type and only where it
+                // is: a base's return type stands for its overrides, so a body that answered
+                // nothing about the return type answers nothing about the narrowing either
+                let guards = inferred_predicate_guards(db, self);
+                if !guards.is_empty() {
+                    if let Some(narrowed) = Self::symmetric_guard_type(db, env, guards) {
+                        raw_signature.return_ty = TypeIsType::from_type_expression(db, narrowed);
+                    }
+                    raw_signature.narrowing_guards.clone_from(guards);
+                }
+                reads_body_for_guards = true;
+            }
+            ReturnTypeSource::Written
+            | ReturnTypeSource::PropertyInitialiser(_)
+            | ReturnTypeSource::Gradual => {}
         }
 
         // basedpython: a body that hands back nothing makes assertions instead of predicates, and
@@ -1620,11 +1626,6 @@ impl<'db> OverloadLiteral<'db> {
     /// basedpython: the return type this function would have if its return annotation were
     /// deleted.
     ///
-    /// The sources are the ones [`OverloadLiteral::raw_signature`] consults for a `def` that
-    /// leaves its return type out, in the same order: a sibling overload group, then an
-    /// overridden base method under `sound-types`, and — only when neither of those supplied
-    /// anything — the body.
-    ///
     /// The body is the one source not computed here. It reads the function's own scope
     /// inference, and the `redundant-return-annotation` lint calls this from inside that very
     /// inference, so the caller supplies it.
@@ -1634,22 +1635,78 @@ impl<'db> OverloadLiteral<'db> {
         env: &ProgramEnvironment<'db>,
         from_body: impl FnOnce() -> Type<'db>,
     ) -> Type<'db> {
-        // the getter of an untyped property with an initialiser — the setter always writes its
-        // `-> None` — is held to that initialiser's type ahead of everything below
-        if !self.has_explicit_return_annotation(db)
+        match self.return_type_source(db, env, true, |base| {
+            Self::overridden_return_type(db, env, base)
+        }) {
+            ReturnTypeSource::PropertyInitialiser(ty)
+            | ReturnTypeSource::Overridden(ty)
+            | ReturnTypeSource::Overloads(ty) => ty,
+            ReturnTypeSource::Body => from_body(),
+            ReturnTypeSource::Written | ReturnTypeSource::Gradual => Type::unknown(),
+        }
+    }
+
+    /// basedpython: where this function's return type comes from, in the order every reader of
+    /// it consults the sources: [`OverloadLiteral::raw_signature`], which builds the signature;
+    /// [`OverloadLiteral::return_type_without_annotation`], which the
+    /// `redundant-return-annotation` lint compares an annotation against; and the reading of
+    /// whether a call to the function can return (`normal_completion`)
+    ///
+    /// `without_annotation` answers for the function as though its return annotation were
+    /// deleted. `overridden` says what the method this one overrides supplies. the signature and
+    /// the lint read the base's signature for that; whether a call can return is answered without
+    /// recovering any return type, so that reading says what it can of the base without one
+    ///
+    /// the body is not read when a base answers. that includes a base whose answer cannot be
+    /// copied, because it is overloaded or in terms of its own type variables: the body must not
+    /// answer differently from the base, so the return type stays gradual. a narrowing return
+    /// type is not copied at all. it is a claim about what the base's body tests, so an override
+    /// that tests something else — or nothing — would be handed a claim it does not make, and
+    /// every call through it would narrow on the strength of it. that one is left to the
+    /// override's own body
+    ///
+    /// `__new__`'s return type is not read off its body. construction reads it structurally — it
+    /// decides whether the result is an instance and so whether `__init__` runs at all — and the
+    /// usual body, `return super().__new__(cls)`, does not currently describe one:
+    /// `object.__new__(cls)` solves to `Never`
+    pub(crate) fn return_type_source(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        without_annotation: bool,
+        overridden: impl FnOnce(FunctionType<'db>) -> OverriddenReturnType<'db>,
+    ) -> ReturnTypeSource<'db> {
+        let header = self.header(db);
+        if header.is_asserts_return
+            || (!without_annotation && self.has_explicit_return_annotation(db))
+        {
+            return ReturnTypeSource::Written;
+        }
+        if header.form == FunctionForm::PropertyGetter
             && let Some(property_type) = self.property_initialiser_type(db)
         {
-            return property_type;
+            return ReturnTypeSource::PropertyInitialiser(property_type);
         }
 
-        let mut return_ty = Type::unknown();
+        let infers = infers_unannotated_signatures(db, self.file(db));
+        let base = if infers {
+            self.overridden_method(db, env)
+                .map_or(OverriddenReturnType::NotOverridden, overridden)
+        } else {
+            OverriddenReturnType::NotOverridden
+        };
+        if let OverriddenReturnType::Declared(base_return) = base
+            && !matches!(base_return, Type::TypeIs(_) | Type::TypeGuard(_))
+        {
+            return ReturnTypeSource::Overridden(base_return);
+        }
 
         if !self.is_overload(db)
             && let Some(previous) = self.previous_overload(db)
         {
             let (overload_list, _) = previous.overloads_and_implementation(db);
             if !overload_list.is_empty() {
-                return_ty = UnionType::from_elements(
+                let returned = UnionType::from_elements(
                     db,
                     env,
                     overload_list.iter().map(|overload| {
@@ -1658,67 +1715,35 @@ impl<'db> OverloadLiteral<'db> {
                             .return_ty
                     }),
                 );
+                if !returned.is_unknown() {
+                    return ReturnTypeSource::Overloads(returned);
+                }
             }
         }
 
-        if db.analysis_settings(self.file(db)).sound_types
-            && let Some(base_signature) = self.overridden_signature(db, env)
-        {
-            return_ty = base_signature.return_ty;
+        if !infers || self.name(db) == "__new__" || base == OverriddenReturnType::Inexpressible {
+            return ReturnTypeSource::Gradual;
         }
-
-        if return_ty.is_unknown()
-            && infers_unannotated_signatures(db, self.file(db))
-            && let OverriddenReturnType::Declared(base_return) =
-                self.overridden_return_type(db, env)
-        {
-            return_ty = base_return;
-        }
-
-        if infers_unannotated_signatures(db, self.file(db))
-            && return_ty.is_unknown()
-            && self.recovers_return_type_from_body(db, env)
-        {
-            return_ty = from_body();
-        }
-
-        return_ty
+        ReturnTypeSource::Body
     }
 
-    /// basedpython: what the method this one overrides says its return type is, for the cases
-    /// where [`OverloadLiteral::overridden_signature`] could not supply the whole signature.
+    /// basedpython: what the method `base` says its return type is, as it would stand for the
+    /// return type of a method that overrides it and writes none
     ///
-    /// Inheriting a whole signature has to refuse a base whose *parameters* mention a type
-    /// variable — the implicit `Self` alone is enough — and a base that is overloaded, since
-    /// neither can be copied wholesale. Neither of those says anything about the return type, and
-    /// a base that declares one is still where a missing annotation should draw from:
     /// `def __len__(self): ...` under `Collection.__len__` returns `int`, not the `None` that
-    /// running its placeholder body would give.
+    /// running its placeholder body would give. this reads `base`'s whole signature, so a base
+    /// that writes no return type either supplies the one it recovers in turn
     fn overridden_return_type(
-        self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
+        base: FunctionType<'db>,
     ) -> OverriddenReturnType<'db> {
-        let Some(base) = self.overridden_method(db, env) else {
-            return OverriddenReturnType::NotOverridden;
-        };
         if base.signature(db).overloads.len() != 1 {
             // which type an overloaded base returns depends on the arguments, so there is no one
             // type to copy
             return OverriddenReturnType::Inexpressible;
         }
-        let return_ty = base_raw_signature(db, base).return_ty;
-        if return_ty.is_unknown() {
-            return OverriddenReturnType::NotOverridden;
-        }
-        // a type variable in the base's return type is bound to the base method's scope, so
-        // copying it here would silently rebind it
-        if any_over_type(db, env, return_ty, false, |ty| {
-            matches!(ty, Type::TypeVar(_))
-        }) {
-            return OverriddenReturnType::Inexpressible;
-        }
-        OverriddenReturnType::Declared(return_ty)
+        OverriddenReturnType::of(db, env, base_raw_signature(db, base).return_ty)
     }
 
     /// basedpython: how to name the method this one overrides, for a diagnostic about it.
@@ -1818,35 +1843,6 @@ impl<'db> OverloadLiteral<'db> {
     fn declares_assertion(self, db: &'db dyn Db) -> bool {
         let module = parsed_module(db, self.python_file(db)).load(db);
         self.node(db, self.file(db), &module).is_asserts_return
-    }
-
-    /// basedpython: whether a return type nobody wrote is read off the body.
-    ///
-    /// It always is, except for `__new__`. Construction *reads* `__new__`'s return type
-    /// structurally — it decides whether the result is an instance and so whether `__init__` runs
-    /// at all — and the usual body, `return super().__new__(cls)`, does not currently describe
-    /// one: `object.__new__(cls)` solves to `Never`. That is a pre-existing gap, reproducible with
-    /// `infer-unannotated-signatures` turned off, so recovering a return type here would only
-    /// hand that gap the power to change what a call means.
-    ///
-    /// A base method that already answers the question is the other exception, even when what it
-    /// answered cannot be written down here — an overloaded base, or one whose return type is in
-    /// terms of its own type variables. The body must not answer differently from the base, so
-    /// where the base's answer cannot be copied the return type stays gradual.
-    ///
-    /// [`OverloadLiteral::raw_signature`] and [`OverloadLiteral::return_type_without_annotation`]
-    /// both consult this, so the signature and the `redundant-return-annotation` lint cannot
-    /// disagree about whether the body was the source.
-    fn recovers_return_type_from_body(
-        self,
-        db: &'db dyn Db,
-        env: &ProgramEnvironment<'db>,
-    ) -> bool {
-        self.name(db) != "__new__"
-            && !matches!(
-                self.overridden_return_type(db, env),
-                OverriddenReturnType::Inexpressible
-            )
     }
 
     /// basedpython: the signature of the method that this method overrides, resolved by looking
@@ -2310,6 +2306,15 @@ pub(super) fn same_module_uncached_raw_signature<'db>(
         .last_definition_raw_signature(db, return_callable_typevar_scope)
 }
 
+/// basedpython: whether `function` is a `decorator def`, which the parser marks with a decorator
+/// no source can spell.
+fn is_decorator_keyword_def(function: &ast::StmtFunctionDef) -> bool {
+    function.decorator_list.iter().any(|decorator| {
+        matches!(&decorator.expression, ast::Expr::Name(name)
+            if name.ctx.is_invalid() && name.id == "decorator_keyword")
+    })
+}
+
 /// basedpython: whether a function in `file` with no annotations is given the signature its body
 /// determines.
 ///
@@ -2329,9 +2334,10 @@ pub(crate) fn infers_unannotated_signatures(db: &dyn Db, file: File) -> bool {
 }
 
 /// basedpython: what the method an unannotated method overrides says about its return type.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum OverriddenReturnType<'db> {
-    /// nothing in the MRO after this class defines the name, so the base has nothing to say
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) enum OverriddenReturnType<'db> {
+    /// the base has nothing to say: nothing in the MRO after this class defines the name, or what
+    /// does leaves its return type gradual
     NotOverridden,
     /// the base declares this, and it can stand as this method's own return type
     Declared(Type<'db>),
@@ -2340,6 +2346,41 @@ enum OverriddenReturnType<'db> {
     /// variables bound to the base's own scope. the base has still answered the question, so the
     /// body must not answer it differently
     Inexpressible,
+}
+
+impl<'db> OverriddenReturnType<'db> {
+    /// what a base whose return type is `return_ty` says about the return type of an override
+    pub(crate) fn of(db: &'db dyn Db, env: &ProgramEnvironment<'db>, return_ty: Type<'db>) -> Self {
+        if return_ty.is_unknown() {
+            return Self::NotOverridden;
+        }
+        // a type variable in the base's return type is bound to the base method's scope, so
+        // copying it here would silently rebind it
+        if any_over_type(db, env, return_ty, false, |ty| {
+            matches!(ty, Type::TypeVar(_))
+        }) {
+            return Self::Inexpressible;
+        }
+        Self::Declared(return_ty)
+    }
+}
+
+/// basedpython: where a function's return type comes from; see
+/// [`OverloadLiteral::return_type_source`]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum ReturnTypeSource<'db> {
+    /// the function writes it: an annotation, or an `asserts` clause, which returns `None`
+    Written,
+    /// the getter of an untyped property is held to the type its initialiser declares
+    PropertyInitialiser(Type<'db>),
+    /// the method this one overrides supplies it
+    Overridden(Type<'db>),
+    /// the union of what the sibling `@overload`s return
+    Overloads(Type<'db>),
+    /// the function's own body
+    Body,
+    /// nothing supplies one, so it stays gradual
+    Gradual,
 }
 
 /// Indicates whether a method is explicitly or implicitly abstract.
@@ -2511,6 +2552,12 @@ impl<'db> FunctionType<'db> {
         self.updated_signatures(db)
             .as_deref()
             .map_or(&[], |updated| &updated.specializations)
+    }
+
+    /// Whether a decorator replaced this function's signature or its implementation's, as opposed
+    /// to only specializing them.
+    pub(super) fn has_replaced_signature(self, db: &'db dyn Db) -> bool {
+        self.updated_signature(db).is_some() || self.updated_implementation_callables(db).is_some()
     }
 
     pub(super) fn updated_signature(self, db: &'db dyn Db) -> Option<&'db CallableSignature<'db>> {
