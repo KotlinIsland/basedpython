@@ -136,7 +136,9 @@ impl BackgroundRequestHandler for TranspileForBuildRequestHandler {
 
         // A panic rather than a failure is reported as a refusal for the reason an error is:
         // a client has one shape to read, and a debugger that got no answer at all would
-        // leave the tree it is about to write into in an unknown state.
+        // leave the tree it is about to write into in an unknown state. Only a panic: an edit
+        // cancelling the transpile never gets here, but unwinds on up to the dispatcher, which
+        // asks again — see the `RetriableRequestHandler` below.
         let Ok(restaged) = restaged else {
             return Ok(Restage::refuse(
                 "the transpiler panicked while re-staging these files",
@@ -181,4 +183,14 @@ fn project_of<'a>(
     }
 }
 
-impl RetriableRequestHandler for TranspileForBuildRequestHandler {}
+/// Retried rather than answered `ContentModified` when an edit lands mid-request.
+///
+/// A reload is a one-shot gesture the user is waiting on, like a rename, and the edit that cancels
+/// it is routinely the user's own: typing and then pressing Reload sends the keystrokes' `didChange`
+/// after the request, and it arrives while the transpile is reading the database the change is
+/// written to. `ContentModified` would hand that race to every client to re-ask, and the re-ask is
+/// this same request against the same new revision — the text the editor now holds, which is what
+/// the request is documented to transpile. So it is asked again here.
+impl RetriableRequestHandler for TranspileForBuildRequestHandler {
+    const RETRY_ON_CANCELLATION: bool = true;
+}
