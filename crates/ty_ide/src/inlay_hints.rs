@@ -3,6 +3,7 @@ use ty_python_semantic::ProgramEnvironment;
 
 use itertools::{Either, Itertools};
 use rustc_hash::FxHashMap;
+use strum_macros::EnumIter;
 
 use crate::importer::{ImportAction, ImportRequest, Importer, MembersInScope};
 use crate::{Db, HasNavigationTargets, NavigationTarget};
@@ -87,7 +88,7 @@ impl InlayHint {
 
         Some(Self {
             position,
-            kind: InlayHintKind::Type,
+            kind: InlayHintKind::VariableType,
             label: InlayHintLabel { parts: label_parts },
             padding_left: false,
             padding_right: false,
@@ -285,7 +286,7 @@ impl InlayHint {
 
         Self {
             position,
-            kind: InlayHintKind::TypeArgument,
+            kind: InlayHintKind::CallTypeArguments,
             label: InlayHintLabel { parts },
             padding_left: false,
             padding_right: false,
@@ -324,7 +325,7 @@ impl InlayHint {
     fn type_argument_name(position: TextSize, name: &str) -> Self {
         Self {
             position,
-            kind: InlayHintKind::TypeArgument,
+            kind: InlayHintKind::TypeArgumentName,
             label: InlayHintLabel {
                 parts: vec![InlayHintLabelPart::new(name), "=".into()],
             },
@@ -436,6 +437,7 @@ impl InlayHint {
     fn implicit_parameters(
         db: &dyn Db,
         env: &ProgramEnvironment<'_>,
+        kind: InlayHintKind,
         position: TextSize,
         parameters: &[(&str, Option<Type>)],
         leading_space: bool,
@@ -459,7 +461,7 @@ impl InlayHint {
 
         Self {
             position,
-            kind: InlayHintKind::ImplicitParameter,
+            kind,
             label: InlayHintLabel { parts },
             padding_left: leading_space,
             padding_right: parameter_follows,
@@ -477,7 +479,7 @@ impl InlayHint {
     ) -> Self {
         Self {
             position,
-            kind: InlayHintKind::Type,
+            kind: InlayHintKind::InferredReturnType,
             label: InlayHintLabel {
                 parts: vec![format!("-> {}", returned.display(db, env)).into()],
             },
@@ -493,12 +495,13 @@ impl InlayHint {
     fn inferred_annotation(
         db: &dyn Db,
         env: &ProgramEnvironment<'_>,
+        kind: InlayHintKind,
         position: TextSize,
         ty: Type,
     ) -> Self {
         Self {
             position,
-            kind: InlayHintKind::Type,
+            kind,
             label: InlayHintLabel {
                 parts: vec![format!(": {}", ty.display(db, env)).into()],
             },
@@ -513,9 +516,25 @@ impl InlayHint {
     }
 }
 
-#[derive(Debug, Clone)]
+/// what a hint in a python or basedpython file is
+///
+/// each kind is switched by a setting of [`InlayHintSettings`] of its own, so a
+/// client can tell every kind apart by [`InlayHintKind::setting`] rather than
+/// by reading its label. the django template hints have kinds of their own, in
+/// `TemplateInlayHintKind`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumIter)]
 pub enum InlayHintKind {
-    Type,
+    /// The type of an unannotated binding
+    VariableType,
+    /// The type of an unannotated lambda parameter
+    LambdaParameterType,
+    /// basedpython: the type a parameter takes from the method it overrides or
+    /// the overloads it implements
+    InheritedParameterType,
+    /// basedpython: the type a property declaration leaves to its accessors
+    PropertyType,
+    /// basedpython: the return type of a `def` that leaves its annotation out
+    InferredReturnType,
     CallArgumentName,
     /// basedpython: a function's inferred exception set
     Raises,
@@ -523,9 +542,10 @@ pub enum InlayHintKind {
     Variance,
     /// basedpython: a type parameter reified without saying so
     Reification,
-    /// The type arguments inferred for a generic call, or the name of the type
-    /// parameter a positional type argument fills
-    TypeArgument,
+    /// The type arguments inferred for a generic call
+    CallTypeArguments,
+    /// The name of the type parameter a positional type argument fills
+    TypeArgumentName,
     /// basedpython: a method that overrides a superclass member without saying so
     Override,
     /// basedpython-ui: the observables a function reads while composing
@@ -542,13 +562,122 @@ pub enum InlayHintKind {
     RevealedType,
     /// The value an enum member takes without the source writing one
     EnumValue,
-    /// basedpython: a parameter the source never spells (`it`, `self`)
+    /// basedpython: the parameters a trailing lambda binds without spelling them:
+    /// `it`, and the receiver named `self` when the callback declares one
     ImplicitParameter,
+    /// basedpython: the `self` an `init(...)` binds without spelling it
+    ImplicitSelf,
     /// basedpython: an argument a call site fills from a `context` declaration
     ImplicitArgument,
     /// basedpython: the default a parameter takes from the method its `def` overrides
     InheritedDefault,
 }
+
+impl InlayHintKind {
+    /// whether a client shows this kind of hint as a parameter rather than as a
+    /// type, which are the only two kinds LSP has
+    pub const fn is_parameter(self) -> bool {
+        match self {
+            InlayHintKind::VariableType
+            | InlayHintKind::LambdaParameterType
+            | InlayHintKind::InheritedParameterType
+            | InlayHintKind::PropertyType
+            | InlayHintKind::InferredReturnType
+            // basedpython: an inferred exception set is a type, like a return type
+            | InlayHintKind::Raises
+            | InlayHintKind::Variance
+            | InlayHintKind::Reification
+            | InlayHintKind::CallTypeArguments
+            | InlayHintKind::TypeArgumentName
+            | InlayHintKind::Override
+            // basedpython-ui: a read set, a dependency set and an invalidation set
+            // are typing facts about the function, and `unstable` is a modifier
+            // like `override`
+            | InlayHintKind::Reads
+            | InlayHintKind::Stability
+            | InlayHintKind::DerivedDeps
+            | InlayHintKind::Invalidates
+            | InlayHintKind::NumericPromotion
+            | InlayHintKind::RevealedType
+            | InlayHintKind::EnumValue => false,
+            InlayHintKind::CallArgumentName
+            | InlayHintKind::ImplicitParameter
+            | InlayHintKind::ImplicitSelf
+            | InlayHintKind::ImplicitArgument
+            | InlayHintKind::InheritedDefault => true,
+        }
+    }
+}
+
+/// the one table saying which setting switches each kind of hint
+///
+/// from it come the kind's `setting()`, the `inlayHints` option a client knows
+/// the setting by, and the `InlayHintSettings` methods that read and write the
+/// field holding it, so a kind cannot be named by one setting and switched by
+/// another. a client that lets its user treat each kind differently needs to
+/// know which kind a hint is, and the label is what a hint says rather than
+/// what it is: a revealed `list[int]` and a call's `[int]` differ by a bracket
+macro_rules! hint_switches {
+    (
+        $kind:ident,
+        $enabled:ident,
+        $set_enabled:ident,
+        { $($variant:ident => $field:ident = $setting:literal,)* }
+    ) => {
+        impl $kind {
+            /// the name of the `inlayHints` option that switches this kind of hint
+            pub const fn setting(self) -> &'static str {
+                match self {
+                    $($kind::$variant => $setting,)*
+                }
+            }
+        }
+
+        impl $crate::InlayHintSettings {
+            /// whether hints of `kind` are shown
+            pub const fn $enabled(&self, kind: $kind) -> bool {
+                match kind {
+                    $($kind::$variant => self.$field,)*
+                }
+            }
+
+            /// show or hide hints of `kind`
+            pub const fn $set_enabled(&mut self, kind: $kind, enabled: bool) {
+                match kind {
+                    $($kind::$variant => self.$field = enabled,)*
+                }
+            }
+        }
+    };
+}
+
+pub(crate) use hint_switches;
+
+hint_switches!(InlayHintKind, enabled, set_enabled, {
+    VariableType => variable_types = "variableTypes",
+    LambdaParameterType => lambda_parameter_types = "lambdaParameterTypes",
+    InheritedParameterType => inherited_parameter_types = "inheritedParameterTypes",
+    PropertyType => property_types = "propertyTypes",
+    InferredReturnType => inferred_return_types = "inferredReturnTypes",
+    CallArgumentName => call_argument_names = "callArgumentNames",
+    Raises => inferred_raises = "inferredRaises",
+    Variance => inferred_variance = "inferredVariance",
+    Reification => inferred_reification = "inferredReification",
+    CallTypeArguments => call_type_arguments = "callTypeArguments",
+    TypeArgumentName => type_argument_names = "typeArgumentNames",
+    Override => inferred_override = "inferredOverride",
+    Reads => inferred_reads = "inferredReads",
+    Stability => parameter_stability = "parameterStability",
+    DerivedDeps => derived_dependencies = "derivedDependencies",
+    Invalidates => inferred_invalidations = "inferredInvalidations",
+    NumericPromotion => numeric_promotions = "numericPromotions",
+    RevealedType => revealed_types = "revealedTypes",
+    EnumValue => enum_values = "enumValues",
+    ImplicitParameter => implicit_parameters = "implicitParameters",
+    ImplicitSelf => implicit_self = "implicitSelf",
+    ImplicitArgument => implicit_arguments = "implicitArguments",
+    InheritedDefault => inherited_parameter_defaults = "inheritedParameterDefaults",
+});
 
 #[derive(Debug, Clone)]
 pub struct InlayHintLabel {
@@ -766,6 +895,14 @@ pub struct InlayHintSettings {
     ///
     /// ```python
     /// x: dict["_KT="str, "_VT="int]
+    /// ```
+    ///
+    /// in a basedpython file it also names the type arguments of the types the
+    /// variable type and call type argument hints show, which are still shown
+    /// and hidden by their own settings
+    ///
+    /// ```by
+    /// x": dict[Key=str, Value=int]" = identity({"a": 1})
     /// ```
     pub type_argument_names: bool,
 
@@ -1330,8 +1467,21 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         self.source_type.is_basedpython()
     }
 
+    /// add `hint` if the setting of its kind is on, answering whether it was added
+    ///
+    /// every hint is added here, so a hint is shown exactly when the one setting
+    /// its kind names is on. the same check made before a hint is worked out
+    /// only saves the work of one that would be dropped
+    fn push(&mut self, hint: InlayHint) -> bool {
+        if !self.settings.enabled(hint.kind) {
+            return false;
+        }
+        self.hints.push(hint);
+        true
+    }
+
     fn add_type_hint(&mut self, expr: &Expr, rhs: &Expr, ty: Type<'db>, allow_edits: bool) {
-        if !self.settings.variable_types {
+        if !self.settings.enabled(InlayHintKind::VariableType) {
             return;
         }
 
@@ -1357,7 +1507,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         if let Some(inlay_hint) =
             InlayHint::variable_type(context, expr, rhs, ty, allow_edits, named_type_arguments)
         {
-            self.hints.push(inlay_hint);
+            self.push(inlay_hint);
         }
     }
 
@@ -1367,7 +1517,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// annotation, before the `:` — so accepting it reads as ordinary source.
     fn add_inferred_raises(&mut self, function: &ast::StmtFunctionDef) {
         let env = &self.model.program_environment();
-        if !self.settings.inferred_raises || function.raises.is_some() {
+        if !self.settings.enabled(InlayHintKind::Raises) || function.raises.is_some() {
             return;
         }
 
@@ -1383,8 +1533,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             .as_deref()
             .map_or_else(|| function.parameters.end(), Ranged::end);
 
-        self.hints
-            .push(InlayHint::inferred_raises(self.db, env, position, raised));
+        self.push(InlayHint::inferred_raises(self.db, env, position, raised));
     }
 
     /// basedpython: hint the variance ty infers for each type parameter of
@@ -1394,7 +1543,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         type_params: Option<&ast::TypeParams>,
         owner: impl FnOnce(&SemanticModel<'db>) -> Option<Type<'db>>,
     ) {
-        if !self.settings.inferred_variance || !self.is_basedpython() {
+        if !self.settings.enabled(InlayHintKind::Variance) || !self.is_basedpython() {
             return;
         }
 
@@ -1427,7 +1576,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
                 continue;
             };
 
-            self.hints.push(InlayHint::inferred_variance(
+            self.push(InlayHint::inferred_variance(
                 type_param.range().start(),
                 variance,
             ));
@@ -1455,7 +1604,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         type_params: Option<&ast::TypeParams>,
         inferred: impl FnOnce(&mut Self) -> Vec<Name>,
     ) {
-        if !self.settings.inferred_reification || !self.is_basedpython() {
+        if !self.settings.enabled(InlayHintKind::Reification) || !self.is_basedpython() {
             return;
         }
 
@@ -1469,8 +1618,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         // everything the parameter's own declaration spells
         for type_param in type_params {
             if inferred.contains(&type_param.name().id) {
-                self.hints
-                    .push(InlayHint::inferred_reification(type_param.range().start()));
+                self.push(InlayHint::inferred_reification(type_param.range().start()));
             }
         }
     }
@@ -1478,7 +1626,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// Hint the value an enum member takes when its declaration does not write
     /// one, at `position` — after `auto()`, or after a `case` variant's name.
     fn add_enum_member_value(&mut self, name: &str, position: TextSize) {
-        if !self.settings.enum_values {
+        if !self.settings.enabled(InlayHintKind::EnumValue) {
             return;
         }
 
@@ -1497,7 +1645,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::enum_member_value(
+        self.push(InlayHint::enum_member_value(
             position,
             &rendered.to_string(),
         ));
@@ -1507,7 +1655,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// member without saying so.
     fn add_inferred_override(&mut self, function: &ast::StmtFunctionDef) {
         let env = &self.model.program_environment();
-        if !self.settings.inferred_override || !self.is_basedpython() {
+        if !self.settings.enabled(InlayHintKind::Override) || !self.is_basedpython() {
             return;
         }
 
@@ -1524,7 +1672,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
         // the range of a `def` excludes its decorators, so this is the modifier
         // position even on a decorated method
-        self.hints.push(InlayHint::inferred_override(
+        self.push(InlayHint::inferred_override(
             function.range().start(),
             superclass
                 .navigation_targets(self.db, env)
@@ -1539,7 +1687,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// annotation and the `raises` clause — and before the `:`, so it reads
     /// as one more clause of the header.
     fn add_inferred_reads(&mut self, function: &ast::StmtFunctionDef) {
-        if !self.settings.inferred_reads || !self.is_basedpython() {
+        if !self.settings.enabled(InlayHintKind::Reads) || !self.is_basedpython() {
             return;
         }
 
@@ -1556,13 +1704,13 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             .or(function.returns.as_deref())
             .map_or_else(|| function.parameters.end(), Ranged::end);
 
-        self.hints.push(InlayHint::inferred_reads(position, &reads));
+        self.push(InlayHint::inferred_reads(position, &reads));
     }
 
     /// basedpython-ui: hint `unstable` before each parameter of the composable
     /// `function` whose declared type the runtime cannot compare.
     fn add_parameter_stability(&mut self, function: &ast::StmtFunctionDef) {
-        if !self.settings.parameter_stability || !self.is_basedpython() {
+        if !self.settings.enabled(InlayHintKind::Stability) || !self.is_basedpython() {
             return;
         }
         if !function
@@ -1584,7 +1732,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
                 continue;
             };
             if parameter_stability(self.db, env, ty) == Some(false) {
-                self.hints.push(InlayHint::unstable_parameter(
+                self.push(InlayHint::unstable_parameter(
                     parameter.name.range().start(),
                 ));
             }
@@ -1594,7 +1742,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// basedpython-ui: hint what a `derived(...)` / `remember(...)` call's
     /// computation depends on, at the end of its line.
     fn add_derived_dependencies(&mut self, call: &ast::ExprCall) {
-        if !self.settings.derived_dependencies || !self.is_basedpython() {
+        if !self.settings.enabled(InlayHintKind::DerivedDeps) || !self.is_basedpython() {
             return;
         }
 
@@ -1602,7 +1750,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::derived_dependencies(
+        self.push(InlayHint::derived_dependencies(
             self.source.line_end(call.range().end()),
             &reads,
         ));
@@ -1619,7 +1767,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// after, so a write in one (`if todos.pop():`) is hinted at the end of
     /// the line it is spelled on.
     fn add_invalidations(&mut self, site: WriteSite<'_>) {
-        if !self.settings.inferred_invalidations || !self.is_basedpython() {
+        if !self.settings.enabled(InlayHintKind::Invalidates) || !self.is_basedpython() {
             return;
         }
 
@@ -1634,14 +1782,13 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             WriteSite::Statement(stmt) => stmt.end(),
             WriteSite::Lambda(lambda) => lambda.end(),
         };
-        self.hints
-            .push(InlayHint::invalidations(position, &invalidations));
+        self.push(InlayHint::invalidations(position, &invalidations));
     }
 
     /// Hint the type arguments inferred for a generic call.
     fn add_call_type_arguments(&mut self, call: &ast::ExprCall, arguments: &[(Name, Type<'db>)]) {
         let env = &self.model.program_environment();
-        if !self.settings.call_type_arguments || arguments.is_empty() {
+        if !self.settings.enabled(InlayHintKind::CallTypeArguments) || arguments.is_empty() {
             return;
         }
 
@@ -1653,7 +1800,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        self.hints.push(InlayHint::call_type_arguments(
+        self.push(InlayHint::call_type_arguments(
             self.db,
             env,
             call.func.range().end(),
@@ -1676,7 +1823,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// — after the explicit arguments, by keyword.
     fn add_implicit_context_arguments(&mut self, call: &ast::ExprCall, callee: Option<Type<'db>>) {
         let env = &self.model.program_environment();
-        if !self.settings.implicit_arguments || !self.is_basedpython() {
+        if !self.settings.enabled(InlayHintKind::ImplicitArgument) || !self.is_basedpython() {
             return;
         }
 
@@ -1709,7 +1856,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             |argument| argument.range().end(),
         );
 
-        self.hints.push(InlayHint::implicit_context_arguments(
+        self.push(InlayHint::implicit_context_arguments(
             position,
             last_explicit.is_some(),
             &labelled,
@@ -1719,7 +1866,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// Hint the name of the type parameter each positional argument of a
     /// subscripted generic fills.
     fn add_type_argument_names(&mut self, subscript: &ast::ExprSubscript) {
-        if !self.settings.type_argument_names {
+        if !self.settings.enabled(InlayHintKind::TypeArgumentName) {
             return;
         }
 
@@ -1738,7 +1885,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         }
 
         for (name, argument) in names.iter().zip(subscript_arguments(&subscript.slice)) {
-            self.hints.push(InlayHint::type_argument_name(
+            self.push(InlayHint::type_argument_name(
                 argument.range().start(),
                 name,
             ));
@@ -1749,7 +1896,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// `float` / `complex` type expression.
     fn add_numeric_promotion(&mut self, expr: &Expr) {
         let env = &self.model.program_environment();
-        if !self.settings.numeric_promotions || !self.in_type_expression {
+        if !self.settings.enabled(InlayHintKind::NumericPromotion) || !self.in_type_expression {
             return;
         }
 
@@ -1769,8 +1916,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints
-            .push(InlayHint::numeric_promotion(expr.range().end(), arms));
+        self.push(InlayHint::numeric_promotion(expr.range().end(), arms));
     }
 
     /// Visit the operands of a union written in a type expression, each knowing what the
@@ -1804,7 +1950,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// Hint the type a `reveal_type` call reveals, at the end of its line.
     fn add_revealed_type(&mut self, call: &ast::ExprCall) {
         let env = &self.model.program_environment();
-        if !self.settings.revealed_types {
+        if !self.settings.enabled(InlayHintKind::RevealedType) {
             return;
         }
 
@@ -1815,7 +1961,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::revealed_type(
+        self.push(InlayHint::revealed_type(
             self.db,
             env,
             self.source.line_end(call.range().end()),
@@ -1834,16 +1980,20 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// head instead.
     fn add_implicit_self(&mut self, parameter: &ast::Parameter) {
         let env = &self.model.program_environment();
-        if !self.settings.implicit_self || !self.is_basedpython() || !parameter.range().is_empty() {
+        if !self.settings.enabled(InlayHintKind::ImplicitSelf)
+            || !self.is_basedpython()
+            || !parameter.range().is_empty()
+        {
             return;
         }
 
         let position = parameter.range().start();
         let ty = hintable_parameter_type(&self.model, parameter);
 
-        self.hints.push(InlayHint::implicit_parameters(
+        self.push(InlayHint::implicit_parameters(
             self.db,
             env,
+            InlayHintKind::ImplicitSelf,
             position,
             &[(parameter.name.as_str(), ty)],
             false,
@@ -1859,7 +2009,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// the colon rather than between the callee and it.
     fn add_trailing_lambda_parameter(&mut self, function: &ast::StmtFunctionDef) {
         let env = &self.model.program_environment();
-        if !self.settings.implicit_parameters {
+        if !self.settings.enabled(InlayHintKind::ImplicitParameter) {
             return;
         }
 
@@ -1877,9 +2027,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        self.hints.push(InlayHint::implicit_parameters(
+        self.push(InlayHint::implicit_parameters(
             self.db,
             env,
+            InlayHintKind::ImplicitParameter,
             colon + TextSize::from(1),
             &parameters,
             true,
@@ -1898,7 +2049,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// Hint the inferred type of an unannotated lambda parameter.
     fn add_lambda_parameter_type(&mut self, parameter: &ast::Parameter) {
         let env = &self.model.program_environment();
-        if !self.settings.lambda_parameter_types
+        if !self.settings.enabled(InlayHintKind::LambdaParameterType)
             || !self.in_lambda
             || parameter.annotation.is_some()
             || parameter.range().is_empty()
@@ -1910,9 +2061,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::inferred_annotation(
+        self.push(InlayHint::inferred_annotation(
             self.db,
             env,
+            InlayHintKind::LambdaParameterType,
             parameter.name.range().end(),
             ty,
         ));
@@ -1925,7 +2077,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// under their own setting.
     fn add_inherited_parameter_type(&mut self, parameter: &ast::Parameter) {
         let env = &self.model.program_environment();
-        if !self.settings.inherited_parameter_types
+        if !self.settings.enabled(InlayHintKind::InheritedParameterType)
             || self.in_lambda
             || parameter.annotation.is_some()
             || parameter.range().is_empty()
@@ -1937,9 +2089,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::inferred_annotation(
+        self.push(InlayHint::inferred_annotation(
             self.db,
             env,
+            InlayHintKind::InheritedParameterType,
             parameter.name.range().end(),
             ty,
         ));
@@ -1948,7 +2101,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// basedpython: hint the default a parameter takes from the method its `def`
     /// overrides, where the parameter's own default would be written.
     fn add_inherited_parameter_default(&mut self, parameter: &ast::ParameterWithDefault) {
-        if !self.settings.inherited_parameter_defaults
+        if !self.settings.enabled(InlayHintKind::InheritedDefault)
             || self.in_lambda
             || parameter.parameter.range().is_empty()
         {
@@ -1959,7 +2112,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::inherited_default(
+        self.push(InlayHint::inherited_default(
             parameter.parameter.range().end(),
             &value,
             parameter.parameter.annotation.is_some(),
@@ -1974,7 +2127,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// `def f() -> int raises TypeError`.
     fn add_inferred_return(&mut self, function: &ast::StmtFunctionDef) {
         let env = &self.model.program_environment();
-        if !self.settings.inferred_return_types
+        if !self.settings.enabled(InlayHintKind::InferredReturnType)
             || function.returns.is_some()
             || function.is_asserts_return
         {
@@ -1988,7 +2141,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         };
 
-        self.hints.push(InlayHint::inferred_return(
+        self.push(InlayHint::inferred_return(
             self.db,
             env,
             function.parameters.end(),
@@ -2002,7 +2155,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// so the type goes where the declaration would have written it — after the
     /// name, exactly as it does for an unannotated variable
     fn add_property_type(&mut self, getter: &ast::StmtFunctionDef) {
-        if !self.settings.property_types
+        if !self.settings.enabled(InlayHintKind::PropertyType)
             || !self.is_basedpython()
             || getter.property_construct_range().is_none()
             // the declaration named a type; the getter carries it as its return
@@ -2020,9 +2173,10 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         };
 
         let env = &self.model.program_environment();
-        self.hints.push(InlayHint::inferred_annotation(
+        self.push(InlayHint::inferred_annotation(
             self.db,
             env,
+            InlayHintKind::PropertyType,
             getter.name.range().end(),
             ty,
         ));
@@ -2041,7 +2195,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         name: &str,
         navigation_target: Option<NavigationTarget>,
     ) -> bool {
-        if !self.settings.call_argument_names {
+        if !self.settings.enabled(InlayHintKind::CallArgumentName) {
             return false;
         }
 
@@ -2051,8 +2205,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
         let inlay_hint = InlayHint::call_argument_name(position, name, navigation_target);
 
-        self.hints.push(inlay_hint);
-        true
+        self.push(inlay_hint)
     }
 }
 
@@ -2722,6 +2875,8 @@ mod tests {
     use ruff_python_parser::parse_unchecked_source;
     use ruff_python_trivia::textwrap::dedent;
     use ruff_text_size::{TextLen, TextSize};
+    use rustc_hash::FxHashSet;
+    use strum::IntoEnumIterator;
 
     use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
     use ty_project::ProjectMetadata;
@@ -3041,6 +3196,119 @@ Source with applied edits:
         «_reads doubled»
         «_depends on count»
         ");
+    }
+
+    /// every kind of hint is shown with only its own setting on, and nothing
+    /// else is. a hint is only ever added when its kind's setting is on, so this
+    /// is what catches a hint whose work is skipped by the wrong setting before
+    /// it is ever made
+    #[test]
+    fn every_kind_is_switched_by_the_setting_it_names() {
+        fn only(kind: InlayHintKind) -> InlayHintSettings {
+            let mut settings = InlayHintSettings::none();
+            settings.set_enabled(kind, true);
+            settings
+        }
+
+        let mut by = basedpython_ui_inlay_hint_test(
+            r#"
+            from basedpython_ui import composable, derived, state, Button, Text
+
+            def identity[T](x: T) -> T:
+                return x
+
+            def two(a: int, b: str) -> None: ...
+
+            x = identity(1)
+            two(1, 'b')
+            y = map(lambda v: v + 1, [1])
+            z: dict[str, int] = {}
+
+            def raiser():
+                raise TypeError
+
+            class Box[T]:
+                def get(self) -> T: ...
+
+            def reify[T]():
+                print(T)
+
+            class Base:
+                def f(self, a: int = 1) -> None: ...
+
+            class Child(Base):
+                def f(self, a) -> None: ...
+
+            reveal_type(x)
+
+            def apply(fn: (int) -> None) -> None:
+                fn(1)
+
+            apply:
+                print(it)
+
+            class Init:
+                init(a: int)
+
+            class Prop:
+                let a
+                    get() = 1
+
+            def ctx(context c: int) -> None: ...
+            context cc = 1
+            ctx()
+
+            enum class Color:
+                case Red, Green
+
+            @composable
+            def Counter(items: list[int]):
+                let count = state(0)
+                let doubled = derived(lambda: count.value * 2)
+                Text(f"{doubled.value}")
+                Button("+"):
+                    count.value += 1
+            "#,
+        );
+        let mut python = inlay_hint_test(
+            "
+            def f(x: float | None) -> None:
+                reveal_type(x)
+            ",
+        );
+
+        let mut produced = FxHashSet::default();
+        for kind in InlayHintKind::iter() {
+            let settings = only(kind);
+            for test in [&mut by, &mut python] {
+                let hints = inlay_hints(
+                    &test.db,
+                    ProgramFile::new(
+                        &test.db,
+                        test.file,
+                        test.db.program_environment().program(&test.db),
+                    ),
+                    test.range,
+                    &settings,
+                );
+                for hint in hints {
+                    assert_eq!(
+                        hint.kind,
+                        kind,
+                        "`{}` produced a {:?} hint",
+                        kind.setting(),
+                        hint.kind,
+                    );
+                    produced.insert(kind);
+                }
+            }
+        }
+
+        let missing: Vec<_> = InlayHintKind::iter()
+            .filter(|kind| !produced.contains(kind))
+            .map(InlayHintKind::setting)
+            .collect();
+        assert!(missing.is_empty(), "no source produced {missing:?}");
     }
 
     /// The same, for the hints a `.py` file gets: one shown at the end of a line
@@ -12091,6 +12359,26 @@ def each(fn: (int) -> None) -> None:
             variable_types: true,
             call_type_arguments: true,
             type_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// with `typeArgumentNames` off, the types other hints show leave their type
+    /// arguments unnamed, while those hints are still shown
+    #[test]
+    fn basedpython_type_arguments_unnamed_with_the_setting_off() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Pair[Key, Value]:
+                init(key: Key, value: Value)
+
+            a = Pair(1, 'x')
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            variable_types: true,
+            call_type_arguments: true,
             ..InlayHintSettings::none()
         }));
     }

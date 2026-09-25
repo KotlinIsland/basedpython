@@ -83,7 +83,10 @@ y = foo(Thing())
             },
             "newText": ": Thing"
           }
-        ]
+        ],
+        "data": {
+          "kind": "variableTypes"
+        }
       },
       {
         "position": {
@@ -126,7 +129,10 @@ y = foo(Thing())
             },
             "newText": "a="
           }
-        ]
+        ],
+        "data": {
+          "kind": "callArgumentNames"
+        }
       }
     ]
     "#);
@@ -174,10 +180,75 @@ def f(x: int) -> None:
         ],
         "kind": 1,
         "textEdits": [],
-        "paddingLeft": true
+        "paddingLeft": true,
+        "data": {
+          "kind": "revealedTypes"
+        }
       }
     ]
     "#);
+
+    Ok(())
+}
+
+/// the basedpython hints are each tagged, as `data.kind`, with the `inlayHints`
+/// option that switches them, though LSP's own `kind` cannot tell them apart:
+/// an implicit `self` is a `Parameter` like a call's argument name, and an
+/// inferred return type is a `Type` like a variable's
+#[test]
+fn a_basedpython_hint_names_the_setting_that_switches_it() -> Result<()> {
+    let workspace_root = SystemPath::new("src");
+    let foo = SystemPath::new("src/foo.by");
+    let foo_content = "\
+class C:
+    init(a: int)
+
+def f():
+    return 1
+";
+
+    let mut server = TestServerBuilder::new()?
+        .with_initialization_options(&ClientOptions::default())
+        .with_workspace(workspace_root, None)?
+        .with_file(foo, foo_content)?
+        .enable_inlay_hints(true)
+        .build()
+        .wait_until_workspaces_are_initialized();
+
+    server.open_text_document(foo, foo_content, 1);
+
+    let hints = server
+        .inlay_hints_request(foo, Range::new(Position::new(0, 0), Position::new(5, 0)))
+        .unwrap();
+
+    let kinds: Vec<_> = hints
+        .iter()
+        .map(|hint| {
+            let label = match &hint.label {
+                lsp_types::Label::String(label) => label.clone(),
+                lsp_types::Label::InlayHintLabelPartList(parts) => {
+                    parts.iter().map(|part| part.value.as_str()).collect()
+                }
+            };
+            (label, hint.kind, hint.data.clone())
+        })
+        .collect();
+
+    assert_eq!(
+        kinds,
+        vec![
+            (
+                "self,".to_string(),
+                Some(lsp_types::InlayHintKind::Parameter),
+                Some(serde_json::json!({ "kind": "implicitSelf" }))
+            ),
+            (
+                "-> 1".to_string(),
+                Some(lsp_types::InlayHintKind::Type),
+                Some(serde_json::json!({ "kind": "inferredReturnTypes" }))
+            ),
+        ]
+    );
 
     Ok(())
 }
@@ -347,7 +418,10 @@ def get_a() -> A:
             },
             "newText": ", A"
           }
-        ]
+        ],
+        "data": {
+          "kind": "variableTypes"
+        }
       }
     ]
     "#);

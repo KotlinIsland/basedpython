@@ -1469,25 +1469,10 @@ pub enum InlayHintKind {
 
 impl From<ty_ide::InlayHintKind> for InlayHintKind {
     fn from(kind: ty_ide::InlayHintKind) -> Self {
-        match kind {
-            ty_ide::InlayHintKind::Type
-            // basedpython: an inferred exception set is a type, like a return type
-            | ty_ide::InlayHintKind::Raises
-            | ty_ide::InlayHintKind::Variance
-            | ty_ide::InlayHintKind::Reification
-            | ty_ide::InlayHintKind::TypeArgument
-            | ty_ide::InlayHintKind::Override
-            | ty_ide::InlayHintKind::Reads
-            | ty_ide::InlayHintKind::Stability
-            | ty_ide::InlayHintKind::DerivedDeps
-            | ty_ide::InlayHintKind::Invalidates
-            | ty_ide::InlayHintKind::NumericPromotion
-            | ty_ide::InlayHintKind::RevealedType
-            | ty_ide::InlayHintKind::EnumValue => Self::Type,
-            ty_ide::InlayHintKind::CallArgumentName
-            | ty_ide::InlayHintKind::ImplicitParameter
-            | ty_ide::InlayHintKind::ImplicitArgument
-            | ty_ide::InlayHintKind::InheritedDefault => Self::Parameter,
+        if kind.is_parameter() {
+            Self::Parameter
+        } else {
+            Self::Type
         }
     }
 }

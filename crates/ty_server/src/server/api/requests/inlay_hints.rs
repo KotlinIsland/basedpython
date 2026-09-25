@@ -86,11 +86,11 @@ impl BackgroundDocumentRequestHandler for InlayHintRequestHandler {
                         .to_lsp_position(db, file, snapshot.encoding())?
                         .local_position(),
                     label: inlay_hint_label(&hint.label, db, snapshot.encoding()),
-                    kind: Some(inlay_hint_kind(&hint.kind)),
+                    kind: Some(inlay_hint_kind(hint.kind)),
                     tooltip: None,
                     padding_left: hint.padding_left.then_some(true),
                     padding_right: hint.padding_right.then_some(true),
-                    data: None,
+                    data: Some(kind_tag(hint.kind.setting())),
                     text_edits: Some(
                         hint.text_edits
                             .into_iter()
@@ -139,34 +139,28 @@ fn template_inlay_hint(
         tooltip: None,
         padding_left: hint.padding_left.then_some(true),
         padding_right: None,
-        data: None,
+        data: Some(kind_tag(hint.kind.setting())),
         text_edits: None,
     })
 }
 
-fn inlay_hint_kind(inlay_hint_kind: &InlayHintKind) -> lsp_types::InlayHintKind {
-    match inlay_hint_kind {
-        InlayHintKind::Type
-        // basedpython: an inferred exception set is a type, like a return type
-        | InlayHintKind::Raises
-        | InlayHintKind::Variance
-        | InlayHintKind::Reification
-        | InlayHintKind::TypeArgument
-        | InlayHintKind::Override
-        // basedpython-ui: a read set, a dependency set and an invalidation set
-        // are typing facts about the function, and `unstable` is a modifier
-        // like `override`
-        | InlayHintKind::Reads
-        | InlayHintKind::Stability
-        | InlayHintKind::DerivedDeps
-        | InlayHintKind::Invalidates
-        | InlayHintKind::NumericPromotion
-        | InlayHintKind::RevealedType
-        | InlayHintKind::EnumValue => lsp_types::InlayHintKind::Type,
-        InlayHintKind::CallArgumentName
-        | InlayHintKind::ImplicitParameter
-        | InlayHintKind::ImplicitArgument
-        | InlayHintKind::InheritedDefault => lsp_types::InlayHintKind::Parameter,
+/// which kind of hint this is, named by the `inlayHints` option that switches
+/// it, as `data.kind`
+///
+/// LSP's own `kind` has two values for the two dozen things these hints are,
+/// and a client that lets its user treat each kind differently has nothing else
+/// to go on but the label, which says what a hint shows rather than what it is.
+/// `data` is otherwise only carried back on `inlayHint/resolve`, which this
+/// server does not offer
+fn kind_tag(setting: &str) -> serde_json::Value {
+    serde_json::json!({ "kind": setting })
+}
+
+fn inlay_hint_kind(inlay_hint_kind: InlayHintKind) -> lsp_types::InlayHintKind {
+    if inlay_hint_kind.is_parameter() {
+        lsp_types::InlayHintKind::Parameter
+    } else {
+        lsp_types::InlayHintKind::Type
     }
 }
 

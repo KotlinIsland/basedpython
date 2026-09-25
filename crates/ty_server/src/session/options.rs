@@ -620,3 +620,48 @@ pub(crate) struct PythonExecutable {
     uri: Option<Uri>,
     sys_prefix: SystemPathBuf,
 }
+
+#[cfg(test)]
+mod tests {
+    use strum::IntoEnumIterator;
+    use ty_ide::{InlayHintKind, InlayHintSettings, TemplateInlayHintKind};
+
+    use super::InlayHintOptions;
+
+    fn settings_with_off(setting: &str) -> InlayHintSettings {
+        serde_json::from_value::<InlayHintOptions>(serde_json::json!({ setting: false }))
+            .unwrap_or_else(|error| panic!("`{setting}` is not an `inlayHints` option: {error}"))
+            .into_settings()
+    }
+
+    /// the name a hint is tagged with is the option a client turns it off by, and
+    /// turning it off hides that kind of hint and no other
+    #[test]
+    fn each_hint_kind_is_turned_off_by_the_option_it_names() {
+        for kind in InlayHintKind::iter() {
+            let settings = settings_with_off(kind.setting());
+            for other in InlayHintKind::iter() {
+                assert_eq!(
+                    settings.enabled(other),
+                    other != kind,
+                    "`{}: false` switched {other:?}",
+                    kind.setting(),
+                );
+            }
+            assert!(TemplateInlayHintKind::iter().all(|other| settings.template_enabled(other)));
+        }
+
+        for kind in TemplateInlayHintKind::iter() {
+            let settings = settings_with_off(kind.setting());
+            for other in TemplateInlayHintKind::iter() {
+                assert_eq!(
+                    settings.template_enabled(other),
+                    other != kind,
+                    "`{}: false` switched {other:?}",
+                    kind.setting(),
+                );
+            }
+            assert!(InlayHintKind::iter().all(|other| settings.enabled(other)));
+        }
+    }
+}
