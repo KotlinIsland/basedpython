@@ -145,6 +145,9 @@ impl RequestHandler for SyntaxOutlineRequestHandler {
 }
 
 impl BackgroundDocumentRequestHandler for SyntaxOutlineRequestHandler {
+    // a parse and what is read off it: the same for a file read from disk as for a buffer
+    const ANSWERS_CLOSED_DOCUMENTS: bool = true;
+
     fn document_uri(params: &SyntaxOutlineParams) -> Cow<'_, Uri> {
         Cow::Borrowed(&params.text_document.uri)
     }

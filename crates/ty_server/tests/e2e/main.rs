@@ -44,6 +44,7 @@ mod implementation;
 mod initialize;
 mod injections;
 mod inlay_hints;
+mod named_text;
 mod notebook;
 mod program_model;
 mod project_server;
@@ -422,6 +423,20 @@ impl TestServer {
         let id = self.next_request_id();
         tracing::debug!("Client sends request `{}` with ID {}", R::METHOD, id);
         let request = lsp_server::Request::new(id.clone(), R::METHOD.to_string(), params);
+        self.send(Message::Request(request));
+        id
+    }
+
+    /// Send a request by method name alone, with params written as json, for a test that asks
+    /// the same thing of several methods.
+    pub(crate) fn send_request_named(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> RequestId {
+        let id = self.next_request_id();
+        tracing::debug!("Client sends request `{method}` with ID {id}");
+        let request = lsp_server::Request::new(id.clone(), method.to_string(), params);
         self.send(Message::Request(request));
         id
     }

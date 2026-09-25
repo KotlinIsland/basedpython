@@ -164,6 +164,10 @@ impl LSPSystem {
         let any_path = AnySystemPath::SystemVirtual(path.to_path_buf());
         self.document(any_path)
     }
+
+    pub(crate) fn uri_to_document(&self, uri: &Uri) -> Option<&Document> {
+        self.index().document(&DocumentKey::from_uri(uri)).ok()
+    }
 }
 
 impl System for LSPSystem {

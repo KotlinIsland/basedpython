@@ -187,6 +187,10 @@ impl Server {
                         api::changes::apply(&mut self.session, &client, &changes);
                     }
 
+                    Action::HoldRequest { request, revision } => {
+                        self.session.hold_request(request, revision, &client);
+                    }
+
                     Action::SuspendWorkspaceDiagnostics(suspended_request) => {
                         self.session.set_suspended_workspace_diagnostics_request(
                             *suspended_request,
@@ -209,6 +213,7 @@ impl Server {
                 Event::PollUvEnvironments { project_root } => {
                     self.session.poll_uv_sync(&client, &project_root);
                 }
+                Event::HeldRequestDue => {}
             }
         }
 
@@ -219,6 +224,14 @@ impl Server {
     ///
     /// Returns `Ok(None)` if the client connection is closed.
     fn next_event(&mut self) -> Result<Option<Event>, crossbeam::channel::RecvError> {
+        // Here rather than after each event, because every event ends up here next — including
+        // the ones that end early — and a request held for a text the last event supplied
+        // should not wait for the event after it.
+        self.session.release_held_requests(&Client::new(
+            self.main_loop_sender.clone(),
+            self.connection.sender.clone(),
+        ));
+
         // We can't queue those into the main loop because that could result in reordering if
         // the `select` below picks a client message first.
         if let Some(deferred) = self.session.take_deferred_messages() {
@@ -238,7 +251,11 @@ impl Server {
         }
 
         let uv_sync = UvSyncWakeups(self.session.uv_sync_wakeups());
-        uv_sync.select(&self.connection.receiver, &self.main_loop_receiver)
+        uv_sync.select(
+            &self.connection.receiver,
+            &self.main_loop_receiver,
+            self.session.held_requests_deadline(),
+        )
     }
 
     /// Schedules a `by` command line's request against a snapshot of this session.
@@ -353,6 +370,13 @@ pub(crate) enum Action {
 
     SuspendWorkspaceDiagnostics(Box<SuspendedWorkspaceDiagnosticRequest>),
 
+    /// Keep a document request until the session holds the text it asks about.
+    HoldRequest {
+        request: lsp_server::Request,
+        /// The session's revision when the request found its text missing.
+        revision: u64,
+    },
+
     /// Re-read the file system, after the server itself changed something in it.
     RescanProjects,
 
@@ -377,6 +401,9 @@ pub(crate) enum Event {
     PollUvEnvironments {
         project_root: SystemPathBuf,
     },
+
+    /// A held request has waited as long as it may. Answered on the way to the next event.
+    HeldRequestDue,
 }
 
 pub(crate) struct SendRequest {
@@ -398,11 +425,13 @@ impl std::fmt::Debug for SendRequest {
 struct UvSyncWakeups(Vec<(SystemPathBuf, crossbeam::channel::Receiver<()>)>);
 
 impl UvSyncWakeups {
-    /// Waits for a project wakeup, client message, or main-loop action.
+    /// Waits for a project wakeup, client message, or main-loop action — or, when a request is
+    /// held, for its `deadline`.
     fn select(
         &self,
         connection: &crossbeam::channel::Receiver<Message>,
         main_loop: &MainLoopReceiver,
+        deadline: Option<std::time::Instant>,
     ) -> Result<Option<Event>, crossbeam::channel::RecvError> {
         let mut select = crossbeam::channel::Select::new_biased();
         for (_, receiver) in &self.0 {
@@ -410,7 +439,15 @@ impl UvSyncWakeups {
         }
         let connection_index = select.recv(connection);
         let main_loop_index = select.recv(main_loop);
-        let operation = select.select();
+        let operation = match deadline {
+            None => select.select(),
+            Some(deadline) => match select.select_deadline(deadline) {
+                Ok(operation) => operation,
+                Err(crossbeam::channel::SelectTimeoutError) => {
+                    return Ok(Some(Event::HeldRequestDue));
+                }
+            },
+        };
         let index = operation.index();
 
         if let Some((project_root, receiver)) = self.0.get(index) {

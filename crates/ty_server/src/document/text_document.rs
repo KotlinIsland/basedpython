@@ -73,13 +73,17 @@ impl LanguageId {
             "python" | "by" | "basedpython" => Self::Python,
             "django-html" | "django-txt" | "htmldjango" | "django" => Self::DjangoTemplate,
             "jinja" | "jinja-html" | "jinja2" => Self::Other,
-            _ => match path.as_system() {
-                Some(path) if ty_ide::is_django_template_path(path) => Self::DjangoTemplate,
-                Some(path) if PySourceType::try_from_path(path.as_std_path()).is_some() => {
-                    Self::Python
-                }
-                _ => Self::Other,
-            },
+            _ => Self::of_path(path),
+        }
+    }
+
+    /// The language of a file by its path alone: what a document the client has given no id
+    /// for — one it has not opened — is written in.
+    pub(crate) fn of_path(path: &AnySystemPath) -> Self {
+        match path.as_system() {
+            Some(path) if ty_ide::is_django_template_path(path) => Self::DjangoTemplate,
+            Some(path) if PySourceType::try_from_path(path.as_std_path()).is_some() => Self::Python,
+            _ => Self::Other,
         }
     }
 

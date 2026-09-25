@@ -1,11 +1,15 @@
+use crate::Db as _;
+use crate::document::TextHash;
 use crate::server::schedule::Task;
-use crate::session::Session;
+use crate::session::{DocumentSnapshot, Session};
 use anyhow::anyhow;
 use lsp_server as server;
 use lsp_server::{ErrorCode, RequestId};
 use lsp_types::{LspNotificationMethod, Notification};
 use lsp_types::{LspRequestMethod, Request};
+use ruff_db::source::source_text;
 use std::panic::{AssertUnwindSafe, UnwindSafe};
+use ty_project::ProjectDatabase;
 
 pub(super) mod changes;
 mod diagnostics;
@@ -384,13 +388,17 @@ where
 }
 
 fn background_document_request_task<R: traits::BackgroundDocumentRequestHandler>(
-    req: server::Request,
+    mut req: server::Request,
     schedule: BackgroundSchedule,
 ) -> Result<Task>
 where
     <<R as RequestHandler>::RequestType as Request>::Params: UnwindSafe,
 {
-    let retry = R::RETRY_ON_CANCELLATION.then(|| req.clone());
+    // Asked again as it came, the named text included, whether after a salsa cancellation or
+    // after being held for its text.
+    let as_sent = req.clone();
+    let retry = R::RETRY_ON_CANCELLATION.then(|| as_sent.clone());
+    let asked = TextHash::take_from(&mut req.params).with_failure_code(ErrorCode::InvalidParams)?;
     let (id, params) = cast_request::<R>(req)?;
 
     Ok(Task::background(schedule, move |session: &Session| {
@@ -400,25 +408,40 @@ where
             .cancellation_token(&id)
             .expect("request should have been tested for cancellation before scheduling");
 
-        let uri = R::document_uri(&params);
+        let uri = R::document_uri(&params).into_owned();
+        let revision = session.revision();
 
-        let Ok(document) = session.snapshot_document(&uri) else {
-            let reason = format!("Document {uri} is not open in the session");
-            tracing::warn!(
-                "Ignoring request id={id} method={} because {reason}",
-                R::METHOD
-            );
-            return Box::new(|client| {
-                respond_silent_error(
-                    id,
-                    client,
-                    lsp_server::ResponseError {
-                        code: lsp_server::ErrorCode::InvalidParams as i32,
-                        message: reason,
-                        data: None,
-                    },
+        let document = match session.snapshot_document(&uri) {
+            Ok(document) => document,
+            Err(_) if asked.is_some() && R::ANSWERS_CLOSED_DOCUMENTS => {
+                match session.snapshot_closed_document(&uri) {
+                    Some(document) => document,
+                    // no file to read: the text can only come from the client opening it
+                    None => return Box::new(move |client| client.hold(as_sent, revision)),
+                }
+            }
+            // the client has said what text it means, and opening the document is how it arrives
+            Err(_) if asked.is_some() => {
+                return Box::new(move |client| client.hold(as_sent, revision));
+            }
+            Err(_) => {
+                let reason = format!("Document {uri} is not open in the session");
+                tracing::warn!(
+                    "Ignoring request id={id} method={} because {reason}",
+                    R::METHOD
                 );
-            });
+                return Box::new(|client| {
+                    respond_silent_error(
+                        id,
+                        client,
+                        lsp_server::ResponseError {
+                            code: lsp_server::ErrorCode::InvalidParams as i32,
+                            message: reason,
+                            data: None,
+                        },
+                    );
+                });
+            }
         };
 
         let path = document.notebook_or_file_path();
@@ -443,6 +466,16 @@ where
 
             if let Err(error) = ruff_db::panic::catch_unwind(|| {
                 salsa::attach(&db, || {
+                    if let Some(asked) = asked
+                        && !holds_text(&db, &document, asked)
+                    {
+                        tracing::debug!(
+                            "Request id={id} method={} asks about text {asked}, which {uri} does not hold yet",
+                            R::METHOD
+                        );
+                        client.hold(as_sent, revision);
+                        return;
+                    }
                     R::handle_request(&id, &db, document, client, params);
                 });
             }) {
@@ -450,6 +483,23 @@ where
             }
         })
     }))
+}
+
+/// Whether the text `document` names is the text a client asked about.
+///
+/// For a document the client has opened, that is the text the client sent, and for a notebook
+/// cell it is the cell's own text rather than the notebook's cells joined together. For one it
+/// has not opened, it is the file as the server reads it. The hash is taken fresh: a text asked
+/// about is usually the one the client just sent, and nothing is cached against it yet.
+fn holds_text(db: &ProjectDatabase, document: &DocumentSnapshot, asked: TextHash) -> bool {
+    match db.document_at_uri(document.uri()) {
+        Some(open) => open
+            .as_text()
+            .is_some_and(|text| TextHash::of(text.contents()) == asked),
+        None => document
+            .to_notebook_or_file(db)
+            .is_some_and(|file| TextHash::of(source_text(db, file).as_str()) == asked),
+    }
 }
 
 fn panic_response<R>(

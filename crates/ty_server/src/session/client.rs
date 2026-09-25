@@ -267,6 +267,12 @@ impl Client {
             .unwrap();
     }
 
+    /// Keeps this request until the session changes, because the text it asks about is not the
+    /// text the session had at `revision`. See [`crate::document::TextHash`].
+    pub(crate) fn hold(&self, request: lsp_server::Request, revision: u64) {
+        self.queue_action(Action::HoldRequest { request, revision });
+    }
+
     pub(crate) fn queue_action(&self, action: Action) {
         self.main_loop_sender.send(Event::Action(action)).unwrap();
     }
