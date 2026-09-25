@@ -15,8 +15,7 @@ use lsp_types::{
 };
 use lsp_types::{DidChangeWatchedFilesNotification, ExitNotification, Notification};
 use lsp_types::{
-    DocumentDiagnosticRequest, RegistrationRequest, Request, ShutdownRequest,
-    UnregistrationRequest, WorkspaceDiagnosticRequest,
+    DocumentDiagnosticRequest, RegistrationRequest, Request, ShutdownRequest, UnregistrationRequest,
 };
 use ruff_db::Db;
 use ruff_db::files::{File, system_path_to_file};
@@ -40,8 +39,8 @@ use crate::capabilities::{ResolvedClientCapabilities, server_diagnostic_options}
 use crate::db::Db as _;
 use crate::document::{DocumentKey, DocumentVersion, LanguageId, NotebookDocument};
 use crate::server::{
-    Action, LazyWorkDoneProgress, ScriptProgress, publish_all_document_diagnostics,
-    publish_diagnostics_if_needed, publish_settings_diagnostics,
+    Action, LazyWorkDoneProgress, ScriptProgress, SuspendedWorkspaceRequestKind,
+    publish_all_document_diagnostics, publish_diagnostics_if_needed, publish_settings_diagnostics,
 };
 use crate::session::client::Client;
 use crate::session::index::Document;
@@ -110,11 +109,21 @@ pub(crate) struct Session {
     /// could result in different workspace diagnostics.
     revision: u64,
 
-    /// A pending workspace diagnostics request because there were no diagnostics
-    /// or no changes when when the request ran last time.
-    /// We'll re-run the request after every change to `Session` (see `revision`)
-    /// to see if there are now changes and, if so, respond to the client.
-    suspended_workspace_diagnostics_request: Option<SuspendedWorkspaceDiagnosticRequest>,
+    /// the workspace diagnostics requests held open, see [`SuspendedWorkspaceDiagnosticRequest`].
+    /// each is run again after every change to `Session` (see `revision`), and answered once
+    /// it has something to say
+    ///
+    /// more than one, because a client can have a `workspace/diagnostic` request held open and
+    /// send a `by/checkWorkspace` beside it, and neither may be dropped: a request that is never
+    /// answered is one the client waits on until it gives up
+    ///
+    /// each is run again on its own, so a change costs one workspace check per request held. the
+    /// checks share the per-file results salsa caches, so the second and later ones mostly redo
+    /// the walk over the project's files and the building of each report. they are not merged
+    /// into one check, because each request compares against its own previous result ids and
+    /// reports its own progress, and is re-dispatched like any other request so that a
+    /// cancellation or a retry reaches it alone
+    suspended_workspace_diagnostics_requests: Vec<SuspendedWorkspaceDiagnosticRequest>,
 
     /// Document requests about a text the session does not hold yet, each waiting for the session
     /// to change. See [`HeldRequest`].
@@ -207,7 +216,7 @@ impl Session {
             request_queue: RequestQueue::new(),
             shutdown_requested: false,
             in_test,
-            suspended_workspace_diagnostics_request: None,
+            suspended_workspace_diagnostics_requests: Vec::new(),
             held_requests: Vec::new(),
             revision: 0,
             registrations: HashSet::new(),
@@ -246,35 +255,42 @@ impl Session {
         self.shutdown_requested = requested;
     }
 
-    pub(crate) fn set_suspended_workspace_diagnostics_request(
+    /// holds `request` open beside any others already held
+    ///
+    /// once the server is shutting down nothing resumes a held request, so one whose check was
+    /// still running when the `shutdown` request came is answered now, as `shutdown` answered
+    /// the ones held before it
+    pub(crate) fn add_suspended_workspace_diagnostics_request(
         &mut self,
         request: SuspendedWorkspaceDiagnosticRequest,
         client: &Client,
     ) {
-        self.suspended_workspace_diagnostics_request = Some(request);
+        if self.shutdown_requested {
+            request.answer_at_shutdown(client);
+            return;
+        }
+        self.suspended_workspace_diagnostics_requests.push(request);
         // Run the suspended workspace diagnostic request immediately in case there
         // were changes since the workspace diagnostics background thread queued
         // the action to suspend the workspace diagnostic request.
-        self.resume_suspended_workspace_diagnostic_request(client);
+        self.resume_suspended_workspace_diagnostic_requests(client);
     }
 
-    pub(crate) fn take_suspended_workspace_diagnostic_request(
+    pub(crate) fn take_suspended_workspace_diagnostic_requests(
         &mut self,
-    ) -> Option<SuspendedWorkspaceDiagnosticRequest> {
-        self.suspended_workspace_diagnostics_request.take()
+    ) -> Vec<SuspendedWorkspaceDiagnosticRequest> {
+        std::mem::take(&mut self.suspended_workspace_diagnostics_requests)
     }
 
-    /// Resumes (retries) the workspace diagnostic request if there
-    /// were any changes to the [`Session`] (the revision got bumped)
-    /// since the workspace diagnostic request ran last time.
+    /// runs each held workspace diagnostics request again if the [`Session`] changed (the
+    /// revision got bumped) since it last ran
     ///
-    /// The workspace diagnostic requests is ignored if the request
-    /// was cancelled in the meantime.
-    pub(crate) fn resume_suspended_workspace_diagnostic_request(&mut self, client: &Client) {
-        self.suspended_workspace_diagnostics_request = self
-            .suspended_workspace_diagnostics_request
-            .take()
-            .and_then(|request| {
+    /// a request the client cancelled in the meantime is dropped
+    pub(crate) fn resume_suspended_workspace_diagnostic_requests(&mut self, client: &Client) {
+        let suspended = std::mem::take(&mut self.suspended_workspace_diagnostics_requests);
+        self.suspended_workspace_diagnostics_requests = suspended
+            .into_iter()
+            .filter_map(|request| {
                 if !self.request_queue.incoming().is_pending(&request.id) {
                     // Clear out the suspended request if the request has been cancelled.
                     tracing::debug!(
@@ -286,7 +302,8 @@ impl Session {
                 }
 
                 request.resume_if_revision_changed(self.revision, client)
-            });
+            })
+            .collect();
     }
 
     /// Keeps `request` until the session changes, because what it asks about is a text the session
@@ -420,7 +437,7 @@ impl Session {
 
         self.bump_revision();
 
-        self.resume_suspended_workspace_diagnostic_request(client);
+        self.resume_suspended_workspace_diagnostic_requests(client);
 
         let capabilities = self.client_capabilities();
         if capabilities.supports_workspace_diagnostic_refresh() {
@@ -2147,14 +2164,18 @@ impl Workspace {
     }
 }
 
-/// A workspace diagnostic request that didn't yield any changes or diagnostic
-/// when it ran the last time.
+/// a workspace diagnostics request held open until the session changes: a `workspace/diagnostic`
+/// request whose last run found nothing that differs from what the client has, or either kind of
+/// request when the workspace was not ready to be checked
 #[derive(Debug)]
 pub(crate) struct SuspendedWorkspaceDiagnosticRequest {
     /// The LSP request id
     pub(crate) id: RequestId,
 
-    /// The params passed to the `workspace/diagnostic` request.
+    /// which request this is
+    pub(crate) kind: SuspendedWorkspaceRequestKind,
+
+    /// the params the request was sent with
     pub(crate) params: serde_json::Value,
 
     /// The session's revision when the request ran the last time.
@@ -2179,11 +2200,16 @@ impl SuspendedWorkspaceDiagnosticRequest {
         tracing::debug!("Resuming workspace diagnostics request after revision bump");
         client.queue_action(Action::RetryRequest(lsp_server::Request {
             id: self.id,
-            method: WorkspaceDiagnosticRequest::METHOD.to_string(),
+            method: self.kind.method(),
             params: self.params,
         }));
 
         None
+    }
+
+    /// answers the request when the server shuts down before it could be run again
+    pub(crate) fn answer_at_shutdown(self, client: &Client) {
+        self.kind.answer_at_shutdown(&self.id, client);
     }
 }
 

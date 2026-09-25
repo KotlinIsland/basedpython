@@ -56,7 +56,7 @@ pub(crate) fn apply(session: &mut Session, client: &Client, changes: &[ChangeEve
 
     // a workspace diagnostic request waiting for the session to change is answered here rather
     // than by a notification's handler: most changes come from the session's own watcher
-    session.resume_suspended_workspace_diagnostic_request(client);
+    session.resume_suspended_workspace_diagnostic_requests(client);
 
     if client_capabilities.supports_workspace_diagnostic_refresh() {
         client.send_request::<types::DiagnosticRefreshRequest>(session, (), |_, ()| {});
