@@ -183,6 +183,10 @@ impl Server {
                         );
                     }
 
+                    Action::ApplyFileSystemChanges(changes) => {
+                        api::changes::apply(&mut self.session, &client, &changes);
+                    }
+
                     Action::SuspendWorkspaceDiagnostics(suspended_request) => {
                         self.session.set_suspended_workspace_diagnostics_request(
                             *suspended_request,
@@ -351,6 +355,9 @@ pub(crate) enum Action {
 
     /// Re-read the file system, after the server itself changed something in it.
     RescanProjects,
+
+    /// Apply what the session's own file system watcher saw.
+    ApplyFileSystemChanges(Vec<ChangeEvent>),
 
     /// Initialize the workspace after the server received
     /// the options from the client.

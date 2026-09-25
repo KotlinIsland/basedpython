@@ -36,6 +36,7 @@ mod completions;
 mod configuration;
 mod data_flow;
 mod django_templates;
+mod file_watching;
 mod folding_range;
 mod goto_definition;
 mod hover;
@@ -233,6 +234,7 @@ impl TestServer {
         initialization_options: Option<Value>,
         env_vars: Vec<(String, Option<String>)>,
         project_server_directory: Option<SystemPathBuf>,
+        watch_file_system: bool,
     ) -> Self {
         setup_tracing();
 
@@ -265,6 +267,7 @@ impl TestServer {
                 test_system,
                 true,
                 project_server_directory,
+                watch_file_system,
             ) {
                 Ok(server) => {
                     if let Err(err) = server.run() {
@@ -1293,6 +1296,7 @@ pub(crate) struct TestServerBuilder {
     client_capabilities: ClientCapabilities,
     env_vars: Vec<(String, Option<String>)>,
     project_server_directory: Option<SystemPathBuf>,
+    watch_file_system: bool,
 }
 
 impl TestServerBuilder {
@@ -1338,6 +1342,7 @@ impl TestServerBuilder {
                 .map(|name| ((*name).to_string(), None))
                 .collect(),
             project_server_directory: None,
+            watch_file_system: false,
         })
     }
 
@@ -1501,13 +1506,19 @@ impl TestServerBuilder {
     }
 
     /// Enable or disable file watching capability
-    #[expect(dead_code)]
+    ///
+    /// Enabled means the client offers to watch files for the server, which it does through
+    /// dynamic registration: a client that watches but cannot be told what to watch is, to the
+    /// server, a client that does not watch.
     pub(crate) fn enable_did_change_watched_files(mut self, enabled: bool) -> Self {
         self.client_capabilities
             .workspace
             .get_or_insert_default()
             .did_change_watched_files = if enabled {
-            Some(DidChangeWatchedFilesClientCapabilities::default())
+            Some(DidChangeWatchedFilesClientCapabilities {
+                dynamic_registration: Some(true),
+                ..DidChangeWatchedFilesClientCapabilities::default()
+            })
         } else {
             None
         };
@@ -1656,6 +1667,15 @@ impl TestServerBuilder {
         self
     }
 
+    /// Start the server watching the file system itself, as `by server` does.
+    ///
+    /// Off by default: a server that watches the test's directory is told about every file the
+    /// test writes, and answers each with refresh requests that a test would then have to claim.
+    pub(crate) fn watch_file_system(mut self) -> Self {
+        self.watch_file_system = true;
+        self
+    }
+
     /// Build the test server
     pub(crate) fn build(self) -> TestServer {
         TestServer::new(
@@ -1665,6 +1685,7 @@ impl TestServerBuilder {
             self.initialization_options,
             self.env_vars,
             self.project_server_directory,
+            self.watch_file_system,
         )
     }
 }

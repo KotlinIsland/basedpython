@@ -56,6 +56,7 @@ impl Server {
         native_system: Arc<dyn System + 'static + Send + Sync + RefUnwindSafe>,
         in_test: bool,
         project_server_directory: Option<SystemPathBuf>,
+        watch_file_system: bool,
     ) -> crate::Result<Self> {
         let (id, init_value) = connection.initialize_start()?;
 
@@ -194,6 +195,7 @@ impl Server {
                 native_system,
                 ClientName::from(client_info),
                 in_test,
+                watch_file_system,
             )?,
         })
     }

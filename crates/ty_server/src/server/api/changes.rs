@@ -35,6 +35,10 @@ pub(crate) fn apply(session: &mut Session, client: &Client, changes: &[ChangeEve
         publish_settings_diagnostics(session, client, root);
     }
 
+    // a change can move what there is to watch: a new virtual environment, a configuration
+    // naming other search paths
+    session.update_file_watcher(client);
+
     if client_capabilities.supports_workspace_diagnostic_refresh() {
         client.send_request::<types::DiagnosticRefreshRequest>(session, (), |_, ()| {});
     } else {

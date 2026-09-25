@@ -3,6 +3,9 @@
     reason = "This implementation is specific to real file systems."
 )]
 
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
 use notify::event::{CreateKind, MetadataKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher as _, recommended_watcher};
 
@@ -18,6 +21,8 @@ where
     H: EventHandler,
 {
     let (sender, receiver) = crossbeam::channel::bounded(20);
+    let aliases = Aliases::default();
+    let debouncer_aliases = aliases.clone();
 
     let debouncer = std::thread::Builder::new()
         .name("watcher::debouncer".to_string())
@@ -31,7 +36,7 @@ where
                     }
                 };
 
-                let mut debouncer = Debouncer::default();
+                let mut debouncer = Debouncer::new(debouncer_aliases.clone());
 
                 debouncer.add_result(event);
 
@@ -89,6 +94,7 @@ where
             watcher,
             debouncer_sender,
             debouncer_thread: debouncer,
+            aliases,
         }),
     })
 }
@@ -109,13 +115,63 @@ struct WatcherInner {
     watcher: RecommendedWatcher,
     debouncer_sender: crossbeam::channel::Sender<DebouncerMessage>,
     debouncer_thread: std::thread::JoinHandle<()>,
+    aliases: Aliases,
+}
+
+/// The watched paths that are not where they resolve to, by the path they resolve to.
+///
+/// macOS reports a change at the path the file system resolved, whatever path was watched:
+/// watching `/tmp/project`, a write to `/tmp/project/a.py` is reported at
+/// `/private/tmp/project/a.py`. The files in a project are known by the paths under its root as
+/// it was given, so an event is put back under the watched path before it is handed on, or it
+/// names a file nothing knows about and is lost.
+#[derive(Clone, Default)]
+struct Aliases(Arc<Mutex<Vec<(PathBuf, SystemPathBuf)>>>);
+
+impl Aliases {
+    fn add(&self, watched: &SystemPath) {
+        // `dunce` keeps windows paths in the `C:\…` spelling events are reported in, rather than
+        // the verbatim `\\?\C:\…` that would make every watched path look like an alias
+        let Ok(resolved) = dunce::canonicalize(watched.as_std_path()) else {
+            return;
+        };
+        if resolved != watched.as_std_path() {
+            self.lock().push((resolved, watched.to_path_buf()));
+        }
+    }
+
+    fn remove(&self, watched: &SystemPath) {
+        self.lock().retain(|(_, path)| path.as_path() != watched);
+    }
+
+    /// `path` under the watched path it was reported for, if it was reported under the path
+    /// that one resolves to.
+    fn to_watched(&self, path: PathBuf) -> PathBuf {
+        let aliases = self.lock();
+        for (resolved, watched) in aliases.iter() {
+            if let Ok(rest) = path.strip_prefix(resolved) {
+                return watched.as_std_path().join(rest);
+            }
+        }
+        path
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<(PathBuf, SystemPathBuf)>> {
+        // the list is only ever pushed to and filtered, so a panic while it was locked cannot
+        // have left it half-updated
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 impl Watcher {
     /// Returns a transaction-like view for updating watched paths in one backend operation.
     pub(crate) fn paths_mut(&mut self) -> WatcherPathsMut<'_> {
+        let inner = self.inner_mut();
         WatcherPathsMut {
-            inner: self.inner_mut().watcher.paths_mut(),
+            inner: inner.watcher.paths_mut(),
+            aliases: &inner.aliases,
         }
     }
 
@@ -163,16 +219,21 @@ impl Watcher {
 
 pub(crate) struct WatcherPathsMut<'a> {
     inner: Box<dyn notify::PathsMut + 'a>,
+    aliases: &'a Aliases,
 }
 
 impl WatcherPathsMut<'_> {
     pub(crate) fn add(&mut self, path: &SystemPath) -> notify::Result<()> {
         tracing::debug!("Watching path: `{path}`");
-        self.inner.add(path.as_std_path(), RecursiveMode::Recursive)
+        self.inner
+            .add(path.as_std_path(), RecursiveMode::Recursive)?;
+        self.aliases.add(path);
+        Ok(())
     }
 
     pub(crate) fn remove(&mut self, path: &SystemPath) -> notify::Result<()> {
         tracing::debug!("Unwatching path: `{path}`");
+        self.aliases.remove(path);
         self.inner.remove(path.as_std_path())
     }
 
@@ -187,13 +248,21 @@ impl Drop for Watcher {
     }
 }
 
-#[derive(Default)]
 struct Debouncer {
     events: Vec<ChangeEvent>,
     rescan_event: Option<ChangeEvent>,
+    aliases: Aliases,
 }
 
 impl Debouncer {
+    fn new(aliases: Aliases) -> Self {
+        Self {
+            events: Vec::new(),
+            rescan_event: None,
+            aliases,
+        }
+    }
+
     fn add_result(&mut self, result: notify::Result<notify::Event>) {
         tracing::trace!("Handling file watcher event: {result:?}");
         match result {
@@ -234,7 +303,7 @@ impl Debouncer {
             return;
         };
 
-        let path = match SystemPathBuf::from_path_buf(path) {
+        let path = match SystemPathBuf::from_path_buf(self.aliases.to_watched(path)) {
             Ok(path) => path,
             Err(path) => {
                 tracing::debug!(
