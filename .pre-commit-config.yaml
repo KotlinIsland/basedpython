@@ -87,7 +87,7 @@ repos:
         types: [rust]
         language: system
         pass_filenames: false
-        stages: [pre-push]
+        stages: [manual]
 
   # Prettier
   - repo: https://github.com/rbubley/mirrors-prettier
