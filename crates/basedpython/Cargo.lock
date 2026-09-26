@@ -170,7 +170,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "basedpython"
-version = "0.0.1-a9"
+version = "0.0.1-b1"
 dependencies = [
  "anyhow",
  "argfile",
@@ -316,6 +316,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "by_transforms",
+ "dunce",
  "rayon",
  "ruff_db",
  "serde",
@@ -3735,6 +3736,7 @@ dependencies = [
  "ty_python_core",
  "ty_python_semantic",
  "ty_vendored",
+ "unicode-width",
 ]
 
 [[package]]
@@ -3771,6 +3773,7 @@ dependencies = [
  "colored",
  "compact_str",
  "crossbeam",
+ "dunce",
  "get-size2",
  "globset",
  "notify",
