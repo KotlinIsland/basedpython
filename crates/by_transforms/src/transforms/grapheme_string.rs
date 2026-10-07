@@ -52,6 +52,8 @@ use ruff_text_size::{Ranged, TextRange};
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::coalesce::is_trivially_pure;
 use super::repeated_underscore::WrittenNames;
+use super::source_util::temporary_name;
+use super::walrus_scope::WalrusRegions;
 use crate::type_info::TypeInfo;
 
 #[expect(
@@ -61,6 +63,7 @@ use crate::type_info::TypeInfo;
 struct GraphemeString<'src> {
     types: &'src dyn TypeInfo,
     written: WrittenNames<'src>,
+    regions: &'src WalrusRegions,
     /// attribute nodes that are the direct callee of a call — the grapheme
     /// properties are not callable there, so they pass through untouched
     callee_attrs: HashSet<TextRange>,
@@ -204,12 +207,26 @@ impl GraphemeString<'_> {
                 Fragment::Lit(" else None)".to_owned()),
             ]
         } else {
-            vec![
-                Fragment::Lit("(Character(_by_graphemes(_s)".to_owned()),
-                Fragment::Lit(format!("[{index}]) if (_s := ")),
-                Fragment::Src(receiver),
-                Fragment::Lit(") else None)".to_owned()),
-            ]
+            let temp = temporary_name(self.written, "s", 0);
+            if self.regions.allows(expr.range()) {
+                vec![
+                    Fragment::Lit(format!(
+                        "(Character(_by_graphemes({temp})[{index}]) if ({temp} := "
+                    )),
+                    Fragment::Src(receiver),
+                    Fragment::Lit(") else None)".to_owned()),
+                ]
+            } else {
+                // where python refuses `:=` (see `WalrusRegions`) the receiver is
+                // bound as a comprehension variable instead
+                vec![
+                    Fragment::Lit(format!(
+                        "([Character(_by_graphemes({temp})[{index}]) for {temp} in ("
+                    )),
+                    Fragment::Src(receiver),
+                    Fragment::Lit(format!(",) if {temp}] or [None])[0]")),
+                ]
+            }
         };
         self.template(expr, fragments);
     }
@@ -296,6 +313,7 @@ impl TypeAwarePass for GraphemeStringPass<'_> {
         let mut inner = GraphemeString {
             types,
             written: self.written,
+            regions: &ctx.walrus_regions,
             callee_attrs: HashSet::new(),
             needs_grapheme_helper: false,
             needs_character_class: false,
@@ -428,7 +446,7 @@ def _by_suffix(_text, _n):
                 "{CHAR_IMPORT}{HELPER}{}",
                 indoc! {"
                     def g() -> str: ...
-                    a = (Character(_by_graphemes(_s)[0]) if (_s := g()) else None)
+                    a = (Character(_by_graphemes(__by_s_0__)[0]) if (__by_s_0__ := g()) else None)
                 "}
             ),
         );
