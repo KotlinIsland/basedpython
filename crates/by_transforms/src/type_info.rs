@@ -438,6 +438,11 @@ pub(crate) trait TypeInfo {
     /// `global`. `None` when ty did not index the reference and cannot place it
     fn resolves_to_module_scope(&self, reference: &ExprName) -> Option<bool>;
 
+    /// whether the name `reference` reads is read in a class body's own scope and may
+    /// find a binding the class body made, which the same read moved into a scope
+    /// nested in the class body would not. `None` when ty did not index the reference
+    fn reads_class_scope_binding(&self, reference: &ExprName) -> Option<bool>;
+
     /// whether `name`, read in an annotation, is a forward reference: a name the
     /// program binds, but not by the point python evaluates the annotation where
     /// it is written, as it does before 3.14 without `from __future__ import
@@ -1216,6 +1221,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn resolves_to_module_scope(&self, reference: &ExprName) -> Option<bool> {
         SemanticModel::resolves_to_module_scope(self, reference)
+    }
+
+    fn reads_class_scope_binding(&self, reference: &ExprName) -> Option<bool> {
+        SemanticModel::reads_class_scope_binding(self, reference)
     }
 
     fn is_forward_reference(&self, name: &ExprName) -> Option<bool> {

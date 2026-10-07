@@ -43,6 +43,26 @@ zip = user?.address.zip
 `a.b?.c` works in the obvious way: only the part after `a.b` is short-circuited
 through a temp variable
 
+where python refuses the walrus — a comprehension's iterable, a comprehension in
+a class body, an annotation, a generic definition's type parameters — the temp is
+a comprehension variable instead, one clause per guard:
+
+```by
+class Report:
+    let streets: list[list[str]?] = [user.address?.streets for _ in range(2)]
+```
+
+transpiles to:
+
+```python
+class Report:
+    streets: list[list[str] | None] = [(([__by_t_0__.streets for __by_t_0__ in (user.address,) if __by_t_0__ is not None] or [None])[0]) for _ in range(2)]
+```
+
+from a comprehension's first iterable in a class body, that moves the chain's
+calls and subscripts out of the class body's scope, so a chain whose call reads a
+name the class body binds there is refused rather than lowered
+
 ## the chain runs to the end of the trailers
 
 a `?.` opens a chain that runs out through every trailer that follows it —
