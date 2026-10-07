@@ -1371,7 +1371,7 @@ pub(crate) fn run_against_source<'a>(
         return_value_use::collect(parsed_handle.suite(), &semantic_model),
     );
     let raises_guard_pass =
-        raises_clause::RaisesGuardPass::new(source_ref, config.runtime_raises_checks);
+        raises_clause::RaisesGuardPass::new(source_ref, written, config.runtime_raises_checks);
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
     let match_type_pass = match_type::MatchTypePass::new(source_ref, written);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref, written, config);
@@ -1407,9 +1407,10 @@ pub(crate) fn run_against_source<'a>(
         kw_subscript::KwSubscriptPass::new(source_ref, written, config.min_version);
     let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
     let reified_generic_pass =
-        reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
+        reified_generic::ReifiedGenericPass::new(source_ref, written, config.min_version);
     let reified_class_pass = reified_class::ReifiedClassPass::new(source_ref, config.min_version);
-    let type_reification_pass = type_reification::TypeReificationPass::new(config.min_version);
+    let type_reification_pass =
+        type_reification::TypeReificationPass::new(written, config.min_version);
     let visibility_rename_pass = visibility_rename::VisibilityRenamePass { written };
     let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref, written);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
@@ -2831,6 +2832,20 @@ mod subsumed_lowerings {
                 "class A:\n    b: int? = None\n\ndef f(a: A?) -> int:\n    return a?.b ?? 1\n",
                 &[],
                 &["?.", "??"],
+            ),
+            case(
+                "ParametricIsPass",
+                &[Lowering::VisibilityRename],
+                "private class Kept:\n    pass\n\ndef f(x: object) -> bool:\n    return x is Kept\n",
+                &["isinstance(x, _Kept)"],
+                &["isinstance(x, Kept)"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::VisibilityRename],
+                "private class Kept:\n    pass\n\ndef f(x: object) -> object:\n    return x cast! Kept\n",
+                &["_checked_cast(x, _Kept)"],
+                &["_checked_cast(x, Kept)"],
             ),
         ]
     }

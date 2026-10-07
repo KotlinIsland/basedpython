@@ -63,6 +63,7 @@ use crate::types::diagnostic::{
 };
 use crate::types::function::{FunctionLiteral, FunctionType, OverloadLiteral};
 use crate::types::generics::{ApplySpecialization, Specialization, enclosing_binding_contexts};
+use crate::types::runtime_spelling::RuntimeSpelling;
 use crate::types::typevar::{BindingContext, BoundTypeVarInstance, TypeVarBoundOrConstraints};
 use crate::types::visitor::any_over_type;
 use crate::types::{
@@ -1137,7 +1138,7 @@ pub struct RaisesRuntimeTarget {
     /// The `isinstance` target with every type parameter widened to its declared
     /// ceiling — what the guard tests when nothing says which type the caller
     /// chose.
-    pub ceiling: String,
+    pub ceiling: RuntimeSpelling,
     /// How to build the exact target at the call, when the clause names a type
     /// parameter that carries a runtime value.
     pub resolved: Option<ResolvedRaisesTarget>,
@@ -1148,7 +1149,7 @@ pub struct RaisesRuntimeTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRaisesTarget {
     /// The target, with each of those parameters spelled by its name.
-    pub expression: String,
+    pub expression: RuntimeSpelling,
     /// The guarded function's own reified parameters, read off the specialization
     /// it is called through.
     pub own: Vec<String>,
@@ -1187,7 +1188,7 @@ pub fn declared_raises_runtime_target<'db>(
     }
     if declared.is_never() {
         return Some(RaisesRuntimeTarget {
-            ceiling: "()".to_string(),
+            ceiling: RuntimeSpelling::text("()"),
             resolved: None,
         });
     }
@@ -1249,7 +1250,7 @@ fn resolved_runtime_target<'db>(
     let mut own = Vec::new();
     let mut receiver = Vec::new();
     let mut reads_any = false;
-    let mut parts: Vec<String> = Vec::new();
+    let mut parts: Vec<RuntimeSpelling> = Vec::new();
     for element in union_elements(db, declared) {
         let part = match element {
             Type::TypeVar(bound_typevar) if let Some(source) = source_of(bound_typevar) => {
@@ -1265,7 +1266,7 @@ fn resolved_runtime_target<'db>(
                     names.push(name.clone());
                 }
                 reads_any = true;
-                name
+                RuntimeSpelling::text(name)
             }
             element => crate::types::soundness::runtime_check_target(
                 db,
@@ -1286,7 +1287,12 @@ fn resolved_runtime_target<'db>(
     // flattening
     let expression = match parts.len() {
         1 => parts.pop()?,
-        _ => format!("({})", parts.join(", ")),
+        _ => {
+            let mut expression = RuntimeSpelling::text("(");
+            expression.push(&RuntimeSpelling::join(parts, ", "));
+            expression.push_str(")");
+            expression
+        }
     };
     Some(ResolvedRaisesTarget {
         expression,

@@ -170,9 +170,10 @@ impl<'a> CastLower<'a> {
         // no parametric claim (or none that can be checked): the shallow
         // `isinstance` target, or the written type when ty offers no faithful one
         match self.types.cast_check_plan(type_arg) {
-            Some(CastCheck::Kind(SoundnessCheck::Isinstance(target))) => {
-                (helper, vec![Fragment::Lit(target.to_string())])
-            }
+            Some(CastCheck::Kind(SoundnessCheck::Isinstance(target))) => (
+                helper,
+                vec![Fragment::Lit(self.written.spelled(&target.spelling()))],
+            ),
             // a `Literal` is a set of values, not a class: `isinstance` against
             // one raises, and testing the values' class would accept every other
             // value of it. the check is membership
@@ -251,6 +252,12 @@ pub(crate) struct CheckedCastPass<'src> {
 }
 
 impl TypeAwarePass for CheckedCastPass<'_> {
+    /// a checked cast prints the type it checks against as the runtime check it builds,
+    /// the emitted name of a `private` class included
+    fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
+        &[super::ast_driver::Lowering::VisibilityRename]
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = CastLower::new(types, self.written);
         for stmt in stmts {

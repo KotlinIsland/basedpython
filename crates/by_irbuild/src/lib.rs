@@ -15662,26 +15662,29 @@ impl Lowering<'_, '_> {
         match target {
             CheckTarget::AnyOf(parts) => parts.iter().any(|part| self.proves(ty, part)),
             CheckTarget::NoneType => *ty == RType::NONE,
-            CheckTarget::Class(name) => match ty {
-                RType::Primitive(primitive) => {
-                    let builtin = match primitive {
-                        Primitive::Int | Primitive::Fixed(_) => "int",
-                        Primitive::Float => "float",
-                        Primitive::Bool | Primitive::Bit => "bool",
-                        Primitive::Str => "str",
-                        Primitive::List => "list",
-                        Primitive::None
-                        | Primitive::Object
-                        | Primitive::Bytes
-                        | Primitive::Dict
-                        | Primitive::Tuple => return false,
-                    };
-                    name == builtin
+            CheckTarget::Class(name) => {
+                let name = name.source();
+                match ty {
+                    RType::Primitive(primitive) => {
+                        let builtin = match primitive {
+                            Primitive::Int | Primitive::Fixed(_) => "int",
+                            Primitive::Float => "float",
+                            Primitive::Bool | Primitive::Bit => "bool",
+                            Primitive::Str => "str",
+                            Primitive::List => "list",
+                            Primitive::None
+                            | Primitive::Object
+                            | Primitive::Bytes
+                            | Primitive::Dict
+                            | Primitive::Tuple => return false,
+                        };
+                        name == builtin
+                    }
+                    RType::Instance { class, .. } => self.extends(class, &name),
+                    RType::Tuple(_) => name == "tuple",
+                    RType::Array(_) => false,
                 }
-                RType::Instance { class, .. } => self.extends(class, name),
-                RType::Tuple(_) => name == "tuple",
-                RType::Array(_) => false,
-            },
+            }
         }
     }
 
@@ -15690,13 +15693,11 @@ impl Lowering<'_, '_> {
     fn resolve_sound_target(&mut self, target: &CheckTarget) -> Lowered<SoundTarget> {
         Ok(match target {
             CheckTarget::Class(name) => {
-                let class = match self.place(name) {
+                let name = name.source();
+                let class = match self.place(&name) {
                     Some(Place::Global { .. }) | None => {
                         let dest = self.builder.temp(RType::OBJECT);
-                        self.builder.push(Op::LoadGlobal {
-                            dest,
-                            name: name.clone(),
-                        });
+                        self.builder.push(Op::LoadGlobal { dest, name });
                         Value::Register(dest)
                     }
                     Some(place) => {

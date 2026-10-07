@@ -24,6 +24,7 @@ use ruff_python_ast::visitor::{
 use ruff_python_ast::{Expr, ModModule, Parameter, Parameters, Stmt};
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange};
+use ty_python_semantic::RuntimeSpelling;
 use ty_python_semantic::types::repeated_underscore::{
     self as decision, UnderscoreLowering, UnderscoreRefusal, callable_parameter_slots,
     lower_repeated_underscores, lowered_parameter_names, parameter_slots,
@@ -610,6 +611,12 @@ impl<'src> WrittenNames<'src> {
             Some(emitted) => emitted.clone(),
             None => super::modifiers::module_private_name(symbol),
         }
+    }
+
+    /// `spelling`, which the checker spelled for this module, as the module is emitted: each
+    /// module-level `private` symbol it reads under the name the symbol is emitted under
+    pub(crate) fn spelled(self, spelling: &RuntimeSpelling) -> String {
+        spelling.spelled(|symbol| self.module_private(symbol))
     }
 
     /// the name a lowering writes `name`, which `module` exports, under — `typing`,

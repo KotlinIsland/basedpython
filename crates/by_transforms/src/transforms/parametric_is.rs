@@ -56,7 +56,9 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, CmpOp, Expr, PySourceType, Stmt};
 use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange};
-use ty_python_semantic::{ArgVariance, ParametricIsPlan, ProtocolMemberCheck, TargetSpelling};
+use ty_python_semantic::{
+    ArgVariance, ParametricIsPlan, ProtocolMemberCheck, RuntimeSpelling, TargetSpelling,
+};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::repeated_underscore::WrittenNames;
@@ -101,9 +103,13 @@ fn variance_code(variance: ArgVariance) -> u8 {
 /// validates the same structural claim. each entry is a kind-tagged tuple:
 /// `(\"attr\", name, type, variance)` or `(\"method\", name, [(type, variance),
 /// …], return_or_None)`
-fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
-    let type_variance = |(expected, variance): &(String, ArgVariance)| {
-        format!("({expected}, {})", variance_code(*variance))
+fn protocol_members_literal(written: WrittenNames, checks: &[ProtocolMemberCheck]) -> String {
+    let type_variance = |(expected, variance): &(RuntimeSpelling, ArgVariance)| {
+        format!(
+            "({}, {})",
+            written.spelled(expected),
+            variance_code(*variance)
+        )
     };
     let entries = checks
         .iter()
@@ -113,7 +119,8 @@ fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
                 expected,
                 variance,
             } => format!(
-                "(\"attr\", {name:?}, {expected}, {})",
+                "(\"attr\", {name:?}, {}, {})",
+                written.spelled(expected),
                 variance_code(*variance)
             ),
             ProtocolMemberCheck::Method { name, params, ret } => {
@@ -269,7 +276,7 @@ fn fragments_for_plan(
                 Fragment::Lit(call.to_owned()),
                 value_ref(),
                 Fragment::Lit(", ".to_owned()),
-                target_fragment(&target, arm),
+                target_fragment(written, &target, arm),
             ];
             frags.push(Fragment::Lit(format!(", {})", variance_tuple(&codes))));
             frags
@@ -277,7 +284,7 @@ fn fragments_for_plan(
         ParametricIsPlan::ProtocolStructural(checks) => {
             needs.protocol_runtime = true;
             needs.references_value = true;
-            let members = protocol_members_literal(&checks);
+            let members = protocol_members_literal(written, &checks);
             vec![
                 Fragment::Lit("_by_protocol_is(".to_owned()),
                 value_ref(),
@@ -303,7 +310,7 @@ fn fragments_for_plan(
                 Fragment::Lit("_by_conforms(".to_owned()),
                 value_ref(),
                 Fragment::Lit(", ".to_owned()),
-                target_fragment(&target, arm),
+                target_fragment(written, &target, arm),
                 Fragment::Lit(format!("{spelled})")),
             ]
         }
@@ -337,7 +344,7 @@ fn fragments_for_plan(
                 value_ref(),
                 Fragment::Lit(", ".to_owned()),
             ];
-            frags.push(target_fragment(&target, arm));
+            frags.push(target_fragment(written, &target, arm));
             frags.push(Fragment::Lit(")".to_owned()));
             frags
         }
@@ -366,7 +373,7 @@ fn fragments_for_plan(
                 Fragment::Lit(format!(") is {} and ", written.builtin(&class))),
                 value_ref(),
                 Fragment::Lit(" == ".to_owned()),
-                target_fragment(&value, arm),
+                target_fragment(written, &value, arm),
                 Fragment::Lit(")".to_owned()),
             ]
         }
@@ -375,7 +382,7 @@ fn fragments_for_plan(
             vec![
                 value_ref(),
                 Fragment::Lit(" is ".to_owned()),
-                target_fragment(&target, arm),
+                target_fragment(written, &target, arm),
             ]
         }
         ParametricIsPlan::Subclass(target) => {
@@ -391,7 +398,7 @@ fn fragments_for_plan(
             )));
             frags.push(value_ref());
             frags.push(Fragment::Lit(", ".to_owned()));
-            frags.push(target_fragment(&target, arm));
+            frags.push(target_fragment(written, &target, arm));
             frags.push(Fragment::Lit("))".to_owned()));
             frags
         }
@@ -436,10 +443,10 @@ fn fragments_for_plan(
 
 /// how a plan's target is written: its own spelling, or the source the target
 /// was written as when the plan carries none
-fn target_fragment(target: &TargetSpelling, arm: &Expr) -> Fragment {
+fn target_fragment(written: WrittenNames, target: &TargetSpelling, arm: &Expr) -> Fragment {
     match target {
         TargetSpelling::Written => Fragment::Src(arm.range()),
-        TargetSpelling::Rebuilt(text) => Fragment::Lit(text.clone()),
+        TargetSpelling::Rebuilt(spelling) => Fragment::Lit(written.spelled(spelling)),
     }
 }
 
@@ -740,12 +747,13 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         Some(super::ast_driver::Lowering::ParametricIs)
     }
 
-    /// the type it tests against is printed as the runtime probe it builds, literals and
-    /// the `None` of an optional included
+    /// the type it tests against is printed as the runtime probe it builds, literals, the
+    /// `None` of an optional and the emitted name of a `private` class included
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
         &[
             super::ast_driver::Lowering::LiteralType,
             super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::VisibilityRename,
         ]
     }
 

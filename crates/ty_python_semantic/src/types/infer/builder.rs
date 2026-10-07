@@ -11164,7 +11164,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         ));
         match runtime_check_target(db, env, self.file(), target) {
             Some(shallow) => diagnostic.info(format_args!(
-                "a runtime check can only test `{shallow}`; the type arguments are assumed"
+                "a runtime check can only test `{}`; the type arguments are assumed",
+                shallow.source()
             )),
             None => diagnostic.info("the type arguments are assumed"),
         }

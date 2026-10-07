@@ -56,6 +56,8 @@ use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, PythonVersion, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange};
 
+use ty_python_semantic::RuntimeSpelling;
+
 use crate::type_info::TypeInfo;
 
 /// the stem of a synthesized type parameter's name. dunder-ish and namespaced
@@ -87,6 +89,9 @@ fn plan(
     if taken.contains(&name) {
         return None;
     }
+    // the rewrite is source the phases after this one read, so a module-level
+    // `private` class is spelled as the source declares it and renamed with every
+    // other reference to it
     let width = union.fixed.len() + 1;
     let arguments: Vec<String> = (0..width)
         .map(|position| {
@@ -97,18 +102,26 @@ fn plan(
                     .fixed
                     .iter()
                     .find(|(at, _)| *at == position)
-                    .map(|(_, text)| text.clone())
+                    .map(|(_, spelling)| spelling.source())
                     .unwrap_or_default()
             }
         })
         .collect();
     Some(Rewrite {
         annotation: annotation.range(),
-        replacement: format!("{}[{}]", union.origin, arguments.join(", ")),
+        replacement: format!("{}[{}]", union.origin.source(), arguments.join(", ")),
         // spelled as a *type mapping*, which is what a union of arms is: the
         // parameter ranges over exactly these types and no others. a bare
         // `: (int, str)` would be a tuple *bound* instead, which no arm satisfies
-        declaration: format!("reified {name} in ({})", union.arms.join(", ")),
+        declaration: format!(
+            "reified {name} in ({})",
+            union
+                .arms
+                .iter()
+                .map(RuntimeSpelling::source)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     })
 }
 

@@ -12,6 +12,7 @@ use ruff_python_parser::parse_expression;
 use ruff_text_size::{Ranged, TextRange};
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index, use_def_map};
+use ty_python_semantic::RuntimeSpelling;
 use ty_python_semantic::types::call_type_forms::CallTypeForm;
 use ty_python_semantic::types::exceptions::RaisesRuntimeTarget;
 use ty_python_semantic::types::ide_support::BaseTypeArgument;
@@ -79,26 +80,43 @@ pub(crate) struct SynthesizedType {
     /// binds further down, or the class being defined, or one nested in it. evaluated there it
     /// raises, so it is written as a string
     pub(crate) forward: bool,
+    /// the module-level `private` classes the text names, each written bare and read
+    /// nowhere in the text but as that class
+    pub(crate) module_private: Vec<String>,
 }
 
 impl SynthesizedType {
     /// the type as the module `written` is of writes it, each of [`Self::typing_names`] under
-    /// the name the lowering imports it by
+    /// the name the lowering imports it by, and each of [`Self::module_private`] under the
+    /// name it is emitted as
     pub(crate) fn text_in(&self, written: WrittenNames) -> String {
         struct Roots<'a> {
             typing_names: &'a [&'static str],
+            module_private: &'a [String],
             written: WrittenNames<'a>,
             edits: Vec<(TextRange, String)>,
+        }
+        impl Roots<'_> {
+            /// the name the module writes `name`, a root the text reads, under
+            fn local(&self, name: &str) -> Option<String> {
+                match name {
+                    _ if self.typing_names.contains(&name) => {
+                        Some(self.written.imported("typing", name))
+                    }
+                    _ if self.module_private.iter().any(|class| class == name) => {
+                        Some(self.written.module_private(name))
+                    }
+                    _ => None,
+                }
+            }
         }
         impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for Roots<'_> {
             fn visit_expr(&mut self, expr: &'ast Expr) {
                 if let Expr::Name(name) = expr
-                    && self.typing_names.contains(&name.id.as_str())
+                    && let Some(local) = self.local(name.id.as_str())
+                    && local != name.id.as_str()
                 {
-                    let local = self.written.imported("typing", name.id.as_str());
-                    if local != name.id.as_str() {
-                        self.edits.push((name.range, local));
-                    }
+                    self.edits.push((name.range, local));
                 }
                 ruff_python_ast::visitor::walk_expr(self, expr);
             }
@@ -108,6 +126,7 @@ impl SynthesizedType {
         };
         let mut roots = Roots {
             typing_names: &self.typing_names,
+            module_private: &self.module_private,
             written,
             edits: Vec::new(),
         };
@@ -284,14 +303,20 @@ pub(crate) trait TypeInfo {
     /// call form when a keyword-variadic pack contributes fields), or `None`
     /// when the call needs no injection or none is possible (ty reports the
     /// latter)
-    fn reified_call_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String>;
+    fn reified_call_specialization(
+        &self,
+        call: &ruff_python_ast::ExprCall,
+    ) -> Option<RuntimeSpelling>;
 
     /// the comma-joined type arguments to inject at a bare constructor call
     /// of a generic class (`A(1)` → `"int"`), or `None` when the callee is
     /// not a generic class literal or the solved specialization has no
     /// runtime spelling — reification of constructors is best-effort, a
     /// missing spelling is never an error
-    fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String>;
+    fn constructor_specialization(
+        &self,
+        call: &ruff_python_ast::ExprCall,
+    ) -> Option<RuntimeSpelling>;
 
     /// when the parameter annotation `annotation` denotes a union of
     /// specializations of one erased origin (`list[int] | list[str]`), how the
@@ -932,11 +957,17 @@ impl TypeInfo for SemanticModel<'_> {
             .is_some_and(|function| function.is_reified(self.db()))
     }
 
-    fn reified_call_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
+    fn reified_call_specialization(
+        &self,
+        call: &ruff_python_ast::ExprCall,
+    ) -> Option<RuntimeSpelling> {
         SemanticModel::reified_call_specialization(self, call)
     }
 
-    fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
+    fn constructor_specialization(
+        &self,
+        call: &ruff_python_ast::ExprCall,
+    ) -> Option<RuntimeSpelling> {
         self.reified_constructor_type_arguments(call)
     }
 
@@ -1783,6 +1814,7 @@ fn spell_for_python<'db>(
         modules,
         typing_names,
         forward,
+        module_private: spelling.module_private_classes,
     };
     resolvable_in_output(
         model,

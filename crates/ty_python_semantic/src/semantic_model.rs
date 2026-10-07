@@ -15,6 +15,7 @@ use ty_module_resolver::{
 };
 
 use crate::Db;
+use crate::RuntimeSpelling;
 use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::place::imported_symbol;
 use crate::place::{builtins_module_scope, implicit_builtins_symbol_scope};
@@ -216,12 +217,11 @@ impl<'db> SemanticModel<'db> {
             .to_instance_approximation(self.db, &self.program_environment())
     }
 
-    /// basedpython: the source text of the specialization step the transpiler
-    /// splices in after the callee of a bare reified-generic call (`f(1)` →
-    /// `"[int]"`). `None` when the call is not a bare reified-generic call or
-    /// no injectable spelling exists — the checker reports the latter as
-    /// `unspecialized-reified-generic`
-    pub fn reified_call_specialization(&self, call: &ast::ExprCall) -> Option<String> {
+    /// basedpython: the specialization step the transpiler splices in after the
+    /// callee of a bare reified-generic call (`f(1)` → `"[int]"`). `None` when
+    /// the call is not a bare reified-generic call or no injectable spelling
+    /// exists — the checker reports the latter as `unspecialized-reified-generic`
+    pub fn reified_call_specialization(&self, call: &ast::ExprCall) -> Option<RuntimeSpelling> {
         let env = &self.program_environment();
         let db = self.db;
         let callee_ty = call.func.inferred_type(self)?;
@@ -1052,7 +1052,10 @@ impl<'db> SemanticModel<'db> {
     /// `None` when the callee is not a generic class literal or no runtime
     /// spelling exists — reification of constructors is best-effort, never
     /// an error
-    pub fn reified_constructor_type_arguments(&self, call: &ast::ExprCall) -> Option<String> {
+    pub fn reified_constructor_type_arguments(
+        &self,
+        call: &ast::ExprCall,
+    ) -> Option<RuntimeSpelling> {
         let env = &self.program_environment();
         let callee_ty = call.func.inferred_type(self)?;
         let class_literal = callee_ty.as_class_literal()?;

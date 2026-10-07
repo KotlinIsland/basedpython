@@ -21,9 +21,10 @@
 //! `T?`, a bare `float`).
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use ruff_python_ast::helpers::MemberVisibility;
-use ruff_python_ast::visitor::{Visitor, walk_stmt};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Parameter, Stmt, StmtFunctionDef};
 use ruff_python_stdlib::basedpython::visibility_rename;
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -34,6 +35,7 @@ use super::mutable_defaults::{parameter_guards, undeclarable_error};
 use super::repeated_underscore::WrittenNames;
 use super::source_util::{PrologueStatement, body_prologue, first_body_statement};
 use super::type_expr_walker::RootKind;
+use super::visibility_rename::renamed_reference;
 use crate::config::Config;
 use crate::type_info::TypeInfo;
 
@@ -60,6 +62,7 @@ impl TypeAwarePass for InitMethod<'_> {
             written: self.written,
             types,
             symbolic_substitutions: ctx.symbolic_substitutions.clone(),
+            module_private: types.private_module_symbols().into_iter().collect(),
             config: &self.config,
             edits: RefCell::new(Vec::new()),
             templates: RefCell::new(Vec::new()),
@@ -134,6 +137,8 @@ struct State<'src> {
     /// line is fresh output, so a fold inside a parameter annotation is dropped
     /// unless it is spliced in here
     symbolic_substitutions: Vec<(TextRange, String)>,
+    /// the module-level names the module declares `private`
+    module_private: HashSet<String>,
     config: &'src Config,
     edits: RefCell<Vec<(TextRange, String)>>,
     templates: RefCell<Vec<(TextRange, Vec<Fragment>)>>,
@@ -184,14 +189,39 @@ impl State<'_> {
     /// verbatim, or the invalid basedpython surface leaks into the `.py` output.
     /// the required imports and any hoisted `Protocol` class come from the
     /// sibling passes' visit of the same parameter annotation, so this only
-    /// needs to reproduce the lowered text. falls back to the source verbatim
-    /// when nothing lowers
+    /// needs to reproduce the lowered text, a name a visibility keyword renamed
+    /// included. falls back to the source verbatim when nothing lowers
     fn lower_annotation(&self, ann: &Expr) -> String {
+        struct Renames<'a, 'src> {
+            state: &'a State<'src>,
+            renames: Vec<(TextRange, String)>,
+        }
+        impl<'ast> Visitor<'ast> for Renames<'_, '_> {
+            fn visit_expr(&mut self, expr: &'ast Expr) {
+                if let Expr::Name(name) = expr
+                    && let Some(renamed) = renamed_reference(
+                        self.state.types,
+                        self.state.written,
+                        &self.state.module_private,
+                        name,
+                    )
+                {
+                    self.renames.push((name.range, renamed));
+                }
+                walk_expr(self, expr);
+            }
+        }
+        let mut renames = Renames {
+            state: self,
+            renames: Vec::new(),
+        };
+        renames.visit_expr(ann);
         let substitutions: Vec<(TextRange, String)> = self
             .symbolic_substitutions
             .iter()
             .filter(|(range, _)| ann.range().contains_range(*range))
             .cloned()
+            .chain(renames.renames)
             .collect();
         lower_type_expr_full(
             self.source,
@@ -458,6 +488,30 @@ mod tests {
             indoc! {"
                 class A:
                     def __init__(self, *args: int, **kwargs: str): ...
+            "},
+        );
+    }
+
+    /// the attribute's annotation names a `private` class the way the parameter's does: by
+    /// the name the class is emitted under, inside a type form the line lowers too
+    #[test]
+    fn a_declared_attribute_names_a_private_class_by_its_emitted_name() {
+        check(
+            indoc! {"
+                private class Kept:
+                    pass
+
+                class Holder:
+                    init(let k: Kept, let ks: list[Kept]?)
+            "},
+            indoc! {"
+                class _Kept:
+                    pass
+
+                class Holder:
+                    def __init__(self, k: _Kept, ks: list[_Kept] | None):
+                        self.k: _Kept = k
+                        self.ks: list[_Kept] | None = ks
             "},
         );
     }
