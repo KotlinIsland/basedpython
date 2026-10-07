@@ -386,6 +386,35 @@ pub(crate) fn resolves_to_module_scope<'db>(
     Some(false)
 }
 
+/// basedpython: whether the name `reference` reads is read in a class body's own
+/// scope and may find a binding the class body made — which the same read, moved
+/// into a scope nested in the class body, would no longer see. a read the body has
+/// not bound on any path resolves outward, as python resolves it, so it answers
+/// `false`. `None` when ty did not index the reference
+pub(crate) fn reads_class_scope_binding<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    reference: &ast::ExprName,
+) -> Option<bool> {
+    let index = crate::semantic_index(db, file);
+    let reference_scope = index.try_expression_scope_id(&ast::ExprRef::from(reference))?;
+    if index.scope(reference_scope).kind() != ScopeKind::Class || !reference.ctx.is_load() {
+        return Some(false);
+    }
+    let scope_id = reference_scope.to_scope_id(db, file);
+    let table = ty_python_core::place_table(db, scope_id);
+    let Some(symbol) = table.symbol_by_name(&reference.id) else {
+        return Some(false);
+    };
+    if symbol.is_global() || symbol.is_nonlocal() || !(symbol.is_bound() || symbol.is_declared()) {
+        return Some(false);
+    }
+    Some(match class_scope_binding(db, scope_id, reference) {
+        ClassBinding::Unbound => false,
+        ClassBinding::Bound | ClassBinding::Maybe => true,
+    })
+}
+
 /// basedpython: how a member reached through a receiver is restricted on one
 /// class the receiver can be
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
