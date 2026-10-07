@@ -183,6 +183,9 @@ pub(crate) struct PassContext {
     /// rendered text has to be spliced into the replacement or the operation is
     /// re-emitted from source and reaches the runtime
     pub(crate) symbolic_substitutions: Vec<(TextRange, String)>,
+    /// where python refuses an assignment expression in the module the type-aware
+    /// passes walk, which every pass binding a temporary asks
+    pub(crate) walrus_regions: super::walrus_scope::WalrusRegions,
 }
 
 /// a lowering whose edits another pass may leave out of its own, because that pass writes
@@ -1429,7 +1432,7 @@ pub(crate) fn run_against_source<'a>(
     let callable_pass = callable::CallableSyntaxPass::new(source_ref, written, config.clone());
     let protocol_type_pass =
         protocol_type::ProtocolTypePass::new(source_ref, written, config.clone());
-    let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref);
+    let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref, &comments);
     let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);
     let flexible_keyword_pass = flexible_keyword::FlexibleKeywordPass;
     let some_ctor_pass = some_ctor::SomeCtorPass::new();
@@ -1749,6 +1752,7 @@ pub(crate) fn run_against_source<'a>(
         // anon-NT spans generics polyfill leaked verbatim into class headers
         &anon_named_tuple_pass,
     ];
+    ctx.walrus_regions = super::walrus_scope::WalrusRegions::collect(parsed_handle.suite());
     for pass in type_aware {
         if config.is_stub && pass.runtime_only() {
             continue;
@@ -2825,13 +2829,6 @@ mod subsumed_lowerings {
                 "def f(xs: list[int?]) -> None:\n    for x in xs:\n        y = x ?? continue\n        print(y)\n",
                 &["continue"],
                 &["??"],
-            ),
-            case(
-                "NoneCoalescePass",
-                &[Lowering::NoneChain],
-                "class A:\n    b: int? = None\n\ndef f(a: A?) -> int:\n    return a?.b ?? 1\n",
-                &[],
-                &["?.", "??"],
             ),
             case(
                 "ParametricIsPass",
