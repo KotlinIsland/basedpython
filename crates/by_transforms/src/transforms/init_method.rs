@@ -385,6 +385,7 @@ impl State<'_> {
                 guards,
                 undeclarable,
             } = parameter_guards(
+                self.source,
                 func,
                 self.written,
                 &super::mutable_defaults::sentinel_name(self.written),

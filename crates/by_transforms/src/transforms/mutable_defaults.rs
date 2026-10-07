@@ -51,7 +51,9 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::repeated_underscore::{WrittenNames, reads_underscore, rebound_underscore};
-use super::source_util::{PrologueStatement, body_prologue, first_body_statement};
+use super::source_util::{
+    PrologueStatement, body_prologue, first_body_statement, standalone_expression,
+};
 use crate::type_info::TypeInfo;
 
 /// what a `_MISSING`-sentinel guard does when the argument was not supplied
@@ -64,7 +66,7 @@ pub(crate) enum Guard {
     Reevaluate {
         name: String,
         sentinel: String,
-        default: TextRange,
+        default: Vec<Fragment>,
     },
     /// raise — the parameter is required, its sentinel default only exists
     /// because python rejects a required parameter after a defaulted one
@@ -103,7 +105,7 @@ impl PrologueStatement for Guard {
                 frags.push(Fragment::Lit(format!(
                     "if {name} is {sentinel}:\n{base}    {name} = "
                 )));
-                frags.push(Fragment::Src(*default));
+                frags.extend(default.iter().cloned());
             }
             Guard::Required {
                 name,
@@ -218,6 +220,7 @@ pub(crate) struct ParameterGuards {
 /// sentinels they re-evaluate — the defaults it writes are never shared between
 /// calls.
 pub(crate) fn parameter_guards(
+    source: &str,
     f: &StmtFunctionDef,
     written_names: WrittenNames,
     sentinel: &str,
@@ -244,7 +247,7 @@ pub(crate) fn parameter_guards(
                         name: crate::python_parameter_name(params, &pw.parameter, written_names)
                             .to_string(),
                         sentinel: sentinel.to_owned(),
-                        default: d.range(),
+                        default: standalone_expression(source, d.range()),
                     });
                 }
             }
@@ -280,7 +283,7 @@ pub(crate) fn parameter_guards(
                     name: crate::python_parameter_name(params, &pw.parameter, written_names)
                         .to_string(),
                     sentinel: sentinel.to_owned(),
-                    default: d.range(),
+                    default: standalone_expression(source, d.range()),
                 });
             }
             Some(_) => {}
@@ -377,6 +380,7 @@ impl MutableDefaults<'_> {
             guards,
             undeclarable,
         } = parameter_guards(
+            self.source,
             f,
             self.written,
             &sentinel_name(self.written),

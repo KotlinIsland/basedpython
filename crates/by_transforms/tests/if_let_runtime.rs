@@ -77,24 +77,42 @@ assert not [name for name in dict(globals()) if name.startswith("_by_if_let")], 
 print("ok")
 "#;
 
-#[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
-fn if_let_chains_run_correctly() {
-    let Some(python) = python() else {
-        eprintln!("skipping `if let` runtime test: no `python3` interpreter found");
-        return;
-    };
+/// a subject and a condition written over several lines inside parentheses, which
+/// are not part of their ranges. the lowering moves each into a statement header it
+/// writes, where it still needs a grouping
+const MULTI_LINE: &str = r#"
+class Box:
+    def __init__(self, value: int | None):
+        self.value = value
 
+def unboxed(b: Box, fallback: bool) -> int:
+    if let int(x) := (
+        b
+        .value
+    ):
+        return x
+    elif (
+        fallback
+        and b.value is None
+    ):
+        return -1
+    return 0
+
+assert unboxed(Box(3), False) == 3, "a subject over several lines"
+assert unboxed(Box(None), True) == -1, "a condition over several lines"
+assert unboxed(Box(None), False) == 0
+
+print("ok")
+"#;
+
+fn run(python: &str, program: &str) {
     let config = Config {
         min_version: PythonVersion::PY313,
         ..Config::default()
     };
-    let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
+    let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(python)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -107,4 +125,33 @@ fn if_let_chains_run_correctly() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn if_let_chains_run_correctly() {
+    let Some(python) = python() else {
+        eprintln!("skipping `if let` runtime test: no `python3` interpreter found");
+        return;
+    };
+
+    run(&python, PROGRAM);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_subject_written_over_several_lines_keeps_its_grouping() {
+    let Some(python) = python() else {
+        eprintln!(
+            "skipping `a_subject_written_over_several_lines_keeps_its_grouping`: no `python3` interpreter found"
+        );
+        return;
+    };
+    run(&python, MULTI_LINE);
 }
