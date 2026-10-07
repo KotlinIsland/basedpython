@@ -104,6 +104,31 @@ impl<'a> StatementVisitor<'a> for RenamedDeclarations {
     }
 }
 
+/// the name the reference `name` is written under, when a visibility keyword renamed what
+/// it reads: a module-level `private` symbol, given the module's `module_private` names, or a
+/// bare name in a class body that is one of the class's own restricted members
+///
+/// a reference is renamed only when it reads the renamed binding — a parameter, a local or a
+/// class attribute that shares the name is a different binding, and renaming it would split
+/// it from its uses — so ty is asked where each resolves
+pub(crate) fn renamed_reference(
+    types: &dyn TypeInfo,
+    written: WrittenNames,
+    module_private: &HashSet<String>,
+    name: &ast::ExprName,
+) -> Option<String> {
+    // a name the parser synthesized has no source to rename
+    if name.ctx == ExprContext::Invalid || name.range.is_empty() {
+        return None;
+    }
+    if module_private.contains(name.id.as_str())
+        && types.resolves_to_module_scope(name) == Some(true)
+    {
+        return Some(written.module_private(name.id.as_str()));
+    }
+    types.class_body_member_name(name)
+}
+
 /// the kind of scope a statement is directly in
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LexicalScope {
@@ -361,25 +386,12 @@ impl<'ast> Visitor<'ast> for Renamer<'_> {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        // a reference to a module-level private symbol is renamed only when it is
-        // one — a parameter, a local or a class attribute that shares the name is a
-        // different binding, and renaming it would split it from its uses — and a
-        // bare name in a class body when it is one of the class's own restricted
-        // members. ty is asked where each resolves
         if let Expr::Name(name) = expr
-            && name.ctx != ExprContext::Invalid
-            // a name the parser synthesized has no source to rename
-            && !name.range.is_empty()
             && !self.declarations.contains(&name.range)
+            && let Some(renamed) =
+                renamed_reference(self.types, self.written, &self.module_private, name)
         {
-            if self.module_private.contains(name.id.as_str())
-                && self.types.resolves_to_module_scope(name) == Some(true)
-            {
-                self.edits
-                    .push((name.range, self.written.module_private(name.id.as_str())));
-            } else if let Some(renamed) = self.types.class_body_member_name(name) {
-                self.edits.push((name.range, renamed));
-            }
+            self.edits.push((name.range, renamed));
         }
         if let Expr::Attribute(attribute) = expr
             && let Some(mangled) = self.types.restricted_member_name(attribute)

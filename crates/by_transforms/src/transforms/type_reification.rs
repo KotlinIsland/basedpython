@@ -78,6 +78,7 @@ use ruff_python_ast::{self as ast, Expr, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::{TypeInfo, trailing_name};
 
 /// dunder assignments whose values static readers (linters, type checkers,
@@ -105,6 +106,7 @@ fn is_version_info(expr: &Expr) -> bool {
 
 struct Reifier<'ti> {
     types: &'ti dyn TypeInfo,
+    written: WrittenNames<'ti>,
     edits: Vec<(TextRange, String)>,
 }
 
@@ -146,7 +148,7 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
                 {
                     self.edits.push((
                         TextRange::empty(call.func.range().end()),
-                        format!("[{arguments}]"),
+                        format!("[{}]", self.written.spelled(&arguments)),
                     ));
                 }
                 walk_expr(self, expr);
@@ -174,17 +176,21 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
     }
 }
 
-pub(crate) struct TypeReificationPass {
+pub(crate) struct TypeReificationPass<'src> {
+    written: WrittenNames<'src>,
     min_version: PythonVersion,
 }
 
-impl TypeReificationPass {
-    pub(crate) fn new(min_version: PythonVersion) -> Self {
-        Self { min_version }
+impl<'src> TypeReificationPass<'src> {
+    pub(crate) fn new(written: WrittenNames<'src>, min_version: PythonVersion) -> Self {
+        Self {
+            written,
+            min_version,
+        }
     }
 }
 
-impl TypeAwarePass for TypeReificationPass {
+impl TypeAwarePass for TypeReificationPass<'_> {
     // the specialization is spelled out so the value a call constructs
     // carries it as the program runs
     fn runtime_only(&self) -> bool {
@@ -197,6 +203,7 @@ impl TypeAwarePass for TypeReificationPass {
         }
         let mut reifier = Reifier {
             types,
+            written: self.written,
             edits: Vec::new(),
         };
         for stmt in stmts {

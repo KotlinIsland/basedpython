@@ -68,6 +68,7 @@ pub use types::reified_infer::{
     ArgVariance, ErasedTargetReason, ErasedUnion, ParametricIsPlan, ProtocolMemberCheck,
     TargetSpelling,
 };
+pub use types::runtime_spelling::RuntimeSpelling;
 pub use types::static_resource::{ResourceError, render_as, resolve_static_resource};
 pub use types::template::finite_string_set;
 pub use types::visibility::private_symbols;

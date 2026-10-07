@@ -21,6 +21,7 @@ use crate::types::literal::LiteralValueTypeKind;
 use crate::types::reified_infer::{
     ArgVariance, parametric_soundness_spelling, protocol_structural_members,
 };
+use crate::types::runtime_spelling::RuntimeSpelling;
 use crate::types::signatures::CallableSignature;
 use crate::types::visitor::any_over_type;
 use crate::types::{ClassLiteral, ClassType, FunctionType, KnownClass, Type};
@@ -28,34 +29,34 @@ use ty_module_resolver::{KnownModule, file_to_module};
 
 /// The second argument of a shallow `isinstance` soundness check.
 ///
-/// Structured rather than spelled, because the transpiler writes it as python source
-/// while the native backend resolves each class and tests against it directly; its
-/// [`Display`](std::fmt::Display) is the spelling.
+/// structured rather than spelled, because the transpiler writes it as python source
+/// while the native backend resolves each class and tests against it directly.
+/// [`Self::spelling`] is how it is written out
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckTarget {
     /// a class, by the name module scope reaches it through: a binding of the
     /// module's own, or a builtin the module leaves unbound
-    Class(String),
+    Class(RuntimeSpelling),
     /// `type(None)`
     NoneType,
     /// any one of several, which `isinstance` accepts as a tuple
     AnyOf(Vec<CheckTarget>),
 }
 
-impl std::fmt::Display for CheckTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl CheckTarget {
+    /// the second argument of the `isinstance` call
+    pub fn spelling(&self) -> RuntimeSpelling {
         match self {
-            Self::Class(name) => f.write_str(name),
-            Self::NoneType => f.write_str("type(None)"),
+            Self::Class(name) => name.clone(),
+            Self::NoneType => RuntimeSpelling::text("type(None)"),
             Self::AnyOf(parts) => {
-                f.write_str("(")?;
-                for (index, part) in parts.iter().enumerate() {
-                    if index > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{part}")?;
-                }
-                f.write_str(")")
+                let mut spelling = RuntimeSpelling::text("(");
+                spelling.push(&RuntimeSpelling::join(
+                    parts.iter().map(Self::spelling),
+                    ", ",
+                ));
+                spelling.push_str(")");
+                spelling
             }
         }
     }
@@ -70,7 +71,10 @@ pub enum CheckKind {
     /// carries `__orig_class__`, its type arguments. `alias` is the runtime
     /// spelling of the specialization (`A[int]`); `variances` is one code per
     /// type parameter (0 invariant, 1 covariant, 2 contravariant, 3 bivariant)
-    Parametric { alias: String, variances: Vec<u8> },
+    Parametric {
+        alias: RuntimeSpelling,
+        variances: Vec<u8>,
+    },
 }
 
 /// How a checked `cast` / `cast?` validates its value against the target type.
@@ -297,8 +301,8 @@ pub(crate) fn runtime_check_target<'db>(
     env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
-) -> Option<String> {
-    target(db, env, file, ty, 0).map(|target| target.to_string())
+) -> Option<RuntimeSpelling> {
+    target(db, env, file, ty, 0).map(|target| target.spelling())
 }
 
 /// The runtime soundness check for a value whose declared type is `ty`.
@@ -476,13 +480,13 @@ fn class_target<'db>(
     file: File,
     literal: ClassLiteral<'db>,
 ) -> Option<CheckTarget> {
-    let name = literal.name(db).as_str();
+    let name = literal.name(db);
     match explicit_global_symbol(db, db.program_file(file), name).place {
         Place::Defined(defined) if defined.ty == Type::ClassLiteral(literal) => {
-            Some(CheckTarget::Class(name.to_owned()))
+            Some(CheckTarget::Class(RuntimeSpelling::global(db, file, name)))
         }
         Place::Undefined if class_is_builtin(db, literal) => {
-            Some(CheckTarget::Class(name.to_owned()))
+            Some(CheckTarget::Class(RuntimeSpelling::text(name.as_str())))
         }
         _ => None,
     }
@@ -497,7 +501,7 @@ fn class_is_builtin<'db>(db: &'db dyn Db, literal: ClassLiteral<'db>) -> bool {
 /// does not rebind that name
 fn builtin_target(db: &dyn Db, file: File, name: &str) -> Option<CheckTarget> {
     match explicit_global_symbol(db, db.program_file(file), name).place {
-        Place::Undefined => Some(CheckTarget::Class(name.to_owned())),
+        Place::Undefined => Some(CheckTarget::Class(RuntimeSpelling::text(name))),
         Place::Defined(_) => None,
     }
 }

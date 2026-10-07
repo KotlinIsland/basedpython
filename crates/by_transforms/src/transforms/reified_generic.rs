@@ -54,6 +54,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::reified::reified_type_param_names;
 
 use super::ast_driver::{PassContext, TypeAwarePass};
+use super::repeated_underscore::WrittenNames;
 use super::source_util::{line_indent, line_start};
 use crate::type_info::TypeInfo;
 
@@ -147,6 +148,7 @@ impl<'ast> Visitor<'ast> for ReifiedGeneric<'_> {
 /// inserts the inferred `[...]` specialization at bare reified call sites
 struct SpecializationInjector<'ti> {
     types: &'ti dyn TypeInfo,
+    written: WrittenNames<'ti>,
     edits: Vec<(TextRange, String)>,
 }
 
@@ -157,8 +159,10 @@ impl<'ast> Visitor<'ast> for SpecializationInjector<'_> {
             && !matches!(call.func.as_ref(), Expr::Subscript(_))
             && let Some(specialization) = self.types.reified_call_specialization(call)
         {
-            self.edits
-                .push((TextRange::empty(call.func.range().end()), specialization));
+            self.edits.push((
+                TextRange::empty(call.func.range().end()),
+                self.written.spelled(&specialization),
+            ));
         }
         walk_expr(self, expr);
     }
@@ -166,13 +170,19 @@ impl<'ast> Visitor<'ast> for SpecializationInjector<'_> {
 
 pub(crate) struct ReifiedGenericPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     min_version: PythonVersion,
 }
 
 impl<'src> ReifiedGenericPass<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        min_version: PythonVersion,
+    ) -> Self {
         Self {
             source,
+            written,
             min_version,
         }
     }
@@ -196,6 +206,7 @@ impl TypeAwarePass for ReifiedGenericPass<'_> {
         // call only when this injection exists, so the two stay in agreement
         let mut injector = SpecializationInjector {
             types,
+            written: self.written,
             edits: Vec::new(),
         };
         for stmt in stmts {

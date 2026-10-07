@@ -520,12 +520,14 @@ impl PrologueStatement for EntryGuard {
 }
 
 /// what the checks a pass decided on are written as
-#[derive(Default)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "independent runtime-helper usage flags, not a state machine"
 )]
-struct Rendered {
+struct Rendered<'src> {
+    /// the module the checks are written into, whose `private` symbols a check
+    /// names as the module is emitted
+    written: WrittenNames<'src>,
     /// each value passed through a call: the span it is at, the text opening the call
     /// and the text closing it
     wraps: Vec<(TextRange, String, String)>,
@@ -543,7 +545,26 @@ struct Rendered {
     used_parametric: bool,
 }
 
-impl Rendered {
+impl<'src> Rendered<'src> {
+    fn new(written: WrittenNames<'src>) -> Self {
+        Self {
+            written,
+            wraps: Vec::new(),
+            guards: Vec::new(),
+            unanchored: Vec::new(),
+            used_iter: false,
+            used_aiter: false,
+            used_iter_p: false,
+            used_aiter_p: false,
+            used_parametric: false,
+        }
+    }
+
+    /// `isinstance`'s second argument for `target`
+    fn target(&self, target: &CheckTarget) -> String {
+        self.written.spelled(&target.spelling())
+    }
+
     /// wrap `expr` in `helper(<expr>, <trailing-args>)`. `trailing`
     /// carries its own leading `, ` (e.g. `", str"` or `", A[int], (0,)"`)
     fn wrap_call(&mut self, expr: &Expr, helper: &str, trailing: &str) {
@@ -564,10 +585,12 @@ impl Rendered {
     fn wrap_check(&mut self, expr: &Expr, plan: &SoundnessCheck) {
         match plan {
             SoundnessCheck::Isinstance(target) => {
+                let target = self.target(target);
                 self.wrap_call(expr, "_soundness_check", &format!(", {target}"));
             }
             SoundnessCheck::Parametric { alias, variances } => {
                 self.used_parametric = true;
+                let alias = self.written.spelled(alias);
                 self.wrap_call(
                     expr,
                     "_soundness_parametric",
@@ -589,7 +612,7 @@ impl Rendered {
                     self.used_iter = true;
                     "_soundness_iter"
                 };
-                (helper, format!(", {target}"))
+                (helper, format!(", {}", self.target(target)))
             }
             SoundnessCheck::Parametric { alias, variances } => {
                 self.used_parametric = true;
@@ -600,7 +623,14 @@ impl Rendered {
                     self.used_iter_p = true;
                     "_soundness_iter_p"
                 };
-                (helper, format!(", {alias}, {}", variance_tuple(variances)))
+                (
+                    helper,
+                    format!(
+                        ", {}, {}",
+                        self.written.spelled(alias),
+                        variance_tuple(variances)
+                    ),
+                )
             }
         };
         self.wrap_call(iterable, helper, &trailing);
@@ -617,11 +647,14 @@ impl Rendered {
     /// the guard statement that validates parameter `name` against `plan`
     fn guard_stmt(&mut self, name: &str, plan: &SoundnessCheck) -> String {
         match plan {
-            SoundnessCheck::Isinstance(target) => format!("_soundness_check({name}, {target})"),
+            SoundnessCheck::Isinstance(target) => {
+                format!("_soundness_check({name}, {})", self.target(target))
+            }
             SoundnessCheck::Parametric { alias, variances } => {
                 self.used_parametric = true;
                 format!(
-                    "_soundness_parametric({name}, {alias}, {})",
+                    "_soundness_parametric({name}, {}, {})",
+                    self.written.spelled(alias),
                     variance_tuple(variances)
                 )
             }
@@ -679,7 +712,7 @@ impl TypeAwarePass for SoundnessPass<'_> {
         if !self.positions.any() {
             return;
         }
-        let mut inner = Rendered::default();
+        let mut inner = Rendered::new(self.written);
         let mut rerendered = Vec::new();
         for (idx, stmt) in stmts.iter().enumerate() {
             let mut walker = Soundness::new(types, self.positions, self.written);
@@ -687,7 +720,7 @@ impl TypeAwarePass for SoundnessPass<'_> {
             // an AST-mutation pass rewrote this statement, and an edit at a node it
             // replaced would be dropped: its checks go into the tree it is printed from
             if ctx.changed.contains(&idx) {
-                let mut rendered = Rendered::default();
+                let mut rendered = Rendered::new(self.written);
                 let mut checks = Vec::new();
                 for site in &walker.sites {
                     match site {

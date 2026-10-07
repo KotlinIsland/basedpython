@@ -469,3 +469,282 @@ fn a_renamed_symbol_never_takes_a_name_the_module_already_has() {
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
     interpreters::ran(&interpreter, target);
 }
+
+/// a module-level `private` class named by the checks a lowering writes from a type rather
+/// than from the source: the soundness checks on a loop, an assignment, a return, an
+/// argument and a projection — through a container, through a private type alias, from a
+/// method of another class, and against a private generic's specialization, by a public
+/// argument and by a private one
+const SOUNDNESS_CHECKS: &str = r#"
+from typing import Any
+
+private class Kept:
+    init(let n: int)
+
+private class Box[T]:
+    init(let v: T)
+
+private type Alias = Kept
+
+private var kept: list[Kept] = [Kept(1), Kept(2)]
+
+def dynamic(value: object) -> Any:
+    return value
+
+def looped() -> int:
+    var sum = 0
+    for one in kept:
+        sum += one.n
+    return sum
+
+def assigned() -> int:
+    k: Kept = dynamic(Kept(3))
+    return k.n
+
+def returned() -> Kept:
+    return dynamic(Kept(4))
+
+def takes(k: Kept) -> int:
+    return k.n
+
+def argument() -> int:
+    return takes(dynamic(Kept(5)))
+
+def projected() -> int:
+    nested: dict[str, list[Kept]] = {"a": [Kept(6)]}
+    return nested["a"][0].n
+
+def aliased() -> int:
+    a: Alias = dynamic(Kept(7))
+    return a.n
+
+class Reader:
+    def read(self) -> int:
+        var sum = 0
+        for one in kept:
+            sum += one.n
+        return sum
+
+def boxed() -> int:
+    boxes: list[Box[int]] = [Box[int](8)]
+    var sum = 0
+    for box in boxes:
+        sum += box.v
+    return sum
+
+def kept_boxes() -> int:
+    boxes: list[Box[Kept]] = [Box[Kept](Kept(9))]
+    var sum = 0
+    for box in boxes:
+        sum += box.v.n
+    return sum
+
+def results() -> list[int]:
+    return [looped(), assigned(), returned().n, argument(), projected(), aliased(), Reader().read(), boxed(), kept_boxes()]
+"#;
+
+const SOUNDNESS_CHECKS_IMPORTER: &str = r#"
+import importlib
+m = importlib.import_module("emitted")
+assert m.results() == [3, 3, 4, 5, 6, 7, 3, 8, 9], m.results()
+m.dynamic = lambda value: "not kept"
+try:
+    m.returned()
+except TypeError as error:
+    assert "_Kept" in str(error), error
+else:
+    raise AssertionError("the return check let a `str` through")
+assert not hasattr(m, "Kept") and not hasattr(m, "Box")
+print("ok")
+"#;
+
+#[test]
+fn a_soundness_check_names_a_private_class_by_its_renamed_binding() {
+    // the program declares a generic class with pep 695 syntax
+    let Some(interpreter) = interpreters::oldest(PythonVersion::PY312, "", "") else {
+        return;
+    };
+    let target = interpreter.version.min(PythonVersion::PY313);
+    let config = Config {
+        min_version: target,
+        ..Config::default()
+    };
+    let transpiled = transpile(SOUNDNESS_CHECKS, &config).expect("transpile should succeed");
+
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    std::fs::write(dir.path().join("emitted.py"), &transpiled).expect("failed to write the module");
+
+    let output = Command::new(&interpreter.command)
+        .arg("-c")
+        .arg(SOUNDNESS_CHECKS_IMPORTER)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn python");
+
+    assert!(
+        output.status.success(),
+        "importing the transpiled module failed on {interpreter}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    interpreters::ran(&interpreter, target);
+}
+
+/// a module-level `private` class named by the other lowerings that write a type out at
+/// runtime: an `is` type test against a class, a generic, a protocol's member and an enum
+/// member, the checked casts, the specialization a reified generic and an erased union are
+/// called with, the guard a `raises` clause is checked by, and the annotation inferred for
+/// a class attribute, which python evaluates as the class body runs
+const RUNTIME_TYPES: &str = r#"
+from enum import Enum
+from typing import Protocol
+
+private class Kept:
+    init(let n: int)
+
+private class Box[T]:
+    init(let v: T)
+
+private class Oops(Exception):
+    pass
+
+class Holder[T]:
+    init(let v: T)
+
+    def kind(self) -> object:
+        return T
+
+def kind_of[T](value: T) -> object:
+    return T
+
+def is_kept(value: object) -> bool:
+    return value is Kept
+
+def is_int_box(value: object) -> bool:
+    return value is Box[int]
+
+private class HasKept(Protocol):
+    k: Kept
+
+    def get(self, other: Kept) -> Kept: ...
+
+class Shaped:
+    k: Kept = Kept(6)
+
+    def get(self, other: Kept) -> Kept:
+        return other
+
+def has_kept(value: object) -> bool:
+    return value is HasKept
+
+private class Color(Enum):
+    RED = 1
+    BLUE = 2
+
+def is_red(value: object) -> bool:
+    return value is Color.RED
+
+def count(values: list[Kept] | list[int]) -> int:
+    return len(values)
+
+def counted() -> int:
+    return count([Kept(7), Kept(8)])
+
+def checked(value: object) -> int:
+    return (value cast! Kept).n
+
+def tried(value: object) -> Kept?:
+    return value cast? Kept
+
+def held() -> object:
+    return Holder(Kept(1)).kind()
+
+def called() -> object:
+    return kind_of(Kept(2))
+
+def fails() -> int raises Oops:
+    raise Oops()
+
+def rethrow[reified E: Exception](error: E) raises E | Oops:
+    raise error
+
+def made() -> Kept:
+    return Kept(5)
+
+class Shelf:
+    var item = made()
+"#;
+
+const RUNTIME_TYPES_IMPORTER: &str = r#"
+import importlib
+m = importlib.import_module("emitted")
+kept = m._Kept(3)
+assert m.is_kept(kept) and not m.is_kept(3)
+assert m.is_int_box(m._Box[int](4)) and not m.is_int_box(m._Box[str]("4"))
+assert m.has_kept(m.Shaped()) and not m.has_kept(object())
+assert m.is_red(m._Color.RED) and not m.is_red(m._Color.BLUE)
+assert m.counted() == 2
+assert m.checked(kept) == 3
+try:
+    m.checked(3)
+except TypeError:
+    pass
+else:
+    raise AssertionError("`cast!` let an `int` through")
+assert m.tried(kept) is kept and m.tried(3) is None
+assert m.held() is m._Kept and m.called() is m._Kept
+try:
+    m.fails()
+except m._Oops:
+    pass
+# the guard reads `E` off the specialization, and tests `(E, _Oops)` rather than the
+# ceiling `Exception`, which would let the `KeyError` through
+for raised in (ValueError("v"), m._Oops()):
+    try:
+        m.rethrow[ValueError](raised)
+    except type(raised):
+        pass
+try:
+    m.rethrow[ValueError](KeyError("k"))
+except AssertionError as error:
+    assert "rethrow raised KeyError" in str(error), error
+else:
+    raise AssertionError("the `raises` guard let a `KeyError` through")
+assert m.Shelf.__annotations__["item"] is m._Kept
+print("ok")
+"#;
+
+#[test]
+fn a_type_written_out_at_runtime_names_a_private_class_by_its_renamed_binding() {
+    // the program declares a generic class with pep 695 syntax
+    let Some(interpreter) = interpreters::oldest(PythonVersion::PY312, "", "") else {
+        return;
+    };
+    let target = interpreter.version.min(PythonVersion::PY313);
+    let config = Config {
+        min_version: target,
+        runtime_raises_checks: true,
+        ..Config::default()
+    };
+    let transpiled = transpile(RUNTIME_TYPES, &config).expect("transpile should succeed");
+
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    std::fs::write(dir.path().join("emitted.py"), &transpiled).expect("failed to write the module");
+
+    let output = Command::new(&interpreter.command)
+        .arg("-c")
+        .arg(RUNTIME_TYPES_IMPORTER)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn python");
+
+    assert!(
+        output.status.success(),
+        "importing the transpiled module failed on {interpreter}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    interpreters::ran(&interpreter, target);
+}

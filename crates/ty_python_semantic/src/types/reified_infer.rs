@@ -36,6 +36,7 @@ use crate::types::generics::{Specialization, combine_use_site_projections};
 use crate::types::instance::Protocol;
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::protocol_class::ReifiedMember;
+use crate::types::runtime_spelling::RuntimeSpelling;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarKind;
 use crate::types::variance::TypeVarVariance;
@@ -92,7 +93,7 @@ pub(crate) fn injectable_call_specialization<'db>(
     function: FunctionType<'db>,
     positional: Vec<Type<'db>>,
     keywords: Vec<(&str, Type<'db>)>,
-) -> Option<String> {
+) -> Option<RuntimeSpelling> {
     let arguments: CallArguments<'_, 'db> = positional
         .into_iter()
         .map(|ty| (Argument::Positional, Some(ty)))
@@ -113,16 +114,22 @@ pub(crate) fn injectable_call_specialization<'db>(
     // declaration order: the wrapper binds them by name, not by slot
     let (fields, positional): (Vec<&TypeArgument>, Vec<&TypeArgument>) =
         rendered.iter().partition(|argument| argument.keyword);
-    let parts: Vec<&str> = positional
-        .into_iter()
-        .chain(fields.iter().copied())
-        .map(|argument| argument.text.as_str())
-        .collect();
-    Some(if fields.is_empty() {
-        format!("[{}]", parts.join(", "))
+    let parts = RuntimeSpelling::join(
+        positional
+            .into_iter()
+            .chain(fields.iter().copied())
+            .map(|argument| argument.text.clone()),
+        ", ",
+    );
+    let (open, close) = if fields.is_empty() {
+        ("[", "]")
     } else {
-        format!(".__getitem__({})", parts.join(", "))
-    })
+        (".__getitem__(", ")")
+    };
+    let mut injected = RuntimeSpelling::text(open);
+    injected.push(&parts);
+    injected.push_str(close);
+    Some(injected)
 }
 
 /// The rendered runtime spellings to inject, in declaration order, from the
@@ -214,9 +221,9 @@ fn rendered_type_arguments<'db>(
 
 /// one rendered argument of an injected specialization
 pub(crate) struct TypeArgument {
-    /// the source text of this argument — `int`, the comma-joined run of a
+    /// the spelling of this argument — `int`, the comma-joined run of a
     /// `*Ts`, or the `foo=int, bar=str` fields of a `**Kwargs` pack
-    text: String,
+    text: RuntimeSpelling,
     /// whether the text is keyword-spelled, and so cannot go in a subscript
     keyword: bool,
 }
@@ -267,15 +274,15 @@ impl ParameterKind {
         }
     }
 
-    /// the source text this parameter's value spells as, or the empty string
-    /// when it stands for no arguments at all
+    /// the spelling of this parameter's value, or the empty spelling when it
+    /// stands for no arguments at all
     fn spelling<'db>(
         self,
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
         file: File,
         ty: Type<'db>,
-    ) -> Option<String> {
+    ) -> Option<RuntimeSpelling> {
         let fields = match self {
             Self::Single => return runtime_spelling(db, env, file, ty),
             Self::Variadic => {
@@ -285,20 +292,24 @@ impl ParameterKind {
                         runtime_spelling(db, env, file, element.promote_in(db, env, file))
                     })
                     .collect::<Option<Vec<_>>>()?;
-                return Some(spellings.join(", "));
+                return Some(RuntimeSpelling::join(spellings, ", "));
             }
             Self::KeywordPack => ty.keyword_pack_fields(db)?,
         };
         let spellings = fields
             .into_iter()
             .map(|(name, field)| {
-                Some(format!(
-                    "{name}={}",
-                    runtime_spelling(db, env, file, field.promote_in(db, env, file))?
-                ))
+                let mut spelling = RuntimeSpelling::text(format!("{name}="));
+                spelling.push(&runtime_spelling(
+                    db,
+                    env,
+                    file,
+                    field.promote_in(db, env, file),
+                )?);
+                Some(spelling)
             })
             .collect::<Option<Vec<_>>>()?;
-        Some(spellings.join(", "))
+        Some(RuntimeSpelling::join(spellings, ", "))
     }
 }
 
@@ -341,9 +352,9 @@ fn runtime_spelling<'db>(
     env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
-) -> Option<String> {
+) -> Option<RuntimeSpelling> {
     if ty.is_none(db) {
-        return Some("None".to_owned());
+        return Some(RuntimeSpelling::text("None"));
     }
     match ty {
         Type::NominalInstance(instance) => spell_class(db, env, file, instance.class(db, env)),
@@ -351,16 +362,16 @@ fn runtime_spelling<'db>(
         // into the enclosing function's closure, and the `generic` wrapper fills
         // that cell with the type argument, so the name evaluates to the type
         Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => {
-            Some(bound_typevar.name(db).to_string())
+            Some(RuntimeSpelling::text(bound_typevar.name(db).as_str()))
         }
-        Type::Union(union) => Some(
+        Type::Union(union) => Some(RuntimeSpelling::join(
             union
                 .elements(db)
                 .iter()
                 .map(|element| runtime_spelling(db, env, file, *element))
-                .collect::<Option<Vec<_>>>()?
-                .join(" | "),
-        ),
+                .collect::<Option<Vec<_>>>()?,
+            " | ",
+        )),
         _ => None,
     }
 }
@@ -370,16 +381,19 @@ fn spell_class<'db>(
     env: &ProgramEnvironment<'db>,
     file: File,
     class: ClassType<'db>,
-) -> Option<String> {
+) -> Option<RuntimeSpelling> {
     match class {
         ClassType::NonGeneric(literal) => spell_class_literal(db, env, file, literal),
         ClassType::Generic(alias) => {
             let origin = ClassLiteral::Static(alias.origin(db));
-            let base = spell_class_literal(db, env, file, origin)?;
+            let mut spelling = spell_class_literal(db, env, file, origin)?;
             let arguments =
                 spell_specialization_arguments(db, env, file, origin, alias.specialization(db))
                     .ok()?;
-            Some(format!("{base}[{arguments}]"))
+            spelling.push_str("[");
+            spelling.push(&arguments);
+            spelling.push_str("]");
+            Some(spelling)
         }
     }
 }
@@ -521,7 +535,7 @@ fn spell_specialization_arguments<'db>(
     file: File,
     origin: ClassLiteral<'db>,
     specialization: Specialization<'db>,
-) -> Result<String, ReifiedInferenceError<'db>> {
+) -> Result<RuntimeSpelling, ReifiedInferenceError<'db>> {
     // the caller may be about to *invent* an `origin[…]` the source never wrote,
     // so it fires only on positive evidence. a wrong yes kills the program at
     // import; a wrong no costs the specialization nothing else can observe
@@ -539,9 +553,9 @@ fn spell_specialization_arguments<'db>(
             .collect::<Option<Vec<_>>>()
             .ok_or(ReifiedInferenceError::NoBinding)?;
         return Ok(if elements.is_empty() {
-            "()".to_owned()
+            RuntimeSpelling::text("()")
         } else {
-            elements.join(", ")
+            RuntimeSpelling::join(elements, ", ")
         });
     }
     let Some(generic_context) = origin.generic_context(db) else {
@@ -579,7 +593,7 @@ fn spell_specialization_arguments<'db>(
             arguments.push(spelling);
         }
     }
-    Ok(arguments.join(", "))
+    Ok(RuntimeSpelling::join(arguments, ", "))
 }
 
 /// The specialization a construction of `class_literal` builds, or the reason
@@ -597,7 +611,7 @@ fn constructor_specialization<'db>(
     file: File,
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
-) -> Result<String, ReifiedInferenceError<'db>> {
+) -> Result<RuntimeSpelling, ReifiedInferenceError<'db>> {
     let Type::NominalInstance(instance) = constructed.promote(db, env) else {
         return Err(ReifiedInferenceError::NoBinding);
     };
@@ -624,7 +638,7 @@ pub(crate) fn constructor_specialization_display<'db>(
     file: File,
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
-) -> Option<String> {
+) -> Option<RuntimeSpelling> {
     constructor_specialization(db, env, file, class_literal, constructed).ok()
 }
 
@@ -647,34 +661,29 @@ pub(crate) fn reified_construction_error<'db>(
     constructor_specialization(db, env, file, class_literal, constructed).err()
 }
 
-/// The full runtime spelling (`list[int]`, `tuple[int, str]`) with which the
-/// transpiler makes a collection literal's inferred element types explicit
-/// (`[1, 2]` → `list[int]([1, 2])`).
-///
-/// `None` when the literal's (literal-promoted) type is not a plain
-/// specialization of the expected builtin: empty or partially-`Unknown`
-/// elements, a `TypedDict`-typed dict display, a shadowed builtin name, or
-/// elements without a runtime spelling.
 /// the class's bare name, provided that name resolves — in the module's
 /// globals, else builtins — to this very class, so the injected expression
-/// evaluates to the intended type object
+/// evaluates to the intended type object. a module-level `private` class is
+/// emitted under a name of the transpiler's, so its name is kept apart for the
+/// transpiler to write ([`RuntimeSpelling::global`])
 fn spell_class_literal<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
     literal: ClassLiteral<'db>,
-) -> Option<String> {
+) -> Option<RuntimeSpelling> {
     let name = literal.name(db);
-    let resolved = global_symbol(db, db.program_file(file), name)
+    if let Some(global) = global_symbol(db, db.program_file(file), name)
         .place
         .ignore_possibly_undefined()
-        .or_else(|| {
-            builtins_symbol(db, env, name)
-                .place
-                .ignore_possibly_undefined()
-        })?;
-    let resolved_literal = resolved.as_class_literal()?;
-    (resolved_literal == literal).then(|| name.to_string())
+    {
+        return (global.as_class_literal()? == literal)
+            .then(|| RuntimeSpelling::global(db, file, name));
+    }
+    let builtin = builtins_symbol(db, env, name)
+        .place
+        .ignore_possibly_undefined()?;
+    (builtin.as_class_literal()? == literal).then(|| RuntimeSpelling::text(name.as_str()))
 }
 
 /// How a parametric type test (`x is C[args]`, keyword form) resolves.
@@ -826,7 +835,7 @@ pub enum TargetSpelling {
     Written,
     /// nothing in the source spells this target on its own — one arm of a union
     /// the source named with a single word — so it is rebuilt
-    Rebuilt(String),
+    Rebuilt(RuntimeSpelling),
 }
 
 /// basedpython: one protocol member a parametric `is`-test checks structurally
@@ -840,7 +849,7 @@ pub enum ProtocolMemberCheck {
         name: String,
         /// a python expression evaluating, in the checked module's scope, to the
         /// member's specialized type (`int`, `list[str]`)
-        expected: String,
+        expected: RuntimeSpelling,
         variance: ArgVariance,
     },
     /// a method member: each declared positional parameter (contravariant) and,
@@ -850,10 +859,10 @@ pub enum ProtocolMemberCheck {
         name: String,
         /// per-parameter `(specialized type spelling, variance)`, in declaration
         /// order after `self` — always contravariant
-        params: Vec<(String, ArgVariance)>,
+        params: Vec<(RuntimeSpelling, ArgVariance)>,
         /// the return `(specialized type spelling, variance)` — covariant, or
         /// `None` when the method declares no meaningful return to check
-        ret: Option<(String, ArgVariance)>,
+        ret: Option<(RuntimeSpelling, ArgVariance)>,
     },
 }
 
@@ -908,15 +917,15 @@ pub enum ErasedTargetReason {
 /// is; the specialization has to travel with the call instead
 pub struct ErasedUnion {
     /// the shared origin's runtime spelling — `list`
-    pub origin: String,
+    pub origin: RuntimeSpelling,
     /// which type-argument position the arms differ in
     pub position: usize,
     /// the differing argument of each arm, in declaration order — `int`, `str`
-    pub arms: Vec<String>,
+    pub arms: Vec<RuntimeSpelling>,
     /// the arguments the arms agree on, by position, so the rewritten
     /// annotation can put them back (`dict[str, int] | dict[str, bool]` keeps
     /// `str` in position 0)
-    pub fixed: Vec<(usize, String)>,
+    pub fixed: Vec<(usize, RuntimeSpelling)>,
 }
 
 /// classify `ty` as an [`ErasedUnion`], or `None` when it is anything else.
@@ -1335,9 +1344,9 @@ fn runtime_test_plan<'db>(
         // the value's type is carried by a reified type parameter on the
         // *target* side — `x is T` where `T` is reified spells `T` itself
         Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => {
-            ParametricIsPlan::Isinstance(TargetSpelling::Rebuilt(
-                bound_typevar.name(db).to_string(),
-            ))
+            ParametricIsPlan::Isinstance(TargetSpelling::Rebuilt(RuntimeSpelling::text(
+                bound_typevar.name(db).as_str(),
+            )))
         }
 
         // `Any` really does admit every value and is worth rejecting. `Unknown`
@@ -1383,7 +1392,7 @@ fn literal_target_plan<'db>(
         value: if written {
             TargetSpelling::Written
         } else {
-            TargetSpelling::Rebuilt(value)
+            TargetSpelling::Rebuilt(RuntimeSpelling::text(value))
         },
     };
     match literal.kind() {
@@ -1405,8 +1414,10 @@ fn literal_target_plan<'db>(
         // comparison `Enum.__eq__` performs anyway
         LiteralValueTypeKind::Enum(member) => {
             match written_or_spelled(target_node, false, || {
-                spell_class_literal(db, env, file, member.enum_class(db))
-                    .map(|class| format!("{class}.{}", member.name(db)))
+                spell_class_literal(db, env, file, member.enum_class(db)).map(|mut class| {
+                    class.push_str(&format!(".{}", member.name(db)));
+                    class
+                })
             }) {
                 Some(spelling) => ParametricIsPlan::Identity(spelling),
                 None => unspellable,
@@ -1440,7 +1451,7 @@ fn literal_target_plan<'db>(
 fn written_or_spelled(
     target_node: Option<&ast::Expr>,
     subscript_evaluates: bool,
-    spell: impl FnOnce() -> Option<String>,
+    spell: impl FnOnce() -> Option<RuntimeSpelling>,
 ) -> Option<TargetSpelling> {
     if let Some(spelling) = spell() {
         return Some(TargetSpelling::Rebuilt(spelling));
@@ -1764,7 +1775,7 @@ fn protocol_member_spelling<'db>(
     env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
-) -> Option<String> {
+) -> Option<RuntimeSpelling> {
     if let Type::LiteralValue(literal) = ty {
         let value = match literal.kind() {
             LiteralValueTypeKind::Bool(boolean) => {
@@ -1783,7 +1794,7 @@ fn protocol_member_spelling<'db>(
             }
             _ => return None,
         };
-        return Some(format!("_by_lit({value})"));
+        return Some(RuntimeSpelling::text(format!("_by_lit({value})")));
     }
     runtime_spelling(db, env, file, ty)
 }
@@ -1795,7 +1806,7 @@ enum ReturnCheck {
     /// `object`) — nothing to verify
     Skip,
     /// check the value method's return annotation against this spelling
-    Check(String),
+    Check(RuntimeSpelling),
     /// a meaningful return with no runtime spelling — the method can't be checked
     Unspellable,
 }
@@ -1940,7 +1951,7 @@ pub(crate) fn parametric_soundness_spelling<'db>(
     env: &ProgramEnvironment<'db>,
     file: File,
     ty: Type<'db>,
-) -> Option<(String, Box<[ArgVariance]>)> {
+) -> Option<(RuntimeSpelling, Box<[ArgVariance]>)> {
     let Type::NominalInstance(instance) = ty else {
         return None;
     };

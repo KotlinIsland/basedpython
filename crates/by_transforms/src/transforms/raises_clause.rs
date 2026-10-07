@@ -25,6 +25,7 @@ use ruff_python_ast::{ModModule, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
+use super::repeated_underscore::WrittenNames;
 use crate::type_info::TypeInfo;
 
 /// Deletes every `raises` clause.
@@ -85,12 +86,17 @@ fn clause_range(source: &str, function: &StmtFunctionDef) -> Option<TextRange> {
 /// Wraps each function with a runtime-testable `raises` clause in a guard.
 pub(crate) struct RaisesGuardPass<'src> {
     source: &'src str,
+    written: WrittenNames<'src>,
     enabled: bool,
 }
 
 impl<'src> RaisesGuardPass<'src> {
-    pub(crate) fn new(source: &'src str, enabled: bool) -> Self {
-        Self { source, enabled }
+    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, enabled: bool) -> Self {
+        Self {
+            source,
+            written,
+            enabled,
+        }
     }
 }
 
@@ -113,6 +119,7 @@ impl super::ast_driver::TypeAwarePass for RaisesGuardPass<'_> {
         for stmt in stmts {
             let mut collector = GuardCollector {
                 source: self.source,
+                written: self.written,
                 types,
                 guards: &mut guards,
             };
@@ -135,6 +142,7 @@ impl super::ast_driver::TypeAwarePass for RaisesGuardPass<'_> {
 /// exactly as much in need of its contract as a top-level one.
 struct GuardCollector<'a> {
     source: &'a str,
+    written: WrittenNames<'a>,
     types: &'a dyn TypeInfo,
     guards: &'a mut Vec<(TextRange, String)>,
 }
@@ -142,7 +150,7 @@ struct GuardCollector<'a> {
 impl<'ast> Visitor<'ast> for GuardCollector<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         if let Stmt::FunctionDef(function) = stmt
-            && let Some(guard) = guard_for(self.source, function, self.types)
+            && let Some(guard) = guard_for(self.source, self.written, function, self.types)
         {
             self.guards.push(guard);
         }
@@ -161,6 +169,7 @@ impl<'ast> Visitor<'ast> for GuardCollector<'_> {
 /// there, so they stay above the decorator rather than between it and its `def`.
 fn guard_for(
     source: &str,
+    written: WrittenNames,
     function: &StmtFunctionDef,
     types: &dyn TypeInfo,
 ) -> Option<(TextRange, String)> {
@@ -172,6 +181,7 @@ fn guard_for(
     let target = types.declared_raises_runtime_target(function)?;
     let (offset, indent) = def_keyword(source, function)?;
     let name = function.name.as_str();
+    let ceiling = written.spelled(&target.ceiling);
 
     let arguments = match &target.resolved {
         Some(resolved) => {
@@ -181,19 +191,19 @@ fn guard_for(
                 .chain(&resolved.receiver)
                 .map(String::as_str)
                 .collect();
+            let expression = written.spelled(&resolved.expression);
             let lambda = if parameters.is_empty() {
-                format!("lambda: {}", resolved.expression)
+                format!("lambda: {expression}")
             } else {
-                format!("lambda {}: {}", parameters.join(", "), resolved.expression)
+                format!("lambda {}: {expression}", parameters.join(", "))
             };
             format!(
-                "{}, \"{name}\", {lambda}, {}, {}",
-                target.ceiling,
+                "{ceiling}, \"{name}\", {lambda}, {}, {}",
                 python_names(&resolved.own),
                 python_names(&resolved.receiver),
             )
         }
-        None => format!("{}, \"{name}\"", target.ceiling),
+        None => format!("{ceiling}, \"{name}\""),
     };
 
     Some((

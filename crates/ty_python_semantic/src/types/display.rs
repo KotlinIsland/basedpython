@@ -32,6 +32,7 @@ use crate::types::signatures::{
 };
 use crate::types::tuple::{RepeatedUnit, TupleSpec, VariableLengthTuple, VariableSegment};
 use crate::types::typevar::BoundTypeVarIdentity;
+use crate::types::visibility::private_symbols;
 use crate::types::visitor::TypeVisitor;
 use crate::types::{
     CallableType, DeferredOperation, DeferredType, DynamicType, IntersectionType,
@@ -986,6 +987,9 @@ pub struct SourceSpelling {
     /// the outer one, `Outer.Inner`. such a path names the outer class, which is unbound while
     /// it is being made, so it resolves only where it is not evaluated as it is written
     pub reads_nested_class: bool,
+    /// those of [`Self::bare_classes`] that are module-level `private` symbols of the file,
+    /// which the transpiler emits under a name of its own
+    pub module_private_classes: Vec<String>,
 }
 
 /// Collects every class a type names, so each can be spelled for a particular file.
@@ -1153,6 +1157,23 @@ impl<'db> Type<'db> {
                 return None;
             }
         }
+        // a bare class the file's global scope binds under a name the file declares
+        // `private` is that `private` symbol
+        let private = private_symbols(db, file.file(db));
+        let module_private_classes = bare
+            .iter()
+            .filter(|name| {
+                private.contains(**name)
+                    && matches!(
+                        global_symbol(db, file, name).place,
+                        Place::Defined(defined) if defined
+                            .ty
+                            .as_class_literal()
+                            .is_some_and(|class| classes.contains(&class))
+                    )
+            })
+            .map(|name| (*name).to_owned())
+            .collect();
         let bare_classes = bare.into_iter().map(str::to_owned).collect();
 
         let settings = DisplaySettings {
@@ -1164,6 +1185,7 @@ impl<'db> Type<'db> {
             modules: modules.into_iter().collect(),
             bare_classes,
             reads_nested_class,
+            module_private_classes,
         })
     }
 }

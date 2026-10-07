@@ -122,11 +122,16 @@ def _by_raises(_allowed, _name, _resolve=None, _own=(), _receiver=()):
                 _instance = None if _generic is None else _generic.instance
                 _owner = _args[0] if _instance is None else _instance
                 _values.extend(_type_argument(_owner, _param) for _param in _receiver)
-            return _resolve(*_values)
-        except Exception:
+        except (TypeError, KeyError, IndexError):
             # a parameter nothing answered for: what the declaration says without
-            # it is the ceiling
+            # it is the ceiling. binding the type arguments and reading one off a
+            # receiver raise `TypeError`, a parameter the specialization left
+            # unbound `KeyError`, and a method called with no receiver `IndexError`
             return _allowed
+        # the lambda only reads the values and the names the module binds, so
+        # anything it raises is a lowering that names something wrong, and is not
+        # mistaken for a value nothing answered for
+        return _resolve(*_values)
 
     def _check(_exc, _generic, _args):
         if not _by_isinstance(_exc, _target(_generic, _args), _allowed):
