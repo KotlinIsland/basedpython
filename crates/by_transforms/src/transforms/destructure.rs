@@ -67,7 +67,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
 use super::repeated_underscore::WrittenNames;
-use super::source_util::{line_indent, line_start, temporary_name};
+use super::source_util::{line_indent, line_start, standalone_expression, temporary_name};
 
 pub(crate) struct DestructurePass<'src> {
     source: &'src str,
@@ -197,7 +197,7 @@ impl DestructureLower<'_> {
             return;
         }
         let indent = line_indent(self.source, let_stmt.range().start()).to_owned();
-        let subject = vec![Fragment::Src(let_stmt.value.range())];
+        let subject = standalone_expression(self.source, let_stmt.value.range());
 
         if let_stmt.orelse.is_empty() {
             let mut fragments = Vec::new();
@@ -462,13 +462,17 @@ impl DestructureLower<'_> {
         // the subject is evaluated once, and every case guard reads it from
         // there. `if True:` hosts the cases at the indentation their bodies
         // already have, so no body moves
+        let mut header = vec![Fragment::Lit(format!("{subject_name} = "))];
+        header.extend(standalone_expression(
+            self.source,
+            match_stmt.subject.range(),
+        ));
+        header.push(Fragment::Lit(format!(
+            "\n{indent}{selector} = 0\n{indent}if True:"
+        )));
         let mut edits = vec![(
             TextRange::new(match_stmt.range().start(), header_colon),
-            vec![
-                Fragment::Lit(format!("{subject_name} = ")),
-                Fragment::Src(match_stmt.subject.range()),
-                Fragment::Lit(format!("\n{indent}{selector} = 0\n{indent}if True:")),
-            ],
+            header,
         )];
 
         for (index, case) in match_stmt.cases.iter().enumerate() {
@@ -488,12 +492,16 @@ impl DestructureLower<'_> {
             let mut fragments = vec![Fragment::Lit(format!(
                 "if {selector} == 0:\n{guard_indent}"
             ))];
+            let guard = case
+                .guard
+                .as_deref()
+                .map(|guard| standalone_expression(self.source, guard.range()));
             if !self.push_destructure_with_guard(
                 &mut fragments,
                 &guard_indent,
                 &[Fragment::Lit(subject_name.clone())],
                 &case.pattern,
-                case.guard.as_deref(),
+                guard.as_deref(),
                 &format!("{selector} = {}", index + 1),
             ) {
                 return;
@@ -541,7 +549,7 @@ impl DestructureLower<'_> {
         indent: &str,
         subject: &[Fragment],
         pattern: &Pattern,
-        guard: Option<&Expr>,
+        guard: Option<&[Fragment]>,
         on_match: &str,
     ) -> bool {
         match push_destructure(
@@ -576,7 +584,7 @@ pub(crate) fn push_destructure(
     indent: &str,
     subject: &[Fragment],
     pattern: &Pattern,
-    guard: Option<&Expr>,
+    guard: Option<&[Fragment]>,
     on_match: &str,
     names: &mut NameGen<'_>,
 ) -> Result<(), String> {
@@ -624,7 +632,7 @@ pub(crate) fn push_destructure(
             && let Some(guard) = guard
         {
             fragments.push(Fragment::Lit(" if ".to_owned()));
-            fragments.push(Fragment::Src(guard.range()));
+            fragments.extend(guard.iter().cloned());
         }
         step_indent = format!("{step_indent}        ");
         fragments.push(Fragment::Lit(format!(":\n{step_indent}")));

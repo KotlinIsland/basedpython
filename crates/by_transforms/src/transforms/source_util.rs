@@ -12,6 +12,28 @@ use ruff_python_ast::{
 use ruff_python_trivia::SimpleTokenizer;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
+/// the expression at `range` as fragments that stand on their own where a line break ends
+/// the statement: the value of an assignment a lowering writes, the test of an `if` it
+/// writes, the subject of a `match` it writes
+///
+/// an expression's range stops inside any parentheses the source grouped it with, and in
+/// them it may run over several lines (`(\n    a\n    .b()\n)`). re-emitted bare, its
+/// second line ends the statement early or starts one of its own: `x = a` above `.b()` is
+/// refused, and `x = [1]` above `+ [2]` runs `+[2]` as a statement of its own. so an
+/// expression written over more than one line gets parentheses of its own, which python
+/// accepts around any expression
+pub(crate) fn standalone_expression(source: &str, range: TextRange) -> Vec<Fragment> {
+    if source[range].contains(['\n', '\r']) {
+        vec![
+            Fragment::Lit("(".to_owned()),
+            Fragment::Src(range),
+            Fragment::Lit(")".to_owned()),
+        ]
+    } else {
+        vec![Fragment::Src(range)]
+    }
+}
+
 /// Whether `expr`, written as it is, has to be parenthesized to stand as one argument
 /// of a call among others: a tuple or generator expression written without its own
 /// parentheses (`for x in a, b:`), or a `yield`, which a call does not accept bare

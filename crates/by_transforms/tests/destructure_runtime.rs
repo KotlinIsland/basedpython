@@ -159,24 +159,57 @@ assert not [name for name in vars(Colour) if "_by_" in name], (
 print("ok")
 "#;
 
-#[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
-fn destructuring_runs_correctly() {
-    let Some(python) = python() else {
-        eprintln!("skipping destructuring runtime test: no `python3` interpreter found");
-        return;
-    };
+/// subjects and guards written over several lines inside parentheses, which are not
+/// part of their ranges. the lowering moves each onto a line of a statement it writes —
+/// an assignment, a `match` header, a `case` guard — where it still needs a grouping
+const MULTI_LINE: &str = r#"
+class Point:
+    __match_args__ = ("x", "y")
 
+    def __init__(self, x: int, y: int):
+        self.x = x
+        self.y = y
+
+def make() -> Point:
+    return Point(1, 2)
+
+def summed() -> int:
+    let Point(x, y) := (
+        make
+        ()
+    )
+    return x + y
+
+assert summed() == 3, "a `let` subject over several lines"
+
+def classify(p: Point, q: int) -> str:
+    match (
+        p if q >= 0
+        else Point(0, 0)
+    ):
+        case Point(x, y) and object() if (
+            x == 1
+            and q > 0
+        ):
+            return "first"
+        case _:
+            return "other"
+
+assert classify(Point(1, 2), 1) == "first", "a guard over several lines"
+assert classify(Point(1, 2), 0) == "other"
+assert classify(Point(0, 2), 1) == "other"
+
+print("ok")
+"#;
+
+fn run(python: &str, program: &str) {
     let config = Config {
         min_version: PythonVersion::PY313,
         ..Config::default()
     };
-    let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
+    let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(python)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -189,4 +222,33 @@ fn destructuring_runs_correctly() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn destructuring_runs_correctly() {
+    let Some(python) = python() else {
+        eprintln!("skipping destructuring runtime test: no `python3` interpreter found");
+        return;
+    };
+
+    run(&python, PROGRAM);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_subject_written_over_several_lines_keeps_its_grouping() {
+    let Some(python) = python() else {
+        eprintln!(
+            "skipping `a_subject_written_over_several_lines_keeps_its_grouping`: no `python3` interpreter found"
+        );
+        return;
+    };
+    run(&python, MULTI_LINE);
 }

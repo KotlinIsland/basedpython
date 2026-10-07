@@ -56,7 +56,8 @@ use std::collections::HashSet;
 use super::ast_driver::{AstPass, Fragment, PassContext};
 use super::repeated_underscore::WrittenNames;
 use super::source_util::{
-    line_indent, line_start, parenthesized_value_range, temporary_name, value_separator_start,
+    line_indent, line_start, parenthesized_value_range, standalone_expression, temporary_name,
+    value_separator_start,
 };
 
 pub(crate) struct StatementExpressionPass<'src> {
@@ -175,7 +176,7 @@ impl Lower<'_> {
         if let Expr::Statement(statement) = tail {
             self.emit_root(statement, stmt, tail, &temp, &indent, &mut fragments);
         } else {
-            Self::emit_value(tail, &temp, &indent, &mut fragments);
+            Self::emit_value(self.source, tail, &temp, &indent, &mut fragments);
             // the replaced range starts after the line's existing indentation,
             // so the first emitted line must not repeat it
             if let Some(Fragment::Lit(first)) = fragments.first_mut()
@@ -293,7 +294,7 @@ impl Lower<'_> {
     }
 
     /// Emits the block that computes `expr` into `temp` at `indent`.
-    fn emit_value(expr: &Expr, temp: &str, indent: &str, out: &mut Vec<Fragment>) {
+    fn emit_value(source: &str, expr: &Expr, temp: &str, indent: &str, out: &mut Vec<Fragment>) {
         match expr {
             // only the diverging forms reach here: a form with a suite is always
             // the whole value expression and took [`Self::emit_root`]
@@ -314,26 +315,26 @@ impl Lower<'_> {
                         out.push(Fragment::Lit(format!("\n{inner}{guard}{temp}:\n")));
                         inner.push_str("    ");
                     }
-                    Self::emit_value(value, temp, &inner, out);
+                    Self::emit_value(source, value, temp, &inner, out);
                 }
             }
             Expr::If(if_expr) => {
                 let inner = format!("{indent}    ");
                 out.push(Fragment::Lit(format!("{indent}if ")));
-                out.push(Fragment::Src(if_expr.test.range()));
+                out.extend(standalone_expression(source, if_expr.test.range()));
                 out.push(Fragment::Lit(":\n".to_string()));
-                Self::emit_value(&if_expr.body, temp, &inner, out);
+                Self::emit_value(source, &if_expr.body, temp, &inner, out);
                 out.push(Fragment::Lit(format!("\n{indent}else:\n")));
-                Self::emit_value(&if_expr.orelse, temp, &inner, out);
+                Self::emit_value(source, &if_expr.orelse, temp, &inner, out);
             }
             Expr::BinOp(bin_op) if matches!(bin_op.op, Operator::Coalesce) => {
                 let inner = format!("{indent}    ");
-                Self::emit_value(&bin_op.left, temp, indent, out);
+                Self::emit_value(source, &bin_op.left, temp, indent, out);
                 out.push(Fragment::Lit(format!("\n{indent}if {temp} is None:\n")));
-                Self::emit_value(&bin_op.right, temp, &inner, out);
+                Self::emit_value(source, &bin_op.right, temp, &inner, out);
             }
             Expr::Named(named) => {
-                Self::emit_value(&named.value, temp, indent, out);
+                Self::emit_value(source, &named.value, temp, indent, out);
                 out.push(Fragment::Lit(format!("\n{indent}")));
                 out.push(Fragment::Src(named.target.range()));
                 out.push(Fragment::Lit(format!(" = {temp}")));
@@ -341,7 +342,7 @@ impl Lower<'_> {
             // an ordinary operand: evaluate it into the temporary
             _ => {
                 out.push(Fragment::Lit(format!("{indent}{temp} = ")));
-                out.push(Fragment::Src(expr.range()));
+                out.extend(standalone_expression(source, expr.range()));
             }
         }
     }

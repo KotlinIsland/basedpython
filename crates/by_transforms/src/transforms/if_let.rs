@@ -42,7 +42,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::destructure::{NameGen, push_destructure};
 use super::repeated_underscore::WrittenNames;
-use super::source_util::{line_indent, temporary_name};
+use super::source_util::{line_indent, standalone_expression, temporary_name};
 use crate::type_info::TypeInfo;
 
 pub(crate) struct IfLetPass<'src> {
@@ -191,7 +191,7 @@ impl IfLetLower<'_, '_> {
                         &selector,
                         1,
                         clause.pattern,
-                        test,
+                        &standalone_expression(self.source, test.range()),
                         &mut self.names,
                     ) {
                         self.errors
@@ -208,7 +208,7 @@ impl IfLetLower<'_, '_> {
                         &selector,
                         index + 1,
                         clause.pattern,
-                        test,
+                        &standalone_expression(self.source, test.range()),
                         &mut self.names,
                     ) {
                         self.errors
@@ -253,21 +253,22 @@ impl IfLetLower<'_, '_> {
 }
 
 /// Appends the guard that records clause `value` as taken: the destructuring a
-/// pattern clause stands for, a plain `if` for a condition
+/// pattern clause stands for, a plain `if` for a condition. `test` is the clause's
+/// subject or condition, as [`standalone_expression`] writes it
 fn push_guard(
     fragments: &mut Vec<Fragment>,
     indent: &str,
     selector: &str,
     value: usize,
     pattern: Option<&Pattern>,
-    test: &Expr,
+    test: &[Fragment],
     names: &mut NameGen<'_>,
 ) -> Result<(), String> {
     match pattern {
         Some(pattern) => push_destructure(
             fragments,
             indent,
-            &[Fragment::Src(test.range())],
+            test,
             pattern,
             None,
             &format!("{selector} = {value}"),
@@ -275,7 +276,7 @@ fn push_guard(
         ),
         None => {
             fragments.push(Fragment::Lit("if ".to_owned()));
-            fragments.push(Fragment::Src(test.range()));
+            fragments.extend(test.iter().cloned());
             fragments.push(Fragment::Lit(format!(
                 ":\n{indent}    {selector} = {value}"
             )));

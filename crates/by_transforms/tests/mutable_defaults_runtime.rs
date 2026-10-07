@@ -112,6 +112,38 @@ print("ok")
 /// second line it is an ordinary character python refuses to tokenize
 const BOM: &str = "\u{feff}\ndef fresh(items = []):\n    items.append(1)\n    return items\n\nassert fresh() == [1], \"the default is re-evaluated per call\"\n\nprint(\"ok\")\n";
 
+/// a default written over several lines inside parentheses, which are not part of its
+/// range. moved into the body it still needs a grouping, or its second line is a
+/// statement of its own: `+ [2]` runs as a unary plus and the default is just `[1]`
+const MULTI_LINE: &str = r#"
+def joined(xs: list[int] = (
+    [1]
+    + [2]
+)) -> list[int]:
+    return xs
+
+assert joined() == [1, 2], "the whole default is re-evaluated, not its first line"
+
+def keyword(*, xs: list[int] = (
+    [1]
+    + [2]
+)) -> list[int]:
+    return xs
+
+assert keyword() == [1, 2], "so is a keyword-only one"
+
+# an `init(...)` with no body of its own writes its guards with the body it makes
+class Holder:
+    init(self, let xs: list[int] = (
+        [1]
+        + [2]
+    ))
+
+assert Holder().xs == [1, 2], "so is one of a bodyless `init`"
+
+print("ok")
+"#;
+
 fn run(python: &str, program: &str) {
     let config = Config {
         min_version: PythonVersion::PY313,
@@ -155,6 +187,21 @@ fn an_extension_members_default_is_hoisted_below_the_preamble() {
         return;
     };
     run(&python, EXTENSION);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_default_written_over_several_lines_survives_the_move_into_the_body() {
+    let Some(python) = python() else {
+        eprintln!(
+            "skipping `a_default_written_over_several_lines_survives_the_move_into_the_body`: no `python3` interpreter found"
+        );
+        return;
+    };
+    run(&python, MULTI_LINE);
 }
 
 /// both preamble paths have to leave the BOM at offset 0: the sentinel the
