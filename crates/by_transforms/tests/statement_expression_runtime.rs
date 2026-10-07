@@ -1,8 +1,11 @@
-//! runtime test for the early exits a statement expression lowers to
+//! runtime test for the early exits a statement expression lowers to, and the one
+//! `^` lowers to
 //!
 //! `x = value or return`, `x = value ?? raise E()` and `x = a if c else raise E()`
 //! lower to statements: each operand is evaluated into a temporary on a line of its
-//! own, and the diverging branch becomes the body of an `if`. the transform's unit
+//! own, and the diverging branch becomes the body of an `if`. `x = value^` evaluates
+//! its operand into a temporary the same way, ahead of a guard that returns it when
+//! it is absent. the transform's unit
 //! tests assert on the lowered *text*; this test runs it. an operand the source wrote
 //! over several lines, inside parentheses that are not part of its own range, has to
 //! keep a grouping when it moves onto its own line — without one, its second line
@@ -125,6 +128,27 @@ else:
 print("ok")
 "#;
 
+/// a `^` operand written over several lines
+const PROPAGATE_MULTI_LINE: &str = r#"
+class Node:
+    def __init__(self, value: int?):
+        self.value = value
+        self.inner = self
+
+def incremented(node: Node) -> int?:
+    x = (
+        node
+        .inner
+        .value
+    )^
+    return x + 1
+
+assert incremented(Node(3)) == 4
+assert incremented(Node(None)) is None
+
+print("ok")
+"#;
+
 fn run(python: &str, program: &str) {
     let config = Config {
         min_version: PythonVersion::PY313,
@@ -157,4 +181,19 @@ fn an_operand_written_over_several_lines_keeps_its_grouping() {
         return;
     };
     run(&python, MULTI_LINE_OPERANDS);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_propagated_operand_written_over_several_lines_keeps_its_grouping() {
+    let Some(python) = python() else {
+        eprintln!(
+            "skipping `a_propagated_operand_written_over_several_lines_keeps_its_grouping`: no `python3` interpreter found"
+        );
+        return;
+    };
+    run(&python, PROPAGATE_MULTI_LINE);
 }

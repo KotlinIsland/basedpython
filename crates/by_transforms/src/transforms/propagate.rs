@@ -28,7 +28,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
 use super::repeated_underscore::WrittenNames;
-use super::source_util::temporary_name;
+use super::source_util::{standalone_expression_text, temporary_name};
 use crate::type_info::{AbsentTest, TypeInfo};
 
 /// The guard condition that detects the "absent" value for a given operand
@@ -194,8 +194,9 @@ impl<'ast> Visitor<'ast> for Propagate<'_> {
                 let temp = temporary_name(self.written, "prop", self.counter);
                 self.counter += 1;
                 let cond = absent_condition(absent, &temp, self.written);
+                let operand = standalone_expression_text(self.source, unary.operand.range());
                 (
-                    format!("{temp} = {operand_src}\n{indent}if {cond}: return {temp}\n{indent}"),
+                    format!("{temp} = {operand}\n{indent}if {cond}: return {temp}\n{indent}"),
                     format!("{temp}{unwrap}"),
                 )
             };
