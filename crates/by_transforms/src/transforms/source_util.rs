@@ -34,6 +34,17 @@ pub(crate) fn standalone_expression(source: &str, range: TextRange) -> Vec<Fragm
     }
 }
 
+/// [`standalone_expression`] as text, for a pass that writes its edits as text
+pub(crate) fn standalone_expression_text(source: &str, range: TextRange) -> String {
+    standalone_expression(source, range)
+        .iter()
+        .map(|fragment| match fragment {
+            Fragment::Lit(text) => text.as_str(),
+            Fragment::Src(span) => &source[*span],
+        })
+        .collect()
+}
+
 /// Whether `expr`, written as it is, has to be parenthesized to stand as one argument
 /// of a call among others: a tuple or generator expression written without its own
 /// parentheses (`for x in a, b:`), or a `yield`, which a call does not accept bare
