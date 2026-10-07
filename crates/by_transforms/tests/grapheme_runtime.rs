@@ -73,8 +73,34 @@ assert type("a") is str, "a bare literal is still a plain str"
 print("ok")
 "#;
 
-#[test]
-fn grapheme_surface_runs_correctly() {
+/// `first` and `last` bind a receiver that is more than a name to a temporary, which
+/// python refuses to bind with `:=` in a comprehension's iterable or anywhere in a
+/// comprehension in a class body
+const BOUND_RECEIVER: &str = r#"
+from ty_extensions import Character
+
+def greeting() -> str:
+    return "a🇺🇸é"
+
+assert [c for c in [greeting().first, greeting().last]] == ["a", "é"], "in an iterable"
+
+class Letters:
+    let firsts: list[Character?] = [greeting().first for _ in [0]]
+
+assert Letters.firsts == ["a"], "in a class body comprehension"
+
+print("ok")
+"#;
+
+fn transpiled(program: &str) -> String {
+    let config = Config {
+        min_version: PythonVersion::PY313,
+        ..Config::default()
+    };
+    transpile(program, &config).expect("transpile should succeed")
+}
+
+fn run_with_regex(program: &str) {
     let Some(interpreter) = interpreters::oldest(
         PythonVersion::PY313,
         "import regex",
@@ -82,12 +108,7 @@ fn grapheme_surface_runs_correctly() {
     ) else {
         return;
     };
-
-    let config = Config {
-        min_version: PythonVersion::PY313,
-        ..Config::default()
-    };
-    let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
+    let transpiled = transpiled(program);
 
     let output = Command::new(&interpreter.command)
         .arg("-c")
@@ -102,5 +123,41 @@ fn grapheme_surface_runs_correctly() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    interpreters::ran(&interpreter, PythonVersion::PY313);
+}
+
+#[test]
+fn grapheme_surface_runs_correctly() {
+    run_with_regex(PROGRAM);
+}
+
+#[test]
+fn a_bound_receiver_runs_where_python_refuses_an_assignment_expression() {
+    run_with_regex(BOUND_RECEIVER);
+}
+
+/// the same module compiles, `regex` or not: an assignment expression where python
+/// refuses one is a `SyntaxError` before the helpers that need `regex` ever run
+#[test]
+fn a_bound_receiver_compiles_where_python_refuses_an_assignment_expression() {
+    let Some(interpreter) = interpreters::oldest(PythonVersion::PY313, "", "") else {
+        return;
+    };
+    let transpiled = transpiled(BOUND_RECEIVER);
+
+    let output = Command::new(&interpreter.command)
+        .args([
+            "-c",
+            "import sys; compile(sys.argv[1], '<emitted>', 'exec')",
+            &transpiled,
+        ])
+        .output()
+        .expect("failed to spawn python");
+
+    assert!(
+        output.status.success(),
+        "the transpiled grapheme program does not compile on {interpreter}:\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+        String::from_utf8_lossy(&output.stderr),
+    );
     interpreters::ran(&interpreter, PythonVersion::PY313);
 }
