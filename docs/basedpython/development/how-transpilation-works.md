@@ -71,7 +71,11 @@ source (.by)
            holds a `.by` file to its target for every other kind, so a checker
            reports what this check would refuse. a basedpython form written as
            syntax of its own is a kind in that list too: a destructuring
-           pattern is written as a `match`, and is held to where one runs
+           pattern is written as a `match`, and is held to where one runs.
+           then run python's compile-time checks over it, on every version
+           from the floor on: python parses an assignment expression in a
+           comprehension's iterable, a parameter named twice, a capture that
+           makes the remaining `case`s unreachable, and refuses to compile them
 ```
 
 entry points in `crates/by_transforms/src/lib.rs`:

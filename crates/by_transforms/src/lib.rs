@@ -1,6 +1,7 @@
 pub mod config;
 mod reverse_transforms;
 pub mod runtime;
+mod semantic_syntax;
 pub(crate) mod source_map;
 mod transforms;
 pub(crate) mod type_info;
@@ -890,27 +891,46 @@ fn run_version_polyfill_phase(source: String, config: &Config) -> String {
 }
 
 /// Re-parse the transpiled output *as the target python version* and report any
-/// construct that version cannot parse.
+/// construct that version cannot parse, or that python refuses to compile on any
+/// version from it on
 ///
 /// [`verify_syntax`] asks whether the output is python at all; this asks whether
 /// it is python the file's declared floor can run. Without it, syntax no
 /// polyfill covers — `except*`, t-strings, a PEP 701 f-string — is emitted
-/// verbatim and fails at import time in generated code the author never wrote.
+/// verbatim and fails at import time in generated code the author never wrote,
+/// and so does python that parses but does not compile: an assignment
+/// expression in a comprehension's iterable, a capture pattern that makes the
+/// remaining cases unreachable
 fn verify_target_syntax(source: &str, config: &Config) -> Result<(), TranspileError> {
     let options = ruff_python_parser::ParseOptions::from(ruff_python_ast::PySourceType::Python)
         .with_target_version(config.min_version);
     let parsed = ruff_python_parser::parse_unchecked(source, options);
-    let Some(first) = parsed.unsupported_syntax_errors().first() else {
-        return Ok(());
-    };
-    // the parser's own wording already names both versions: "Cannot use
-    // `except*` on Python 3.9 (syntax was added in Python 3.11)"
-    Err(TranspileError {
-        kind: TranspileErrorKind::InvalidSyntax,
-        message: first.to_string(),
-        output_range: Some(first.range),
-        by_range: None,
-    })
+    if let Some(first) = parsed.unsupported_syntax_errors().first() {
+        // the parser's own wording already names both versions: "Cannot use
+        // `except*` on Python 3.9 (syntax was added in Python 3.11)"
+        return Err(TranspileError {
+            kind: TranspileErrorKind::InvalidSyntax,
+            message: first.to_string(),
+            output_range: Some(first.range),
+            by_range: None,
+        });
+    }
+    // a `.by` source holds back python's two `match` checks, because a bare
+    // `case A:` name may be an enum member of the subject rather than the
+    // capture it looks like. by here every name is spelled out, so they apply
+    // with the rest
+    if let Some(module) = parsed.syntax().as_module()
+        && let Some(error) =
+            semantic_syntax::first_error(&module.body, source, config.min_version, config.is_stub)
+    {
+        return Err(TranspileError {
+            kind: TranspileErrorKind::InvalidSyntax,
+            message: format!("transpiler produced invalid Python: {error}"),
+            output_range: Some(error.range),
+            by_range: None,
+        });
+    }
+    Ok(())
 }
 
 /// Splice `preamble` into `body` where generated lines belong: after the module
@@ -1092,19 +1112,6 @@ fn verify_syntax(source: &str, author: &AuthorNames) -> Result<(), TranspileErro
             kind: TranspileErrorKind::Bug,
             message: format!("transpiler failed to lower `typeof` syntax `{snippet}`"),
             output_range: Some(range),
-            by_range: None,
-        });
-    }
-
-    // a `.by` source holds back python's two `match` checks, because a bare
-    // `case A:` name may be an enum member of the subject rather than the
-    // capture it looks like. by here every name is spelled out, so the checks
-    // apply again — and a `match` that fails them is python that will not parse
-    if let Some(error) = first_invalid_match_statement(parsed.suite()) {
-        return Err(TranspileError {
-            kind: TranspileErrorKind::InvalidSyntax,
-            message: format!("transpiler produced invalid Python: {error}"),
-            output_range: Some(error.range),
             by_range: None,
         });
     }
@@ -1416,48 +1423,6 @@ fn verify_runtime_helpers(suite: &[Stmt], written: &HashSet<String>) -> Result<(
         }),
         None => Ok(()),
     }
-}
-
-/// The first `match` in `suite` that python's own parse-time checks reject.
-fn first_invalid_match_statement(
-    suite: &[ruff_python_ast::Stmt],
-) -> Option<ruff_python_parser::semantic_errors::SemanticSyntaxError> {
-    use ruff_python_ast::visitor::{Visitor, walk_stmt};
-    use ruff_python_parser::semantic_errors::{SemanticSyntaxChecker, SemanticSyntaxError};
-
-    struct Scanner {
-        error: Option<SemanticSyntaxError>,
-    }
-    impl<'ast> Visitor<'ast> for Scanner {
-        fn visit_stmt(&mut self, stmt: &'ast ruff_python_ast::Stmt) {
-            if self.error.is_some() {
-                return;
-            }
-            if let ruff_python_ast::Stmt::Match(match_stmt) = stmt {
-                self.error = SemanticSyntaxChecker::python_match_statement_errors(
-                    match_stmt,
-                    // the checks are version-independent; `match` itself needs
-                    // 3.10, which the parse above has already settled
-                    ruff_python_ast::PythonVersion::latest(),
-                )
-                .into_iter()
-                .next();
-                if self.error.is_some() {
-                    return;
-                }
-            }
-            walk_stmt(self, stmt);
-        }
-    }
-
-    let mut scanner = Scanner { error: None };
-    for stmt in suite {
-        scanner.visit_stmt(stmt);
-        if scanner.error.is_some() {
-            break;
-        }
-    }
-    scanner.error
 }
 
 /// Map a byte offset in the generated python to a byte range in the original
@@ -2191,7 +2156,7 @@ mod transpile_error {
     /// The emitted python has every name spelled out, so a `match` that is
     /// invalid there has to be caught rather than written out.
     #[test]
-    fn verify_syntax_rejects_an_invalid_match() {
+    fn verify_target_syntax_rejects_an_invalid_match() {
         for source in [
             // alternatives that bind different names
             "match x:\n    case a | b:\n        pass\n",
@@ -2200,7 +2165,7 @@ mod transpile_error {
             // nested in a function, which the scan has to reach
             "def f(x):\n    match x:\n        case a | b:\n            pass\n",
         ] {
-            let err = verify_syntax(source, &AuthorNames::none()).unwrap_err();
+            let err = verify_target_syntax(source, &Config::test_default()).unwrap_err();
             assert!(
                 err.message
                     .starts_with("transpiler produced invalid Python:"),
@@ -2213,12 +2178,25 @@ mod transpile_error {
     /// The qualified spelling a resolved case name lowers to binds nothing, so
     /// the alternatives agree and the check has nothing to say.
     #[test]
-    fn verify_syntax_accepts_a_qualified_match() {
-        verify_syntax(
+    fn verify_target_syntax_accepts_a_qualified_match() {
+        verify_target_syntax(
             "match x:\n    case Color.Red | Color.Green:\n        pass\n    case Color.Blue:\n        pass\n",
-            &AuthorNames::none(),
+            &Config::test_default(),
         )
         .unwrap();
+    }
+
+    /// python parses an assignment expression in a comprehension's iterable, and
+    /// refuses to compile it, so it is refused here rather than at import
+    #[test]
+    fn verify_target_syntax_rejects_what_python_does_not_compile() {
+        let err =
+            verify_target_syntax("[x for x in (t := xs)]\n", &Config::test_default()).unwrap_err();
+        assert!(
+            err.message.contains("comprehension iterable"),
+            "got: {}",
+            err.message
+        );
     }
 
     /// how many kinds of syntax the parser holds a python version to
