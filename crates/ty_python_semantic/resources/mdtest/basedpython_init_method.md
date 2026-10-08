@@ -26,9 +26,7 @@ class A:
         self.b = str(a)
 
 x = A(1)
-# `str(a)` constructs, so the attribute's only assignment is exactly a `str` — see
-# basedpython/features/exact-construction.md
-reveal_type(x.b)  # revealed: final str
+reveal_type(x.b)  # revealed: str
 ```
 
 ## `let` parameter inside body-bearing `init`

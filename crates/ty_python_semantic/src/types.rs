@@ -3924,20 +3924,28 @@ impl<'db> Type<'db> {
         self.apply_type_mapping(
             db,
             env,
-            &TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular),
+            &TypeMapping::Promote(
+                PromotionMode::On,
+                PromotionKind::regular(
+                    NumericPromotion::SpecialCase,
+                    FunctionPromotion::ToCallable,
+                ),
+            ),
             TypeContext::default(),
         )
     }
 
-    /// As [`Type::promote`], but honouring the numeric model of the file the type came from.
+    /// As [`Type::promote`], but honouring the model of the file the type came from.
     ///
     /// An *inferred* type is widened through the same promotion that applies the numeric
     /// special case, so a module that opted out of the special case in its annotations would
     /// otherwise get it back through inference — `self.x = x` with `x: float` would declare
     /// the attribute `int | float` however strict the parameter was.
     ///
-    /// A `.by` file has that model by definition rather than by configuration, so it takes
-    /// the strict path whatever `strict-float` says.
+    /// A `.by` file has that numeric model by definition rather than by configuration, so it
+    /// takes the strict path whatever `strict-float` says. It also keeps a function's own type
+    /// ([`FunctionPromotion::Keep`]), which is a property of the language rather than of its
+    /// numbers, so `strict-float` has no say in it.
     #[must_use]
     fn promote_in(
         self,
@@ -3945,16 +3953,24 @@ impl<'db> Type<'db> {
         env: &ProgramEnvironment<'db>,
         file: ruff_db::files::File,
     ) -> Type<'db> {
-        let kind =
-            if file.source_type(db).is_basedpython() || db.analysis_settings(file).strict_float {
-                PromotionKind::RegularStrictNumeric
-            } else {
-                PromotionKind::Regular
-            };
+        let basedpython = file.source_type(db).is_basedpython();
+        let numeric = if basedpython || db.analysis_settings(file).strict_float {
+            NumericPromotion::Exact
+        } else {
+            NumericPromotion::SpecialCase
+        };
+        let functions = if basedpython {
+            FunctionPromotion::Keep
+        } else {
+            FunctionPromotion::ToCallable
+        };
         self.apply_type_mapping(
             db,
             env,
-            &TypeMapping::Promote(PromotionMode::On, kind),
+            &TypeMapping::Promote(
+                PromotionMode::On,
+                PromotionKind::regular(numeric, functions),
+            ),
             TypeContext::default(),
         )
     }
@@ -10306,7 +10322,10 @@ impl<'db> Type<'db> {
                     // callable form.
                     TypeMapping::Promote(
                         PromotionMode::On,
-                        PromotionKind::Regular | PromotionKind::RegularKeepingLiterals,
+                        PromotionKind::Regular {
+                            functions: FunctionPromotion::ToCallable,
+                            ..
+                        },
                     ) => mapped.promote_impl(db, visitor.env),
                     _ => mapped,
                 }
@@ -10333,14 +10352,15 @@ impl<'db> Type<'db> {
                 ),
             )),
 
-            // `RegularStrictNumeric` is deliberately absent: it promotes everything
-            // else and leaves `float` and `complex` exact
             Type::NominalInstance(instance)
                 if matches!(
                     type_mapping,
                     TypeMapping::Promote(
                         PromotionMode::On,
-                        PromotionKind::Regular | PromotionKind::RegularKeepingLiterals
+                        PromotionKind::Regular {
+                            numeric: NumericPromotion::SpecialCase,
+                            ..
+                        }
                     )
                 ) =>
             {
@@ -10493,10 +10513,7 @@ impl<'db> Type<'db> {
                 // so we don't preserve them here when regular promotion is enabled.
                 if !matches!(
                     type_mapping,
-                    TypeMapping::Promote(
-                        PromotionMode::On,
-                        PromotionKind::Regular | PromotionKind::RegularKeepingLiterals
-                    )
+                    TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular { .. })
                 ) {
                     for negative in intersection.negative(db) {
                         builder.add_negative_in_place(negative.apply_type_mapping_impl(
@@ -10568,7 +10585,13 @@ impl<'db> Type<'db> {
                 if restricted.modifier(db) == TypeModifier::Final
                     && matches!(
                         type_mapping,
-                        TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular)
+                        TypeMapping::Promote(
+                            PromotionMode::On,
+                            PromotionKind::Regular {
+                                literals: LiteralPromotion::Widen,
+                                ..
+                            }
+                        )
                     )
                 {
                     return inner;
@@ -10700,11 +10723,18 @@ impl<'db> Type<'db> {
                 ) => self,
                 TypeMapping::Promote(
                     PromotionMode::On,
-                    PromotionKind::Regular | PromotionKind::RegularStrictNumeric,
+                    PromotionKind::Regular {
+                        literals: LiteralPromotion::Widen,
+                        ..
+                    },
                 ) => self.promote_impl(db, env),
-                TypeMapping::Promote(PromotionMode::On, PromotionKind::RegularKeepingLiterals) => {
-                    self.promote_impl_keeping_literals(db, env)
-                }
+                TypeMapping::Promote(
+                    PromotionMode::On,
+                    PromotionKind::Regular {
+                        literals: LiteralPromotion::Keep,
+                        ..
+                    },
+                ) => self.promote_impl_keeping_literals(db, env),
             },
 
             Type::Dynamic(_) => match type_mapping {
@@ -11860,24 +11890,66 @@ impl PromotionMode {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, get_size2::GetSize)]
 pub enum PromotionKind {
-    /// Default promotion behaviour: recurse into nested types
-    Regular,
-    /// Like [`PromotionKind::Regular`], but literal values are left as they are.
-    ///
-    /// This is what a covariant type argument gets: widening it is sound, but nothing reads a
-    /// different type back out of that position, so the literal it was inferred from stands.
-    RegularKeepingLiterals,
-    /// Like [`PromotionKind::Regular`], but `float` and `complex` are left exact.
-    ///
-    /// Widening a literal is one thing; widening `float` to `int | float` is the typing spec's
-    /// numeric special case, and a module that set `strict-float` has opted out of it. The two
-    /// travel together in [`PromotionKind::Regular`] because they are usually wanted together.
-    RegularStrictNumeric,
+    /// Default promotion behaviour: recurse into nested types. what it does with a literal
+    /// and with `float` / `complex` are two independent choices
+    Regular {
+        literals: LiteralPromotion,
+        numeric: NumericPromotion,
+        functions: FunctionPromotion,
+    },
     /// Promote class literals recursively without promoting other literal types.
     ClassLiteralsOnly,
     /// Singleton-only promotion recursively descends through nominal instances
     /// without recursing into unions or non-nominal types.
     SingletonsOnly,
+}
+
+impl PromotionKind {
+    /// regular promotion that widens literals, under the given numeric model and treatment of
+    /// functions
+    const fn regular(numeric: NumericPromotion, functions: FunctionPromotion) -> Self {
+        Self::Regular {
+            literals: LiteralPromotion::Widen,
+            numeric,
+            functions,
+        }
+    }
+}
+
+/// what regular promotion does with a literal value
+#[derive(Debug, Copy, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub enum LiteralPromotion {
+    /// widen it to the class it is an instance of (`Literal[1]` → `int`), and drop the exactness
+    /// a constructor call infers (`final A` → `A`), which is the same kind of precision
+    Widen,
+    /// leave it as it is. this is what a covariant type argument gets: widening it is sound,
+    /// but nothing reads a different type back out of that position, so the literal it was
+    /// inferred from stands
+    Keep,
+}
+
+/// what regular promotion does with `float` and `complex`
+#[derive(Debug, Copy, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub enum NumericPromotion {
+    /// the typing spec's numeric special case: `float` widens to `int | float` and `complex`
+    /// to `int | float | complex`
+    SpecialCase,
+    /// `float` and `complex` are left exact. a `.by` module has this model by definition, and
+    /// a module that set `strict-float` has opted into it
+    Exact,
+}
+
+/// what regular promotion does with a function
+#[derive(Debug, Copy, Clone, PartialEq, Eq, get_size2::GetSize)]
+pub enum FunctionPromotion {
+    /// widen it to its callable type (`def f() -> int` → `() -> int`)
+    ToCallable,
+    /// leave it as it is. a function declared in a `.by` module can carry what no callable
+    /// type expresses — reified type parameters a call specializes by subscript, `context`
+    /// parameters a call fills, `local` / `once` parameters, a `raises` clause — and a call
+    /// through the stored value relies on them, so a `.by` module keeps the function's own
+    /// type
+    Keep,
 }
 
 /// Returns the [`ClassLiteral`] that "owns" a `Self` typevar (i.e., the class from its upper bound).

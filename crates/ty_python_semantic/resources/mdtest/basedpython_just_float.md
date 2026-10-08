@@ -308,6 +308,89 @@ class Counter:
         reveal_type(self.label)  # revealed: str
 ```
 
+## the rest of an inferred type widens as it does without the strict model
+
+of the numbers, the strict model holds back only the widening of `float` and `complex`. the rest of
+the precision an inferred type is widened from goes as it does in a module without it: an attribute
+assigned a constructor call is declared with the class rather than the exact `final` type of that
+one instance, and one assigned a narrowed value is declared without what the narrowing ruled out, so
+either can later hold an instance of a subclass; an attribute assigned a `range` is declared a
+`range` whether or not that one was empty; and a covariant type argument keeps the literal it was
+inferred from, since nothing reads a different type back out of it
+
+a function is the one thing a `.by` module widens differently, and not because of its numbers: it
+keeps the function's own type rather than widening it to a callable type, because a `.by` function
+can carry what no callable type expresses — reified type parameters, `context` parameters, `local`
+parameters, a `raises` clause
+
+```by
+class A: ...
+
+class B(A): ...
+
+class Out[out T]:
+    def __init__(self, t: T): ...
+
+class Holder:
+    def __init__(self, v: A):
+        self.a = A()
+        self.f = len
+        self.r = range(3)
+        self.out = Out(1)
+        if v is not B:
+            self.narrowed = v
+
+def replace(h: Holder):
+    reveal_type(h.a)  # revealed: A
+    reveal_type(h.f)  # revealed: def len(obj: Sized, /) -> int
+    reveal_type(h.out)  # revealed: Out[1]
+    reveal_type(h.narrowed)  # revealed: A
+    h.a = B()
+    h.narrowed = B()
+    h.r = range(0)
+```
+
+## `strict-float` gives a `.py` module the same widening
+
+a `.py` module that opts into the strict model widens its numbers exactly as the `.by` module above
+does, holding back only `float` and `complex`. a function widens to its callable type as it does in
+any `.py` module: keeping it is part of what `.by` is, not of its numeric model
+
+```toml
+[analysis]
+strict-float = true
+
+[environment]
+python-version = "3.12"
+```
+
+```py
+class A: ...
+class B(A): ...
+
+class Out[T]:
+    def __init__(self, t: T) -> None: ...
+    def get(self) -> T:
+        raise NotImplementedError
+
+class Holder:
+    def __init__(self, v: A, x: float) -> None:
+        self.x = x
+        self.f = len
+        self.r = range(3)
+        self.out = Out(1)
+        if not isinstance(v, B):
+            self.narrowed = v
+
+def replace(h: Holder) -> None:
+    reveal_type(h.x)  # revealed: float
+    reveal_type(h.f)  # revealed: (obj: Sized, /) -> int
+    reveal_type(h.out)  # revealed: Out[Literal[1]]
+    reveal_type(h.narrowed)  # revealed: A
+    h.narrowed = B()
+    h.r = range(0)
+```
+
 ## a container's element type, which is what the compiler lays out
 
 Reading an element out of a `list[float]` and iterating one both go through the same annotation, so

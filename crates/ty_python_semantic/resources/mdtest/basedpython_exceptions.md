@@ -161,6 +161,49 @@ def main():
         pass
 ```
 
+## a stored function still raises what it declares
+
+a type inferred from a stored value is widened, but a `.by` module keeps a function's own type
+rather than widening it to a callable type, which has no `raises` clause. so a call through a
+function read back out of a list, a dict, a tuple or an attribute still raises what the function
+declares
+
+```by
+def p() -> int raises ValueError:
+    raise ValueError
+
+class Holder:
+    def __init__(self):
+        self.p = p
+
+listed = [p]
+keyed = {"a": p}
+paired = (p, 1)
+held = Holder()
+appended = []
+appended.append(p)
+
+def from_list() -> int raises KeyError:
+    # error: [undeclared-raise] "`from_list` can raise `ValueError`, which its `raises` clause does not include"
+    return listed[0]()
+
+def from_dict() -> int raises KeyError:
+    # error: [undeclared-raise] "`from_dict` can raise `ValueError`, which its `raises` clause does not include"
+    return keyed["a"]()
+
+def from_tuple() -> int raises KeyError:
+    # error: [undeclared-raise] "`from_tuple` can raise `ValueError`, which its `raises` clause does not include"
+    return paired[0]()
+
+def from_attribute() -> int raises KeyError:
+    # error: [undeclared-raise] "`from_attribute` can raise `ValueError`, which its `raises` clause does not include"
+    return held.p()
+
+def from_append() -> int raises KeyError:
+    # error: [undeclared-raise] "`from_append` can raise `ValueError`, which its `raises` clause does not include"
+    return appended[0]()
+```
+
 ## `raises Never` cannot raise
 
 ```by
