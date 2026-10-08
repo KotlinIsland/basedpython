@@ -35,6 +35,15 @@ class Socket:
     let match: str
     var case: bytes
 
+# it is also the name a declaration keyword introduces
+protocol match:
+    def go(self) -> int
+
+newtype lazy = int
+
+enum class case:
+    case A
+
 # the vendored typeshed spells an optional with the postfix marker, in every
 # position a stub writes one
 class Cursor:
@@ -76,6 +85,15 @@ class Socket:
     let type: int
     let match: str
     var case: bytes
+
+# it is also the name a declaration keyword introduces
+protocol match:
+    def go(self) -> int
+
+newtype lazy = int
+
+enum class case:
+    case A
 
 # the vendored typeshed spells an optional with the postfix marker, in every
 # position a stub writes one

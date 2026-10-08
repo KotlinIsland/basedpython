@@ -6623,6 +6623,39 @@ x = (local cast int)
     }
 
     #[test]
+    fn semantic_tokens_soft_keyword_after_a_declaration_keyword() {
+        // a soft keyword after `protocol`, `newtype` or `enum class` is the name the
+        // declaration introduces
+        let test = SemanticTokenTest::new_by(
+            "
+protocol match:
+    x: int
+
+newtype lazy = int
+
+enum class case:
+    case A
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "protocol" @ 1..9: Keyword
+        "match" @ 10..15: Class [definition]
+        "x" @ 21..22: Variable [definition]
+        "int" @ 24..27: Class
+        "newtype" @ 29..36: Keyword
+        "lazy" @ 37..41: Variable [definition]
+        "int" @ 44..47: Class
+        "enum class" @ 49..59: Keyword
+        "case" @ 60..64: Class [definition]
+        "case" @ 70..74: Keyword
+        "A" @ 75..76: Class [definition]
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_super_keyword() {
         let test = SemanticTokenTest::new_by(
             "

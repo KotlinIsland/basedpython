@@ -19,6 +19,12 @@ extension list[Element: int]:
         return sum(self)
 
 
+# a soft keyword names the extended type like any other name
+extension type:
+    def short_name(self) -> str:
+        return self.__name__[:2]
+
+
 # computed property
 extension str:
     @property
@@ -79,6 +85,12 @@ extension list:
 extension list[Element: int]:
     def total(self) -> int:
         return sum(self)
+
+
+# a soft keyword names the extended type like any other name
+extension type:
+    def short_name(self) -> str:
+        return self.__name__[:2]
 
 
 # computed property
