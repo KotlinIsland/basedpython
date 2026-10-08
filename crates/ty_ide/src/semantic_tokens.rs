@@ -6559,6 +6559,37 @@ class A:
     }
 
     #[test]
+    fn semantic_tokens_soft_keyword_parameter_after_a_modifier() {
+        // a soft keyword after a parameter's modifiers is the parameter's name
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    init(let cast: int, var match: int)
+
+def f(local type: int, once lazy: int): ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "init" @ 14..18: Keyword
+        "cast" @ 23..27: Parameter [definition]
+        "int" @ 29..32: Class
+        "match" @ 38..43: Parameter [definition]
+        "int" @ 45..48: Class
+        "f" @ 55..56: Function [definition]
+        "local" @ 57..62: Keyword
+        "type" @ 63..67: Parameter [definition]
+        "int" @ 69..72: Class
+        "once" @ 74..78: Keyword
+        "lazy" @ 79..83: Parameter [definition]
+        "int" @ 85..88: Class
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_super_keyword() {
         let test = SemanticTokenTest::new_by(
             "

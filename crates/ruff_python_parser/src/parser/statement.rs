@@ -7885,7 +7885,7 @@ impl<'src> Parser<'src> {
         // permissive here; the `init_method` lowering rejects combinations that
         // are invalid for this context
         while self.at(TokenKind::Name)
-            && self.peek() == TokenKind::Name
+            && declares_a_name(self.peek())
             && is_param_modifier_kw(self.src_text(self.current_token_range()))
         {
             let kw = self.src_text(self.current_token_range()).to_string();
@@ -7901,7 +7901,7 @@ impl<'src> Parser<'src> {
         if matches!(allow_context, AllowContextModifier::Yes)
             && self.at(TokenKind::Name)
             && self.src_text(self.current_token_range()) == "context"
-            && self.peek() == TokenKind::Name
+            && declares_a_name(self.peek())
         {
             self.error_if_not_basedpython(
                 "`context` parameter modifier is not valid in .py files".to_string(),
@@ -7916,11 +7916,11 @@ impl<'src> Parser<'src> {
         // order (`once local fn`). Like `let`, the keywords carry no AST field:
         // the `Parameter.range` covers them (it starts before this run) and the
         // strip transform + ty analysis detect them from the source span. The
-        // trailing `Name` guard keeps a parameter literally named `local`/`once`
+        // trailing name guard keeps a parameter literally named `local`/`once`
         // (`def f(local)`) from being read as a modifier.
         while self.at(TokenKind::Name)
             && matches!(self.src_text(self.current_token_range()), "local" | "once")
-            && self.peek() == TokenKind::Name
+            && declares_a_name(self.peek())
         {
             self.error_if_not_basedpython(
                 "`local` / `once` parameter modifiers are not valid in .py files".to_string(),

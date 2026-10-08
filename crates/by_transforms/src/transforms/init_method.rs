@@ -552,6 +552,26 @@ mod tests {
         );
     }
 
+    /// a soft keyword is the name of the parameter its modifiers precede, and of the
+    /// attribute it declares
+    #[test]
+    fn a_soft_keyword_names_a_declaring_parameter() {
+        check(
+            indoc! {"
+                class A:
+                    init(let cast: int, var match: int, private let type: int, local lazy: int, let case: int)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, cast: int, match: int, type: int, lazy: int, case: int):
+                        self.cast: int = cast
+                        self.match: int = match
+                        self.__type: int = type
+                        self.case: int = case
+            "},
+        );
+    }
+
     // `var` is accepted as the mutable counterpart of `let`; for an init
     // parameter it self-assigns identically
     #[test]
