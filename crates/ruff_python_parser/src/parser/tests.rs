@@ -600,6 +600,69 @@ fn basedpython_local_once_as_bare_param_name() {
     }
 }
 
+/// the parameter names of the first function in `parsed`, which may be the first
+/// statement of a class body
+fn parameter_names(parsed: &Parsed<ModModule>) -> Vec<String> {
+    let function = match parsed.suite().first() {
+        Some(Stmt::FunctionDef(function)) => function,
+        Some(Stmt::ClassDef(class)) => match class.body.first() {
+            Some(Stmt::FunctionDef(function)) => function,
+            other => panic!("expected a method, got {other:?}"),
+        },
+        other => panic!("expected a function or a class, got {other:?}"),
+    };
+    function
+        .parameters
+        .iter()
+        .map(|parameter| parameter.name().to_string())
+        .collect()
+}
+
+#[test]
+fn basedpython_param_modifier_before_a_soft_keyword_name() {
+    // a soft keyword lexes as its own token kind, but after a parameter modifier it
+    // is the parameter's name like any other identifier
+    for keyword in ["match", "case", "type", "lazy", "cast"] {
+        for modifier in [
+            "let",
+            "var",
+            "private",
+            "private let",
+            "local",
+            "once",
+            "once local",
+            "context",
+            "context local",
+        ] {
+            let source = format!("def f({modifier} {keyword}: int, {modifier} b: int): ...\n");
+            let parsed = parse_basedpython_module_with_errors(&source);
+            assert_eq!(parsed.errors(), &[], "expected a clean parse of `{source}`");
+            assert_eq!(parameter_names(&parsed), [keyword, "b"], "{source}");
+        }
+        let source = format!("class A:\n    init(let {keyword}: int, var b: int = 1)\n");
+        let parsed = parse_basedpython_module_with_errors(&source);
+        assert_eq!(parsed.errors(), &[], "expected a clean parse of `{source}`");
+        assert_eq!(parameter_names(&parsed), ["self", keyword, "b"], "{source}");
+    }
+
+    // a modifier keyword followed by a separator is the parameter itself, whether or
+    // not a soft keyword names a parameter beside it
+    for (source, names) in [
+        ("def f(let, match): ...\n", &["let", "match"][..]),
+        ("def f(local, type): ...\n", &["local", "type"]),
+        ("def f(match, let): ...\n", &["match", "let"]),
+        ("def f(let let): ...\n", &["let"]),
+        (
+            "def f(context: int, cast: int): ...\n",
+            &["context", "cast"],
+        ),
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert_eq!(parsed.errors(), &[], "expected a clean parse of `{source}`");
+        assert_eq!(parameter_names(&parsed), names, "{source}");
+    }
+}
+
 #[test]
 fn basedpython_local_once_param_rejected_in_py() {
     // the modifiers are `.by`-only; a `.py` file using them collects a

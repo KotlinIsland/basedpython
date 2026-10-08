@@ -28,6 +28,10 @@ def with_context(local fn: () -> None, context c: int) -> None: ...
 def not_modifiers(local, once) -> None: ...
 
 
+# a soft keyword after the modifiers is the parameter's name
+def soft_keyword_names(local type: int, once  match: () -> None, context cast: int) -> None: ...
+
+
 # keyword-only, variadic and defaulted parameters
 def positions(local a: int, *, once cb: () -> None = print) -> None: ...
 
@@ -66,6 +70,12 @@ def with_context(local fn: () -> None, context c: int) -> None: ...
 
 # parameters literally named `local` / `once` are not modifiers
 def not_modifiers(local, once) -> None: ...
+
+
+# a soft keyword after the modifiers is the parameter's name
+def soft_keyword_names(
+    local type: int, once match: () -> None, context cast: int
+) -> None: ...
 
 
 # keyword-only, variadic and defaulted parameters

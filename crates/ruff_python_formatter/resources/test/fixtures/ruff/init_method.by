@@ -20,6 +20,10 @@ class PlainParams:
     init(self, a: int, let b: int)
 
 
+class SoftKeywordNames:
+    init(let cast: int, var match: int, private let type: int, local lazy: int)
+
+
 class DefinitionModifiers:
     private init(self, let a: int)
 
