@@ -1022,6 +1022,30 @@ fn basedpython_decorated_protocol_keyword() {
     assert_eq!(names, ["runtime_checkable", "protocol_class"]);
 }
 
+/// in a `.py` file a decorator over a modifier word that starts no definition gets python's
+/// own recovery, as a decorator over any other statement does
+#[test]
+fn a_decorator_over_a_modifier_word_in_a_py_file_recovers() {
+    for source in [
+        "@d\nfinal x\n",
+        "@d\nfinal = 1\n",
+        "@d\nprivate x = 1\n",
+        "@d\nprivate protocol cast int\n",
+    ] {
+        let parsed = crate::parse_unchecked(source, ParseOptions::from(Mode::Module));
+        assert!(
+            parsed
+                .errors()
+                .iter()
+                .any(|error| error.error.to_string().starts_with(
+                    "Expected class, function definition or async function definition"
+                )),
+            "{source}: {:?}",
+            parsed.errors()
+        );
+    }
+}
+
 #[test]
 fn basedpython_final_in_modifier_chain_keeps_final_marker() {
     // `final` combined with another modifier must still carry the `__final__`

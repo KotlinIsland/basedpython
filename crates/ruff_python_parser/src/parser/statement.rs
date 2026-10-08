@@ -7577,9 +7577,8 @@ impl<'src> Parser<'src> {
         // basedpython: a modifier chain also prefixes a *binding* — `export let
         // a = 1` — which is not what `parse_with_modifier` reads. When the chain
         // does not end at a definition the statement is parsed as the decorated
-        // binding it is instead
-        if at_modifier && (!self.options.is_basedpython || self.modifier_chain_ends_at_definition())
-        {
+        // binding it is instead, or in a `.py` file gets python's own recovery
+        if at_modifier && self.modifier_chain_ends_at_definition() {
             return self.parse_with_modifier(start, decorators);
         }
 
