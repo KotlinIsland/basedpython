@@ -447,6 +447,36 @@ a = A(s)
 a.m()  # ok — bound methods resolve
 ```
 
+## a stored function still has its `context` parameters filled
+
+a type inferred from a stored value is widened, but a `.by` module keeps a function's own type
+rather than widening it to a callable type, which has no `context` parameters. so a function read
+back out of a list, a dict, a tuple or an attribute is still a plain function, and its `context`
+parameters are filled where it is called
+
+```by
+def f(a: int, context b: str) -> str:
+    return b
+
+class Holder:
+    def __init__(self):
+        self.f = f
+
+context s = "filled"
+listed = [f]
+keyed = {"a": f}
+paired = (f, 1)
+held = Holder()
+appended = []
+appended.append(f)
+
+reveal_type(listed[0](1))  # revealed: str
+reveal_type(keyed["a"](1))  # revealed: str
+reveal_type(paired[0](1))  # revealed: str
+reveal_type(held.f(1))  # revealed: str
+reveal_type(appended[0](1))  # revealed: str
+```
+
 ## an overloaded callee fills a parameter every overload agrees on
 
 Which overload a call selects is decided by the arguments it is given, so an argument may be written

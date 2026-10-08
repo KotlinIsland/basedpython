@@ -444,6 +444,58 @@ assert len(calls) == 1, "an effectful value is evaluated once"
 print("ok")
 "#;
 
+/// basedpython whose module-level `assert`s run what the transpiler writes out from the
+/// checker's spelling of a type that holds a `float`. `float` in basedpython is just `float`,
+/// not python's `int | float`, so a type test's probe compares the arguments a `list[float]`
+/// subclass records against `float`, and a reified type parameter is handed `float` itself
+const JUST_FLOAT_PROGRAM: &str = r#"
+# a type test names the alias, so the probe is rebuilt from the alias's value
+type Floats = list[float]
+
+class FloatList(list[float]): ...
+class IntList(list[int]): ...
+
+def floats(v: object) -> bool:
+    return v is Floats
+
+assert floats(FloatList()) is True, "a list subclass of float is a list[float]"
+assert floats(IntList()) is False, "a list subclass of int is not"
+assert (FloatList() cast? Floats) is not None, "a checked cast accepts a list subclass of float"
+assert (IntList() cast? Floats) is None, "and refuses a list subclass of int"
+
+# a reified type parameter is handed `float` itself
+class Tagged[reified T]:
+    def __init__(self, t: T):
+        self.t = t
+
+    def argument(self) -> object:
+        return T
+
+def argument[reified T](x: T) -> object:
+    return T
+
+def from_variable(y: float) -> object:
+    return argument(y)
+
+def from_floats(ys: list[float]) -> object:
+    return argument(ys)
+
+def from_complex(c: complex) -> object:
+    return argument(c)
+
+class Made: ...
+
+assert argument(1.5) === float, f"a float literal reifies as {argument(1.5)}"
+assert from_variable(1.5) === float, f"a float variable reifies as {from_variable(1.5)}"
+assert from_floats([1.5]) == list[float], f"a list of floats reifies as {from_floats([1.5])}"
+assert from_complex(1j) === complex, f"a complex variable reifies as {from_complex(1j)}"
+# a constructed value is exactly a `Made`, and the argument is the class
+assert argument(Made()) === Made, f"a constructed value reifies as {argument(Made())}"
+assert Tagged(1.5).argument() === float, f"a float literal specializes as {Tagged(1.5).argument()}"
+
+print("ok")
+"#;
+
 const PEP695_PROBE: &str = "type X[T] = T";
 
 /// pep 696 defaults in native syntax plus the `has_default()` accessor the probe
@@ -537,4 +589,18 @@ fn type_param_defaults_resolve_at_runtime() {
         return;
     };
     run_program(&python, DEFAULTS_PROGRAM);
+}
+
+/// a reified class needs 3.13, so this is probed like [`DEFAULTS_PROGRAM`]
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_check_written_from_a_float_type_checks_just_float() {
+    let Some(python) = python_supporting(PEP696_PROBE) else {
+        eprintln!("skipping just-float runtime test: no 3.13+ interpreter found");
+        return;
+    };
+    run_program(&python, JUST_FLOAT_PROGRAM);
 }

@@ -38,10 +38,10 @@ use crate::types::visitor::{
 use crate::types::{
     ApplyTypeMappingVisitor, BindingContext, BoundTypeVarInstance, CallableType, CallableTypes,
     ClassLiteral, ErrorContext, FindLegacyTypeVarsVisitor, IntersectionType, KnownClass,
-    KnownInstanceType, MaterializationKind, PromotionKind, PromotionMode, SubclassOfInner, Type,
-    TypeAliasType, TypeContext, TypeMapping, TypeRecursionContext, TypeVarBoundOrConstraints,
-    TypeVarKind, TypeVarVariance, UnionAccumulator, UnionType, binding_type,
-    infer_definition_types, inferred_declaration,
+    KnownInstanceType, LiteralPromotion, MaterializationKind, PromotionKind, PromotionMode,
+    SubclassOfInner, Type, TypeAliasType, TypeContext, TypeMapping, TypeRecursionContext,
+    TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, UnionAccumulator, UnionType,
+    binding_type, infer_definition_types, inferred_declaration,
 };
 use crate::{Db, FxIndexMap, FxOrderMap, FxOrderSet};
 use ty_python_core::definition::{Definition, DefinitionKind};
@@ -1759,20 +1759,30 @@ impl<'db> Specialization<'db> {
                 // reads a different type back out of it, so widening its literals only loses
                 // precision. (an invariant or contravariant argument keeps its literals too — the
                 // arm below flips promotion off, because widening it would be unsound)
-                (variance, TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular))
-                    if variance.is_covariant() =>
-                {
-                    ty.apply_type_mapping_impl(
-                        db,
-                        env,
-                        &TypeMapping::Promote(
-                            PromotionMode::On,
-                            PromotionKind::RegularKeepingLiterals,
-                        ),
-                        tcx,
-                        visitor,
-                    )
-                }
+                (
+                    variance,
+                    TypeMapping::Promote(
+                        PromotionMode::On,
+                        PromotionKind::Regular {
+                            literals: LiteralPromotion::Widen,
+                            numeric,
+                            functions,
+                        },
+                    ),
+                ) if variance.is_covariant() => ty.apply_type_mapping_impl(
+                    db,
+                    env,
+                    &TypeMapping::Promote(
+                        PromotionMode::On,
+                        PromotionKind::Regular {
+                            literals: LiteralPromotion::Keep,
+                            numeric: *numeric,
+                            functions: *functions,
+                        },
+                    ),
+                    tcx,
+                    visitor,
+                ),
                 (variance, _) if variance.is_covariant() => {
                     ty.apply_type_mapping_impl(db, env, type_mapping, tcx, visitor)
                 }

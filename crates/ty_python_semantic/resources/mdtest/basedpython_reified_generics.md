@@ -325,6 +325,37 @@ def g[T](x: T) -> T:
 c: (int) -> int = g  # ok — erased generic specializes to a plain callable
 ```
 
+## a reified generic keeps its type when stored
+
+a type inferred from a stored value is widened, but a `.by` module keeps a function's own type
+rather than widening it to a callable type, which has no slot for the specialization step either. so
+a reified generic can still be specialized once it is read back out of a list, a dict, a tuple or an
+attribute
+
+```by
+def name[reified T]() -> str:
+    return T.__name__
+
+class Holder:
+    def __init__(self):
+        self.f = name
+
+listed = [name]
+keyed = {"a": name}
+paired = (name, 1)
+held = Holder()
+appended = []
+appended.append(name)
+
+reveal_type(listed)  # revealed: list[def name[T]() -> str]
+reveal_type(held.f)  # revealed: def name[T]() -> str
+reveal_type(listed[0][int]())  # revealed: str
+reveal_type(keyed["a"][str]())  # revealed: str
+reveal_type(paired[0][bytes]())  # revealed: str
+reveal_type(held.f[float]())  # revealed: str
+reveal_type(appended[0][int]())  # revealed: str
+```
+
 ## overrides must keep the reified interface
 
 Specializations flow through the base type — `a.f[int]()` on `a: A` dispatches to the override at

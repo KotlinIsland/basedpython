@@ -318,6 +318,46 @@ mod tests {
         );
     }
 
+    /// `float` in basedpython is just `float`, so it is what a construction is specialized
+    /// with, not python's `int | float`. a covariant argument goes through the promotion
+    /// that would apply python's special case
+    #[test]
+    fn a_float_argument_specializes_as_just_float() {
+        let out = out_at(
+            indoc! {"
+                class A[out T]:
+                    def __init__(self, t: T): ...
+                def f(y: float):
+                    a = A(1.5)
+                    b = A(y)
+            "},
+            PythonVersion::PY312,
+        );
+        assert!(out.contains("a = A[float](1.5)"), "got: {out}");
+        assert!(out.contains("b = A[float](y)"), "got: {out}");
+    }
+
+    /// backlog N15 #1, constructor calls still widen `float` in `.by`: pinned so a fix shows up
+    /// here. the checker solves an invariant parameter from a `float` variable through python's
+    /// numeric special case, so the construction is typed `A[int | float]` and specialized that
+    /// way. the literal is right
+    #[test]
+    fn an_invariant_float_argument_still_specializes_as_int_or_float() {
+        let out = out_at(
+            indoc! {"
+                class A[T]:
+                    def __init__(self, t: T):
+                        self.t = t
+                def f(y: float):
+                    a = A(1.5)
+                    b = A(y)
+            "},
+            PythonVersion::PY312,
+        );
+        assert!(out.contains("a = A[float](1.5)"), "got: {out}");
+        assert!(out.contains("b = A[int | float](y)"), "got: {out}");
+    }
+
     #[test]
     fn generic_builtin_the_runtime_never_subscripts_stays_bare() {
         // a `zip` object is generic to the type checker, but no release of

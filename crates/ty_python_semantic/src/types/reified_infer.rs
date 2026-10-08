@@ -203,7 +203,7 @@ fn rendered_type_arguments<'db>(
             let ty = parameter
                 .value
                 .ok_or_else(|| ReifiedInferenceError::Unsolved(parameter.name.clone()))?;
-            let promoted = ty.promote(db, env);
+            let promoted = ty.promote_in(db, env, file);
             parameter
                 .kind
                 .spelling(db, env, file, promoted)
@@ -571,10 +571,11 @@ fn spell_specialization_arguments<'db>(
         if matches!(kind, ParameterKind::KeywordPack) {
             return Err(ReifiedInferenceError::NoBinding);
         }
-        // an argument is promoted one by one: a covariant parameter keeps the
-        // literal type it was inferred from, and only a class object can be
-        // written at runtime
-        let promoted = argument.promote(db, env);
+        // a covariant parameter keeps the literal type it was inferred from
+        // (`B[Literal[1]]`), and a literal has no runtime spelling, so each argument
+        // is promoted on its own, outside the class's variance, to the class it is
+        // an instance of — under the numeric model of the module it is written into
+        let promoted = argument.promote_in(db, env, file);
         // an unsolved parameter reads as `Never`, and one solved from something
         // the checker cannot see reads as `Unknown`. neither is an argument
         // anybody wrote down, so both say the same thing: name one
@@ -612,7 +613,7 @@ fn constructor_specialization<'db>(
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
 ) -> Result<RuntimeSpelling, ReifiedInferenceError<'db>> {
-    let Type::NominalInstance(instance) = constructed.promote(db, env) else {
+    let Type::NominalInstance(instance) = constructed.promote_in(db, env, file) else {
         return Err(ReifiedInferenceError::NoBinding);
     };
     let ClassType::Generic(alias) = instance.class(db, env) else {

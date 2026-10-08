@@ -326,6 +326,36 @@ f:
     sink(it)
 ```
 
+## a stored function's parameters are still checked
+
+a type inferred from a stored value is widened, but a `.by` module keeps a function's own type
+rather than widening it to a callable type. so a function read back out of a list, a dict, a tuple
+or an attribute still says which of its parameters are `local`, and handing a `local` to one that is
+not still escapes
+
+```by
+def keep(cb: () -> None):
+    cb()
+
+class Holder:
+    def __init__(self):
+        self.k = keep
+
+listed = [keep]
+keyed = {"a": keep}
+paired = (keep, 1)
+held = Holder()
+appended = []
+appended.append(keep)
+
+def use(local cb: () -> None):
+    listed[0](cb)  # error: [escaping-local]
+    keyed["a"](cb)  # error: [escaping-local]
+    paired[0](cb)  # error: [escaping-local]
+    held.k(cb)  # error: [escaping-local]
+    appended[0](cb)  # error: [escaping-local]
+```
+
 ## an opaque callee leaves the block unconstrained
 
 When the callee's callback shape cannot be inspected, there is no declaration to read, so the block
