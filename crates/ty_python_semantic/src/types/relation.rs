@@ -2522,6 +2522,11 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
 
             // For union simplification, we want to preserve the unpromotable form of a literal value,
             // and so redundancy is not symmetric.
+            //
+            // basedpython: this arm and the next one say that two literals holding one value each
+            // (`LiteralValueTypeKind::holds_one_value`) are related only when their kinds are equal.
+            // the union builder's `LiteralReceiverMethod` groups rely on that, and
+            // `one_valued_literals_are_related_only_by_kind` pins it
             (Type::LiteralValue(source), Type::LiteralValue(target))
                 if matches!(self.relation, TypeRelation::Redundancy { pure: false }) =>
             {

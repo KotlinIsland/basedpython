@@ -3537,16 +3537,7 @@ impl<'db> Type<'db> {
                 .elements(db)
                 .iter()
                 .all(|ty| ty.is_literal_or_union_of_literals(db, env)),
-            Type::LiteralValue(literal) => match literal.kind() {
-                LiteralValueTypeKind::String(_)
-                | LiteralValueTypeKind::Bytes(_)
-                | LiteralValueTypeKind::Int(_)
-                | LiteralValueTypeKind::Bool(_)
-                | LiteralValueTypeKind::Enum(_)
-                | LiteralValueTypeKind::Float(_)
-                | LiteralValueTypeKind::Complex(_) => true,
-                LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Template(_) => false,
-            },
+            Type::LiteralValue(literal) => literal.kind().holds_one_value(),
             Type::NominalInstance(_) => {
                 self.is_none(db) || self.is_bool(db) || self.is_enum(db, env)
             }
