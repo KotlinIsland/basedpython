@@ -38,19 +38,28 @@
 //! reason, we group literal types in `UnionBuilder`. Since every different string literal type
 //! shares exactly the same possible super-types, and none of them are subtypes of each other
 //! (unless exactly the same literal type), we can avoid many unnecessary redundancy checks.
+//!
+//! basedpython: the same holds one step removed, for a method bound to a literal such as
+//! `"a".lower`. looking up an attribute on a large literal union gives a union of as many bound
+//! methods, one per receiver (`kind.name.lower` for an enum `kind`, whose `name` is a string
+//! literal per member). two methods that differ only in their receiver are redundant with each
+//! other only if their receivers are, which two different literals never are, so these methods
+//! are grouped by everything but their receiver; see [`LiteralReceiverMethod`]
 
 use std::hint::cold_path;
 
 use super::RecursivelyDefined;
 use super::generic_gradual_intersections::{GenericIntersection, generic_gradual_intersection};
 use crate::types::enums::EnumComplement;
+use crate::types::function::FunctionType;
 use crate::types::regex;
 use crate::types::set_theoretic::expand_intersection_typevars_and_newtypes;
 use crate::types::visitor::any_over_type;
 use crate::types::{
-    BytesLiteralType, ClassLiteral, EnumLiteralType, IntersectionType, KnownClass,
-    KnownInstanceType, LiteralValueType, LiteralValueTypeKind, NegativeIntersectionElements,
-    StringLiteralType, SubclassOfType, Type, TypePair, TypeVarBoundOrConstraints, UnionType,
+    BytesLiteralType, ClassLiteral, EnumLiteralType, IntersectionType, KnownBoundMethodType,
+    KnownClass, KnownInstanceType, LiteralValueType, LiteralValueTypeKind,
+    NegativeIntersectionElements, StringLiteralType, SubclassOfType, Type, TypePair,
+    TypeVarBoundOrConstraints, UnionType,
 };
 use crate::{Db, FxOrderMap, FxOrderSet, ProgramEnvironment};
 use rustc_hash::FxHashSet;
@@ -309,6 +318,42 @@ impl<'db> Type<'db> {
     }
 }
 
+/// basedpython: a method bound to a literal that holds exactly one value, without its receiver
+///
+/// two bound methods with the same [`LiteralReceiverMethod`] are related only through their
+/// receivers: a bound method is a subtype of another only if its receiver is a subtype of the
+/// other's (see `check_bound_method_pair` and `check_known_bound_method_pair`). two different
+/// literals that each hold one value are never redundant with each other (see
+/// `LiteralValueTypeKind::holds_one_value`), so neither are two such methods with different
+/// receivers, and the union builder compares them by receiver instead of by relation
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LiteralReceiverMethod<'db> {
+    /// a function bound to its receiver, as in `"a".lower`
+    Function(FunctionType<'db>),
+    /// `str.startswith` bound to a string literal, as in `"a".startswith`
+    StrStartswith,
+}
+
+impl<'db> LiteralReceiverMethod<'db> {
+    /// split `ty` into the method and the literal it is bound to, when it is a method bound to
+    /// a literal that holds exactly one value
+    fn of(db: &'db dyn Db, ty: Type<'db>) -> Option<(Self, LiteralValueTypeKind<'db>)> {
+        let (method, receiver) = match ty {
+            Type::BoundMethod(method) => {
+                let Type::LiteralValue(receiver) = method.self_instance(db) else {
+                    return None;
+                };
+                (Self::Function(method.function(db)), receiver.kind())
+            }
+            Type::KnownBoundMethod(KnownBoundMethodType::StrStartswith(receiver)) => {
+                (Self::StrStartswith, LiteralValueTypeKind::String(receiver))
+            }
+            _ => return None,
+        };
+        receiver.holds_one_value().then_some((method, receiver))
+    }
+}
+
 #[derive(Debug)]
 enum UnionElement<'db> {
     Type(Type<'db>),
@@ -323,6 +368,12 @@ enum UnionElement<'db> {
         enum_class: ClassLiteral<'db>,
         literals: FxOrderMap<EnumLiteralType<'db>, bool>,
     },
+    /// basedpython: methods bound to different literals, keyed by the value of the literal each
+    /// is bound to
+    LiteralReceiverMethods {
+        method: LiteralReceiverMethod<'db>,
+        methods: FxOrderMap<LiteralValueTypeKind<'db>, Type<'db>>,
+    },
 }
 
 impl<'db> UnionElement<'db> {
@@ -333,6 +384,7 @@ impl<'db> UnionElement<'db> {
             UnionElement::StringLiterals(literals) => literals.len(),
             UnionElement::BytesLiterals(literals) => literals.len(),
             UnionElement::EnumLiterals { literals, .. } => literals.len(),
+            UnionElement::LiteralReceiverMethods { methods, .. } => methods.len(),
         }
     }
 
@@ -368,6 +420,9 @@ impl<'db> UnionElement<'db> {
                         .as_nominal_instance()
                         .is_none_or(|instance| instance.class_literal(db, env) != *enum_class),
                 ),
+                // recovery makes no relation-based simplification, and only an identical
+                // method could stand for one of these
+                UnionElement::LiteralReceiverMethods { .. } => ReduceResult::KeepIf(true),
                 UnionElement::Type(_) => unreachable!("ordinary types are handled before recovery"),
             };
         }
@@ -468,6 +523,10 @@ impl<'db> UnionElement<'db> {
                     !Type::from(LiteralValueType::new(*literal, *promotable))
                         .is_redundant_with(db, env, other_type)
                 }
+            }
+            UnionElement::LiteralReceiverMethods { methods, .. } => {
+                methods.retain(|_, method| should_retain_type(*method));
+                !methods.is_empty()
             }
             UnionElement::Type(_) => unreachable!("ordinary types are handled before reduction"),
         };
@@ -636,7 +695,7 @@ impl<'db> UnionBuilder<'db> {
                     let (enum_literal, _) = literals.first().unwrap();
                     replace_with.push(enum_literal.enum_class_instance(db, &self.env));
                 }
-                UnionElement::Type(_) => {}
+                UnionElement::LiteralReceiverMethods { .. } | UnionElement::Type(_) => {}
             }
         }
         for ty in replace_with {
@@ -684,7 +743,7 @@ impl<'db> UnionBuilder<'db> {
                         UnionElement::StringLiterals(literals) => acc + literals.len(),
                         UnionElement::BytesLiterals(literals) => acc + literals.len(),
                         UnionElement::EnumLiterals { literals, .. } => acc + literals.len(),
-                        UnionElement::Type(_) => acc,
+                        UnionElement::LiteralReceiverMethods { .. } | UnionElement::Type(_) => acc,
                     });
                     if should_widen(literals, self.recursively_defined) {
                         self.widen_literal_types(seen_aliases);
@@ -1070,7 +1129,57 @@ impl<'db> UnionBuilder<'db> {
         let mut ty_negated: Option<Type> = None;
         let mut to_remove = SmallVec::<[usize; 2]>::new();
 
+        // basedpython: a method bound to a literal joins the group of methods that differ from
+        // it only in their receiver, which it needs no relation query against
+        let original_ty = ty;
+        let mut receiver_group = LiteralReceiverMethod::of(db, ty);
+        let mut group_methods = None;
+
         for (i, element) in self.elements.iter_mut().enumerate() {
+            // the group's methods are handed over for the rest of the push, so the element is
+            // moved into the match rather than reborrowed, and the test that it is the group is
+            // made first: a guard would hold a borrow of it into the other arm
+            let joins_group = receiver_group.is_some_and(|(method, _)| {
+                matches!(
+                    element,
+                    UnionElement::LiteralReceiverMethods { method: group_method, .. }
+                        if *group_method == method
+                )
+            });
+            let element = match (joins_group, receiver_group, element) {
+                (
+                    true,
+                    Some((_, receiver)),
+                    UnionElement::LiteralReceiverMethods { methods, .. },
+                ) => {
+                    // every other method in the group has a different receiver, so only one bound
+                    // to the same receiver can be redundant with `ty`, or `ty` with it. it can
+                    // differ from `ty`, e.g. bound to the promotable form of the literal where
+                    // `ty` is bound to the unpromotable one, and only the relation can tell which
+                    // of the two stands for the other
+                    match methods.get(&receiver).copied() {
+                        None => {}
+                        Some(existing) if existing == ty => return,
+                        Some(existing)
+                            if !self.cycle_recovery && ty.is_redundant_with(db, env, existing) =>
+                        {
+                            return;
+                        }
+                        // `ty` takes the place of the method redundant with it
+                        Some(existing)
+                            if !self.cycle_recovery && existing.is_redundant_with(db, env, ty) => {}
+                        // neither stands for the other, so `ty` is kept as an element of its own
+                        Some(_) => {
+                            receiver_group = None;
+                            continue;
+                        }
+                    }
+                    group_methods = Some(methods);
+                    continue;
+                }
+                (_, _, element) => element,
+            };
+
             let element_type = match element.try_reduce(db, &self.env, ty, self.cycle_recovery) {
                 ReduceResult::KeepIf(keep) => {
                     if !keep {
@@ -1194,15 +1303,34 @@ impl<'db> UnionBuilder<'db> {
             }
         }
 
+        // the loop can replace `ty` with a merged type, which is not the method it was grouped as
+        let new_element = match (receiver_group, group_methods) {
+            (Some((_, receiver)), Some(methods)) if ty == original_ty => {
+                methods.insert(receiver, ty);
+                // descending, to keep the remaining indices valid after `swap_remove`
+                for index in to_remove.into_iter().rev() {
+                    self.elements.swap_remove(index);
+                }
+                return;
+            }
+            (Some((method, receiver)), None) if ty == original_ty => {
+                UnionElement::LiteralReceiverMethods {
+                    method,
+                    methods: FxOrderMap::from_iter([(receiver, ty)]),
+                }
+            }
+            _ => UnionElement::Type(ty),
+        };
+
         let mut to_remove = to_remove.into_iter();
         if let Some(first) = to_remove.next() {
-            self.elements[first] = UnionElement::Type(ty);
+            self.elements[first] = new_element;
             // We iterate in descending order to keep remaining indices valid after `swap_remove`.
             for index in to_remove.rev() {
                 self.elements.swap_remove(index);
             }
         } else {
-            self.elements.push(UnionElement::Type(ty));
+            self.elements.push(new_element);
         }
     }
 
@@ -1252,6 +1380,9 @@ impl<'db> UnionBuilder<'db> {
                                 .with_recursively_defined(recursively_defined),
                         )
                     }));
+                }
+                UnionElement::LiteralReceiverMethods { methods, .. } => {
+                    types.extend(methods.into_values());
                 }
                 // basedpython: a literal without a group of its own — a float or a complex —
                 // is carried as an ordinary element, so it is the only place the union's
@@ -2169,13 +2300,19 @@ mod tests {
         RecursivelyDefined, Type, UnionBuilder, UnionType,
     };
 
-    use crate::db::tests::{TestDb, setup_db};
+    use std::fmt::Write as _;
+
+    use crate::db::tests::{TestDb, TestDbBuilder, setup_db};
     use crate::place::{global_symbol, known_module_symbol};
     use crate::types::enums::enum_member_literals;
     use crate::types::type_alias::TypeAliasType;
-    use crate::types::{KnownClass, KnownInstanceType, Truthiness};
+    use crate::types::{
+        KnownClass, KnownInstanceType, LiteralValueType, LiteralValueTypeKind, Truthiness,
+    };
 
     use ruff_db::system::DbWithWritableSystem as _;
+    use ruff_db::testing::assert_function_query_was_not_run_by_name;
+    use ruff_python_ast::PythonVersion;
     use ty_module_resolver::KnownModule;
     use ty_python_core::ProgramFile;
 
@@ -2365,6 +2502,147 @@ mod tests {
                     .expect_union();
                 assert!(union.elements(db).contains(&left));
                 assert!(union.elements(db).contains(&right));
+            }
+        }
+    }
+
+    /// basedpython: a module of enums whose members are literals of their own kind
+    fn literal_receiver_enums_db() -> TestDb {
+        let mut source = String::from(
+            "from enum import Enum, IntEnum, StrEnum\n\n\
+             class Plain(Enum):\n    ONE = 1\n    TWO = 2\n\n\
+             class Name(StrEnum):\n    ONE = \"1\"\n    TWO = \"2\"\n\n\
+             class Code(IntEnum):\n",
+        );
+        for index in 0..64 {
+            writeln!(source, "    M{index} = {index}").unwrap();
+        }
+        let mut db = TestDbBuilder::new()
+            .with_python_version(PythonVersion::PY312)
+            .build()
+            .expect("valid TestDb setup");
+        db.write_dedented("/src/enums.py", &source).unwrap();
+        db
+    }
+
+    fn enum_members<'db>(db: &'db TestDb, name: &str) -> Vec<Type<'db>> {
+        let file = ruff_db::files::system_path_to_file(db, "/src/enums.py").unwrap();
+        let module = ProgramFile::new(db, file, db.program_environment().program(db));
+        let class = global_symbol(db, module, name)
+            .place
+            .expect_type()
+            .expect_class_literal();
+        enum_member_literals(db, class, None)
+            .expect("an enum")
+            .collect()
+    }
+
+    /// basedpython: a union of methods bound to many different literals, like `kind.name.lower`
+    /// for a large enum, is built without a single query: in particular no
+    /// `is_redundant_with_impl` for each pair of methods, which is what it used to cost
+    #[test]
+    fn methods_bound_to_literals_need_no_queries() {
+        let db = literal_receiver_enums_db();
+        // a handle on the same database and its event log, which the types below borrow
+        let mut events_db = db.clone();
+        let db = &db;
+        let env = db.program_environment();
+
+        let strings: Vec<Type> = (0..64)
+            .map(|index| Type::string_literal(db, format!("m{index}").as_str()))
+            .collect();
+        let ints: Vec<Type> = (0..64).map(Type::int_literal).collect();
+        let enum_members = enum_members(db, "Code");
+        assert_eq!(enum_members.len(), 64);
+
+        for (receivers, method) in [
+            (&strings, "lower"),
+            (&strings, "startswith"),
+            (&ints, "bit_length"),
+            (&enum_members, "bit_length"),
+        ] {
+            let methods: Vec<Type> = receivers
+                .iter()
+                .map(|receiver| receiver.member(db, &env, method).place.expect_type())
+                .collect();
+            events_db.take_salsa_events();
+
+            let union = UnionType::from_elements(db, &env, methods.iter().copied());
+
+            let events = events_db.take_salsa_events();
+            assert_function_query_was_not_run_by_name(db, "is_redundant_with_impl", None, &events);
+            let queries: Vec<_> = events
+                .iter()
+                .filter(|event| matches!(event.kind, salsa::EventKind::WillExecute { .. }))
+                .collect();
+            assert!(queries.is_empty(), "`{method}` ran {queries:#?}");
+            assert_eq!(union.expect_union().elements(db), methods.as_slice());
+        }
+    }
+
+    /// basedpython: two literals that each hold one value are related only when their kinds are
+    /// equal, the promotable one being redundant with the unpromotable one. grouping methods
+    /// bound to literals relies on it, see `LiteralValueTypeKind::holds_one_value`
+    #[test]
+    fn one_valued_literals_are_related_only_by_kind() {
+        let db = literal_receiver_enums_db();
+        let db = &db;
+        let env = db.program_environment();
+
+        // the same value as far as possible, in every kind holding one value
+        let literals = [
+            Type::int_literal(1),
+            Type::bool_literal(true),
+            Type::string_literal(db, "1"),
+            Type::bytes_literal(db, b"1"),
+            Type::float_literal(1.0),
+            Type::complex_literal(db, 1.0, 0.0),
+            enum_members(db, "Plain")[0],
+            enum_members(db, "Name")[0],
+            enum_members(db, "Code")[1],
+        ]
+        .map(|ty| ty.as_literal_value().expect("a literal").kind());
+
+        let mut kinds_seen = [false; 7];
+        for kind in literals {
+            assert!(kind.holds_one_value());
+            let index = match kind {
+                LiteralValueTypeKind::Int(_) => 0,
+                LiteralValueTypeKind::Bool(_) => 1,
+                LiteralValueTypeKind::String(_) => 2,
+                LiteralValueTypeKind::Bytes(_) => 3,
+                LiteralValueTypeKind::Float(_) => 4,
+                LiteralValueTypeKind::Complex(_) => 5,
+                LiteralValueTypeKind::Enum(_) => 6,
+                LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Template(_) => {
+                    panic!("`{kind:?}` holds many values")
+                }
+            };
+            kinds_seen[index] = true;
+        }
+        assert_eq!(
+            kinds_seen, [true; 7],
+            "a kind holding one value is not sampled"
+        );
+
+        let forms = |kind| {
+            [true, false].map(|promotable| Type::from(LiteralValueType::new(kind, promotable)))
+        };
+        for left in literals {
+            let [left_promotable, left_unpromotable] = forms(left);
+            assert!(left_promotable.is_redundant_with(db, &env, left_unpromotable));
+            assert!(!left_unpromotable.is_redundant_with(db, &env, left_promotable));
+            for right in literals.into_iter().filter(|right| *right != left) {
+                for left_form in forms(left) {
+                    for right_form in forms(right) {
+                        assert!(
+                            !left_form.is_redundant_with(db, &env, right_form),
+                            "{} is redundant with {}",
+                            left_form.display(db, &env),
+                            right_form.display(db, &env),
+                        );
+                    }
+                }
             }
         }
     }

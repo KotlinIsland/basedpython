@@ -101,6 +101,27 @@ pub(crate) enum LiteralValueTypeKind<'db> {
     Template(TemplateLiteralType<'db>),
 }
 
+impl LiteralValueTypeKind<'_> {
+    /// basedpython: whether a literal of this kind holds exactly one value
+    ///
+    /// two literals that each hold one value are related only when their kinds are equal (the
+    /// last `LiteralValue` arms of `TypeRelationChecker::check_type_pair`). the union builder
+    /// relies on that to group methods bound to different literals without comparing them, and
+    /// `one_valued_literals_are_related_only_by_kind` pins it
+    pub(crate) const fn holds_one_value(self) -> bool {
+        match self {
+            LiteralValueTypeKind::Int(_)
+            | LiteralValueTypeKind::Bool(_)
+            | LiteralValueTypeKind::String(_)
+            | LiteralValueTypeKind::Enum(_)
+            | LiteralValueTypeKind::Bytes(_)
+            | LiteralValueTypeKind::Float(_)
+            | LiteralValueTypeKind::Complex(_) => true,
+            LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::Template(_) => false,
+        }
+    }
+}
+
 impl<'db> LiteralValueType<'db> {
     pub(crate) fn new(
         kind: impl Into<LiteralValueTypeKind<'db>>,

@@ -150,6 +150,128 @@ def _(
     reveal_type(u2)  # revealed: Literal[Color.RED]
 ```
 
+## Methods bound to literals
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+looking up a method on a union of literals gives a union of bound methods, one for each literal. a
+method bound to `"a"` is not redundant with the same method bound to `"b"`, so each one is kept
+along with its receiver
+
+```py
+from enum import Enum
+from typing import Literal
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+    BLUE = 3
+
+def _(s: Literal["a", "b"], n: Literal[1, 2], color: Literal[Color.RED, Color.GREEN]):
+    # revealed: (Overload[def lower() -> LiteralString, def lower() -> str]) | (Overload[def lower() -> LiteralString, def lower() -> str])
+    reveal_type(s.lower)
+    reveal_type(s.lower.__self__)  # revealed: Literal["a", "b"]
+    reveal_type(s.lower())  # revealed: LiteralString
+    # revealed: (<method-wrapper 'startswith' of string 'a'>) | (<method-wrapper 'startswith' of string 'b'>)
+    reveal_type(s.startswith)
+    reveal_type(s.startswith("a"))  # revealed: bool
+    reveal_type(n.bit_length.__self__)  # revealed: Literal[1, 2]
+    reveal_type(color.__eq__.__self__)  # revealed: Literal[Color.RED, Color.GREEN]
+```
+
+an enum's `name` is the union of its members' names, so a method called on it is bound to each name
+
+```py
+def _(color: Color):
+    reveal_type(color.name.lower.__self__)  # revealed: Literal["RED", "GREEN", "BLUE"]
+    reveal_type(color.name.lower())  # revealed: LiteralString
+```
+
+the same method bound to the same literal appears once. when one receiver is the promotable form of
+the literal (the `"a"` written below) and the other is not (the declared `a`), the union keeps the
+method bound to the unpromotable one, as a union of the two literals keeps the unpromotable literal.
+promotion shows in the inferred list type
+
+```py
+def _(flag: bool, a: Literal["a"]):
+    reveal_type(a.lower if flag else a.lower)  # revealed: Overload[() -> LiteralString, () -> str]
+    reveal_type(a.lower if flag else "a".lower)  # revealed: Overload[() -> LiteralString, () -> str]
+    reveal_type("a".lower if flag else a.lower)  # revealed: Overload[() -> LiteralString, () -> str]
+    reveal_type(["a"])  # revealed: list[str]
+    reveal_type([(a.lower if flag else "a".lower).__self__])  # revealed: list[Literal["a"]]
+    reveal_type([("a".lower if flag else a.lower).__self__])  # revealed: list[Literal["a"]]
+```
+
+a type that holds every one of the bound methods subsumes them, whichever side of the union it is
+on. a method bound to a `LiteralString` is such a type for the same method bound to a string literal
+
+```py
+from typing import Callable
+from typing_extensions import LiteralString
+
+def _(flag: bool, s: Literal["a", "b"], f: Callable[[], str], x: LiteralString):
+    reveal_type(s.lower if flag else f)  # revealed: () -> str
+    reveal_type(f if flag else s.lower)  # revealed: () -> str
+    reveal_type(s.lower if flag else x.lower)  # revealed: Overload[() -> LiteralString, () -> str]
+    reveal_type(x.lower if flag else s.lower)  # revealed: Overload[() -> LiteralString, () -> str]
+```
+
+literals of different kinds can share a method: `True`, `1` and a member of an `IntEnum` or
+`IntFlag` all have `int.bit_length`, and a `StrEnum` member has the methods of `str`. a literal of
+one kind is never a literal of another, even where the two compare equal like `True` and `1`, so
+neither method stands for the other and both are kept
+
+```py
+from enum import IntEnum, IntFlag, StrEnum
+
+class Code(IntEnum):
+    ONE = 1
+    TWO = 2
+
+class Bits(IntFlag):
+    ONE = 1
+    TWO = 2
+
+class Name(StrEnum):
+    A = "a"
+    B = "b"
+
+def _(flag: bool, b: Literal[True], i: Literal[1], a: Literal["a"]):
+    # revealed: (bound method Literal[True].bit_length() -> int) | (bound method Literal[1].bit_length() -> int)
+    reveal_type(b.bit_length if flag else i.bit_length)
+    reveal_type((b.bit_length if flag else i.bit_length).__self__)  # revealed: Literal[True, 1]
+    reveal_type((i.bit_length if flag else b.bit_length).__self__)  # revealed: Literal[1, True]
+    # revealed: (bound method Literal[Code.ONE].bit_length() -> int) | (bound method Literal[1].bit_length() -> int)
+    reveal_type(Code.ONE.bit_length if flag else i.bit_length)
+    reveal_type((Code.ONE.bit_length if flag else i.bit_length).__self__)  # revealed: Literal[Code.ONE, 1]
+    reveal_type((i.bit_length if flag else Code.ONE.bit_length).__self__)  # revealed: Literal[1, Code.ONE]
+    reveal_type((Bits.ONE.bit_length if flag else i.bit_length).__self__)  # revealed: Literal[Bits.ONE, 1]
+    reveal_type((i.bit_length if flag else Bits.ONE.bit_length).__self__)  # revealed: Literal[1, Bits.ONE]
+    # revealed: (bound method Literal[Name.A].lower() -> str) | (Overload[() -> LiteralString, () -> str])
+    reveal_type(Name.A.lower if flag else a.lower)
+    reveal_type((Name.A.lower if flag else a.lower).__self__)  # revealed: Literal[Name.A, "a"]
+    reveal_type((a.lower if flag else Name.A.lower).__self__)  # revealed: Literal["a", Name.A]
+```
+
+## Methods bound to template literals
+
+a template literal holds many strings, like `LiteralString`. a method bound to `f"v{int}"` subsumes
+the same method bound to `"v1"` or `"v2"`, but not the one bound to `"x"`, which the template does
+not produce
+
+```by
+def _(flag: bool, s: "v1" | "v2" | "x", t: f"v{int}"):
+    # revealed: (Overload[() -> LiteralString, () -> str]) | (bound method f"v{int}".lower() -> str)
+    reveal_type(s.lower if flag else t.lower)
+    # revealed: (bound method f"v{int}".lower() -> str) | (Overload[() -> LiteralString, () -> str])
+    reveal_type(t.lower if flag else s.lower)
+    reveal_type((s.lower if flag else t.lower).__self__)  # revealed: "x" | f"v{int}"
+    reveal_type((t.lower if flag else s.lower).__self__)  # revealed: f"v{int}" | "x"
+```
+
 ## Do not erase `Unknown`
 
 ```py
