@@ -159,6 +159,17 @@ fn force_unwrap_before_debug_equal() -> ParseErrorType {
     )
 }
 
+/// basedpython: which infix cast a `cast` keyword followed by `after_cast` is, or `None` when
+/// that `cast` is an ordinary name
+fn infix_cast_kind(after_cast: TokenKind) -> Option<CastKind> {
+    match after_cast {
+        TokenKind::Exclamation => Some(CastKind::Checked),
+        TokenKind::Question => Some(CastKind::Try),
+        kind if EXPR_SET.contains(kind) || kind.is_soft_keyword() => Some(CastKind::Static),
+        _ => None,
+    }
+}
+
 impl<'src> Parser<'src> {
     /// Returns `true` if the parser is at a name or keyword (including soft keyword) token.
     pub(super) fn at_name_or_keyword(&self) -> bool {
@@ -577,14 +588,7 @@ impl<'src> Parser<'src> {
             // expression level (where `left_precedence` is `None`). Lowered by
             // `transforms::checked_cast`.
             if current_token == TokenKind::Cast
-                && let Some(cast_kind) = match self.peek() {
-                    TokenKind::Exclamation => Some(CastKind::Checked),
-                    TokenKind::Question => Some(CastKind::Try),
-                    peeked if EXPR_SET.contains(peeked) || peeked.is_soft_keyword() => {
-                        Some(CastKind::Static)
-                    }
-                    _ => None,
-                }
+                && let Some(cast_kind) = infix_cast_kind(self.peek())
             {
                 if left_precedence > OperatorPrecedence::None {
                     break;
@@ -3584,7 +3588,9 @@ impl<'src> Parser<'src> {
     ///
     /// Only consumed when a bare name (a type) directly follows, so a
     /// parenthesized name (`(local)`), a call (`once(x)`), or a subscript
-    /// (`local[i]`) is never mistaken for a modifier.
+    /// (`local[i]`) is never mistaken for a modifier. A soft keyword is a name
+    /// there too (`(local type[int])`), except a `cast` that is the infix cast
+    /// operator applied to `local`.
     ///
     /// A run may spell both (`once local fn`); `once` is the stronger of the two
     /// (it implies the borrow) and wins.
@@ -3592,11 +3598,16 @@ impl<'src> Parser<'src> {
         let mut borrow = ParameterBorrow::None;
         while self.at(TokenKind::Name)
             && matches!(self.src_text(self.current_token_range()), "local" | "once")
-            && self.peek() == TokenKind::Name
-            // `(local x=1)` is an anonymous named tuple *value*, which has no
-            // parameters to borrow — leave the name alone so it keeps its
-            // existing reading
-            && self.peek2().1 != TokenKind::Equal
+            && match self.peek2() {
+                // `(local x=1)` is an anonymous named tuple *value*, which has no
+                // parameters to borrow — leave the name alone so it keeps its
+                // existing reading
+                (_, TokenKind::Equal) => false,
+                // `(local cast int)` casts a value named `local`, as it would
+                // anywhere else
+                (TokenKind::Cast, after_cast) => infix_cast_kind(after_cast).is_none(),
+                (next, _) => next == TokenKind::Name || next.is_soft_keyword(),
+            }
         {
             self.error_if_not_basedpython(
                 "`local` / `once` in a callable type are not valid in .py files".to_string(),

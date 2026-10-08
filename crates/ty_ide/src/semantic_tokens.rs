@@ -6590,6 +6590,39 @@ def f(local type: int, once lazy: int): ...
     }
 
     #[test]
+    fn semantic_tokens_soft_keyword_after_a_callable_type_modifier() {
+        // a soft keyword after a callable-type parameter's modifier is the type it
+        // borrows, while `local cast int` stays a cast of `local`
+        let test = SemanticTokenTest::new_by(
+            "
+def f(make: (local type[int], once str) -> None): ...
+
+local = 1
+x = (local cast int)
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 5..6: Function [definition]
+        "make" @ 7..11: Parameter [definition]
+        "local" @ 14..19: Keyword
+        "type" @ 20..24: Class
+        "int" @ 25..28: Class
+        "once" @ 31..35: Keyword
+        "str" @ 36..39: Class
+        "None" @ 44..48: BuiltinConstant
+        "local" @ 56..61: Variable [definition]
+        "1" @ 64..65: Number
+        "x" @ 66..67: Variable [definition]
+        "local" @ 71..76: Variable
+        "cast" @ 77..81: Keyword
+        "int" @ 82..85: Class
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_super_keyword() {
         let test = SemanticTokenTest::new_by(
             "

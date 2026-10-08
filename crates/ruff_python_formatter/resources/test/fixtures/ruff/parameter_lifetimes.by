@@ -30,6 +30,11 @@ def soft_keyword_names(local type: int, once  match: () -> None, context cast: i
 def positions(local a: int, *, once cb: () -> None = print) -> None: ...
 
 
+# in a callable type the modifier borrows the parameter it precedes, which may be
+# named by a soft keyword
+def borrows(make: (local type[int], once str) -> int) -> int: ...
+
+
 # lambdas take the same modifiers
 handler = lambda local fn: fn
 
