@@ -45,6 +45,10 @@ pub(crate) struct TemplateTypePass<'src> {
 }
 
 impl TypeAwarePass for TemplateTypePass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::TemplateType)
+    }
+
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = TemplateType {
             types,

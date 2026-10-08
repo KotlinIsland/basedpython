@@ -747,12 +747,20 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         Some(super::ast_driver::Lowering::ParametricIs)
     }
 
-    /// the type it tests against is printed as the runtime probe it builds, literals, the
-    /// `None` of an optional and the emitted name of a `private` class included
+    /// the runtime probe is built from the checker's reading of the type it tests against,
+    /// and the type is left out where the checker settles the test without it, so it writes
+    /// these lowerings of the type as written itself — literals, the `None` of an optional
+    /// and the emitted name of a `private` class among them. where the probe passes the
+    /// type as written through, the lowerings inside pass through with it
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
         &[
+            super::ast_driver::Lowering::AnonNamedTuple,
+            super::ast_driver::Lowering::Callable,
+            super::ast_driver::Lowering::DynamicKeyword,
+            super::ast_driver::Lowering::JustFloat,
             super::ast_driver::Lowering::LiteralType,
             super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::Typeof,
             super::ast_driver::Lowering::VisibilityRename,
         ]
     }

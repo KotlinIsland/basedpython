@@ -496,6 +496,147 @@ assert Tagged(1.5).argument() === float, f"a float literal specializes as {Tagge
 print("ok")
 "#;
 
+/// basedpython whose module-level `assert`s run checked casts and type tests against targets
+/// another lowering rewrites where they are written — `float`, `int?`, a literal, a tuple
+/// type, `typeof`, a callable type, `dynamic` and the rest. the check is built from the
+/// checker's reading of the target, so it tests what the target means rather than how it
+/// is spelled; and where the operand's type cannot hold the target, the checker settles the
+/// check without the target at all
+const LOWERED_TARGETS_PROGRAM: &str = r#"
+y = 1
+
+def raises(f: () -> object) -> bool:
+    try:
+        f()
+    except TypeError:
+        return True
+    return False
+
+# the operand's type cannot hold the target, so the checker settles the cast without the
+# target: it never succeeds
+def int_to_float(x: int) -> float:
+    return x cast! float
+
+def int_to_float_or_none(x: int) -> float?:
+    return x cast? float
+
+assert raises(lambda: int_to_float(3)), "an int is not a float"
+assert int_to_float_or_none(3) is None, "an int is not a float"
+
+def str_to_one(x: str) -> object:
+    return x cast? 1
+
+def str_to_pair(x: str) -> object:
+    return x cast? (int, str)
+
+def str_to_named(x: str) -> object:
+    return x cast? (a: int, b: str)
+
+def str_to_inf(x: str) -> object:
+    return x cast? float.inf
+
+def str_to_floats(x: str) -> object:
+    return x cast? tuple[float, ...]
+
+assert str_to_one("1") is None
+assert str_to_pair("a") is None
+assert str_to_named("a") is None
+assert str_to_inf("inf") is None
+assert str_to_floats("a") is None
+
+# the operand may hold the target, so the check is built from the checker's reading of it
+def to_float(x: object) -> float:
+    return x cast! float
+
+assert to_float(3.5) == 3.5
+assert raises(lambda: to_float(3)), "an int is not a float"
+
+def to_optional(x: object) -> int?:
+    return x cast! int?
+
+assert to_optional(None) is None
+assert to_optional(1) == 1
+assert raises(lambda: to_optional("a"))
+
+class FloatList(list[float]): ...
+class IntList(list[int]): ...
+
+def to_pair(x: object) -> object:
+    return x cast? (int, str)
+
+def to_floats(x: object) -> object:
+    return x cast? list[float]
+
+def to_y(x: object) -> object:
+    return x cast? typeof y
+
+def to_y_plus_one(x: object) -> object:
+    return x cast? typeof y + 1
+
+def to_float_class(x: object) -> object:
+    return x cast? type[float]
+
+def to_pattern(x: object) -> object:
+    return x cast? f"a{int}b"
+
+def to_dynamic_list(x: object) -> object:
+    return x cast? list[dynamic]
+
+def to_callbacks(x: object) -> object:
+    return x cast? list[(int) -> str]
+
+assert to_pair((1, "a")) is not None
+assert to_pair([1, "a"]) is None
+assert to_floats(FloatList()) is not None
+assert to_floats(IntList()) is None
+assert to_y(1) == 1
+assert to_y(2) is None
+assert to_y(True) is None
+assert to_y_plus_one(2) == 2
+assert to_y_plus_one(1) is None
+assert to_float_class(float) === float
+assert to_float_class(int) is None
+assert to_pattern("a1b") == "a1b"
+assert to_pattern("a1c") is None
+assert to_dynamic_list([1]) == [1]
+assert to_dynamic_list((1,)) is None
+assert to_callbacks([str]) is not None
+assert to_callbacks("s") is None
+
+# a type test is built the same way, and `float` is just `float` there too
+def is_float(v: object) -> bool:
+    return v is float
+
+assert is_float(3.5) is True
+assert is_float(3) is False, "an int is not a float"
+
+def is_floats(v: object) -> bool:
+    return v is list[float]
+
+def is_y(v: object) -> bool:
+    return v is typeof y
+
+def is_callbacks(v: object) -> bool:
+    return v is list[(int) -> str]
+
+def is_dynamic_list(v: object) -> bool:
+    return v is list[dynamic]
+
+def str_is_named(v: str) -> bool:
+    return v is (a: int, b: str)
+
+assert is_floats(FloatList()) is True
+assert is_floats(IntList()) is False
+assert is_y(1) is True
+assert is_y(2) is False
+assert is_callbacks([]) is False
+assert is_dynamic_list([1]) is True
+assert is_dynamic_list((1,)) is False
+assert str_is_named("a") is False
+
+print("ok")
+"#;
+
 const PEP695_PROBE: &str = "type X[T] = T";
 
 /// pep 696 defaults in native syntax plus the `has_default()` accessor the probe
@@ -603,4 +744,17 @@ fn a_check_written_from_a_float_type_checks_just_float() {
         return;
     };
     run_program(&python, JUST_FLOAT_PROGRAM);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn a_target_another_lowering_rewrites_checks_correctly_at_runtime() {
+    let Some(python) = python_supporting(PEP695_PROBE) else {
+        eprintln!("skipping lowered-target runtime test: no PEP 695-capable interpreter found");
+        return;
+    };
+    run_program(&python, LOWERED_TARGETS_PROGRAM);
 }

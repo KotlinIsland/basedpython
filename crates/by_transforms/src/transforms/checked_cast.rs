@@ -252,10 +252,27 @@ pub(crate) struct CheckedCastPass<'src> {
 }
 
 impl TypeAwarePass for CheckedCastPass<'_> {
-    /// a checked cast prints the type it checks against as the runtime check it builds,
-    /// the emitted name of a `private` class included
+    /// a checked cast builds its runtime check from the checker's reading of the type it
+    /// checks against, and leaves the type out where the checker settles the check without
+    /// it (an operand whose type cannot hold the target), so it writes these lowerings of the
+    /// type as written itself. where it falls back to the type as written, the lowerings
+    /// inside pass through with it. the emitted name of a `private` class is included
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
-        &[super::ast_driver::Lowering::VisibilityRename]
+        &[
+            super::ast_driver::Lowering::AnonNamedTuple,
+            super::ast_driver::Lowering::Callable,
+            super::ast_driver::Lowering::DynamicKeyword,
+            super::ast_driver::Lowering::FloatConst,
+            super::ast_driver::Lowering::JustFloat,
+            super::ast_driver::Lowering::LiteralType,
+            super::ast_driver::Lowering::OptionalType,
+            super::ast_driver::Lowering::SymbolicTypeOp,
+            super::ast_driver::Lowering::TemplateType,
+            super::ast_driver::Lowering::TupleLiteralType,
+            super::ast_driver::Lowering::TypedDictLiteral,
+            super::ast_driver::Lowering::Typeof,
+            super::ast_driver::Lowering::VisibilityRename,
+        ]
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {

@@ -484,6 +484,10 @@ fn flatten_bitand(expr: &Expr) -> Vec<&Expr> {
 }
 
 impl AstPass for TypedDictLiteralPass<'_> {
+    fn lowering(&self) -> Option<super::ast_driver::Lowering> {
+        Some(super::ast_driver::Lowering::TypedDictLiteral)
+    }
+
     /// a typed dict type it replaces moves into a class, whose field types the shared
     /// type-expression lowerer prints, a `typeof` among them
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
