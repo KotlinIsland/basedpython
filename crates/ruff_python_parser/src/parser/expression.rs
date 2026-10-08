@@ -161,7 +161,7 @@ fn force_unwrap_before_debug_equal() -> ParseErrorType {
 
 /// basedpython: which infix cast a `cast` keyword followed by `after_cast` is, or `None` when
 /// that `cast` is an ordinary name
-fn infix_cast_kind(after_cast: TokenKind) -> Option<CastKind> {
+pub(super) fn infix_cast_kind(after_cast: TokenKind) -> Option<CastKind> {
     match after_cast {
         TokenKind::Exclamation => Some(CastKind::Checked),
         TokenKind::Question => Some(CastKind::Try),

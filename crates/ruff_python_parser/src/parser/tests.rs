@@ -373,6 +373,122 @@ fn basedpython_declares_a_soft_keyword_name() {
     assert!(alias.is_private);
 }
 
+/// the name a declaration introduced by a keyword declares: a class or a newtype
+fn introduced_name(stmt: &Stmt) -> &str {
+    match stmt {
+        Stmt::ClassDef(class) => class.name.as_str(),
+        Stmt::AnnAssign(assign) => match assign.target.as_ref() {
+            Expr::Name(name) => name.id.as_str(),
+            other => panic!("expected a name target, got {other:?}"),
+        },
+        other => panic!("expected a declaration, got {other:?}"),
+    }
+}
+
+/// the interface at `index` in the `implements` declaration that is the whole body of
+/// the one class in `parsed`
+fn implemented_interface(parsed: &Parsed<ModModule>, index: usize) -> &str {
+    let [Stmt::ClassDef(class)] = parsed.suite().as_slice() else {
+        panic!("expected one class, got {:?}", parsed.suite());
+    };
+    let [Stmt::Expr(statement)] = class.body.as_slice() else {
+        panic!(
+            "expected one `implements` declaration, got {:?}",
+            class.body
+        );
+    };
+    let Expr::Call(call) = statement.value.as_ref() else {
+        panic!(
+            "expected an `implements` marker call, got {:?}",
+            statement.value
+        );
+    };
+    match call.arguments.args.get(index) {
+        Some(Expr::Name(name)) => name.id.as_str(),
+        other => panic!("expected an interface name at {index}, got {other:?}"),
+    }
+}
+
+#[test]
+fn basedpython_an_introducer_declares_a_soft_keyword_name() {
+    // a soft keyword after `protocol`, `extension`, `newtype`, `implements` or
+    // `enum class` is the name the declaration introduces
+    for keyword in ["match", "case", "type", "lazy", "cast"] {
+        for source in [
+            format!("protocol {keyword}:\n    x: int\n"),
+            format!("private protocol {keyword}:\n    x: int\n"),
+            format!("@runtime_checkable\nprotocol {keyword}:\n    x: int\n"),
+            format!("@runtime_checkable\nprivate protocol {keyword}:\n    x: int\n"),
+            format!("extension {keyword}:\n    def f(self) -> int: ...\n"),
+            format!("newtype {keyword} = int\n"),
+            format!("enum class {keyword}:\n    case A\n"),
+            format!("private enum class {keyword}:\n    case A\n"),
+        ] {
+            let parsed = parse_basedpython_module_with_errors(&source);
+            assert_eq!(parsed.errors(), &[], "expected a clean parse of `{source}`");
+            let [stmt] = parsed.suite().as_slice() else {
+                panic!("expected one statement for `{source}`");
+            };
+            assert_eq!(introduced_name(stmt), keyword, "{source}");
+        }
+
+        for (source, index) in [
+            (format!("class A:\n    implements {keyword}, B\n"), 0),
+            (format!("class A:\n    implements B, {keyword}\n"), 1),
+        ] {
+            let parsed = parse_basedpython_module_with_errors(&source);
+            assert_eq!(parsed.errors(), &[], "expected a clean parse of `{source}`");
+            assert_eq!(implemented_interface(&parsed, index), keyword, "{source}");
+        }
+    }
+
+    // a bare `enum E:` is reported as one error, whatever names the enum
+    for keyword in ["match", "type", "cast"] {
+        let source = format!("enum {keyword}:\n    case A\n");
+        let parsed = parse_basedpython_module_with_errors(&source);
+        let errors: Vec<String> = parsed
+            .errors()
+            .iter()
+            .map(|error| error.error.to_string())
+            .collect();
+        assert_eq!(
+            errors,
+            ["based enums must be written `enum class E:`, not `enum E:`"],
+            "{source}"
+        );
+        assert_eq!(introduced_name(&parsed.suite()[0]), keyword, "{source}");
+    }
+
+    // `cast` followed by a type is the infix cast operator, so the keyword in front of it
+    // is the value being cast rather than a declaration of something named `cast`
+    for keyword in ["protocol", "extension", "implements", "enum"] {
+        for operator in ["cast", "cast!", "cast?"] {
+            let source = format!("{keyword} {operator} int\n");
+            let parsed = parse_basedpython_module_with_errors(&source);
+            assert_eq!(parsed.errors(), &[], "expected a clean parse of `{source}`");
+            let [Stmt::Expr(statement)] = parsed.suite().as_slice() else {
+                panic!("expected an expression statement for `{source}`");
+            };
+            let Expr::Call(call) = statement.value.as_ref() else {
+                panic!("expected a cast for `{source}`");
+            };
+            assert!(call.cast_kind.is_some(), "{source}");
+        }
+    }
+
+    // a decorated modifier chain decides that it ends at a protocol by the same test, so
+    // a cast there is reported as a decorator on something that is not a definition
+    let parsed = parse_basedpython_module_with_errors("@d\nprivate protocol cast int\n");
+    assert!(
+        parsed.errors().iter().any(|error| error
+            .error
+            .to_string()
+            .contains("Expected a definition or a binding after decorator")),
+        "got {:?}",
+        parsed.errors()
+    );
+}
+
 #[test]
 fn basedpython_context_composes_with_the_declaration_modifiers() {
     // `context` takes its place in the modifier chain rather than forming a statement of

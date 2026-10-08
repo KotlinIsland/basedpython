@@ -18,7 +18,7 @@ use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::error::StarTupleKind;
-use crate::parser::expression::{ArgumentsContext, EXPR_SET, ParsedExpr};
+use crate::parser::expression::{ArgumentsContext, EXPR_SET, ParsedExpr, infix_cast_kind};
 use crate::parser::progress::ParserProgress;
 use crate::parser::{
     FunctionKind, IpyEscapeContext, Parser, RecoveryContext, RecoveryContextKind, WithItemKind,
@@ -746,6 +746,18 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Whether the token `n` places past the next one is the name a declaration keyword
+    /// in front of it introduces — the `P` of `protocol P:`, or the `type` of
+    /// `extension type:`. A soft keyword is a name there like anywhere else, except a
+    /// `cast` that the expression parser would read as the infix cast operator: `protocol
+    /// cast int` casts a value named `protocol`, as `x cast int` casts `x`
+    fn introduces_a_name(&mut self, n: usize) -> bool {
+        match self.peek_nth(n).0 {
+            TokenKind::Cast => infix_cast_kind(self.peek_nth(n + 1).0).is_none(),
+            kind => declares_a_name(kind),
+        }
+    }
+
     /// If the current token starts a basedpython modifier chain or introducer keyword
     /// (`let`, `newtype`, `protocol`, `abstract a: T`, or any combination of modifiers
     /// before `def`/`class`/`let`/`name = ...`), parse the corresponding statement.
@@ -758,22 +770,20 @@ impl<'src> Parser<'src> {
         let kw = self.src_text(self.current_token_range());
 
         // single-keyword introducers without modifier-chain support
-        if kw == "newtype"
-            && self.peek() == TokenKind::Name
-            && self.peek_nth(1).0 == TokenKind::Equal
+        if kw == "newtype" && declares_a_name(self.peek()) && self.peek_nth(1).0 == TokenKind::Equal
         {
             self.error_if_not_basedpython(
                 "`newtype` declarations are not valid in .py files".to_string(),
             );
             return Some(self.parse_newtype_decl(start));
         }
-        if kw == "protocol" && self.peek() == TokenKind::Name {
+        if kw == "protocol" && self.introduces_a_name(0) {
             self.error_if_not_basedpython(
                 "`protocol` class syntax is not valid in .py files".to_string(),
             );
             return Some(self.parse_protocol_def(start, DecoratorList::new()));
         }
-        if kw == "extension" && self.peek() == TokenKind::Name {
+        if kw == "extension" && self.introduces_a_name(0) {
             self.error_if_not_basedpython(
                 "`extension` declarations are not valid in .py files".to_string(),
             );
@@ -792,7 +802,7 @@ impl<'src> Parser<'src> {
             );
             return Some(self.parse_build_def(start));
         }
-        if kw == "implements" && self.peek() == TokenKind::Name {
+        if kw == "implements" && self.introduces_a_name(0) {
             self.error_if_not_basedpython(
                 "`implements` declarations are not valid in .py files".to_string(),
             );
@@ -802,8 +812,7 @@ impl<'src> Parser<'src> {
         // sum type when its body has payload variants, an idiomatic `Enum` when
         // its variants are all unit). the `class` keyword is part of the
         // declaration
-        if kw == "enum" && self.peek() == TokenKind::Class && self.peek_nth(1).0 == TokenKind::Name
-        {
+        if kw == "enum" && self.peek() == TokenKind::Class && declares_a_name(self.peek_nth(1).0) {
             self.error_if_not_basedpython(
                 "`enum class` declarations are not valid in .py files".to_string(),
             );
@@ -811,7 +820,7 @@ impl<'src> Parser<'src> {
         }
         // a bare `enum E:` (no `class`) is not valid — based enums are written
         // `enum class E:`. report it but still parse the body for recovery
-        if kw == "enum" && self.peek() == TokenKind::Name {
+        if kw == "enum" && self.introduces_a_name(0) {
             self.add_error(
                 ParseErrorType::OtherError(
                     "based enums must be written `enum class E:`, not `enum E:`".to_string(),
@@ -1011,7 +1020,7 @@ impl<'src> Parser<'src> {
                     // modifier chain — `private enum class E:`, `export protocol P:`.
                     // dispatch through the modifier path so the chain is carried
                     // as decorators on the introduced class
-                    if (text == "protocol" && following == TokenKind::Name)
+                    if (text == "protocol" && self.introduces_a_name(idx))
                         || (text == "enum" && following == TokenKind::Class)
                     {
                         self.error_if_not_basedpython(format!(
@@ -1383,7 +1392,7 @@ impl<'src> Parser<'src> {
             Stmt::FunctionDef(self.parse_function_definition(decorators, start))
         } else if self.at(TokenKind::Name)
             && self.src_text(self.current_token_range()) == "protocol"
-            && self.peek() == TokenKind::Name
+            && self.introduces_a_name(0)
         {
             // `private protocol P:` — the modifier decorators ride alongside the
             // synthetic `protocol_class` marker; both lower by disjoint edits
@@ -2172,7 +2181,7 @@ impl<'src> Parser<'src> {
 
         let mut args: Vec<Expr> = Vec::new();
         loop {
-            if !self.at(TokenKind::Name) {
+            if !self.at_name_or_soft_keyword() {
                 self.add_error(
                     ParseErrorType::OtherError("`implements` takes an interface name".to_string()),
                     self.current_token_range(),
@@ -7556,7 +7565,7 @@ impl<'src> Parser<'src> {
         // appended after them.
         if self.at(TokenKind::Name)
             && self.src_text(self.current_token_range()) == "protocol"
-            && self.peek() == TokenKind::Name
+            && self.introduces_a_name(0)
         {
             self.error_if_not_basedpython(
                 "`protocol` class syntax is not valid in .py files".to_string(),
@@ -7676,7 +7685,7 @@ impl<'src> Parser<'src> {
                 TokenKind::Name => {
                     let text = self.src_text(range);
                     // `protocol P:` and `enum class E:` introduce a definition
-                    if text == "protocol" && declares_a_name(self.peek_nth(idx).0) {
+                    if text == "protocol" && self.introduces_a_name(idx) {
                         return true;
                     }
                     if text == "enum" && self.peek_nth(idx).0 == TokenKind::Class {
