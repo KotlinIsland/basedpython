@@ -161,7 +161,7 @@ fn force_unwrap_before_debug_equal() -> ParseErrorType {
 
 /// basedpython: which infix cast a `cast` keyword followed by `after_cast` is, or `None` when
 /// that `cast` is an ordinary name
-pub(super) fn infix_cast_kind(after_cast: TokenKind) -> Option<CastKind> {
+fn infix_cast_kind(after_cast: TokenKind) -> Option<CastKind> {
     match after_cast {
         TokenKind::Exclamation => Some(CastKind::Checked),
         TokenKind::Question => Some(CastKind::Try),
@@ -184,6 +184,24 @@ impl<'src> Parser<'src> {
     /// Returns `true` if the parser is at a soft keyword token.
     pub(super) fn at_soft_keyword(&self) -> bool {
         self.current_token_kind().is_soft_keyword()
+    }
+
+    /// basedpython: whether the token `n` places past the next one is a name, which a keyword
+    /// in front of it introduces or modifies — the `P` of `protocol P:`, the `type` of
+    /// `extension type:` or `(local type[int]) -> None`. a soft keyword is a name there like
+    /// anywhere else, except a `cast` that is the infix cast operator: `protocol cast int`
+    /// casts a value named `protocol`, as `x cast int` casts `x`
+    ///
+    /// this is the test for a keyword that could itself be an ordinary name, and so the
+    /// operand of that `cast`. where the position is already pinned down — the tokens after
+    /// the name are checked as well, or no expression is being read — the statement parser's
+    /// `declares_a_name` answers for a single token kind
+    pub(super) fn peek_is_name(&mut self, n: usize) -> bool {
+        match self.peek_nth(n).0 {
+            TokenKind::Name => true,
+            TokenKind::Cast => infix_cast_kind(self.peek_nth(n + 1).0).is_none(),
+            kind => kind.is_soft_keyword(),
+        }
     }
 
     /// basedpython: whether the expression just parsed ended with a suite, which
@@ -215,7 +233,8 @@ impl<'src> Parser<'src> {
     /// `None` if no variance keyword was present.
     ///
     /// Disambiguates `out` from a bare reference to a variable named `out`:
-    /// the variance form requires the next token to be a *name* (`out T`).
+    /// the variance form requires the next token to be a *name* (`out T`), as
+    /// [`Self::peek_is_name`] decides it.
     /// Two adjacent names are never valid Python, so `out T` is unambiguous —
     /// whereas `out[...]`, `out(...)`, `out.attr`, `out + 1` etc. are an
     /// ordinary subscript / call / attribute / arithmetic on a variable named
@@ -224,7 +243,7 @@ impl<'src> Parser<'src> {
         &mut self,
     ) -> Option<ruff_python_ast::helpers::UseSiteVariance> {
         use ruff_python_ast::helpers::UseSiteVariance;
-        let next_starts_type_expr = matches!(self.peek(), TokenKind::Name);
+        let next_starts_type_expr = self.peek_is_name(0);
         let variance = if self.at(TokenKind::In) {
             // `in` is a hard keyword, so its presence in subscript-start
             // position is unambiguously variance.
@@ -289,19 +308,20 @@ impl<'src> Parser<'src> {
     /// range of the keyword itself. Returns `None` if no modifier is present.
     ///
     /// Disambiguated exactly like [`Self::eat_basedpython_variance_prefix`]: the
-    /// modifier form requires the next token to be a *name*, and two adjacent
-    /// names are never valid Python. So `literal str` is unambiguously the
-    /// modifier, while `literal`, `final[x]`, `literal.attr`, `final(x)` etc.
-    /// stay ordinary references to a variable of that name. The consequence is
-    /// that a type which does not start with a name — a parenthesized callable
-    /// type, a string forward reference, a starred type — cannot carry a bare
-    /// modifier; see the docs for the recommended spelling.
+    /// modifier form requires the next token to be a *name*
+    /// ([`Self::peek_is_name`]), and two adjacent names are never valid
+    /// Python. So `literal str` is unambiguously the modifier, while `literal`,
+    /// `final[x]`, `literal.attr`, `final(x)` etc. stay ordinary references to
+    /// a variable of that name. The consequence is that a type which does not
+    /// start with a name — a parenthesized callable type, a string forward
+    /// reference, a starred type — cannot carry a bare modifier; see the docs
+    /// for the recommended spelling.
     fn eat_basedpython_type_modifier_prefix(
         &mut self,
     ) -> Option<(ruff_python_ast::helpers::TypeModifier, TextRange)> {
         use ruff_python_ast::helpers::TypeModifier;
 
-        if !self.at(TokenKind::Name) || !matches!(self.peek(), TokenKind::Name) {
+        if !self.at(TokenKind::Name) || !self.peek_is_name(0) {
             return None;
         }
         let range = self.current_token_range();
@@ -1191,7 +1211,7 @@ impl<'src> Parser<'src> {
             TokenKind::Name
                 if self.options.is_basedpython
                     && self.src_text(self.current_token_range()) == "some"
-                    && self.peek() == TokenKind::Name =>
+                    && self.peek_is_name(0) =>
             {
                 self.add_error(
                     ParseErrorType::OtherError(
@@ -3588,9 +3608,7 @@ impl<'src> Parser<'src> {
     ///
     /// Only consumed when a bare name (a type) directly follows, so a
     /// parenthesized name (`(local)`), a call (`once(x)`), or a subscript
-    /// (`local[i]`) is never mistaken for a modifier. A soft keyword is a name
-    /// there too (`(local type[int])`), except a `cast` that is the infix cast
-    /// operator applied to `local`.
+    /// (`local[i]`) is never mistaken for a modifier.
     ///
     /// A run may spell both (`once local fn`); `once` is the stronger of the two
     /// (it implies the borrow) and wins.
@@ -3598,16 +3616,11 @@ impl<'src> Parser<'src> {
         let mut borrow = ParameterBorrow::None;
         while self.at(TokenKind::Name)
             && matches!(self.src_text(self.current_token_range()), "local" | "once")
-            && match self.peek2() {
-                // `(local x=1)` is an anonymous named tuple *value*, which has no
-                // parameters to borrow — leave the name alone so it keeps its
-                // existing reading
-                (_, TokenKind::Equal) => false,
-                // `(local cast int)` casts a value named `local`, as it would
-                // anywhere else
-                (TokenKind::Cast, after_cast) => infix_cast_kind(after_cast).is_none(),
-                (next, _) => next == TokenKind::Name || next.is_soft_keyword(),
-            }
+            && self.peek_is_name(0)
+            // `(local x=1)` is an anonymous named tuple *value*, which has no
+            // parameters to borrow — leave the name alone so it keeps its
+            // existing reading
+            && self.peek2().1 != TokenKind::Equal
         {
             self.error_if_not_basedpython(
                 "`local` / `once` in a callable type are not valid in .py files".to_string(),
