@@ -2095,6 +2095,14 @@ fn basedpython_use_site_variance_in_any_slice_element() {
                 None,
             ],
         ),
+        // a soft keyword is a name after `out` like after any other keyword, but
+        // `out cast int` casts a variable named `out`
+        ("a: list[out type[int]]\n", vec![Some(UseSiteVariance::Out)]),
+        (
+            "a: dict[int, out match]\n",
+            vec![None, Some(UseSiteVariance::Out)],
+        ),
+        ("a: X[out cast int]\n", vec![None]),
     ] {
         let parsed = parse_basedpython_module(source);
         assert_eq!(
@@ -3091,6 +3099,9 @@ fn basedpython_type_modifier_prefix() {
         ("a: final int = 1\n", TypeModifier::Final),
         ("a: literal list[*]\n", TypeModifier::Literal),
         ("a: final dict[str, int]\n", TypeModifier::Final),
+        // a soft keyword is a name after the modifier like after any other keyword
+        ("a: final type[int]\n", TypeModifier::Final),
+        ("a: literal match\n", TypeModifier::Literal),
     ] {
         let parsed = parse_basedpython_module(source);
         let [Stmt::AnnAssign(ann)] = parsed.syntax().body.as_slice() else {
@@ -3171,6 +3182,9 @@ fn basedpython_type_modifier_keywords_stay_identifiers() {
         "a: final[int]\n",
         "a: literal.Alias\n",
         "a: final()\n",
+        // `cast` followed by a type is the infix cast operator, so this casts a
+        // variable called `literal`
+        "a: literal cast int\n",
     ] {
         let parsed = parse_basedpython_module(source);
         let [Stmt::AnnAssign(ann)] = parsed.syntax().body.as_slice() else {
@@ -3668,6 +3682,10 @@ fn a_misplaced_some_is_one_error() {
             "def g(xs: list[int]): ...",
         ),
         ("x: some int = 1\n", "x: int = 1"),
+        (
+            "def h(xs: list[some type[int]]): ...\n",
+            "def h(xs: list[type[int]]): ...",
+        ),
         ("y = cast(some int?, 1)\n", "y = cast(int?, 1)"),
     ] {
         let parsed = parse_basedpython_module_with_errors(source);
@@ -3692,6 +3710,26 @@ fn a_misplaced_some_is_one_error() {
             comparable(&expected.syntax().body),
             "{source}"
         );
+    }
+}
+
+/// at the top of a parameter's annotation `some` takes any type as its bound, not only one
+/// that starts with a name
+#[test]
+fn some_at_the_top_of_an_annotation_takes_any_type() {
+    for source in [
+        "def f(x: some int): ...\n",
+        "def f(x: some type[int]): ...\n",
+        "def f(x: some () -> int): ...\n",
+        "def f(x: some (int | str)): ...\n",
+        "def f(x: some \"Forward\"): ...\n",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert_eq!(parsed.errors(), &[], "expected a clean parse of `{source}`");
+        let Some(Stmt::FunctionDef(function)) = parsed.suite().first() else {
+            panic!("expected a function for `{source}`");
+        };
+        assert!(function.parameters.args[0].parameter.is_some, "{source}");
     }
 }
 
