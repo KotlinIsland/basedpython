@@ -217,7 +217,9 @@ pub(crate) enum Lowering {
     RuntimeUnion,
     StatementExpression,
     SymbolicTypeOp,
+    TemplateType,
     TupleLiteralType,
+    TypedDictLiteral,
     Typeof,
     Unpack,
     VarianceStrip,
@@ -2847,6 +2849,156 @@ mod subsumed_lowerings {
         ]
     }
 
+    /// a checked cast and a type test build their check from the checker's reading of the
+    /// target, so a lowering of the target as written is not what they print: the check
+    /// spells what the target means, or, where the operand's type cannot hold the target,
+    /// is settled without it
+    fn type_test_target_cases() -> Vec<Case> {
+        let cast = |operand: &str, target: &str| {
+            format!("y = 1\n\ndef f(x: {operand}) -> object:\n    return x cast! {target}\n")
+        };
+        let test = |operand: &str, target: &str| {
+            format!("y = 1\n\ndef f(x: {operand}) -> bool:\n    return x is {target}\n")
+        };
+        let never = "_checked_cast_pred(x, lambda _by_cast_value: False)";
+        let mut cases = vec![
+            case(
+                "CheckedCastPass",
+                &[Lowering::AnonNamedTuple],
+                &cast("str", "(a: int, b: str)"),
+                &[never],
+                &["(a: int"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::Callable],
+                &cast("str", "list[(int) -> str]"),
+                &[never],
+                &["(int) ->"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::DynamicKeyword],
+                &cast("object", "list[dynamic]"),
+                &["_checked_cast(x, list)"],
+                &["dynamic"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::FloatConst],
+                &cast("str", "float.inf"),
+                &[never],
+                &["float.inf"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::JustFloat],
+                &cast("int", "float"),
+                &[never],
+                &["cast! float"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::JustFloat],
+                &cast("object", "list[float]"),
+                &["_parametric_is_lenient(_by_cast_value, list[float], (0,))"],
+                &["list[JustFloat]"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::LiteralType],
+                &cast("str", "1"),
+                &[never],
+                &["Literal[1]"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::OptionalType],
+                &cast("object", "int?"),
+                &["(isinstance(_by_cast_value, int) or _by_cast_value is None)"],
+                &["int?"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::SymbolicTypeOp],
+                &cast("object", "typeof y + 1"),
+                &["_by_cast_value == 2)"],
+                &["typeof"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::TemplateType],
+                &cast("object", "f\"a{int}b\""),
+                &["_by_pattern_is(_by_cast_value, \"a(?:0|-?[1-9][0-9]*)b\")"],
+                &["f\"a{int}b\""],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::TupleLiteralType],
+                &cast("object", "(int, str)"),
+                &["_parametric_is_lenient(_by_cast_value, tuple[int, str], (1,))"],
+                &["cast! (int, str)"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::TypedDictLiteral],
+                &cast("object", "{\"a\": int}"),
+                &["_checked_cast(x, dict)"],
+                &["{\"a\": int}"],
+            ),
+            case(
+                "CheckedCastPass",
+                &[Lowering::Typeof],
+                &cast("object", "typeof y"),
+                &["_by_cast_value == 1)"],
+                &["typeof"],
+            ),
+        ];
+        cases.extend([
+            case(
+                "ParametricIsPass",
+                &[Lowering::AnonNamedTuple],
+                &test("str", "(a: int, b: str)"),
+                &["return False"],
+                &["(a: int"],
+            ),
+            case(
+                "ParametricIsPass",
+                &[Lowering::Callable],
+                &test("str", "list[(int) -> str]"),
+                &["return False"],
+                &["(int) ->"],
+            ),
+            case(
+                "ParametricIsPass",
+                &[Lowering::DynamicKeyword],
+                &test("object", "list[dynamic]"),
+                &["isinstance(x, list)"],
+                &["dynamic"],
+            ),
+            case(
+                "ParametricIsPass",
+                &[Lowering::JustFloat],
+                &test("object", "list[float]"),
+                &["_parametric_is(x, list[float], (0,))"],
+                &["list[JustFloat]"],
+            ),
+            case(
+                "ParametricIsPass",
+                &[Lowering::Typeof],
+                &test("object", "typeof y"),
+                &["x == 1)"],
+                &["typeof"],
+            ),
+        ]);
+        cases
+    }
+
+    #[test]
+    fn a_type_test_target_is_written_as_what_it_means() {
+        check(&type_test_target_cases(), PythonVersion::PY312);
+    }
+
     #[test]
     fn a_type_expression_a_pass_moves_is_written_lowered() {
         check(&type_expression_cases(), PythonVersion::PY310);
@@ -2868,6 +3020,7 @@ mod subsumed_lowerings {
         let cases: Vec<Case> = type_expression_cases()
             .into_iter()
             .chain(whole_construct_cases())
+            .chain(type_test_target_cases())
             .collect();
 
         let mut failures = Vec::new();
