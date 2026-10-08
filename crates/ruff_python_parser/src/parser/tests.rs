@@ -3,8 +3,8 @@ use std::assert_matches;
 use ruff_python_ast::comparable::ComparableStmt;
 use ruff_python_ast::helpers::{UseSiteVariance, use_site_variance_marker};
 use ruff_python_ast::{
-    Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Pattern, Stmt,
-    TypeParam, UnaryOp, is_destructure_binder,
+    CastKind, Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Pattern,
+    Stmt, TypeParam, UnaryOp, is_destructure_binder,
 };
 use ruff_text_size::Ranged;
 
@@ -751,6 +751,10 @@ fn basedpython_local_once_in_callable_type() {
         // an implicit receiver is not one of `args`, so the modifiers still
         // line up with the written parameters
         ("f: int.(local str) -> None", &[Local]),
+        // a soft keyword after the modifier is the type it borrows
+        ("f: (local type[int]) -> None", &[Local]),
+        ("f: (int, once match) -> None", &[NoBorrow, Once]),
+        ("f: (local cast) -> None", &[Local]),
     ] {
         let parsed = parse_basedpython_module(source);
         let [Stmt::AnnAssign(assign)] = parsed.syntax().body.as_slice() else {
@@ -770,6 +774,37 @@ fn basedpython_local_once_in_callable_type() {
             "borrows are recorded positionally, so they cannot outnumber the \
              parameters in `{source}`"
         );
+    }
+}
+
+/// `cast` followed by a type is the infix cast operator, so the `local` written before it
+/// is the value it casts rather than a modifier on a parameter named `cast`
+#[test]
+fn basedpython_local_before_an_infix_cast_is_its_operand() {
+    for (source, kind) in [
+        ("y = (local cast int)\n", CastKind::Static),
+        ("y = (local cast! int)\n", CastKind::Checked),
+        ("y = (local cast? int)\n", CastKind::Try),
+        ("y = (local cast int, once)\n", CastKind::Static),
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert_eq!(parsed.errors(), &[], "expected a clean parse of `{source}`");
+        let [Stmt::Assign(assign)] = parsed.suite().as_slice() else {
+            panic!("expected an assignment for `{source}`");
+        };
+        let call = match assign.value.as_ref() {
+            Expr::Call(call) => call,
+            Expr::Tuple(tuple) => match tuple.elts.first() {
+                Some(Expr::Call(call)) => call,
+                other => panic!("expected a cast first in `{source}`, got {other:?}"),
+            },
+            other => panic!("expected a cast in `{source}`, got {other:?}"),
+        };
+        assert_eq!(call.cast_kind, Some(kind), "{source}");
+        let [_, Expr::Name(value)] = &*call.arguments.args else {
+            panic!("expected the cast's value to be a name in `{source}`");
+        };
+        assert_eq!(value.id.as_str(), "local", "{source}");
     }
 }
 
