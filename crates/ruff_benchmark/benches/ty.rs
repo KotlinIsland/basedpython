@@ -548,6 +548,38 @@ fn benchmark_large_enum_membership(criterion: &mut Criterion) {
     });
 }
 
+/// basedpython: regression benchmark for calling a method on a large enum's `name`
+///
+/// `name` is a union of one string literal per member, so `kind.name.lower` is a union of as many
+/// bound methods, one per name. none of them is redundant with another, and building that union
+/// should not have to compare every pair of them to find that out
+fn benchmark_enum_name_method(criterion: &mut Criterion) {
+    const NUM_ENUM_MEMBERS: usize = 512;
+
+    setup_rayon();
+
+    let mut code = "from enum import IntEnum\n\nclass E(IntEnum):\n".to_string();
+    for i in 0..NUM_ENUM_MEMBERS {
+        writeln!(&mut code, "    m{i} = {i}").ok();
+    }
+    code.push_str(
+        "\ndef lower(kind: E) -> str:\n    return kind.name.lower()\n\n\
+         def starts(kind: E) -> bool:\n    return kind.name.startswith(\"m\")\n",
+    );
+
+    criterion.bench_function("ty_micro[enum_name_method]", |b| {
+        b.iter_batched_ref(
+            || setup_micro_case(&code),
+            |case| {
+                let Case { db } = case;
+                let result = db.check();
+                assert_eq!(result.len(), 0);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 fn benchmark_enum_comparison(criterion: &mut Criterion, name: &str, code: &str) {
     setup_rayon();
 
@@ -1909,6 +1941,7 @@ criterion_group!(
     benchmark_complex_constrained_attributes_3,
     benchmark_gradual_vararg_call,
     benchmark_large_enum_membership,
+    benchmark_enum_name_method,
     benchmark_many_enum_members,
     benchmark_narrowed_str_enum_comparison,
     benchmark_optional_str_enum_comparison,
