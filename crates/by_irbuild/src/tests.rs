@@ -12312,6 +12312,21 @@ def make() -> (name: str, age: int):
 }
 
 #[test]
+fn a_plain_tuple_built_as_an_anonymous_named_tuple_is_declined() {
+    // the checker reads the literal as an instance of the named tuple expected where it
+    // stands, so its fields are read by name, and a plain tuple has none of them
+    let reason = decline(
+        "\
+def second() -> int:
+    items: list[(a: int, b: int)] = []
+    items.append((1, 2))
+    return items[0].b
+",
+    );
+    assert!(reason.contains("anonymous named tuple"), "{reason}");
+}
+
+#[test]
 fn a_checked_cast_is_declined() {
     // `v cast! int` tests the value and raises when it does not hold; read as a call it
     // calls `v` with the type object

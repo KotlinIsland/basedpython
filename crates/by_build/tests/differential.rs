@@ -44946,6 +44946,30 @@ def show() -> str:
 }
 
 #[test]
+fn a_plain_tuple_built_as_an_anonymous_named_tuple_agrees() {
+    // the checker reads each literal as an instance of the named tuple expected where it
+    // stands, and the fields are read by name: a plain tuple the lowering built has none
+    agree_with_declines(
+        "anonbuilt",
+        "\
+def take(p: (a: int, b: int)) -> int:
+    return p.a + p.b
+
+
+def call() -> int:
+    return take((7, 8))
+
+
+def second() -> int:
+    items: list[(a: int, b: int)] = []
+    items.append((1, 2))
+    return items[0].b
+",
+        &["m.call()", "m.second()"],
+    );
+}
+
+#[test]
 fn a_checked_cast_agrees_on_the_value_it_refuses() {
     // the refusal is the point of the form, so the raise is part of the answer
     agree_with_declines(
