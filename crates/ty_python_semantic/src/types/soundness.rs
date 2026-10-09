@@ -12,6 +12,7 @@
 //!   what second argument does that check take? (`runtime_check_target`)
 
 use ruff_db::files::File;
+use ruff_python_ast as ast;
 
 use crate::Db;
 use crate::place::{Place, explicit_global_symbol};
@@ -21,7 +22,7 @@ use crate::types::literal::LiteralValueTypeKind;
 use crate::types::reified_infer::{
     ArgVariance, parametric_soundness_spelling, protocol_structural_members,
 };
-use crate::types::runtime_spelling::RuntimeSpelling;
+use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
 use crate::types::signatures::CallableSignature;
 use crate::types::visitor::any_over_type;
 use crate::types::{ClassLiteral, ClassType, FunctionType, KnownClass, Type};
@@ -203,7 +204,28 @@ fn python_string_literal(value: &str) -> String {
 /// protocol with no faithful check degrades to [`CastCheck::Unchecked`]. This
 /// keeps the emitted code from ever running `isinstance` against a subscripted
 /// or non-`@runtime_checkable` protocol, which raises at runtime.
+///
+/// `written_at` is the cast's written target, where the check runs: a check whose target
+/// reads a name that does not hold there the binding the checker resolved has no plan
 pub fn cast_check_plan<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    ty: Type<'db>,
+    written_at: Option<&ast::Expr>,
+) -> Option<CastCheck> {
+    let plan = cast_check_plan_anywhere(db, env, file, ty)?;
+    if let Some(site) = written_at.map(RuntimeSite::at)
+        && plan
+            .spelling()
+            .is_some_and(|spelling| spelling.unbound_read(db, env, file, site).is_some())
+    {
+        return None;
+    }
+    Some(plan)
+}
+
+fn cast_check_plan_anywhere<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
@@ -236,7 +258,7 @@ pub fn cast_target_is_unverifiable_protocol<'db>(
     target: Type<'db>,
 ) -> bool {
     matches!(
-        cast_check_plan(db, env, file, target),
+        cast_check_plan_anywhere(db, env, file, target),
         Some(CastCheck::Unchecked)
     )
 }
@@ -494,7 +516,8 @@ fn target<'db>(
 /// resolve the runtime name for `literal` as seen from module scope in
 /// `file`: either the module binds the class's name to this exact class
 /// (definition or import), or the name is unbound and the class is a
-/// builtin so the bare name reaches it
+/// builtin so the bare name reaches it. whether the name holds that binding
+/// where the check runs is the site's to ask ([`RuntimeSpelling::unbound_read`])
 fn class_target<'db>(
     db: &'db dyn Db,
     file: File,

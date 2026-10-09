@@ -15,9 +15,28 @@
 
 use ruff_db::files::File;
 use ruff_python_ast::name::Name;
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::Db;
+use crate::place::{RuntimeBinding, RuntimeRead, runtime_binding};
+use crate::types::ProgramEnvironment;
 use crate::types::visibility::private_symbols;
+
+/// where a lowering writes a spelling into code that runs, which decides what each name it
+/// reads holds there
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeSite {
+    range: TextRange,
+}
+
+impl RuntimeSite {
+    /// the code `node` is written as
+    pub(crate) fn at(node: &impl Ranged) -> Self {
+        Self {
+            range: node.range(),
+        }
+    }
+}
 
 /// a python expression the checker spells for the transpiled program, which evaluates in
 /// the module it was spelled for to the runtime object of a type (`list[int]`) or to a
@@ -71,6 +90,29 @@ impl RuntimeSpelling {
         self.parts.iter().filter_map(|part| match part {
             SpellingPart::Global(name) | SpellingPart::ModulePrivate(name) => Some(name),
             SpellingPart::Text(_) => None,
+        })
+    }
+
+    /// the first module-level name the spelling reads that does not hold, where `site` runs,
+    /// the binding the checker resolved — with what it holds instead
+    pub(crate) fn unbound_read<'db>(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        file: File,
+        site: RuntimeSite,
+    ) -> Option<(Name, RuntimeBinding)> {
+        self.global_reads().find_map(|name| {
+            let binding = runtime_binding(
+                db,
+                env,
+                db.program_file(file),
+                RuntimeRead::Global {
+                    name,
+                    range: site.range,
+                },
+            );
+            (binding != RuntimeBinding::Bound).then(|| (name.clone(), binding))
         })
     }
 

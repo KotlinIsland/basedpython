@@ -1445,7 +1445,10 @@ pub(crate) fn run_against_source<'a>(
     let runtime_union_pass = runtime_union::RuntimeUnionPass::new(written, config.min_version);
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, written, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, written, config);
-    let checked_cast_pass = checked_cast::CheckedCastPass { written };
+    let checked_cast_pass = checked_cast::CheckedCastPass {
+        source: source_ref,
+        written,
+    };
     let module_api_pass = module_api::ModuleApiPass::new(source_ref);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let if_let_pass = if_let::IfLetPass::new(source_ref);

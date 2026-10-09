@@ -26,6 +26,57 @@ from typing import TYPE_CHECKING as TC
 reveal_type(TC)  # revealed: Literal[True]
 ```
 
+### A name assigned the constant, then something else
+
+A condition reads whatever the name holds where it is tested, so once the alias is reassigned the
+branch is decided by the new value:
+
+```py
+from typing import TYPE_CHECKING
+
+TC = TYPE_CHECKING
+TC = False
+
+if TC:
+    y = 1
+else:
+    y = "a"
+
+reveal_type(y)  # revealed: Literal["a"]
+```
+
+### An alias imported in a class body
+
+A class body's names are not visible from its methods, so a method testing the same name reads
+something else, which nothing here binds:
+
+```py
+class K:
+    from typing import TYPE_CHECKING as KC
+
+    def m(self):
+        if KC:  # error: [unresolved-reference]
+            c = 1
+        else:
+            c = "a"
+        reveal_type(c)  # revealed: Literal[1, "a"]
+```
+
+### An alias imported in an enclosing function
+
+```py
+def outer():
+    from typing import TYPE_CHECKING as TC
+
+    def inner():
+        if TC:
+            b = 1
+        else:
+            b = "a"
+        reveal_type(b)  # revealed: Literal[1]
+    return inner
+```
+
 ### Qualified conditions
 
 Qualified references to `TYPE_CHECKING` are evaluated eagerly, allowing narrowing from the

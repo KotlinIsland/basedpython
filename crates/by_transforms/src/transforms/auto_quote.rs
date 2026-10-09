@@ -285,30 +285,31 @@ impl Quoter<'_> {
         }
     }
 
-    /// wrap `range` in quotes, as one template passing the source through so
-    /// the lowerings inside it land between the quotes. the delimiter is one the
-    /// source it wraps does not already use
     fn quote(&mut self, range: TextRange) {
-        let text = &self.source[range];
-        let delimiter = ["\"", "'", "\"\"\"", "'''"]
-            .into_iter()
-            .find(|delimiter| {
-                !text.contains(delimiter)
-                    && delimiter
-                        .chars()
-                        .next()
-                        .is_none_or(|quote| !text.ends_with(quote))
-            })
-            .unwrap_or("\"");
-        self.edits.push((
-            range,
-            vec![
-                Fragment::Lit(delimiter.to_owned()),
-                Fragment::Src(range),
-                Fragment::Lit(delimiter.to_owned()),
-            ],
-        ));
+        self.edits.push((range, quoted(self.source, range)));
     }
+}
+
+/// `range` of `source` wrapped in quotes, as one template passing the source through so
+/// the lowerings inside it land between the quotes. the delimiter is one the source it
+/// wraps does not already use
+pub(crate) fn quoted(source: &str, range: TextRange) -> Vec<Fragment> {
+    let text = &source[range];
+    let delimiter = ["\"", "'", "\"\"\"", "'''"]
+        .into_iter()
+        .find(|delimiter| {
+            !text.contains(delimiter)
+                && delimiter
+                    .chars()
+                    .next()
+                    .is_none_or(|quote| !text.ends_with(quote))
+        })
+        .unwrap_or("\"");
+    vec![
+        Fragment::Lit(delimiter.to_owned()),
+        Fragment::Src(range),
+        Fragment::Lit(delimiter.to_owned()),
+    ]
 }
 
 #[cfg(test)]

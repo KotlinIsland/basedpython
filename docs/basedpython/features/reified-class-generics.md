@@ -137,7 +137,14 @@ class Holder:
 
 where nothing solves it, the bare construction is an error
 (`unspecialized-reified-generic`) rather than an instance that would fail the
-first time a method asked it a question
+first time a method asked it a question. that includes a type argument the
+running program does not have where the construction runs: a class imported only
+under `if TYPE_CHECKING:` (or past any other condition that reads the constant),
+imported only on some paths, unbound by a `del`, or declared further down the
+module than the statement the construction is in —
+for one in a function or a method, the `def` or `class` statement at the top of
+the module that holds it, which can be called as soon as that runs. write the
+specialization out there (`Box[Later]()`) where you know it is bound
 
 ## a reified parameter is invariant
 

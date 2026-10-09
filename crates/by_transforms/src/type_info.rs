@@ -473,6 +473,10 @@ pub(crate) trait TypeInfo {
     /// annotations`. `None` when ty did not index the name
     fn is_forward_reference(&self, name: &ExprName) -> Option<bool>;
 
+    /// whether every name `expr` reads holds, where it is written, the binding the checker
+    /// resolved when the program runs, so `expr` can be written into code that runs there
+    fn reads_names_bound_where_written(&self, expr: &Expr) -> bool;
+
     /// how a bare name in a class body is emitted, when it names a member the
     /// class declares with a visibility keyword — `y = x + 1` after `private x =
     /// 1`. `None` for any other name
@@ -1462,6 +1466,10 @@ impl TypeInfo for SemanticModel<'_> {
         ty_python_semantic::types::ide_support::repeated_underscore_lowering(self, function)
     }
 
+    fn reads_names_bound_where_written(&self, expr: &Expr) -> bool {
+        SemanticModel::reads_names_bound_where_written(self, expr)
+    }
+
     fn cast_check_plan(&self, type_expr: &Expr) -> Option<CastCheck> {
         let ty = type_expr.inferred_type(self)?;
         ty_python_semantic::types::soundness::cast_check_plan(
@@ -1469,6 +1477,7 @@ impl TypeInfo for SemanticModel<'_> {
             &self.program_environment(),
             self.file(),
             ty,
+            Some(type_expr),
         )
     }
 

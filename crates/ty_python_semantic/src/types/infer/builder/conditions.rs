@@ -220,6 +220,11 @@ fn definition_is_environment_derived_inner<'db>(
         return false;
     }
     let module = parsed_module(db, definition.python_file(db)).load(db);
+    // the declaration of `typing.TYPE_CHECKING` is the fact itself — typeshed declares it
+    // without a value — so a name imported from it under another name stands for it too
+    if crate::place::declares_typing_type_checking(db, definition) {
+        return true;
+    }
     // an import is followed by name resolution before it ever reaches here, so what is left is
     // the value a binding was written with
     let value: &ast::Expr = match definition.kind(db) {

@@ -146,6 +146,7 @@ use crate::types::reified_infer::{self, ErasedTargetReason, ReifiedInferenceErro
 use crate::types::repeated_underscore::{
     LoweredParameters, WrittenNames, lower_repeated_underscores, parameter_slots,
 };
+use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
 use crate::types::soundness::{
@@ -11234,6 +11235,47 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// a checked cast with no runtime check the checker can spell tests its value against
+    /// the target as written, so a target reading a name that does not hold there the binding
+    /// the checker resolved — a class imported only under `if TYPE_CHECKING:` — would raise
+    /// `NameError`, or test against another class. a cast that needs no check (a widening) is
+    /// a plain `typing.cast`, whose target is written as a string, and is left alone
+    fn report_cast_target_unbound_at_runtime(
+        &mut self,
+        type_arg: &ast::Expr,
+        value_ty: Type<'db>,
+        target: Type<'db>,
+    ) {
+        let env = self.program_environment();
+        let db = self.db();
+        if cast_is_redundant(db, env, value_ty, target)
+            || crate::types::soundness::cast_check_plan(
+                db,
+                env,
+                self.file(),
+                target,
+                Some(type_arg),
+            )
+            .is_some()
+        {
+            return;
+        }
+        let Some((name, binding)) =
+            crate::types::reified_infer::written_unbound_read(db, env, self.file(), type_arg)
+        else {
+            return;
+        };
+        let Some(builder) = self.context.report_lint(&ERASED_TYPE_CHECK, type_arg) else {
+            return;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "`{}` cannot be checked at runtime: {}",
+            target.display(db, env),
+            binding.why_not_checkable(&name)
+        ));
+        diagnostic.info(binding.describe(&name));
+    }
+
     /// Report a plain `cast` that is not a widening, and say whether it was one.
     ///
     /// The unsuffixed `cast` reinterprets a value without looking at it, so the
@@ -11473,6 +11515,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // claim; the plain `cast` never reaches a check in the first place
             if cast_kind.verifies_at_runtime() {
                 self.report_erased_cast_argument(type_arg, value_ty, target);
+                self.report_cast_target_unbound_at_runtime(type_arg, value_ty, target);
                 self.record_checked_cast_spellings(value_ty, target, type_arg);
             }
             // an unsound plain `cast` is already the sharper report — a
@@ -12978,6 +13021,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     callable_type,
                     function,
                     &call_arguments,
+                    Some(RuntimeSite::at(call_expression)),
                 )
                 .err()
                 .map(Some)
@@ -13009,6 +13053,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                              no runtime spelling — specialize with `{name}[...]`",
                             ty.display(self.db(), env),
                         ));
+                    }
+                    Some(ReifiedInferenceError::NotAtRuntime(read, binding)) => {
+                        diagnostic.info(binding.describe(&read));
                     }
                     Some(ReifiedInferenceError::NoBinding) => {
                         diagnostic.info(format_args!(
@@ -13182,6 +13229,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.file(),
             class_literal,
             return_ty,
+            Some(RuntimeSite::at(call_expression)),
         ) else {
             return;
         };
@@ -13205,6 +13253,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                  spelling — construct a specialization, as in `{name}[int](...)`",
                 ty.display(db, env),
             )),
+            ReifiedInferenceError::NotAtRuntime(read, binding) => {
+                diagnostic.info(binding.describe(&read));
+            }
             ReifiedInferenceError::NoBinding => diagnostic.info(format_args!(
                 "the specialization cannot be inferred from this call — construct \
                  one, as in `{name}[int](...)`"
@@ -15898,7 +15949,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.context.record_spelling(spelling);
         }
         if let Some(spelling) =
-            crate::types::soundness::cast_check_plan(db, env, self.file(), target)
+            crate::types::soundness::cast_check_plan(db, env, self.file(), target, Some(type_arg))
                 .and_then(|check| check.spelling())
         {
             self.context.record_spelling(&spelling);
@@ -16746,12 +16797,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         for spelling in plan.spellings() {
             self.context.record_spelling(spelling);
         }
-        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = plan {
+        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = &plan {
             let source = ruff_db::source::source_text(db, self.file());
             self.report_erased_type_check(
                 TextRange::new(left.start(), right.end()),
                 &source[right.range()],
-                reason,
+                reason.clone(),
             );
         } else {
             // a target with no runtime test has already been rejected, and
@@ -16824,6 +16875,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         };
         match reason {
+            ErasedTargetReason::NotAtRuntime(name, binding) => {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`is {target}` cannot be checked at runtime: {}",
+                    binding.why_not_checkable(&name)
+                ));
+                diagnostic.info(binding.describe(&name));
+            }
             ErasedTargetReason::Protocol => {
                 let mut diagnostic = builder.into_diagnostic(format_args!(
                     "`is {target}` cannot be checked at runtime: a protocol's instances don't \

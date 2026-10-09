@@ -3,6 +3,7 @@ pub(crate) mod definitions;
 use crate::ProgramEnvironment;
 use itertools::Either;
 use ruff_index::IndexSlice;
+use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor};
 use ruff_python_ast::{self as ast, PythonVersion};
 use rustc_hash::FxHashMap;
 use ty_module_resolver::{
@@ -25,7 +26,7 @@ use crate::types::{
 };
 use crate::{Db, FxIndexSet, FxOrderSet};
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 use ty_python_core::definition::{Definition, DefinitionKind, DefinitionState};
 use ty_python_core::narrowing_constraints::ScopedNarrowingConstraint;
 use ty_python_core::place::{PlaceExpr, ScopedPlaceId};
@@ -33,7 +34,7 @@ use ty_python_core::predicate::{Predicate, ScopedPredicateId};
 use ty_python_core::reachability_constraints::{
     ReachabilityConstraints, ScopedReachabilityConstraintId,
 };
-use ty_python_core::scope::ScopeId;
+use ty_python_core::scope::{FileScopeId, ScopeId};
 use ty_python_core::{
     BindingWithConstraints, BindingWithConstraintsIterator, BoundnessAnalysis,
     DeclarationWithConstraint, DeclarationsIterator, ProgramFile, SemanticIndex, Truthiness,
@@ -543,6 +544,648 @@ pub(crate) fn global_symbol<'db>(
     explicit_global_symbol(db, file, name).or_fall_back_to(db, &env, || {
         module_type_implicit_global_symbol(db, file, name)
     })
+}
+
+/// basedpython: what a name the transpiled program reads holds when the program runs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeBinding {
+    /// on every path to the read, a binding the program runs holds the name, and it is the
+    /// binding the checker resolved
+    Bound,
+    /// on some path to the read nothing the program runs has bound the name: it is bound only
+    /// under `if TYPE_CHECKING:`, only on some paths, or only further on
+    Unbound,
+    /// the program binds the name, but a binding the checker resolves never runs — it is made
+    /// under `if TYPE_CHECKING:` — so the value read need not be what the checker resolved
+    NotTheCheckers,
+}
+
+impl RuntimeBinding {
+    /// why a runtime check naming `name` cannot run here, for a diagnostic's message
+    pub(crate) fn why_not_checkable(self, name: &str) -> String {
+        match self {
+            RuntimeBinding::Bound => format!("`{name}` is the class the checker resolved"),
+            RuntimeBinding::Unbound => format!("`{name}` is not bound when it runs"),
+            RuntimeBinding::NotTheCheckers => format!(
+                "the `{name}` bound when it runs need not be the class the checker resolved"
+            ),
+        }
+    }
+
+    /// why `name`, read where a lowering would write it, cannot be read there
+    pub(crate) fn describe(self, name: &str) -> String {
+        match self {
+            RuntimeBinding::Bound => format!("`{name}` holds the binding the checker resolved"),
+            RuntimeBinding::Unbound => format!(
+                "`{name}` is not bound when this runs: it is bound only under \
+                 `if TYPE_CHECKING:`, only on some paths, or further on"
+            ),
+            RuntimeBinding::NotTheCheckers => format!(
+                "the `{name}` bound when this runs need not be the class the checker resolved: \
+                 the checker reads a binding of `{name}` made under `if TYPE_CHECKING:`, which \
+                 never runs"
+            ),
+        }
+    }
+}
+
+/// a name the transpiled program reads, and where it reads it
+#[derive(Clone, Copy)]
+pub(crate) enum RuntimeRead<'a> {
+    /// a name the source writes, read where it is written
+    Written(ast::ExprRef<'a>),
+    /// a module-level name a lowering writes into code at `range` of `scope`
+    Global { name: &'a str, range: TextRange },
+}
+
+/// basedpython: what `read` holds when the transpiled program runs — the one question every
+/// lowering that writes a name into code that runs asks first.
+///
+/// a name the source writes is read where it is written, and holds what ty resolves there. a
+/// module-level name a lowering writes is read inside one of the module's own statements,
+/// which the program runs in order; that statement may be a `def` or a `class` whose body runs
+/// later, but which code runs it, and when, is not known here, so the name is asked about at
+/// the point the statement itself runs. it is bound there if every binding of it is made above
+/// that statement, and either, by the end of the module, every path has bound it and none has
+/// unbound it — a `del`, a binding made only in one branch of a conditional expression — or
+/// every binding of it is one a statement at the top of the module always makes once it
+/// completes, which a module the checker finds never ends, one that stops with `sys.exit()`
+/// say, needs. a binding made under `if TYPE_CHECKING:` never runs, which is how an import
+/// cycle is broken
+pub(crate) fn runtime_binding<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: ProgramFile<'db>,
+    read: RuntimeRead<'_>,
+) -> RuntimeBinding {
+    let index = semantic_index(db, file);
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    match read {
+        RuntimeRead::Written(expr) => written_runtime_binding(db, env, file, index, expr),
+        RuntimeRead::Global { name, range, .. } => {
+            let global = global_scope(db, file);
+            let Some(symbol) = place_table(db, global).symbol_id(name) else {
+                return RuntimeBinding::Unbound;
+            };
+            let Some(statement) = module
+                .suite()
+                .iter()
+                .find(|statement| statement.range().contains_range(range))
+            else {
+                return RuntimeBinding::Unbound;
+            };
+            let use_def = use_def_map(db, global);
+            match tally_bindings(db, index, use_def.end_of_scope_symbol_bindings(symbol))
+                .runtime_binding()
+            {
+                RuntimeBinding::Bound => {}
+                _ if made_by_completed_statements(db, file, &module, name) => {}
+                other => return other,
+            }
+            let bindings = use_def.reachable_symbol_bindings(symbol);
+            let predicates = bindings.predicates();
+            let reachability_constraints = bindings.reachability_constraints();
+            let above = bindings.into_iter().all(|binding| {
+                let DefinitionState::Defined(definition) = binding.binding else {
+                    return true;
+                };
+                evaluate_reachability_with_cache(
+                    db,
+                    None,
+                    reachability_constraints,
+                    predicates,
+                    binding.reachability_constraint,
+                )
+                .is_always_false()
+                    || definition.full_range(db, &module).range().end() <= statement.start()
+            });
+            if above {
+                RuntimeBinding::Bound
+            } else {
+                RuntimeBinding::Unbound
+            }
+        }
+    }
+}
+
+/// whether every binding `file` makes of the module-level `name` is made by a statement at the
+/// top of the module that always makes it once it completes — an import, a `class`, a `def`,
+/// an assignment — rather than one inside an `if`, a `try` or an expression. the module runs
+/// those statements in order, and one that raises stops it, so whatever runs below such a
+/// binding runs after it was made
+fn made_by_completed_statements<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    module: &ParsedModuleRef,
+    name: &str,
+) -> bool {
+    bindings_alone(db, file, name).is_some_and(|bindings| {
+        !bindings.is_empty()
+            && bindings.into_iter().all(|definition| {
+                let range = definition.full_range(db, module).range();
+                let Some(statement) = module
+                    .suite()
+                    .iter()
+                    .find(|statement| statement.range().contains_range(range))
+                else {
+                    return false;
+                };
+                matches!(
+                    (definition.kind(db), statement),
+                    (DefinitionKind::Import(_), ast::Stmt::Import(_))
+                        | (DefinitionKind::ImportFrom(_), ast::Stmt::ImportFrom(_))
+                        | (DefinitionKind::Class(_), ast::Stmt::ClassDef(_))
+                        | (DefinitionKind::Function(_), ast::Stmt::FunctionDef(_))
+                        | (DefinitionKind::TypeAlias(_), ast::Stmt::TypeAlias(_))
+                        | (DefinitionKind::Assignment(_), ast::Stmt::Assign(_))
+                        | (
+                            DefinitionKind::AnnotatedAssignment(_),
+                            ast::Stmt::AnnAssign(_)
+                        )
+                )
+            })
+    })
+}
+
+/// every binding `file`'s global scope makes of the module-level `name`, reached by the checker
+/// or not, when nothing else changes what the name holds: none is made only for the checker,
+/// nothing unbinds the name, and no other scope declares it `global`
+fn bindings_alone<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    name: &str,
+) -> Option<Vec<Definition<'db>>> {
+    let global = global_scope(db, file);
+    let symbol = place_table(db, global).symbol_id(name)?;
+    if declared_global_elsewhere(db, file, name) {
+        return None;
+    }
+    let use_def = use_def_map(db, global);
+    let place = ScopedPlaceId::Symbol(symbol);
+    if use_def.deletions().any(|(_, deleted)| deleted == place) {
+        return None;
+    }
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let in_stub = file.file(db).is_stub(db);
+    let mut bindings = Vec::new();
+    for (_, definition, _) in use_def.definitions_with_usage() {
+        if definition.place(db) != place
+            || !definition.kind(db).category(in_stub, &module).is_binding()
+        {
+            continue;
+        }
+        if made_only_for_the_checker(db, definition) {
+            return None;
+        }
+        bindings.push(definition);
+    }
+    Some(bindings)
+}
+
+/// whether a scope of `file` other than its global one declares `name` `global`, which is how
+/// a function rebinds a module-level name. the module's own bindings of it do not show that
+fn declared_global_elsewhere(db: &dyn Db, file: ProgramFile<'_>, name: &str) -> bool {
+    let global = global_scope(db, file).file_scope_id(db);
+    semantic_index(db, file).scope_ids().any(|scope| {
+        let table = place_table(db, scope);
+        scope.file_scope_id(db) != global
+            && table
+                .symbol_id(name)
+                .is_some_and(|id| table.symbol(id).is_global())
+    })
+}
+
+/// [`runtime_binding`] of a name the source writes, resolved where it is written
+fn written_runtime_binding<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: ProgramFile<'db>,
+    index: &'db SemanticIndex<'db>,
+    expr: ast::ExprRef<'_>,
+) -> RuntimeBinding {
+    // a name the index never saw (inside a string annotation, or a word basedpython reads
+    // as syntax) is not one the program reads as a name
+    let (Some(scope), Some(_)) = (index.try_expression_scope_id(&expr), index.try_use_id(expr))
+    else {
+        return RuntimeBinding::Bound;
+    };
+    let scope = scope.to_scope_id(db, file);
+    let Some(place) = PlaceExpr::try_from_expr(expr) else {
+        return RuntimeBinding::Bound;
+    };
+    let mut resolution =
+        resolve_place_load(db, index, scope, place, PlaceLoadMode::AtExpression(expr));
+    loop {
+        match resolution.next() {
+            Some(PlaceLoadResolutionStep::Source(source)) => {
+                let tally = runtime_tally(db, env, index, source);
+                if !tally.is_empty() {
+                    return tally.runtime_binding();
+                }
+            }
+            Some(PlaceLoadResolutionStep::MemberResolutionCondition(_)) => {}
+            Some(PlaceLoadResolutionStep::Exhausted(_)) | None => break,
+        }
+    }
+    // nothing binds it on the way here: either the program binds it only further on, or
+    // no binding in the program supplies it — a name basedpython resolves itself, which the
+    // transpiler makes available
+    match is_forward_reference(db, env, file, expr) {
+        Some(true) => RuntimeBinding::Unbound,
+        Some(false) | None => RuntimeBinding::Bound,
+    }
+}
+
+/// basedpython: whether `definition` may be made only for the checker: the checker reads
+/// `typing.TYPE_CHECKING` as `True` and the program reads it as `False`, so a binding whose
+/// making, or whose value, depends on the constant need not be one the program makes.
+///
+/// a binding depends on the constant when a condition deciding whether it is made reads it —
+/// the test of an enclosing `if`, `elif` or `while` and those before it, the subject, patterns
+/// and guards of an enclosing `match` case and those before it, or an expression around the
+/// binding such as a conditional expression or `and` holding a walrus —
+/// or when its value reads it, as `Foo = _F if TYPE_CHECKING else None` does. a condition
+/// reads the constant when any name in it resolves to a binding that carries it: the
+/// constant's declaration, imported under any name, or a binding whose value reads it. this
+/// does not ask which way the condition goes: `if not TYPE_CHECKING:` counts, and so does
+/// `if TYPE_CHECKING and x:`, whose body the program may never run either
+#[salsa::tracked(returns(copy), cycle_initial=|_, _, _| false, heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn made_only_for_the_checker<'db>(db: &'db dyn Db, definition: Definition<'db>) -> bool {
+    let file = definition.program_file(db);
+    let index = semantic_index(db, file);
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let range = definition.full_range(db, &module).range();
+    if index.is_in_type_checking_block(definition.file_scope(db), range) {
+        return true;
+    }
+    let reader = TypeCheckingReader { db, file };
+    statements_check_only(&reader, module.suite(), range)
+        || carries_type_checking(db, definition)
+        || match definition.kind(db) {
+            // a binding imported from another module is made only for the checker when the
+            // binding it imports is
+            DefinitionKind::Import(_)
+            | DefinitionKind::ImportFrom(_)
+            | DefinitionKind::StarImport(_) => {
+                resolved_definitions(db, definition).any(|resolved| match resolved {
+                    ResolvedTarget::Definition(resolved) => {
+                        resolved != definition && made_only_for_the_checker(db, resolved)
+                    }
+                    ResolvedTarget::Module(_) => false,
+                })
+            }
+            _ => false,
+        }
+}
+
+/// whether `range`, inside one of `body`'s statements, is reached only past a condition that
+/// reads the `TYPE_CHECKING` constant
+fn statements_check_only(
+    reader: &TypeCheckingReader<'_>,
+    body: &[ast::Stmt],
+    range: TextRange,
+) -> bool {
+    let Some(statement) = body
+        .iter()
+        .find(|statement| statement.range().contains_range(range))
+    else {
+        return false;
+    };
+    let holds = |body: &[ast::Stmt]| body.iter().any(|s| s.range().contains_range(range));
+    // the conditions decided before `range` is reached, and the body holding it, if any
+    let (guards, inner): (Vec<Guard>, Option<&[ast::Stmt]>) = match statement {
+        ast::Stmt::If(node) => {
+            let clauses = std::iter::once((Some(&*node.test), &node.body[..], node.test.start()))
+                .chain(
+                    node.elif_else_clauses
+                        .iter()
+                        .map(|clause| (clause.test.as_ref(), &clause.body[..], clause.start())),
+                )
+                .collect::<Vec<_>>();
+            let taken = clauses
+                .iter()
+                .rposition(|(_, _, start)| *start <= range.start())
+                .unwrap_or_default();
+            let guards = clauses[..=taken]
+                .iter()
+                .filter_map(|(test, _, _)| test.map(Guard::Expr))
+                .collect();
+            let body = clauses[taken].1;
+            (guards, holds(body).then_some(body))
+        }
+        ast::Stmt::While(node) => (
+            vec![Guard::Expr(&node.test)],
+            [&node.body[..], &node.orelse[..]]
+                .into_iter()
+                .find(|body| holds(body)),
+        ),
+        // the checker never takes the body of a `for` or an `except` clause to run for
+        // certain, so a binding made only there is one it already finds possibly unbound
+        ast::Stmt::For(node) => (
+            Vec::new(),
+            [&node.body[..], &node.orelse[..]]
+                .into_iter()
+                .find(|body| holds(body)),
+        ),
+        ast::Stmt::Try(node) => (
+            Vec::new(),
+            std::iter::once(&node.body[..])
+                .chain(node.handlers.iter().map(|handler| match handler {
+                    ast::ExceptHandler::ExceptHandler(handler) => &handler.body[..],
+                }))
+                .chain([&node.orelse[..], &node.finalbody[..]])
+                .find(|body| holds(body)),
+        ),
+        ast::Stmt::Match(node) => {
+            // a case is tried only once the subject is evaluated and every case before it
+            // has failed to match
+            let taken = node
+                .cases
+                .iter()
+                .position(|case| case.range().contains_range(range));
+            let tried = taken.map_or(0, |taken| taken + 1);
+            let guards = std::iter::once(Guard::Expr(&node.subject))
+                .chain(node.cases[..tried].iter().flat_map(|case| {
+                    std::iter::once(Guard::Pattern(&case.pattern))
+                        .chain(case.guard.as_deref().map(Guard::Expr))
+                }))
+                .collect();
+            let body = taken.map(|taken| &node.cases[taken].body[..]);
+            (guards, body.filter(|body| holds(body)))
+        }
+        ast::Stmt::With(node) => (Vec::new(), holds(&node.body).then_some(&node.body[..])),
+        ast::Stmt::FunctionDef(node) => (Vec::new(), holds(&node.body).then_some(&node.body[..])),
+        ast::Stmt::ClassDef(node) => (Vec::new(), holds(&node.body).then_some(&node.body[..])),
+        _ => (Vec::new(), None),
+    };
+    if guards.into_iter().any(|guard| reader.reads(guard)) {
+        return true;
+    }
+    match inner {
+        Some(body) => statements_check_only(reader, body, range),
+        // the binding is made in the statement itself, by an expression it may stand inside
+        None => {
+            let mut around = AroundBinding {
+                reader,
+                range,
+                found: false,
+            };
+            source_order::walk_stmt(&mut around, statement);
+            around.found
+        }
+    }
+}
+
+/// a condition deciding whether a binding is made
+#[derive(Clone, Copy)]
+enum Guard<'a> {
+    Expr(&'a ast::Expr),
+    Pattern(&'a ast::Pattern),
+}
+
+/// finds an expression standing around a binding's range that reads the `TYPE_CHECKING`
+/// constant, without entering the statement's nested bodies
+struct AroundBinding<'r, 'db> {
+    reader: &'r TypeCheckingReader<'db>,
+    range: TextRange,
+    found: bool,
+}
+
+impl<'a> SourceOrderVisitor<'a> for AroundBinding<'_, '_> {
+    fn visit_body(&mut self, _body: &'a [ast::Stmt]) {}
+
+    fn visit_expr(&mut self, expr: &'a ast::Expr) {
+        if self.found || !expr.range().contains_range(self.range) || expr.range() == self.range {
+            return;
+        }
+        if self.reader.reads(Guard::Expr(expr)) {
+            self.found = true;
+        } else {
+            source_order::walk_expr(self, expr);
+        }
+    }
+}
+
+/// answers whether an expression of `file` reads the `TYPE_CHECKING` constant
+struct TypeCheckingReader<'db> {
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+}
+
+impl<'db> TypeCheckingReader<'db> {
+    fn reads(&self, guard: Guard<'_>) -> bool {
+        let mut visitor = ReadsTypeChecking {
+            reader: self,
+            found: false,
+        };
+        match guard {
+            Guard::Expr(expr) => visitor.visit_expr(expr),
+            Guard::Pattern(pattern) => visitor.visit_pattern(pattern),
+        }
+        visitor.found
+    }
+
+    /// the bindings `expr` reads: those of a name that reach it, or the module members an
+    /// attribute of a module names
+    fn definitions(&self, expr: &ast::Expr) -> Vec<Definition<'db>> {
+        match expr {
+            ast::Expr::Name(_) => self.reaching_definitions(expr),
+            ast::Expr::Attribute(attribute) => self
+                .definitions(&attribute.value)
+                .into_iter()
+                .flat_map(|definition| resolved_definitions(self.db, definition))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|module| match module {
+                    ResolvedTarget::Module(module) => {
+                        crate::types::definition_resolution::find_symbol_in_scope(
+                            self.db,
+                            global_scope(self.db, module),
+                            attribute.attr.as_str(),
+                        )
+                        .into_iter()
+                        .collect()
+                    }
+                    ResolvedTarget::Definition(_) => Vec::new(),
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// the bindings of a name the program reads that reach it
+    fn reaching_definitions(&self, expr: &ast::Expr) -> Vec<Definition<'db>> {
+        let db = self.db;
+        let index = semantic_index(db, self.file);
+        let expr = ast::ExprRef::from(expr);
+        let (Some(scope), Some(_)) = (index.try_expression_scope_id(&expr), index.try_use_id(expr))
+        else {
+            return Vec::new();
+        };
+        let Some(place) = PlaceExpr::try_from_expr(expr) else {
+            return Vec::new();
+        };
+        let mut resolution = resolve_place_load(
+            db,
+            index,
+            scope.to_scope_id(db, self.file),
+            place,
+            PlaceLoadMode::AtExpression(expr),
+        );
+        loop {
+            match resolution.next() {
+                Some(PlaceLoadResolutionStep::Source(PlaceLoadSource {
+                    kind: PlaceLoadSourceKind::Bindings(bindings),
+                    ..
+                })) => {
+                    let predicates = bindings.predicates();
+                    let reachability_constraints = bindings.reachability_constraints();
+                    let definitions: Vec<Definition<'db>> = bindings
+                        .filter(|binding| {
+                            !evaluate_reachability_with_cache(
+                                db,
+                                None,
+                                reachability_constraints,
+                                predicates,
+                                binding.reachability_constraint,
+                            )
+                            .is_always_false()
+                        })
+                        .filter_map(|binding| match binding.binding {
+                            DefinitionState::Defined(definition) => Some(definition),
+                            DefinitionState::Undefined | DefinitionState::Deleted => None,
+                        })
+                        .collect();
+                    if !definitions.is_empty() {
+                        return definitions;
+                    }
+                }
+                Some(
+                    PlaceLoadResolutionStep::Source(_)
+                    | PlaceLoadResolutionStep::MemberResolutionCondition(_),
+                ) => {}
+                Some(PlaceLoadResolutionStep::Exhausted(_)) | None => return Vec::new(),
+            }
+        }
+    }
+}
+
+struct ReadsTypeChecking<'r, 'db> {
+    reader: &'r TypeCheckingReader<'db>,
+    found: bool,
+}
+
+impl<'a> SourceOrderVisitor<'a> for ReadsTypeChecking<'_, '_> {
+    fn visit_expr(&mut self, expr: &'a ast::Expr) {
+        if self.found {
+            return;
+        }
+        if matches!(expr, ast::Expr::Name(_) | ast::Expr::Attribute(_))
+            && self
+                .reader
+                .definitions(expr)
+                .into_iter()
+                .any(|definition| carries_type_checking(self.reader.db, definition))
+        {
+            self.found = true;
+            return;
+        }
+        source_order::walk_expr(self, expr);
+    }
+}
+
+/// what an import resolves to: a binding in the module it imports from, or a module
+enum ResolvedTarget<'db> {
+    Definition(Definition<'db>),
+    Module(ProgramFile<'db>),
+}
+
+/// `definition`, or the bindings an import resolves to, through every alias
+fn resolved_definitions<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> impl Iterator<Item = ResolvedTarget<'db>> + 'db {
+    let env = ProgramEnvironment::from_file(definition.program_file(db));
+    crate::types::definition_resolution::resolve_definition(
+        db,
+        &env,
+        definition,
+        None,
+        crate::types::definition_resolution::ImportAliasResolution::ResolveAliases,
+    )
+    .into_iter()
+    .filter_map(|resolved| match resolved {
+        crate::types::definition_resolution::ResolvedDefinition::Definition(definition) => {
+            Some(ResolvedTarget::Definition(definition))
+        }
+        crate::types::definition_resolution::ResolvedDefinition::Module(module) => {
+            Some(ResolvedTarget::Module(module))
+        }
+        crate::types::definition_resolution::ResolvedDefinition::FileWithRange(_) => None,
+    })
+}
+
+/// whether the value `definition` binds carries the `TYPE_CHECKING` constant: it is the
+/// constant's declaration, reached through any import of it, or a binding computed from an
+/// expression that reads the constant.
+///
+/// ty reads every binding named `TYPE_CHECKING` as `True`, the constant's own declaration in
+/// `typing` among them, and a module that cannot import `typing` declares its own as `False`
+#[salsa::tracked(returns(copy), cycle_initial=|_, _, _| false, heap_size=ruff_memory_usage::heap_size)]
+fn carries_type_checking<'db>(db: &'db dyn Db, definition: Definition<'db>) -> bool {
+    resolved_definitions(db, definition).any(|resolved| {
+        let ResolvedTarget::Definition(resolved) = resolved else {
+            return false;
+        };
+        let file = resolved.program_file(db);
+        let module = parsed_module(db, file.python_file(db)).load(db);
+        let reader = TypeCheckingReader { db, file };
+        let reads = |expr: &ast::Expr| reader.reads(Guard::Expr(expr));
+        let names_the_constant = |target: &ast::Expr| {
+            target
+                .as_name_expr()
+                .is_some_and(|name| name.id == "TYPE_CHECKING")
+        };
+        match resolved.kind(db) {
+            DefinitionKind::Assignment(assignment) => {
+                names_the_constant(assignment.target(&module)) || reads(assignment.value(&module))
+            }
+            DefinitionKind::AnnotatedAssignment(assignment) => {
+                names_the_constant(assignment.target(&module))
+                    || assignment.value(&module).is_some_and(reads)
+            }
+            DefinitionKind::NamedExpression(named) => reads(&named.node(&module).value),
+            DefinitionKind::AugmentedAssignment(assignment) => {
+                reads(&assignment.node(&module).value)
+            }
+            _ => false,
+        }
+    })
+}
+
+/// basedpython: whether `definition` is the declaration of `typing.TYPE_CHECKING` (or of
+/// `typing_extensions.TYPE_CHECKING`, which re-exports it)
+pub(crate) fn declares_typing_type_checking<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> bool {
+    let file = definition.program_file(db);
+    let is_typing = file_to_module(db, file.resolver_file(db)).is_some_and(|module| {
+        module.is_known(db, KnownModule::Typing)
+            || module.is_known(db, KnownModule::TypingExtensions)
+    });
+    if !is_typing {
+        return false;
+    }
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    let target = match definition.kind(db) {
+        DefinitionKind::Assignment(assignment) => assignment.target(&module),
+        DefinitionKind::AnnotatedAssignment(assignment) => assignment.target(&module),
+        _ => return false,
+    };
+    target
+        .as_name_expr()
+        .is_some_and(|name| name.id == "TYPE_CHECKING")
 }
 
 /// Infers the public type of an imported symbol.
@@ -1781,7 +2424,6 @@ pub(crate) fn is_forward_reference<'db>(
     let index = semantic_index(db, file);
     let scope = index.try_expression_scope_id(&expr)?.to_scope_id(db, file);
     index.try_use_id(expr)?;
-    let module = parsed_module(db, file.python_file(db)).load(db);
 
     let mut resolution = resolve_place_load(
         db,
@@ -1793,7 +2435,7 @@ pub(crate) fn is_forward_reference<'db>(
     let bound_where_written = loop {
         match resolution.next() {
             Some(PlaceLoadResolutionStep::Source(source)) => {
-                match runtime_definedness(db, env, index, &module, source) {
+                match runtime_definedness(db, env, index, source) {
                     RuntimeDefinedness::Defined => break true,
                     RuntimeDefinedness::PossiblyUndefined => break false,
                     RuntimeDefinedness::Undefined => {}
@@ -1856,6 +2498,39 @@ fn lexical_binding_exists<'db>(db: &'db dyn Db, source: PlaceLoadSource<'db>) ->
     }
 }
 
+/// what the bindings of one source of a place load hold once the program is running
+#[derive(Default, Clone, Copy)]
+struct BindingTally {
+    /// a binding the program runs holds a value on some path
+    runs: bool,
+    /// on some path nothing holds a value
+    unbound: bool,
+    /// a binding the checker sees is made under `if TYPE_CHECKING:`, and never runs
+    checker_only: bool,
+}
+
+impl BindingTally {
+    fn is_empty(self) -> bool {
+        !self.runs && !self.checker_only
+    }
+
+    fn definedness(self) -> RuntimeDefinedness {
+        match (self.runs, self.unbound || self.checker_only) {
+            (true, false) => RuntimeDefinedness::Defined,
+            (true, true) => RuntimeDefinedness::PossiblyUndefined,
+            (false, _) => RuntimeDefinedness::Undefined,
+        }
+    }
+
+    fn runtime_binding(self) -> RuntimeBinding {
+        match (self.runs, self.unbound, self.checker_only) {
+            (true, false, false) => RuntimeBinding::Bound,
+            (true, _, true) => RuntimeBinding::NotTheCheckers,
+            _ => RuntimeBinding::Unbound,
+        }
+    }
+}
+
 /// Whether one source of a place load holds a value once the program is running.
 enum RuntimeDefinedness {
     Defined,
@@ -1869,33 +2544,33 @@ fn runtime_definedness<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     index: &'db SemanticIndex<'db>,
-    module: &ParsedModuleRef,
     source: PlaceLoadSource<'db>,
 ) -> RuntimeDefinedness {
+    runtime_tally(db, env, index, source).definedness()
+}
+
+fn runtime_tally<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    index: &'db SemanticIndex<'db>,
+    source: PlaceLoadSource<'db>,
+) -> BindingTally {
     match source.kind {
-        PlaceLoadSourceKind::Bindings(bindings) => {
-            bindings_runtime_definedness(db, index, module, bindings)
-        }
+        PlaceLoadSourceKind::Bindings(bindings) => tally_bindings(db, index, bindings),
         // a lazy scope reads the owner's value when it runs, by which point the owner has made
         // every binding it is going to
         PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => {
-            bindings_runtime_definedness(
-                db,
-                index,
-                module,
-                use_def_map(db, scope).end_of_scope_bindings(id),
-            )
+            tally_bindings(db, index, use_def_map(db, scope).end_of_scope_bindings(id))
         }
         PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ExplicitGlobalSymbol { file, name }) => {
             let global = global_scope(db, file);
             match place_table(db, global).symbol_id(&name) {
-                Some(symbol) => bindings_runtime_definedness(
+                Some(symbol) => tally_bindings(
                     db,
                     index,
-                    module,
                     use_def_map(db, global).end_of_scope_symbol_bindings(symbol),
                 ),
-                None => RuntimeDefinedness::Undefined,
+                None => BindingTally::default(),
             }
         }
         PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::Builtin(name)) => {
@@ -1908,30 +2583,30 @@ fn runtime_definedness<'db>(
             defined_if(module_type_implicit_global_symbol(db, file, &name))
         }
         PlaceLoadSourceKind::Observed(_)
-        | PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::DunderClass(_)) => {
-            RuntimeDefinedness::Defined
-        }
+        | PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::DunderClass(_)) => BindingTally {
+            runs: true,
+            ..BindingTally::default()
+        },
     }
 }
 
 /// an implicit source holds a value only where its lookup finds one
-fn defined_if(place: PlaceAndQualifiers<'_>) -> RuntimeDefinedness {
-    if place.place.is_definitely_bound() {
-        RuntimeDefinedness::Defined
-    } else {
-        RuntimeDefinedness::Undefined
+fn defined_if(place: PlaceAndQualifiers<'_>) -> BindingTally {
+    BindingTally {
+        runs: place.place.is_definitely_bound(),
+        ..BindingTally::default()
     }
 }
 
-fn bindings_runtime_definedness<'db>(
+fn tally_bindings<'db>(
     db: &'db dyn Db,
     index: &'db SemanticIndex<'db>,
-    module: &ParsedModuleRef,
     bindings: BindingWithConstraintsIterator<'_, 'db>,
-) -> RuntimeDefinedness {
+) -> BindingTally {
     let predicates = bindings.predicates();
     let reachability_constraints = bindings.reachability_constraints();
-    let (mut defined, mut undefined) = (false, false);
+    let mut tally = BindingTally::default();
+    let mut checker_only_place = None;
     for binding in bindings {
         if evaluate_reachability_with_cache(
             db,
@@ -1945,22 +2620,52 @@ fn bindings_runtime_definedness<'db>(
             continue;
         }
         match binding.binding {
-            DefinitionState::Defined(definition)
-                if !index.is_in_type_checking_block(
-                    definition.file_scope(db),
-                    definition.full_range(db, module).range(),
-                ) =>
-            {
-                defined = true;
+            DefinitionState::Defined(definition) if made_only_for_the_checker(db, definition) => {
+                tally.checker_only = true;
+                checker_only_place = Some((definition.file_scope(db), definition.place(db)));
             }
-            _ => undefined = true,
+            DefinitionState::Defined(_) => tally.runs = true,
+            DefinitionState::Undefined | DefinitionState::Deleted => tally.unbound = true,
         }
     }
-    match (defined, undefined) {
-        (true, false) => RuntimeDefinedness::Defined,
-        (true, true) => RuntimeDefinedness::PossiblyUndefined,
-        (false, _) => RuntimeDefinedness::Undefined,
+    // the checker reads every `if TYPE_CHECKING:` block as taken, so a binding the program
+    // makes in its `else:` instead is one it never sees reach anything. the program still
+    // makes it, so the name holds something when it runs — not what the checker resolved
+    if !tally.runs
+        && let Some((scope, place)) = checker_only_place
+    {
+        tally.runs = binds_where_the_checker_does_not_look(db, index, scope, place);
     }
+    tally
+}
+
+/// whether `scope` binds `place` anywhere the checker does not vouch for as unmade: outside
+/// every branch made only for the checker, or in one the checker never reaches. the checker
+/// reads every `if TYPE_CHECKING:` block as taken, so a binding in its `else:` is one the
+/// checker sees reach nothing, and one the program makes
+fn binds_where_the_checker_does_not_look<'db>(
+    db: &'db dyn Db,
+    index: &'db SemanticIndex<'db>,
+    scope: FileScopeId,
+    place: ScopedPlaceId,
+) -> bool {
+    let bindings = index.use_def_map(scope).reachable_bindings(place);
+    let predicates = bindings.predicates();
+    let reachability_constraints = bindings.reachability_constraints();
+    bindings.into_iter().any(|binding| {
+        let DefinitionState::Defined(definition) = binding.binding else {
+            return false;
+        };
+        !made_only_for_the_checker(db, definition)
+            || evaluate_reachability_with_cache(
+                db,
+                None,
+                reachability_constraints,
+                predicates,
+                binding.reachability_constraint,
+            )
+            .is_always_false()
+    })
 }
 
 /// The type declared for the place a binding writes to.

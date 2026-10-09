@@ -23,6 +23,7 @@ use crate::types::AnonNamedTupleClass;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
+use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::{
     ClassPatternPositionalResult, ClassPatternPositionalSource, CycleDetector, ProgramEnvironment,
     SpecialFormType, Type, TypeQualifiers, binding_type, class_pattern_positional_result,
@@ -259,6 +260,7 @@ impl<'db> SemanticModel<'db> {
             function,
             positional,
             keywords,
+            Some(RuntimeSite::at(call)),
         )
     }
 
@@ -759,6 +761,20 @@ impl<'db> SemanticModel<'db> {
         AnonNamedTupleClass::of(self.db, &self.program_environment(), ty)
     }
 
+    /// basedpython: whether every name `expr` reads holds, where it is written, the binding the
+    /// checker resolved when the program runs — so writing `expr` into code that runs there
+    /// evaluates what the checker saw. a class imported only under `if TYPE_CHECKING:`, bound
+    /// only on some paths or only further on does not
+    pub fn reads_names_bound_where_written(&self, expr: &ast::Expr) -> bool {
+        crate::types::reified_infer::written_unbound_read(
+            self.db,
+            &self.program_environment(),
+            self.file(),
+            expr,
+        )
+        .is_none()
+    }
+
     /// could any conversion apply at this call at all?
     ///
     /// Binding the call a second time to find out is the expensive part, and
@@ -1083,6 +1099,7 @@ impl<'db> SemanticModel<'db> {
             self.file(),
             class_literal,
             constructed,
+            Some(RuntimeSite::at(call)),
         )
     }
 
