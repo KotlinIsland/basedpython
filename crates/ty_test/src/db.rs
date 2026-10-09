@@ -536,6 +536,11 @@ fn mdtest_rule_selection(
         // `.by` test to write `let` or `var` on assignments whose subject is
         // something else entirely.
         "implicit-declaration",
+        // `unused-import` too: a `.by` test imports what its subject needs, and often
+        // more than one block reads, so reporting every unused import would bury the
+        // tests that are about something else. `basedpython_unused_import.md` turns it
+        // back on for the tests that are about it.
+        "unused-import",
     ];
 
     let registry = default_lint_registry();

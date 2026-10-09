@@ -723,7 +723,8 @@ enum DefinitionEntry<'db> {
     Unused(Definition<'db>),
     Used(Definition<'db>),
     Undefined,
-    Deleted,
+    /// the place a `del`, or the end of an `except … as` clause, unbound
+    Deleted(ScopedPlaceId),
 }
 
 impl<'db> DefinitionEntry<'db> {
@@ -733,7 +734,7 @@ impl<'db> DefinitionEntry<'db> {
             | Self::Unused(definition)
             | Self::Used(definition) => DefinitionState::Defined(definition),
             Self::Undefined => DefinitionState::Undefined,
-            Self::Deleted => DefinitionState::Deleted,
+            Self::Deleted(_) => DefinitionState::Deleted,
         }
     }
 }
@@ -991,7 +992,22 @@ impl<'db> UseDefMap<'db> {
                 DefinitionEntry::Used(definition) => Some((id, definition, true)),
                 DefinitionEntry::DeclarationPart(_)
                 | DefinitionEntry::Undefined
-                | DefinitionEntry::Deleted => None,
+                | DefinitionEntry::Deleted(_) => None,
+            })
+    }
+
+    /// every place this scope unbinds, with the point in the scope's history it does: a
+    /// `del`, the end of an `except … as` clause, and the end of a block that declared a
+    /// name. ordered with [`Self::definitions_with_usage`] by the ids both hand out
+    pub fn deletions(&self) -> impl Iterator<Item = (ScopedDefinitionId, ScopedPlaceId)> + '_ {
+        self.all_definitions
+            .iter_enumerated()
+            .filter_map(|(id, entry)| match entry {
+                DefinitionEntry::Deleted(place) => Some((id, place)),
+                DefinitionEntry::DeclarationPart(_)
+                | DefinitionEntry::Unused(_)
+                | DefinitionEntry::Used(_)
+                | DefinitionEntry::Undefined => None,
             })
     }
 
@@ -2647,7 +2663,7 @@ impl<'db> UseDefMapBuilder<'db> {
     }
 
     pub(super) fn delete_binding(&mut self, place: ScopedPlaceId) {
-        let def_id = self.push_definition(DefinitionEntry::Deleted);
+        let def_id = self.push_definition(DefinitionEntry::Deleted(place));
         let pending = self.pending_reachability.current;
         let place_state =
             pending_place_state_mut(place, &mut self.symbol_states, &mut self.member_states);

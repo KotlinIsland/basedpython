@@ -213,6 +213,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
     registry.register_lint(&BOOL_AS_INT);
     registry.register_lint(&UNUSED_RETURN_VALUE);
+    registry.register_lint(&UNUSED_IMPORT);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
     registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
     registry.register_lint(&REIFIED_WITHOUT_RECEIVER);
@@ -2857,6 +2858,74 @@ declare_lint! {
     pub(crate) static BOOL_AS_INT = {
         summary: "detects a `bool` implicitly used as an `int`",
         status: LintStatus::stable("0.0.61"),
+        default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks a basedpython file for an import that nothing uses: no name it binds
+    /// is read, and no `extension` or conformance it brings into scope supplies
+    /// anything the file relies on.
+    ///
+    /// ## Why is this bad?
+    /// An unused import costs time when the module is imported, can create an
+    /// import cycle, and tells a reader the module depends on something it does
+    /// not.
+    ///
+    /// The extension members a module declares are only applicable in the files
+    /// that import it, so an import can be used without its name ever being read.
+    /// This rule counts that as a use, which a linter working one file at a time
+    /// cannot — so in a `.by` file it takes the place of buff's `F401`, which
+    /// leaves `.by` files alone.
+    ///
+    /// Otherwise the rule is `F401`'s:
+    ///
+    /// - a read of a binding counts for every later binding of that name in the
+    ///   scope. An import nothing reads before another import rebinds the name
+    ///   is reported too, as `F811` reports the redefinition, so one round of
+    ///   fixes removes every one. An import inside a class body is never
+    ///   reported
+    /// - `import a as a`, `from a import b as b` and `from a export b` are
+    ///   re-exports, a name listed in `__all__` is exported, and
+    ///   `from __future__ import …` is a directive — none of them is reported
+    /// - in a package's `__init__.by`, and inside a `try` that handles
+    ///   `ImportError`, an unused import is reported without a fix: it may be a
+    ///   re-export, or a test for whether the module is installed
+    ///
+    /// ## Examples
+    /// ```by
+    /// # colours.by
+    /// from enum import Enum
+    ///
+    /// extension Enum:
+    ///     let lower_name: str
+    ///         get() = self.name.lower()
+    /// ```
+    ///
+    /// ```by
+    /// # main.by
+    /// import json         # error: `json` imported but unused
+    /// import colours      # ok — the extension it declares is used below
+    /// from enum import Enum
+    ///
+    /// class Colour(Enum):
+    ///     RED = 1
+    ///
+    /// def describe(colour: Colour) -> str:
+    ///     return colour.lower_name
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```by
+    /// import colours
+    /// from enum import Enum
+    /// ```
+    pub(crate) static UNUSED_IMPORT = {
+        summary: "detects an import that nothing uses",
+        status: LintStatus::stable("0.0.1-beta.2"),
         default_level: Level::Warn,
         ty_compat: TyCompat::BasedPython,
     }
