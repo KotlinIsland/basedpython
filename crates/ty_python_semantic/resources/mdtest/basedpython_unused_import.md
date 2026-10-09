@@ -365,6 +365,98 @@ import parsing
 register(3)
 ```
 
+## every element of a collection literal that converts uses its extension
+
+each element of the list converts through a different module's extension, so both imports are used —
+the second element's as much as the first's
+
+`ids.by`:
+
+```by
+class UserId:
+    pass
+
+class Tag:
+    pass
+```
+
+`numbers.by`:
+
+```by
+from ids import UserId
+
+extension UserId:
+    class def __from__(cls, value: int) -> UserId:
+        return UserId()
+```
+
+`labels.by`:
+
+```by
+from ids import Tag
+
+extension Tag:
+    class def __from__(cls, value: str) -> Tag:
+        return Tag()
+```
+
+`main.by`:
+
+```by
+from ids import UserId, Tag
+import numbers
+import labels
+
+xs: list[UserId | Tag] = [1, "s"]
+```
+
+## every element of a collection literal assigned to an attribute uses its extension
+
+`ids.by`:
+
+```by
+class UserId:
+    pass
+
+class Tag:
+    pass
+```
+
+`numbers.by`:
+
+```by
+from ids import UserId
+
+extension UserId:
+    class def __from__(cls, value: int) -> UserId:
+        return UserId()
+```
+
+`labels.by`:
+
+```by
+from ids import Tag
+
+extension Tag:
+    class def __from__(cls, value: str) -> Tag:
+        return Tag()
+```
+
+`main.by`:
+
+```by
+from ids import UserId, Tag
+import numbers
+import labels
+
+class Holder:
+    def __init__(self) -> None:
+        self.xs: list[UserId | Tag] = []
+
+holder = Holder()
+holder.xs = [1, "s"]
+```
+
 ## any import of the module grants its extensions
 
 a `from` import of a name the file never reads still makes the module's extensions applicable, so it
@@ -485,6 +577,168 @@ def show(x: int) -> str:
     return x.renderer()
 ```
 
+## an import read only as a context-sensitive name's qualifier
+
+`Red` where a `Color` is expected is lowered to `Color.Red`, so the import of `Color` is read
+although the source never spells the name
+
+`palette.by`:
+
+```by
+enum class Color:
+    case Red, Green
+
+def paint(c: Color) -> str:
+    return str(c)
+```
+
+`main.by`:
+
+```by
+from palette import Color, paint
+
+paint(Red)
+```
+
+## an import read only as a case name's qualifier
+
+`case Red:` is lowered to `case Color.Red:`, and `case Circle(r):` to `case Shape.Circle(r):`
+
+`palette.by`:
+
+```by
+enum class Color:
+    case Red, Green
+
+enum class Shape:
+    case Circle(radius: float)
+    case Dot
+
+def current() -> Color:
+    return Color.Green
+
+def outline() -> Shape:
+    return Shape.Dot
+```
+
+`main.by`:
+
+```by
+from palette import Color, Shape, current, outline
+
+def describe() -> str:
+    match current():
+        case Red:
+            return "red"
+        case _:
+            return "other"
+
+def radius() -> float:
+    match outline():
+        case Circle(r):
+            return r
+        case _:
+            return 0.0
+```
+
+## an import read only by a type test's runtime check
+
+`x is AB` is lowered to a test of each arm of the alias, `isinstance(x, A) or isinstance(x, B)`, so
+it reads `A` and `B` although the source spells neither
+
+`kinds.by`:
+
+```by
+class A:
+    pass
+
+class B:
+    pass
+
+type AB = A | B
+```
+
+`main.by`:
+
+```by
+from kinds import AB, A, B
+
+def check(x: object) -> bool:
+    return x is AB
+```
+
+## an import read only by a type test against a module attribute
+
+`kinds.by`:
+
+```by
+class A:
+    pass
+
+class B:
+    pass
+
+type AB = A | B
+```
+
+`main.by`:
+
+```by
+import kinds
+from kinds import A, B
+
+def check(x: object) -> bool:
+    return x is kinds.AB
+```
+
+## an import read only by a checked cast's runtime check
+
+`kinds.by`:
+
+```by
+class A:
+    pass
+
+class B:
+    pass
+
+type AB = A | B
+```
+
+`main.by`:
+
+```by
+from kinds import AB, A, B
+
+def narrow(x: object) -> AB:
+    return x cast! AB
+```
+
+## an import read only by a `raises` guard
+
+the guard a `raises` function is lowered behind names the exceptions it may raise
+
+`errors.by`:
+
+```by
+class Oops(Exception):
+    pass
+
+class Bad(Exception):
+    pass
+
+type Errs = Oops | Bad
+```
+
+`main.by`:
+
+```by
+from errors import Errs, Oops, Bad
+
+def run() -> None raises Errs:
+    raise Oops()
+```
+
 ## explicit re-exports are not reported
 
 `import a as a`, `from a import b as b` and basedpython's `from a export b` say the name is part of
@@ -557,10 +811,10 @@ __all__ += helpers.__all__
 from __future__ import annotations
 ```
 
-## a rebound name is reported only at its last binding
+## an import rebound by something other than an import is not reported
 
-only the binding a name is left holding at the end of its scope is reported. an import the name is
-rebound after is `F811`'s concern
+an assignment that rebinds the name makes the import a redefinition rather than an unused import,
+which is `F811`'s concern
 
 ```by
 import json
@@ -579,10 +833,13 @@ os.getcwd()
 import os
 ```
 
-## the last of several unread bindings is reported
+## every one of several unread imports of a name is reported
+
+an import rebound by another import before anything reads it is reported too, so one round of fixes
+removes them all
 
 ```by
-import json
+import json  # error: [unused-import]
 import json  # error: [unused-import]
 ```
 
@@ -667,6 +924,18 @@ import email.parser
 
 def parser() -> object:
     return email.parser
+```
+
+## an import of the package does not redefine a submodule import
+
+`import os` after `import os.path` binds `os` again, but `os.path` stays reachable through it only
+because of the first import, so the first is not an unused redefinition
+
+```by
+import os.path
+import os
+
+os.getcwd()
 ```
 
 ## a read earlier in a loop body uses an import later in it
@@ -756,6 +1025,35 @@ warning[unused-import]: `tomllib` imported but unused
 help: To test whether a module is available, use `importlib.util.find_spec` instead of importing it
 ```
 
+## an import in a function defined inside such a `try` is not a test
+
+the function's body runs when it is called, outside the `try`, so its import gets the ordinary fix
+
+```by
+try:
+    import tomllib  # error: [unused-import]
+
+    def load() -> None:
+        import json  # snapshot
+except ImportError:
+    pass
+```
+
+```snapshot
+warning[unused-import]: `json` imported but unused
+ --> src/mdtest_snippet.by:5:16
+  |
+5 |         import json  # snapshot
+  |                ^^^^
+help: Remove the unused import `json`
+  |
+4 |     def load() -> None:
+  -         import json  # snapshot
+5 +         pass  # snapshot
+6 | except ImportError:
+  |
+```
+
 ## an unused import in a package's `__init__` may be a re-export
 
 a package's `__init__.by` is what importing the package runs, so an import there may be how the
@@ -790,4 +1088,72 @@ help: If this is a re-export, write it as `from … export …`, as a redundant 
 ```by
 def load() -> None:
     import json  # error: [unused-import]
+```
+
+## the fix removes an unused alias and keeps the rest of the statement
+
+```by
+from collections import OrderedDict, deque  # snapshot
+
+OrderedDict()
+```
+
+```snapshot
+warning[unused-import]: `collections.deque` imported but unused
+ --> src/mdtest_snippet.by:1:38
+  |
+1 | from collections import OrderedDict, deque  # snapshot
+  |                                      ^^^^^
+help: Remove the unused import `collections.deque`
+  |
+  - from collections import OrderedDict, deque  # snapshot
+1 + from collections import OrderedDict  # snapshot
+2 |
+  |
+```
+
+## the fix removes an alias with its own line inside parentheses
+
+```by
+from collections import (
+    OrderedDict,  # read below
+    deque,  # snapshot
+)
+
+OrderedDict()
+```
+
+```snapshot
+warning[unused-import]: `collections.deque` imported but unused
+ --> src/mdtest_snippet.by:3:5
+  |
+3 |     deque,  # snapshot
+  |     ^^^^^
+help: Remove the unused import `collections.deque`
+  |
+2 |     OrderedDict,  # read below
+  -     deque,  # snapshot
+3 | )
+  |
+```
+
+## the fix writes `pass` where removing the import would leave a block empty
+
+```by
+def load() -> None:
+    import json  # snapshot
+```
+
+```snapshot
+warning[unused-import]: `json` imported but unused
+ --> src/mdtest_snippet.by:2:12
+  |
+2 |     import json  # snapshot
+  |            ^^^^
+help: Remove the unused import `json`
+  |
+1 | def load() -> None:
+  -     import json  # snapshot
+2 +     pass  # snapshot
+  |
 ```

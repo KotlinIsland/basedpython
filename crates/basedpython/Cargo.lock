@@ -3865,6 +3865,7 @@ dependencies = [
  "ruff_memory_usage",
  "ruff_python_ast",
  "ruff_python_edits",
+ "ruff_python_index",
  "ruff_python_literal",
  "ruff_python_parser",
  "ruff_python_stdlib",

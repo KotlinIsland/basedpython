@@ -2923,6 +2923,12 @@ declare_lint! {
     /// import colours
     /// from enum import Enum
     /// ```
+    ///
+    /// ## Fix safety
+    /// The fix removes the import, and is safe: nothing in the file reads it.
+    /// Removing an import also stops the imported module from being run, which
+    /// matters only if the module's import has a side effect the program relies
+    /// on.
     pub(crate) static UNUSED_IMPORT = {
         summary: "detects an import that nothing uses",
         status: LintStatus::stable("0.0.1-beta.2"),

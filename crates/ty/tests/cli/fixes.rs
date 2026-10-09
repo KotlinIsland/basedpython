@@ -202,6 +202,100 @@ fn fix() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `--fix` removes the imports nothing in a `.by` file uses, and keeps the one used only
+/// through the extension its module declares
+#[test]
+fn fix_unused_imports() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "colours.by",
+            r#"
+            from enum import Enum
+
+            extension Enum:
+                let lower_name: str
+                    get() = self.name.lower()
+            "#,
+        ),
+        (
+            "main.by",
+            r#"
+            import json
+            from enum import Enum
+            import colours
+            from collections import OrderedDict, deque
+
+            class Colour(Enum):
+                RED = 1
+
+            def describe(colour: Colour, seen: OrderedDict[str, int]) -> str:
+                return colour.lower_name
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command().arg("--fix"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Found 2 diagnostics (2 fixed, 0 remaining).
+
+    ----- stderr -----
+    ");
+
+    assert_snapshot!(fs::read_to_string(case.root().join("main.by"))?, @"
+
+    from enum import Enum
+    import colours
+    from collections import OrderedDict
+
+    class Colour(Enum):
+        RED = 1
+
+    def describe(colour: Colour, seen: OrderedDict[str, int]) -> str:
+        return colour.lower_name
+    ");
+
+    // the fixed file checks clean, the extension still resolving
+    assert_cmd_snapshot!(case.command(), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    All checks passed!
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
+/// a name imported many times over is fixed in one round, however many times: every unread
+/// import of it is reported at once, so the fixes do not converge one import per round. a
+/// block left with nothing in it is left with `pass` and nothing else
+#[test]
+fn fix_unused_imports_in_one_round() -> anyhow::Result<()> {
+    let repeated = "import os\n".repeat(12);
+    let source = format!("{repeated}\nif True:\n    import json; import sys\n");
+    let case = CliTest::with_file("main.by", &source)?;
+
+    assert_cmd_snapshot!(case.command().arg("--fix"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    Found 14 diagnostics (14 fixed, 0 remaining).
+
+    ----- stderr -----
+    ");
+
+    assert_snapshot!(fs::read_to_string(case.root().join("main.by"))?, @"
+
+    if True:
+        pass
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn fix_unfixable() -> anyhow::Result<()> {
     let case = CliTest::with_files([

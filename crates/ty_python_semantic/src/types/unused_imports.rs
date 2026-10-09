@@ -24,12 +24,17 @@
 
 use ruff_db::files::File;
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
+use ruff_db::source::source_text;
+use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::identifier::Identifier;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::statement_visitor::{StatementVisitor, walk_stmt};
 use ruff_python_ast::{self as ast};
+use ruff_python_index::Indexer;
+use ruff_python_trivia::{PythonWhitespace, is_python_whitespace};
+use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{ImportingFile, ModuleName, resolve_module};
 use ty_python_core::definition::{Definition, DefinitionCategory, DefinitionKind};
 use ty_python_core::place::ScopedPlaceId;
@@ -77,22 +82,64 @@ pub(crate) fn report_unused_imports(
     }
 
     let index = semantic_index(db, file);
-    let uses = Uses::new(db, file, index, &parsed, inferred);
-    let context = ImportContext::new(db, file, &env, &parsed);
+    let checked_scopes = || {
+        index.scope_ids().filter(|scope| {
+            matches!(
+                index.scope(scope.file_scope_id(db)).kind(),
+                ScopeKind::Module | ScopeKind::Function
+            )
+        })
+    };
+    // most files read every import they make, which the semantic index alone can tell: an
+    // import is only ever unused when the index records no read of it
+    let unread_import = checked_scopes().any(|scope| {
+        index
+            .use_def_map(scope.file_scope_id(db))
+            .definitions_with_usage()
+            .any(|(_, definition, is_used)| !is_used && definition.kind(db).is_import())
+    });
+    if !unread_import {
+        return;
+    }
 
-    for scope in index.scope_ids() {
-        let file_scope = scope.file_scope_id(db);
-        let kind = index.scope(file_scope).kind();
-        if !matches!(kind, ScopeKind::Module | ScopeKind::Function) {
-            continue;
-        }
-        let unused = unused_in_scope(db, index, file_scope, &parsed, &uses, source_file);
-        if unused.is_empty() {
-            continue;
-        }
-        let infer_context = InferContext::new(db, &env, scope, source_file, file, &parsed);
+    let uses = Uses::new(db, file, index, &parsed, inferred);
+    let unused_by_scope: Vec<_> = checked_scopes()
+        .filter_map(|scope| {
+            let file_scope = scope.file_scope_id(db);
+            let unused = unused_in_scope(db, index, file_scope, &parsed, &uses, source_file);
+            (!unused.is_empty()).then_some((scope, unused))
+        })
+        .collect();
+    if unused_by_scope.is_empty() {
+        return;
+    }
+
+    let context = ImportContext::new(db, file, &env, &parsed);
+    let scopes: Vec<_> = unused_by_scope
+        .into_iter()
+        .map(|(scope, unused)| {
+            let at_module = scope.file_scope_id(db).is_global();
+            let infer_context = InferContext::new(db, &env, scope, source_file, file, &parsed);
+            (infer_context, unused, at_module)
+        })
+        .collect();
+
+    // an import the lint is not reporting — a suppressed one, or one in unreachable code — is
+    // not removed, so the fix for its statement leaves it in place
+    let removed = scopes.iter().flat_map(|(infer_context, unused, _)| {
+        unused.iter().filter(|import| {
+            context.fixable(import)
+                && infer_context
+                    .report_lint(&UNUSED_IMPORT, import.binding)
+                    .is_some()
+        })
+    });
+    let source = source_text(db, source_file);
+    let removals = Removals::new(&parsed, source.as_str(), removed);
+
+    for (infer_context, unused, at_module) in scopes {
         for import in &unused {
-            import.report(&infer_context, &context, kind == ScopeKind::Module);
+            import.report(&infer_context, &context, at_module, &removals);
         }
         diagnostics.extend(&infer_context.finish());
     }
@@ -193,6 +240,8 @@ impl<'db> Uses<'db> {
 struct UnusedImport {
     /// the statement the binding is one alias of
     statement: TextRange,
+    /// which of the statement's aliases makes the binding
+    alias_index: usize,
     /// the name the import makes available, as F401 spells it: `a.b`, `a.b.c` for
     /// `from a.b import c`, `.c` for `from . import c`
     qualified_name: String,
@@ -256,37 +305,94 @@ fn unused_in_scope<'db>(
         if symbol.is_global() || symbol.is_nonlocal() {
             continue;
         }
-        events.sort_unstable_by_key(|(id, _)| *id);
-        // the bindings since the name was last unbound: the one it is left holding, and the
-        // ones it shadows. a read of any of them counts for the last, as it does for `F401`
-        let since_unbound = match events.iter().rposition(|(_, event)| event.is_none()) {
-            Some(deletion) => &events[deletion + 1..],
-            None => &events[..],
-        };
-        // a name left unbound at the end of the scope holds no import
-        let Some(&(_, Some(live))) = since_unbound.last() else {
-            continue;
-        };
-        let Some(import) = reportable_import(db, live, parsed) else {
-            continue;
-        };
-        if since_unbound
-            .iter()
-            .filter_map(|(_, definition)| *definition)
-            .any(|definition| uses.reads(definition))
+        // a name read as a whole reads whichever binding it is left holding, and every
+        // binding before it carries that read forward
+        if uses.scope_reads.contains(&(scope, symbol_id))
+            || (scope.is_global() && uses.module_names.contains(symbol.name()))
         {
             continue;
         }
-        if uses.scope_reads.contains(&(scope, symbol_id)) {
-            continue;
+        events.sort_unstable_by_key(|(id, _)| *id);
+        // the bindings since the name was last unbound, in order. a read of one counts for
+        // every binding after it, as `F401` carries a shadowed binding's reads to the one that
+        // shadows it, so the bindings that count as unread are a prefix of these
+        let since_unbound: Vec<Definition<'db>> =
+            match events.iter().rposition(|(_, event)| event.is_none()) {
+                Some(deletion) => &events[deletion + 1..],
+                None => &events[..],
+            }
+            .iter()
+            .filter_map(|(_, definition)| *definition)
+            .collect();
+        for (position, &definition) in since_unbound.iter().enumerate() {
+            if uses.reads(definition) {
+                break;
+            }
+            // a binding the name goes on to be rebound by is reported only when the import
+            // rebinding it redefines it — the unused import `F811` reports as redefined.
+            // reporting every one at once is what lets the fix remove them all in one round
+            if let Some(&next) = since_unbound.get(position + 1)
+                && !redefines(db, parsed, next, definition)
+            {
+                continue;
+            }
+            if let Some(import) = reportable_import(db, definition, parsed) {
+                unused.push(import);
+            }
         }
-        if scope.is_global() && uses.module_names.contains(symbol.name()) {
-            continue;
-        }
-        unused.push(import);
     }
     unused.sort_unstable_by_key(|import| import.binding.start());
     unused
+}
+
+/// what an import binds, for deciding whether a later import redefines it: the name it
+/// imports, as `F401` spells it, and whether it is a submodule import (`import a.b`, which
+/// binds `a` but makes `a.b` reachable through it)
+fn imported_name<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+    parsed: &ParsedModuleRef,
+) -> Option<(String, bool)> {
+    match definition.kind(db) {
+        DefinitionKind::Import(import) => {
+            let alias = import.alias(parsed);
+            let submodule = alias.asname.is_none() && alias.name.contains('.');
+            Some((alias.name.to_string(), submodule))
+        }
+        DefinitionKind::ImportFrom(import) => {
+            let statement = import.import(parsed);
+            let mut name = ".".repeat(statement.level as usize);
+            if let Some(module) = &statement.module {
+                name.push_str(module);
+                name.push('.');
+            }
+            name.push_str(&import.alias(parsed).name);
+            Some((name, false))
+        }
+        _ => None,
+    }
+}
+
+/// whether the import `later` redefines the import `earlier`, by ruff's rule: a submodule
+/// import redefines, and is redefined by, only an import of the same submodule — `import a.b`
+/// then `import a.c` binds `a` twice, and the second leaves `a.b` reachable through it
+fn redefines<'db>(
+    db: &'db dyn Db,
+    parsed: &ParsedModuleRef,
+    later: Definition<'db>,
+    earlier: Definition<'db>,
+) -> bool {
+    let (Some((later_name, later_submodule)), Some((earlier_name, earlier_submodule))) = (
+        imported_name(db, later, parsed),
+        imported_name(db, earlier, parsed),
+    ) else {
+        return false;
+    };
+    if later_submodule || earlier_submodule {
+        later_name == earlier_name
+    } else {
+        true
+    }
 }
 
 /// `definition` as an import F401 reports when nothing reads it: not a `__future__`
@@ -309,6 +415,7 @@ fn reportable_import<'db>(
             }
             Some(UnusedImport {
                 statement: statement.range(),
+                alias_index: import.alias_index(),
                 qualified_name: alias.name.to_string(),
                 module: (!alias.is_resource)
                     .then(|| ModuleName::new(&alias.name))
@@ -341,6 +448,7 @@ fn reportable_import<'db>(
             qualified_name.push_str(&alias.name);
             Some(UnusedImport {
                 statement: statement.range(),
+                alias_index: import.alias_index(),
                 qualified_name,
                 module: statement
                     .module
@@ -405,6 +513,12 @@ impl<'db> ImportContext<'db> {
         }
     }
 
+    /// whether the import is removed by a fix: not one that may be a re-export from a
+    /// package's `__init__`, and not one that tests for its module's availability
+    fn fixable(&self, import: &UnusedImport) -> bool {
+        !self.in_init && !self.probing.contains(&import.statement.start())
+    }
+
     /// whether `module` is the project's own code
     fn is_first_party(&self, import: &UnusedImport) -> bool {
         let db = self.db;
@@ -424,7 +538,13 @@ impl<'db> ImportContext<'db> {
 }
 
 impl UnusedImport {
-    fn report(&self, context: &InferContext<'_, '_>, imports: &ImportContext<'_>, at_module: bool) {
+    fn report(
+        &self,
+        context: &InferContext<'_, '_>,
+        imports: &ImportContext<'_>,
+        at_module: bool,
+        removals: &Removals<'_>,
+    ) {
         let Some(builder) = context.report_lint(&UNUSED_IMPORT, self.binding) else {
             return;
         };
@@ -446,7 +566,238 @@ impl UnusedImport {
                  or list it in `__all__`",
             );
         }
+        if imports.fixable(self)
+            && let Some(edits) = removals.edits(self.statement)
+        {
+            let mut edits = edits.into_iter();
+            if let Some(first) = edits.next() {
+                diagnostic.set_fix(Fix::safe_edits(first, edits));
+                diagnostic.help(format_args!(
+                    "Remove the unused import `{}`",
+                    self.qualified_name
+                ));
+            }
+        }
     }
+}
+
+/// the edits that remove the unused imports the lint reports. every diagnostic in a statement
+/// carries the same fix, so applying any of them removes all of the statement's unused
+/// aliases at once, as `F401`'s fix does. a statement that loses every alias is deleted, and
+/// the statements deleted next to one another in a suite share one fix too: the deletion of
+/// one ends where the next begins, and two fixes that touch are applied in separate rounds
+struct Removals<'a> {
+    source: &'a str,
+    indexer: Indexer,
+    /// each statement with an alias to remove, by its start, with the aliases to remove
+    statements: FxHashMap<TextSize, (&'a ast::Stmt, Vec<usize>)>,
+    /// each deleted statement, by its start, with the run of adjacent deleted statements in
+    /// its suite it belongs to
+    deleted: FxHashMap<TextSize, usize>,
+    runs: Vec<Run<'a>>,
+}
+
+/// statements next to one another in a suite, all deleted
+struct Run<'a> {
+    statements: Vec<&'a ast::Stmt>,
+    /// whether the run is the whole of a suite that may not be left empty, so its last
+    /// statement is written as `pass`. deleting each one before it takes the separator after
+    /// it too, so a suite written on one line (`import os; import sys`) is left as `pass`
+    leaves_pass: bool,
+}
+
+impl<'a> Removals<'a> {
+    fn new<'i>(
+        parsed: &'a ParsedModuleRef,
+        source: &'a str,
+        removed: impl Iterator<Item = &'i UnusedImport>,
+    ) -> Self {
+        let mut wanted: FxHashMap<TextSize, Vec<usize>> = FxHashMap::default();
+        for import in removed {
+            wanted
+                .entry(import.statement.start())
+                .or_default()
+                .push(import.alias_index);
+        }
+
+        let mut suites = Suites {
+            wanted: &wanted,
+            statements: FxHashMap::default(),
+            deleted: FxHashMap::default(),
+            runs: Vec::new(),
+            in_module: true,
+        };
+        suites.visit_body(parsed.suite());
+
+        Self {
+            source,
+            indexer: Indexer::from_tokens(parsed.tokens(), source),
+            statements: suites.statements,
+            deleted: suites.deleted,
+            runs: suites.runs,
+        }
+    }
+
+    /// the edits removing the unused aliases of the statement starting at `statement`
+    fn edits(&self, statement: TextRange) -> Option<Vec<Edit>> {
+        let start = statement.start();
+        if let Some(&run) = self.deleted.get(&start) {
+            let run = &self.runs[run];
+            let last = run.statements.len() - 1;
+            return Some(
+                run.statements
+                    .iter()
+                    .enumerate()
+                    .map(|(position, stmt)| {
+                        if run.leaves_pass && position == last {
+                            Edit::range_replacement("pass".to_owned(), stmt.range())
+                        } else {
+                            ruff_python_edits::delete_stmt(stmt, None, self.source, &self.indexer)
+                        }
+                    })
+                    .collect(),
+            );
+        }
+        let (stmt, aliases) = self.statements.get(&start)?;
+        let names = import_aliases(stmt)?;
+        Some(remove_aliases(self.source, stmt, names, aliases))
+    }
+}
+
+/// the aliases of an import statement
+fn import_aliases(stmt: &ast::Stmt) -> Option<&[ast::Alias]> {
+    match stmt {
+        ast::Stmt::Import(import) => Some(&import.names),
+        ast::Stmt::ImportFrom(import) => Some(&import.names),
+        _ => None,
+    }
+}
+
+/// finds each import statement with an alias to remove, and groups the ones that lose every
+/// alias, and with it the whole statement, into runs of neighbours
+struct Suites<'a, 'w> {
+    wanted: &'w FxHashMap<TextSize, Vec<usize>>,
+    statements: FxHashMap<TextSize, (&'a ast::Stmt, Vec<usize>)>,
+    deleted: FxHashMap<TextSize, usize>,
+    runs: Vec<Run<'a>>,
+    /// whether the suite being visited is the module's own, which may be left empty
+    in_module: bool,
+}
+
+impl<'a> StatementVisitor<'a> for Suites<'a, '_> {
+    fn visit_body(&mut self, body: &'a [ast::Stmt]) {
+        let in_module = std::mem::replace(&mut self.in_module, false);
+        let mut run: Vec<&'a ast::Stmt> = Vec::new();
+        let mut runs: Vec<Vec<&'a ast::Stmt>> = Vec::new();
+        for stmt in body {
+            let start = stmt.start();
+            let mut deleted = false;
+            if let (Some(aliases), Some(names)) = (self.wanted.get(&start), import_aliases(stmt)) {
+                let mut aliases = aliases.clone();
+                aliases.sort_unstable();
+                aliases.dedup();
+                deleted = aliases.len() == names.len();
+                if !deleted {
+                    self.statements.insert(start, (stmt, aliases));
+                }
+            }
+            if deleted {
+                run.push(stmt);
+            } else if !run.is_empty() {
+                runs.push(std::mem::take(&mut run));
+            }
+            self.visit_stmt(stmt);
+        }
+        if !run.is_empty() {
+            runs.push(run);
+        }
+        let whole_suite = !in_module && runs.len() == 1 && runs[0].len() == body.len();
+        for statements in runs {
+            let id = self.runs.len();
+            for stmt in &statements {
+                self.deleted.insert(stmt.start(), id);
+            }
+            self.runs.push(Run {
+                statements,
+                leaves_pass: whole_suite,
+            });
+        }
+        self.in_module = in_module;
+    }
+}
+
+/// the edits removing the aliases at `remove` (sorted, and not every one) from an import
+/// statement whose aliases are `aliases`.
+///
+/// a run of aliases removed together goes with the separator after it, up to the next alias
+/// kept, or — at the end of the statement — with the separator before it. a run that has
+/// lines of its own inside parentheses goes with those lines, so the comments the formatter
+/// leaves on an alias's line go with it and no other line changes
+fn remove_aliases(
+    source: &str,
+    statement: &ast::Stmt,
+    aliases: &[ast::Alias],
+    remove: &[usize],
+) -> Vec<Edit> {
+    let mut edits = Vec::new();
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for &index in remove {
+        match runs.last_mut() {
+            Some((_, last)) if *last + 1 == index => *last = index,
+            _ => runs.push((index, index)),
+        }
+    }
+    for (first, last) in runs {
+        let start = aliases[first].start();
+        let end = aliases[last].end();
+        if let Some(lines) = own_lines(source, statement, aliases, first, last) {
+            edits.push(Edit::range_deletion(lines));
+        } else if let Some(next) = aliases.get(last + 1) {
+            edits.push(Edit::deletion(start, next.start()));
+        } else {
+            // the run ends the statement, and something before it is kept
+            edits.push(Edit::deletion(aliases[first - 1].end(), end));
+        }
+    }
+    edits
+}
+
+/// the whole lines the aliases `first..=last` occupy, when they occupy lines of their own
+/// inside the statement's parentheses: nothing but indentation before the first, and nothing
+/// but its comma and a comment after the last
+fn own_lines(
+    source: &str,
+    statement: &ast::Stmt,
+    aliases: &[ast::Alias],
+    first: usize,
+    last: usize,
+) -> Option<TextRange> {
+    // only a `from` import is parenthesized, and nothing before its first alias but the
+    // parenthesis can be one
+    let parenthesized = matches!(statement, ast::Stmt::ImportFrom(_))
+        && source[TextRange::new(statement.start(), aliases.first()?.start())].contains('(');
+    if !parenthesized {
+        return None;
+    }
+    let start = aliases[first].start();
+    let end = aliases[last].end();
+    let line_start = source.line_start(start);
+    if !source[TextRange::new(line_start, start)]
+        .chars()
+        .all(is_python_whitespace)
+    {
+        return None;
+    }
+    let line_end = source.line_end(end);
+    let rest = source[TextRange::new(end, line_end)].trim_whitespace_start();
+    let rest = rest
+        .strip_prefix(',')
+        .unwrap_or(rest)
+        .trim_whitespace_start();
+    if !(rest.is_empty() || rest.starts_with('#')) {
+        return None;
+    }
+    Some(TextRange::new(line_start, source.full_line_end(end)))
 }
 
 /// finds the import statements written in the body of a `try` that handles `ImportError` or
@@ -485,6 +836,13 @@ impl<'ast> StatementVisitor<'ast> for ImportProbes<'_, '_> {
                 if self.depth > 0 {
                     self.probing.insert(stmt.start());
                 }
+            }
+            // a function's body runs when it is called, not inside the `try` it is defined
+            // in, and the `try` protects none of its imports — `F401` reads it the same way
+            ast::Stmt::FunctionDef(function) => {
+                let depth = std::mem::take(&mut self.depth);
+                self.visit_body(&function.body);
+                self.depth = depth;
             }
             ast::Stmt::Try(try_stmt) => {
                 let probes = self.handles_import_error(&try_stmt.handlers);

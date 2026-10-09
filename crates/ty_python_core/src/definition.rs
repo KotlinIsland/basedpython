@@ -1463,6 +1463,11 @@ pub struct ImportDefinitionKind {
 }
 
 impl ImportDefinitionKind {
+    /// which of the statement's aliases this definition is the binding of
+    pub fn alias_index(&self) -> usize {
+        self.alias_index as usize
+    }
+
     pub fn import<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast ast::StmtImport {
         self.node.node(module)
     }
@@ -1484,6 +1489,11 @@ pub struct ImportFromDefinitionKind {
 }
 
 impl ImportFromDefinitionKind {
+    /// which of the statement's aliases this definition is the binding of
+    pub fn alias_index(&self) -> usize {
+        self.alias_index as usize
+    }
+
     pub fn import<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast ast::StmtImportFrom {
         self.node.node(module)
     }
