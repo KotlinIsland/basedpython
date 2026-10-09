@@ -147,6 +147,113 @@ pub(super) enum ExplicitAttributeWriteRequirement<'db> {
     },
 }
 
+impl<'db> AttributeWriteRequirement<'db> {
+    /// the one type the assigned value is checked against, where it is checked against one: a
+    /// declared type, or the value a descriptor's setter takes
+    pub(super) fn write_type(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<Type<'db>> {
+        match self {
+            Self::Instance { object_ty, member } => member.write_type(db, env, *object_ty),
+            Self::Class { object_ty, member } => match member {
+                ClassAttributeWriteMember::Explicit { member, .. } => {
+                    member.write_type(db, env, *object_ty)
+                }
+                ClassAttributeWriteMember::ClassAttribute(
+                    FallbackAttributeWriteRequirement::AssignableTo { ty, .. },
+                ) => Some(*ty),
+                ClassAttributeWriteMember::ClassAttribute(
+                    FallbackAttributeWriteRequirement::PossiblyMissing,
+                )
+                | ClassAttributeWriteMember::Unresolved { .. } => None,
+            },
+            Self::Module(ty) => *ty,
+            Self::ProtocolMember {
+                write: Some(ProtocolMemberWriteRequirement::AssignableTo(ty)),
+                ..
+            } => Some(*ty),
+            Self::ProtocolMember {
+                write:
+                    Some(ProtocolMemberWriteRequirement::Descriptor {
+                        domain: Some(domain),
+                        ..
+                    }),
+                ..
+            } => Some(*domain),
+            Self::ProtocolMember { .. }
+            | Self::All { .. }
+            | Self::Any { .. }
+            | Self::Unconstrained
+            | Self::CannotAssign => None,
+        }
+    }
+}
+
+impl<'db> InstanceAttributeWriteMember<'db> {
+    /// the type the assigned value is checked against on `object_ty`, where it is checked
+    /// against one
+    pub(super) fn write_type(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        object_ty: Type<'db>,
+    ) -> Option<Type<'db>> {
+        match self {
+            Self::Explicit { member, .. } => member.write_type(db, env, object_ty),
+            Self::Instance(FallbackAttributeWriteRequirement::AssignableTo { ty, .. }) => Some(*ty),
+            Self::Instance(FallbackAttributeWriteRequirement::PossiblyMissing)
+            | Self::ClassVar
+            | Self::SetAttr => None,
+        }
+    }
+}
+
+impl<'db> ExplicitAttributeWriteRequirement<'db> {
+    /// the type the assigned value is checked against on `object_ty`, where it is checked
+    /// against one: the declared type, or the value the descriptor's setter takes
+    pub(super) fn write_type(
+        &self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+        object_ty: Type<'db>,
+    ) -> Option<Type<'db>> {
+        match self {
+            Self::AssignableTo { ty, .. } => Some(*ty),
+            Self::Descriptor { descriptor_ty, .. } => {
+                // a property's own `__set__` takes any value; what its setter takes is what
+                // the write is checked against
+                if let Some(property) = descriptor_ty.as_property_instance() {
+                    return property
+                        .setter(db)
+                        .and_then(|setter| setter_value_type(db, setter));
+                }
+                match descriptor_setter_domain(db, env, *descriptor_ty, object_ty) {
+                    DescriptorSetterDomain::Known(domain) => Some(domain),
+                    DescriptorSetterDomain::Missing | DescriptorSetterDomain::Deferred => None,
+                }
+            }
+        }
+    }
+}
+
+/// the value a property setter takes: the type of its second parameter, where it has one
+/// signature
+fn setter_value_type<'db>(db: &'db dyn Db, setter: Type<'db>) -> Option<Type<'db>> {
+    let Type::FunctionLiteral(function) = setter else {
+        return None;
+    };
+    let [overload] = function.signature(db).overloads.as_slice() else {
+        return None;
+    };
+    overload
+        .parameters()
+        .iter()
+        .nth(1)
+        .map(Parameter::annotated_type)
+}
+
 impl ExplicitAttributeWriteRequirement<'_> {
     pub(super) fn qualifiers(&self) -> TypeQualifiers {
         match self {

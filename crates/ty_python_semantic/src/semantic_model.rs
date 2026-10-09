@@ -19,6 +19,7 @@ use crate::RuntimeSpelling;
 use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::place::imported_symbol;
 use crate::place::{builtins_module_scope, implicit_builtins_symbol_scope};
+use crate::types::AnonNamedTupleClass;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
@@ -745,6 +746,17 @@ impl<'db> SemanticModel<'db> {
             ));
         }
         conversions
+    }
+
+    /// basedpython: the anonymous named tuple class the checker read `tuple` as —
+    /// the one a type form or a value form declares, or the one a plain tuple
+    /// literal is built as where one was expected. `None` for any other tuple
+    pub fn anon_named_tuple_class(
+        &self,
+        tuple: &ast::ExprTuple,
+    ) -> Option<AnonNamedTupleClass<'db>> {
+        let ty = tuple.inferred_type(self)?;
+        AnonNamedTupleClass::of(self.db, &self.program_environment(), ty)
     }
 
     /// could any conversion apply at this call at all?

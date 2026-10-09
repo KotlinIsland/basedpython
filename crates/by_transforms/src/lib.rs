@@ -638,6 +638,7 @@ fn run_anon_named_tuple_cleanup(
         for stmt in module.suite() {
             anon.visit_stmt(stmt);
         }
+        anon.finish();
         if let Some(err) = anon.errors.first() {
             return Err(err.clone());
         }

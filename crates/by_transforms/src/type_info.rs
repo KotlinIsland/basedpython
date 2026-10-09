@@ -5,7 +5,8 @@ use crate::transforms::trailing_lambda::RECEIVER_PARAMETER;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::{
-    Expr, ExprCall, ExprName, ExprRef, ParameterWithDefault, Stmt, StmtClassDef, StmtFunctionDef,
+    Expr, ExprCall, ExprName, ExprRef, ExprTuple, ParameterWithDefault, Stmt, StmtClassDef,
+    StmtFunctionDef,
 };
 use ruff_python_parser::parse_expression;
 use ruff_text_size::{Ranged, TextRange};
@@ -20,7 +21,8 @@ use ty_python_semantic::types::{
     DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
 use ty_python_semantic::{
-    Db, HasType, ImplicitReceiverReference, ProgramEnvironment, SemanticModel,
+    AnonNamedTupleClass, AnonNamedTupleId, Db, HasType, ImplicitReceiverReference,
+    ProgramEnvironment, SemanticModel,
 };
 
 /// How the postfix `^` / `!` operators test the "absent" arm of an operand's
@@ -180,6 +182,29 @@ impl SynthesizedType {
             )
             .collect()
     }
+}
+
+/// the anonymous named tuple class the checker reads a plain tuple literal as, which the
+/// emitted python constructs around it
+#[derive(Clone, Debug)]
+pub(crate) struct AnonNamedTupleConstruction {
+    /// the checker's identity of the class, shared with every type form it reads as the
+    /// same type
+    pub(crate) id: AnonNamedTupleId,
+    /// each field's name and type, for a module that has no type form of the class to
+    /// emit it from
+    pub(crate) fields: Vec<(String, AnonNamedTupleField)>,
+}
+
+/// the type of one field of an [`AnonNamedTupleConstruction`]
+#[derive(Clone, Debug)]
+pub(crate) enum AnonNamedTupleField {
+    /// a type the emitted python can name
+    Spelled(SynthesizedType),
+    /// another anonymous named tuple, emitted as a class of its own
+    NamedTuple(AnonNamedTupleConstruction),
+    /// a type the emitted python cannot name
+    Unspellable,
 }
 
 /// How an assignment inside a trailing-lambda block reaches an enclosing scope,
@@ -543,6 +568,19 @@ pub(crate) trait TypeInfo {
     /// relocated into a nested function would reach the binding through a cell
     /// rather than as a global
     fn shares_a_cell_scope(&self, reference: &ExprName, anchor: &Expr) -> bool;
+
+    /// the checker's identity of the anonymous named tuple class a type form
+    /// `(name: T, ...)` declares
+    fn anon_named_tuple_id(&self, tuple: &ExprTuple) -> Option<AnonNamedTupleId>;
+
+    /// the anonymous named tuple a plain tuple literal is built as: the checker reads
+    /// one standing where an anonymous named tuple is expected as an instance of it.
+    /// `None` for a literal that stays a tuple
+    fn anon_named_tuple_construction(
+        &self,
+        tuple: &ExprTuple,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<AnonNamedTupleConstruction>;
 
     /// rendered inferred (literal-promoted) type of `expr`, or `None` when ty
     /// cannot resolve a type (unresolved import, parse error, etc.) or the type
@@ -1231,6 +1269,26 @@ impl TypeInfo for SemanticModel<'_> {
             })
     }
 
+    fn anon_named_tuple_id(&self, tuple: &ExprTuple) -> Option<AnonNamedTupleId> {
+        self.anon_named_tuple_class(tuple).map(|class| class.id)
+    }
+
+    fn anon_named_tuple_construction(
+        &self,
+        tuple: &ExprTuple,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Option<AnonNamedTupleConstruction> {
+        if tuple.is_anon_named_tuple
+            || tuple.is_anon_named_tuple_value
+            || tuple.has_parameter_shape()
+            || !tuple.ctx.is_load()
+        {
+            return None;
+        }
+        let class = self.anon_named_tuple_class(tuple)?;
+        Some(anon_named_tuple_construction(self, class, min_version))
+    }
+
     fn promoted_type_display(
         &self,
         expr: &Expr,
@@ -1655,6 +1713,39 @@ fn display_for_python<'db>(
         DisplaySettings::default().with_reduced_symbolic_operations(),
     )
     .to_string()
+}
+
+/// `class` with each field's type spelled for the emitted python
+fn anon_named_tuple_construction<'db>(
+    model: &SemanticModel<'db>,
+    class: AnonNamedTupleClass<'db>,
+    min_version: ruff_python_ast::PythonVersion,
+) -> AnonNamedTupleConstruction {
+    let db = model.db();
+    let env = model.program_environment();
+    let fields = class
+        .fields
+        .into_iter()
+        .map(|(name, ty)| {
+            let field = if let Some(nested) = AnonNamedTupleClass::of(db, &env, ty) {
+                AnonNamedTupleField::NamedTuple(anon_named_tuple_construction(
+                    model,
+                    nested,
+                    min_version,
+                ))
+            } else {
+                spell_for_python(db, &env, model, ty, min_version, true, None).map_or(
+                    AnonNamedTupleField::Unspellable,
+                    AnonNamedTupleField::Spelled,
+                )
+            };
+            (name.to_string(), field)
+        })
+        .collect();
+    AnonNamedTupleConstruction {
+        id: class.id,
+        fields,
+    }
 }
 
 /// Spell `ty` as a type expression the *emitted* file can resolve, or `None` when it has

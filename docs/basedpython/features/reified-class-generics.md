@@ -127,6 +127,12 @@ class Box[T]:
 
 b: Box[int] = Box()   # from the declaration
 Box[str]()            # written out
+
+class Holder:
+    box: Box[int]
+
+    def __init__(self):
+        self.box = Box()  # from the attribute's declaration
 ```
 
 where nothing solves it, the bare construction is an error

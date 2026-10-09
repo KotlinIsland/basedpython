@@ -1673,12 +1673,17 @@ declare_lint! {
     /// ## What it does
     /// Checks for conversion sites where more than one conversion applies — two
     /// dunders, a dunder and an in-scope conformance, or two applicable
-    /// `implementation`s of the same interface and type.
+    /// `implementation`s of the same interface and type. A plain tuple literal
+    /// that more than one expected anonymous named tuple accepts is one too:
+    /// `(1,)` where `(a: int) | (b: int)` is expected.
     ///
     /// ## Why is this bad?
     /// `__from__` and `__into__` are hand-written bodies that can disagree, so
     /// which one runs must not depend on arbitrary ordering. Remove one of them,
-    /// or write the conversion you want explicitly.
+    /// or write the conversion you want explicitly. A plain tuple literal is
+    /// constructed as the anonymous named tuple it stands for, which decides the
+    /// field names the value has, and nothing in the literal says which one was
+    /// meant: name the fields, as in `(a=1)`.
     ///
     /// ## Example
     ///

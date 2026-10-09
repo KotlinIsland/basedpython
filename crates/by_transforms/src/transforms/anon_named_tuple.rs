@@ -6,6 +6,9 @@
 //! across the module collapse to one class so structural equivalence is
 //! preserved at the type level.
 //!
+//! a plain tuple literal the checker reads as an instance of an anonymous named
+//! tuple — one standing wherever one is expected — is constructed as its class
+//!
 //! Example:
 //! ```by
 //! def foo(x: (name: str, age: int)) -> (name: str, age: int):
@@ -23,7 +26,7 @@
 //!     age: int
 //!
 //! def foo(x: _AnonNamedTuple_<hash>) -> _AnonNamedTuple_<hash>:
-//!     return ("asdf", 1)
+//!     return _AnonNamedTuple_<hash>("asdf", 1)
 //!
 //! a = _AnonNamedTuple_<hash>
 //! ```
@@ -34,13 +37,14 @@ use std::hash::Hash;
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtFunctionDef, StmtReturn};
+use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::Ranged;
+use ty_python_semantic::AnonNamedTupleId;
 
 use crate::transforms::callable::CallableSyntax;
 use crate::transforms::generics::PolyfilledTypeParams;
 use crate::transforms::repeated_underscore::WrittenNames;
-use crate::type_info::TypeInfo;
+use crate::type_info::{AnonNamedTupleConstruction, AnonNamedTupleField, TypeInfo};
 
 /// Synthetic field name for the i-th positional element of a mixed
 /// anonymous named tuple. `NamedTuple` disallows leading-underscore field
@@ -115,7 +119,7 @@ pub(crate) struct AnonNamedTuple<'src> {
     /// emitted `NamedTuple` definition is valid Python.
     ///
     /// Stored as a `Vec` (`TextRange` isn't `Ord`) and walked linearly when
-    /// rendering. Inserts append; `render_subbed` skips entries that don't
+    /// rendering. Inserts append; `render_subbed_value` skips entries that don't
     /// fall within the requested range.
     range_to_class: Vec<(ruff_text_size::TextRange, String)>,
     /// Source range of every anonymous-named-tuple *value* form (`(name=v,
@@ -136,10 +140,6 @@ pub(crate) struct AnonNamedTuple<'src> {
     typing_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// whether python evaluates the synthesized class's field annotations as it is made
     annotations_evaluated: bool,
-    /// Active function-scope return-annotation shape stack. Empty when not
-    /// inside a function. The innermost (last) entry governs how a `return`
-    /// statement inside the current function is coerced.
-    return_shape_stack: Vec<Option<Shape>>,
     /// Stack of typevar rename maps (`T` → `_T`) accumulated as the visitor
     /// descends into PEP 695 generics. Synthesized `NamedTuple` class bodies
     /// are hoisted to module scope, but the original source text references
@@ -152,12 +152,15 @@ pub(crate) struct AnonNamedTuple<'src> {
     typevar_rename_stack: Vec<HashMap<String, String>>,
     /// the name the generics polyfill declares each type parameter under
     polyfilled: PolyfilledTypeParams,
-    /// Names bound to an anonymous named tuple by an alias — `P = (a: int)` or
-    /// `type P = (a: int)`. Coercion asks what the annotation *means*, not how
-    /// it is spelled, so a plain tuple literal under `x: P` is wrapped exactly
-    /// as one under `x: (a: int)` is. Populated in source order, so an alias
-    /// only applies below its own declaration.
-    aliases: HashMap<String, Shape>,
+    /// the class emitted for each anonymous named tuple the checker identifies, so
+    /// that every type form it reads as one type, and every plain tuple literal it
+    /// reads as an instance of it, names one class
+    identity_classes: HashMap<AnonNamedTupleId, String>,
+    /// the plain tuple literals the checker reads as an anonymous named tuple, in
+    /// source order with an enclosing literal ahead of the ones inside it. each is
+    /// built as its class once the whole module has been visited, because the
+    /// type form that names the class may come after the literal
+    constructions: Vec<PendingConstruction>,
     /// Hard transpile errors — each one aborts the whole transpilation so we
     /// never emit syntactically invalid Python. The transform aborts on the
     /// *first* failure during the visit pass; subsequent visits are no-ops.
@@ -187,9 +190,9 @@ impl<'src> AnonNamedTuple<'src> {
             type_only_imports: std::cell::RefCell::default(),
             typing_imports: std::cell::RefCell::default(),
             annotations_evaluated: false,
-            return_shape_stack: Vec::new(),
             typevar_rename_stack: Vec::new(),
-            aliases: HashMap::new(),
+            identity_classes: HashMap::new(),
+            constructions: Vec::new(),
             errors: Vec::new(),
         }
     }
@@ -213,26 +216,6 @@ impl<'src> AnonNamedTuple<'src> {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
-    /// Render `range`'s source, substituting any anonymous-named-tuple
-    /// expression contained within `range` with its synthesized class name.
-    /// Used wherever a stretch of original source ends up in the transpiled
-    /// output (class field type, constructor argument, coerced literal) so
-    /// nested anon-NT regions don't leak through verbatim.
-    fn render_subbed(&self, range: ruff_text_size::TextRange) -> String {
-        let raw = self.render_subbed_with(range, &self.range_to_class);
-        let renamed = self.apply_typevar_renames(&raw);
-        // Synthesized NamedTuple classes are hoisted to module scope, but
-        // the renamed typevars (`_T`) get declared *after* them by the
-        // generics polyfill. Wrap typevar references in PEP 484 forward-ref
-        // quotes so the annotation is stored as a string and only resolved
-        // by type checkers, not at class-construction time.
-        if renamed != raw && !raw.is_empty() {
-            format!("\"{renamed}\"")
-        } else {
-            renamed
-        }
-    }
-
     /// Lower a field's type expression to python source.
     ///
     /// The synthesized class body is hoisted out of the statement the field type
@@ -243,8 +226,8 @@ impl<'src> AnonNamedTuple<'src> {
     fn render_field_type(&mut self, expr: &Expr) -> String {
         let lowered = self.callable.lower_type_expr(expr);
         let renamed = self.apply_typevar_renames(&lowered);
-        // same forward-reference quoting as `render_subbed`: a renamed typevar is
-        // declared below the hoisted class, so the annotation must stay a string
+        // a renamed typevar is declared below the hoisted class, so the annotation
+        // must stay a string
         if renamed != lowered && !lowered.is_empty() {
             format!("\"{renamed}\"")
         } else {
@@ -277,10 +260,11 @@ impl<'src> AnonNamedTuple<'src> {
         super::source_util::rename_identifiers(text, &borrowed)
     }
 
-    /// Like `render_subbed` but substitutes value-form constructor calls
-    /// instead of bare class names. Used when an outer anon-NT *value* form
-    /// is rendering its argument list — a nested value form there must call
-    /// its inner constructor, not just reference the inner class.
+    /// Render `range`'s source with every anonymous named tuple inside it
+    /// substituted: a value form by its constructor call, a type form by its
+    /// class name. Used when an outer anon-NT *value* form is rendering its
+    /// argument list — a nested value form there must call its inner
+    /// constructor, not just reference the inner class.
     fn render_subbed_value(&self, range: ruff_text_size::TextRange) -> String {
         // Combine value-form constructor calls (preferred) with class-name
         // subs for any nested *type* form in the same range. Value renders
@@ -296,20 +280,6 @@ impl<'src> AnonNamedTuple<'src> {
                     .map(|(r, s)| (*r, s.as_str())),
             )
             .filter(|(r, _)| r.start() >= range.start() && r.end() <= range.end())
-            .collect();
-        subs.sort_by_key(|(r, _)| r.start());
-        self.sweep(range, subs)
-    }
-
-    fn render_subbed_with(
-        &self,
-        range: ruff_text_size::TextRange,
-        table: &[(ruff_text_size::TextRange, String)],
-    ) -> String {
-        let mut subs: Vec<(ruff_text_size::TextRange, &str)> = table
-            .iter()
-            .filter(|(r, _)| r.start() >= range.start() && r.end() <= range.end())
-            .map(|(r, n)| (*r, n.as_str()))
             .collect();
         subs.sort_by_key(|(r, _)| r.start());
         self.sweep(range, subs)
@@ -463,13 +433,20 @@ impl<'src> AnonNamedTuple<'src> {
         Ok(Some(Shape { fields }))
     }
 
-    fn class_name_for(&mut self, shape: Shape, source_range: ruff_text_size::TextRange) -> String {
-        let name = if let Some(existing) = self.shapes.get(&shape) {
+    fn class_name_for(
+        &mut self,
+        shape: Shape,
+        source_range: ruff_text_size::TextRange,
+        id: Option<AnonNamedTupleId>,
+    ) -> String {
+        let name = if let Some(existing) = id.and_then(|id| self.identity_classes.get(&id)) {
             existing.clone()
         } else {
-            let n = shape.class_name(self.written);
-            self.shapes.insert(shape, n.clone());
-            n
+            let name = self.shape_class_name(shape);
+            if let Some(id) = id {
+                self.identity_classes.insert(id, name.clone());
+            }
+            name
         };
         // Track this anon-NT's source range → class name so any *outer* anon-NT
         // that contains this one can substitute its source span when rendering
@@ -490,7 +467,8 @@ impl<'src> AnonNamedTuple<'src> {
                 return;
             }
         };
-        let class_name = self.class_name_for(shape, tuple.range());
+        let id = self.types.anon_named_tuple_id(tuple);
+        let class_name = self.class_name_for(shape, tuple.range(), id);
         self.needs_import = true;
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
             class_name,
@@ -508,7 +486,7 @@ impl<'src> AnonNamedTuple<'src> {
             }
         };
         // Render constructor call: `ClassName(v1, v2, ...)` using positional
-        // args sourced from each field's value expression. We `render_subbed`
+        // args sourced from each field's value expression. We `render_subbed_value`
         // so a nested anon-NT inside any value gets substituted with its own
         // class-constructor call rather than emitted verbatim.
         let mut value_args: Vec<String> = Vec::with_capacity(tuple.elts.len());
@@ -519,7 +497,9 @@ impl<'src> AnonNamedTuple<'src> {
             };
             value_args.push(self.render_subbed_value(value_expr.range()));
         }
-        let class_name = self.class_name_for(shape, tuple.range());
+        // a value form is left out of the checker's identities: its class is the one
+        // its own field values make, which a type form's need not be
+        let class_name = self.class_name_for(shape, tuple.range(), None);
         self.needs_import = true;
         let constructor_call = format!("{class_name}({})", value_args.join(", "));
         self.range_to_value_render
@@ -528,171 +508,6 @@ impl<'src> AnonNamedTuple<'src> {
             constructor_call,
             tuple.range(),
         )));
-    }
-
-    /// Rewrite a `return ...` statement inside a function annotated with an
-    /// anonymous-named-tuple return type, when the returned value is a plain
-    /// tuple literal of matching arity. The plain tuple is wrapped as a
-    /// constructor call so runtime field access works.
-    fn rewrite_return_coercion(&mut self, ret: &StmtReturn) {
-        let Some(Some(shape)) = self.return_shape_stack.last().cloned() else {
-            return;
-        };
-        let Some(value) = ret.value.as_ref() else {
-            return;
-        };
-        if let Expr::Tuple(tuple) = value.as_ref() {
-            self.wrap_plain_tuple(tuple, shape);
-        }
-    }
-
-    /// Walk an `x: T = ...` statement and coerce plain tuple literals on the
-    /// RHS when the annotation is an anonymous named tuple (directly or
-    /// inside a recognized container generic).
-    fn rewrite_ann_assign_coercion(&mut self, stmt: &StmtAnnAssign) {
-        let Some(value) = stmt.value.as_deref() else {
-            return;
-        };
-        let Some(target) = self.coercion_target(&stmt.annotation) else {
-            return;
-        };
-        self.apply_coercion(&target, value);
-    }
-
-    fn return_shape_for(&mut self, func: &StmtFunctionDef) -> Option<Shape> {
-        // Errors in shape extraction surface through the visitor's own pass
-        // over this annotation tuple — silently treat them as "no coercion"
-        // here so we don't double-report.
-        self.annotated_shape(func.returns.as_deref()?)
-    }
-
-    /// Extract a coercion target from an annotation expression. Returns the
-    /// expected shape and the surrounding container so the caller knows
-    /// whether to wrap the value directly or to wrap each element of an
-    /// outer collection literal.
-    fn coercion_target(&mut self, annotation: &Expr) -> Option<CoercionTarget> {
-        // a declaration modifier keeps the declared type in a marker subscript
-        // (`let x: T` parses as `x: __let__[T]`), and the annotation this reads
-        // is the one the source wrote
-        if let Some(declared) = ruff_python_ast::helpers::declaration_annotation_type(annotation) {
-            return self.coercion_target(declared);
-        }
-        // Direct: `x: (name: T, ...)` or `x: Alias`
-        if let Some(shape) = self.annotated_shape(annotation) {
-            return Some(CoercionTarget {
-                shape,
-                container: ContainerKind::Direct,
-            });
-        }
-        // Containers: `x: list[(name: T, ...)]` and friends. The annotation
-        // is `Subscript(value=Name("list"), slice=Tuple{is_anon_named_tuple=true})`.
-        if let Expr::Subscript(sub) = annotation {
-            let Expr::Name(name) = sub.value.as_ref() else {
-                return None;
-            };
-            let kind = match name.id.as_str() {
-                "list" | "List" => ContainerKind::ListLike,
-                "set" | "Set" | "frozenset" | "FrozenSet" => ContainerKind::SetLike,
-                _ => return None,
-            };
-            let shape = self.annotated_shape(sub.slice.as_ref())?;
-            return Some(CoercionTarget {
-                shape,
-                container: kind,
-            });
-        }
-        None
-    }
-
-    /// The anonymous-named-tuple shape an annotation denotes — written out, or
-    /// reached through an alias declared above it.
-    fn annotated_shape(&mut self, annotation: &Expr) -> Option<Shape> {
-        match annotation {
-            Expr::Tuple(t) => self.extract_type_shape(t).ok().flatten(),
-            Expr::Name(name) => self.aliases.get(name.id.as_str()).cloned(),
-            _ => None,
-        }
-    }
-
-    /// Record `P = (name: T, ...)` / `type P = (name: T, ...)` so a later
-    /// annotation spelling `P` coerces the same way the written-out form does.
-    fn record_alias(&mut self, name: &Expr, value: &Expr) {
-        let (Expr::Name(target), Expr::Tuple(t)) = (name, value) else {
-            return;
-        };
-        if !t.is_anon_named_tuple {
-            return;
-        }
-        // the tuple has already been visited, so a shape error is reported there
-        if let Ok(Some(shape)) = self.extract_type_shape(t) {
-            self.aliases.insert(target.id.to_string(), shape);
-        }
-    }
-
-    /// Wrap a plain tuple literal `(v1, v2, ...)` as a constructor call to the
-    /// synthesized `NamedTuple` class for `shape`. No-op if the tuple is
-    /// already a basedpython anon form, has wrong arity, or contains starred
-    /// elements.
-    fn wrap_plain_tuple(&mut self, tuple: &ruff_python_ast::ExprTuple, shape: Shape) {
-        if tuple.is_anon_named_tuple || tuple.is_anon_named_tuple_value {
-            return;
-        }
-        if tuple.elts.len() != shape.fields.len() {
-            return;
-        }
-        if tuple.elts.iter().any(Expr::is_starred_expr) {
-            return;
-        }
-        // Build the constructor call. Each argument is rendered against the
-        // shape's corresponding field type so that a plain tuple element
-        // whose target field is itself a synthesized `NamedTuple` class is
-        // recursively wrapped — otherwise `record.point.x` would fail at
-        // runtime because the inner plain tuple doesn't carry field names.
-        self.needs_import = true;
-        let args: Vec<String> = tuple
-            .elts
-            .iter()
-            .zip(shape.fields.iter())
-            .map(|(elt, (_, field_type))| self.render_arg_against_field_type(elt, field_type))
-            .collect();
-        let name = if let Some(existing) = self.shapes.get(&shape) {
-            existing.clone()
-        } else {
-            let n = shape.class_name(self.written);
-            self.shapes.insert(shape, n.clone());
-            n
-        };
-        let constructor_call = format!("{name}({})", args.join(", "));
-        self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            constructor_call,
-            tuple.range(),
-        )));
-    }
-
-    /// Render a constructor argument. If `field_type` is the name of a
-    /// synthesized `NamedTuple` class and the argument is a plain tuple
-    /// matching that shape, recursively wrap it so nested field-name access
-    /// (`outer.inner.x`) keeps working at runtime. Otherwise fall back to
-    /// `render_subbed` which substitutes any inner anon-NT spans.
-    fn render_arg_against_field_type(&self, elt: &Expr, field_type: &str) -> String {
-        if let Some(inner_shape) = self.shape_for_class_name(field_type) {
-            if let Expr::Tuple(t) = elt {
-                if !t.is_anon_named_tuple
-                    && !t.is_anon_named_tuple_value
-                    && t.elts.len() == inner_shape.fields.len()
-                    && !t.elts.iter().any(Expr::is_starred_expr)
-                {
-                    let inner_args: Vec<String> = t
-                        .elts
-                        .iter()
-                        .zip(inner_shape.fields.iter())
-                        .map(|(e, (_, ft))| self.render_arg_against_field_type(e, ft))
-                        .collect();
-                    return format!("{}({})", field_type, inner_args.join(", "));
-                }
-            }
-        }
-        self.render_subbed(elt.range())
     }
 
     /// Push the typevar rename frame the generics polyfill gives a `[T, U, ...]`
@@ -720,137 +535,103 @@ impl<'src> AnonNamedTuple<'src> {
             .map(|(_, n)| n.clone())
     }
 
-    fn shape_for_class_name(&self, name: &str) -> Option<&Shape> {
-        if !name.starts_with("_AnonNamedTuple_") {
-            return None;
+    /// the name of the class declaring `shape`, one class per shape
+    fn shape_class_name(&mut self, shape: Shape) -> String {
+        if let Some(existing) = self.shapes.get(&shape) {
+            return existing.clone();
         }
-        self.shapes
-            .iter()
-            .find_map(|(shape, n)| (n == name).then_some(shape))
+        let name = shape.class_name(self.written);
+        self.shapes.insert(shape, name.clone());
+        name
     }
 
-    /// Apply the coercion target to the right-hand side of an assignment.
-    fn apply_coercion(&mut self, target: &CoercionTarget, value: &Expr) {
-        match target.container {
-            ContainerKind::Direct => {
-                if let Expr::Tuple(tuple) = value {
-                    self.wrap_plain_tuple(tuple, target.shape.clone());
+    /// build each plain tuple literal the checker reads as an anonymous named tuple
+    /// as that class. called once the module has been visited
+    pub(crate) fn finish(&mut self) {
+        for construction in std::mem::take(&mut self.constructions) {
+            let class_name = match self.construction_class(&construction.target) {
+                Ok(name) => name,
+                Err(field) => {
+                    self.errors.push(format!(
+                        "the tuple at offset {} is built as an anonymous named tuple whose \
+                         field `{field}` has no type the emitted python can name; construct \
+                         it explicitly, or give it a `NamedTuple` class of its own",
+                        u32::from(construction.range.start())
+                    ));
+                    continue;
                 }
-            }
-            ContainerKind::ListLike => {
-                let elts = match value {
-                    Expr::List(list) => &list.elts[..],
-                    // `[a, b]` is the common case; a parenthesized
-                    // generator/expr would not match `list[X]` typewise.
-                    _ => return,
-                };
-                for elt in elts {
-                    if let Expr::Tuple(tuple) = elt {
-                        self.wrap_plain_tuple(tuple, target.shape.clone());
-                    }
-                }
-            }
-            ContainerKind::SetLike => {
-                let elts = match value {
-                    Expr::Set(set) => &set.elts[..],
-                    _ => return,
-                };
-                for elt in elts {
-                    if let Expr::Tuple(tuple) = elt {
-                        self.wrap_plain_tuple(tuple, target.shape.clone());
-                    }
-                }
+            };
+            self.needs_import = true;
+            // a parenthesized literal is already the argument list of the call
+            if construction.parenthesized {
+                self.edits.push(Fix::safe_edit(Edit::insertion(
+                    class_name,
+                    construction.range.start(),
+                )));
+            } else {
+                self.edits.push(Fix::safe_edit(Edit::insertion(
+                    format!("{class_name}("),
+                    construction.range.start(),
+                )));
+                self.edits.push(Fix::safe_edit(Edit::insertion(
+                    ")".to_owned(),
+                    construction.range.end(),
+                )));
             }
         }
+    }
+
+    /// the class a plain tuple literal is built as: the one emitted for a type form
+    /// the checker reads as the same type, or else one declared from the checker's
+    /// own field types. `Err` names a field whose type the output cannot spell
+    fn construction_class(
+        &mut self,
+        target: &AnonNamedTupleConstruction,
+    ) -> Result<String, String> {
+        if let Some(existing) = self.identity_classes.get(&target.id) {
+            return Ok(existing.clone());
+        }
+        let mut fields = Vec::with_capacity(target.fields.len());
+        for (name, field) in &target.fields {
+            let field_type = match field {
+                AnonNamedTupleField::Spelled(spelled) => {
+                    self.type_only_imports
+                        .borrow_mut()
+                        .extend(spelled.modules.iter().cloned());
+                    self.typing_imports
+                        .borrow_mut()
+                        .extend(spelled.typing_imports_in(self.written));
+                    spelled.annotation_in(self.written, self.annotations_evaluated)
+                }
+                AnonNamedTupleField::NamedTuple(nested) => self.construction_class(nested)?,
+                AnonNamedTupleField::Unspellable => return Err(name.clone()),
+            };
+            fields.push((name.clone(), field_type));
+        }
+        let class_name = self.shape_class_name(Shape { fields });
+        self.identity_classes.insert(target.id, class_name.clone());
+        Ok(class_name)
     }
 }
 
-/// What surrounding shape a plain tuple literal at this position should be
-/// coerced into.
-#[derive(Clone, Debug)]
-enum ContainerKind {
-    /// Annotation is the anon-NT directly: `x: (name: T, ...)`.
-    Direct,
-    /// Annotation wraps in a list-like generic: `list[X]`, `List[X]`.
-    ListLike,
-    /// Annotation wraps in a set-like generic: `set[X]`, `frozenset[X]`,
-    /// `Set[X]`, `FrozenSet[X]`.
-    SetLike,
-}
-
-#[derive(Clone, Debug)]
-struct CoercionTarget {
-    shape: Shape,
-    container: ContainerKind,
+/// a plain tuple literal to build as an anonymous named tuple
+struct PendingConstruction {
+    range: ruff_text_size::TextRange,
+    parenthesized: bool,
+    target: AnonNamedTupleConstruction,
 }
 
 impl<'ast> Visitor<'ast> for AnonNamedTuple<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        match stmt {
-            Stmt::FunctionDef(func) => {
-                // Visit non-body parts first so their anonymous-named-tuple
-                // expressions register synthesized classes before any body
-                // `return` statement is coerced. Walking via `walk_stmt`
-                // would visit the body before we've pushed the return shape
-                // onto the stack, so we manually drive the visit order.
-                let pushed = self.push_typevar_scope_from(func.type_params.as_deref());
-                if let Some(tp) = func.type_params.as_deref() {
-                    self.visit_type_params(tp);
-                }
-                self.visit_parameters(&func.parameters);
-                if let Some(returns) = func.returns.as_deref() {
-                    self.visit_expr(returns);
-                }
-                let shape = self.return_shape_for(func);
-                self.return_shape_stack.push(shape);
-                for s in &func.body {
-                    self.visit_stmt(s);
-                }
-                self.return_shape_stack.pop();
-                for d in &func.decorator_list {
-                    self.visit_decorator(d);
-                }
-                if pushed {
-                    self.typevar_rename_stack.pop();
-                }
-            }
-            Stmt::ClassDef(cls) => {
-                let pushed = self.push_typevar_scope_from(cls.type_params.as_deref());
-                ruff_python_ast::visitor::walk_stmt(self, stmt);
-                if pushed {
-                    self.typevar_rename_stack.pop();
-                }
-            }
-            Stmt::Return(ret) => {
-                if let Some(v) = ret.value.as_deref() {
-                    self.visit_expr(v);
-                }
-                self.rewrite_return_coercion(ret);
-            }
-            Stmt::AnnAssign(ann) => {
-                // Visit annotation first so any anon-NT inside it (including
-                // nested ones) registers its synthesized class. Then visit
-                // the RHS — any anon-NT children there register too. THEN
-                // coerce: the shape extracted from the annotation now uses
-                // the fully populated `range_to_class` so emitted class
-                // bodies don't embed raw inner anon-NT source.
-                self.visit_expr(&ann.annotation);
-                if let Some(v) = ann.value.as_deref() {
-                    self.visit_expr(v);
-                }
-                self.rewrite_ann_assign_coercion(ann);
-            }
-            Stmt::Assign(assign) => {
-                walk_stmt(self, stmt);
-                if let [target] = assign.targets.as_slice() {
-                    self.record_alias(target, &assign.value);
-                }
-            }
-            Stmt::TypeAlias(alias) => {
-                walk_stmt(self, stmt);
-                self.record_alias(&alias.name, &alias.value);
-            }
-            _ => walk_stmt(self, stmt),
+        let type_params = match stmt {
+            Stmt::FunctionDef(func) => func.type_params.as_deref(),
+            Stmt::ClassDef(cls) => cls.type_params.as_deref(),
+            _ => None,
+        };
+        let pushed = self.push_typevar_scope_from(type_params);
+        walk_stmt(self, stmt);
+        if pushed {
+            self.typevar_rename_stack.pop();
         }
     }
 
@@ -867,6 +648,16 @@ impl<'ast> Visitor<'ast> for AnonNamedTuple<'_> {
                     self.rewrite_value_form(tuple);
                 }
                 return;
+            }
+            if let Some(target) = self
+                .types
+                .anon_named_tuple_construction(tuple, self.config.min_version)
+            {
+                self.constructions.push(PendingConstruction {
+                    range: tuple.range(),
+                    parenthesized: tuple.parenthesized,
+                    target,
+                });
             }
         }
         walk_expr(self, expr);
@@ -924,6 +715,7 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
+        inner.finish();
         for err in std::mem::take(&mut inner.errors) {
             ctx.errors.push(err);
         }
@@ -1133,10 +925,11 @@ mod tests {
     }
 
     #[test]
-    fn an_alias_below_its_use_does_not_coerce() {
-        // the table is built in source order, so a name is only an anon-NT alias
-        // from its declaration down — the same rule the binding itself follows.
-        // the annotation runs before `P` is bound, so it is quoted
+    fn an_alias_below_its_use_still_builds_the_class() {
+        // a `.by` annotation may name what is bound below it, and the checker
+        // reads `P` there as the alias. the class is declared above every
+        // statement, so building it there is fine; the annotation runs before `P`
+        // is bound, so it is quoted
         check(
             indoc! {"
                 v: P = (\"a\", 1)
@@ -1148,7 +941,7 @@ mod tests {
                     name: str
                     age: int
 
-                v: \"P\" = (\"a\", 1)
+                v: \"P\" = _AnonNamedTuple_7bfb4772(\"a\", 1)
                 P = _AnonNamedTuple_7bfb4772
             "},
         );
@@ -1682,9 +1475,7 @@ mod tests {
     }
 
     #[test]
-    fn plain_tuple_arg_unchanged() {
-        // Plain tuple literal at a call argument is not coerced — only return
-        // values inside anon-NT-returning functions are.
+    fn a_plain_tuple_argument_is_built_as_its_parameter() {
         let out = transpile(
             indoc! {"
                 def foo(x: (name: str, age: int)) -> None: ...
@@ -1693,7 +1484,29 @@ mod tests {
             &Config::test_default(),
         )
         .unwrap();
-        assert!(out.contains("foo((\"asdf\", 1))"), "got: {out}");
+        assert!(
+            out.contains("foo(_AnonNamedTuple_7bfb4772(\"asdf\", 1))"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn two_spellings_of_one_type_are_one_class() {
+        // the checker reads `(a: List[int])` and `(a: list[int])` as one type, so
+        // the literal it reads as that type is built as the one class both
+        // annotations name
+        let out = transpile(
+            indoc! {"
+                from typing import List
+                def take(p: (a: List[int])) -> None: ...
+                def give(q: (a: list[int])) -> None: ...
+                take(([1],))
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert_eq!(out.matches("(NamedTuple):").count(), 1, "got: {out}");
+        assert!(out.contains("take(_AnonNamedTuple_"), "got: {out}");
     }
 
     #[test]
