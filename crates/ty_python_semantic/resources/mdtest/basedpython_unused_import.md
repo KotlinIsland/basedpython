@@ -739,6 +739,121 @@ def run() -> None raises Errs:
     raise Oops()
 ```
 
+## an import read only by a soundness check
+
+the result of a call whose type comes from a type variable is checked at runtime against the type
+the checker gave it, `isinstance(…, (A, B))` here, which reads `A` and `B`. a build may turn that
+check off, but one that leaves it on reads them, so they are used either way
+
+`kinds.by`:
+
+```by
+class A:
+    pass
+
+class B:
+    pass
+
+type AB = A | B
+```
+
+`main.by`:
+
+```by
+from kinds import AB, A, B
+
+def pick[T](items: list[T]) -> T:
+    return items[0]
+
+def first(xs: list[AB]) -> AB:
+    y: AB = pick(xs)
+    return y
+```
+
+## an import read only by a reified call's specialization
+
+a bare call of a reified generic function is given the specialization the checker solved,
+`describe[Widget]` here
+
+`widgets.by`:
+
+```by
+class Widget:
+    pass
+
+def make() -> Widget:
+    return Widget()
+```
+
+`main.by`:
+
+```by
+from widgets import Widget, make
+
+def describe[reified T](value: T) -> str:
+    return T.__name__
+
+describe(make())
+```
+
+## an import read only by a reified construction's specialization
+
+`widgets.by`:
+
+```by
+class Widget:
+    pass
+
+def make() -> Widget:
+    return Widget()
+```
+
+`main.by`:
+
+```by
+from widgets import Widget, make
+
+class Tagged[reified T]:
+    def __init__(self, value: T) -> None:
+        self.value = value
+
+Tagged(make())
+```
+
+## an import read only by a union parameter's reified type parameter
+
+a parameter annotated with a union of specializations of one collection is given a reified type
+parameter whose bound spells each arm's class, `(A, B)` here. the annotation spells `A` only through
+another module's name for it
+
+`kinds.by`:
+
+```by
+class A:
+    pass
+
+class B:
+    pass
+```
+
+`aliases.by`:
+
+```by
+from kinds import A
+
+Alias = A
+```
+
+`main.by`:
+
+```by
+from aliases import Alias
+from kinds import A, B
+
+def size(xs: list[Alias] | list[B]) -> int:
+    return len(xs)
+```
+
 ## explicit re-exports are not reported
 
 `import a as a`, `from a import b as b` and basedpython's `from a export b` say the name is part of
