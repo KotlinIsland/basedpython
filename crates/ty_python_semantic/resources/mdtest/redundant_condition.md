@@ -965,7 +965,7 @@ if BAR >= (3, 14):  # no diagnostic
 
 reveal_type(TYPE_CHECKINGGGGG)  # revealed: Literal[True]
 
-if TYPE_CHECKINGGGGG:  # error: [redundant-condition] "This condition is always true"
+if TYPE_CHECKINGGGGG:  # no diagnostic
     pass
 
 reveal_type(sys_platform)  # revealed: Literal["linux"]
@@ -1141,6 +1141,27 @@ class PlatformAttributeCycle:
         reveal_type(bool(self.first))  # revealed: Literal[True]
         if self.first:
             pass
+```
+
+## A `TYPE_CHECKING` constant that is not `typing`'s
+
+ty reads any constant named `TYPE_CHECKING` as true, but only `typing.TYPE_CHECKING` (and its
+`typing_extensions` re-export) is a fact about the environment the program is checked in. A module's
+own constant of that name, imported under another name, is an ordinary condition:
+
+`settings.py`:
+
+```py
+TYPE_CHECKING = False
+```
+
+`main.py`:
+
+```py
+from settings import TYPE_CHECKING as DEBUGGING
+
+if DEBUGGING:  # error: [redundant-condition] "This condition is always true"
+    pass
 ```
 
 ## Environment-dependent assignment guards

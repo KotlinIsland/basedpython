@@ -653,6 +653,238 @@ mod tests {
         );
     }
 
+    /// a class imported only under `if TYPE_CHECKING:` is a name the running program does
+    /// not have, so a specialization naming it is left out, as an annotated assignment and as
+    /// a write to a declared attribute
+    #[test]
+    fn a_class_imported_only_for_the_checker_is_left_out() {
+        let out = out(indoc! {"
+            from typing import TYPE_CHECKING
+            if TYPE_CHECKING:
+                from decimal import Decimal
+
+            class Ledger:
+                entries: set[Decimal]
+
+                def __init__(self) -> None:
+                    self.entries = set()
+                    kept: set[Decimal] = set()
+
+            totals: set[Decimal] = set()
+        "});
+        assert!(!out.contains("set[Decimal]()"), "got: {out}");
+        assert_eq!(out.matches("= set()").count(), 3, "got: {out}");
+    }
+
+    /// a block on the constant under another name, or read off the module, is a type-checking
+    /// block all the same, while a block on a condition that holds whenever the program runs
+    /// is not
+    #[test]
+    fn a_class_imported_under_an_aliased_type_checking_block_is_left_out() {
+        let out = out(indoc! {"
+            import typing as t
+            from typing import TYPE_CHECKING as TC
+
+            CHECKING = TC
+            ALWAYS = True
+
+            if CHECKING:
+                from decimal import Decimal
+            if t.TYPE_CHECKING:
+                from fractions import Fraction
+            if ALWAYS:
+                from ipaddress import IPv4Address
+
+            class Ledger:
+                entries: set[Decimal]
+                fractions: set[Fraction]
+                addresses: set[IPv4Address]
+
+                def __init__(self) -> None:
+                    self.entries = set()
+                    self.fractions = set()
+                    self.addresses = set()
+        "});
+        assert!(out.contains("self.entries = set()"), "got: {out}");
+        assert!(out.contains("self.fractions = set()"), "got: {out}");
+        assert!(
+            out.contains("self.addresses = set[IPv4Address]()"),
+            "got: {out}"
+        );
+    }
+
+    /// a condition that reads the constant in any way — here a module's own `TYPE_CHECKING`,
+    /// which the checker reads as `True` as it does `typing`'s, inside an `or` — may be one the
+    /// program does not take
+    #[test]
+    fn a_class_past_a_condition_that_reads_type_checking_is_left_out() {
+        let out = out(indoc! {"
+            import os
+
+            TYPE_CHECKING = False
+
+            if TYPE_CHECKING or os.environ.get('NEVER'):
+                from decimal import Decimal
+
+            class Ledger:
+                entries: set[Decimal]
+
+                def __init__(self) -> None:
+                    self.entries = set()
+        "});
+        assert!(out.contains("self.entries = set()"), "got: {out}");
+    }
+
+    /// what the running program binds above the statement a read is in is spelled, and what
+    /// it binds only further down is not: a method's body runs when it is called, which can be
+    /// before the module reaches a class declared below it (`Ledger()` above `class Later`)
+    #[test]
+    fn a_class_declared_above_is_spelled_in_a_method_and_one_below_is_not() {
+        let out = out(indoc! {"
+            from decimal import Decimal
+
+            class Ledger:
+                entries: set[Decimal]
+                later: set[Later]
+
+                def __init__(self) -> None:
+                    self.entries = set()
+                    self.later = set()
+                    kept: set[Decimal] = set()
+
+            class Later: ...
+        "});
+        assert!(out.contains("self.entries = set[Decimal]()"), "got: {out}");
+        assert!(out.contains("self.later = set()"), "got: {out}");
+        assert!(
+            out.contains("kept: set[Decimal] = set[Decimal]()"),
+            "got: {out}"
+        );
+    }
+
+    /// the module's own statements run in order: one above a class's declaration runs before
+    /// the class exists, one below it after
+    #[test]
+    fn a_class_is_spelled_below_its_declaration_and_not_above() {
+        let out = out(indoc! {"
+            early: set[Later] = set()
+
+            class Later: ...
+
+            late: set[Later] = set()
+        "});
+        assert!(out.contains("early: \"set[Later]\" = set()"), "got: {out}");
+        assert!(
+            out.contains("late: set[Later] = set[Later]()"),
+            "got: {out}"
+        );
+    }
+
+    /// the checker resolves a module-level name from every binding the module makes, so a
+    /// statement that runs while an earlier binding of the name still holds — the module binds
+    /// it again further down — may read another class than the one the checker resolved
+    #[test]
+    fn a_name_bound_again_further_down_is_left_out_above_it() {
+        let out = out(indoc! {"
+            from decimal import Decimal
+
+            kept: set[Decimal] = set()
+
+            from decimal import Decimal
+        "});
+        assert!(out.contains("kept: set[Decimal] = set()"), "got: {out}");
+    }
+
+    /// a class the module's global scope does not bind, as its own class, has no spelling at
+    /// all: a type parameter, a class local to a function, a class nested in another
+    #[test]
+    fn a_class_the_module_does_not_bind_is_left_out() {
+        let out = out(indoc! {"
+            class Box[T]:
+                items: set[T]
+
+                def __init__(self):
+                    self.items = set()
+
+            def make():
+                class Local: ...
+                kept: set[Local] = set()
+                return kept
+
+            class Outer:
+                class Inner: ...
+                inners: set[Inner] = set()
+        "});
+        assert!(out.contains("self.items = set()"), "got: {out}");
+        assert!(out.contains("kept: set[Local] = set()"), "got: {out}");
+        assert!(out.contains("inners: set[Inner] = set()"), "got: {out}");
+    }
+
+    /// a `del` unbinds a name by the end of the module, and a binding made in one branch of a
+    /// conditional expression leaves it unbound on the other
+    #[test]
+    fn a_name_the_module_may_have_unbound_is_left_out() {
+        let out = out(indoc! {"
+            import os
+            from decimal import Decimal
+            from fractions import Fraction as _F
+
+            entries: set[Decimal] = set()
+            del Decimal
+
+            _ = (Fraction := _F) if os.environ.get(\"UNSET\") else None
+            fractions: set[Fraction] = set()
+        "});
+        assert!(!out.contains("set[Decimal]()"), "got: {out}");
+        assert!(!out.contains("set[Fraction]()"), "got: {out}");
+        assert_eq!(out.matches("= set()").count(), 2, "got: {out}");
+    }
+
+    /// a function that rebinds a module-level name through `global` can run at any time, so
+    /// the name may hold whatever it bound
+    #[test]
+    fn a_name_a_function_rebinds_through_global_is_left_out() {
+        let out = out(indoc! {"
+            from decimal import Decimal
+
+            class Ledger:
+                entries: set[Decimal]
+
+                def __init__(self) -> None:
+                    self.entries = set()
+
+            def forget() -> None:
+                global Decimal
+                del Decimal
+        "});
+        assert!(out.contains("self.entries = set()"), "got: {out}");
+    }
+
+    /// a module the checker finds never ends, here one that stops with `sys.exit()`, has no
+    /// end where every binding is made; a name only statements at its top bind, above the
+    /// read, is bound wherever the read runs all the same
+    #[test]
+    fn a_class_bound_above_is_spelled_in_a_module_that_never_ends() {
+        let out = out(indoc! {"
+            import sys
+            from decimal import Decimal
+
+            class Ledger:
+                entries: set[Decimal]
+
+                def __init__(self) -> None:
+                    self.entries = set()
+
+            totals: set[Decimal] = set()
+            sys.exit(0)
+        "});
+        assert!(out.contains("self.entries = set[Decimal]()"), "got: {out}");
+        assert!(
+            out.contains("totals: set[Decimal] = set[Decimal]()"),
+            "got: {out}"
+        );
+    }
+
     #[test]
     fn inert_below_39() {
         let out = out_at("xs = [1, 2]\n", PythonVersion::PY38);

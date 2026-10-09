@@ -106,8 +106,20 @@ no check is emitted when there is no faithful shallow runtime test —
 protocols, callables, unsolved type parameters, and `object` (which every
 value satisfies) are all skipped, as is a type whose name doesn't resolve at
 module scope (a class shadowed by a local binding, or one not in scope where
-the check would run). a pure-`None` result is skipped too: validating a value
-that carries no data guards nothing
+the check would run). a class the program does not have where the check runs
+is skipped the same way: one bound only past a condition that reads
+`TYPE_CHECKING` (how an import cycle is broken) — an `if`, `while` or `match`
+on the constant under any name or inside any expression, or a value a
+conditional expression on it chooses — one imported only on some paths,
+unbound by a `del`, rebound from a function through `global`, or declared
+further down the module than the check, and one bound in the `else:` of a
+`TYPE_CHECKING` block, where the name the check would read need not be the
+class the checker resolved. a pure-`None` result is skipped too: validating a
+value that carries no data guards nothing
+
+a check in a function or a method runs whenever it is called, so there the
+class has to be bound above the `def` or `class` statement at the top of the
+module that holds the function, which can be called as soon as that runs
 
 ## deep checks for user generics
 

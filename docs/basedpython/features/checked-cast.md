@@ -76,6 +76,13 @@ both forms:
 - skip the check entirely when it is provably redundant. if the value is already
     the target, the probe would always pass, so the cast degrades to the same
     plain `typing.cast` the unsuffixed `cast` emits
+- refuse a target naming a class the program does not have where the cast runs
+    (`erased-type-check`), as a [type test](parametric-type-tests.md#the-erased-type-check-error)
+    does: one imported only under `if TYPE_CHECKING:` (or past any other condition
+    that reads the constant), imported only on some paths,
+    or bound in the `else:` of a `TYPE_CHECKING` block, where the name need not be
+    the class the checker resolved. an unchecked `cast` tests nothing, and writes
+    such a type as a string
 - evaluate the value exactly once, even when it has side effects
     (`g() cast! int` calls `g()` once)
 - are basedpython-only: a `.py` file using either produces a parse error. they

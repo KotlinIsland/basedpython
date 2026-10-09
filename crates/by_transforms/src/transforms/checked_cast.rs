@@ -115,6 +115,7 @@ impl Helper {
 }
 
 struct CastLower<'a> {
+    source: &'a str,
     types: &'a dyn TypeInfo,
     written: WrittenNames<'a>,
     /// the name `typing.cast` is written under
@@ -126,8 +127,9 @@ struct CastLower<'a> {
 }
 
 impl<'a> CastLower<'a> {
-    fn new(types: &'a dyn TypeInfo, written: WrittenNames<'a>) -> Self {
+    fn new(source: &'a str, types: &'a dyn TypeInfo, written: WrittenNames<'a>) -> Self {
         Self {
+            source,
             types,
             written,
             cast: written.imported("typing", "cast"),
@@ -193,23 +195,27 @@ impl<'a> CastLower<'a> {
         let value_range = value_arg.range();
         // unchecked `typing.cast(type, value)` keeps the exact written type (it
         // never reaches `isinstance`) and takes the type first
+        //
+        // `typing.cast` never reads its type, but python evaluates it all the same, so a
+        // type naming something that does not hold there the binding the checker resolved —
+        // a class imported only under `if TYPE_CHECKING:`, or declared further on — is
+        // written as a string, as python's own spelling of such a cast is
         let (helper, first, rest) = if helper == Helper::TypingCast {
-            (
-                helper,
-                Fragment::Src(type_arg.range()),
-                vec![Fragment::Src(value_range)],
-            )
+            let first = if self.types.reads_names_bound_where_written(type_arg) {
+                vec![Fragment::Src(type_arg.range())]
+            } else {
+                super::auto_quote::quoted(self.source, type_arg.range())
+            };
+            (helper, first, vec![Fragment::Src(value_range)])
         } else {
             let (helper, rest) = self.target(value_arg, type_arg, helper);
-            (helper, Fragment::Src(value_range), rest)
+            (helper, vec![Fragment::Src(value_range)], rest)
         };
 
         self.used.insert(helper);
-        let mut fragments = vec![
-            Fragment::Lit(helper.open_call(&self.cast)),
-            first,
-            Fragment::Lit(", ".to_owned()),
-        ];
+        let mut fragments = vec![Fragment::Lit(helper.open_call(&self.cast))];
+        fragments.extend(first);
+        fragments.push(Fragment::Lit(", ".to_owned()));
         fragments.extend(rest);
         fragments.push(Fragment::Lit(")".to_owned()));
         self.edits.push((whole, fragments));
@@ -248,6 +254,7 @@ impl<'ast> Visitor<'ast> for CastLower<'_> {
 }
 
 pub(crate) struct CheckedCastPass<'src> {
+    pub(crate) source: &'src str,
     pub(crate) written: WrittenNames<'src>,
 }
 
@@ -276,7 +283,7 @@ impl TypeAwarePass for CheckedCastPass<'_> {
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = CastLower::new(types, self.written);
+        let mut inner = CastLower::new(self.source, types, self.written);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }

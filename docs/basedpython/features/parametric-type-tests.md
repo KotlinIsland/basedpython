@@ -182,6 +182,40 @@ def g(x):
     return x is array.array       # ok — an ordinary isinstance
 ```
 
+and a target naming a class the program does not have where the test runs, since the test reads
+it there: one imported only under `if TYPE_CHECKING:` (or past any other condition that reads the
+constant, such as `match TYPE_CHECKING:` or `if TYPE_CHECKING and ready:`), or imported only on some
+paths
+
+```by
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from decimal import Decimal
+
+def f(x) -> bool:
+    return x is Decimal  # error: `Decimal` is not bound when it runs
+```
+
+a module can import a class for the checker and bind the name some other way as it runs, in the
+`else:` of the same block. the checker reads the block as always taken, so the class it resolves is
+the `TYPE_CHECKING` one, and the name the test would read need not be that class — so that is
+refused too:
+
+```by
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from decimal import Decimal
+else:
+    Decimal = float
+
+def f(x) -> bool:
+    return x is Decimal  # error: the `Decimal` bound when it runs need not be the class the checker resolved
+```
+
+import the class as the program runs to test against it
+
 ## `===` is unaffected
 
 the `===` / `!==` identity operators keep python semantics; only the `is` /

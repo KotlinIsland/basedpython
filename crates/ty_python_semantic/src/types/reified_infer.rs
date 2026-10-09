@@ -26,7 +26,7 @@ use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashMap;
 
 use crate::Db;
-use crate::place::{builtins_symbol, global_symbol};
+use crate::place::{RuntimeBinding, RuntimeRead, builtins_symbol, global_symbol, runtime_binding};
 use crate::types::ProgramEnvironment;
 use crate::types::call::{Argument, CallArguments};
 use crate::types::class::{ClassLiteral, ClassType, GenericAlias};
@@ -36,7 +36,7 @@ use crate::types::generics::{Specialization, combine_use_site_projections};
 use crate::types::instance::Protocol;
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::protocol_class::ReifiedMember;
-use crate::types::runtime_spelling::RuntimeSpelling;
+use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarKind;
 use crate::types::variance::TypeVarVariance;
@@ -48,6 +48,9 @@ pub(crate) enum ReifiedInferenceError<'db> {
     Unsolved(Name),
     /// solved, but the solution has no runtime spelling at this call site
     Unspellable(Name, Type<'db>),
+    /// solved and spelled, but the spelling reads a name that does not hold, where the call
+    /// runs, the binding the checker resolved
+    NotAtRuntime(Name, RuntimeBinding),
     /// the callable's specialization could not be derived at all (no unique
     /// matching overload, or the arguments do not bind)
     NoBinding,
@@ -65,6 +68,7 @@ pub(crate) fn inferred_call_type_arguments<'db>(
     callee: Type<'db>,
     function: FunctionType<'db>,
     arguments: &CallArguments<'_, 'db>,
+    site: Option<RuntimeSite>,
 ) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
     let bindings = callee
         .try_call(db, env, arguments)
@@ -75,7 +79,7 @@ pub(crate) fn inferred_call_type_arguments<'db>(
         .ok_or(ReifiedInferenceError::NoBinding)?
         .1
         .merged_specialization(db, env);
-    rendered_type_arguments(db, env, file, function, specialization)
+    rendered_type_arguments(db, env, file, function, specialization, site)
 }
 
 /// [`inferred_call_type_arguments`] for callers outside the `types` module:
@@ -85,6 +89,7 @@ pub(crate) fn inferred_call_type_arguments<'db>(
 /// keyword-variadic pack contributes fields, since a subscript takes no
 /// keywords. any failure collapses to `None` — the checker reports those, the
 /// caller just skips injection
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn injectable_call_specialization<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -93,6 +98,7 @@ pub(crate) fn injectable_call_specialization<'db>(
     function: FunctionType<'db>,
     positional: Vec<Type<'db>>,
     keywords: Vec<(&str, Type<'db>)>,
+    site: Option<RuntimeSite>,
 ) -> Option<RuntimeSpelling> {
     let arguments: CallArguments<'_, 'db> = positional
         .into_iter()
@@ -104,7 +110,7 @@ pub(crate) fn injectable_call_specialization<'db>(
         )
         .collect();
     let rendered =
-        inferred_call_type_arguments(db, env, file, callee, function, &arguments).ok()?;
+        inferred_call_type_arguments(db, env, file, callee, function, &arguments, site).ok()?;
     // an empty prefix means everything defaults — the bare call is already
     // correct and nothing is injected
     if rendered.is_empty() {
@@ -146,6 +152,7 @@ fn rendered_type_arguments<'db>(
     file: File,
     function: FunctionType<'db>,
     specialization: Option<Specialization<'db>>,
+    site: Option<RuntimeSite>,
 ) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
     let signature = function.signature(db);
     let generic_context = signature
@@ -204,14 +211,21 @@ fn rendered_type_arguments<'db>(
                 .value
                 .ok_or_else(|| ReifiedInferenceError::Unsolved(parameter.name.clone()))?;
             let promoted = ty.promote_in(db, env, file);
-            parameter
+            let text = parameter
                 .kind
                 .spelling(db, env, file, promoted)
-                .map(|text| TypeArgument {
-                    text,
-                    keyword: parameter.kind == ParameterKind::KeywordPack,
-                })
-                .ok_or_else(|| ReifiedInferenceError::Unspellable(parameter.name.clone(), promoted))
+                .ok_or_else(|| {
+                    ReifiedInferenceError::Unspellable(parameter.name.clone(), promoted)
+                })?;
+            if let Some(site) = site
+                && let Some((name, binding)) = text.unbound_read(db, env, file, site)
+            {
+                return Err(ReifiedInferenceError::NotAtRuntime(name, binding));
+            }
+            Ok(TypeArgument {
+                text,
+                keyword: parameter.kind == ParameterKind::KeywordPack,
+            })
         })
         // a variadic or pack that absorbed nothing spells as nothing — it
         // occupies no slot in the injected list, exactly as the wrapper binds it
@@ -612,6 +626,7 @@ fn constructor_specialization<'db>(
     file: File,
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
+    site: Option<RuntimeSite>,
 ) -> Result<RuntimeSpelling, ReifiedInferenceError<'db>> {
     let Type::NominalInstance(instance) = constructed.promote_in(db, env, file) else {
         return Err(ReifiedInferenceError::NoBinding);
@@ -623,7 +638,13 @@ fn constructor_specialization<'db>(
     if origin != class_literal {
         return Err(ReifiedInferenceError::NoBinding);
     }
-    spell_specialization_arguments(db, env, file, origin, alias.specialization(db))
+    let spelling = spell_specialization_arguments(db, env, file, origin, alias.specialization(db))?;
+    if let Some(site) = site
+        && let Some((name, binding)) = spelling.unbound_read(db, env, file, site)
+    {
+        return Err(ReifiedInferenceError::NotAtRuntime(name, binding));
+    }
+    Ok(spelling)
 }
 
 /// The bracketed type-argument spelling to inject at a bare constructor call
@@ -639,8 +660,9 @@ pub(crate) fn constructor_specialization_display<'db>(
     file: File,
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
+    site: Option<RuntimeSite>,
 ) -> Option<RuntimeSpelling> {
-    constructor_specialization(db, env, file, class_literal, constructed).ok()
+    constructor_specialization(db, env, file, class_literal, constructed, site).ok()
 }
 
 /// Why a construction of the reified generic class `class_literal` cannot say
@@ -658,8 +680,9 @@ pub(crate) fn reified_construction_error<'db>(
     file: File,
     class_literal: ClassLiteral<'db>,
     constructed: Type<'db>,
+    site: Option<RuntimeSite>,
 ) -> Option<ReifiedInferenceError<'db>> {
-    constructor_specialization(db, env, file, class_literal, constructed).err()
+    constructor_specialization(db, env, file, class_literal, constructed, site).err()
 }
 
 /// the class's bare name, provided that name resolves — in the module's
@@ -667,6 +690,9 @@ pub(crate) fn reified_construction_error<'db>(
 /// evaluates to the intended type object. a module-level `private` class is
 /// emitted under a name of the transpiler's, so its name is kept apart for the
 /// transpiler to write ([`RuntimeSpelling::global`])
+///
+/// whether the name holds that class where the expression is written is the
+/// writer's to ask ([`RuntimeSpelling::unbound_read`])
 fn spell_class_literal<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
@@ -930,7 +956,7 @@ pub enum ProtocolMemberCheck {
 }
 
 /// why a type test's target cannot be checked at runtime
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErasedTargetReason {
     /// the target says nothing a runtime check could look for — `Any` and
     /// `Unknown` admit every value, so the test has no content
@@ -959,6 +985,10 @@ pub enum ErasedTargetReason {
     /// the target has no runtime spelling at all — a type the checker can name
     /// but the emitted python cannot evaluate
     Unspellable,
+    /// the target names something that does not hold, where the test runs, the binding
+    /// the checker resolved — a class imported only under `if TYPE_CHECKING:`, or declared
+    /// further on
+    NotAtRuntime(Name, RuntimeBinding),
     /// a builtin collection (`list` / `dict` / `set` / `frozenset` / `tuple`)
     /// erases its type arguments — its C-level instances reject
     /// `__orig_class__` entirely
@@ -1269,7 +1299,7 @@ pub(crate) fn type_test_plan<'db>(
     target: Type<'db>,
     target_node: Option<&ast::Expr>,
 ) -> ParametricIsPlan {
-    type_test_plan_seen(
+    let plan = type_test_plan_seen(
         db,
         env,
         file,
@@ -1277,7 +1307,18 @@ pub(crate) fn type_test_plan<'db>(
         target,
         target_node,
         &mut Vec::new(),
-    )
+    );
+    // each spelling the plan rebuilds is written where the test is: one for a union's arm
+    // has no node of its own to have been asked about
+    if let Some(site) = target_node.map(RuntimeSite::at)
+        && let Some((name, binding)) = plan
+            .spellings()
+            .into_iter()
+            .find_map(|spelling| spelling.unbound_read(db, env, file, site))
+    {
+        return ParametricIsPlan::ErasedTarget(ErasedTargetReason::NotAtRuntime(name, binding));
+    }
+    plan
 }
 
 /// [`type_test_plan`] carrying the aliases already opened on the way here.
@@ -1476,14 +1517,14 @@ fn literal_target_plan<'db>(
         // an enum member is a singleton, so identity is exact — and it is the
         // comparison `Enum.__eq__` performs anyway
         LiteralValueTypeKind::Enum(member) => {
-            match written_or_spelled(target_node, false, || {
+            match written_or_spelled(db, env, file, target_node, false, || {
                 spell_class_literal(db, env, file, member.enum_class(db)).map(|mut class| {
                     class.push_str(&format!(".{}", member.name(db)));
                     class
                 })
             }) {
-                Some(spelling) => ParametricIsPlan::Identity(spelling),
-                None => unspellable,
+                Ok(spelling) => ParametricIsPlan::Identity(spelling),
+                Err(reason) => ParametricIsPlan::ErasedTarget(reason),
             }
         }
         // `LiteralString` is the *property* of having been written as a literal,
@@ -1511,17 +1552,85 @@ fn literal_target_plan<'db>(
 /// or a class imported under another name. Only a plain dotted name qualifies,
 /// and only a [`Probe`](ParametricIsPlan::Probe) also accepts a subscript,
 /// whose value is the specialization it unwinds.
-fn written_or_spelled(
+///
+/// the written node is evaluated where it stands, and a rebuilt spelling where the test is
+/// written, so each has to read names that hold there the bindings the checker resolved
+/// ([`runtime_binding`]): a class imported under `if TYPE_CHECKING:` is one the checker
+/// resolves and the program does not have
+fn written_or_spelled<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
     target_node: Option<&ast::Expr>,
     subscript_evaluates: bool,
     spell: impl FnOnce() -> Option<RuntimeSpelling>,
-) -> Option<TargetSpelling> {
+) -> Result<TargetSpelling, ErasedTargetReason> {
+    let site = target_node.map(RuntimeSite::at);
+    let mut unbound = None;
     if let Some(spelling) = spell() {
-        return Some(TargetSpelling::Rebuilt(spelling));
+        match site.and_then(|site| spelling.unbound_read(db, env, file, site)) {
+            None => return Ok(TargetSpelling::Rebuilt(spelling)),
+            Some(read) => unbound = Some(read),
+        }
     }
-    target_node
-        .filter(|node| evaluates_to_its_target(node, subscript_evaluates))
-        .map(|_| TargetSpelling::Written)
+    let Some(node) = target_node.filter(|node| evaluates_to_its_target(node, subscript_evaluates))
+    else {
+        return Err(
+            unbound.map_or(ErasedTargetReason::Unspellable, |(name, binding)| {
+                ErasedTargetReason::NotAtRuntime(name, binding)
+            }),
+        );
+    };
+    match written_unbound_read(db, env, file, node) {
+        None => Ok(TargetSpelling::Written),
+        Some((name, binding)) => Err(ErasedTargetReason::NotAtRuntime(name, binding)),
+    }
+}
+
+/// the first name the written expression `node` reads that does not hold, where `node` is
+/// written, the binding the checker resolved — with what it holds instead. the same question
+/// [`RuntimeSpelling::unbound_read`] asks of a spelling the checker writes, asked of one the
+/// source wrote
+pub(crate) fn written_unbound_read<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: File,
+    node: &ast::Expr,
+) -> Option<(Name, RuntimeBinding)> {
+    struct Names<'a, 'db> {
+        db: &'db dyn Db,
+        env: &'a ProgramEnvironment<'db>,
+        file: File,
+        found: Option<(Name, RuntimeBinding)>,
+    }
+    impl<'ast> ast::visitor::Visitor<'ast> for Names<'_, '_> {
+        fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+            if self.found.is_some() {
+                return;
+            }
+            if let ast::Expr::Name(name) = expr {
+                let binding = runtime_binding(
+                    self.db,
+                    self.env,
+                    self.db.program_file(self.file),
+                    RuntimeRead::Written(ast::ExprRef::from(expr)),
+                );
+                if binding != RuntimeBinding::Bound {
+                    self.found = Some((name.id.clone(), binding));
+                }
+                return;
+            }
+            ast::visitor::walk_expr(self, expr);
+        }
+    }
+    let mut names = Names {
+        db,
+        env,
+        file,
+        found: None,
+    };
+    ast::visitor::Visitor::visit_expr(&mut names, node);
+    names.found
 }
 
 /// whether the runtime value of `node` is the thing the type it names denotes
@@ -1596,11 +1705,11 @@ fn class_target_plan<'db>(
                 .iter()
                 .all(Type::is_dynamic) =>
         {
-            match written_or_spelled(target_node, false, || {
+            match written_or_spelled(db, env, file, target_node, false, || {
                 spell_class_literal(db, env, file, ClassLiteral::Static(alias.origin(db)))
             }) {
-                Some(spelling) => ParametricIsPlan::Isinstance(spelling),
-                None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
+                Ok(spelling) => ParametricIsPlan::Isinstance(spelling),
+                Err(reason) => ParametricIsPlan::ErasedTarget(reason),
             }
         }
         // a specialization keeps the engine it always had: reified cells,
@@ -1613,15 +1722,15 @@ fn class_target_plan<'db>(
             // registry rather than by the class hierarchy, so it is checkable
             // even though a conforming type is not a subclass
             if let Some((members, declared_in)) = conformance_members(db, file, class) {
-                return match written_or_spelled(target_node, false, || {
+                return match written_or_spelled(db, env, file, target_node, false, || {
                     spell_class(db, env, file, class)
                 }) {
-                    Some(target) => ParametricIsPlan::Conformance {
+                    Ok(target) => ParametricIsPlan::Conformance {
                         target,
                         members,
                         declared_in,
                     },
-                    None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
+                    Err(reason) => ParametricIsPlan::ErasedTarget(reason),
                 };
             }
             if let Some(protocol) = class.into_protocol_class(db) {
@@ -1643,9 +1752,11 @@ fn class_target_plan<'db>(
                     };
                 }
             }
-            match written_or_spelled(target_node, false, || spell_class(db, env, file, class)) {
-                Some(spelling) => ParametricIsPlan::Isinstance(spelling),
-                None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
+            match written_or_spelled(db, env, file, target_node, false, || {
+                spell_class(db, env, file, class)
+            }) {
+                Ok(spelling) => ParametricIsPlan::Isinstance(spelling),
+                Err(reason) => ParametricIsPlan::ErasedTarget(reason),
             }
         }
     }
@@ -1944,10 +2055,11 @@ fn classify_value<'db>(
         // runtime probe (user generic) or an erased-target error (builtin)
         // the source's own spelling is preferred: a name it wrote is in scope,
         // and the runtime probe unwraps a `TypeAliasType` for itself
-        let Some(target) = written_or_spelled(rhs_node, true, || {
+        let target = match written_or_spelled(db, env, file, rhs_node, true, || {
             spell_class(db, env, file, ClassType::Generic(rhs_alias))
-        }) else {
-            return ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable);
+        }) {
+            Ok(target) => target,
+            Err(reason) => return ParametricIsPlan::ErasedTarget(reason),
         };
         ParametricIsPlan::Probe {
             target,

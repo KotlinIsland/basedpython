@@ -12,6 +12,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::Db;
 use crate::semantic_model::{HasType, SemanticModel};
+use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::soundness::{
     ArgSelector, CheckKind, CheckTarget, call_result_is_typevar_derived,
     is_specialized_generic_instance, parameter_check_plan, parameter_runtime_check_plan,
@@ -270,8 +271,23 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
             .filter(|plan| !matches!(plan, CheckKind::Isinstance(CheckTarget::NoneType)))
     }
 
+    /// whether every name `plan`'s target reads holds, where `site` runs, the binding the
+    /// checker resolved. a check that would read one that does not — a class imported only
+    /// under `if TYPE_CHECKING:`, or declared further on — is left out, as a check with no
+    /// faithful target is
+    fn runs_at(&self, plan: &CheckKind, site: Option<RuntimeSite>) -> bool {
+        site.is_some_and(|site| {
+            plan.spelling()
+                .unbound_read(self.db(), &self.env(), self.model.file(), site)
+                .is_none()
+        })
+    }
+
     /// check the value `expr` produces against `plan`
     fn check_value(&mut self, expr: &'ast Expr, plan: CheckKind) {
+        if !self.runs_at(&plan, Some(RuntimeSite::at(expr))) {
+            return;
+        }
         self.sites.push(SoundnessSite::Value { expr, plan });
     }
 
@@ -285,6 +301,9 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
         let Some(plan) = self.check_plan(target_expr) else {
             return;
         };
+        if !self.runs_at(&plan, Some(RuntimeSite::at(iterable))) {
+            return;
+        }
         self.sites.push(SoundnessSite::Elements {
             iterable,
             is_async,
@@ -358,7 +377,9 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
             .chain(&params.kwonlyargs)
         {
             let parameter = &pwd.parameter;
-            if let Some(plan) = self.parameter_plan(parameter) {
+            if let Some(plan) = self.parameter_plan(parameter)
+                && self.runs_at(&plan, Some(RuntimeSite::at(func)))
+            {
                 guards.push((parameter, plan));
             }
         }
