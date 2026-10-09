@@ -69,13 +69,12 @@ use std::collections::HashMap;
 
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::transformer::{self, Transformer};
-use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
-    AtomicNodeIndex, Comprehension, Expr, ExprCall, ExprName, HasNodeIndex, Parameter, Stmt,
-    StmtFunctionDef, UnaryOp,
+    AtomicNodeIndex, Expr, ExprCall, ExprName, HasNodeIndex, Stmt, StmtFunctionDef,
 };
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::types::soundness::CheckTarget;
+use ty_python_semantic::types::soundness_sites::SoundnessSite;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::parametric_is::variance_tuple;
@@ -92,13 +91,9 @@ use crate::type_info::{SoundnessCheck, TypeInfo};
 // leaving the base `isinstance` as the guarantee. reuses `_parametric_is`
 // (and its `_parametric_is_sub`) from `PARAMETRIC_IS_RUNTIME`
 
-/// which parameter an argument binds to, for the `arguments` gate
-enum ArgSlot<'a> {
-    Positional(usize),
-    Keyword(&'a str),
-}
-
-/// one check the pass decided on, before anything is written for it
+/// one check the pass makes, before anything is written for it: a site the checker's
+/// [`soundness_sites`](ty_python_semantic::types::soundness_sites::soundness_sites)
+/// decided on, with each checked parameter named as python binds it
 enum Site<'ast> {
     /// the value `expr` produces is checked as it is produced
     Value {
@@ -120,298 +115,42 @@ enum Site<'ast> {
     },
 }
 
-/// where the checks go, decided once over a syntax tree, and what is not a place
-/// for one
-struct Soundness<'a, 'ast> {
-    types: &'a dyn TypeInfo,
+/// the checks `suite` makes under `positions`, as the checker decides them. `written` is
+/// the module as written, which a repeated `_` parameter's name is numbered around
+fn sites<'ast>(
+    types: &dyn TypeInfo,
+    written: WrittenNames,
+    suite: &'ast [Stmt],
     positions: SoundnessPositions,
-    /// the module as written, which a repeated `_` parameter's name is numbered around
-    written: WrittenNames<'a>,
-    sites: Vec<Site<'ast>>,
-    /// gated expressions already covered by a wrap on an enclosing `!`
-    /// force-unwrap — wrapping them directly would splice the check's second
-    /// argument into `_force_unwrap`'s call parens
-    consumed: Vec<TextRange>,
-    /// declared-return-type check plans of the enclosing functions (innermost
-    /// last); `None` when a function has no annotation or an uncheckable one
-    return_targets: Vec<Option<SoundnessCheck>>,
-}
-
-impl<'a, 'ast> Soundness<'a, 'ast> {
-    fn new(
-        types: &'a dyn TypeInfo,
-        positions: SoundnessPositions,
-        written: WrittenNames<'a>,
-    ) -> Self {
-        Self {
-            types,
-            positions,
-            written,
-            sites: Vec::new(),
-            consumed: Vec::new(),
-            return_targets: Vec::new(),
-        }
-    }
-
-    /// whether `expr` is a value this pass classifies as resting on an
-    /// unverified claim: a call whose result type came from a typevar
-    /// solution, or an element read out of a specialized container. this is
-    /// the position-agnostic *classification*; the direct-wrap sites also
-    /// require the corresponding position to be enabled ([`Self::gated_enabled`])
-    fn gated(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Call(call) => self.types.call_result_is_typevar_derived(&call.func),
-            Expr::Subscript(subscript) => {
-                subscript.ctx.is_load()
-                    && self.types.is_specialized_generic_instance(&subscript.value)
-            }
-            _ => false,
-        }
-    }
-
-    /// [`Self::gated`] restricted to the enabled positions: a `Call` needs
-    /// `generic_calls`, a `Subscript` needs `projections`
-    fn gated_enabled(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::Call(_) => self.positions.generic_calls && self.gated(expr),
-            Expr::Subscript(_) => self.positions.projections && self.gated(expr),
-            _ => false,
-        }
-    }
-
-    /// whether `value` is "unhelpful" — its own inferred type doesn't back a
-    /// standalone check, so a surrounding annotation (assignment / return /
-    /// parameter) must supply the target: a plain `Any`, or a gated value
-    /// whose type is unresolved (a typevar solved only by that context)
-    fn value_needs_context_target(&self, value: &Expr) -> bool {
-        self.types.is_any(value) || (self.gated(value) && self.check_plan(value).is_none())
-    }
-
-    /// the check plan for `expr`'s inferred type, with the pure-`None`
-    /// isinstance noise case dropped (validating a `None` result guards nothing)
-    fn check_plan(&self, expr: &Expr) -> Option<SoundnessCheck> {
-        self.types
-            .soundness_check_plan(expr)
-            .filter(|plan| !matches!(plan, SoundnessCheck::Isinstance(CheckTarget::NoneType)))
-    }
-
-    /// [`Self::check_plan`] for a parameter, read off the parameter rather than off
-    /// its annotation — which is the only way to see a type the source stated with a
-    /// default instead of with an annotation
-    fn parameter_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck> {
-        self.types
-            .parameter_check_plan(parameter)
-            .filter(|plan| !matches!(plan, SoundnessCheck::Isinstance(CheckTarget::NoneType)))
-    }
-
-    /// check the value `expr` produces against `plan`
-    fn check_value(&mut self, expr: &'ast Expr, plan: SoundnessCheck) {
-        self.sites.push(Site::Value { expr, plan });
-    }
-
-    /// check each element drawn from the iterable of a `for` / comprehension
-    /// clause when the iterable carries a generic specialization and the element
-    /// (loop target) type is checkable
-    fn check_iteration(&mut self, iterable: &'ast Expr, target_expr: &Expr, is_async: bool) {
-        if !self.types.is_specialized_generic_instance(iterable) {
-            return;
-        }
-        let Some(plan) = self.check_plan(target_expr) else {
-            return;
-        };
-        self.sites.push(Site::Elements {
-            iterable,
-            is_async,
-            plan,
-        });
-    }
-
-    /// check each argument of `call` whose own type is unhelpful against its
-    /// matched parameter's annotation. positional mapping stops at the first
-    /// starred spread (positions past it are unknown); `**kwargs` spreads are
-    /// skipped
-    fn check_call_arguments(&mut self, call: &'ast ExprCall) {
-        let callee = call.func.as_ref();
-        for (index, arg) in call.arguments.args.iter().enumerate() {
-            if arg.is_starred_expr() {
-                break;
-            }
-            self.maybe_check_argument(callee, arg, &ArgSlot::Positional(index));
-        }
-        for keyword in &call.arguments.keywords {
-            if let Some(name) = &keyword.arg {
-                self.maybe_check_argument(callee, &keyword.value, &ArgSlot::Keyword(name.as_str()));
-            }
-        }
-    }
-
-    fn maybe_check_argument(&mut self, callee: &Expr, arg: &'ast Expr, slot: &ArgSlot<'_>) {
-        if self.consumed.contains(&arg.range()) || !self.value_needs_context_target(arg) {
-            return;
-        }
-        let plan = match *slot {
-            ArgSlot::Positional(index) => self.types.call_positional_param_plan(callee, index),
-            ArgSlot::Keyword(name) => self.types.call_keyword_param_plan(callee, name),
-        };
-        if let Some(plan) = plan {
-            self.check_value(arg, plan);
-        }
-    }
-
-    /// the plan to validate a returned `value` against — the enclosing
-    /// function's declared return plan — but only when `value`'s own type
-    /// is unhelpful (else `generic_calls`/`projections` already covers it)
-    fn return_plan(&self, value: &Expr) -> Option<SoundnessCheck> {
-        let plan = self.return_targets.last()?.clone()?;
-        self.value_needs_context_target(value).then_some(plan)
-    }
-
-    /// check each checkable parameter of `func` where its body begins — the
-    /// `parameters` position, defending the contract against callers the checker
-    /// never saw. variadic (`*args` / `**kwargs`) parameters are skipped, and so is
-    /// any parameter whose source states no type: an unannotated one with no
-    /// default states nothing, and `x=None` says the argument may be left out rather
-    /// than that `None` belongs there
-    ///
-    /// the plan is read off the *parameter*, not off its annotation, because a
-    /// default is a written type too. `def f(safe='/')` says `safe` is a `str`
-    /// — the native backend lays the parameter out at that bound and checks it
-    /// at the boundary, and asking the annotation node left the interpreted twin
-    /// silently more permissive than its own compiled form
-    fn check_parameters(&mut self, func: &'ast StmtFunctionDef) {
-        let params = &func.parameters;
-        let mut guards = Vec::new();
-        for pwd in params
-            .posonlyargs
-            .iter()
-            .chain(&params.args)
-            .chain(&params.kwonlyargs)
-        {
-            let parameter = &pwd.parameter;
-            if let Some(plan) = self.parameter_plan(parameter) {
-                guards.push((
-                    crate::python_parameter_name(params, parameter, self.written),
-                    plan,
-                ));
-            }
-        }
-        if !guards.is_empty() {
-            self.sites.push(Site::Parameters {
-                function: func,
-                guards,
-            });
-        }
-    }
-}
-
-impl<'ast> Visitor<'ast> for Soundness<'_, 'ast> {
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        match stmt {
-            Stmt::FunctionDef(func) => {
-                if self.positions.parameters {
-                    self.check_parameters(func);
-                }
-                // track the declared return plan so nested `return`s validate
-                // against the right function's annotation
-                let plan = func
-                    .returns
-                    .as_deref()
-                    .and_then(|returns| self.check_plan(returns));
-                self.return_targets.push(plan);
-                walk_stmt(self, stmt);
-                self.return_targets.pop();
-                return;
-            }
-            Stmt::For(for_stmt) => {
-                if self.positions.iterations {
-                    self.check_iteration(&for_stmt.iter, &for_stmt.target, for_stmt.is_async);
-                }
-            }
-            Stmt::AnnAssign(ann) => {
-                // the annotation node's stored type is the declared type;
-                // it backs two checks the value's own type can't:
-                // - an explicit `Any` flowing into the declared binding
-                // - a gated value whose typevar solution came from this very
-                //   declaration (`a: str = t()` stores `Unknown` for `t()` —
-                //   the context, not the expression, carries the claim)
-                if self.positions.assignments
-                    && let Some(value) = &ann.value
-                    && self.value_needs_context_target(value)
-                    // a field-specifier RHS (`a: int = Field()`) is modelled as
-                    // the field type but is a descriptor object at runtime, so a
-                    // soundness check against the annotation would always fail
-                    && !self.types.is_field_specifier(value)
-                    && let Some(plan) = self.check_plan(&ann.annotation)
-                {
-                    self.check_value(value, plan);
-                }
-            }
-            Stmt::Return(ret) => {
-                if self.positions.returns
-                    && let Some(value) = &ret.value
-                    && let Some(plan) = self.return_plan(value)
-                {
-                    self.check_value(value, plan);
-                }
-            }
-            // a type-alias value is a type expression; nothing in it executes
-            Stmt::TypeAlias(_) => return,
-            _ => {}
-        }
-        walk_stmt(self, stmt);
-    }
-
-    // annotations are type positions — never wrap inside them
-    fn visit_annotation(&mut self, _expr: &'ast Expr) {}
-
-    fn visit_comprehension(&mut self, comprehension: &'ast Comprehension) {
-        if self.positions.iterations {
-            self.check_iteration(
-                &comprehension.iter,
-                &comprehension.target,
-                comprehension.is_async,
-            );
-        }
-        ruff_python_ast::visitor::walk_comprehension(self, comprehension);
-    }
-
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::UnaryOp(unary) = expr
-            && unary.op == UnaryOp::Force
-        {
-            // the force lowering inserts `_force_unwrap(` at the operand's
-            // first byte; a check wrapped around the bare operand would land
-            // its second argument inside that call. wrap the whole `expr!`
-            // instead (the force edits materialize inside the passthrough)
-            // and consume the operand — and any inner `!` layers — so they
-            // aren't wrapped again
-            let already_consumed = self.consumed.contains(&expr.range());
-            let mut operand = unary.operand.as_ref();
-            while let Expr::UnaryOp(inner) = operand
-                && inner.op == UnaryOp::Force
-            {
-                self.consumed.push(operand.range());
-                operand = &inner.operand;
-            }
-            if self.gated_enabled(operand) {
-                self.consumed.push(operand.range());
-                if !already_consumed && let Some(plan) = self.check_plan(expr) {
-                    self.check_value(expr, plan);
-                }
-            }
-        } else if self.gated_enabled(expr)
-            && !self.consumed.contains(&expr.range())
-            && let Some(plan) = self.check_plan(expr)
-        {
-            self.check_value(expr, plan);
-        }
-        if self.positions.arguments
-            && let Expr::Call(call) = expr
-        {
-            self.check_call_arguments(call);
-        }
-        walk_expr(self, expr);
-    }
+) -> Vec<Site<'ast>> {
+    types
+        .soundness_sites(suite, positions)
+        .into_iter()
+        .map(|site| match site {
+            SoundnessSite::Value { expr, plan } => Site::Value { expr, plan },
+            SoundnessSite::Elements {
+                iterable,
+                is_async,
+                plan,
+            } => Site::Elements {
+                iterable,
+                is_async,
+                plan,
+            },
+            SoundnessSite::Parameters { function, guards } => Site::Parameters {
+                function,
+                guards: guards
+                    .into_iter()
+                    .map(|(parameter, plan)| {
+                        (
+                            crate::python_parameter_name(&function.parameters, parameter, written),
+                            plan,
+                        )
+                    })
+                    .collect(),
+            },
+        })
+        .collect()
 }
 
 /// a syntax node, as the checks a module makes are looked up by
@@ -477,12 +216,7 @@ pub fn soundness_sites(
     positions: SoundnessPositions,
 ) -> SoundnessSites {
     let mut sites = SoundnessSites::default();
-    if !positions.any() {
-        return sites;
-    }
-    let mut walker = Soundness::new(model, positions, written);
-    walker.visit_body(suite);
-    for site in walker.sites {
+    for site in self::sites(model, written, suite, positions) {
         match site {
             Site::Value { expr, plan } => {
                 if let Some(key) = SiteKey::of(expr) {
@@ -715,14 +449,18 @@ impl TypeAwarePass for SoundnessPass<'_> {
         let mut inner = Rendered::new(self.written);
         let mut rerendered = Vec::new();
         for (idx, stmt) in stmts.iter().enumerate() {
-            let mut walker = Soundness::new(types, self.positions, self.written);
-            walker.visit_stmt(stmt);
+            let sites = sites(
+                types,
+                self.written,
+                std::slice::from_ref(stmt),
+                self.positions,
+            );
             // an AST-mutation pass rewrote this statement, and an edit at a node it
             // replaced would be dropped: its checks go into the tree it is printed from
             if ctx.changed.contains(&idx) {
                 let mut rendered = Rendered::new(self.written);
                 let mut checks = Vec::new();
-                for site in &walker.sites {
+                for site in &sites {
                     match site {
                         Site::Value { expr, plan } => rendered.wrap_check(expr, plan),
                         Site::Elements {
@@ -755,7 +493,7 @@ impl TypeAwarePass for SoundnessPass<'_> {
                 }
                 continue;
             }
-            for site in &walker.sites {
+            for site in &sites {
                 match site {
                     Site::Value { expr, plan } => inner.wrap_check(expr, plan),
                     Site::Elements {

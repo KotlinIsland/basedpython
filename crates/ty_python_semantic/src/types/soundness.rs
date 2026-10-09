@@ -7,7 +7,7 @@
 //! these queries answer the two questions that decide an insertion:
 //!
 //! - does this expression's type rest on such an assumption? (the gates:
-//!   [`call_result_is_typevar_derived`], [`is_specialized_generic_instance`])
+//!   `call_result_is_typevar_derived`, `is_specialized_generic_instance`)
 //! - can the inferred type be validated with `isinstance` at runtime, and
 //!   what second argument does that check take? (`runtime_check_target`)
 
@@ -246,7 +246,7 @@ pub fn cast_target_is_unverifiable_protocol<'db>(
 /// (`def t[T]() -> T`), or the method is bound to a specialized generic
 /// instance (`dict[str, int].get`), where the specialization itself is an
 /// unverified annotation-level claim
-pub fn call_result_is_typevar_derived<'db>(
+pub(crate) fn call_result_is_typevar_derived<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     callee: Type<'db>,
@@ -283,7 +283,7 @@ fn mentions_type_var<'db>(db: &'db dyn Db, env: &ProgramEnvironment<'db>, ty: Ty
 /// specialization — the runtime-unverifiable part of an annotation like
 /// `list[str]`. element projections out of such values (subscripts, method
 /// results, iteration) are where the specialization's claim is consumed
-pub fn is_specialized_generic_instance<'db>(
+pub(crate) fn is_specialized_generic_instance<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     ty: Type<'db>,
@@ -332,7 +332,7 @@ pub(crate) fn runtime_check_target<'db>(
 /// arguments are checkable at runtime); otherwise falls back to the shallow
 /// [`CheckKind::Isinstance`] of `runtime_check_target`. `None` when neither
 /// applies (no faithful runtime test).
-pub fn runtime_check_plan<'db>(
+pub(crate) fn runtime_check_plan<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
@@ -361,7 +361,7 @@ pub fn runtime_check_plan<'db>(
 /// of the bound is recovered from how the body happens to use the parameter, and a
 /// recovered requirement is not something to raise a `TypeError` over — it is a
 /// sample, and it can be withdrawn.
-pub fn parameter_runtime_check_plan<'db>(
+pub(crate) fn parameter_runtime_check_plan<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
@@ -527,7 +527,7 @@ fn builtin_target(db: &dyn Db, file: File, name: &str) -> Option<CheckTarget> {
 }
 
 /// selects which parameter of a call an argument binds to, for
-/// [`parameter_check_plan`]
+/// `parameter_check_plan`
 #[derive(Clone, Copy)]
 pub enum ArgSelector<'a> {
     /// a positional argument at the given 0-based index (after any bound
@@ -544,7 +544,7 @@ pub enum ArgSelector<'a> {
 /// misleading), a variadic / unmatched / unannotated parameter, or a
 /// parameter type with no runtime test. deliberately conservative —
 /// a missed check is a no-op, a wrong one changes semantics
-pub fn parameter_check_plan<'db>(
+pub(crate) fn parameter_check_plan<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,
