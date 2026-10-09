@@ -829,6 +829,43 @@ impl ParametricIsPlan {
         }
     }
 
+    /// every spelling the plan writes, in any arm
+    pub(crate) fn spellings(&self) -> Vec<&RuntimeSpelling> {
+        fn rebuilt(target: &TargetSpelling) -> Option<&RuntimeSpelling> {
+            match target {
+                TargetSpelling::Rebuilt(spelling) => Some(spelling),
+                TargetSpelling::Written => None,
+            }
+        }
+        match self {
+            Self::Probe { target, .. }
+            | Self::Isinstance(target)
+            | Self::Identity(target)
+            | Self::Subclass(target)
+            | Self::Conformance { target, .. }
+            | Self::Equality { value: target, .. } => rebuilt(target).into_iter().collect(),
+            Self::ProtocolStructural(checks) => checks
+                .iter()
+                .flat_map(|check| match check {
+                    ProtocolMemberCheck::Attribute { expected, .. } => vec![expected],
+                    ProtocolMemberCheck::Method { params, ret, .. } => params
+                        .iter()
+                        .chain(ret)
+                        .map(|(spelling, _)| spelling)
+                        .collect(),
+                })
+                .collect(),
+            Self::Union(arms) => arms.iter().flat_map(Self::spellings).collect(),
+            Self::Fold(_)
+            | Self::TokenEq(_)
+            | Self::ErasedTarget(_)
+            | Self::IsCallable
+            | Self::IsNone
+            | Self::Pattern(_)
+            | Self::Unresolved => Vec::new(),
+        }
+    }
+
     /// every module whose conformance this plan answers from, in any arm
     pub(crate) fn conformance_modules(&self) -> Vec<File> {
         match self {

@@ -97,7 +97,7 @@ fn bind_receiver<'db>(
 /// annotation, and a declaration has one type wherever it is visible. A scope
 /// that binds the name to anything else shadows it, the same way it would shadow
 /// the name in an ordinary load
-pub(crate) fn resolve_receiver_attribute<'db>(
+fn resolve_receiver_attribute<'db>(
     db: &'db dyn Db,
     env: &ProgramEnvironment<'db>,
     file: File,

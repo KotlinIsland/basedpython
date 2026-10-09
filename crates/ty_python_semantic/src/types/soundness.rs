@@ -62,6 +62,26 @@ impl CheckTarget {
     }
 }
 
+impl CheckKind {
+    /// the spelling the check writes its target with
+    pub(crate) fn spelling(&self) -> RuntimeSpelling {
+        match self {
+            Self::Isinstance(target) => target.spelling(),
+            Self::Parametric { alias, .. } => alias.clone(),
+        }
+    }
+}
+
+impl CastCheck {
+    /// the spelling the check writes its target with, when it writes one
+    pub(crate) fn spelling(&self) -> Option<RuntimeSpelling> {
+        match self {
+            Self::Kind(kind) => Some(kind.spelling()),
+            Self::Protocol | Self::Unchecked | Self::Members(_) => None,
+        }
+    }
+}
+
 /// How a runtime soundness check validates a value against a target type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CheckKind {

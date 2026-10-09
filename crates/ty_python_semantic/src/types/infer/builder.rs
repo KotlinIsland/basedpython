@@ -71,7 +71,7 @@ use crate::types::class::{
 };
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
-use crate::types::context_sensitive::{self, case_name_pattern_type};
+use crate::types::context_sensitive;
 use crate::types::dedicated::{django, pydantic};
 use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::definition_resolution::AttributeRead;
@@ -3438,8 +3438,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let Some(case_name) = self.index.case_name(NodeKey::from_node(identifier)) else {
                 return;
             };
-            if case_name_pattern_type(self.db(), self.program_environment(), case_name).is_none() {
-                captures.push((alternative, identifier, case_name));
+            match context_sensitive::resolve_case_name(
+                self.db(),
+                self.program_environment(),
+                case_name,
+            ) {
+                Some(member) => self.record_context_sensitive_qualifier(member),
+                None => captures.push((alternative, identifier, case_name)),
             }
         });
         for (alternative, identifier, case_name) in captures {
@@ -11410,6 +11415,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // claim; the plain `cast` never reaches a check in the first place
             if cast_kind.verifies_at_runtime() {
                 self.report_erased_cast_argument(type_arg, value_ty, target);
+                self.record_checked_cast_spellings(value_ty, target, type_arg);
             }
             // an unsound plain `cast` is already the sharper report — a
             // non-overlapping one would only repeat that the value is not the
@@ -14055,6 +14061,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         symbol_name,
                     )
                 {
+                    self.record_context_sensitive_qualifier(member);
                     Place::bound(member.ty).into()
                 } else {
                     Place::Undefined.into()
@@ -14071,6 +14078,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     && let Some(case_name) = self.index.case_name(NodeKey::from_node(name_node))
                     && let Some(member) = context_sensitive::resolve_case_name(db, env, case_name)
                 {
+                    self.record_context_sensitive_qualifier(member);
                     Place::bound(member.ty).into()
                 } else {
                     Place::Undefined.into()
@@ -14251,6 +14259,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let env = self.program_environment();
         let is_class_body_global_fallback = source.is_class_body_global_fallback();
 
+        self.record_whole_scope_read(&source.kind);
+
         let place = match source.kind {
             PlaceLoadSourceKind::Bindings(bindings) => {
                 let mut place = place_from_bindings_with_reachability_cache(
@@ -14317,6 +14327,38 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             place.map_type(|ty| {
                 self.narrow_place_with_applicable_constraints(place_expr, ty, narrowing_constraints)
             })
+        }
+    }
+
+    /// basedpython: records a read the semantic index has no record of — one that reads every
+    /// binding a scope makes rather than the bindings live at the reading expression. a name in
+    /// an annotation is evaluated lazily, and a name declared `global` is read from the module.
+    /// a nested scope's read of an enclosing one is not among them: the index records that
+    /// itself
+    fn record_whole_scope_read(&self, source: &PlaceLoadSourceKind<'db>) {
+        if !self.is_basedpython_file() {
+            return;
+        }
+        let db = self.db();
+        match source {
+            PlaceLoadSourceKind::Bindings(bindings) if self.is_deferred() => {
+                for binding in bindings.clone() {
+                    if let Some(definition) = binding.binding.definition()
+                        && let Some(symbol) = definition.place(db).as_symbol()
+                    {
+                        self.context
+                            .record_scope_read(definition.file_scope(db), symbol);
+                    }
+                }
+            }
+            PlaceLoadSourceKind::Implicit(ImplicitPlaceLoad::ExplicitGlobalSymbol {
+                file,
+                name,
+            }) if *file == self.program_file() => {
+                self.context
+                    .record_scope_read_of_name(ty_python_core::global_scope(db, *file), name);
+            }
+            _ => {}
         }
     }
 
@@ -15070,7 +15112,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // extensions, this never shadows a declared member
         if self.is_basedpython_file()
             && fallback_place.place.is_undefined()
-            && let Some(bound) = receivers::resolve_receiver_attribute(
+            && let Some((declaring_scope, bound)) = receivers::resolve_receiver_attribute_in_scope(
                 db,
                 env,
                 self.file(),
@@ -15079,6 +15121,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 &attr.id,
             )
         {
+            // the access reads the name, which no name expression spells
+            self.context
+                .record_scope_read_of_name(declaring_scope, &attr.id);
             fallback_place = Place::bound(bound).into();
         }
 
@@ -15767,6 +15812,51 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let returned = operator.return_type(db, env, &CallArguments::none())?;
         self.record_extension_resolution(&operator.resolution);
         Some(returned)
+    }
+
+    /// basedpython: records the bindings a checked cast's runtime check reads. the lowering
+    /// builds its predicate from the type test the cast shares with `is`, and falls back to
+    /// the shallow target the soundness checks use, so both are spelled here as it spells them
+    fn record_checked_cast_spellings(
+        &self,
+        value_ty: Type<'db>,
+        target: Type<'db>,
+        type_arg: &ast::Expr,
+    ) {
+        if !self.is_basedpython_file() {
+            return;
+        }
+        let db = self.db();
+        let env = self.program_environment();
+        let plan = crate::types::reified_infer::type_test_plan(
+            db,
+            env,
+            self.file(),
+            value_ty,
+            target,
+            Some(type_arg),
+        );
+        for spelling in plan.spellings() {
+            self.context.record_spelling(spelling);
+        }
+        if let Some(spelling) =
+            crate::types::soundness::cast_check_plan(db, env, self.file(), target)
+                .and_then(|check| check.spelling())
+        {
+            self.context.record_spelling(&spelling);
+        }
+    }
+
+    /// basedpython: records the binding a context-sensitive name's lowering reads its
+    /// qualifier through — `Red` is written `Color.Red`, which reads `Color` although the
+    /// source never spells it
+    fn record_context_sensitive_qualifier(
+        &self,
+        member: context_sensitive::ContextSensitiveMember<'db>,
+    ) {
+        if let Some((scope, symbol)) = member.qualifier_binding() {
+            self.context.record_scope_read(scope, symbol);
+        }
     }
 
     /// basedpython: records every extension an extension-member resolution relied on, so
@@ -16594,6 +16684,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         );
         for module in plan.conformance_modules() {
             self.context.record_extension_module_use(module);
+        }
+        for spelling in plan.spellings() {
+            self.context.record_spelling(spelling);
         }
         if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = plan {
             let source = ruff_db::source::source_text(db, self.file());

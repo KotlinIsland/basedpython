@@ -8,6 +8,10 @@
 //! emitted as `_Kept`, or under another name where the module already has that one, and
 //! only the transpiler decides which. so a spelling keeps the names of those symbols
 //! apart, and whoever writes the spelling out spells them
+//!
+//! every binding of the module's global scope a spelling reads is kept apart the same way,
+//! so the checker, which spells the same thing while it checks, can record that the
+//! transpiled program reads it — an import read only by a lowering is still used
 
 use ruff_db::files::File;
 use ruff_python_ast::name::Name;
@@ -31,6 +35,8 @@ pub struct RuntimeSpelling {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SpellingPart {
     Text(String),
+    /// a binding of the module's global scope, written under its own name
+    Global(Name),
     /// a module-level `private` symbol, by the name the source declares it under
     ModulePrivate(Name),
 }
@@ -51,13 +57,21 @@ impl RuntimeSpelling {
     /// [`Self::text`] instead: the module may declare a `private` symbol of that name
     /// without binding it, and the builtin is not that symbol
     pub(crate) fn global(db: &dyn Db, file: File, name: &Name) -> Self {
-        if private_symbols(db, file).contains(name) {
-            Self {
-                parts: vec![SpellingPart::ModulePrivate(name.clone())],
-            }
+        let part = if private_symbols(db, file).contains(name) {
+            SpellingPart::ModulePrivate(name.clone())
         } else {
-            Self::text(name.as_str())
-        }
+            SpellingPart::Global(name.clone())
+        };
+        Self { parts: vec![part] }
+    }
+
+    /// every binding of the module's global scope the spelling reads, by the name the
+    /// source binds it under
+    pub(crate) fn global_reads(&self) -> impl Iterator<Item = &Name> {
+        self.parts.iter().filter_map(|part| match part {
+            SpellingPart::Global(name) | SpellingPart::ModulePrivate(name) => Some(name),
+            SpellingPart::Text(_) => None,
+        })
     }
 
     pub(crate) fn push_str(&mut self, text: &str) {
@@ -75,7 +89,9 @@ impl RuntimeSpelling {
         for part in &other.parts {
             match part {
                 SpellingPart::Text(text) => self.push_str(text),
-                SpellingPart::ModulePrivate(_) => self.parts.push(part.clone()),
+                SpellingPart::Global(_) | SpellingPart::ModulePrivate(_) => {
+                    self.parts.push(part.clone());
+                }
             }
         }
     }
@@ -103,6 +119,7 @@ impl RuntimeSpelling {
         for part in &self.parts {
             match part {
                 SpellingPart::Text(text) => spelled.push_str(text),
+                SpellingPart::Global(name) => spelled.push_str(name),
                 SpellingPart::ModulePrivate(name) => spelled.push_str(&module_private(name)),
             }
         }
