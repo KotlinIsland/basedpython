@@ -24,11 +24,13 @@
 //! [`ClassDef`]: ruff_python_ast::StmtClassDef
 
 use ruff_db::files::File;
+use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{ModuleName, resolve_module};
+use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::{global_scope, place_table, semantic_index};
 
 use crate::Db;
@@ -179,6 +181,74 @@ pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClass
         }
     }
     extensions.into_boxed_slice()
+}
+
+/// an import in a file that makes another module's extensions applicable there
+#[derive(Debug, Clone, Copy, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) struct ExtensionGrant<'db> {
+    /// the module whose extensions the import makes applicable
+    pub(crate) module: File,
+    /// the import's definition: one alias of an `import` or a `from … import`
+    pub(crate) import: Definition<'db>,
+}
+
+/// every import in `file` that makes another module's extensions applicable, with
+/// the module each one grants.
+///
+/// This is [`applicable_extensions`]'s visibility rule read backwards, so it has to
+/// grant exactly what that one does: `import a.b` grants `a.b` and `a`, and
+/// `from a import x` grants `a`, wherever in the file the statement is written. A
+/// module declaring no extension is left out, because no extension use can name it
+#[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
+pub(crate) fn extension_granting_imports(db: &dyn Db, file: File) -> Box<[ExtensionGrant<'_>]> {
+    if !file.source_type(db).is_basedpython() {
+        return Box::default();
+    }
+    let program_file = db.program_file(file);
+    let index = semantic_index(db, program_file);
+    let parsed = parsed_module(db, program_file.python_file(db)).load(db);
+    let importing = ImportingFile::File(file, program_file.resolver_environment(db));
+    let mut grants = Vec::new();
+    for scope in index.scope_ids() {
+        let use_def = index.use_def_map(scope.file_scope_id(db));
+        for (_, definition, _) in use_def.definitions_with_usage() {
+            let modules: Vec<ModuleName> = match definition.kind(db) {
+                DefinitionKind::Import(import) => {
+                    let alias = import.alias(&parsed);
+                    if alias.is_resource {
+                        continue;
+                    }
+                    let Some(name) = ModuleName::new(&alias.name) else {
+                        continue;
+                    };
+                    name.ancestors().collect()
+                }
+                DefinitionKind::ImportFrom(import) => {
+                    let Ok(name) =
+                        ModuleName::from_import_statement(db, importing, import.import(&parsed))
+                    else {
+                        continue;
+                    };
+                    vec![name]
+                }
+                _ => continue,
+            };
+            for name in modules {
+                let Some(module) =
+                    resolve_module(db, importing, &name).and_then(|module| module.file(db))
+                else {
+                    continue;
+                };
+                if module != file && !extensions_in_module(db, module).is_empty() {
+                    grants.push(ExtensionGrant {
+                        module,
+                        import: definition,
+                    });
+                }
+            }
+        }
+    }
+    grants.into_boxed_slice()
 }
 
 /// the classes an applicable extension supplies a conversion dunder for.
