@@ -239,6 +239,7 @@ mod safe_variance;
 mod set_theoretic;
 mod signatures;
 pub mod soundness;
+pub mod soundness_sites;
 mod special_form;
 pub(crate) mod state_invalidations;
 pub(crate) mod state_reads;

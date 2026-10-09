@@ -5,8 +5,7 @@ use crate::transforms::trailing_lambda::RECEIVER_PARAMETER;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::{
-    Expr, ExprCall, ExprName, ExprRef, Parameter, ParameterWithDefault, Stmt, StmtClassDef,
-    StmtFunctionDef,
+    Expr, ExprCall, ExprName, ExprRef, ParameterWithDefault, Stmt, StmtClassDef, StmtFunctionDef,
 };
 use ruff_python_parser::parse_expression;
 use ruff_text_size::{Ranged, TextRange};
@@ -638,44 +637,13 @@ pub(crate) trait TypeInfo {
     /// stands for the enclosing class and can never bind to an optional
     fn optional_wraps(&self, expr: &Expr) -> bool;
 
-    /// whether a call through `callee` yields a result whose type was
-    /// derived by substituting typevars — a generic function's return, or a
-    /// method bound to a specialized generic instance. such results rest on
-    /// an assumption ty cannot verify, so the soundness pass validates them
-    fn call_result_is_typevar_derived(&self, callee: &Expr) -> bool;
-
-    /// whether `expr`'s inferred type is an instance carrying a generic
-    /// specialization (`list[str]`, a `TypedDict`) — element projections out
-    /// of it consume an annotation-level claim
-    fn is_specialized_generic_instance(&self, expr: &Expr) -> bool;
-
-    /// the runtime soundness check for `expr`'s inferred type — a shallow
-    /// `isinstance` target (`str`, `(int, type(None))`) or a deep parametric
-    /// check for a user-generic specialization (`A[int]` + variances). `None`
-    /// when the type has no faithful runtime test or its name doesn't resolve
-    /// at module scope
-    fn soundness_check_plan(&self, expr: &Expr) -> Option<SoundnessCheck>;
-
-    /// the runtime soundness check for a *parameter*, planned against the type its
-    /// source states rather than the one its annotation node spells
-    ///
-    /// the two differ exactly where there is no annotation to spell. `def f(safe='/')`
-    /// opens a hole bounded by everything the function requires of `safe`, and a hole
-    /// has no runtime test — so asking about the annotation answered nothing, and the
-    /// interpreted leg wrote no check where the native backend was already enforcing
-    /// the bound at its boundary
-    fn parameter_check_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck>;
-
-    /// the soundness check for the parameter that the positional argument at
-    /// `index` binds to in a call through `callee` (see
-    /// [`soundness_check_plan`](TypeInfo::soundness_check_plan)). `None` when
-    /// the callee isn't a single-overload function/method, the parameter is
-    /// variadic/unannotated, or its type has no runtime test
-    fn call_positional_param_plan(&self, callee: &Expr, index: usize) -> Option<SoundnessCheck>;
-
-    /// like [`call_positional_param_plan`](TypeInfo::call_positional_param_plan)
-    /// but for a keyword argument matched by `name`
-    fn call_keyword_param_plan(&self, callee: &Expr, name: &str) -> Option<SoundnessCheck>;
+    /// every runtime soundness check `suite` makes under `positions` — the checker's one
+    /// answer, which the native backend reads as well
+    fn soundness_sites<'ast>(
+        &self,
+        suite: &'ast [ruff_python_ast::Stmt],
+        positions: crate::SoundnessPositions,
+    ) -> Vec<ty_python_semantic::types::soundness_sites::SoundnessSite<'ast>>;
 
     /// the runtime check for a type expression used as a checked cast target,
     /// or `None` when the type has no faithful runtime test. a user generic
@@ -825,14 +793,6 @@ pub(crate) trait TypeInfo {
     /// member binds its receiver rather than wrapping what it does, under whatever name it is
     /// written
     fn decides_receiver_binding(&self, decorator: &ruff_python_ast::Decorator) -> bool;
-
-    /// whether `expr` is a field-specifier call — `pydantic.Field(...)`,
-    /// `dataclasses.field(...)`, `attrs.field(...)`, and the like. the checker
-    /// models these as assignable to the field's declared type, but their
-    /// runtime value is a field-descriptor object (`FieldInfo`, `Field`), so a
-    /// soundness check against the field annotation would always fail at
-    /// runtime — the transpiler must not emit one
-    fn is_field_specifier(&self, expr: &Expr) -> bool;
 
     /// basedpython: the python a static resource import lowers to, bound to
     /// `binding` — the document at `path` written out as classes, tuples and
@@ -1425,34 +1385,12 @@ impl TypeInfo for SemanticModel<'_> {
         )
     }
 
-    fn call_result_is_typevar_derived(&self, callee: &Expr) -> bool {
-        callee.inferred_type(self).is_some_and(|ty| {
-            ty_python_semantic::types::soundness::call_result_is_typevar_derived(
-                self.db(),
-                &self.program_environment(),
-                ty,
-            )
-        })
-    }
-
-    fn is_specialized_generic_instance(&self, expr: &Expr) -> bool {
-        expr.inferred_type(self).is_some_and(|ty| {
-            ty_python_semantic::types::soundness::is_specialized_generic_instance(
-                self.db(),
-                &self.program_environment(),
-                ty,
-            )
-        })
-    }
-
-    fn soundness_check_plan(&self, expr: &Expr) -> Option<SoundnessCheck> {
-        let ty = expr.inferred_type(self)?;
-        ty_python_semantic::types::soundness::runtime_check_plan(
-            self.db(),
-            &self.program_environment(),
-            self.file(),
-            ty,
-        )
+    fn soundness_sites<'ast>(
+        &self,
+        suite: &'ast [ruff_python_ast::Stmt],
+        positions: crate::SoundnessPositions,
+    ) -> Vec<ty_python_semantic::types::soundness_sites::SoundnessSite<'ast>> {
+        ty_python_semantic::types::soundness_sites::soundness_sites(self, suite, positions)
     }
 
     fn inherited_parameter_default(&self, parameter: &ParameterWithDefault) -> Option<String> {
@@ -1464,38 +1402,6 @@ impl TypeInfo for SemanticModel<'_> {
         function: &StmtFunctionDef,
     ) -> Option<Result<UnderscoreLowering, UnderscoreRefusal>> {
         ty_python_semantic::types::ide_support::repeated_underscore_lowering(self, function)
-    }
-
-    fn parameter_check_plan(&self, parameter: &Parameter) -> Option<SoundnessCheck> {
-        let ty = parameter.inferred_type(self)?;
-        ty_python_semantic::types::soundness::parameter_runtime_check_plan(
-            self.db(),
-            &self.program_environment(),
-            self.file(),
-            ty,
-        )
-    }
-
-    fn call_positional_param_plan(&self, callee: &Expr, index: usize) -> Option<SoundnessCheck> {
-        let ty = callee.inferred_type(self)?;
-        ty_python_semantic::types::soundness::parameter_check_plan(
-            self.db(),
-            &self.program_environment(),
-            self.file(),
-            ty,
-            ty_python_semantic::types::soundness::ArgSelector::Positional(index),
-        )
-    }
-
-    fn call_keyword_param_plan(&self, callee: &Expr, name: &str) -> Option<SoundnessCheck> {
-        let ty = callee.inferred_type(self)?;
-        ty_python_semantic::types::soundness::parameter_check_plan(
-            self.db(),
-            &self.program_environment(),
-            self.file(),
-            ty,
-            ty_python_semantic::types::soundness::ArgSelector::Keyword(name),
-        )
     }
 
     fn cast_check_plan(&self, type_expr: &Expr) -> Option<CastCheck> {
@@ -1714,13 +1620,6 @@ impl TypeInfo for SemanticModel<'_> {
         ty_python_semantic::render_as(self.db(), file, binding)
             .map(|rendered| rendered.source)
             .map_err(|error| error.to_string())
-    }
-
-    fn is_field_specifier(&self, expr: &Expr) -> bool {
-        matches!(
-            expr.inferred_type(self),
-            Some(Type::KnownInstance(KnownInstanceType::Field(_)))
-        )
     }
 }
 

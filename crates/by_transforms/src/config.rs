@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+pub use ty_python_semantic::types::soundness_sites::SoundnessPositions;
+
 pub use ruff_python_ast::PythonVersion;
 
 #[derive(Debug, Clone)]
@@ -99,89 +101,6 @@ pub enum FloatLiteralLowering {
     /// `a: Literal[1.5]`. the precision survives and the output still runs, but
     /// a checker reading it reports the argument as invalid
     Literal,
-}
-
-/// Per-position toggles for the runtime type-soundness checks. Each field
-/// enables validation at one syntactic position where ty accepts a value on
-/// an annotation-level claim it can't verify at runtime.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "independent per-position toggles, not a state machine"
-)]
-pub struct SoundnessPositions {
-    /// results of calls whose type is typevar-derived — a generic function's
-    /// return (`t[T]() -> T`) or a method bound to a specialized generic
-    /// instance (`dict[str, int].get`)
-    pub generic_calls: bool,
-    /// element reads out of a specialized container (`a[0]` on `list[str]`)
-    pub projections: bool,
-    /// loop / comprehension elements drawn from a specialized iterable
-    pub iterations: bool,
-    /// explicit `Any` (or a context-solved generic result) flowing into an
-    /// annotated assignment target (`a: str = any_val`)
-    pub assignments: bool,
-    /// a returned value validated against the enclosing function's declared
-    /// return type (`def g() -> str: return any_val`)
-    pub returns: bool,
-    /// a call argument validated against its matched parameter's annotation
-    /// (`takes(any_val)` where `takes(s: str)`)
-    pub arguments: bool,
-    /// a function's own parameters validated against their annotations at
-    /// entry, defending its contract against callers the checker never saw
-    /// (untyped or third-party code). off in the default set — it runs on
-    /// every call, so it's opt-in — but included in [`Self::all`]
-    pub parameters: bool,
-}
-
-impl SoundnessPositions {
-    /// every position enabled, including the opt-in defensive `parameters`
-    /// entry checks (the CLI `--soundness all`)
-    pub fn all() -> Self {
-        Self {
-            parameters: true,
-            ..Self::defaults()
-        }
-    }
-
-    /// the positions enabled without an explicit request: every inference-gap
-    /// check, but *not* the defensive `parameters` entry checks (those add a
-    /// check on every call, so they stay opt-in)
-    pub fn defaults() -> Self {
-        Self {
-            generic_calls: true,
-            projections: true,
-            iterations: true,
-            assignments: true,
-            returns: true,
-            arguments: true,
-            parameters: false,
-        }
-    }
-
-    /// no position enabled — the pass is a no-op
-    pub fn none() -> Self {
-        Self {
-            generic_calls: false,
-            projections: false,
-            iterations: false,
-            assignments: false,
-            returns: false,
-            arguments: false,
-            parameters: false,
-        }
-    }
-
-    /// whether any position is enabled
-    pub(crate) fn any(self) -> bool {
-        self.generic_calls
-            || self.projections
-            || self.iterations
-            || self.assignments
-            || self.returns
-            || self.arguments
-            || self.parameters
-    }
 }
 
 impl Default for Config {
