@@ -132,6 +132,14 @@ use crate::{Applicability, Fix, FixAvailability, Violation};
 ///     print("numpy is not installed")
 /// ```
 ///
+/// ## basedpython
+/// a `.by` or `.byi` file is not checked. an import there can be used without its
+/// name ever being read: the `extension`s and conformances a module declares are
+/// only applicable in the files that import it, and whether one of them supplies
+/// something a file relies on is a question about types, which a linter checking one
+/// file at a time cannot answer. `by check` reports unused imports in `.by` files
+/// instead, with this rule's semantics, as `unused-import`
+///
 /// ## Options
 /// - `lint.ignore-init-module-imports`
 /// - `lint.pyflakes.allowed-unused-imports`
@@ -326,6 +334,13 @@ fn find_dunder_all_exprs<'a>(semantic: &'a SemanticModel) -> Vec<&'a ast::Expr> 
 /// ¬__init__.py ∧ 3rdpty → safe,   remove
 ///
 pub(crate) fn unused_import(checker: &Checker, scope: &Scope) {
+    // basedpython: the checker's `unused-import` owns this rule for `.by` files, because an
+    // import used only through the extensions its module declares reads no name this
+    // per-file, typeless analysis could see
+    if checker.source_type.is_basedpython() {
+        return;
+    }
+
     // Collect all unused imports by statement.
     let mut unused: BTreeMap<(NodeId, Exceptions), Vec<ImportBinding>> = BTreeMap::default();
     let mut ignored: BTreeMap<(NodeId, Exceptions), Vec<ImportBinding>> = BTreeMap::default();

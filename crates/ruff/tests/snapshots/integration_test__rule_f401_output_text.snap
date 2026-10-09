@@ -1,7 +1,8 @@
 ---
 source: crates/ruff/tests/integration_test.rs
+assertion_line: 1046
 info:
-  program: ruff
+  program: buff
   args:
     - rule
     - F401
@@ -124,6 +125,14 @@ if find_spec("numpy") is not None:
 else:
     print("numpy is not installed")
 ```
+
+## basedpython
+a `.by` or `.byi` file is not checked. an import there can be used without its
+name ever being read: the `extension`s and conformances a module declares are
+only applicable in the files that import it, and whether one of them supplies
+something a file relies on is a question about types, which a linter checking one
+file at a time cannot answer. `by check` reports unused imports in `.by` files
+instead, with this rule's semantics, as `unused-import`
 
 ## Options
 - `lint.ignore-init-module-imports`
