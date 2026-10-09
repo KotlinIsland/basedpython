@@ -772,6 +772,10 @@ pub enum ParametricIsPlan {
         /// the interface's required member names, for the runtime check to look
         /// for on a value nothing registered
         members: Vec<String>,
+        /// the modules declaring the conformances to the interface that are visible
+        /// here. the test is answered from the registry only because one is, so the
+        /// import making each one visible is relied on
+        declared_in: Vec<File>,
     },
     /// nothing is known about the target — an error elsewhere left `Unknown`
     /// behind. the test is lowered as the plain `isinstance` the source spells
@@ -822,6 +826,27 @@ impl ParametricIsPlan {
             Self::Fold(holds) => !holds,
             Self::Union(arms) => arms.iter().all(Self::never_holds),
             _ => false,
+        }
+    }
+
+    /// every module whose conformance this plan answers from, in any arm
+    pub(crate) fn conformance_modules(&self) -> Vec<File> {
+        match self {
+            Self::Conformance { declared_in, .. } => declared_in.clone(),
+            Self::Union(arms) => arms.iter().flat_map(Self::conformance_modules).collect(),
+            Self::Fold(_)
+            | Self::TokenEq(_)
+            | Self::Probe { .. }
+            | Self::ProtocolStructural(_)
+            | Self::ErasedTarget(_)
+            | Self::Isinstance(_)
+            | Self::IsCallable
+            | Self::IsNone
+            | Self::Equality { .. }
+            | Self::Identity(_)
+            | Self::Subclass(_)
+            | Self::Pattern(_)
+            | Self::Unresolved => Vec::new(),
         }
     }
 }
@@ -1550,11 +1575,15 @@ fn class_target_plan<'db>(
             // an interface something visibly conforms to is answered by the
             // registry rather than by the class hierarchy, so it is checkable
             // even though a conforming type is not a subclass
-            if let Some(members) = conformance_members(db, file, class) {
+            if let Some((members, declared_in)) = conformance_members(db, file, class) {
                 return match written_or_spelled(target_node, false, || {
                     spell_class(db, env, file, class)
                 }) {
-                    Some(target) => ParametricIsPlan::Conformance { target, members },
+                    Some(target) => ParametricIsPlan::Conformance {
+                        target,
+                        members,
+                        declared_in,
+                    },
                     None => ParametricIsPlan::ErasedTarget(ErasedTargetReason::Unspellable),
                 };
             }
@@ -1586,21 +1615,28 @@ fn class_target_plan<'db>(
 }
 
 /// The required member names of `class` when something in `file`'s scope
-/// visibly conforms to it, or `None` when it is not a conformance interface.
+/// visibly conforms to it, with the modules declaring those conformances, or
+/// `None` when it is not a conformance interface.
 fn conformance_members<'db>(
     db: &'db dyn Db,
     file: File,
     class: ClassType<'db>,
-) -> Option<Vec<String>> {
-    let conformed = crate::types::conformance::visible_conformances(db, file)
+) -> Option<(Vec<String>, Vec<File>)> {
+    let mut declared_in: Vec<File> = Vec::new();
+    for (extension, declared) in crate::types::conformance::visible_conformances(db, file) {
+        let module = extension.file(db);
+        if declared.class_literal(db) == class.class_literal(db) && !declared_in.contains(&module) {
+            declared_in.push(module);
+        }
+    }
+    if declared_in.is_empty() {
+        return None;
+    }
+    let members = crate::types::conformance::interface_requirements(db, class)
         .iter()
-        .any(|(_, declared)| declared.class_literal(db) == class.class_literal(db));
-    conformed.then(|| {
-        crate::types::conformance::interface_requirements(db, class)
-            .iter()
-            .map(ToString::to_string)
-            .collect()
-    })
+        .map(ToString::to_string)
+        .collect();
+    Some((members, declared_in))
 }
 
 /// whether a callable signature says nothing beyond "this is callable" — the

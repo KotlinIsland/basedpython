@@ -585,7 +585,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         ),
                     )
                     .is_some_and(|repair| {
-                        crate::types::conversions::report_ambiguous_conversion(
+                        crate::types::conversions::accept_conversion(
                             &self.context,
                             return_statement.range,
                             &repair,

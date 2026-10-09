@@ -79,7 +79,10 @@ pub(crate) enum Route<'db> {
     /// a visible conformance extension makes the source's class conform to the
     /// protocol the target asks for. nothing is emitted: the value is already
     /// the object the protocol dispatches on
-    Conformance(ClassType<'db>),
+    Conformance {
+        extension: StaticClassLiteral<'db>,
+        protocol: ClassType<'db>,
+    },
     /// `T.__from__(value)`, where `T` is the target class
     From(ClassType<'db>, DunderSource<'db>),
     /// `T.__of__(value)`, where `T` is the target class
@@ -94,6 +97,19 @@ pub(crate) enum Route<'db> {
 }
 
 impl<'db> Route<'db> {
+    /// the extension the route is supplied by, when one is
+    fn extension(self) -> Option<StaticClassLiteral<'db>> {
+        match self {
+            Route::Conformance { extension, .. }
+            | Route::From(_, DunderSource::Extension(extension))
+            | Route::Of(_, DunderSource::Extension(extension)) => Some(extension),
+            Route::From(_, DunderSource::Declared)
+            | Route::Of(_, DunderSource::Declared)
+            | Route::Into(_)
+            | Route::DiscardReturn => None,
+        }
+    }
+
     /// how the route reads in a diagnostic
     fn describe(self, db: &'db dyn Db, env: &ProgramEnvironment<'db>) -> String {
         let dunder = |class: ClassType<'db>, source: DunderSource<'db>, dunder: &str| match source {
@@ -107,7 +123,9 @@ impl<'db> Route<'db> {
             ),
         };
         match self {
-            Route::Conformance(protocol) => format!("conformance to `{}`", protocol.name(db)),
+            Route::Conformance { protocol, .. } => {
+                format!("conformance to `{}`", protocol.name(db))
+            }
             Route::From(class, source) => dunder(class, source, FROM),
             Route::Of(class, source) => dunder(class, source, OF),
             Route::Into(source) => format!("{}.{INTO}", source.display(db, env)),
@@ -156,10 +174,13 @@ pub(crate) fn repair_conversion<'db>(
     let source = source.erase_restriction(db);
 
     let mut routes: Vec<Route<'db>> = Vec::new();
-    if let Some(protocol) =
+    if let Some((extension, protocol)) =
         super::conformance::repair_with_conformance(db, env, file, source, target)
     {
-        routes.push(Route::Conformance(protocol));
+        routes.push(Route::Conformance {
+            extension,
+            protocol,
+        });
     }
     dunder_routes(db, env, file, source, target, value, &mut routes);
     if discards_return(db, env, source, target) {
@@ -897,14 +918,15 @@ pub(crate) fn call_parameter_types<'db>(
     bindings.plain_callee_parameter_types(arguments.len())
 }
 
-/// report a conversion site served by more than one route. the site is otherwise
-/// accepted — any of the conversions would work — but which one runs must not
-/// depend on ordering
-pub(crate) fn report_ambiguous_conversion<'db>(
+/// accept a conversion site's repair: record the extensions it relies on, and report
+/// a site served by more than one route. the site is otherwise accepted — any of the
+/// conversions would work — but which one runs must not depend on ordering
+pub(crate) fn accept_conversion<'db>(
     context: &InferContext<'db, '_>,
     node: impl Ranged,
     repair: &ConversionRepair<'db>,
 ) {
+    record_conversion_uses(context, repair);
     let env = context.program_environment();
     let db = context.db();
     if repair.ambiguous_with.is_empty() {
@@ -920,6 +942,21 @@ pub(crate) fn report_ambiguous_conversion<'db>(
         .collect();
     diagnostic.info(format_args!("{} all convert this value", names.join(", ")));
     diagnostic.help("Remove all but one of them, or write the conversion you want explicitly");
+}
+
+/// record the extensions a repair relies on: the one supplying its route, and every rival
+/// route's. a site served by two is reported rather than resolved, and each import keeps
+/// the site in that state, so neither is removable on its own
+pub(crate) fn record_conversion_uses<'db>(
+    context: &InferContext<'db, '_>,
+    repair: &ConversionRepair<'db>,
+) {
+    for extension in std::iter::once(repair.route)
+        .chain(repair.ambiguous_with.iter().copied())
+        .filter_map(Route::extension)
+    {
+        context.record_extension_use(extension);
+    }
 }
 
 /// the conversions the value expression `value` needs so that it satisfies
@@ -1130,7 +1167,7 @@ pub(crate) fn conversion_info<'db>(
         // conformance is not a conversion at runtime: the value already answers
         // every member the protocol asks for, through the witness table its
         // conformance registered. the site emits nothing at all
-        Route::Conformance(_) => ConversionInfo::Call {
+        Route::Conformance { .. } => ConversionInfo::Call {
             prefix: String::new(),
             suffix: String::new(),
             replaces_value: false,

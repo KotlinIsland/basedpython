@@ -545,13 +545,14 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
         } else {
             Vec::new()
         };
-        if let Some((range, repair)) = conversions.first() {
+        if let Some(((range, repair), rest)) = conversions.split_first() {
             if emit_diagnostics {
-                crate::types::conversions::report_ambiguous_conversion(
-                    &self.builder.context,
-                    *range,
-                    repair,
-                );
+                crate::types::conversions::accept_conversion(&self.builder.context, *range, repair);
+            } else {
+                crate::types::conversions::record_conversion_uses(&self.builder.context, repair);
+            }
+            for (_, repair) in rest {
+                crate::types::conversions::record_conversion_uses(&self.builder.context, repair);
             }
             return true;
         }

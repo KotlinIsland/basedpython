@@ -298,7 +298,9 @@ fn fragments_for_plan(
         // `isinstance`: a conforming type is not a subclass. the registry
         // answers first, and a value nothing registered falls back to carrying
         // the requirements
-        ParametricIsPlan::Conformance { target, members } => {
+        ParametricIsPlan::Conformance {
+            target, members, ..
+        } => {
             needs.references_value = true;
             needs.conformance_runtime = true;
             let mut spelled = String::from(", (");

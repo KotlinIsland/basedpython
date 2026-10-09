@@ -155,10 +155,10 @@ fn imported_module_names(db: &dyn Db, file: File) -> Vec<ModuleName> {
         .collect()
 }
 
-/// the protocol a conformance extension in `file` makes `receiver_class`
-/// conform to, when that protocol's class literal is `protocol`.
+/// the conformance extension visible in `file` that makes `receiver_class` conform to
+/// `protocol`, with the protocol it declares.
 ///
-/// The answer is the protocol *as the conformance declared it*, so a specialized
+/// The protocol is the one *as the conformance declared it*, so a specialized
 /// conformance (`extension MyBox(Container[int]):`) hands back `Container[int]`
 /// — which is what a protocol extension's members must be specialized at when
 /// they are reached through the conforming type
@@ -168,20 +168,21 @@ pub(crate) fn conformance_for<'db>(
     file: File,
     receiver_class: ClassType<'db>,
     protocol: ClassLiteral<'db>,
-) -> Option<ClassType<'db>> {
+) -> Option<(StaticClassLiteral<'db>, ClassType<'db>)> {
     for &(extension, declared) in visible_conformances(db, file) {
         if declared.class_literal(db) != protocol {
             continue;
         }
         if extension_applies(db, env, extension, receiver_class).is_some() {
-            return Some(declared);
+            return Some((extension, declared));
         }
     }
     None
 }
 
 /// would a visible conformance make `source` acceptable where `target` is asked
-/// for? the protocol it conforms to, for the diagnostic that reports two routes.
+/// for? the conformance, and the protocol it conforms to for the diagnostic that
+/// reports two routes.
 ///
 /// Unlike a conversion this materializes nothing: the value already answers
 /// every requirement, through the witness table its conformance registered at
@@ -194,7 +195,7 @@ pub(crate) fn repair_with_conformance<'db>(
     file: File,
     source: Type<'db>,
     target: Type<'db>,
-) -> Option<ClassType<'db>> {
+) -> Option<(StaticClassLiteral<'db>, ClassType<'db>)> {
     if !file.source_type(db).is_basedpython() {
         return None;
     }
@@ -215,7 +216,7 @@ pub(crate) fn repair_with_conformance<'db>(
             continue;
         }
         if Type::instance(db, env, protocol).is_assignable_to(db, env, target) {
-            return Some(protocol);
+            return Some((extension, protocol));
         }
     }
     None
@@ -452,8 +453,14 @@ pub(crate) fn validate_conformance_declaration<'db>(
         }
 
         // two conformances of one pair would register two witness tables against
-        // the same key, and which one survives would depend on import order
-        if let Some(other) = conflicting_conformance(db, extension, target, *interface)
+        // the same key, and which one survives would depend on import order. the
+        // import bringing the other one into scope is what puts the pair in that
+        // state, so it is relied on until one of the two is dropped
+        let conflicting = conflicting_conformance(db, extension, target, *interface);
+        if let Some(other) = conflicting {
+            context.record_extension_use(other);
+        }
+        if let Some(other) = conflicting
             && let Some(builder) = context.report_lint(&INVALID_CONFORMANCE, node.range())
         {
             let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -584,6 +591,23 @@ pub(crate) fn validate_conformance_declaration<'db>(
                     expected.display(db, env),
                     supplied.display(db, env),
                 ));
+            }
+        }
+
+        // a default the protocol's own extension supplies goes into the witness
+        // table this conformance registers, so the import that makes that extension
+        // applicable here is relied on
+        for requirement in interface_requirements(db, *interface) {
+            let name = requirement.as_str();
+            if own_member(db, extension, name).is_none()
+                && let Some(default) = protocol_extension_supplying(
+                    db,
+                    extension.file(db),
+                    interface.class_literal(db),
+                    name,
+                )
+            {
+                context.record_extension_use(default);
             }
         }
 
