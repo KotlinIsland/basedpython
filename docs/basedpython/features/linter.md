@@ -66,6 +66,14 @@ here, and why `t[0]` is not reported as a
 [tuple member access](tuple-index.md) — whether `t` is a tuple is a type
 question
 
+`F401` is the one upstream rule that follows from that split. whether an
+import is used can be a type question in a `.by` file — an import may be there
+only for the [extensions](extensions.md) its module declares — so `F401` does
+not check `.by` or `.byi` files, and `by check` reports them as
+[`unused-import`](unused-imports.md), with `F401`'s rules. a `# noqa: F401` in a
+`.by` file suppresses nothing any more, and `RUF100` reports it where it is
+enabled; write `# ty: ignore[unused-import]` instead
+
 ## upstream rules on `.by` source
 
 ruff's own rules are written for python source, and two things follow from that.
