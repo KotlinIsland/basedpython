@@ -143,6 +143,16 @@ pub enum SoundnessSite<'ast> {
     },
 }
 
+impl SoundnessSite<'_> {
+    /// every check the site makes
+    pub(crate) fn plans(&self) -> Vec<&CheckKind> {
+        match self {
+            Self::Value { plan, .. } | Self::Elements { plan, .. } => vec![plan],
+            Self::Parameters { guards, .. } => guards.iter().map(|(_, plan)| plan).collect(),
+        }
+    }
+}
+
 /// where the checks go, decided once over a syntax tree, and what is not a place
 /// for one
 struct Soundness<'a, 'db, 'ast> {
