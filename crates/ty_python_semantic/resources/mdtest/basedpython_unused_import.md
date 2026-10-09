@@ -854,6 +854,42 @@ def size(xs: list[Alias] | list[B]) -> int:
     return len(xs)
 ```
 
+## an import read only by a type test's spelling of a class
+
+`Number` names `Fraction` as an attribute of `fractions`, but the test checks each arm against the
+class as the module binds it, `isinstance(value, Fraction)`, which reads the `from` import
+
+```by
+import fractions
+from fractions import Fraction
+
+type Number = fractions.Fraction | int
+
+def numeric(value: object) -> bool:
+    return value is Number
+
+print(numeric(fractions.Fraction(1, 2)), numeric("x"))
+```
+
+## an import read only by a soundness check's spelling of a class
+
+the check on `pick`'s result reads `Fraction` the same way. a build that runs it rejects the `1`
+smuggled into the list as `Any`; without the import there is no check to reject it
+
+```by
+import fractions
+from fractions import Fraction
+from typing import Any
+
+def pick[T](items: list[T]) -> T:
+    return items[0]
+
+smuggled: Any = 1
+numbers: list[fractions.Fraction] = [smuggled]
+first = pick(numbers)
+print(type(first).__name__)
+```
+
 ## explicit re-exports are not reported
 
 `import a as a`, `from a import b as b` and basedpython's `from a export b` say the name is part of

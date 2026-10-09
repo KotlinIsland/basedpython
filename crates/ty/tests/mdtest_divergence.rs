@@ -9,6 +9,15 @@
 //!
 //! blocks carrying expected diagnostics are skipped — their runtime behaviour
 //! is intentionally unspecified.
+//!
+//! a second leg holds `unused-import` to the same contract: each such block has its unused
+//! imports removed by `by check --fix`, and must then check the same and do the same at
+//! runtime — every soundness check on, so a check that reads an import is run. a removed
+//! import whose binding the transpiled program still reads, because the lowering spelled a
+//! name the checker never recorded a read of, shows up as a program that behaves
+//! differently, or no longer checks. it sees only what this corpus exercises: an import read
+//! only by a lowering, in a checker-clean block of a single file. a multi-file section is not
+//! run, so a read across modules is out of its reach, as is any lowering no such block makes
 
 use std::fs;
 use std::io::Write;
@@ -147,13 +156,17 @@ fn transpile(source: &str, min_version: &str) -> Result<String, String> {
     // full of stub bodies (`def f[T]() -> T: ...`) that legitimately violate
     // their annotations when executed — the checks would report those as
     // divergences rather than transpiler bugs, so this harness opts out
+    transpile_with(source, min_version, "none")
+}
+
+fn transpile_with(source: &str, min_version: &str, soundness: &str) -> Result<String, String> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
         .args([
             "transpile",
             "--min-version",
             min_version,
             "--soundness",
-            "none",
+            soundness,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -172,6 +185,112 @@ fn transpile(source: &str, min_version: &str) -> Result<String, String> {
     } else {
         Err(String::from_utf8_lossy(&output.stderr).into_owned())
     }
+}
+
+/// the error-level diagnostics `by check` reports for the module `dir/main.by`, without their
+/// positions, which removing an import shifts
+fn check_errors(dir: &Path) -> Vec<String> {
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args([
+            "check",
+            "--output-format",
+            "concise",
+            "--exit-zero",
+            "--no-progress",
+        ])
+        .arg("main.by")
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn by");
+    let mut errors: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains(": error["))
+        .map(|line| line.splitn(4, ':').nth(3).unwrap_or(line).trim().to_owned())
+        .collect();
+    errors.sort();
+    errors
+}
+
+/// what the module `source` does when it is transpiled with every soundness check on and
+/// run as `dir/main.py`: whether it transpiles, its exit status and its output, with `dir`
+/// left out so two directories compare
+fn behaviour(source: &str, min_version: &str, python: &str, dir: &Path) -> String {
+    let transpiled = match transpile_with(source, min_version, "all") {
+        Ok(transpiled) => transpiled,
+        Err(error) => return format!("transpile failed:\n{error}"),
+    };
+    let py = dir.join("main.py");
+    fs::write(&py, with_reveal_stub(&transpiled)).unwrap();
+    let run = Command::new(python)
+        .arg(&py)
+        .current_dir(dir)
+        .output()
+        .expect("failed to run python");
+    let text = format!(
+        "status {:?}\n{}\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    text.replace(&dir.to_string_lossy().into_owned(), "<dir>")
+}
+
+/// the second leg: remove the block's unused imports with `by check --fix`, and require the
+/// result to check and behave as the block did. `None` when it does, or when there was
+/// nothing to remove
+fn unused_import_leg(
+    block: &str,
+    min_version: &str,
+    python: &str,
+    root: &Path,
+    key: &str,
+) -> Option<String> {
+    let project = format!(
+        "[project]\nname = \"leg\"\nversion = \"0\"\nrequires-python = \">={min_version}\"\n"
+    );
+    let original = root.join(format!("{key}_written"));
+    let fixed = root.join(format!("{key}_fixed"));
+    for dir in [&original, &fixed] {
+        fs::create_dir_all(dir).unwrap();
+        fs::write(dir.join("pyproject.toml"), &project).unwrap();
+        fs::write(dir.join("main.by"), block).unwrap();
+    }
+    Command::new(env!("CARGO_BIN_EXE_by"))
+        .args([
+            "check",
+            "--ignore",
+            "all",
+            "--warn",
+            "unused-import",
+            "--fix",
+            "--exit-zero",
+            "--no-progress",
+        ])
+        .arg("main.by")
+        .current_dir(&fixed)
+        .output()
+        .expect("failed to spawn by");
+    let without = fs::read_to_string(fixed.join("main.by")).unwrap();
+    if without == block {
+        return None;
+    }
+    let checked = (check_errors(&original), check_errors(&fixed));
+    if checked.0 != checked.1 {
+        return Some(format!(
+            "removing its unused imports changed what the checker reports:\nbefore: {:?}\nafter: {:?}\n--- after ---\n{without}",
+            checked.0, checked.1
+        ));
+    }
+    let behaved = (
+        behaviour(block, min_version, python, &original),
+        behaviour(&without, min_version, python, &fixed),
+    );
+    (behaved.0 != behaved.1).then(|| {
+        format!(
+            "removing its unused imports changed what the program does:\n--- before ---\n{}\n--- after ---\n{}\n--- without the imports ---\n{without}",
+            behaved.0, behaved.1
+        )
+    })
 }
 
 /// Stub `reveal_type` (an mdtest debugging device with no runtime binding)
@@ -405,6 +524,15 @@ fn clean_mdtest_blocks_run() {
                         failures.lock().unwrap().push(format!(
                             "{name} block {i}: checker-clean block crashed at runtime:\n{}\n--- block ---\n{block}",
                             String::from_utf8_lossy(&run.stderr)
+                        ));
+                        continue;
+                    }
+                    let key = format!("{}_{i}", name.trim_end_matches(".md").replace('-', "_"));
+                    if let Some(divergence) =
+                        unused_import_leg(block, &version, &python, tmp.path(), &key)
+                    {
+                        failures.lock().unwrap().push(format!(
+                            "{name} block {i}: {divergence}\n--- block ---\n{block}"
                         ));
                     }
                 }
