@@ -10929,6 +10929,24 @@ impl<'db> BindingError<'db> {
                 }
 
                 add_invariant_generic_hints(db, env, &mut diag, *expected_ty, *provided_ty);
+
+                // a `.by` file builds a plain tuple standing where an anonymous named tuple
+                // is expected as one, so a caller written in python is where that stops
+                if !context.file().source_type(db).is_basedpython()
+                    && provided_ty.tuple_instance_spec(db, env).is_some()
+                    && !crate::types::anon_named_tuple::expected_anon_named_tuples(
+                        db,
+                        env,
+                        *expected_ty,
+                    )
+                    .is_empty()
+                {
+                    diag.info(
+                        "A `.py` file does not build an anonymous named tuple from a plain \
+                         tuple: construct it through a name its module binds the type to, \
+                         as in `P(1, 2)` where the module declares `P = (a: int, b: int)`",
+                    );
+                }
             }
 
             Self::InvalidKeyType {

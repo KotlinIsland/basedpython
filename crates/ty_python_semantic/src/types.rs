@@ -25,6 +25,7 @@ use ty_module_resolver::{
     ImportingFile, KnownModule, Module, ModuleName, file_to_module, resolve_module,
 };
 
+pub use self::anon_named_tuple::{AnonNamedTupleClass, AnonNamedTupleId};
 pub(crate) use self::callable::UpcastPolicy;
 use self::class::ClassInstanceFlags;
 pub use self::cyclic::CycleDetector;
@@ -170,6 +171,7 @@ use ty_python_core::place::ScopedPlaceId;
 use ty_python_core::scope::ScopeId;
 use ty_python_core::{ProgramFile, Truthiness, place_table, semantic_index, use_def_map};
 
+mod anon_named_tuple;
 mod attribute_write;
 mod bool;
 mod bound_super;

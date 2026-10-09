@@ -56,6 +56,7 @@ use crate::reachability::{
 };
 use crate::subscript::PyIndex;
 use crate::types::add_inferred_python_version_hint_to_diagnostic;
+use crate::types::anon_named_tuple;
 use crate::types::attribute_write::{AssignmentAttributeMembers, assignment_attribute_members};
 use crate::types::call::bind::{
     ArgumentTypeContext, CallableDescription, CheckTypesMode, OverloadSet,
@@ -76,22 +77,23 @@ use crate::types::dedicated::{django, pydantic};
 use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::definition_resolution::AttributeRead;
 use crate::types::diagnostic::{
-    self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
-    CYCLIC_TYPE_ALIAS_DEFINITION, DYNAMIC_FUNCTION_DECORATOR_RETURN, ERASED_CAST_ARGUMENT,
-    ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind, IMPLICIT_DECLARATION,
-    INACCESSIBLE_MEMBER, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
-    INVALID_ATTRIBUTE_ACCESS, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
-    INVALID_FIELD_LOOKUP, INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC,
-    INVALID_REGEX, INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
-    INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION,
-    NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
-    NON_OVERLAPPING_TYPE_TEST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, PRIVATE_CONSTRUCTOR, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING,
-    TRAILING_LAMBDA_PARAMETERS, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
-    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
-    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSOUND_ASSIGNMENT, UNSOUND_CAST, UNSOUND_YIELD,
-    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, USED_UNDERSCORE_NAME,
-    YieldKind, autofix_with_notimplementederror, display_required_elements,
+    self, AMBIGUOUS_CONVERSION, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE,
+    CONFLICTING_DECLARATIONS, CYCLIC_TYPE_ALIAS_DEFINITION, DYNAMIC_FUNCTION_DECORATOR_RETURN,
+    ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind,
+    IMPLICIT_DECLARATION, INACCESSIBLE_MEMBER, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE,
+    INVALID_ASSIGNMENT, INVALID_ATTRIBUTE_ACCESS, INVALID_DECLARATION,
+    INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP, INVALID_LEGACY_TYPE_VARIABLE,
+    INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX, INVALID_REIFIED_TYPE_PARAM,
+    INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS,
+    INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION, NARROWING_GUARD_AS_VALUE,
+    NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST, NON_OVERLAPPING_TYPE_TEST,
+    OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
+    PRIVATE_CONSTRUCTOR, REFUTABLE_DESTRUCTURING, REFUTABLE_UNPACKING, TRAILING_LAMBDA_PARAMETERS,
+    TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS,
+    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
+    UNSOUND_ASSIGNMENT, UNSOUND_CAST, UNSOUND_YIELD, UNSPECIALIZED_REIFIED_GENERIC,
+    UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, USED_UNDERSCORE_NAME, YieldKind,
+    autofix_with_notimplementederror, display_required_elements,
     hint_if_stdlib_attribute_exists_on_other_versions, refutable_unpacking_applies,
     report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
     report_bad_dunder_delete_call, report_bool_as_int, report_bool_as_int_assignment,
@@ -8842,6 +8844,87 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         Type::ClassLiteral(ClassLiteral::DynamicNamedTuple(nt))
     }
 
+    /// every plain tuple literal in `value` this builder has read as an anonymous named
+    /// tuple, with the class it is built as
+    fn anon_named_tuple_constructions(
+        &self,
+        value: &ast::Expr,
+    ) -> Vec<(TextRange, DynamicNamedTupleLiteral<'db>)> {
+        struct Literals<'a, 'db, 'ast> {
+            builder: &'a TypeInferenceBuilder<'db, 'ast>,
+            found: Vec<(TextRange, DynamicNamedTupleLiteral<'db>)>,
+        }
+        impl<'b> ast::visitor::Visitor<'b> for Literals<'_, '_, '_> {
+            fn visit_expr(&mut self, expr: &'b ast::Expr) {
+                if let ast::Expr::Tuple(tuple) = expr
+                    && !tuple.is_anon_named_tuple
+                    && !tuple.is_anon_named_tuple_value
+                    && let Some(ty) = self.builder.try_expression_type(expr)
+                    && let Some((class, _)) = anon_named_tuple::anon_named_tuple_class(
+                        self.builder.db(),
+                        self.builder.program_environment(),
+                        ty,
+                    )
+                {
+                    self.found.push((tuple.range, class));
+                }
+                ast::visitor::walk_expr(self, expr);
+            }
+        }
+        let mut literals = Literals {
+            builder: self,
+            found: Vec::new(),
+        };
+        ast::visitor::Visitor::visit_expr(&mut literals, value);
+        literals.found
+    }
+
+    /// whether each element of the plain tuple literal `tuple`, inferred against its
+    /// field's type, is assignable to it. inferred speculatively, so nothing is
+    /// recorded for the literal
+    fn anon_named_tuple_fields_accept(
+        &self,
+        tuple: &ast::ExprTuple,
+        spec: NamedTupleSpec<'db>,
+    ) -> bool {
+        let env = self.program_environment();
+        let db = self.db();
+        let mut speculative = self.speculate_without_diagnostics();
+        tuple
+            .elts
+            .iter()
+            .zip(spec.fields(db).iter())
+            .all(|(elt, field)| {
+                speculative
+                    .infer_expression(elt, TypeContext::new(Some(field.ty)))
+                    .is_assignable_to(db, env, field.ty)
+            })
+    }
+
+    /// report a plain tuple literal that more than one expected anonymous named
+    /// tuple accepts
+    fn report_ambiguous_anon_named_tuple(
+        &self,
+        tuple: &ast::ExprTuple,
+        accepting: &[(Type<'db>, NamedTupleSpec<'db>)],
+    ) {
+        let env = self.program_environment();
+        let db = self.db();
+        let Some(builder) = self.context.report_lint(&AMBIGUOUS_CONVERSION, tuple) else {
+            return;
+        };
+        let mut diagnostic =
+            builder.into_diagnostic("More than one anonymous named tuple accepts this tuple");
+        let names = accepting
+            .iter()
+            .map(|(target, _)| format!("`{}`", target.display(db, env)))
+            .join(", ");
+        diagnostic.info(format_args!(
+            "{names} all accept it, and a plain tuple does not say which one to build"
+        ));
+        diagnostic.help("Name the fields, or construct the one you want explicitly");
+    }
+
     fn infer_tuple_expression(
         &mut self,
         tuple: &ast::ExprTuple,
@@ -8872,13 +8955,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // same coercion the plain-tuple spelling gets below: `b: P = (name="a")`
             // and `b: P = ("a",)` construct the one class the transpiler emits, whose
             // fields carry the *declared* types — so `b._replace(name="x")` is a call
-            // the runtime accepts
-            if let Some(target) = tcx
-                .annotation()
-                .and_then(|annotation| find_anon_nt_target(self.db(), env, annotation))
-                && literal_instance.is_assignable_to(self.db(), env, target)
+            // the runtime accepts. with several that accept it, none is chosen: the
+            // literal one is still assignable to each
+            if let Some(annotation) = tcx.annotation()
+                && let [(target, _)] =
+                    anon_named_tuple::expected_anon_named_tuples(db, env, annotation)
+                        .into_iter()
+                        .filter(|(target, _)| literal_instance.is_assignable_to(db, env, *target))
+                        .collect::<Vec<_>>()
+                        .as_slice()
             {
-                return target;
+                return *target;
             }
             return literal_instance;
         }
@@ -8896,83 +8983,54 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             return Type::unknown();
         }
-        // basedpython: a *plain* tuple literal in a position whose expected
-        // type (via bidirectional inference) is an anonymous-named-tuple
-        // instance gets inferred AS that instance — matching the transpiler's
-        // implicit constructor coercion. This makes `def f() -> (name: str,
-        // age: int): return ("a", 1)` type-check, since at runtime the
-        // returned value is wrapped as `_AnonNamedTuple_xxx("a", 1)`.
-        // Find an anon-NT instance candidate in the expected type. Accept the
-        // direct case (`x: anon-NT`) and any union member (`x: anon-NT | None`,
-        // `x: anon-NT | Other`, …). The first matching union member wins. A
-        // `type P = (name: str)` alias is resolved through, so the coercion
-        // follows what the annotation means rather than how it is spelled —
-        // which is also what the transpiler wraps on.
-        #[expect(clippy::items_after_statements, reason = "helper colocated with use")]
-        fn find_anon_nt_target<'db>(
-            db: &'db dyn crate::Db,
-            env: &ProgramEnvironment<'db>,
-            ty: Type<'db>,
-        ) -> Option<Type<'db>> {
-            let ty = ty.resolve_type_alias(db);
-            if let Type::NominalInstance(instance) = ty
-                && let crate::types::class::ClassLiteral::DynamicNamedTuple(nt) =
-                    instance.class(db, env).class_literal(db)
-                && nt.name(db).as_str().starts_with("_AnonNamedTuple_")
-            {
-                return Some(ty);
-            }
-            if let Type::Union(union) = ty {
-                for member in union.elements(db).iter().copied() {
-                    if let Some(found) = find_anon_nt_target(db, env, member) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
-        }
-        if let Some(target_instance) = tcx
-            .annotation()
-            .and_then(|a| find_anon_nt_target(self.db(), env, a))
-            && let Type::NominalInstance(instance) = target_instance
-            && let crate::types::class::ClassLiteral::DynamicNamedTuple(nt) =
-                instance.class(self.db(), env).class_literal(self.db())
-            && nt.name(self.db()).as_str().starts_with("_AnonNamedTuple_")
+        // basedpython: a *plain* tuple literal in a position whose expected type
+        // (via bidirectional inference) is an anonymous named tuple is inferred as
+        // an instance of it, and the transpiler constructs that class around it —
+        // so `take((1, 2))` with `def take(p: (a: int, b: int))` reads `p.a` off a
+        // value that has it. the transpiler finds the sites by this inferred type,
+        // so whatever position gives the literal its expected type is one.
+        //
+        // the expected type may allow several (`(a: int) | (b: str)`), or one alongside
+        // other arms (`(a: list[int]) | tuple[list[object]]`). those whose field count
+        // matches are candidates, and a candidate is built only where its fields accept
+        // the elements — otherwise the literal is inferred as a tuple, against the rest
+        // of the expected type. a literal more than one candidate accepts is reported
+        // rather than given to whichever the union lists first: the class decides which
+        // field names exist at runtime, and nothing in the literal says which. a `.py`
+        // file has no such construction, so a plain tuple stays a plain tuple there
+        let mut tcx = tcx;
+        if self.is_basedpython_file()
+            && !tuple.elts.iter().any(ast::Expr::is_starred_expr)
+            && let Some(annotation) = tcx.annotation()
         {
-            let spec = match nt.anchor(self.db()) {
-                crate::types::class::DynamicNamedTupleAnchor::ScopeOffset { spec, .. } => {
-                    Some(*spec)
+            let expected = anon_named_tuple::expected_anon_named_tuples(db, env, annotation);
+            let accepting: Vec<_> = expected
+                .iter()
+                .copied()
+                .filter(|(_, spec)| {
+                    spec.fields(db).len() == tuple.elts.len()
+                        && self.anon_named_tuple_fields_accept(tuple, *spec)
+                })
+                .collect();
+            match accepting.as_slice() {
+                [] if expected.is_empty() => {}
+                [] => {
+                    tcx = TypeContext::new(anon_named_tuple::without_anon_named_tuples(
+                        db, env, annotation,
+                    ));
                 }
-                _ => None,
-            };
-            if let Some(spec) = spec {
-                let fields = spec.fields(self.db());
-                if fields.len() == tuple.elts.len()
-                    && tuple
-                        .elts
-                        .iter()
-                        .all(|e| !matches!(e, ast::Expr::Starred(_)))
-                {
-                    // type-check element-wise against the expected field
-                    // types. when every element is assignable, return the
-                    // anon-NT instance so attribute access works; otherwise
-                    // build a plain heterogeneous tuple from the inferred
-                    // types (each element has already been inferred, so we
-                    // can't re-call `infer_expression` in a fall-through
-                    // branch)
-                    let mut elt_tys: Vec<Type<'db>> = Vec::with_capacity(tuple.elts.len());
-                    let mut all_assignable = true;
-                    for (elt, field) in tuple.elts.iter().zip(fields.iter()) {
-                        let elt_ty = self.infer_expression(elt, TypeContext::new(Some(field.ty)));
-                        if !elt_ty.is_assignable_to(self.db(), env, field.ty) {
-                            all_assignable = false;
-                        }
-                        elt_tys.push(elt_ty);
+                [(target, spec)] => {
+                    for (elt, field) in tuple.elts.iter().zip(spec.fields(db).iter()) {
+                        self.infer_expression(elt, TypeContext::new(Some(field.ty)));
                     }
-                    if all_assignable {
-                        return target_instance;
+                    return *target;
+                }
+                ambiguous => {
+                    self.report_ambiguous_anon_named_tuple(tuple, ambiguous);
+                    for elt in &tuple.elts {
+                        self.infer_expression(elt, TypeContext::default());
                     }
-                    return Type::heterogeneous_tuple(self.db(), env, elt_tys);
+                    return Type::unknown();
                 }
             }
         }
@@ -17914,6 +17972,19 @@ impl<'db, 'ast, 'infer> MultiInferenceGuard<'db, 'ast, 'infer> {
     ) -> Type<'db> {
         self.last_tcx = Some(tcx);
         (self.infer_expr)(&mut builder.speculate_without_diagnostics(), tcx)
+    }
+
+    /// infer the expression silently with `tcx`, and read the result off the speculative
+    /// builder it was inferred in. the context is not remembered as the last one tried
+    fn infer_silent_with<R>(
+        &mut self,
+        builder: &mut TypeInferenceBuilder<'db, 'ast>,
+        tcx: TypeContext<'db>,
+        inspect: impl FnOnce(&TypeInferenceBuilder<'db, 'ast>) -> R,
+    ) -> R {
+        let mut speculative = builder.speculate_without_diagnostics();
+        (self.infer_expr)(&mut speculative, tcx);
+        inspect(&speculative)
     }
 
     fn last_tcx(&self) -> TypeContext<'db> {

@@ -1,5 +1,7 @@
+use itertools::Itertools;
 use ruff_python_ast as ast;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
+use rustc_hash::FxHashMap;
 
 use super::{ArgumentsIter, MultiInferenceGuard, TypeInferenceBuilder};
 use crate::place::{DefinedPlace, Place, PlaceAndQualifiers};
@@ -9,7 +11,7 @@ use crate::types::attribute_write::{
     ProtocolMemberWriteRequirement, attribute_write_requirement, property_setter_returns_never,
 };
 use crate::types::call::{Bindings, CallArguments, CallDiagnosticOverride, CallError};
-use crate::types::class::FrozenDataclassDispatch;
+use crate::types::class::{DynamicNamedTupleLiteral, FrozenDataclassDispatch};
 use crate::types::dedicated::pydantic;
 use crate::types::diagnostic::{
     DEPRECATED, INVALID_ASSIGNMENT, INVALID_ATTRIBUTE_ACCESS, MISSING_SLOT, UNRESOLVED_ATTRIBUTE,
@@ -19,7 +21,7 @@ use crate::types::diagnostic::{
 use crate::types::safe_variance::private_member_view;
 use crate::types::{
     CallDunderError, DisplaySettings, MemberLookupPolicy, PropertyDeprecations, Type, TypeContext,
-    TypeQualifiers,
+    TypeQualifiers, UnionType,
 };
 use crate::{Db, ProgramEnvironment};
 
@@ -103,6 +105,11 @@ enum AssignmentAttributeWriteDiagnostic<'db> {
     InvalidCompositeAssignment {
         object_ty: Type<'db>,
         value_ty: Type<'db>,
+    },
+    /// basedpython: the elements of a union receiver would build different anonymous named
+    /// tuples from a plain tuple literal in the value
+    DifferentAnonNamedTuples {
+        object_ty: Type<'db>,
     },
     CannotAssign,
     CannotAssignToClassVar,
@@ -252,6 +259,36 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
         }
     }
 
+    /// the context the assigned value is recorded with, when the write is checked against
+    /// `write_type`.
+    ///
+    /// the check re-infers the value with `write_type` as its context, so in a `.py` file the
+    /// recorded type only ever loses precision by leaving it out. in a `.by` file what a
+    /// literal *is* can depend on its context — a plain tuple literal written where an
+    /// anonymous named tuple is declared is built as one — so the value is recorded as what
+    /// it was checked as, which is what the transpiler builds
+    fn commit_context(&self, write_type: Option<Type<'db>>) -> TypeContext<'db> {
+        if self.builder.is_basedpython_file() {
+            TypeContext::new(write_type)
+        } else {
+            TypeContext::default()
+        }
+    }
+
+    /// the anonymous named tuple each plain tuple literal in the value is built as, inferred
+    /// against `write_type`
+    fn constructions_against(
+        &mut self,
+        write_type: Type<'db>,
+    ) -> Vec<(TextRange, DynamicNamedTupleLiteral<'db>)> {
+        let value = self.value;
+        self.infer_value_ty.infer_silent_with(
+            self.builder,
+            TypeContext::new(Some(write_type)),
+            |speculative| speculative.anon_named_tuple_constructions(value),
+        )
+    }
+
     /// Infer the value again using the context that succeeded.
     ///
     /// The earlier inference was only a trial, so its result was not saved.
@@ -334,8 +371,53 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
                 object_ty,
                 element_tys,
             } => {
-                let value_ty = self.infer_value(TypeContext::default(), emit_diagnostics);
                 let attribute = self.attribute;
+                let by = self.builder.is_basedpython_file();
+                // each element's declaration, where it has one. in a `.by` file the value is
+                // recorded against the declaration the elements share, if they share one
+                let write_types: Vec<Option<Type<'db>>> = if by {
+                    element_tys
+                        .iter()
+                        .map(|ty| {
+                            attribute_write_requirement(db, env, *ty, attribute).write_type(db, env)
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                // one value reaches whichever element the receiver is, and a plain tuple
+                // literal in it is built as the anonymous named tuple its expected type
+                // names. each element is still checked against its own declaration, so where
+                // the declarations differ, no two elements may build different classes from
+                // one literal; the value is recorded against the declarations of those that
+                // build one, which then builds it. a class built where another element builds
+                // none is one that element accepts too: it is a subtype of the plain tuple.
+                // where they share a declaration, it is recorded against that one
+                let shared = write_types.iter().all_equal_value().ok().copied().flatten();
+                let mut builds_apart = false;
+                let tcx = if shared.is_some() {
+                    self.commit_context(shared)
+                } else {
+                    let mut built = FxHashMap::default();
+                    let mut building = Vec::new();
+                    for write_type in write_types.iter().flatten() {
+                        let constructions = self.constructions_against(*write_type);
+                        if !constructions.is_empty() {
+                            building.push(*write_type);
+                        }
+                        for (range, class) in constructions {
+                            builds_apart |= built
+                                .insert(range, class)
+                                .is_some_and(|earlier| earlier != class);
+                        }
+                    }
+                    if builds_apart || building.is_empty() {
+                        TypeContext::default()
+                    } else {
+                        self.commit_context(Some(UnionType::from_elements(db, env, building)))
+                    }
+                };
+                let value_ty = self.infer_value(tcx, emit_diagnostics);
                 let mut requirements = element_tys
                     .iter()
                     .map(|ty| attribute_write_requirement(db, env, *ty, attribute));
@@ -363,6 +445,16 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
                             ),
                         )
                     });
+                }
+                if builds_apart {
+                    if emit_diagnostics {
+                        self.report(
+                            AssignmentAttributeWriteDiagnostic::DifferentAnonNamedTuples {
+                                object_ty: *object_ty,
+                            },
+                        );
+                    }
+                    return false;
                 }
                 if valid {
                     self.validate_composite_final_assignment(*object_ty, emit_diagnostics);
@@ -627,7 +719,10 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
             ) {
             self.infer_and_try_call_setattr(setattr_receiver, emit_diagnostics)
         } else {
-            let value_ty = self.infer_value(TypeContext::default(), emit_diagnostics);
+            let value_ty = self.infer_value(
+                self.commit_context(member.write_type(db, env, object_ty)),
+                emit_diagnostics,
+            );
             let setattr_result = setattr_receiver.try_call_dunder_with_policy(
                 db,
                 env,
@@ -772,7 +867,10 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
                     self.infer_value(TypeContext::default(), emit_diagnostics);
                     return false;
                 }
-                let value_ty = self.infer_value(TypeContext::default(), emit_diagnostics);
+                let value_ty = self.infer_value(
+                    self.commit_context(member.write_type(db, env, object_ty)),
+                    emit_diagnostics,
+                );
                 let member_valid =
                     self.evaluate_explicit_member(object_ty, member, value_ty, emit_diagnostics);
                 if let Some(fallback) = fallback {
@@ -1070,6 +1168,25 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
                         self.attribute,
                         object_ty.display_with(db, env, settings),
                     ));
+                }
+            }
+            AssignmentAttributeWriteDiagnostic::DifferentAnonNamedTuples { object_ty } => {
+                if let Some(builder) = self
+                    .builder
+                    .context
+                    .report_lint(&INVALID_ASSIGNMENT, self.target)
+                {
+                    let mut diagnostic = builder.into_diagnostic(format_args!(
+                        "The members of `{}` would build different anonymous named tuples \
+                         from this value for attribute `{}`",
+                        object_ty.display(db, env),
+                        self.attribute,
+                    ));
+                    diagnostic.info(
+                        "a plain tuple literal is built as the anonymous named tuple its \
+                         declaration expects, and one value reaches whichever member the \
+                         receiver is",
+                    );
                 }
             }
             AssignmentAttributeWriteDiagnostic::CannotAssign => {
