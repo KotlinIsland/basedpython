@@ -21,6 +21,7 @@ use crate::types::class::StaticClassLiteral;
 use crate::types::diagnostic::{INVALID_TYPE_FORM, UNBOUND_TYPE_VARIABLE};
 use crate::types::function::FunctionDecorators;
 use crate::types::infer::InferenceFlags;
+use crate::types::runtime_spelling::RuntimeSpelling;
 use crate::{
     Db, Program,
     lint::{LintId, LintMetadata},
@@ -28,8 +29,9 @@ use crate::{
 };
 use ty_module_resolver::ResolverEnvironment;
 use ty_python_core::definition::Definition;
-use ty_python_core::scope::ScopeId;
-use ty_python_core::{ProgramFile, semantic_index};
+use ty_python_core::scope::{FileScopeId, ScopeId};
+use ty_python_core::symbol::ScopedSymbolId;
+use ty_python_core::{ProgramFile, global_scope, place_table, semantic_index};
 
 /// The lazily resolved program used by a semantic operation.
 #[derive(Clone)]
@@ -247,6 +249,30 @@ impl<'db, 'ast> InferContext<'db, 'ast> {
     /// record with it
     pub(crate) fn record_extension_use(&self, extension: StaticClassLiteral<'db>) {
         self.record_extension_module_use(extension.file(self.db));
+    }
+
+    /// basedpython: records that inference read every binding `symbol` has in `scope`, at a
+    /// site the semantic index records no read for
+    pub(crate) fn record_scope_read(&self, scope: FileScopeId, symbol: ScopedSymbolId) {
+        self.diagnostics.borrow_mut().mark_scope_read(scope, symbol);
+    }
+
+    /// basedpython: [`Self::record_scope_read`], for the symbol named `name`
+    pub(crate) fn record_scope_read_of_name(&self, scope: ScopeId<'db>, name: &str) {
+        let db = self.db;
+        if let Some(symbol) = place_table(db, scope).symbol_id(name) {
+            self.record_scope_read(scope.file_scope_id(db), symbol);
+        }
+    }
+
+    /// basedpython: records the bindings of the module's global scope a spelling the
+    /// transpiled program writes reads. the checker spells it while it checks, exactly as
+    /// the lowering will, and the source spells none of those reads
+    pub(crate) fn record_spelling(&self, spelling: &RuntimeSpelling) {
+        let global = global_scope(self.db, self.program_file);
+        for name in spelling.global_reads() {
+            self.record_scope_read_of_name(global, name);
+        }
     }
 
     /// basedpython: [`Self::record_extension_use`], for a use known only by the module that

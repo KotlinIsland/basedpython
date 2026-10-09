@@ -338,6 +338,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             |call| self.call_solution(call),
         );
 
+        // basedpython: the guard a `raises` function is lowered behind names the declared
+        // exceptions as the module reaches them, so it reads the bindings it names them by
+        if function.raises.is_some() && self.is_basedpython_file() {
+            let db = self.db();
+            let function_ty =
+                crate::types::binding_type(db, self.index.expect_single_definition(function));
+            if let Some(target) = crate::types::exceptions::declared_raises_runtime_target(
+                db,
+                self.program_environment(),
+                self.file(),
+                function_ty,
+            ) {
+                self.context.record_spelling(&target.ceiling);
+                if let Some(resolved) = &target.resolved {
+                    self.context.record_spelling(&resolved.expression);
+                }
+            }
+        }
+
         // basedpython: a trailing-lambda block in a loop that captures a loop
         // variable is a late-binding trap unless its callee confines it
         // (`local` / `once`) — the type-aware complement to ruff's `B023`

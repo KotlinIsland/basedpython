@@ -28,7 +28,8 @@ use std::ops::ControlFlow;
 use ruff_db::files::File;
 use ruff_python_ast::name::Name;
 use ty_python_core::predicate::CaseNamePredicateKind;
-use ty_python_core::scope::ScopeId;
+use ty_python_core::scope::{FileScopeId, ScopeId};
+use ty_python_core::symbol::ScopedSymbolId;
 use ty_python_core::{place_table, semantic_index};
 
 use crate::Db;
@@ -52,6 +53,10 @@ pub(crate) struct ContextSensitiveMember<'db> {
     enum_class: ClassLiteral<'db>,
     /// the type of `<enum_class>.<name>`
     pub(crate) ty: Type<'db>,
+    /// the binding the qualifier is read through once the name is lowered to
+    /// `<enum>.<name>`: the symbol, and the scope that binds it. set once the member is
+    /// known to be nameable
+    qualifier_binding: Option<(FileScopeId, ScopedSymbolId)>,
 }
 
 impl<'db> ContextSensitiveMember<'db> {
@@ -64,6 +69,20 @@ impl<'db> ContextSensitiveMember<'db> {
     /// rather than the spelling — goto-definition on a bare member
     pub(crate) fn enum_class(self) -> ClassLiteral<'db> {
         self.enum_class
+    }
+
+    /// the binding the lowered `<enum>.<name>` reads the qualifier through. the checker
+    /// records it, because the source spells no read of it
+    pub(crate) fn qualifier_binding(self) -> Option<(FileScopeId, ScopedSymbolId)> {
+        self.qualifier_binding
+    }
+
+    /// this member, once the enum is known to be nameable here through `binding`
+    fn named_through(self, binding: (FileScopeId, ScopedSymbolId)) -> Self {
+        Self {
+            qualifier_binding: Some(binding),
+            ..self
+        }
     }
 }
 
@@ -132,7 +151,8 @@ pub(crate) fn resolve_in_context<'db>(
     let Search::Found(member) = search(db, env, target, name) else {
         return None;
     };
-    is_nameable(db, file, scope, member.enum_class).then_some(member)
+    nameable_through(db, file, scope, member.enum_class)
+        .map(|binding| member.named_through(binding))
 }
 
 /// the member a bare `case A:` names, or `None` when it is the capture python
@@ -157,7 +177,8 @@ pub(crate) fn resolve_case_name<'db>(
     let Search::Found(member) = search(db, env, subject_ty, name) else {
         return None;
     };
-    is_nameable(db, file, scope, member.enum_class).then_some(member)
+    nameable_through(db, file, scope, member.enum_class)
+        .map(|binding| member.named_through(binding))
 }
 
 /// the type a bare `case A:` matches, or `None` when the name is an ordinary
@@ -200,7 +221,7 @@ pub(crate) fn explain_case_name_miss<'db>(
         {
             Some(Miss::Shadowed(member.enum_class))
         }
-        Search::Found(member) if !is_nameable(db, file, scope, member.enum_class) => {
+        Search::Found(member) if nameable_through(db, file, scope, member.enum_class).is_none() => {
             Some(Miss::Unnameable(member.enum_class))
         }
         Search::Found(_) | Search::Nothing => None,
@@ -221,7 +242,7 @@ pub(crate) fn explain_miss<'db>(
         Search::Found(member) if claimed_by_lexical_scope(db, env, file, scope, name) => {
             Some(Miss::Shadowed(member.enum_class))
         }
-        Search::Found(member) if !is_nameable(db, file, scope, member.enum_class) => {
+        Search::Found(member) if nameable_through(db, file, scope, member.enum_class).is_none() => {
             Some(Miss::Unnameable(member.enum_class))
         }
         Search::Found(_) | Search::Nothing => None,
@@ -272,6 +293,7 @@ fn member_of<'db>(
             return Some(ContextSensitiveMember {
                 enum_class: literal,
                 ty: Type::enum_literal(EnumLiteralType::new(db, enum_class, member.clone())),
+                qualifier_binding: None,
             });
         }
         // a based enum's payload variant, whose class is declared in the enum body
@@ -283,6 +305,7 @@ fn member_of<'db>(
             return Some(ContextSensitiveMember {
                 enum_class: literal,
                 ty,
+                qualifier_binding: None,
             });
         }
     }
@@ -296,28 +319,31 @@ fn is_variant_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
         .is_some_and(|class| class.is_enum_variant(db))
 }
 
-/// whether the enum is reachable from `scope` under its own name. the transpiler
-/// qualifies the resolved name with it (`Red` → `Color.Red`), so a spelling that
-/// is not in scope has no lowering — and must therefore not resolve here either
-fn is_nameable<'db>(
+/// the binding the enum is reachable through from `scope` under its own name: the
+/// symbol, and the scope that binds it. the transpiler qualifies the resolved name with
+/// it (`Red` → `Color.Red`), so a spelling that is not in scope has no lowering — and
+/// must therefore not resolve here either
+fn nameable_through<'db>(
     db: &'db dyn Db,
     file: File,
     scope: ScopeId<'db>,
     enum_class: ClassLiteral<'db>,
-) -> bool {
+) -> Option<(FileScopeId, ScopedSymbolId)> {
     let name = enum_class.name(db);
     let index = semantic_index(db, db.program_file(file));
     for (ancestor_id, _) in index.visible_ancestor_scopes(scope.file_scope_id(db)) {
         let ancestor_scope = ancestor_id.to_scope_id(db, db.program_file(file));
-        let Some(place) = place_table(db, ancestor_scope).symbol_by_name(name) else {
+        let table = place_table(db, ancestor_scope);
+        let Some(symbol_id) = table.symbol_id(name) else {
             continue;
         };
+        let place = table.symbol(symbol_id);
         if !(place.is_bound() || place.is_declared()) {
             continue;
         }
         // the first scope that gives the name a value decides it, exactly as a
         // name load would
-        return symbol(
+        let names_enum = symbol(
             db,
             ancestor_scope,
             name,
@@ -327,8 +353,9 @@ fn is_nameable<'db>(
         .ignore_possibly_undefined()
         .and_then(Type::as_class_literal)
             == Some(enum_class);
+        return names_enum.then_some((ancestor_id, symbol_id));
     }
-    false
+    None
 }
 
 /// shared checker/transpiler contract: the enum a name that resolved to `ty`
@@ -381,7 +408,7 @@ pub(crate) fn enum_class_for_unbound_name<'db>(
     if !declares_member(db, env, enum_class, name) {
         return None;
     }
-    is_nameable(db, file, scope, enum_class).then_some(enum_class)
+    nameable_through(db, file, scope, enum_class).map(|_| enum_class)
 }
 
 /// the enum an already-resolved member type belongs to

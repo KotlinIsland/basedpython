@@ -63,6 +63,8 @@ use ty_module_resolver::{KnownModule, Module, ModuleName, SearchPath, file_to_mo
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
 use ty_python_core::place::{PlaceTable, ScopedPlaceId};
 use ty_python_core::predicate::CaseNamePredicateKind;
+use ty_python_core::scope::FileScopeId;
+use ty_python_core::symbol::ScopedSymbolId;
 use ty_python_core::{ProgramFile, global_scope, place_table, use_def_map};
 
 const RUNTIME_CHECKABLE_DOCS_URL: &str =
@@ -4117,11 +4119,27 @@ declare_lint! {
 pub struct TypeCheckDiagnostics {
     diagnostics: Vec<Diagnostic>,
     used_suppressions: FxHashSet<FileSuppressionId>,
-    /// basedpython: the modules whose `extension` or conformance supplied something inference
-    /// relied on — a member, an operator's dunder, a conversion, a conformance. none of these
-    /// reads a name the module's import binds, so the import that makes the module's
-    /// extensions applicable is used only through this record (see `unused-import`)
-    used_extension_modules: FxHashSet<File>,
+    /// basedpython: allocated by the first use recorded. every inference builder holds its
+    /// diagnostics by value, and inference recurses through builders on the stack, so the
+    /// record is kept out of line
+    uses: Option<Box<InferenceUses>>,
+}
+
+/// basedpython: what an inference relied on that the semantic index has no record of
+#[derive(Default, Eq, PartialEq, get_size2::GetSize)]
+struct InferenceUses {
+    /// the modules whose `extension` or conformance supplied something inference relied on —
+    /// a member, an operator's dunder, a conversion, a conformance. none of these reads a name
+    /// the module's import binds, so the import that makes the module's extensions applicable
+    /// is used only through this record (see `unused-import`)
+    extension_modules: FxHashSet<File>,
+    /// the names inference read as every binding their scope makes, where the semantic index
+    /// records no read — a receiver callable read as a method (`x.fn()`), a name in an
+    /// annotation, which is evaluated lazily, a name read through `global`, the enum a
+    /// context-sensitive name or case name is lowered to qualify (`Color.Red`), and each
+    /// module-level name a runtime spelling the transpiled program writes reads. each is a
+    /// symbol of the scope that owns it
+    scope_reads: FxHashSet<(FileScopeId, ScopedSymbolId)>,
 }
 
 pub(crate) fn report_mismatched_type_name<'db>(
@@ -4159,8 +4177,11 @@ impl TypeCheckDiagnostics {
     pub(super) fn extend(&mut self, other: &TypeCheckDiagnostics) {
         self.diagnostics.extend_from_slice(&other.diagnostics);
         self.used_suppressions.extend(&other.used_suppressions);
-        self.used_extension_modules
-            .extend(&other.used_extension_modules);
+        if let Some(other_uses) = &other.uses {
+            let uses = self.uses_mut();
+            uses.extension_modules.extend(&other_uses.extension_modules);
+            uses.scope_reads.extend(&other_uses.scope_reads);
+        }
     }
 
     pub(super) fn extend_diagnostics(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
@@ -4182,12 +4203,36 @@ impl TypeCheckDiagnostics {
     /// basedpython: records that an extension or conformance declared in `module` supplied
     /// something inference relied on
     pub(crate) fn mark_extension_module_used(&mut self, module: File) {
-        self.used_extension_modules.insert(module);
+        self.uses_mut().extension_modules.insert(module);
+    }
+
+    pub(crate) fn is_extension_module_used(&self, module: File) -> bool {
+        self.uses
+            .as_ref()
+            .is_some_and(|uses| uses.extension_modules.contains(&module))
+    }
+
+    /// basedpython: records that inference read every binding `symbol` has in `scope`
+    pub(crate) fn mark_scope_read(&mut self, scope: FileScopeId, symbol: ScopedSymbolId) {
+        self.uses_mut().scope_reads.insert((scope, symbol));
+    }
+
+    pub(crate) fn scope_reads(&self) -> impl Iterator<Item = (FileScopeId, ScopedSymbolId)> {
+        self.uses
+            .iter()
+            .flat_map(|uses| uses.scope_reads.iter().copied())
+    }
+
+    fn uses_mut(&mut self) -> &mut InferenceUses {
+        self.uses.get_or_insert_with(Box::default)
     }
 
     pub(crate) fn shrink_to_fit(&mut self) {
         self.used_suppressions.shrink_to_fit();
-        self.used_extension_modules.shrink_to_fit();
+        if let Some(uses) = &mut self.uses {
+            uses.extension_modules.shrink_to_fit();
+            uses.scope_reads.shrink_to_fit();
+        }
         self.diagnostics.shrink_to_fit();
     }
 
@@ -4196,7 +4241,7 @@ impl TypeCheckDiagnostics {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        !self.has_reports() && self.used_extension_modules.is_empty()
+        !self.has_reports() && self.uses.is_none()
     }
 
     /// whether anything was reported, suppressed or not. a recorded extension use is not a
