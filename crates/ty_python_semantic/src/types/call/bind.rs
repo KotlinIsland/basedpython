@@ -10741,7 +10741,7 @@ impl<'db> BindingError<'db> {
                         Self::get_argument_node(node, *argument_index).map(ArgOrKeyword::value),
                     )
                 {
-                    crate::types::conversions::report_ambiguous_conversion(context, range, &repair);
+                    crate::types::conversions::accept_conversion(context, range, &repair);
                     return;
                 }
 

@@ -563,6 +563,21 @@ pub(crate) struct ExtensionMemberResolution<'db> {
     /// another applicable extension that also supplies the member — an
     /// ambiguity the checker reports at the access site
     pub(crate) ambiguous_with: Option<StaticClassLiteral<'db>>,
+    /// the conformance the receiver reached the member through, when the member is a
+    /// protocol extension's and the receiver is not an instance of the protocol
+    pub(crate) conformance: Option<StaticClassLiteral<'db>>,
+}
+
+impl<'db> ExtensionMemberResolution<'db> {
+    /// every extension the resolution relied on: the one supplying the member, the
+    /// conformance it was reached through, and a rival that supplies it too. a file's
+    /// import of each one's module is what makes it applicable, so each makes that import
+    /// a used one
+    pub(crate) fn relied_on(&self) -> impl Iterator<Item = StaticClassLiteral<'db>> {
+        std::iter::once(self.extension)
+            .chain(self.conformance)
+            .chain(self.ambiguous_with)
+    }
 }
 
 /// resolve an attribute access that found no regular member: consult the
@@ -663,9 +678,13 @@ pub(crate) fn resolve_extension_members<'db>(
         }
         resolved.push(ExtensionMemberResolution {
             extension,
-            ty: bind(member, applicable.conformed_as),
+            ty: bind(
+                member,
+                applicable.conformed_as.map(|(_, protocol)| protocol),
+            ),
             kind,
             ambiguous_with: None,
+            conformance: applicable.conformed_as.map(|(conformance, _)| conformance),
         });
     }
 
@@ -947,10 +966,10 @@ pub(crate) fn own_member<'db>(
 /// an extension member that applies to one receiver
 struct ApplicableMember<'db> {
     member: Type<'db>,
-    /// the interface the receiver reached this member through, when it was
-    /// reached by conformance rather than by being an instance of the extended
+    /// the conformance and the interface the receiver reached this member through, when
+    /// it was reached by conformance rather than by being an instance of the extended
     /// type. that interface is what the member's `self` is written as
-    conformed_as: Option<ClassType<'db>>,
+    conformed_as: Option<(StaticClassLiteral<'db>, ClassType<'db>)>,
 }
 
 /// if `extension` applies to `receiver_class` and declares `name`, return the
@@ -1000,12 +1019,13 @@ fn applicable_member<'db>(
         });
     }
     let target = extended_class(db, extension)?;
-    let conformed = conformance::conformance_for(db, env, file, receiver_class, target)?;
+    let (conformance, conformed) =
+        conformance::conformance_for(db, env, file, receiver_class, target)?;
     let application = applied_at(db, env, extension, target, conformed)?;
     let member = own_member(db, extension, name)?;
     Some(ApplicableMember {
         member: application.apply(db, env, extension, member),
-        conformed_as: Some(conformed),
+        conformed_as: Some((conformance, conformed)),
     })
 }
 

@@ -4117,6 +4117,11 @@ declare_lint! {
 pub struct TypeCheckDiagnostics {
     diagnostics: Vec<Diagnostic>,
     used_suppressions: FxHashSet<FileSuppressionId>,
+    /// basedpython: the modules whose `extension` or conformance supplied something inference
+    /// relied on — a member, an operator's dunder, a conversion, a conformance. none of these
+    /// reads a name the module's import binds, so the import that makes the module's
+    /// extensions applicable is used only through this record (see `unused-import`)
+    used_extension_modules: FxHashSet<File>,
 }
 
 pub(crate) fn report_mismatched_type_name<'db>(
@@ -4154,6 +4159,8 @@ impl TypeCheckDiagnostics {
     pub(super) fn extend(&mut self, other: &TypeCheckDiagnostics) {
         self.diagnostics.extend_from_slice(&other.diagnostics);
         self.used_suppressions.extend(&other.used_suppressions);
+        self.used_extension_modules
+            .extend(&other.used_extension_modules);
     }
 
     pub(super) fn extend_diagnostics(&mut self, diagnostics: impl IntoIterator<Item = Diagnostic>) {
@@ -4172,8 +4179,15 @@ impl TypeCheckDiagnostics {
         self.used_suppressions.len()
     }
 
+    /// basedpython: records that an extension or conformance declared in `module` supplied
+    /// something inference relied on
+    pub(crate) fn mark_extension_module_used(&mut self, module: File) {
+        self.used_extension_modules.insert(module);
+    }
+
     pub(crate) fn shrink_to_fit(&mut self) {
         self.used_suppressions.shrink_to_fit();
+        self.used_extension_modules.shrink_to_fit();
         self.diagnostics.shrink_to_fit();
     }
 
@@ -4182,7 +4196,13 @@ impl TypeCheckDiagnostics {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.diagnostics.is_empty() && self.used_suppressions.is_empty()
+        !self.has_reports() && self.used_extension_modules.is_empty()
+    }
+
+    /// whether anything was reported, suppressed or not. a recorded extension use is not a
+    /// report
+    pub(crate) fn has_reports(&self) -> bool {
+        !self.diagnostics.is_empty() || !self.used_suppressions.is_empty()
     }
 
     fn iter(&self) -> std::slice::Iter<'_, Diagnostic> {
@@ -4907,8 +4927,11 @@ pub(super) fn report_invalid_assignment<'db>(
             value_node,
             target_ty,
         );
-        if let Some((range, repair)) = conversions.first() {
-            crate::types::conversions::report_ambiguous_conversion(context, *range, repair);
+        if let Some(((range, repair), rest)) = conversions.split_first() {
+            crate::types::conversions::accept_conversion(context, *range, repair);
+            for (_, repair) in rest {
+                crate::types::conversions::record_conversion_uses(context, repair);
+            }
             return;
         }
     }

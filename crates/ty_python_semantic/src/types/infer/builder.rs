@@ -13929,6 +13929,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Some(name_node),
             )
         {
+            if let receivers::ImplicitReceiverName::ExtensionMember { resolution, .. } = &resolved {
+                self.record_extension_resolution(resolution);
+            }
             return resolved.ty();
         }
 
@@ -15045,6 +15048,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             if let Some(resolution) =
                 extensions::resolve_extension_member(db, env, self.file(), value_type, &attr.id)
             {
+                self.record_extension_resolution(&resolution);
                 if let Some(other) = resolution.ambiguous_with
                     && let Some(builder) = self
                         .context
@@ -15759,11 +15763,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return None;
         }
         let db = self.db();
-        extensions::unary_extension_operator(db, env, self.file(), op, operand)?.return_type(
-            db,
-            env,
-            &CallArguments::none(),
-        )
+        let operator = extensions::unary_extension_operator(db, env, self.file(), op, operand)?;
+        let returned = operator.return_type(db, env, &CallArguments::none())?;
+        self.record_extension_resolution(&operator.resolution);
+        Some(returned)
+    }
+
+    /// basedpython: records every extension an extension-member resolution relied on, so
+    /// the imports that make them applicable count as used
+    fn record_extension_resolution(&self, resolution: &extensions::ExtensionMemberResolution<'db>) {
+        for extension in resolution.relied_on() {
+            self.context.record_extension_use(extension);
+        }
     }
 
     /// basedpython: the type a binary operator evaluates to when an applicable
@@ -15782,7 +15793,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let operator =
             extensions::binary_extension_operator(db, env, self.file(), left, op, right)?;
         let argument = if operator.reflected { left } else { right };
-        operator.return_type(db, env, &CallArguments::positional([argument]))
+        let returned = operator.return_type(db, env, &CallArguments::positional([argument]))?;
+        self.record_extension_resolution(&operator.resolution);
+        Some(returned)
     }
 
     /// basedpython: the type a comparison evaluates to when an applicable
@@ -15804,6 +15817,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             extensions::comparison_extension_operator(db, env, self.file(), left, op, right)?;
         let argument = if operator.reflected { left } else { right };
         let returned = operator.return_type(db, env, &CallArguments::positional([argument]))?;
+        self.record_extension_resolution(&operator.resolution);
         Some(match op {
             ast::CmpOp::In | ast::CmpOp::NotIn => KnownClass::Bool.to_instance(db, env),
             _ => returned,
@@ -16578,6 +16592,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             target,
             Some(right),
         );
+        for module in plan.conformance_modules() {
+            self.context.record_extension_module_use(module);
+        }
         if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = plan {
             let source = ruff_db::source::source_text(db, self.file());
             self.report_erased_type_check(

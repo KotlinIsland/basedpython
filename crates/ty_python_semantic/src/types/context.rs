@@ -17,6 +17,7 @@ use super::{Type, TypeCheckDiagnostics, infer_definition_types};
 use crate::diagnostic::DiagnosticGuard;
 use crate::lint::LintSource;
 use crate::reachability::is_range_reachable;
+use crate::types::class::StaticClassLiteral;
 use crate::types::diagnostic::{INVALID_TYPE_FORM, UNBOUND_TYPE_VARIABLE};
 use crate::types::function::FunctionDecorators;
 use crate::types::infer::InferenceFlags;
@@ -235,7 +236,25 @@ impl<'db, 'ast> InferContext<'db, 'ast> {
     }
 
     pub(super) fn has_diagnostics(&self) -> bool {
-        !self.diagnostics.borrow().is_empty()
+        self.diagnostics.borrow().has_reports()
+    }
+
+    /// basedpython: records that `extension` supplied something this inference relied on, so
+    /// the import that makes it applicable is a used one.
+    ///
+    /// Recorded even where diagnostics are suppressed: a speculative inference whose result is
+    /// kept relied on the extension just the same, and one whose result is dropped takes its
+    /// record with it
+    pub(crate) fn record_extension_use(&self, extension: StaticClassLiteral<'db>) {
+        self.record_extension_module_use(extension.file(self.db));
+    }
+
+    /// basedpython: [`Self::record_extension_use`], for a use known only by the module that
+    /// declares the extension
+    pub(crate) fn record_extension_module_use(&self, module: File) {
+        self.diagnostics
+            .borrow_mut()
+            .mark_extension_module_used(module);
     }
 
     /// Prevents diagnostic construction for this inference context.
