@@ -15876,6 +15876,19 @@ impl Lowering<'_, '_> {
             Expr::Attribute(node) => self.attribute(node),
             Expr::List(node) => self.display(&node.elts, Display::List),
             Expr::Set(node) => self.display(&node.elts, Display::Set),
+            // the checker reads a plain tuple standing where an anonymous named tuple is
+            // expected as an instance of that class, which the interpreted twin constructs.
+            // a tuple built here would have none of its fields
+            Expr::Tuple(node)
+                if !node.is_anon_named_tuple
+                    && !node.is_anon_named_tuple_value
+                    && self.model.anon_named_tuple_class(node).is_some() =>
+            {
+                Err(Decline::new(
+                    "a tuple literal standing where an anonymous named tuple is expected is \
+                     constructed as that class",
+                ))
+            }
             Expr::Tuple(node) => self.display(&node.elts, Display::Tuple),
             Expr::Dict(node) => self.dict_display(&node.items),
             Expr::Subscript(node) => {
