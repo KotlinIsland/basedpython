@@ -259,6 +259,7 @@ mod typevar;
 pub(crate) mod underscore_names;
 mod unpacker;
 mod unsafe_union;
+mod unused_imports;
 mod variance;
 pub(crate) mod visibility;
 mod visitor;
@@ -304,6 +305,12 @@ pub(crate) fn check_types_with(
             diagnostics.extend(scope_diagnostics);
         }
     }
+
+    // basedpython: an import may be used only through an extension it makes applicable,
+    // which only the whole file's inference knows
+    let mut unused_imports = TypeCheckDiagnostics::default();
+    unused_imports::report_unused_imports(db, file, &diagnostics, &mut unused_imports);
+    diagnostics.extend(&unused_imports);
 
     diagnostics.extend_diagnostics(
         index
