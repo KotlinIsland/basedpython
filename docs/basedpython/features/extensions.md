@@ -309,9 +309,13 @@ greeting.dedented()
 
 naming what a module declares is the usual way a file depends on it — a
 conformance is written against an interface imported by name — so
-`from mod import Show` carries `mod`'s extensions too. requiring a separate
-`import mod` whose symbols were never used would leave an import that reads as
-removable to anyone tidying the file, silently withdrawing conformance
+`from mod import Show` carries `mod`'s extensions too. an import of `mod`
+anywhere in the file is enough, inside a function included
+
+a bare `import mod` whose name is never read is not unused: `by check` counts an
+import as used when an extension or conformance it makes applicable supplies
+something the file relies on, so [`unused-import`](unused-imports.md) does not
+report it and `by check --fix` keeps it
 
 nothing is registered globally and nothing is monkeypatched, so two dependencies
 cannot fight over the same pair: their conformances are simply not visible to
@@ -514,5 +518,3 @@ header already carries
     is not reported yet, and the last module imported wins at runtime
 - a requirement cannot be reached through an optional chain (`value?.show()`)
     or assigned through the interface; both are reported rather than lowered
-- an unused `import` that carries a conformance is still reported by `F401`,
-    whose autofix would remove it and silently withdraw the conformance
