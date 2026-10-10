@@ -568,7 +568,7 @@ impl<'src> WrittenNames<'src> {
     }
 
     /// [`Self::fresh`], also passing over every name `taken` answers for
-    fn fresh_outside(self, stem: &str, taken: impl Fn(&str) -> bool) -> String {
+    pub(crate) fn fresh_outside(self, stem: &str, taken: impl Fn(&str) -> bool) -> String {
         self.names
             .fresh_outside(stem, |name| self.lowering_binds(name) || taken(name))
     }
@@ -1100,6 +1100,16 @@ mod tests {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);
     }
 
+    /// the runtime imported from a module written beside the output, as a build writes it,
+    /// so an expectation names the helpers it uses rather than spelling out their definitions
+    fn check_beside_runtime(input: &str, expected: &str) {
+        let config = Config {
+            runtime_module: Some("_by_runtime".to_owned()),
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(input, &config).unwrap(), expected);
+    }
+
     fn refused(input: &str) -> String {
         transpile(input, &Config::test_default()).unwrap_err()
     }
@@ -1302,9 +1312,9 @@ mod tests {
     /// that re-evaluates `f`'s mutable default there
     #[test]
     fn a_numbered_name_skips_a_name_the_module_binds() {
-        check(
+        check_beside_runtime(
             "_2: list[int] = [9]\n\ndef f(_: int, _: int, x: list[int] = _2) -> list[int]:\n    return x\n\ndef g(_: int, _: int) -> list[int]:\n    return _2\n",
-            "from typing import Any\n_MISSING: Any = object()\n_2: list[int] = [9]\n\ndef f(_: int, _3: int, /, x: list[int] = _MISSING) -> list[int]:\n    if x is _MISSING:\n        x = _2\n    return x\n\ndef g(_: int, _3: int, /) -> list[int]:\n    return _2\n",
+            "from typing import Any\nfrom _by_runtime import _by_default\n_MISSING: Any = _by_default(\"_2\", __name__, \"_MISSING\")\n_2: list[int] = [9]\n\ndef f(_: int, _3: int, /, x: list[int] = _MISSING) -> list[int]:\n    if x is _MISSING:\n        x = _2\n    return x\n\ndef g(_: int, _3: int, /) -> list[int]:\n    return _2\n",
         );
     }
 

@@ -31,7 +31,9 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::callable::lower_type_expr_full;
-use super::mutable_defaults::{parameter_guards, undeclarable_error};
+use super::mutable_defaults::{
+    DefaultMarkers, define_markers, parameter_guards, undeclarable_error,
+};
 use super::repeated_underscore::WrittenNames;
 use super::source_util::{PrologueStatement, body_prologue, first_body_statement};
 use super::type_expr_walker::RootKind;
@@ -42,14 +44,21 @@ use crate::type_info::TypeInfo;
 pub(crate) struct InitMethod<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    markers: &'src DefaultMarkers,
     config: Config,
 }
 
 impl<'src> InitMethod<'src> {
-    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: Config) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        markers: &'src DefaultMarkers,
+        config: Config,
+    ) -> Self {
         Self {
             source,
             written,
+            markers,
             config,
         }
     }
@@ -68,15 +77,13 @@ impl TypeAwarePass for InitMethod<'_> {
             templates: RefCell::new(Vec::new()),
             relocating: RefCell::new(Vec::new()),
             errors: RefCell::new(Vec::new()),
-            needs_missing: RefCell::new(false),
+            markers: self.markers,
+            definitions: RefCell::new(Vec::new()),
         };
         for stmt in stmts {
             state.visit_stmt(stmt);
         }
-        if state.needs_missing.into_inner() {
-            ctx.required_imports
-                .extend(super::mutable_defaults::sentinel_definition(self.written));
-        }
+        define_markers(self.written, state.definitions.into_inner(), ctx);
         ctx.text_edits.extend(state.edits.into_inner());
         ctx.template_edits.extend(state.templates.into_inner());
         ctx.relocating_edits.extend(state.relocating.into_inner());
@@ -145,8 +152,9 @@ struct State<'src> {
     /// the `_MISSING` substitutions, whose defaults the guards re-evaluate
     relocating: RefCell<Vec<(TextRange, Vec<Fragment>)>>,
     errors: RefCell<Vec<String>>,
-    /// whether the `_MISSING` sentinel reached the output
-    needs_missing: RefCell<bool>,
+    markers: &'src DefaultMarkers,
+    /// the lines binding the `_MISSING` markers the generated signatures name
+    definitions: RefCell<Vec<String>>,
 }
 
 impl State<'_> {
@@ -383,12 +391,13 @@ impl State<'_> {
                 sentinels,
                 written,
                 guards,
+                definitions,
                 undeclarable,
             } = parameter_guards(
                 self.source,
                 func,
                 self.written,
-                &super::mutable_defaults::sentinel_name(self.written),
+                self.markers,
                 self.types,
                 self.config.is_stub,
             );
@@ -417,6 +426,7 @@ impl State<'_> {
             // are written whether or not the body gains anything
             self.relocating.borrow_mut().extend(sentinels);
             self.templates.borrow_mut().extend(written);
+            self.definitions.borrow_mut().extend(definitions);
             let pos = func.range.end();
             if guards.is_empty() {
                 // no passthrough to carry, so emit plain text: a template
@@ -424,12 +434,6 @@ impl State<'_> {
                 // this offset, and here they belong to the signature
                 self.push(TextRange::new(pos, pos), literal_text(&frags));
                 return;
-            }
-            if guards
-                .iter()
-                .any(super::mutable_defaults::Guard::uses_sentinel)
-            {
-                *self.needs_missing.borrow_mut() = true;
             }
             self.templates
                 .borrow_mut()
@@ -454,6 +458,16 @@ mod tests {
 
     fn check(input: &str, expected: &str) {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);
+    }
+
+    /// the runtime imported from a module written beside the output, as a build writes it,
+    /// so an expectation names the helpers it uses rather than spelling out their definitions
+    fn check_beside_runtime(input: &str, expected: &str) {
+        let config = Config {
+            runtime_module: Some("_by_runtime".to_owned()),
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(input, &config).unwrap(), expected);
     }
 
     #[test]
@@ -811,7 +825,7 @@ mod tests {
     /// stored as the sentinel
     #[test]
     fn a_declaration_follows_the_guard_for_its_own_default() {
-        check(
+        check_beside_runtime(
             indoc! {"
                 class A:
                     init(let a: list[int] = []):
@@ -820,7 +834,8 @@ mod tests {
             "},
             indoc! {"
                 from typing import Any
-                _MISSING: Any = object()
+                from _by_runtime import _by_default
+                _MISSING: Any = _by_default(\"[]\", __name__, \"_MISSING\")
                 class A:
                     def __init__(self, a: list[int] = _MISSING):
                         \"\"\"doc\"\"\"
@@ -857,20 +872,12 @@ mod tests {
     /// write at the offset after the docstring, in the order they run
     #[test]
     fn two_passes_write_under_a_docstring_on_the_clause_line() {
-        check(
+        check_beside_runtime(
             indoc! {"
                 class A:
                     init(let a: list[int] = []): \"\"\"doc\"\"\"
             "},
-            indoc! {"
-                from typing import Any
-                _MISSING: Any = object()
-                class A:
-                    def __init__(self, a: list[int] = _MISSING): \n        \n        \"\"\"doc\"\"\"
-                        if a is _MISSING:
-                            a = []
-                        self.a: list[int] = a
-            "},
+            "from typing import Any\nfrom _by_runtime import _by_default\n_MISSING: Any = _by_default(\"[]\", __name__, \"_MISSING\")\nclass A:\n    def __init__(self, a: list[int] = _MISSING): \n        \n        \"\"\"doc\"\"\"\n        if a is _MISSING:\n            a = []\n        self.a: list[int] = a\n",
         );
     }
 
@@ -879,20 +886,12 @@ mod tests {
     /// that follows it
     #[test]
     fn a_docstring_followed_by_statements_on_the_clause_line_is_given_a_line_of_its_own() {
-        check(
+        check_beside_runtime(
             indoc! {"
                 class A:
                     init(let a: list[int] = []): \"\"\"doc\"\"\"; print(a)
             "},
-            indoc! {"
-                from typing import Any
-                _MISSING: Any = object()
-                class A:
-                    def __init__(self, a: list[int] = _MISSING): \n        \n        \"\"\"doc\"\"\"; \n        if a is _MISSING:
-                            a = []
-                        \n        self.a: list[int] = a
-                        print(a)
-            "},
+            "from typing import Any\nfrom _by_runtime import _by_default\n_MISSING: Any = _by_default(\"[]\", __name__, \"_MISSING\")\nclass A:\n    def __init__(self, a: list[int] = _MISSING): \n        \n        \"\"\"doc\"\"\"; \n        if a is _MISSING:\n            a = []\n        \n        self.a: list[int] = a\n        print(a)\n",
         );
     }
 

@@ -574,6 +574,16 @@ mod tests {
         );
     }
 
+    /// the runtime imported from a module written beside the output, as a build writes it,
+    /// so an expectation names the helpers it uses rather than spelling out their definitions
+    fn check_beside_runtime(input: &str, expected: &str) {
+        let config = Config {
+            runtime_module: Some("_by_runtime".to_owned()),
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(input, &config).unwrap(), expected);
+    }
+
     /// the decorated form emits the rebind runtime; the tests below assert
     /// everything else. exactly the runtime's text is removed, so whatever else
     /// the preamble holds is still asserted
@@ -646,7 +656,7 @@ mod tests {
     /// of a loop binding there is a closure read and has to be rebound with it
     #[test]
     fn a_default_reading_the_target_is_rebound() {
-        check_body(
+        check_beside_runtime(
             indoc! {"
                 def build():
                     for i in items:
@@ -655,7 +665,8 @@ mod tests {
             "},
             indoc! {"
                 from typing import Any
-                _MISSING: Any = object()
+                from _by_runtime import _by_default, _by_loop_bind
+                _MISSING: Any = _by_default(\"i\", __name__, \"_MISSING\")
                 def build():
                     for i in items:
                         @_by_loop_bind(i=i)
@@ -818,7 +829,7 @@ mod tests {
     /// binding the rebind froze
     #[test]
     fn a_closure_in_a_parameter_default_is_left_to_the_body_guard() {
-        check_body(
+        check_beside_runtime(
             indoc! {"
                 def build():
                     for i in items:
@@ -827,7 +838,8 @@ mod tests {
             "},
             indoc! {"
                 from typing import Any
-                _MISSING: Any = object()
+                from _by_runtime import _by_default, _by_loop_bind
+                _MISSING: Any = _by_default(\"lambda: i\", __name__, \"_MISSING\")
                 def build():
                     for i in items:
                         @_by_loop_bind(i=i)

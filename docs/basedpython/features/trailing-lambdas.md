@@ -332,7 +332,7 @@ inspected leaves the block unconstrained
 so a trailing block can bind the last parameter while earlier parameters keep
 defaults, a `def` (not a `lambda`) may declare a required parameter after a
 defaulted one. python rejects that shape at runtime, so the required parameter
-is lowered to a `_MISSING` sentinel default plus a guard that raises —
+is lowered to a `_MISSING` marker default plus a guard that raises —
 mirroring python's own error:
 
 ```python
@@ -343,7 +343,8 @@ def f(x=1, a=_MISSING):
 ```
 
 the checker still treats the parameter as required. see
-[mutable defaults](mutable-defaults.md) for the sentinel machinery this shares
+[mutable defaults](mutable-defaults.md) for the marker this shares, and for what
+`inspect.signature` shows for it
 
 ## inlay hints
 

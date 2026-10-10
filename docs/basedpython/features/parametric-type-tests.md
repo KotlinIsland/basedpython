@@ -275,6 +275,29 @@ InitLevel() is HasA[int]    # TypeError: its type is declared inside a method
 declare the member in the class body and the check answers. this is the same
 line the erased builtin target takes: refuse, never guess.
 
+### a default evaluated per call records no type
+
+a method parameter with no annotation is checked by the type of its default.
+a default that is not a scalar has no value until a call
+[evaluates it](mutable-defaults.md#what-inspectsignature-shows), so nothing at
+runtime records the type the checker reads off it, and the test raises:
+
+```by
+class Foo: ...
+
+class Feeds[T](Protocol):
+    def m(self, x: T) -> int: ...
+
+class TakesFoo:
+    def m(self, x = Foo()) -> int:
+        return 1
+
+def g(v: object):
+    v is Feeds[Foo]    # TypeError for a `TakesFoo`: annotate `x`
+```
+
+annotate the parameter and the check answers
+
 ### the cast forms usually never get here
 
 a [checked cast](checked-cast.md) shares this engine, but only for a value the

@@ -535,6 +535,16 @@ mod tests {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);
     }
 
+    /// the runtime imported from a module written beside the output, as a build writes it,
+    /// so an expectation names the helpers it uses rather than spelling out their definitions
+    fn check_beside_runtime(input: &str, expected: &str) {
+        let config = Config {
+            runtime_module: Some("_by_runtime".to_owned()),
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(input, &config).unwrap(), expected);
+    }
+
     /// the options are passed as `@d(option=...)`, so a repeated `_` among them would
     /// be keyword-only, and the name only a keyword reaches it by is not the author's
     #[test]
@@ -837,14 +847,15 @@ mod tests {
     /// and `@d` raised `TypeError: object of type 'object' has no len()`
     #[test]
     fn a_mutable_option_default_reaches_the_guard_and_not_the_signature() {
-        check(
+        check_beside_runtime(
             indoc! {"
                 decorator def d(fn: (...) -> object, tags: list[str] = []) -> int:
                     return len(tags)
             "},
             indoc! {"
                 from typing import Any, Callable, overload
-                _MISSING: Any = object()
+                from _by_runtime import _by_default
+                _MISSING: Any = _by_default(\"[]\", __name__, \"_MISSING\")
                 @overload
                 def d(fn: Callable[..., object], *, tags: list[str] = ...) -> int: ...
                 @overload
