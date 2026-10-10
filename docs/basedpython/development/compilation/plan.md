@@ -299,7 +299,13 @@ M0, M1 and M2 are done. what exists:
     class-level constant, both come from the *interpreted definition* that already
     evaluated them at definition time rather than being computed a second time.
     that is what makes a mutable default shared by every call that omits it, and it
-    keeps the object identical between the two halves
+    keeps the object identical between the two halves. a call that hands the
+    boundary the very object the interpreted definition holds as a default is handed
+    to that definition too: in `.by` that object is the
+    [marker](../../features/mutable-defaults.md#what-inspectsignature-shows) a call
+    gets from `inspect.signature`, which only the definition's guard reads as the
+    argument not given — evaluating the default per call, or raising for a required
+    parameter after a defaulted one
 
 - **plain classes** — a hand-written `__init__` is lowered as a method and `tp_init`
     binds against *its* signature; the layout is the attributes that constructor

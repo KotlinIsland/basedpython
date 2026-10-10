@@ -237,6 +237,17 @@ pub fn emit_module(module: &ModuleIr) -> String {
                 "static PyObject *{} = NULL;",
                 function.interpreted_symbol(module.name.dotted())
             );
+            let markers = function
+                .twin_defaults()
+                .into_iter()
+                .filter(|_| function.defaults_are_markers);
+            for index in markers {
+                let _ = writeln!(
+                    out,
+                    "static PyObject *{} = NULL;",
+                    function.twin_default_symbol(module.name.dotted(), index)
+                );
+            }
         }
     }
     if any_defers {
@@ -1726,7 +1737,7 @@ fn emit_written_init(module: &ModuleIr, init: &Function) -> String {
     );
     // the same boundary the method's own wrapper has, and the same hand-over: a slot
     // is handed a tuple and a dict rather than a vector, which is all that differs
-    let tests = defer_tests(init, true);
+    let tests = defer_tests(module, init, true);
     if !tests.is_empty() {
         let _ = writeln!(
             out,
@@ -10578,7 +10589,7 @@ fn emit_terminator(
 ///
 /// `receiver` says whether the first parameter is a `self` that arrives outside the
 /// binding, which is what shifts every slot index
-fn defer_tests(function: &Function, receiver: bool) -> Vec<String> {
+fn defer_tests(module: &ModuleIr, function: &Function, receiver: bool) -> Vec<String> {
     let slot = |index: &usize| format!("by_bound[{}]", index - usize::from(receiver));
     function
         .deferring
@@ -10587,16 +10598,21 @@ fn defer_tests(function: &Function, receiver: bool) -> Vec<String> {
             let slot = slot(index);
             format!("({slot} != NULL && !By_IsExactFloat({slot}))")
         })
-        // an omitted parameter whose default is not an immediate: the interpreted
-        // definition holds the one object every such call has to share — unless the
-        // receiver holds it, in which case this boundary can fill it itself
-        .chain(
-            function
-                .computed_defaults
-                .iter()
-                .filter(|_| function.defaults_held_by == by_ir::function::DefaultsHeldBy::Twin)
-                .map(|index| format!("{} == NULL", slot(index))),
-        )
+        // a parameter whose default only the interpreted definition holds, omitted: a
+        // computed default is the one object every such call has to share in python. in
+        // basedpython it is a marker the definition re-evaluates the default for, or
+        // raises for a required parameter after a defaulted one, so a call handed that
+        // very marker is the definition's too. a receiver that holds the default is not
+        // one of these, and this boundary fills it itself
+        .chain(function.twin_defaults().iter().map(|index| {
+            let slot = slot(index);
+            if function.defaults_are_markers {
+                let held = function.twin_default_symbol(module.name.dotted(), *index);
+                format!("({slot} == NULL || {slot} == {held})")
+            } else {
+                format!("{slot} == NULL")
+            }
+        }))
         .collect()
 }
 
@@ -11062,7 +11078,7 @@ fn emit_wrapper(module: &ModuleIr, function: &Function, is_method: bool) -> Stri
         )
     };
 
-    let tests = defer_tests(function, is_method);
+    let tests = defer_tests(module, function, is_method);
     if !tests.is_empty() {
         let _ = writeln!(out, "    if ({}) goto by_wrap_defer;", tests.join(" || "));
     }
@@ -12612,6 +12628,31 @@ fn emit_module_init(module: &ModuleIr) -> String {
                     c_string(&function.name)
                 );
             }
+        }
+        let markers = function
+            .twin_defaults()
+            .into_iter()
+            .filter(|_| function.defaults_are_markers);
+        for index in markers {
+            // a keyword-only parameter's default is held by name — the name the
+            // definition declares it under, which is the parameter's here — and a
+            // positional one's by its place among the definition's positional parameters
+            let position = if function.is_keyword_only(index) {
+                -1
+            } else {
+                i64::try_from(index).unwrap_or(-1)
+            };
+            let name = function
+                .params()
+                .get(index)
+                .and_then(|decl| decl.name.as_deref())
+                .unwrap_or_default();
+            let _ = writeln!(
+                interpreted_init,
+                "    {} = By_TwinDefault({handle}, {position}, {});",
+                function.twin_default_symbol(module.name.dotted(), index),
+                c_string(name)
+            );
         }
     }
 
@@ -15898,11 +15939,18 @@ mod tests {
     /// a class whose `__init__` takes `value`, with a default only the interpreted
     /// definition holds
     fn holder() -> ModuleIr {
+        holder_holding(false)
+    }
+
+    /// [`holder`], from a `.by` definition when `markers`, which holds a marker for the
+    /// computed default rather than its value
+    fn holder_holding(markers: bool) -> ModuleIr {
         let mut builder = FunctionBuilder::new("__init__", RType::NONE);
         let receiver = builder.param("self", RType::OBJECT);
         let value = builder.param("value", RType::OBJECT);
         builder.defaults(vec![None, None]);
         builder.computed_defaults(vec![1]);
+        builder.defaults_are_markers(markers);
         builder.push(Op::SetField {
             receiver: Value::Register(receiver),
             class: "Holder".to_string(),
@@ -15971,7 +16019,8 @@ mod tests {
             "{slot}"
         );
         // and the call that omits it goes to the definition holding the one object
-        // every such call has to share
+        // every such call has to share. one handed that object is the native's: python's
+        // default is a value, and handing the call over would only make it slower
         assert!(
             slot.contains(
                 "if (by_bound[0] == NULL) return By_InitInterpreted(byi_app_Holder___init__, \
@@ -15979,9 +16028,33 @@ mod tests {
             ),
             "{slot}"
         );
+        assert!(!c.contains("By_TwinDefault("), "{c}");
         // which means the slot needs the handle the method wrapper already takes
         assert!(
             c.contains("static PyObject *byi_app_Holder___init__ = NULL;"),
+            "{c}"
+        );
+    }
+
+    /// a `.by` definition holds a marker for the default instead, which only its own guard
+    /// reads as the argument not given — so a call handed that very marker goes to it too
+    #[test]
+    fn a_constructor_handed_its_marker_hands_the_call_over() {
+        let c = emit_module(&holder_holding(true));
+        let slot = body_of(&c, "static int By_app_Holder_Type_init(");
+        assert!(
+            slot.contains(
+                "if ((by_bound[0] == NULL || by_bound[0] == byi_app_Holder___init___d1)) \
+                 return By_InitInterpreted(byi_app_Holder___init__, \"Holder.__init__\", \
+                 selfobj, args, kwds);"
+            ),
+            "{slot}"
+        );
+        // the marker is read off the definition once the module has run
+        assert!(
+            c.contains(
+                "byi_app_Holder___init___d1 = By_TwinDefault(byi_app_Holder___init__, 1, \"value\");"
+            ),
             "{c}"
         );
     }

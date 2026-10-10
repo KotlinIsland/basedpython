@@ -29062,6 +29062,95 @@ class Joiner:
     );
 }
 
+/// `inspect.signature` reads a compiled function's defaults off its interpreted definition,
+/// and in `.by` a default re-evaluated per call is a marker there. a tool that binds a call
+/// from the signature and calls with `apply_defaults` hands the markers back, and the
+/// compiled boundary hands such a call to the definition, whose guard reads each one as the
+/// argument not given — the boundary was unboxing the marker as the argument instead
+#[test]
+fn a_default_marker_handed_back_agrees() {
+    const HANDED_BACK: &str = "(lambda f: (lambda b: (b.apply_defaults(), f(*b.args, **b.kwargs))[1])(__import__('inspect').signature(f).bind()))";
+    let calls = [
+        format!("[{HANDED_BACK}(m.fresh), {HANDED_BACK}(m.fresh)]"),
+        format!("[{HANDED_BACK}(m.limit), setattr(m, 'LIMIT', 5), {HANDED_BACK}(m.limit)]"),
+        format!("_warnings_from({HANDED_BACK}, m.relaxed)"),
+        format!("[{HANDED_BACK}(m.keyword), {HANDED_BACK}(m.keyword)]"),
+        "(lambda d: [m.Bag([1]).add(d), m.Bag([1]).add(d)])(__import__('inspect').signature(m.Bag.add).parameters['more'].default)".to_owned(),
+    ];
+    agree(
+        "default_markers",
+        "\
+LIMIT = 2
+
+
+def fresh(xs: list[int] = []) -> int:
+    xs.append(1)
+    return len(xs)
+
+
+def limit(x: int = LIMIT) -> int:
+    return x
+
+
+def relaxed(x: int = 1, a: int) -> int:
+    return x + a
+
+
+def keyword(*, xs: list[int] = []) -> int:
+    xs.append(1)
+    return len(xs)
+
+
+class Bag:
+    def __init__(self, items: list[int]) -> None:
+        self.items = items
+
+    def add(self, more: list[int] = [2]) -> int:
+        more.append(3)
+        return len(self.items) + len(more)
+",
+        &calls.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+}
+
+/// the marker a compiled method compares an argument against is read off its interpreted
+/// definition at module init, through `__wrapped__` where a decorator wrapped it. a
+/// `__wrapped__` that leads back round stops the walk, as `inspect.unwrap` stops, rather
+/// than holding the import forever. the decorated method itself is left to the class the
+/// interpreted definition decorated, which is the one reading its handle at init
+#[test]
+fn a_wrapped_chain_that_leads_back_round_agrees() {
+    agree_with_declines(
+        "wrapped_cycle",
+        "\
+class Looped:
+    def __init__(self, fn: (...) -> int):
+        self.fn = fn
+        self.__wrapped__ = self
+
+    def __get__(self, instance: object, owner: object = None) -> object:
+        if instance === None:
+            return self
+        return lambda xs: self.fn(instance, xs)
+
+
+def looped(fn: (...) -> int) -> Looped:
+    return Looped(fn)
+
+
+class Bag:
+    def __init__(self):
+        self.n = 1
+
+    @looped
+    def fresh(self, xs: list[int] = []) -> int:
+        xs.append(1)
+        return len(xs) + self.n
+",
+        &["[m.Bag().fresh([5]), m.Bag().fresh([5])]"],
+    );
+}
+
 #[test]
 fn the_numeric_slots_agree() {
     // every binary numeric dunder fills a `nb_*` slot, and python never looks one up by

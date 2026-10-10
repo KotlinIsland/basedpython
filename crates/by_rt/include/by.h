@@ -1491,6 +1491,78 @@ static inline PyObject *By_CallInterpreted(PyObject *fn, const char *name,
     return PyObject_Vectorcall(fn, args, (size_t)nargs, kwnames);
 }
 
+/* the object the interpreted definition `twin` holds as a parameter's default: the
+ * positional parameter at `position`, counted from its first and receiver included, or
+ * the keyword-only parameter `name` where `position` is negative. a boundary that is
+ * handed this very object hands the call to the definition, as it does one that omits
+ * the argument.
+ *
+ * a definition a decorator wrapped is reached through `__wrapped__`, which is where
+ * `inspect.signature` reads the same defaults from. the walk stops where `inspect.unwrap`
+ * refuses to go on: at an object it has already passed, so a `__wrapped__` that leads
+ * back round cannot hold module init forever, and past the recursion limit. the objects
+ * passed are held until the walk ends, so none of their addresses can be reused by the
+ * next. NULL, and no error, where nothing is held: such a boundary then defers only a
+ * call that omits the argument */
+static PyObject *By_TwinDefault(PyObject *twin, Py_ssize_t position, const char *name) {
+    PyObject *function, *passed, *found = NULL;
+    if (twin == NULL) return NULL;
+    passed = PyList_New(0);
+    if (passed == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    function = Py_NewRef(twin);
+    while (function != NULL && !PyFunction_Check(function) && !PyMethod_Check(function)) {
+        PyObject *wrapped;
+        Py_ssize_t at, count = PyList_GET_SIZE(passed);
+        for (at = 0; at < count; at++) {
+            if (PyList_GET_ITEM(passed, at) == function) break;
+        }
+        if (at < count || count >= Py_GetRecursionLimit() || PyList_Append(passed, function) < 0) {
+            Py_DECREF(function);
+            function = NULL;
+            break;
+        }
+        wrapped = PyObject_GetAttrString(function, "__wrapped__");
+        Py_DECREF(function);
+        function = wrapped;
+    }
+    Py_DECREF(passed);
+    if (function != NULL && PyMethod_Check(function)) {
+        PyObject *inner = Py_NewRef(PyMethod_GET_FUNCTION(function));
+        Py_DECREF(function);
+        function = inner;
+        if (!PyFunction_Check(function)) {
+            Py_DECREF(function);
+            function = NULL;
+        }
+    }
+    if (function == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+    if (position >= 0) {
+        PyObject *defaults = PyFunction_GetDefaults(function);
+        PyCodeObject *code = (PyCodeObject *)PyFunction_GetCode(function);
+        if (defaults != NULL && PyTuple_Check(defaults)) {
+            Py_ssize_t held = PyTuple_GET_SIZE(defaults);
+            Py_ssize_t first = code->co_argcount - held;
+            if (position >= first && position - first < held) {
+                found = Py_NewRef(PyTuple_GET_ITEM(defaults, position - first));
+            }
+        }
+    } else {
+        PyObject *kwdefaults = PyFunction_GetKwDefaults(function);
+        if (kwdefaults != NULL && PyDict_Check(kwdefaults)) {
+            found = PyDict_GetItemString(kwdefaults, name);
+            Py_XINCREF(found);
+        }
+    }
+    Py_DECREF(function);
+    return found;
+}
+
 /* `float`'s narrowing as a test, for a caller that branches on it and reads the double
  * itself: the double a float holds may be any value at all, so a failure that is only an
  * error value would have to ask the thread whether an exception is set on every read */
