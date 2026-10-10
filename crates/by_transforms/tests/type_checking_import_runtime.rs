@@ -5,7 +5,7 @@
 //! lowered code reads it — under `TYPE_CHECKING` that is how an import cycle is broken. A
 //! lowering that writes a type into code that runs (a specialization the checker solved, a
 //! soundness check's target, a cast's type) must not write that name, or the module raises
-//! `NameError` with `by check` clean.
+//! `NameError` with `by check` clean, unless it looks the name up as it runs.
 
 mod common;
 
@@ -188,6 +188,62 @@ assert ledger.in_match == ledger.in_negated_alias == set()
 print("ok")
 "#;
 
+/// a check in a function on a class the module declares further down: the function can run
+/// before the class exists, when the value passes unchecked, and after, when it is checked
+const LATER_PROGRAM: &str = r#"
+def loose(value: object) -> dynamic:
+    return value
+
+
+def first(values: list[dynamic]) -> Later:
+    return values[0]
+
+
+def make(value: object) -> Kept:
+    return loose(value)
+
+
+assert first([1]) == 1
+
+
+class Later:
+    def __init__(self, size: int):
+        self.size = size
+
+
+private class Kept: ...
+
+
+class Holder:
+    later: list[Later]
+
+    def __init__(self, later: list[dynamic]):
+        self.later = later
+
+    def total(self) -> int:
+        total = 0
+        for later in self.later:
+            total += later.size
+        return total
+
+
+def refused(run) -> bool:
+    try:
+        run()
+    except TypeError:
+        return True
+    return False
+
+
+assert Holder([Later(1), Later(2)]).total() == 3
+assert refused(lambda: Holder([1]).total())
+assert refused(lambda: first([1]))
+assert first([Later(3)]).size == 3
+assert refused(lambda: make(1))
+assert make(Kept()) is not None
+print("ok")
+"#;
+
 #[test]
 fn a_class_imported_only_for_the_checker_is_never_evaluated() {
     run(PROGRAM);
@@ -201,6 +257,11 @@ fn a_name_bound_elsewhere_than_where_it_is_read_is_never_evaluated() {
 #[test]
 fn a_name_bound_past_a_condition_reading_type_checking_is_never_evaluated() {
     run(CONDITION_PROGRAM);
+}
+
+#[test]
+fn a_class_declared_further_down_is_checked_once_it_is_bound() {
+    run(LATER_PROGRAM);
 }
 
 /// a module importing a name another module binds one way for the checker and another way as

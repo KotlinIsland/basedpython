@@ -36,6 +36,10 @@ impl RuntimeSite {
             range: node.range(),
         }
     }
+
+    pub(crate) fn range(self) -> TextRange {
+        self.range
+    }
 }
 
 /// a python expression the checker spells for the transpiled program, which evaluates in
@@ -89,6 +93,20 @@ impl RuntimeSpelling {
     pub(crate) fn global_reads(&self) -> impl Iterator<Item = &Name> {
         self.parts.iter().filter_map(|part| match part {
             SpellingPart::Global(name) | SpellingPart::ModulePrivate(name) => Some(name),
+            SpellingPart::Text(_) => None,
+        })
+    }
+
+    /// every binding of the module's global scope the spelling reads, each with the spelling
+    /// of that read alone
+    pub(crate) fn global_read_spellings(&self) -> impl Iterator<Item = (&Name, Self)> {
+        self.parts.iter().filter_map(|part| match part {
+            SpellingPart::Global(name) | SpellingPart::ModulePrivate(name) => Some((
+                name,
+                Self {
+                    parts: vec![part.clone()],
+                },
+            )),
             SpellingPart::Text(_) => None,
         })
     }

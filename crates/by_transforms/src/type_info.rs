@@ -848,6 +848,9 @@ pub(crate) trait TypeInfo {
 /// re-export of the ty-side check plan so transforms name a single type
 pub(crate) use ty_python_semantic::types::soundness::CheckKind as SoundnessCheck;
 
+/// re-export of the ty-side check a soundness site makes, with the names it waits on
+pub(crate) use ty_python_semantic::types::soundness_sites::SiteCheck;
+
 /// re-export of the ty-side checked-cast plan (a superset of [`SoundnessCheck`]
 /// that also carries protocol-structural and unchecked cases)
 pub(crate) use ty_python_semantic::types::soundness::CastCheck;

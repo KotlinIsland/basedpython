@@ -117,9 +117,36 @@ further down the module than the check, and one bound in the `else:` of a
 class the checker resolved. a pure-`None` result is skipped too: validating a
 value that carries no data guards nothing
 
-a check in a function or a method runs whenever it is called, so there the
-class has to be bound above the `def` or `class` statement at the top of the
-module that holds the function, which can be called as soon as that runs
+a check in a function or a method runs whenever it is called, which can be
+before or after the module reaches a class declared further down. where every
+binding the module makes of the name binds that one class — none binds anything
+else, none is made only for the checker, nothing unbinds it, and no function
+rebinds it through `global` — the check looks the name up as it runs, and is
+made once the name is bound; until then the value passes unchecked. where that
+does not hold, the class has to be bound above the `def` or `class` statement
+at the top of the module that holds the function, which can be called as soon
+as that runs:
+
+```by
+class Modifier:
+    cuts: list[Cut]
+
+    def total(self) -> int:
+        total = 0
+        for cut in self.cuts:
+            total += cut.size
+        return total
+
+class Cut:
+    size: int
+```
+
+→ `for cut in _soundness_once_bound(("Cut",), self.cuts, _soundness_iter, lambda: Cut):`
+
+the lookup is by the name the class is emitted under, so a `private class Cut`
+is looked up as `"_Cut"`. a check at the module's own level runs in order, so
+it is made only below the class it names. `by compile` leaves a function with
+such a check to its interpreted definition
 
 ## deep checks for user generics
 

@@ -143,6 +143,7 @@ use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_python_semantic::ProgramEnvironment;
 use ty_python_semantic::types::soundness::{CheckKind, CheckTarget};
+use ty_python_semantic::types::soundness_sites::SiteCheck;
 use ty_python_semantic::types::{KnownClass, SpecialFormType, Type, TypeDefinition, TypeQualifier};
 use ty_python_semantic::{HasType, SemanticModel};
 
@@ -15645,14 +15646,22 @@ impl Lowering<'_, '_> {
     /// with: an unboxed `int` came through `PyLong_Check`, and an emitted class's
     /// instance through a type test. the narrowing that made the value raised the
     /// check's own `TypeError` if it failed, so nothing is left to ask
-    fn sound_target(&mut self, ty: &RType, plan: &CheckKind) -> Lowered<Option<SoundTarget>> {
-        let CheckKind::Isinstance(target) = plan else {
+    fn sound_target(&mut self, ty: &RType, check: &SiteCheck) -> Lowered<Option<SoundTarget>> {
+        let CheckKind::Isinstance(target) = &check.plan else {
             return Err(Decline::new(
                 "a soundness check against a generic class's type arguments is not lowered",
             ));
         };
         if self.proves(ty, target) {
             return Ok(None);
+        }
+        // the interpreted build looks such a check's names up as it runs, and makes it only
+        // once they are bound
+        if !check.once_bound.is_empty() {
+            return Err(Decline::new(
+                "a soundness check on a class the module may not have bound yet when it runs \
+                 is not lowered",
+            ));
         }
         self.resolve_sound_target(target).map(Some)
     }

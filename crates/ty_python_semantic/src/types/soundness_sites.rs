@@ -9,10 +9,13 @@
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Comprehension, Expr, ExprCall, Parameter, Stmt, StmtFunctionDef, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
+use ty_python_core::scope::ScopeKind;
+use ty_python_core::semantic_index;
 
 use crate::Db;
+use crate::place::{RuntimeBinding, RuntimeRead, binds_one_class_wherever_bound, runtime_binding};
 use crate::semantic_model::{HasType, SemanticModel};
-use crate::types::runtime_spelling::RuntimeSite;
+use crate::types::runtime_spelling::{RuntimeSite, RuntimeSpelling};
 use crate::types::soundness::{
     ArgSelector, CheckKind, CheckTarget, call_result_is_typevar_derived,
     is_specialized_generic_instance, parameter_check_plan, parameter_runtime_check_plan,
@@ -129,18 +132,18 @@ enum ArgSlot<'a> {
 #[derive(Debug, Clone)]
 pub enum SoundnessSite<'ast> {
     /// the value `expr` produces is checked as it is produced
-    Value { expr: &'ast Expr, plan: CheckKind },
+    Value { expr: &'ast Expr, check: SiteCheck },
     /// each element drawn from `iterable` is checked as it is drawn
     Elements {
         iterable: &'ast Expr,
         is_async: bool,
-        plan: CheckKind,
+        check: SiteCheck,
     },
     /// `function`'s own parameters are checked where its body begins, each in the order
     /// it is written
     Parameters {
         function: &'ast StmtFunctionDef,
-        guards: Vec<(&'ast Parameter, CheckKind)>,
+        guards: Vec<(&'ast Parameter, SiteCheck)>,
     },
 }
 
@@ -148,10 +151,25 @@ impl SoundnessSite<'_> {
     /// every check the site makes
     pub(crate) fn plans(&self) -> Vec<&CheckKind> {
         match self {
-            Self::Value { plan, .. } | Self::Elements { plan, .. } => vec![plan],
-            Self::Parameters { guards, .. } => guards.iter().map(|(_, plan)| plan).collect(),
+            Self::Value { check, .. } | Self::Elements { check, .. } => vec![&check.plan],
+            Self::Parameters { guards, .. } => {
+                guards.iter().map(|(_, check)| &check.plan).collect()
+            }
         }
     }
+}
+
+/// a check a site makes, and the module-level names it reads that the program may not have
+/// bound yet when it runs
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteCheck {
+    pub plan: CheckKind,
+    /// each name the check's target reads that is bound only further down the module, or
+    /// only on some paths, as a spelling of its own. every binding the module makes of one
+    /// binds the class the checker resolved, so once all of them are bound the target is the
+    /// one the checker named; the check is made only then, and the value passes unchecked
+    /// before. empty for a check whose names are bound wherever it runs
+    pub once_bound: Vec<RuntimeSpelling>,
 }
 
 /// where the checks go, decided once over a syntax tree, and what is not a place
@@ -271,24 +289,65 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
             .filter(|plan| !matches!(plan, CheckKind::Isinstance(CheckTarget::NoneType)))
     }
 
-    /// whether every name `plan`'s target reads holds, where `site` runs, the binding the
-    /// checker resolved. a check that would read one that does not — a class imported only
-    /// under `if TYPE_CHECKING:`, or declared further on — is left out, as a check with no
-    /// faithful target is
-    fn runs_at(&self, plan: &CheckKind, site: Option<RuntimeSite>) -> bool {
-        site.is_some_and(|site| {
-            plan.spelling()
-                .unbound_read(self.db(), &self.env(), self.model.file(), site)
-                .is_none()
+    /// the check `plan` makes at `site`, if it can make one there: every name its target
+    /// reads must hold, where `site` runs, the binding the checker resolved. a check that would
+    /// read one that does not — a class imported only under `if TYPE_CHECKING:`, or declared
+    /// further on — is left out, as a check with no faithful target is.
+    ///
+    /// code in a function runs whenever the function is called, which can be before or after
+    /// the module binds a class declared further down. there a name the module binds only to
+    /// one class, and never to anything else, is looked up as the check runs instead
+    /// ([`SiteCheck::once_bound`]), and the check is made once it is bound
+    fn site_check(
+        &self,
+        plan: CheckKind,
+        site: RuntimeSite,
+        runs_later: bool,
+    ) -> Option<SiteCheck> {
+        let db = self.db();
+        let file = self.model.file();
+        let program_file = db.program_file(file);
+        let mut once_bound = Vec::new();
+        for (name, read) in plan.spelling().global_read_spellings() {
+            match runtime_binding(
+                db,
+                &self.env(),
+                program_file,
+                RuntimeRead::Global {
+                    name,
+                    range: site.range(),
+                },
+            ) {
+                RuntimeBinding::Bound => {}
+                RuntimeBinding::Unbound | RuntimeBinding::NotTheCheckers
+                    if runs_later && binds_one_class_wherever_bound(db, program_file, name) =>
+                {
+                    once_bound.push(read);
+                }
+                RuntimeBinding::Unbound | RuntimeBinding::NotTheCheckers => return None,
+            }
+        }
+        Some(SiteCheck { plan, once_bound })
+    }
+
+    /// whether `expr` runs only once a function or a lambda holding it is called, rather than
+    /// as the module or a class body reaches it
+    fn runs_later(&self, expr: &Expr) -> bool {
+        let index = semantic_index(self.db(), self.db().program_file(self.model.file()));
+        index.try_expression_scope_id(expr).is_some_and(|scope| {
+            index
+                .ancestor_scopes(scope)
+                .any(|(_, scope)| matches!(scope.kind(), ScopeKind::Function | ScopeKind::Lambda))
         })
     }
 
     /// check the value `expr` produces against `plan`
     fn check_value(&mut self, expr: &'ast Expr, plan: CheckKind) {
-        if !self.runs_at(&plan, Some(RuntimeSite::at(expr))) {
+        let Some(check) = self.site_check(plan, RuntimeSite::at(expr), self.runs_later(expr))
+        else {
             return;
-        }
-        self.sites.push(SoundnessSite::Value { expr, plan });
+        };
+        self.sites.push(SoundnessSite::Value { expr, check });
     }
 
     /// check each element drawn from the iterable of a `for` / comprehension
@@ -301,13 +360,15 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
         let Some(plan) = self.check_plan(target_expr) else {
             return;
         };
-        if !self.runs_at(&plan, Some(RuntimeSite::at(iterable))) {
+        let Some(check) =
+            self.site_check(plan, RuntimeSite::at(iterable), self.runs_later(iterable))
+        else {
             return;
-        }
+        };
         self.sites.push(SoundnessSite::Elements {
             iterable,
             is_async,
-            plan,
+            check,
         });
     }
 
@@ -377,10 +438,11 @@ impl<'a, 'db, 'ast> Soundness<'a, 'db, 'ast> {
             .chain(&params.kwonlyargs)
         {
             let parameter = &pwd.parameter;
+            // the guards run where the function's body begins, when it is called
             if let Some(plan) = self.parameter_plan(parameter)
-                && self.runs_at(&plan, Some(RuntimeSite::at(func)))
+                && let Some(check) = self.site_check(plan, RuntimeSite::at(func), true)
             {
-                guards.push((parameter, plan));
+                guards.push((parameter, check));
             }
         }
         if !guards.is_empty() {

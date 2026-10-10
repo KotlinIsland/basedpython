@@ -32,6 +32,20 @@ async def _soundness_aiter(_it, _t):
         yield _soundness_check(_x, _t)
 
 
+# a check in a function on a class the module binds further down, or only on some
+# paths. every binding the module makes of each of `_names` binds the class the check
+# names, so once they are all bound `_target` builds the target the checker named, and
+# `_check` is made against it; before then the value passes unchecked. the names are
+# looked up in the globals of the module the check is written in, which the lambda
+# `_target` carries
+def _soundness_once_bound(_names, _v, _check, _target, *_rest):
+    _globals = _target.__globals__
+    for _name in _names:
+        if _name not in _globals:
+            return _v
+    return _check(_v, _target(), *_rest)
+
+
 # --- checked casts ---------------------------------------------------------
 # `value cast! T` verifies at run time and raises on a mismatch; `value cast? T`
 # yields None instead. the predicate forms serve any target the parametric

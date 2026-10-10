@@ -668,6 +668,27 @@ pub(crate) fn runtime_binding<'db>(
     }
 }
 
+/// basedpython: whether every binding `file` makes of the module-level `name` binds one and
+/// the same class, so that whenever the program finds the name bound it holds that class. a
+/// name that is not yet bound, or bound only on some paths, passes: what this answers is what
+/// the name holds once it is there
+pub(crate) fn binds_one_class_wherever_bound<'db>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    name: &str,
+) -> bool {
+    let Some(bindings) = bindings_alone(db, file, name) else {
+        return false;
+    };
+    let mut classes = bindings
+        .into_iter()
+        .map(|definition| binding_type(db, definition));
+    let Some(Type::ClassLiteral(class)) = classes.next() else {
+        return false;
+    };
+    classes.all(|bound| bound == Type::ClassLiteral(class))
+}
+
 /// whether every binding `file` makes of the module-level `name` is made by a statement at the
 /// top of the module that always makes it once it completes — an import, a `class`, a `def`,
 /// an assignment — rather than one inside an `if`, a `try` or an expression. the module runs
