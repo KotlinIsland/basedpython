@@ -34,6 +34,13 @@
 //! no check. A check whose target is exactly `type(None)` is dropped too:
 //! validating a `None` result guards no data flowing onward.
 //!
+//! A check is made only where every name its target reads holds the class the
+//! checker resolved. In a function, which runs whenever it is called, a name
+//! the module binds to one class and nothing else — a class declared further
+//! down — is looked up as the check runs instead:
+//! `_soundness_once_bound(("Cut",), expr, _soundness_check, lambda: Cut)` makes
+//! the check once `Cut` is bound and passes the value unchecked before.
+//!
 //! When the target is a *user-defined* generic specialization (`A[int]`), the
 //! check deepens to `_soundness_parametric(expr, A[int], variances)`, which
 //! validates the base class *and* — when the value carries its reified
@@ -60,9 +67,7 @@
 //!
 //! Known gaps, deliberate for now: no checks on `await` results, unpacking
 //! targets, `*args`/`**kwargs` spreads, or arguments to non-function callees
-//! (class constructors, overloaded functions); a check argument naming a class
-//! defined later in the module can raise `NameError` if the checked line runs
-//! at import time before the class body.
+//! (class constructors, overloaded functions).
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -82,7 +87,10 @@ use super::repeated_underscore::WrittenNames;
 use super::source_util::{PrologueStatement, body_prologue, needs_parentheses_as_argument};
 use crate::Config;
 use crate::config::SoundnessPositions;
-use crate::type_info::{SoundnessCheck, TypeInfo};
+use crate::type_info::{SiteCheck, SoundnessCheck, TypeInfo};
+
+/// the helper a check is made through when its target reads a name that may not be bound yet
+const ONCE_BOUND: &str = crate::runtime::SOUNDNESS_ONCE_BOUND.name();
 
 // deep check for a user-generic-specialized target: validates the base class
 // always, and the reified type arguments when the value carries them
@@ -96,22 +104,19 @@ use crate::type_info::{SoundnessCheck, TypeInfo};
 /// decided on, with each checked parameter named as python binds it
 enum Site<'ast> {
     /// the value `expr` produces is checked as it is produced
-    Value {
-        expr: &'ast Expr,
-        plan: SoundnessCheck,
-    },
+    Value { expr: &'ast Expr, check: SiteCheck },
     /// each element drawn from `iterable` is checked as it is drawn
     Elements {
         iterable: &'ast Expr,
         is_async: bool,
-        plan: SoundnessCheck,
+        check: SiteCheck,
     },
     /// `function`'s own parameters are checked where its body begins
     Parameters {
         function: &'ast StmtFunctionDef,
         /// each checked parameter by the name python binds it to, which for a repeated
         /// `_` is not the one the source spells
-        guards: Vec<(Name, SoundnessCheck)>,
+        guards: Vec<(Name, SiteCheck)>,
     },
 }
 
@@ -127,24 +132,24 @@ fn sites<'ast>(
         .soundness_sites(suite, positions)
         .into_iter()
         .map(|site| match site {
-            SoundnessSite::Value { expr, plan } => Site::Value { expr, plan },
+            SoundnessSite::Value { expr, check } => Site::Value { expr, check },
             SoundnessSite::Elements {
                 iterable,
                 is_async,
-                plan,
+                check,
             } => Site::Elements {
                 iterable,
                 is_async,
-                plan,
+                check,
             },
             SoundnessSite::Parameters { function, guards } => Site::Parameters {
                 function,
                 guards: guards
                     .into_iter()
-                    .map(|(parameter, plan)| {
+                    .map(|(parameter, check)| {
                         (
                             crate::python_parameter_name(&function.parameters, parameter, written),
-                            plan,
+                            check,
                         )
                     })
                     .collect(),
@@ -182,25 +187,25 @@ impl SiteKey {
 /// same values against the same types, under the same `--soundness` positions
 #[derive(Debug, Default)]
 pub struct SoundnessSites {
-    values: HashMap<SiteKey, SoundnessCheck>,
-    elements: HashMap<SiteKey, SoundnessCheck>,
-    parameters: HashMap<SiteKey, Vec<(String, SoundnessCheck)>>,
+    values: HashMap<SiteKey, SiteCheck>,
+    elements: HashMap<SiteKey, SiteCheck>,
+    parameters: HashMap<SiteKey, Vec<(String, SiteCheck)>>,
 }
 
 impl SoundnessSites {
     /// the check made on the value `expr` produces, as it is produced
-    pub fn value(&self, expr: &Expr) -> Option<&SoundnessCheck> {
+    pub fn value(&self, expr: &Expr) -> Option<&SiteCheck> {
         self.values.get(&SiteKey::of(expr)?)
     }
 
     /// the check made on each element drawn from `iterable`, as it is drawn
-    pub fn elements(&self, iterable: &Expr) -> Option<&SoundnessCheck> {
+    pub fn elements(&self, iterable: &Expr) -> Option<&SiteCheck> {
         self.elements.get(&SiteKey::of(iterable)?)
     }
 
     /// the checks made on `function`'s own parameters where its body begins, by the
     /// name python binds each parameter to, in the order the parameters are written
-    pub fn parameters(&self, function: &StmtFunctionDef) -> &[(String, SoundnessCheck)] {
+    pub fn parameters(&self, function: &StmtFunctionDef) -> &[(String, SiteCheck)] {
         SiteKey::of(function)
             .and_then(|key| self.parameters.get(&key))
             .map_or(&[], Vec::as_slice)
@@ -218,21 +223,23 @@ pub fn soundness_sites(
     let mut sites = SoundnessSites::default();
     for site in self::sites(model, written, suite, positions) {
         match site {
-            Site::Value { expr, plan } => {
+            Site::Value { expr, check } => {
                 if let Some(key) = SiteKey::of(expr) {
-                    sites.values.insert(key, plan);
+                    sites.values.insert(key, check);
                 }
             }
-            Site::Elements { iterable, plan, .. } => {
+            Site::Elements {
+                iterable, check, ..
+            } => {
                 if let Some(key) = SiteKey::of(iterable) {
-                    sites.elements.insert(key, plan);
+                    sites.elements.insert(key, check);
                 }
             }
             Site::Parameters { function, guards } => {
                 if let Some(key) = SiteKey::of(function) {
                     let guards = guards
                         .into_iter()
-                        .map(|(name, plan)| (name.to_string(), plan))
+                        .map(|(name, check)| (name.to_string(), check))
                         .collect();
                     sites.parameters.insert(key, guards);
                 }
@@ -274,6 +281,9 @@ struct Rendered<'src> {
     used_aiter: bool,
     used_iter_p: bool,
     used_aiter_p: bool,
+    /// any check made once the names it reads are bound — pulls in
+    /// `_soundness_once_bound`
+    used_once_bound: bool,
     /// any deep parametric check emitted — pulls in `_soundness_parametric`
     /// and the `_parametric_is` probe it reuses
     used_parametric: bool,
@@ -290,6 +300,7 @@ impl<'src> Rendered<'src> {
             used_aiter: false,
             used_iter_p: false,
             used_aiter_p: false,
+            used_once_bound: false,
             used_parametric: false,
         }
     }
@@ -299,9 +310,9 @@ impl<'src> Rendered<'src> {
         self.written.spelled(&target.spelling())
     }
 
-    /// wrap `expr` in `helper(<expr>, <trailing-args>)`. `trailing`
-    /// carries its own leading `, ` (e.g. `", str"` or `", A[int], (0,)"`)
-    fn wrap_call(&mut self, expr: &Expr, helper: &str, trailing: &str) {
+    /// wrap `expr` in `helper(<leading><expr><trailing>)`. `leading` carries its own
+    /// trailing `, `, and `trailing` its own leading `, ` (e.g. `", str"`)
+    fn wrap_call(&mut self, expr: &Expr, helper: &str, leading: &str, trailing: &str) {
         let (open, close) = if needs_parentheses_as_argument(expr) {
             ("(", ")")
         } else {
@@ -309,90 +320,90 @@ impl<'src> Rendered<'src> {
         };
         self.wraps.push((
             expr.range(),
-            format!("{helper}({open}"),
+            format!("{helper}({leading}{open}"),
             format!("{close}{trailing})"),
         ));
     }
 
-    /// wrap `expr` in the scalar check (`_soundness_check` /
-    /// `_soundness_parametric`) named by `plan`
-    fn wrap_check(&mut self, expr: &Expr, plan: &SoundnessCheck) {
-        match plan {
-            SoundnessCheck::Isinstance(target) => {
-                let target = self.target(target);
-                self.wrap_call(expr, "_soundness_check", &format!(", {target}"));
-            }
+    /// the helper a check against `check`'s target is made with, and the text its value
+    /// argument is preceded and followed by. `helpers` names the plain helper and the
+    /// parametric one, which also takes the variances
+    fn checking(
+        &mut self,
+        check: &SiteCheck,
+        helpers: [&'static str; 2],
+    ) -> (String, String, String) {
+        let (helper, target, rest) = match &check.plan {
+            SoundnessCheck::Isinstance(target) => (helpers[0], self.target(target), String::new()),
             SoundnessCheck::Parametric { alias, variances } => {
                 self.used_parametric = true;
-                let alias = self.written.spelled(alias);
-                self.wrap_call(
-                    expr,
-                    "_soundness_parametric",
-                    &format!(", {alias}, {}", variance_tuple(variances)),
-                );
+                (
+                    helpers[1],
+                    self.written.spelled(alias),
+                    format!(", {}", variance_tuple(variances)),
+                )
             }
+        };
+        if check.once_bound.is_empty() {
+            return (
+                helper.to_owned(),
+                String::new(),
+                format!(", {target}{rest}"),
+            );
         }
+        // the target is read through a lambda, once every name it reads is bound
+        self.used_once_bound = true;
+        let names: Vec<String> = check
+            .once_bound
+            .iter()
+            .map(|read| format!("\"{}\"", self.written.spelled(read)))
+            .collect();
+        (
+            ONCE_BOUND.to_owned(),
+            format!("({},), ", names.join(", ")),
+            format!(", {helper}, lambda: {target}{rest}"),
+        )
+    }
+
+    /// wrap `expr` in the scalar check (`_soundness_check` /
+    /// `_soundness_parametric`) named by `check`
+    fn wrap_check(&mut self, expr: &Expr, check: &SiteCheck) {
+        let (helper, leading, trailing) =
+            self.checking(check, ["_soundness_check", "_soundness_parametric"]);
+        self.wrap_call(expr, &helper, &leading, &trailing);
     }
 
     /// wrap an iterable in a validating generator whose form (shallow vs
     /// parametric) follows the element's check plan
-    fn wrap_iteration(&mut self, iterable: &Expr, is_async: bool, plan: &SoundnessCheck) {
-        let (helper, trailing) = match plan {
-            SoundnessCheck::Isinstance(target) => {
-                let helper = if is_async {
-                    self.used_aiter = true;
-                    "_soundness_aiter"
-                } else {
-                    self.used_iter = true;
-                    "_soundness_iter"
-                };
-                (helper, format!(", {}", self.target(target)))
-            }
-            SoundnessCheck::Parametric { alias, variances } => {
-                self.used_parametric = true;
-                let helper = if is_async {
-                    self.used_aiter_p = true;
-                    "_soundness_aiter_p"
-                } else {
-                    self.used_iter_p = true;
-                    "_soundness_iter_p"
-                };
-                (
-                    helper,
-                    format!(
-                        ", {}, {}",
-                        self.written.spelled(alias),
-                        variance_tuple(variances)
-                    ),
-                )
-            }
+    fn wrap_iteration(&mut self, iterable: &Expr, is_async: bool, check: &SiteCheck) {
+        let helpers = if is_async {
+            ["_soundness_aiter", "_soundness_aiter_p"]
+        } else {
+            ["_soundness_iter", "_soundness_iter_p"]
         };
-        self.wrap_call(iterable, helper, &trailing);
+        match (&check.plan, is_async) {
+            (SoundnessCheck::Isinstance(_), false) => self.used_iter = true,
+            (SoundnessCheck::Isinstance(_), true) => self.used_aiter = true,
+            (SoundnessCheck::Parametric { .. }, false) => self.used_iter_p = true,
+            (SoundnessCheck::Parametric { .. }, true) => self.used_aiter_p = true,
+        }
+        let (helper, leading, trailing) = self.checking(check, helpers);
+        self.wrap_call(iterable, &helper, &leading, &trailing);
     }
 
     /// the guard statements that validate each of `checks`, in order
-    fn guard_stmts(&mut self, checks: &[(Name, SoundnessCheck)]) -> Vec<String> {
+    fn guard_stmts(&mut self, checks: &[(Name, SiteCheck)]) -> Vec<String> {
         checks
             .iter()
-            .map(|(name, plan)| self.guard_stmt(name, plan))
+            .map(|(name, check)| self.guard_stmt(name, check))
             .collect()
     }
 
-    /// the guard statement that validates parameter `name` against `plan`
-    fn guard_stmt(&mut self, name: &str, plan: &SoundnessCheck) -> String {
-        match plan {
-            SoundnessCheck::Isinstance(target) => {
-                format!("_soundness_check({name}, {})", self.target(target))
-            }
-            SoundnessCheck::Parametric { alias, variances } => {
-                self.used_parametric = true;
-                format!(
-                    "_soundness_parametric({name}, {}, {})",
-                    self.written.spelled(alias),
-                    variance_tuple(variances)
-                )
-            }
-        }
+    /// the guard statement that validates parameter `name` against `check`
+    fn guard_stmt(&mut self, name: &str, check: &SiteCheck) -> String {
+        let (helper, leading, trailing) =
+            self.checking(check, ["_soundness_check", "_soundness_parametric"]);
+        format!("{helper}({leading}{name}{trailing})")
     }
 
     /// insert the entry guards at the top of `func`'s body, after any docstring
@@ -400,7 +411,7 @@ impl<'src> Rendered<'src> {
         &mut self,
         source: &str,
         func: &StmtFunctionDef,
-        checks: &[(Name, SoundnessCheck)],
+        checks: &[(Name, SiteCheck)],
     ) {
         let guards: Vec<EntryGuard> = self
             .guard_stmts(checks)
@@ -462,12 +473,12 @@ impl TypeAwarePass for SoundnessPass<'_> {
                 let mut checks = Vec::new();
                 for site in &sites {
                     match site {
-                        Site::Value { expr, plan } => rendered.wrap_check(expr, plan),
+                        Site::Value { expr, check } => rendered.wrap_check(expr, check),
                         Site::Elements {
                             iterable,
                             is_async,
-                            plan,
-                        } => rendered.wrap_iteration(iterable, *is_async, plan),
+                            check,
+                        } => rendered.wrap_iteration(iterable, *is_async, check),
                         Site::Parameters { function, guards } => {
                             checks.push(RerenderedCheck::Guards {
                                 function: function.range(),
@@ -487,6 +498,7 @@ impl TypeAwarePass for SoundnessPass<'_> {
                 inner.used_aiter |= rendered.used_aiter;
                 inner.used_iter_p |= rendered.used_iter_p;
                 inner.used_aiter_p |= rendered.used_aiter_p;
+                inner.used_once_bound |= rendered.used_once_bound;
                 inner.used_parametric |= rendered.used_parametric;
                 if !checks.is_empty() {
                     rerendered.push((idx, checks));
@@ -495,12 +507,12 @@ impl TypeAwarePass for SoundnessPass<'_> {
             }
             for site in &sites {
                 match site {
-                    Site::Value { expr, plan } => inner.wrap_check(expr, plan),
+                    Site::Value { expr, check } => inner.wrap_check(expr, check),
                     Site::Elements {
                         iterable,
                         is_async,
-                        plan,
-                    } => inner.wrap_iteration(iterable, *is_async, plan),
+                        check,
+                    } => inner.wrap_iteration(iterable, *is_async, check),
                     Site::Parameters { function, guards } => {
                         inner.insert_param_guards(self.source, function, guards);
                     }
@@ -534,6 +546,9 @@ impl TypeAwarePass for SoundnessPass<'_> {
         }
         if inner.used_aiter_p {
             ctx.runtime.insert(crate::runtime::SOUNDNESS_AITER_P);
+        }
+        if inner.used_once_bound {
+            ctx.runtime.insert(crate::runtime::SOUNDNESS_ONCE_BOUND);
         }
         ctx.template_edits
             .extend(inner.wraps.into_iter().map(|(range, before, after)| {
@@ -706,6 +721,8 @@ impl Transformer for Placing {
 
 #[cfg(test)]
 mod tests {
+    use indoc::indoc;
+
     use crate::{Config, transpile};
 
     fn soundness_config() -> Config {
@@ -918,6 +935,130 @@ mod tests {
         let out = check("class Box: ...\ndef t[T]() -> T: ...\ndef f():\n    b: Box = t()\n");
         assert!(
             out.contains("b: Box = _soundness_check(t(), Box)"),
+            "got:\n{out}"
+        );
+    }
+
+    /// a function may be called before or after the module reaches a class declared below
+    /// it, so a check in one looks the class up as it runs. a check at the module's own level
+    /// runs in order, where the class is not there yet, and is left out
+    #[test]
+    fn a_class_declared_below_is_looked_up_where_the_check_runs() {
+        let out = check_with(
+            indoc! {"
+                def t[T]() -> T: ...
+
+                class Holder:
+                    later: list[Later]
+
+                    def first(self) -> Later:
+                        return self.later[0]
+
+                    def each(self) -> None:
+                        for later in self.later:
+                            pass
+
+                def take(value: Later) -> None: ...
+
+                early: Later = t()
+
+                class Later: ...
+            "},
+            crate::SoundnessPositions::all(),
+        );
+        assert!(
+            out.contains(
+                r#"return _soundness_once_bound(("Later",), self.later[0], _soundness_check, lambda: Later)"#
+            ),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                r#"for later in _soundness_once_bound(("Later",), self.later, _soundness_iter, lambda: Later):"#
+            ),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                r#"_soundness_once_bound(("Later",), value, _soundness_check, lambda: Later)"#
+            ),
+            "got:\n{out}"
+        );
+        assert!(out.contains(r#"early: "Later" = t()"#), "got:\n{out}");
+        assert!(out.contains("def _soundness_once_bound"), "got:\n{out}");
+    }
+
+    /// the lookup finds whatever the name holds, so it is made only where every binding of
+    /// the name binds the one class: not where the module binds it to something else first,
+    /// binds a second class under it, binds it only for the checker, unbinds it, or rebinds
+    /// it from a function through `global`
+    #[test]
+    fn a_name_bound_to_anything_but_the_class_is_not_looked_up() {
+        let out = check(indoc! {"
+            from typing import TYPE_CHECKING
+
+            class Other: ...
+
+            def t[T]() -> T: ...
+
+            def first() -> Later:
+                return t()
+
+            def second() -> Twice:
+                return t()
+
+            def third() -> Checked:
+                return t()
+
+            def fourth() -> Gone:
+                return t()
+
+            def fifth() -> Rebound:
+                return t()
+
+            def rebind() -> None:
+                global Rebound
+                Rebound = None
+
+            Later = None
+
+            class Later: ...
+
+            Twice = Other
+
+            class Twice: ...
+
+            if TYPE_CHECKING:
+                from decimal import Decimal as Checked
+            else:
+                class Checked: ...
+
+            class Gone: ...
+
+            del Gone
+
+            class Rebound: ...
+        "});
+        assert!(!out.contains("_soundness_once_bound("), "got:\n{out}");
+        assert!(!out.contains("_soundness_check(t()"), "got:\n{out}");
+    }
+
+    /// a `private` class is emitted under another name, and the lookup is keyed by the name
+    /// the module emits it under
+    #[test]
+    fn a_private_class_is_looked_up_by_the_name_it_is_emitted_under() {
+        let out = check(indoc! {"
+            def t[T]() -> T: ...
+
+            def make() -> Kept:
+                return t()
+
+            private class Kept: ...
+        "});
+        assert!(
+            out.contains(
+                r#"_soundness_once_bound(("_Kept",), t(), _soundness_check, lambda: _Kept)"#
+            ),
             "got:\n{out}"
         );
     }

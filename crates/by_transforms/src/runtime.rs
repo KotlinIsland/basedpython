@@ -73,6 +73,7 @@ helpers! {
     SOUNDNESS_PARAMETRIC = "_soundness_parametric",
     SOUNDNESS_ITER_P = "_soundness_iter_p",
     SOUNDNESS_AITER_P = "_soundness_aiter_p",
+    SOUNDNESS_ONCE_BOUND = "_soundness_once_bound",
     CHECKED_CAST = "_checked_cast",
     TRY_CAST = "_try_cast",
     CHECKED_CAST_PRED = "_checked_cast_pred",

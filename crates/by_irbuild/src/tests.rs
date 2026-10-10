@@ -452,6 +452,24 @@ def unwrap(v: Any) -> Cell[int]:
 }
 
 #[test]
+fn a_soundness_check_on_a_class_declared_further_down_declines() {
+    // the function may run before the module binds `Later`, so the interpreted build looks
+    // it up as the check runs and makes the check only once it is bound, which a compiled
+    // module has no lowering for
+    let reason = decline(
+        "\
+from typing import Any
+
+def unwrap(v: Any) -> Later:
+    return v
+
+class Later: ...
+",
+    );
+    assert!(reason.contains("may not have bound yet"), "{reason}");
+}
+
+#[test]
 fn a_gradual_parameter_is_an_object() {
     // `object` assumes nothing, so no check is needed and nothing declines
     let ir = ir("def f(a) -> None:\n    pass\n");
