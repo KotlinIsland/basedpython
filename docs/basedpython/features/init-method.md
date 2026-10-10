@@ -60,10 +60,10 @@ class Fight:
 
 ```python
 class Fight:
-    def __init__(self, seen: set[int] = _MISSING, last: int = _MISSING):
+    def __init__(self, seen: set[int] = _MISSING, last: int = _MISSING2):
         if seen is _MISSING:
             seen = set()
-        if last is _MISSING:
+        if last is _MISSING2:
             raise TypeError("__init__() missing required argument: 'last'")
         self.seen: set[int] = seen
         self.last: int = last

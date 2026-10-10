@@ -225,6 +225,16 @@ mod tests {
         );
     }
 
+    /// the runtime imported from a module written beside the output, as a build writes it,
+    /// so an expectation names the helpers it uses rather than spelling out their definitions
+    fn check_beside_runtime(input: &str, expected: &str) {
+        let config = Config {
+            runtime_module: Some("_by_runtime".to_owned()),
+            ..Config::test_default()
+        };
+        assert_eq!(transpile(input, &config).unwrap(), expected);
+    }
+
     #[test]
     fn basic_coalesce() {
         check("x = a ?? b\n", "x = a if a is not None else b\n");
@@ -319,7 +329,7 @@ mod tests {
     /// which printed the signature again over this edit and left the program refused
     #[test]
     fn coalesce_in_a_parameter_default() {
-        check(
+        check_beside_runtime(
             indoc::indoc! {"
                 g: int? = None
 
@@ -328,7 +338,8 @@ mod tests {
             "},
             indoc::indoc! {"
                 from typing import Any
-                _MISSING: Any = object()
+                from _by_runtime import _by_default
+                _MISSING: Any = _by_default(\"g ?? 1\", __name__, \"_MISSING\")
                 g: int | None = None
 
                 def f(y: int = _MISSING) -> int:
@@ -342,28 +353,20 @@ mod tests {
     /// the same default with the body written on the clause's line
     #[test]
     fn coalesce_in_a_parameter_default_with_an_inline_body() {
-        check(
+        check_beside_runtime(
             indoc::indoc! {"
                 g: int? = None
 
                 def f(y: int = g ?? 1) -> int: return y
             "},
-            indoc::indoc! {"
-                from typing import Any
-                _MISSING: Any = object()
-                g: int | None = None
-
-                def f(y: int = _MISSING) -> int: \n    if y is _MISSING:
-                        y = g if g is not None else 1
-                    return y
-            "},
+            "from typing import Any\nfrom _by_runtime import _by_default\n_MISSING: Any = _by_default(\"g ?? 1\", __name__, \"_MISSING\")\ng: int | None = None\n\ndef f(y: int = _MISSING) -> int: \n    if y is _MISSING:\n        y = g if g is not None else 1\n    return y\n",
         );
     }
 
     /// and a chain longer than one link, which recurses in the same edit
     #[test]
     fn a_chained_coalesce_in_a_parameter_default() {
-        check(
+        check_beside_runtime(
             indoc::indoc! {"
                 g: int? = None
                 h: int? = None
@@ -373,7 +376,8 @@ mod tests {
             "},
             indoc::indoc! {"
                 from typing import Any
-                _MISSING: Any = object()
+                from _by_runtime import _by_default
+                _MISSING: Any = _by_default(\"g ?? h ?? 1\", __name__, \"_MISSING\")
                 g: int | None = None
                 h: int | None = None
 

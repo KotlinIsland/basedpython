@@ -524,7 +524,7 @@ mod tests {
         "});
         assert!(
             out.contains("def f(x=_MISSING):"),
-            "default must stay a bare sentinel: {out}"
+            "default must stay a bare marker: {out}"
         );
         assert!(
             !out.contains("](_MISSING"),

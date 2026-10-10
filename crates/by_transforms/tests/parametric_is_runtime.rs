@@ -142,6 +142,26 @@ assert (FeedBool() is Feed[int]) is False, "param contravariant: bool does not a
 assert (FeedBool() is Feed[bool]) is True, "param matches bool"
 assert (C() is Feed[bool]) is False, "value without the method fails"
 
+# a default re-evaluated per call has no value before the call, so nothing at runtime
+# records the type the checker reads off it — the marker standing in the signature
+# is not that type. the check refuses to answer rather than answer from the marker
+class FeedLate:
+    def f(self, other = C()):
+        pass
+
+def refused(test) -> bool:
+    try:
+        test()
+    except TypeError as error:
+        return "per call" in str(error)
+    return False
+
+def feeds_bool(value: object) -> bool:
+    return value is Feed[bool]
+
+assert refused(lambda: FeedLate() is Feed[C]), "the check refuses the type the default would give"
+assert refused(lambda: feeds_bool(FeedLate())), "and one it would not"
+
 # an impl with an extra *required* parameter the protocol doesn't supply can't
 # satisfy it — a protocol-shaped call would fail to provide that argument
 class ExtraRequired:
@@ -149,6 +169,57 @@ class ExtraRequired:
         pass
 
 assert (ExtraRequired() is Feed[bool]) is False, "extra required parameter fails"
+
+# so does a required one after a default, which python cannot declare and which stands
+# in the signature as a marker in place of a default
+class ExtraRequiredAfterDefault:
+    def f(self, other = True, extra):
+        pass
+
+assert feeds_bool(ExtraRequiredAfterDefault()) is False, "a required parameter after a default fails"
+
+# a required parameter after a default the protocol does supply is required, not a
+# default evaluated per call: an unannotated one says nothing about its type, so the
+# check answers `False` rather than refusing
+class FeedSecond[in out T](Protocol):
+    def f(self, a: int, other: T): ...
+
+class ReqAfterDefault:
+    def f(self, a = 1, other):
+        pass
+
+def feeds_second_bool(value: object) -> bool:
+    return value is FeedSecond[bool]
+
+assert feeds_second_bool(ReqAfterDefault()) is False, "a required parameter is not a late-bound default"
+
+# a class of the program's own may carry every attribute a marker has, and a default
+# that is one of its instances is still a value, read by its type: a marker is only the
+# object its module binds under the name it carries. written in plain python, so the
+# default stands in the signature as written
+_plain = {"__name__": "__main__"}
+exec("""
+class Tagged:
+    _by_marker = True
+    _by_name = "Tagged"
+
+class Forged:
+    _by_name = "Forged"
+    _by_source = None
+
+class TakesTagged:
+    def f(self, other=Tagged()):
+        pass
+
+class TakesForged:
+    def f(self, other: bool = True, extra=Forged()):
+        pass
+""", _plain)
+Tagged = _plain["Tagged"]
+Forged = _plain["Forged"]
+
+assert feeds_bool(_plain["TakesTagged"]()) is False, "a value with a marker's attributes is a value"
+assert feeds_bool(_plain["TakesForged"]()) is True, "and a default, not a required parameter's marker"
 
 # a method return is covariant: an impl returning `bool` satisfies a protocol
 # asking for `int` (bool <: int), but not one asking for `str`

@@ -104,6 +104,36 @@ def _force_unwrap(_v):
     return _v
 
 
+# --- parameter defaults ----------------------------------------------------
+# a default re-evaluated per call has no value until a call evaluates it, so the
+# signature holds a marker in its place and the body tests for it. each default has
+# a marker of its own, bound at module level under a name of the transpiler's, and
+# the body's guard tests for that one object. its `repr` is the default as
+# basedpython reads it, which is what `inspect.signature` shows; `<required>` stands
+# for a parameter python cannot declare required where it stands. a marker handed
+# back as an argument, as `apply_defaults` hands it, is the argument not given
+#
+# a marker reduces to the name it is bound under, so a pickled one is read back from
+# that name, and a copy of one — which `copy` makes through the same reduction — is
+# the marker itself. a tool that copies or pickles a signature's defaults hands back
+# the object the guard tests for
+
+
+class _by_default:
+    def __init__(self, source, module, name):
+        self._by_source = source
+        self.__module__ = module
+        self._by_name = name
+
+    def __repr__(self):
+        if self._by_source is None:
+            return "<required>"
+        return f"<default: {self._by_source}>"
+
+    def __reduce__(self):
+        return self._by_name
+
+
 # --- effects, entry points and loop capture --------------------------------
 
 
@@ -943,6 +973,27 @@ def _by_method_matches(klass, name, params, ret):
         hints = typing.get_type_hints(method)
     except Exception:
         return False
+    import sys
+
+    # a marker is the object its module binds under the name it carries. no attribute
+    # of its own says so — a class of the program's may define any of them — and a
+    # value is read without assuming it has any of them
+    def marker_source(value):
+        try:
+            module = sys.modules.get(value.__module__)
+            if module is None or getattr(module, value._by_name) is not value:
+                return False, None
+            return True, value._by_source
+        except Exception:
+            return False, None
+
+    # a required parameter after a default carries a marker in place of a default
+    def has_default(p):
+        if p.default is inspect.Parameter.empty:
+            return False
+        marker, source = marker_source(p.default)
+        return not (marker and source is None)
+
     positional = [
         p for p in signature.parameters.values()
         if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
@@ -954,7 +1005,7 @@ def _by_method_matches(klass, name, params, ret):
     # extra positional parameters the protocol doesn't supply must be optional,
     # else a caller matching the protocol would fail to provide them
     for p in positional[len(params):]:
-        if p.default is inspect.Parameter.empty:
+        if not has_default(p):
             return False
     # likewise any required keyword-only parameter would break a protocol call
     for p in signature.parameters.values():
@@ -963,11 +1014,23 @@ def _by_method_matches(klass, name, params, ret):
     for (expected, variance), p in zip(params, positional):
         if p.name in hints:
             actual = hints[p.name]
-        elif p.default is not inspect.Parameter.empty:
+        elif not has_default(p):
+            return False
+        elif marker_source(p.default)[0]:
+            if variance == 3:
+                continue
+            # the default is evaluated per call, so the signature holds a marker
+            # and nothing at runtime records the type the checker read off the
+            # default. the marker's own type would answer for it, wrongly
+            raise TypeError(
+                "cannot check `" + klass.__qualname__ + "." + name + "` against a "
+                + "parameterized protocol: parameter `" + p.name + "` has no "
+                + "annotation, and its default is evaluated per call, so nothing "
+                + "records its type at runtime. annotate it"
+            )
+        else:
             # a reified default gives the parameter's inferred type at runtime
             actual = type(p.default)
-        else:
-            return False
         if not _by_variance_ok(actual, expected, variance):
             return False
     if ret is not None:

@@ -103,6 +103,7 @@ helpers! {
     OPTIONAL = "Optional",
     FORCE_UNWRAP = "_force_unwrap",
     MAIN_ARGS = "_by_main_args",
+    DEFAULT = "_by_default",
     RAISES = "_by_raises",
     LAZY_MODULE = "_lazy_module",
     LAZY_ATTR = "_lazy_attr",

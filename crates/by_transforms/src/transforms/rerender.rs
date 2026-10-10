@@ -1848,9 +1848,9 @@ mod tests {
             def f(_: list[int] = [], _: list[int] = []) -> int:
                 return len(_)
         "});
-        assert!(out.contains("if _ is _MISSING:"), "got:\n{out}");
+        assert!(out.contains("if _ is _MISSING"), "got:\n{out}");
         assert!(
-            out.contains("if _2 is _MISSING:\n        _2 = []"),
+            out.contains("if _2 is _MISSING2:\n        _2 = []"),
             "got:\n{out}"
         );
     }

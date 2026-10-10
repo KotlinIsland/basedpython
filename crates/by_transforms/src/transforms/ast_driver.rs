@@ -406,10 +406,10 @@ fn is_wrapper(frags: &[Fragment], start: usize, end: usize) -> bool {
 ///
 /// A [`SubPatch::Relocating`] edit is the one thing that does *not* travel with
 /// that source. It is the stand-in a pass leaves at the span it moved a
-/// construct away from — `_MISSING` where the default was written — and a
-/// passthrough of exactly that span, from outside the template's own range, is
-/// the place the construct moved *to*. Materializing the stand-in there too
-/// would put `_MISSING` at both ends and the construct at neither, which is how
+/// construct away from — the `_MISSING` marker where the default was written —
+/// and a passthrough of exactly that span, from outside the template's own range,
+/// is the place the construct moved *to*. Materializing the stand-in there too
+/// would put the marker at both ends and the construct at neither, which is how
 /// a `decorator def` whose header template re-emits the whole signature came to
 /// emit `if tags is _MISSING: tags = _MISSING`.
 fn template_claimees(
@@ -1128,7 +1128,7 @@ pub(crate) fn merge_into_own_imports(body: &mut String, imports: Vec<String>) ->
 
 /// Coalesce repeated `from <module> import X` lines into a single
 /// `from <module> import X, Y, ...` line. Preserves any non-matching
-/// lines (e.g. `import foo`, `_MISSING = object()`) in their original
+/// lines (e.g. `import foo`, a synthesized class) in their original
 /// order. Names within a merged line are sorted and deduped
 fn merge_from_imports(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
     // preserve first-seen module order so tests that depend on specific
@@ -1231,6 +1231,13 @@ pub(crate) fn run_against_source<'a>(
     // tokens go when the syntax tree is taken out of the parse
     let accessor_value_ranges =
         properties::collect_value_ranges(&parsed.syntax().body, parsed.tokens());
+    // a default's marker shows the default on one line and without its comments, which
+    // only the tokens tell apart from the text of a string
+    let default_markers = mutable_defaults::DefaultMarkers::collect(
+        &parsed.syntax().body,
+        parsed.tokens(),
+        source_ref,
+    );
     // a statement an AST pass rewrote is re-emitted in the source's own indentation,
     // since the lines it passes through keep theirs
     let indentation = ruff_python_codegen::Stylist::from_tokens(parsed.tokens(), source_ref)
@@ -1357,12 +1364,17 @@ pub(crate) fn run_against_source<'a>(
     let dedent_string_pass = dedent_string::DedentString::new(source_ref);
     let super_keyword_pass = super_keyword::SuperKeyword::new(written);
     let postfix_await_pass = postfix_await::PostfixAwait::new(source_ref);
-    let mutable_defaults_pass =
-        mutable_defaults::MutableDefaultsPass::new(source_ref, written, config.is_stub);
+    let mutable_defaults_pass = mutable_defaults::MutableDefaultsPass::new(
+        source_ref,
+        written,
+        &default_markers,
+        config.is_stub,
+    );
     let unique_loop_bindings_pass =
         unique_loop_bindings::UniqueLoopBindingsPass::new(source_ref, config.unique_loop_bindings);
     let auto_quote_pass = auto_quote::AutoQuote::new(source_ref);
-    let init_method_pass = init_method::InitMethod::new(source_ref, written, config.clone());
+    let init_method_pass =
+        init_method::InitMethod::new(source_ref, written, &default_markers, config.clone());
     let properties_pass = properties::PropertiesPass::new(
         source_ref,
         written,
@@ -1730,7 +1742,7 @@ pub(crate) fn run_against_source<'a>(
         // …); receiver spans pass through as `Src` fragments, so sibling
         // lowerings inside compose
         &grapheme_string_pass,
-        // mutable defaults → `_MISSING` sentinel swap + body-prologue guard;
+        // mutable defaults → a `_MISSING` marker per default + body-prologue guard;
         // narrow edits, so the function body's own lowerings still apply
         &mutable_defaults_pass,
         // per-iteration loop bindings: a closure made in a loop body is applied
