@@ -362,6 +362,12 @@ pub struct Function {
     pub computed_defaults: Vec<usize>,
     /// who keeps the values for [`Self::computed_defaults`]
     pub defaults_held_by: DefaultsHeldBy,
+    /// whether the defaults [`Self::twin_defaults`] names are basedpython's markers: a `.by`
+    /// definition holds, for a default it re-evaluates per call and for a required
+    /// parameter after a defaulted one, an object that stands for no argument at all.
+    /// python's own computed default is a value, and a call handed it is the native's
+    /// to answer
+    pub defaults_are_markers: bool,
     /// decorators to apply, outermost first, after the native function is
     /// installed in the module namespace
     pub decorators: Vec<Decorator>,
@@ -501,8 +507,50 @@ impl Function {
 
     /// whether any call can be handed to the interpreted definition
     pub fn defers(&self) -> bool {
-        !self.deferring.is_empty()
-            || (!self.computed_defaults.is_empty() && self.defaults_held_by == DefaultsHeldBy::Twin)
+        !self.deferring.is_empty() || !self.twin_defaults().is_empty()
+    }
+
+    /// the parameters whose default only the interpreted definition holds, by index
+    ///
+    /// a computed default, which python evaluated once where the definition stood, and a
+    /// required parameter after a defaulted one, which basedpython allows and python does
+    /// not: the definition declares a default for it that stands for no argument at all.
+    /// a call that omits one of these is the definition's to answer — and so is one that
+    /// hands it the very object the definition holds, where that is one of basedpython's
+    /// [markers](Self::defaults_are_markers), as `BoundArguments.apply_defaults` hands it
+    /// with a signature read off the definition
+    pub fn twin_defaults(&self) -> Vec<usize> {
+        if self.defaults_held_by != DefaultsHeldBy::Twin {
+            return Vec::new();
+        }
+        let packed = usize::from(self.vararg) + usize::from(self.kwarg);
+        let named = self.param_count.saturating_sub(packed);
+        let positional = named.saturating_sub(self.kwonly);
+        let defaulted = |index: usize| self.defaults.get(index).is_some_and(Option::is_some);
+        let mut after_default = false;
+        let mut indices = Vec::new();
+        for index in 0..named {
+            let computed = self.computed_defaults.contains(&index);
+            if computed || (index < positional && after_default && !defaulted(index)) {
+                indices.push(index);
+            }
+            after_default |= index < positional && (computed || defaulted(index));
+        }
+        indices
+    }
+
+    /// whether the parameter at `index` is keyword-only
+    pub fn is_keyword_only(&self, index: usize) -> bool {
+        let packed = usize::from(self.vararg) + usize::from(self.kwarg);
+        let named = self.param_count.saturating_sub(packed);
+        index < named && index >= named.saturating_sub(self.kwonly)
+    }
+
+    /// the C identifier for the marker the interpreted definition holds for the parameter
+    /// at `index`, one of [`Self::twin_defaults`] of a function whose
+    /// [defaults are markers](Self::defaults_are_markers)
+    pub fn twin_default_symbol(&self, module: &str, index: usize) -> String {
+        format!("{}_d{index}", self.interpreted_symbol(module))
     }
 
     /// the environment field holding the value for the parameter at `index`, for a
@@ -1895,6 +1943,7 @@ mod tests {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             defaults_held_by: DefaultsHeldBy::Twin,
+            defaults_are_markers: false,
             binding: Binding::Instance,
             coroutine_body: None,
             doc: None,

@@ -40,6 +40,7 @@ pub struct FunctionBuilder {
     deferring: Vec<usize>,
     computed_defaults: Vec<usize>,
     defaults_held_by: crate::function::DefaultsHeldBy,
+    defaults_are_markers: bool,
     posonly: usize,
     kwonly: usize,
     /// per-block `.by` spans, parallel to `blocks`
@@ -85,6 +86,7 @@ impl FunctionBuilder {
             deferring: Vec::new(),
             computed_defaults: Vec::new(),
             defaults_held_by: crate::function::DefaultsHeldBy::Twin,
+            defaults_are_markers: false,
             posonly: 0,
             kwonly: 0,
             block_ranges: vec![None],
@@ -252,6 +254,13 @@ impl FunctionBuilder {
     /// see [`Function::computed_defaults`]
     pub fn computed_defaults(&mut self, computed: Vec<usize>) {
         self.computed_defaults = computed;
+    }
+
+    /// that the interpreted definition holds basedpython's markers for those defaults
+    ///
+    /// see [`Function::defaults_are_markers`]
+    pub fn defaults_are_markers(&mut self, markers: bool) {
+        self.defaults_are_markers = markers;
     }
 
     /// that those defaults are held by the receiver rather than by an interpreted twin
@@ -441,6 +450,7 @@ impl FunctionBuilder {
             deferring: self.deferring,
             computed_defaults: self.computed_defaults,
             defaults_held_by: self.defaults_held_by,
+            defaults_are_markers: self.defaults_are_markers,
             binding: crate::function::Binding::Instance,
             coroutine_body: None,
             doc: self.doc,

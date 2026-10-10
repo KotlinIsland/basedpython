@@ -1632,6 +1632,7 @@ fn lower_generator_constructor(
         db,
         model,
         layouts,
+        language,
         ..
     } = unit;
     let mut signed = signature(
@@ -1669,6 +1670,7 @@ fn lower_generator_constructor(
     builder.binding_kinds(posonly, kwonly);
     builder.deferring(deferring);
     builder.computed_defaults(computed_defaults);
+    builder.defaults_are_markers(!language.defaults_evaluated_at_the_def());
     let mut registers: HashMap<String, RegisterId> = HashMap::new();
     for (name, rtype) in &params {
         registers.insert(name.clone(), builder.param(name.clone(), rtype.clone()));
@@ -7940,6 +7942,7 @@ fn lower_function_with_receiver(
         builder.defaults_held_by_the_receiver();
     }
     builder.computed_defaults(computed_defaults);
+    builder.defaults_are_markers(!unit.language.defaults_evaluated_at_the_def());
     let mut locals: HashMap<String, RegisterId> = HashMap::new();
 
     for (name, rtype) in &params {
