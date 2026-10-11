@@ -1545,6 +1545,18 @@ mod tests {
         );
     }
 
+    /// a string `.by` reads as a literal type is written as one, and names nothing
+    #[test]
+    fn polyfill_a_string_type_argument_names_nothing() {
+        let out = transpile_polyfill(
+            "from json import JSONDecoder\nAlias = list[\"JSONDecoder\"]\nprint(JSONDecoder)\n",
+        );
+        assert!(
+            out.contains("_lazy_from(_by_lazy, \"json\", {\"JSONDecoder\": \"JSONDecoder\"})"),
+            "{out}"
+        );
+    }
+
     #[test]
     fn annotation_names_reads_the_annotations_python_keeps() {
         use ruff_python_parser::parse_module;

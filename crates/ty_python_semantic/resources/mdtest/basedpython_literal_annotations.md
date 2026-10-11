@@ -30,6 +30,25 @@ x: Literal["a", "b"] = "a"
 reveal_type(x)  # revealed: "a"
 ```
 
+## a string in a generic's type argument is a Literal
+
+a string is a literal type wherever a type expression holds it, so `list["a"]` is a list of the
+string `"a"` rather than a forward reference to a name `a`
+
+```by
+from typing import Callable
+
+type Named = dict[str, "y"]
+Alias = list["x"]
+
+def f(a: list["a"], b: dict[str, "k"], c: Callable[["p"], "r"], n: Named, al: Alias):
+    reveal_type(a[0])  # revealed: "a"
+    reveal_type(b["z"])  # revealed: "k"
+    reveal_type(c("p"))  # revealed: "r"
+    reveal_type(n["z"])  # revealed: "y"
+    reveal_type(al[0])  # revealed: "x"
+```
+
 ## a union of string literals is a union of literal types
 
 `"foo" | "bar"` is two literal types joined, not a `str.__or__` that would fail at runtime: the

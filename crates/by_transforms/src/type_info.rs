@@ -263,6 +263,13 @@ pub(crate) trait TypeInfo {
     /// unresolved name should be treated as a runtime subscript, not a type)
     fn subscript_is_known_type_context(&self, value: &Expr) -> bool;
 
+    /// whether subscripting `value` specializes it, so the checker infers its slice as type
+    /// expressions — see [`SemanticModel::subscript_specializes`]
+    fn subscript_specializes(&self, value: &Expr) -> bool;
+
+    /// whether `annotation` declares a PEP 613 type alias, whose value is a type expression
+    fn is_type_alias_annotation(&self, annotation: &Expr) -> bool;
+
     /// the arguments of `call` that are type expressions, because the call is one of the
     /// typing constructs that spells a type through a call — `NewType("D", int)`,
     /// `TypeVar("T", bound=int)`, the functional `NamedTuple` and `TypedDict`
@@ -900,6 +907,14 @@ impl TypeInfo for SemanticModel<'_> {
             Some(ty) => ty.is_subscript_type_context() && !ty.is_dynamic(),
             None => false,
         }
+    }
+
+    fn subscript_specializes(&self, value: &Expr) -> bool {
+        SemanticModel::subscript_specializes(self, value)
+    }
+
+    fn is_type_alias_annotation(&self, annotation: &Expr) -> bool {
+        SemanticModel::is_type_alias_annotation(self, annotation)
     }
 
     fn call_type_expression_arguments<'ast>(&self, call: &'ast ExprCall) -> Vec<&'ast Expr> {

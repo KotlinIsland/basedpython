@@ -22,8 +22,8 @@
 //! 1. `AnnAssign` annotation
 //! 2. function parameter annotations (regular, vararg, kwarg, lambda params)
 //! 3. function return annotation
-//! 4. `type X = T` RHS / `X: TypeAlias = T` (the `TypeAlias` form is reached
-//!    via `AnnAssign`, no special case needed)
+//! 4. `type X = T` RHS / `X: TypeAlias = T` (the value of the `TypeAlias` form,
+//!    as ty reads the annotation)
 //! 5. `TypeParam` bound (PEP 695 + the basedpython type mapping `T in (…)`)
 //! 6. `TypeParam` default
 //! 7. value-position type applications (`list[T]`, `dict[K, V]` outside an
@@ -357,7 +357,15 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
                     declaration_annotation_type(&a.annotation).unwrap_or(&a.annotation);
                 self.visit_root(annotation, RootKind::Annotation);
                 if let Some(v) = &a.value {
-                    self.visit_expr(v);
+                    // the value of `X: TypeAlias = …` is a type expression of its own
+                    if self
+                        .types
+                        .is_some_and(|types| types.is_type_alias_annotation(annotation))
+                    {
+                        self.visit_root(v, RootKind::Evaluated);
+                    } else {
+                        self.visit_expr(v);
+                    }
                 }
             }
             Stmt::TypeAlias(a) => {

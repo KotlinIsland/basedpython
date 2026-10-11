@@ -13,33 +13,56 @@
 //! inside the unquoted text is a forward reference too, and is unquoted the same
 //! way
 //!
-//! the positions are the annotation positions: parameters, returns, variables
-//! (local ones included — the reader of a `.by` file reads them all the same),
-//! `TypeAlias` values and pep 695 bounds and defaults. inside one, the
-//! arguments of `Literal[…]` and the metadata of `Annotated[…]` are values, and
-//! stay strings. a string whose text is not a single expression, or is a bare
-//! tuple — which means something else once it is not a string — is left as it
-//! is
+//! the positions are the ones where basedpython reads a string as a literal type, which
+//! the forward transpile writes as `Literal[…]`: the very strings that lowering wraps
+//! ([`literal_type_strings`]), so that a forward reference python wrote comes back from a
+//! round trip as the reference it was. a string left a string here would come back a
+//! `Literal`. inside the unquoted text a string is a forward reference in every type
+//! position but the arguments of `Literal[…]` and the metadata of `Annotated[…]`. a
+//! string whose text is not a single expression, or is a bare tuple — which means
+//! something else once it is not a string — is left as it is
 
 use ruff_python_ast::Expr;
-use ruff_python_parser::{parse_expression, parse_module};
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
+use ruff_python_parser::parse_expression;
 use ruff_text_size::{Ranged, TextRange};
 
-use crate::transforms::source_util::for_each_annotation_in_stmt;
+use crate::transforms::literal_types::literal_type_strings;
 use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_one_type_expr};
 
-/// `source` with each string annotation replaced by the expression it spells
+/// `source` with each string the forward transpile would write as a literal type replaced by
+/// the expression it spells
 pub(crate) fn unquote_forward_references(source: &str) -> String {
-    let Ok(parsed) = parse_module(source) else {
+    let (db, file) = crate::make_in_memory_db(source);
+    let program_file = ty_python_semantic::Db::program_file(&db, file);
+    let module = ruff_db::parsed::parsed_module(&db, program_file.python_file(&db)).load(&db);
+    if !module.errors().is_empty() {
         return source.to_owned();
-    };
-    let mut collector = Collector { edits: Vec::new() };
-    for stmt in parsed.suite() {
-        for_each_annotation_in_stmt(stmt, |annotation| {
-            walk_one_type_expr(annotation, &mut collector);
-        });
     }
-    splice(source, collector.edits)
+    let model = ty_python_semantic::SemanticModel::new(&db, program_file);
+    let ranges = literal_type_strings(source, module.suite(), &model);
+    let mut strings = Strings {
+        ranges: &ranges,
+        collector: Collector { edits: Vec::new() },
+    };
+    strings.visit_body(module.suite());
+    splice(source, strings.collector.edits)
+}
+
+/// the strings at `ranges`, each unquoted as a forward reference
+struct Strings<'a> {
+    ranges: &'a [TextRange],
+    collector: Collector,
+}
+
+impl<'ast> SourceOrderVisitor<'ast> for Strings<'_> {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if expr.is_string_literal_expr() && self.ranges.contains(&expr.range()) {
+            self.collector.visit(expr, TypePos::Root);
+        } else {
+            walk_expr(self, expr);
+        }
+    }
 }
 
 struct Collector {
@@ -227,6 +250,74 @@ mod tests {
                     x: Later = Later()
             "},
         );
+    }
+
+    /// every string the forward transpile would write as a literal type is a forward reference
+    /// in python, wherever it stands: a type argument in a value expression, a base's, a typing
+    /// construct's and a type variable's bound among them
+    #[test]
+    fn a_string_the_forward_transpile_reads_as_a_literal_type_is_unquoted() {
+        check(
+            indoc! {"
+                from typing import Callable, Generic, List, Optional, TypeVar, Union
+
+                T = TypeVar(\"T\")
+
+                class Foo(Generic[T]):
+                    pass
+
+                class Later:
+                    pass
+
+                Alias = List[\"Later\"]
+                UAlias = Union[\"Later\", int]
+                CAlias = Callable[[\"Later\"], \"Later\"]
+                MaybeLater = Optional[\"Later\"]
+                B = TypeVar(\"B\", bound=\"Later\")
+
+                class Bar(Foo[\"Later\"]):
+                    pass
+            "},
+            indoc! {"
+                from typing import Callable, Generic, List, Optional, TypeVar, Union
+
+                T = TypeVar(\"T\")
+
+                class Foo(Generic[T]):
+                    pass
+
+                class Later:
+                    pass
+
+                Alias = List[Later]
+                UAlias = Union[Later, int]
+                CAlias = Callable[[Later], Later]
+                MaybeLater = Optional[Later]
+                B = TypeVar(\"B\", bound=Later)
+
+                class Bar(Foo[Later]):
+                    pass
+            "},
+        );
+    }
+
+    /// the value of a `TypeAlias` is a type expression
+    #[test]
+    fn a_type_alias_value_is_unquoted() {
+        check(
+            "from typing import TypeAlias\n\nclass Later: ...\n\nX: TypeAlias = \"Later\"\n",
+            "from typing import TypeAlias\n\nclass Later\n\ntype X = Later\n",
+        );
+    }
+
+    /// a string that is no type expression — a subscript on a class that is not generic, an
+    /// enum's member lookup — is a value, and stays one
+    #[test]
+    fn a_member_lookup_stays_a_string() {
+        let source =
+            "from enum import Enum\n\nclass Colour(Enum):\n    Red = 1\n\nred = Colour[\"Red\"]\n";
+        let out = reverse_transpile(source, &Config::test_default()).unwrap();
+        assert!(out.contains("red = Colour[\"Red\"]"), "{out}");
     }
 
     /// a bare tuple means something else once it is not a string

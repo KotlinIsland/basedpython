@@ -174,9 +174,10 @@ from json import JSONDecodeError; _lazy_from(_by_lazy, "json", {"dumps": "dumps"
 - **a name a forward reference the transpiler writes reads** — a type parameter's
     bound written ahead of the class it reads a name of, as
     `TypeVar("T", bound="dict[Thing, C.Inner]")`: whatever evaluates that string
-    looks the name up in the module's namespace. a string handed to
-    `typing.ForwardRef` by hand or to `eval` is not seen, and is the last two rows of
-    the table above
+    looks the name up in the module's namespace. a string in a `.by` type expression
+    is a [literal type](literal-types.md) and is written as `Literal["Thing"]`, so it
+    names nothing; a string handed to `typing.ForwardRef` by hand or to `eval` is not
+    seen, and is the last two rows of the table above
 - **a name a decorator reads.** a decorator says what the definition under it
     *is*, and a checker reading the emitted python recognizes `@overload` or
     `@dataclass` only by name. deferring one buys nothing either: a decorator is
