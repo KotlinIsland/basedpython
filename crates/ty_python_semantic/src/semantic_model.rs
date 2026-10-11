@@ -384,6 +384,13 @@ impl<'db> SemanticModel<'db> {
         names
     }
 
+    /// basedpython: the module-level `from` imports whose binding is the only thing that ever
+    /// binds its name in this file, each with every read of it — the imports the lazy-import
+    /// polyfill can defer by rewriting those reads. see `types::deferred_imports`
+    pub fn deferrable_from_imports(&self) -> Vec<crate::DeferrableImport> {
+        crate::types::deferred_imports::deferrable_from_imports(self.db, self.file)
+    }
+
     /// basedpython: when an attribute access reads a *requirement* off an
     /// interface-typed receiver, how it dispatches through the witness table.
     ///

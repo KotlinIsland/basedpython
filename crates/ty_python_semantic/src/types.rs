@@ -194,6 +194,7 @@ pub(crate) mod conversions;
 mod cyclic;
 pub(crate) mod dedicated;
 mod deferred;
+pub(crate) mod deferred_imports;
 mod diagnostic;
 pub(crate) mod display;
 pub(crate) mod enums;
