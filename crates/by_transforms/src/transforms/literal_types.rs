@@ -35,6 +35,8 @@ pub(crate) struct LiteralType<'src> {
     float_literals: FloatLiteralLowering,
     pub(crate) edits: Vec<Fix>,
     pub(crate) needs_literal_import: bool,
+    /// every string the edits write as a literal type
+    literal_strings: Vec<TextRange>,
 }
 
 impl<'src> LiteralType<'src> {
@@ -52,6 +54,7 @@ impl<'src> LiteralType<'src> {
             float_literals,
             edits: Vec::new(),
             needs_literal_import: false,
+            literal_strings: Vec::new(),
         }
     }
 
@@ -86,6 +89,9 @@ impl<'src> LiteralType<'src> {
             return;
         }
         if is_literal_expr(expr, self.float_literals) {
+            if expr.is_string_literal_expr() {
+                self.literal_strings.push(expr.range());
+            }
             self.needs_literal_import = true;
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 format!("{}[{}]", self.literal, self.src(expr.range())),
@@ -122,6 +128,13 @@ impl<'src> LiteralType<'src> {
             }
             return;
         }
+        // the parameter list of a `Callable[[A, B], R]`
+        if let Expr::List(list) = expr {
+            for element in &list.elts {
+                self.emit_type_edits(element, false);
+            }
+            return;
+        }
         if let Expr::Subscript(s) = expr {
             if self.is_literal_name(&s.value) {
                 return;
@@ -137,18 +150,20 @@ impl<'src> LiteralType<'src> {
             if !self.is_type_subscript(&s.value) {
                 return;
             }
+            // a string here is a literal type, as it is anywhere else in a `.by` type
+            // expression — `list["a"]` is `list[Literal["a"]]` — while python would read
+            // it as a forward reference to a name `a`
+            // a slice the value is not specialized by is a value, an enum member's name
+            let specializes = self.types.subscript_specializes(&s.value);
             match s.slice.as_ref() {
                 Expr::Tuple(t) if !t.parenthesized => {
                     for e in &t.elts {
-                        // bare strings inside a generic subscript are PEP 484
-                        // forward references; don't promote them to `Literal`
-                        if matches!(e, Expr::StringLiteral(_)) {
-                            continue;
+                        if specializes || !matches!(e, Expr::StringLiteral(_)) {
+                            self.emit_type_edits(e, false);
                         }
-                        self.emit_type_edits(e, false);
                     }
                 }
-                Expr::StringLiteral(_) => {}
+                Expr::StringLiteral(_) if !specializes => {}
                 slice => self.emit_type_edits(slice, false),
             }
         }
@@ -163,6 +178,10 @@ impl<'src> LiteralType<'src> {
         if !parts.iter().any(|p| {
             is_literal_expr(p, float_literals) || nominal_float_type(p, float_literals).is_some()
         }) {
+            // no arm is a literal, but an arm may hold one: `list["a"] | int`
+            for part in parts {
+                self.emit_type_edits(part, false);
+            }
             return;
         }
 
@@ -202,6 +221,9 @@ impl<'src> LiteralType<'src> {
                         group_start = Some(p.range().start());
                     }
                 }
+                if p.is_string_literal_expr() {
+                    self.literal_strings.push(p.range());
+                }
                 group_list.push(self.src(p.range()).to_owned());
                 group_end = p.range().end();
             } else {
@@ -215,6 +237,26 @@ impl<'src> LiteralType<'src> {
         // trailing None stays as-is; flush final group
         flush_group!();
     }
+}
+
+/// every string in `stmts` that the lowering writes as a literal type, because the checker reads
+/// a string there as one — which python, reading the same text, takes for a forward reference
+///
+/// the reverse direction unquotes exactly these, so that a forward reference python wrote comes
+/// back from a round trip as the reference it was
+pub(crate) fn literal_type_strings(
+    source: &str,
+    stmts: &[Stmt],
+    types: &dyn TypeInfo,
+) -> Vec<TextRange> {
+    let mut inner = LiteralType::new(
+        source,
+        WrittenNames::new(source),
+        types,
+        FloatLiteralLowering::default(),
+    );
+    walk_type_positions_skipping(stmts, Some(types), &[], &mut inner);
+    inner.literal_strings
 }
 
 pub(crate) struct LiteralTypePass<'src> {
@@ -855,33 +897,97 @@ mod tests {
         unchanged("a: 1 | 2\n");
     }
 
+    /// a string in a `.by` type expression is a literal type wherever it is, a subscript's
+    /// slice included: the checker reads `Foo["Later"]` as `Foo[Literal["Later"]]`, and python
+    /// would read the bare string as a forward reference to a name `Later`
     #[test]
-    fn forward_ref_in_generic_class_subscript_not_promoted() {
-        // `Foo["Later"]` is a PEP 484 forward reference, not a Literal;
-        // promoting it to `Foo[Literal["Later"]]` would change the program.
+    fn a_string_in_a_generic_subscript_is_a_literal_type() {
         check(
             indoc! {"
-                class Foo: pass
+                class Foo[T]: pass
                 class Bar(Foo[\"Later\"]): pass
             "},
             indoc! {"
-                class Foo: pass
-                class Bar(Foo[\"Later\"]): pass
+                from typing import Literal, TypeVar, Generic
+                _T = TypeVar(\"_T\")
+                class Foo(Generic[_T]): pass
+                class Bar(Foo[Literal[\"Later\"]]): pass
             "},
         );
     }
 
     #[test]
-    fn forward_ref_inside_dict_arg_not_promoted() {
+    fn a_string_argument_of_a_generic_annotation_is_a_literal_type() {
         check(
-            indoc! {"
-                class Foo: pass
-                a: dict[str, \"Later\"]
-            "},
-            indoc! {"
-                class Foo: pass
-                a: dict[str, \"Later\"]
-            "},
+            "a: dict[str, \"Later\"]\n",
+            "from typing import Literal\na: dict[str, Literal[\"Later\"]]\n",
+        );
+        check(
+            "a: list[\"x\" | \"y\"]\n",
+            "from typing import Literal\na: list[Literal[\"x\", \"y\"]]\n",
+        );
+    }
+
+    #[test]
+    fn a_string_in_a_callable_s_parameter_list_is_a_literal_type() {
+        check(
+            "from typing import Callable\na: Callable[[\"x\", int], \"y\"]\n",
+            "from typing import Callable, Literal\na: Callable[[Literal[\"x\"], int], Literal[\"y\"]]\n",
+        );
+    }
+
+    /// a union with no literal arm can still hold one inside an arm
+    #[test]
+    fn a_literal_inside_an_arm_of_a_union_is_lowered() {
+        check(
+            "a: list[\"x\"] | int\n",
+            "from typing import Literal\na: list[Literal[\"x\"]] | int\n",
+        );
+        check(
+            "a: list[1] | int\n",
+            "from typing import Literal\na: list[Literal[1]] | int\n",
+        );
+    }
+
+    /// subscripting an enum class looks a member up by name at run time: the string is the
+    /// name, not a type
+    #[test]
+    fn a_runtime_lookup_on_a_class_keeps_its_string() {
+        let source = indoc! {"
+            from enum import Enum
+            class Colour(Enum):
+                Red = 1
+            red = Colour[\"Red\"]
+        "};
+        check(source, source);
+    }
+
+    /// nor is a subscript the checker resolves to no type at all
+    #[test]
+    fn an_unresolved_subscript_on_a_class_keeps_its_string() {
+        let out = transpile(
+            "enum class Shape:\n    case Circle(radius: float)\n    case Point\n\nkind = Shape[\"Circle\"]\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(out.contains("kind = Shape[\"Circle\"]"), "{out}");
+    }
+
+    /// the value of a `TypeAlias` is a type expression
+    #[test]
+    fn a_string_type_alias_value_is_a_literal_type() {
+        check(
+            "from typing import TypeAlias\nX: TypeAlias = \"Later\"\n",
+            "from typing import TypeAlias, Literal\nX: TypeAlias = Literal[\"Later\"]\n",
+        );
+    }
+
+    /// `Annotated`'s metadata and `Literal`'s own arguments are not type expressions
+    #[test]
+    fn a_string_that_is_no_type_expression_stays_a_string() {
+        check(
+            "from typing import Annotated\na: Annotated[\"x\", \"meta\"]\n",
+            "from typing import Annotated, Literal\na: Annotated[Literal[\"x\"], \"meta\"]\n",
         );
     }
 }

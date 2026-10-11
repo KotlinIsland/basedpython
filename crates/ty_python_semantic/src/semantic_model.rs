@@ -963,6 +963,24 @@ impl<'db> SemanticModel<'db> {
             .is_some_and(|ty| crate::types::subscript::is_runtime_subscript(self.db, env, ty))
     }
 
+    /// basedpython: whether subscripting `value` specializes it, so that the checker infers
+    /// the slice as type expressions: a generic class, `tuple`, `type`, a generic alias or a
+    /// special form. a class that is not generic is subscripted through its metaclass's
+    /// `__getitem__` or its `__class_getitem__` — `Colour["Red"]` looks an enum member up —
+    /// and a slice read there is a value. `false` for a value the checker could not resolve
+    pub fn subscript_specializes(&self, value: &Expr) -> bool {
+        let db = self.db;
+        match value.inferred_type(self) {
+            Some(Type::ClassLiteral(class)) => {
+                class.generic_context(db).is_some()
+                    || class.is_tuple(db)
+                    || class.is_known(db, crate::types::KnownClass::Type)
+            }
+            Some(Type::GenericAlias(_) | Type::SpecialForm(_) | Type::KnownInstance(_)) => true,
+            _ => false,
+        }
+    }
+
     /// basedpython: whether an attribute access resolves through an *implicit
     /// receiver* — `x.fn` where `fn` names a receiver callable (`int.() -> str`)
     /// in scope rather than a member of `x`. The transpiler rewrites those to

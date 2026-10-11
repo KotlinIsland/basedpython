@@ -137,9 +137,11 @@ mod tests {
         );
     }
 
+    /// a string in a base's type argument is a forward reference in python and a literal type
+    /// in basedpython, so it comes back as the reference it is, whatever it names
     #[test]
-    fn other_strings_unchanged() {
-        check("class A(list[\"B\"]): ...\n", "class A(list[\"B\"])\n");
+    fn a_forward_reference_to_another_name_is_unquoted_too() {
+        check("class A(list[\"B\"]): ...\n", "class A(list[B])\n");
     }
 
     #[test]
