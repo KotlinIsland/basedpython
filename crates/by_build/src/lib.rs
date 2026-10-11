@@ -390,9 +390,10 @@ fn finish(
         anyhow::anyhow!("the `{pass}` pass produced ill-formed IR:\n  {detail}")
     })?;
 
-    // the default config on purpose, except for the target version: the
-    // lazy-import pass is what binds `JustFloat = float` locally instead of
-    // emitting a `from ty_extensions import ...` that has no module behind it.
+    // the default config on purpose, except for the target version and the
+    // deferral of `from` imports: the lazy-import pass is what binds
+    // `JustFloat = float` locally instead of emitting a
+    // `from ty_extensions import ...` that has no module behind it
     //
     // the version has to be the *interpreter's*, because this python runs inside
     // the extension at import time — emitting syntax the interpreter cannot parse
@@ -402,6 +403,9 @@ fn finish(
         source.to_string()
     } else {
         let mut config = options.fallback.clone().unwrap_or_default();
+        // the compiled functions read the module's globals by name, and a deferred
+        // `from` import is in them only once something has read it
+        config.defer_from_imports = false;
         if let Some((major, minor)) = toolchain.and_then(|toolchain| toolchain.version)
             && let Ok(parsed) = format!("{major}.{minor}").parse()
         {

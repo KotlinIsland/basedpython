@@ -96,6 +96,10 @@ pub(crate) struct PassContext {
     /// Full source lines to prepend to the file (e.g. `from typing import cast`).
     /// Deduped before emission.
     pub(crate) required_imports: Vec<String>,
+    /// the names read by a forward reference a pass writes as a string outside an
+    /// annotation, which python evaluates against the module's namespace when anything
+    /// evaluates it — so the lazy-import polyfill binds them where they are imported
+    pub(crate) forward_reference_reads: Vec<String>,
     /// Runtime helpers the emitted code calls, by the name it calls them under.
     /// The driver turns these into an import of the module a build writes them
     /// to, or — when there is no such module — into the definitions themselves.
@@ -1169,6 +1173,15 @@ fn merge_from_imports(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
     (from_lines, other)
 }
 
+/// what phase 0 makes of a module: the rewritten source, the errors, the line map back to the
+/// source, and the names read by the forward references its passes wrote as strings
+pub(crate) struct Phase0<'a> {
+    pub(crate) source: Cow<'a, str>,
+    pub(crate) errors: Vec<String>,
+    pub(crate) line_map: Vec<Option<u32>>,
+    pub(crate) forward_reference_reads: Vec<String>,
+}
+
 /// Run every registered AST pass against `source` and splice the rewritten
 /// statements back into the source text. Returns a borrowed `Cow` when
 /// nothing changed.
@@ -1183,7 +1196,7 @@ pub(crate) fn run_against_source<'a>(
     written: repeated_underscore::WrittenNames,
     config: &Config,
     project: SemanticSource<'_>,
-) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>) {
+) -> Phase0<'a> {
     // blank the keyword-prefix type markers — use-site variance and the
     // `literal`/`final` type modifiers — out up front; downstream passes
     // (callable, intersection) copy operand source verbatim and would leak the
@@ -1218,13 +1231,23 @@ pub(crate) fn run_against_source<'a>(
     if !parsed_handle.errors().is_empty() {
         let cow = blanked.stripped(source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
-        return (cow, Vec::new(), table);
+        return Phase0 {
+            source: cow,
+            errors: Vec::new(),
+            line_map: table,
+            forward_reference_reads: Vec::new(),
+        };
     }
     let parsed = parse_unchecked_source(source_ref, PySourceType::BasedPython);
     if !parsed.errors().is_empty() {
         let cow = blanked.stripped(source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
-        return (cow, Vec::new(), table);
+        return Phase0 {
+            source: cow,
+            errors: Vec::new(),
+            line_map: table,
+            forward_reference_reads: Vec::new(),
+        };
     }
     // the parentheses grouping an expression are visible in the tokens and
     // nowhere in the AST, so anything that needs them has to measure now — the
@@ -1965,7 +1988,12 @@ pub(crate) fn run_against_source<'a>(
     {
         let cow = blanked.stripped(source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
-        return (cow, ctx.errors, table);
+        return Phase0 {
+            source: cow,
+            errors: ctx.errors,
+            line_map: table,
+            forward_reference_reads: ctx.forward_reference_reads,
+        };
     }
 
     // splice changed statements back into the source string. process highest
@@ -2237,7 +2265,12 @@ pub(crate) fn run_against_source<'a>(
         preamble_end,
         &ctx.extension_backing_functions,
     );
-    (Cow::Owned(out), ctx.errors, table)
+    Phase0 {
+        source: Cow::Owned(out),
+        errors: ctx.errors,
+        line_map: table,
+        forward_reference_reads: ctx.forward_reference_reads,
+    }
 }
 
 #[cfg(test)]
@@ -2434,7 +2467,7 @@ mod driver_tests {
     #[test]
     fn double_coalesce_spliced() {
         let src = "x = None\na = x ?? x ?? \"fallback\"\n";
-        let (out, _, _) = run_against_source(
+        let Phase0 { source: out, .. } = run_against_source(
             src,
             repeated_underscore::WrittenNames::new(src),
             &Config::test_default(),

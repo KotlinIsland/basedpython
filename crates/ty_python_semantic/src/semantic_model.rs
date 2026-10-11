@@ -337,21 +337,18 @@ impl<'db> SemanticModel<'db> {
         crate::types::conformance::eagerly_imported_modules(self.db, self.file.file(db))
     }
 
-    /// basedpython: the names this file imports that must be bound to the real
-    /// object rather than to a lazy proxy — the exception classes and the special
-    /// forms.
+    /// basedpython: the names this file imports that the lazy-import polyfill binds where the
+    /// import is written rather than deferring — the exception classes and the special forms
     ///
-    /// `except` is one place cpython refuses a stand-in: it checks that what it
-    /// catches is a class inheriting `BaseException`, and never consults
-    /// `__instancecheck__`. A proxy there raises `TypeError` from the handler —
-    /// the line least likely to be covered by a happy-path test — so an
-    /// exception class is imported eagerly and the proxy never stands where it
-    /// cannot work.
+    /// A deferred name is resolved where it is first read, and for an exception class that is
+    /// a handler: an import that fails there would surface while another exception is being
+    /// handled, and replace it. So an exception class is imported where the import is written,
+    /// where a failure surfaces as it does without the polyfill
     ///
     /// A special form is the other. What reads one tells it apart by identity:
     /// `dataclasses` decides that a bare `ClassVar` annotation is not a field by
     /// asking whether it *is* `typing.ClassVar`, and a checker reading the emitted
-    /// python rejects `ClassVar[int]` once `ClassVar` names a variable.
+    /// python rejects `ClassVar[int]` once `ClassVar` is anything else
     pub fn eagerly_imported_names(&self) -> Vec<String> {
         let db = self.db;
         let env = self.program_environment();

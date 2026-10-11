@@ -70,6 +70,10 @@ pub(crate) struct GenericPolyfill<'src> {
     /// ranges of `pending_edits` this pass re-rendered; the driver drops them so
     /// the stale un-renamed text cannot win the overlap race
     superseded: Vec<TextRange>,
+    /// the names a bound or default reads that is written as a string — a forward
+    /// reference, which python evaluates against the module's namespace when anything
+    /// evaluates it at all
+    forward_reference_reads: Vec<String>,
     /// the `TypeVar` definitions a polyfilled `class` / `def` needs, keyed on the
     /// start of the line its definition begins on
     ///
@@ -236,6 +240,7 @@ impl<'src> GenericPolyfill<'src> {
             symbolic_substitutions,
             pending_edits,
             superseded: Vec::new(),
+            forward_reference_reads: Vec::new(),
             statement_prefixes: Vec::new(),
         }
     }
@@ -474,6 +479,13 @@ impl<'src> GenericPolyfill<'src> {
         self.needed_imports.paramspec = true;
     }
 
+    /// record that `expr` is written as a forward reference, a string python evaluates
+    /// against the module's namespace when anything evaluates it
+    fn note_forward_reference(&mut self, expr: &Expr) {
+        self.forward_reference_reads
+            .extend(names_read(expr).into_iter().map(str::to_owned));
+    }
+
     /// lower `params`, each declared under the name at the same position in `names`
     fn process_type_params(
         &mut self,
@@ -483,12 +495,16 @@ impl<'src> GenericPolyfill<'src> {
     ) -> ProcessedTypeParams {
         // a bound that reads a class's name through the class is written ahead of the class,
         // so it is a string, which `TypeVar` keeps as a forward reference
+        // — and whether it is one
         let through_classes = |text: String| {
             let read_through = apply_renames_to_rendered(&text, qualified);
             if read_through == text {
-                text
+                (text, false)
             } else {
-                super::source_util::python_string_literal(&read_through)
+                (
+                    super::source_util::python_string_literal(&read_through),
+                    true,
+                )
             }
         };
         let mut generic_args: Vec<String> = Vec::new();
@@ -587,18 +603,22 @@ impl<'src> GenericPolyfill<'src> {
                                 )
                                 .unwrap_or_else(|| self.src(bound.range()).to_owned())
                             };
-                            extra_args.push(format!(
-                                "bound={}",
-                                through_classes(apply_renames_to_rendered(&bound_src, &visible))
-                            ));
+                            let (written, quoted) =
+                                through_classes(apply_renames_to_rendered(&bound_src, &visible));
+                            if quoted {
+                                self.note_forward_reference(bound);
+                            }
+                            extra_args.push(format!("bound={written}"));
                         }
                     }
 
                     if let Some(default) = &tv.default {
-                        extra_args.push(format!(
-                            "default={}",
-                            through_classes(self.default_arg(default, &visible))
-                        ));
+                        let (written, quoted) =
+                            through_classes(self.default_arg(default, &visible));
+                        if quoted {
+                            self.note_forward_reference(default);
+                        }
+                        extra_args.push(format!("default={written}"));
                     }
 
                     // basedpython variance keywords: forward `out`/`in`/`in out`
@@ -2118,6 +2138,8 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
             .map(|(index, _)| index)
             .collect();
         ctx.withdrawn_text_edits.extend(withdrawn);
+        ctx.forward_reference_reads
+            .extend(std::mem::take(&mut inner.forward_reference_reads));
         let emits_any = inner.needed_imports_any;
         for line in
             std::mem::take(&mut inner.needed_imports).into_lines(&inner.constructors, self.written)
