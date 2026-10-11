@@ -338,7 +338,9 @@ needs whatever that python needs at import time. that turns out to be nothing
 extra, but only because the transpiler is configured the same way `by build`
 configures it: the [lazy-import pass](../../features/lazy-imports.md) binds
 `JustFloat = float` locally rather than emitting a `from ty_extensions import …`
-that has no module behind it
+that has no module behind it. the one setting that differs is the deferral of `from`
+imports, which is off: below 3.15 a deferred `from` import binds nothing where it
+is written, and the compiled functions read the module's globals by name
 
 this is a sharp edge worth naming. transpiling for the fallback with a
 *different* config than the interpreted build uses produces an extension that

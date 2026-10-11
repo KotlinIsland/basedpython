@@ -40,8 +40,14 @@ async def _soundness_aiter(_it, _t):
 # `_target` carries
 def _soundness_once_bound(_names, _v, _check, _target, *_rest):
     _globals = _target.__globals__
+    # a deferred `from` import is bound once its statement has run, which its
+    # module's `_LazyFrom` knows, and is in the namespace only once something has
+    # read it. the `_LazyFrom` is the module's `__getattr__`'s receiver, asked by
+    # what it holds rather than by its class: this check is often pasted in by
+    # another pass than the import's, and each paste has a class of its own
+    _deferred = getattr(getattr(_globals.get("__getattr__"), "__self__", None), "__by_from__", {})
     for _name in _names:
-        if _name not in _globals:
+        if _name not in _globals and _deferred.get(_name) is None:
             return _v
     return _check(_v, _target(), *_rest)
 
@@ -1261,18 +1267,25 @@ def _type_argument(owner, name):
 
 # --- lazy imports ----------------------------------------------------------
 # below python 3.15 there is no `lazy` keyword, so an import is rewritten to a
-# call: a module import becomes `_lazy_module`, and a `from` import a proxy that
-# resolves the attribute the first time anything touches it
+# call. a module import becomes `_lazy_module`, which binds the real module and
+# runs its body on first attribute access
 #
-# `__class__` makes `isinstance(proxy, C)` work, and `__instancecheck__` makes
-# `isinstance(x, proxy)` work for a lazily-imported class (`isinstance` looks
-# `__instancecheck__` up on `type(classinfo)`, which is `_LazyAttr`).
-# `type(proxy)` and `proxy is x` cannot be fixed by any proxy — that is exactly
-# why PEP 810 is a language feature — and are documented limits of this
-# polyfill
+# a `from` import binds nothing where it is written. the module holds one
+# `_LazyFrom` whose `__dict__` is the module's own namespace, the statement
+# registers its names with it (`_lazy_from`), and every read of an imported
+# name is written as a read off it. a name already in the namespace is a plain
+# dict hit; a missing one is resolved from its module, stored in the namespace
+# and returned, so from its first use on the name is the real object, exactly
+# as PEP 810 makes it. sharing the namespace is also what keeps patching
+# working: `mock.patch("app.svc.fetch")` writes `app.svc`'s namespace, which is
+# what every read in `app.svc` looks in first
+#
+# the module's `__getattr__` and `__dir__` serve the names nothing has read yet
+# to other modules: `from app.svc import fetch`, `app.svc.fetch`, `dir(app.svc)`
 
 
-import importlib as _by_il, importlib.util as _by_iu, sys as _by_sys
+import builtins as _by_builtins, importlib as _by_il, importlib.util as _by_iu, sys as _by_sys
+import _thread as _by_thread
 # a relative import names its module against the package doing the importing,
 # which only that module knows, so it hands `__package__` in
 def _lazy_module(name, package=None):
@@ -1285,97 +1298,141 @@ def _lazy_module(name, package=None):
         return _by_il.import_module(name)
     spec = _by_iu.find_spec(name)
     if spec is None or spec.loader is None:
-        raise ImportError(f"No module named {name!r}", name=name)
+        raise ModuleNotFoundError(f"No module named {name!r}", name=name)
     spec.loader = _by_iu.LazyLoader(spec.loader)
     mod = _by_iu.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return _by_sys.modules.setdefault(name, mod)
 
 
-def _by_forward_operators(proxy):
-    import operator as op
-    def one(f): return lambda s: f(s._by_resolve())
-    def two(f): return lambda s, o: f(s._by_resolve(), o)
-    def rtwo(f): return lambda s, o: f(o, s._by_resolve())
-    for n, f in (("add", op.add), ("sub", op.sub), ("mul", op.mul), ("matmul", op.matmul),
-                 ("truediv", op.truediv), ("floordiv", op.floordiv), ("mod", op.mod),
-                 ("divmod", divmod), ("pow", op.pow), ("lshift", op.lshift),
-                 ("rshift", op.rshift), ("and", op.and_), ("xor", op.xor), ("or", op.or_)):
-        setattr(proxy, "__" + n + "__", two(f))
-        setattr(proxy, "__r" + n + "__", rtwo(f))
-    for n in ("lt", "le", "eq", "ne", "gt", "ge"):
-        setattr(proxy, "__" + n + "__", two(getattr(op, n)))
-    for n, f in (("neg", op.neg), ("pos", op.pos), ("abs", abs), ("invert", op.inv),
-                 ("len", len), ("iter", iter), ("next", next), ("bool", bool),
-                 ("str", str), ("repr", repr), ("bytes", bytes), ("int", int),
-                 ("float", float), ("complex", complex), ("index", op.index),
-                 ("hash", hash), ("reversed", reversed)):
-        setattr(proxy, "__" + n + "__", one(f))
-    setattr(proxy, "__getitem__", two(op.getitem))
-    setattr(proxy, "__contains__", two(op.contains))
-    setattr(proxy, "__delitem__", two(op.delitem))
-    setattr(proxy, "__setitem__", lambda s, k, v: op.setitem(s._by_resolve(), k, v))
-    setattr(proxy, "__format__", lambda s, f: format(s._by_resolve(), f))
-    setattr(proxy, "__round__", lambda s, *a: round(s._by_resolve(), *a))
-    setattr(proxy, "__enter__", lambda s: s._by_resolve().__enter__())
-    setattr(proxy, "__exit__", lambda s, *a: s._by_resolve().__exit__(*a))
+# the names a module's deferred `from` imports bind. `names` is every one of them,
+# so a read of one whose statement has not run yet is what python's global lookup
+# gives — the builtin of that name, or a `NameError` — while any other attribute is
+# an `AttributeError`, as tools that walk a module's namespace probing what they
+# find expect. no deferred name begins with two underscores, so none can be
+# mistaken for an attribute of the holder itself
+class _LazyFrom:
+    __slots__ = ("__dict__", "__by_from__", "__by_resolving__")
 
-class _LazyAttr:
-    __slots__ = ("_by_mod", "_by_attr", "_by_val", "_by_has")
-    def __init__(self, mod, attr):
-        object.__setattr__(self, "_by_mod", mod)
-        object.__setattr__(self, "_by_attr", attr)
-        object.__setattr__(self, "_by_val", None)
-        object.__setattr__(self, "_by_has", False)
-    def _by_resolve(self):
-        if not self._by_has:
-            m = _lazy_module(self._by_mod)
-            try:
-                v = getattr(m, self._by_attr)
-            except AttributeError:
-                # a submodule rather than an attribute: `urllib/__init__.py` never
-                # imports `parse`, and cpython binds it only because `__import__` is
-                # handed a fromlist. reading the attribute alone never triggers that
-                try:
-                    v = _by_il.import_module(self._by_mod + "." + self._by_attr)
-                except ImportError:
-                    # worded as the import machinery words it, down to the module's
-                    # file: a `from x import y` that fails is something programs catch
-                    # and report, so the report must not say where the import was
-                    # written. `name_from` is left off — cpython's own constructor
-                    # only took it from 3.12, and this polyfill runs on 3.9
-                    p = getattr(m, "__file__", None)
-                    raise ImportError("cannot import name " + repr(self._by_attr) +
-                                      " from " + repr(self._by_mod) +
-                                      ("" if p is None else " (" + p + ")"),
-                                      name=self._by_mod, path=p) from None
-            object.__setattr__(self, "_by_val", v)
-            object.__setattr__(self, "_by_has", True)
-        return self._by_val
-    # the three below really do override `object`'s, and `@override` is what says
-    # so — but it is `typing.override`, which arrived in 3.12, and this polyfill
-    # runs on 3.9. the suppression is what the decorator would have been
-    @property
-    def __class__(self): return self._by_resolve().__class__  # ty: ignore[missing-override-decorator]
-    def __getattr__(self, k): return getattr(self._by_resolve(), k)
-    def __setattr__(self, k, v): setattr(self._by_resolve(), k, v)  # ty: ignore[missing-override-decorator]
-    def __delattr__(self, k): delattr(self._by_resolve(), k)  # ty: ignore[missing-override-decorator]
-    def __call__(self, *a, **k): return self._by_resolve()(*a, **k)
-    def __class_getitem__(cls, k): return cls
-    def __instancecheck__(self, o): return isinstance(o, self._by_resolve())
-    def __subclasscheck__(self, o): return issubclass(o, self._by_resolve())
-    def __mro_entries__(self, bases):
-        r = self._by_resolve()
-        m = getattr(r, "__mro_entries__", None)
-        if m is None: return (r,)
-        return m(tuple(r if b is self else b for b in bases))
+    def __init__(self, namespace, names):
+        self.__dict__ = namespace
+        self.__by_from__ = dict.fromkeys(names)
+        self.__by_resolving__ = set()
 
-_by_forward_operators(_LazyAttr)
+    def __getattr__(self, name):
+        source = self.__by_from__.get(name)
+        if source is None:
+            if name in self.__by_from__:
+                # `if PY2: from itertools import izip as zip` leaves `zip` the
+                # builtin where the import did not run. the builtins are the ones
+                # the module runs with, a module or its dict
+                b = self.__dict__.get("__builtins__", _by_builtins)
+                b = b if isinstance(b, dict) else b.__dict__
+                if name in b:
+                    return b[name]
+                error = NameError(f"name {name!r} is not defined")
+                # `NameError.name` arrived in 3.10, and this polyfill runs on 3.9
+                error.name = name
+                raise error
+            raise AttributeError(name)
+        # while a name resolves, the module's own `__getattr__` does not answer for
+        # it: `from . import helper` in a package's `__init__` reads `helper` off the
+        # package, which is this module, and has to fall through to importing the
+        # submodule rather than resolve itself again
+        key = (name, _by_thread.get_ident())
+        self.__by_resolving__.add(key)
+        try:
+            value = _lazy_from_value(*source)
+        finally:
+            self.__by_resolving__.discard(key)
+        self.__dict__[name] = value
+        return value
 
-def _lazy_attr(mod, attr, package=None):
+    # the module's `__getattr__`: a deferred name another module reads before
+    # this one has
+    def __by_getattr__(self, name):
+        if (
+            self.__by_from__.get(name) is None
+            or (name, _by_thread.get_ident()) in self.__by_resolving__
+        ):
+            raise AttributeError(
+                f"module {self.__dict__.get('__name__')!r} has no attribute {name!r}"
+            )
+        return getattr(self, name)
+
+    # the module's `__dir__`
+    def __by_dir__(self):
+        names = set(self.__dict__)
+        names.update(name for name, source in self.__by_from__.items() if source is not None)
+        return sorted(names)
+
+
+# what `from mod import attr` binds, read as python's import machinery reads it
+def _lazy_from_value(mod, attr):
+    # the module is needed now, so it is imported as an ordinary import would, and
+    # whatever its body raises is the import's error, an `AttributeError` included
+    m = _by_sys.modules.get(mod)
+    if m is None:
+        m = _by_il.import_module(mod)
+    else:
+        # one another import made lazily runs its body on its first attribute read
+        m.__dict__
+    try:
+        return getattr(m, attr)
+    except AttributeError:
+        pass
+    name = getattr(m, "__name__", mod)
+    # a package's submodule nothing has imported yet: `urllib/__init__.py` never
+    # imports `parse`, and cpython binds it because `__import__` is handed a
+    # fromlist, which imports it. a submodule that does not exist is the name
+    # missing; a module its body cannot import is the error that body raised
+    if hasattr(m, "__path__"):
+        submodule = name + "." + attr
+        try:
+            _by_il.import_module(submodule)
+        except ModuleNotFoundError as error:
+            if error.name != submodule or (
+                submodule in _by_sys.modules and _by_sys.modules[submodule] is None
+            ):
+                raise
+        try:
+            return getattr(m, attr)
+        except AttributeError:
+            pass
+        value = _by_sys.modules.get(submodule)
+        if value is not None:
+            return value
+    # worded as the import machinery words it, down to the module's file: a
+    # `from x import y` that fails is something programs catch and report, so the
+    # report must not say where the import was written
+    path = getattr(m, "__file__", None)
+    where = path if isinstance(path, str) else "unknown location"
+    if getattr(getattr(m, "__spec__", None), "_initializing", False):
+        message = (
+            f"cannot import name {attr!r} from partially initialized module {name!r} "
+            f"(most likely due to a circular import) ({where})"
+        )
+    else:
+        message = f"cannot import name {attr!r} from {name!r} ({where})"
+    error = ImportError(message, name=name, path=path)
+    # `name_from` arrived in 3.12, and this polyfill runs on 3.9
+    if hasattr(error, "name_from"):
+        error.name_from = attr
+    raise error
+
+
+# a `from` import: registers each name it binds, as `{bound: imported}`, with the
+# module's `_LazyFrom`. a relative import names its module against the package
+# doing the importing, which only that module knows, so it hands `__package__` in
+#
+# a value the name already holds is from before the statement ran — a reload runs
+# the module again over the namespace it had — and the statement replaces it
+def _lazy_from(lazy, mod, names, package=None):
     if package is not None:
         mod = _by_iu.resolve_name(mod, package)
-    return _LazyAttr(mod, attr)
+    for bound, attr in names.items():
+        lazy.__dict__.pop(bound, None)
+        lazy.__by_from__[bound] = (mod, attr)
 
 
 # a type-only marker for `ty_extensions` names, which have no runtime import

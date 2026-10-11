@@ -73,7 +73,9 @@ print(os)   # this is what loads it
 an import with a side effect — registering a plugin, patching something at
 module scope — no longer happens just because the importing module was loaded.
 `from __future__ import ...`, `from x import *`, and an unaliased `import a.b`
-stay eager. see [lazy imports](lazy-imports.md)
+stay eager. below python 3.15 a name imported with `from` is read off its module
+on first use, and is in the importing module's namespace only from then on. see
+[lazy imports](lazy-imports.md)
 
 ### an annotation read at runtime is its python spelling
 

@@ -57,59 +57,145 @@ set the target with `--min-version 3.15` on `by transpile`/`by build`/`by run`
 ## the polyfill (python < 3.15)
 
 without the `lazy` keyword there is no language-level way to defer a binding,
-so the polyfill emits two different shapes:
+so the polyfill lowers the two forms differently
 
-- `import os` → `os = _lazy_module("os")`, which wraps the loader in
-    `importlib.util.LazyLoader` and hands back a **real module object**. nothing
-    is proxied, so this form behaves exactly like an eager import apart from when
-    the body runs
-- `from os import path` → `path = _lazy_attr("os", "path")`, a `_LazyAttr`
-    **proxy**. a proxy is unavoidable here: `_lazy_module` already defers the
-    module body, but reading `path` off the module would force it to run
-    immediately, which is the very thing being deferred
+`import os` binds a real module object whose body runs on first attribute access:
 
-the proxy is transparent — it forwards the operators (`==`, `+`, `len`, `in`,
-`str`, `hash`, comparisons, …) to the value behind it, so it behaves like the
-imported object. this matters more than it sounds: python looks special methods
-up on the *type* and never routes them through `__getattr__`, so any dunder the
-proxy fails to forward silently falls back to `object`'s version rather than
-raising — an unforwarded `__eq__` would make `a == b` compare proxy identity
-and quietly answer `False` for equal values
-
-`isinstance` works in both directions: `isinstance(x, C)` for a proxied `x`
-(via `__class__`), and `isinstance(x, C)` where `C` itself was lazily imported
-(via `__instancecheck__`)
-
-an **exception class is never proxied**. `except` is the one place cpython
-refuses a stand-in: it checks that what it catches is a real class inheriting
-`BaseException`, and never consults `__instancecheck__`. so
-`from errors import ParseError` stays an ordinary import, and the rest of the
-statement's names still don't:
-
-```py
-from errors import ParseError
-decode = _lazy_attr("errors", "decode")
+```python
+os = _lazy_module("os")
 ```
 
-nor is a **special form** — `ClassVar`, `Final`, `Literal`, `Annotated`, `Protocol` and
-the rest of what a type checker gives a meaning of its own. what reads one tells it
-apart by identity: `dataclasses` decides a bare `ClassVar` annotation is not a field
-by asking whether it *is* `typing.ClassVar`, and a checker reading the emitted python
-rejects `ClassVar[int]` once `ClassVar` names a variable. that holds for the imports the
-transpiler writes itself, such as the `ClassVar` an `enum class` lowers through:
+nothing stands in for the module, so this form behaves exactly like an eager
+import apart from when the body runs
 
-```py
-from typing import ClassVar
-cast = _lazy_attr("typing", "cast")
+`from json import dumps` binds nothing where it is written. every read of `dumps`
+is written as a read through one object the module keeps for its deferred names,
+which resolves the name on first use:
+
+```by
+from json import dumps
+
+def show(value: int) -> str:
+    return dumps(value)
 ```
 
-nor is a name an **annotation** reads. whatever reads an annotation back is handed what
-the name is bound to, and a proxy is not the object it stands for: `dataclasses` decides
-that `_: KW_ONLY` is not a field by asking whether the annotation *is*
-`dataclasses.KW_ONLY`, and `typing.get_type_hints` answers with the proxy rather than the
-class. so a `from` import whose name any annotation reads stays an ordinary import — a
-parameter's or a return's annotation, a variable's in a module or a class body, or one
-that is a string, as every annotation is under `from __future__ import annotations`:
+transpiles to:
+
+```python
+_by_lazy = _LazyFrom(globals(), ("dumps",))
+__getattr__ = _by_lazy.__by_getattr__
+__dir__ = _by_lazy.__by_dir__
+_lazy_from(_by_lazy, "json", {"dumps": "dumps"})
+
+def show(value: int) -> str:
+    return _by_lazy.dumps(value)
+```
+
+(the runtime the polyfill calls is left out here)
+
+the first read of `dumps` imports `json`, reads `json.dumps` and stores it in the
+module's namespace under `dumps`, and every read after that finds it there. so
+the name evaluates to the object itself — `type(dumps)`, `dumps === json.dumps`,
+handing it to `json.dumps` or `pytest.approx`, all answer as they would for an
+ordinary import
+
+### what other modules see
+
+the module serves the name to other modules as an ordinary import would:
+`from app import dumps`, `app.dumps`, `hasattr(app, "dumps")` and `dir(app)` all
+find it, through the module's `__getattr__` and `__dir__`
+
+a patch of the name where it is used — `mock.patch("app.dumps")`,
+`monkeypatch.setattr(app, "dumps", fake)` — writes the module's namespace, which
+is where every read in the module looks first, so the module's own code sees the
+patch, and sees the original again once it is undone
+
+### the name is resolved once
+
+a name is read off its module at its first use and kept, as PEP 810 does it. an
+ordinary `from` import reads it when the import runs instead, so a module that
+rebinds `json.dumps` between the import and the first use is seen by the polyfill
+and not by an ordinary import. a rebinding after the first use is seen by neither
+
+### until the first use, the name is not in the namespace
+
+nothing is bound where the import is written, so until something reads the
+name, it is not in the module's namespace:
+
+| expression                                 | before the first use    |
+| ------------------------------------------ | ----------------------- |
+| `globals()["dumps"]`, `vars(app)["dumps"]` | `KeyError`              |
+| `from app import *`, with no `__all__`     | does not import `dumps` |
+| `eval("dumps")` in the module              | `NameError`             |
+| `typing.ForwardRef("dumps")`, evaluated    | `NameError`             |
+
+anything that walks a module's `__dict__` rather than asking for a name misses it
+too: pytest does not collect a test class a test module imports and never uses
+
+reading the name once puts it there, and a module with an `__all__` that lists it
+passes it on to `from app import *` whether it was read or not
+
+a read made before the import statement has run — or where it never ran, as in
+`if PY2: from itertools import izip as zip` — finds what python's lookup finds: the
+builtin of that name if there is one, and a `NameError` if not
+
+a reload runs the module again, and each of its `from` imports reads its name off the
+module again on its next use, as an ordinary import reads it again when it runs
+
+### what stays an ordinary import
+
+the polyfill defers a name only where every read of it can be rewritten, and
+where nothing reads it by identity before it is used. a name it does not defer
+keeps an ordinary import, and the other names of the statement are still
+deferred:
+
+```py
+from json import JSONDecodeError; _lazy_from(_by_lazy, "json", {"dumps": "dumps"})
+```
+
+- **an exception class.** a deferred name is resolved where it is first read, and
+    for an exception class that is a handler: an import failing there would
+    surface while another exception is being handled, and replace it
+- **a special form** — `ClassVar`, `Final`, `Literal`, `Annotated`, `Protocol` and
+    the rest of what a type checker gives a meaning of its own. what reads one
+    tells it apart by identity: `dataclasses` decides a bare `ClassVar` annotation
+    is not a field by asking whether it *is* `typing.ClassVar`, and a checker
+    reading the emitted python rejects `ClassVar[int]` once `ClassVar` is anything
+    else. that holds for the imports the transpiler writes itself, such as the
+    `ClassVar` an `enum class` lowers through
+- **a name an annotation reads.** whatever reads an annotation back reads its names
+    from the module's namespace: `typing.get_type_hints` evaluates a string
+    annotation against it, and `dataclasses` decides that `_: KW_ONLY` is not a
+    field by asking whether the annotation *is* `dataclasses.KW_ONLY`. that counts a
+    parameter's or a return's annotation, a variable's in a module or a class
+    body, and one that is a string, as every annotation is under
+    `from __future__ import annotations`. an annotation on a variable inside a
+    function body is never evaluated, so it does not count
+- **a name a forward reference the transpiler writes reads** — a type parameter's
+    bound written ahead of the class it reads a name of, as
+    `TypeVar("T", bound="dict[Thing, C.Inner]")`: whatever evaluates that string
+    looks the name up in the module's namespace. a string handed to
+    `typing.ForwardRef` by hand or to `eval` is not seen, and is the last two rows of
+    the table above
+- **a name a decorator reads.** a decorator says what the definition under it
+    *is*, and a checker reading the emitted python recognizes `@overload` or
+    `@dataclass` only by name. deferring one buys nothing either: a decorator is
+    applied while the module is executing
+- **a name bound again anywhere in the module** — assigned, deleted, a `def` or a
+    `class` of that name, a `for`, `with`, `except` or walrus target, a second
+    import, or a `global` declaration that binds it from a function. a read could
+    find either binding, and only the one the import makes is deferred
+- **a name a class body reads where the body may have bound it already**: the read
+    finds the class's binding on some paths and the import on others
+- **a name read where python keeps the text of the read**: `f"{dumps=}"` prints
+    the expression as written, and a t-string's `Interpolation` carries it
+- **a name beginning with two underscores**, which a class body mangles
+- **every name of a module that has a `from … import *`**, which can bind any
+    name, **or its own `__getattr__` or `__dir__`**, which the deferred names are
+    served through
+- **every name of a module compiled with [`by compile`](../cli-reference.md#by-compile)**,
+    whose compiled functions read the module's globals by name. its module imports
+    are still deferred
 
 ```by
 from fractions import Fraction
@@ -121,45 +207,10 @@ def show(value: Fraction) -> str:
 
 ```py
 from fractions import Fraction
-dumps = _lazy_attr("json", "dumps")
+_lazy_from(_by_lazy, "json", {"dumps": "dumps"})
 ```
 
 this is an edge of the polyfill: **an import used only in annotations is not deferred on
 python before 3.15**, and the module it names runs where the import is written — so one
-this python does not have fails there, as an ordinary import does. an
-annotation on a variable inside a function body is never evaluated, so it does not count.
-on 3.15 and later the `lazy` keyword binds the real object, and such an import is deferred
-like any other
-
-the functional forms build annotations out of values instead: `NamedTuple("P", [("x", T)])`,
-`TypedDict("TD", {"a": T})` and `dataclasses.make_dataclass(...)` are handed their types as
-arguments, when the call runs. a name imported with `from` and read only there is read as a
-value, so under the polyfill it is still a proxy, and whatever reads those annotations back is
-handed the proxy: `typing.get_type_hints(P)["x"]` is the proxy rather than the class, and
-`make_dataclass` makes a field of the `_` in this `Row`, and leaves `extra` positional:
-
-```by
-from dataclasses import KW_ONLY, make_dataclass
-
-Row = make_dataclass("Row", [("name", str), ("_", KW_ONLY), ("extra", int)])
-```
-
-reach such a name through its module — `import dataclasses` and `dataclasses.KW_ONLY` — which
-binds the real module rather than a proxy, or target `--min-version 3.15`
-
-two things a proxy cannot emulate, and which are therefore limitations of the
-polyfill only:
-
-| expression                   | result                                          |
-| ---------------------------- | ----------------------------------------------- |
-| `type(x)`                    | `_LazyAttr`, not the value's real type          |
-| `x === y` (identity)         | compares proxy identity, not value identity     |
-| `x === None` on imported `x` | always `False`, even when the value *is* `None` |
-
-the `=== None` case is the sharp one, because identity-against-a-singleton is a
-common idiom: `from cfg import SENTINEL` then `SENTINEL === None` is `False`
-even when `SENTINEL` is `None`, because `===` (python `is`) sees the proxy, not
-the value it stands for. test imported values for emptiness by *value* — `x`'s
-truthiness, `x == None`, `isinstance(x, T)` — all of which the proxy forwards.
-or target `--min-version 3.15`, where the `lazy` keyword binds the real object
-and none of these limitations exist
+this python does not have fails there, as an ordinary import does. on 3.15 and later the
+`lazy` keyword binds the real object, and such an import is deferred like any other

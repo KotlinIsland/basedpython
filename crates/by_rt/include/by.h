@@ -3925,8 +3925,7 @@ static inline PyObject *By_SpecSubclass(PyObject *module_dict, const char *name,
  *
  * python resolves `__mro_entries__` before it works out a metaclass or calls one: a
  * base that is not a class may stand for a tuple of them. `typing.Generic[T]` is the
- * familiar one, and a name bound to a proxy — which is what a lazily imported base is
- * until it is first read — is another */
+ * familiar one, which a generic class's lowering writes among its bases */
 static inline PyObject *By_ResolveBases(PyObject *bases) {
     Py_ssize_t index, prior;
     PyObject *tuple;

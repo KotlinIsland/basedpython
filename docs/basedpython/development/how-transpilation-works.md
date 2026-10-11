@@ -117,8 +117,15 @@ body, so a helper brings the rest of what it needs along
     all three paste the definitions in
 
 both renderings are slices of the same text. the lazy-import pass leaves the
-runtime import eager, since a helper reached through its proxy would be a proxy
-call on every use
+runtime import eager: the polyfill runs on it, and a deferred helper would be an
+attribute read on every use
+
+below 3.15 the lazy-import pass asks ty which `from` imports it can defer
+(`SemanticModel::deferrable_from_imports`, run over the output itself, so it sees
+every name an earlier lowering wrote). an import qualifies when it is the only
+binding its name has anywhere in the module, and the answer carries every read
+that reaches it; the pass writes each of those reads through the module's
+`_LazyFrom`, whose `__dict__` is the module's namespace
 
 `_by_runtime.py` is excluded from this repository's own ruff configuration.
 reformatting it rewrites transpiled output, and the isort rule would put a

@@ -23,6 +23,14 @@ pub struct Config {
     /// Tests that compare exact transpile output should set this to `false`
     /// to keep their expected strings free of the lazy preamble
     pub lazy_imports: bool,
+    /// when true (the default), the polyfill defers a `from` import below 3.15 by
+    /// binding nothing where it is written and reading the name through the
+    /// module's `_LazyFrom` on first use. off, a `from` import stays an ordinary
+    /// import, and only module imports are deferred. the interpreted fallback a
+    /// natively compiled module embeds turns it off: the compiled functions read
+    /// the module's globals by name, where a deferred name is not until something
+    /// has read it
+    pub defer_from_imports: bool,
     /// when true, every transpiled file is prefixed with
     /// `from __future__ import annotations`, deferring all annotation
     /// evaluation. off by default: forward references are handled surgically
@@ -110,6 +118,7 @@ impl Default for Config {
             is_python: false,
             is_stub: false,
             lazy_imports: true,
+            defer_from_imports: true,
             inject_future_annotations: false,
             prune_unused_imports_after_reverse: true,
             soundness: SoundnessPositions::defaults(),

@@ -44,6 +44,21 @@ pub(crate) fn make_in_memory_db(source: &str) -> (TestDb, File) {
     make_in_memory_db_at(source, PythonVersion::latest_ty())
 }
 
+/// a single-file db over `source` read as the python it is: transpiled output, which
+/// python runs, and which is to be understood the way python understands it
+fn make_in_memory_python_db(source: &str) -> (TestDb, File) {
+    let mut db = TestDb::new(ProjectMetadata::new(
+        ruff_python_ast::name::Name::new_static(""),
+        SystemPathBuf::from("/"),
+    ));
+    db.init_program_with_python_version(PythonVersion::latest_ty())
+        .expect("program init failed");
+    db.write_file("/output.py", source)
+        .expect("write file failed");
+    let file = system_path_to_file(&db, "/output.py").expect("file not in db");
+    (db, file)
+}
+
 /// [`make_in_memory_db`], analysing the source at `python_version`
 fn make_in_memory_db_at(source: &str, python_version: PythonVersion) -> (TestDb, File) {
     let mut db = TestDb::new(ProjectMetadata::new(
@@ -243,7 +258,12 @@ fn transpile_with_report(
     let unchanged = !reified_changed
         && !qualified_changed
         && matches!(enum_lowered.output, std::borrow::Cow::Borrowed(_));
-    let (source, ast_errors, _phase0_map) = transforms::ast_driver::run_against_source(
+    let transforms::ast_driver::Phase0 {
+        source,
+        errors: ast_errors,
+        forward_reference_reads,
+        ..
+    } = transforms::ast_driver::run_against_source(
         source,
         written_names,
         config,
@@ -282,12 +302,16 @@ fn transpile_with_report(
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
     let (final_output, requirements) = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, written_names, config)?;
+    // a forward reference a lowering wrote as a string reads its names when python evaluates
+    // it, against the module's namespace, so those are bound where they are imported
+    let mut eager_names = model.eagerly_imported_names();
+    eager_names.extend(forward_reference_reads);
     let final_output = run_lazy_import_phase(
         final_output,
         config,
         &model.eagerly_imported_modules(),
-        &model.eagerly_imported_names(),
-    );
+        &eager_names,
+    )?;
     let final_output = run_version_polyfill_phase(final_output, config);
 
     // --- Phase 3: syntax verification ---
@@ -491,9 +515,16 @@ pub fn transpile_typed_with_report(
     // single-file db cannot resolve the modules that declare the conformances
     let eager_model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
     let eager_imports = eager_model.eagerly_imported_modules();
-    let eager_names = eager_model.eagerly_imported_names();
-    let (spliced, ast_errors, phase0_map) =
-        transforms::ast_driver::run_against_source(working_source, written_names, config, project);
+    let mut eager_names = eager_model.eagerly_imported_names();
+    let transforms::ast_driver::Phase0 {
+        source: spliced,
+        errors: ast_errors,
+        line_map: phase0_map,
+        forward_reference_reads,
+    } = transforms::ast_driver::run_against_source(working_source, written_names, config, project);
+    // a forward reference a lowering wrote as a string reads its names when python evaluates
+    // it, against the module's namespace, so those are bound where they are imported
+    eager_names.extend(forward_reference_reads);
     if let Some(first) = ast_errors.first() {
         return Err(first.clone().into());
     }
@@ -535,7 +566,7 @@ pub fn transpile_typed_with_report(
 
     let (final_output, requirements) = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, written_names, config)?;
-    let final_output = run_lazy_import_phase(final_output, config, &eager_imports, &eager_names);
+    let final_output = run_lazy_import_phase(final_output, config, &eager_imports, &eager_names)?;
     let final_output = run_version_polyfill_phase(final_output, config);
 
     // phases 1-2c only prepend preambles at the top and edit within lines, so
@@ -738,19 +769,21 @@ fn run_import_redirect_phase(source: String, config: &Config) -> (String, Runtim
 /// prepends `lazy ` (PEP 810, Python 3.15+) to every `import` and
 /// `from import` statement. Skips `from __future__` and star imports.
 ///
-/// Gated on `min_version >= 3.15`: PEP 810 syntax doesn't parse on older
-/// Python, so we leave imports eager when the target version can't handle
-/// the keyword. A redundant `lazy` keyword written in source is stripped
-/// in that case so the output stays valid
+/// Below 3.15 the keyword does not parse, so the imports are lowered onto the
+/// runtime's polyfill instead: a module import binds a lazily loaded module, and
+/// a `from` import binds nothing at all, every read of the name being written as
+/// a read through the module's `_LazyFrom`, which resolves it on first use. A
+/// redundant `lazy` keyword written in source is stripped so the output stays
+/// valid
 ///
 /// `eager` names the modules that must not be deferred whatever the target: a
 /// module declaring a conformance exists at runtime only because its
 /// registration ran, so deferring it defers the conformance out of existence
 ///
-/// `eager_names` names the *bindings* that must be bound to the real object: a
-/// lazy proxy cannot stand where cpython checks for a real class, which is what
-/// `except` does, nor where a special form is told apart by identity, nor in an
-/// annotation something reads back
+/// `eager_names` names the *bindings* that must be bound to the real object where
+/// the import is written: what `except` catches, a special form, and a name an
+/// annotation or a decorator reads, whose readers look them up in the module's
+/// namespace or tell them apart by identity as the module is executing
 ///
 /// A stub defers nothing: it is never executed, and deferring its imports would
 /// hand a checker a call result where the stub declares a module or a class
@@ -759,12 +792,12 @@ fn run_lazy_import_phase(
     config: &Config,
     eager: &[String],
     eager_names: &[String],
-) -> String {
+) -> Result<String, String> {
     if !config.lazy_imports {
-        return source;
+        return Ok(source);
     }
 
-    let (db, file) = make_in_memory_db(&source);
+    let (db, file) = make_in_memory_python_db(&source);
     let source_ref = ruff_db::source::source_text(&db, file);
     let src = source_ref.as_str();
     let module = ruff_db::parsed::parsed_module(
@@ -772,17 +805,15 @@ fn run_lazy_import_phase(
         ty_python_semantic::Db::program_file(&db, file).python_file(&db),
     )
     .load(&db);
+    let model = ty_python_semantic::SemanticModel::new(
+        &db,
+        ty_python_semantic::Db::program_file(&db, file),
+    );
     // the lowering writes imports of its own — an enum's `ClassVar` among them — which
     // the source the transpile began from never held, so the output is asked too. the
     // annotations are read off the output for the same reason: a lowering writes those
     let mut eager_names = eager_names.to_vec();
-    eager_names.extend(
-        ty_python_semantic::SemanticModel::new(
-            &db,
-            ty_python_semantic::Db::program_file(&db, file),
-        )
-        .eagerly_imported_names(),
-    );
+    eager_names.extend(model.eagerly_imported_names());
     eager_names.extend(transforms::lazy_import::annotation_names(
         module.suite(),
         src,
@@ -796,30 +827,56 @@ fn run_lazy_import_phase(
     } else {
         transforms::lazy_import::Deferral::Polyfill
     };
-    // the runtime is what the polyfill itself runs on, and a helper reached
-    // through a proxy would be a proxy call on every use
+    let deferrable = if deferral == transforms::lazy_import::Deferral::Polyfill
+        && config.defer_from_imports
+    {
+        transforms::lazy_import::deferrable_reads(module.suite(), model.deferrable_from_imports())
+    } else {
+        std::collections::HashMap::default()
+    };
+    let code = CodeNames::of(module.suite());
+    let written = transforms::repeated_underscore::WrittenNames::new(src).with_code(&code);
+    let holder = written.fresh("_by_lazy");
+    // the runtime is what the polyfill itself runs on
     let mut eager = eager.to_vec();
     eager.extend(config.runtime_module.clone());
-    let mut lazy = transforms::lazy_import::LazyImport::new(src, deferral, &eager, &eager_names);
+    let mut lazy = transforms::lazy_import::LazyImport::new(
+        src,
+        deferral,
+        &eager,
+        &eager_names,
+        deferrable.keys().copied().collect(),
+        &holder,
+    );
     for stmt in module.suite() {
         lazy.visit_stmt(stmt);
     }
-    let needs_module = lazy.needs_module_helper;
-    let needs_attr = lazy.needs_attr_helper;
-    let needs_ty_ext = lazy.needs_ty_ext_marker;
-    let needs_character_class = lazy.needs_character_class;
+    let mut edits = std::mem::take(&mut lazy.edits);
+    for (alias, bound) in &lazy.deferred {
+        for read in deferrable.get(alias).into_iter().flatten() {
+            edits.push(Fix::safe_edit(Edit::range_replacement(
+                format!("{holder}.{bound}"),
+                *read,
+            )));
+        }
+    }
+    let deferred_names: Vec<String> = lazy
+        .deferred
+        .iter()
+        .map(|(_, bound)| bound.clone())
+        .collect();
 
     let helpers = transforms::lazy_import::polyfill_helpers(
-        needs_module,
-        needs_attr,
-        needs_ty_ext,
-        needs_character_class,
+        lazy.needs_module_helper,
+        !deferred_names.is_empty(),
+        lazy.needs_ty_ext_marker,
+        lazy.needs_character_class,
     );
-    if lazy.edits.is_empty() && helpers.is_empty() {
-        return source;
+    if edits.is_empty() && helpers.is_empty() {
+        return Ok(source);
     }
 
-    let (mut body, _) = apply_transforms_once(src, lazy.edits);
+    let (mut body, _) = apply_transforms_once(src, edits);
     // phase 0 already gave the module the helpers *it* needed. where that was an import of the
     // runtime written beside it, the helpers this phase needs belong on that same line rather
     // than on a second one naming the same module
@@ -828,17 +885,58 @@ fn run_lazy_import_phase(
     {
         let line = runtime::import_line(module, helpers.iter().copied());
         let left_over = transforms::ast_driver::merge_into_own_imports(&mut body, vec![line]);
-        return match left_over.first() {
-            Some(line) => splice_preamble(&body, &format!("{line}\n")),
-            None => body,
-        };
-    }
-    let preamble = runtime_preamble(config, &helpers, &body);
-    if preamble.is_empty() {
-        body
+        if let Some(line) = left_over.first() {
+            body = splice_preamble(&body, &format!("{line}\n"));
+        }
     } else {
-        splice_preamble(&body, &preamble)
+        let preamble = runtime_preamble(config, &helpers, &body);
+        if !preamble.is_empty() {
+            body = splice_preamble(&body, &preamble);
+        }
     }
+    if deferred_names.is_empty() {
+        return Ok(body);
+    }
+    let globals = written.builtin("globals");
+    let lines = transforms::lazy_import::holder_lines(&holder, &deferred_names, &globals);
+    let mut block = String::new();
+    for import in written.builtin_imports(&lines, config.min_version.minor) {
+        block.push_str(&import);
+        block.push('\n');
+    }
+    block.push_str(&lines);
+    insert_after_binding(&body, runtime::LAZY_FROM.name(), &block)
+}
+
+/// `text` inserted on the line after the top-level statement of `module` that binds `name`,
+/// a runtime helper the preamble provides. a module that does not bind it was not given it,
+/// and the lines that need it have nowhere to go
+fn insert_after_binding(module: &str, name: &str, text: &str) -> Result<String, String> {
+    let parsed =
+        ruff_python_parser::parse_unchecked_source(module, ruff_python_ast::PySourceType::Python);
+    let Some(statement) = parsed
+        .suite()
+        .iter()
+        .find(|stmt| runtime::bindings(stmt).contains_key(name))
+    else {
+        return Err(format!(
+            "the lazy-import polyfill needs `{name}`, and the module was not given it"
+        ));
+    };
+    let end = usize::from(statement.end());
+    let at = module[end..]
+        .find('\n')
+        .map_or(module.len(), |newline| end + newline + 1);
+    let separator = if at == module.len() && !module.ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "{}{separator}{text}{}",
+        &module[..at],
+        &module[at..]
+    ))
 }
 
 /// The lines that give `module`, python, the runtime helpers it calls: an import of

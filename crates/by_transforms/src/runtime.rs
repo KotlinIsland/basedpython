@@ -20,12 +20,12 @@
 //! a helper resolves to the top-level statement that binds its name, as our own
 //! parser reads the file. a comment written between two definitions falls outside
 //! both and never reaches the output; one inside a body is part of it. a
-//! top-level statement that binds nothing, such as
-//! `_by_forward_operators(_LazyAttr)`, travels with the definition above it
+//! top-level statement that binds nothing, such as a call that finishes setting up
+//! a class, travels with the definition above it
 //!
 //! # dependencies
 //!
-//! helpers call each other: `_lazy_attr` resolves through `_lazy_module`,
+//! helpers call each other: `_LazyFrom` resolves through `_lazy_module`,
 //! `_soundness_parametric` through `_parametric_is`. what a helper needs is read
 //! out of the calls in its body, so asking for one yields a set that runs
 
@@ -106,7 +106,8 @@ helpers! {
     DEFAULT = "_by_default",
     RAISES = "_by_raises",
     LAZY_MODULE = "_lazy_module",
-    LAZY_ATTR = "_lazy_attr",
+    LAZY_FROM_HOLDER = "_LazyFrom",
+    LAZY_FROM = "_lazy_from",
     TY_EXT_MARKER = "_TyExtMarker",
     CHARACTER = "Character",
     MATCH_MISS = "_by_match_miss",
@@ -1196,48 +1197,6 @@ mod tests {
         assert_eq!(DISCARD.name(), ty_python_semantic::DISCARD_ADAPTER);
     }
 
-    /// the proxy's operator forwarding is read by nothing; it has to travel with
-    /// the class it patches, or the proxy is left with no operators at all
-    #[test]
-    fn set_up_code_travels_with_its_definition() {
-        let pasted = inline(
-            [LAZY_ATTR],
-            &[],
-            crate::transforms::repeated_underscore::WrittenNames::new(""),
-        )
-        .concat();
-        assert!(pasted.contains("class _LazyAttr:"), "{pasted}");
-        assert!(
-            pasted.contains("_by_forward_operators(_LazyAttr)"),
-            "{pasted}"
-        );
-        assert!(pasted.contains("def _lazy_module("), "{pasted}");
-    }
-
-    /// the proxy's three overrides of `object`'s own members are reported by
-    /// `missing-override-decorator`, and the emitted python is read by this project's own
-    /// checker. `@override` is `typing.override`, which arrived in 3.12, and the polyfill
-    /// runs on 3.9 — so each carries the suppression the decorator would have been
-    #[test]
-    fn the_proxies_overrides_do_not_report_in_the_emitted_python() {
-        let pasted = inline(
-            [LAZY_ATTR],
-            &[],
-            crate::transforms::repeated_underscore::WrittenNames::new(""),
-        )
-        .concat();
-        for member in ["__class__", "__setattr__", "__delattr__"] {
-            let line = pasted
-                .lines()
-                .find(|line| line.trim_start().starts_with(&format!("def {member}(")))
-                .unwrap_or_else(|| panic!("`{member}` is no longer defined:\n{pasted}"));
-            assert!(
-                line.contains("# ty: ignore[missing-override-decorator]"),
-                "`{member}` lost its suppression: {line}"
-            );
-        }
-    }
-
     /// the reads a pasted definition renames are the names python itself looks up in the
     /// module's globals: its compiler's symbol table answers the same question, so the two
     /// are held to agree over the whole runtime. with no python to ask, there is nothing
@@ -1289,7 +1248,7 @@ print(" ".join(sorted(found)))
     /// in a function of its own leaves them reading it as written
     #[test]
     fn a_pasted_definition_reads_a_builtin_the_module_binds_under_its_own_name() {
-        let module = "def getattr(o, n): return 42\ndef f(format): return format\n";
+        let module = "def getattr(o, n): return 42\ndef f(sorted): return sorted\n";
         let parsed = ruff_python_parser::parse_unchecked_source(
             module,
             ruff_python_ast::PySourceType::Python,
@@ -1297,15 +1256,12 @@ print(" ".join(sorted(found)))
         let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
         let written =
             crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
-        let pasted = inline([LAZY_ATTR], parsed.suite(), written).concat();
+        let pasted = inline([LAZY_FROM_HOLDER], parsed.suite(), written).concat();
         assert!(
-            pasted.contains("v = getattr2(m, self._by_attr)") && !pasted.contains("getattr(m,"),
+            pasted.contains("return getattr2(m, attr)") && !pasted.contains("getattr(m,"),
             "{pasted}"
         );
-        assert!(
-            pasted.contains("lambda s, f: format(s._by_resolve(), f)"),
-            "{pasted}"
-        );
+        assert!(pasted.contains("return sorted(names)"), "{pasted}");
     }
 
     /// a function or class that declares a builtin's name `global` and binds it rebinds the
@@ -1320,7 +1276,7 @@ print(" ".join(sorted(found)))
             "            for getattr in [len]:\n",
             "                pass\n",
             "def local():\n",
-            "    format = 1\n",
+            "    sorted = 1\n",
         );
         let parsed = ruff_python_parser::parse_unchecked_source(
             module,
@@ -1329,15 +1285,12 @@ print(" ".join(sorted(found)))
         let code = crate::transforms::repeated_underscore::CodeNames::of(parsed.suite());
         let written =
             crate::transforms::repeated_underscore::WrittenNames::new(module).with_code(&code);
-        let pasted = inline([LAZY_ATTR], parsed.suite(), written).concat();
+        let pasted = inline([LAZY_FROM_HOLDER], parsed.suite(), written).concat();
         assert!(
-            pasted.contains("v = getattr2(m, self._by_attr)") && !pasted.contains("getattr(m,"),
+            pasted.contains("return getattr2(m, attr)") && !pasted.contains("getattr(m,"),
             "{pasted}"
         );
         // a local binding leaves the module's alone
-        assert!(
-            pasted.contains("lambda s, f: format(s._by_resolve(), f)"),
-            "{pasted}"
-        );
+        assert!(pasted.contains("return sorted(names)"), "{pasted}");
     }
 }

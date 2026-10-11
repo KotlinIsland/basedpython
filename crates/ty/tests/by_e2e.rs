@@ -4887,9 +4887,10 @@ def main():
     reason = "a skipped test prints why it was skipped"
 )]
 fn a_lazy_from_import_resolves_a_submodule_and_refuses_a_missing_name_as_python_does() {
-    // `_LazyAttr` defers the attribute read, and reading an attribute is not how a
-    // submodule gets bound: `urllib/__init__.py` never imports `parse`, and cpython
-    // binds it only because `__import__` is handed a fromlist. so a transpiled
+    // a deferred `from` import reads an attribute off the module on first use, and
+    // reading an attribute is not how a submodule gets bound: `urllib/__init__.py`
+    // never imports `parse`, and cpython binds it only because `__import__` is
+    // handed a fromlist. so a transpiled
     // `from urllib import parse` used to raise `AttributeError` where the same source
     // run by cpython is fine — a wrong answer in shipped output rather than a decline
     //
@@ -4940,7 +4941,7 @@ fn a_lazy_from_import_resolves_a_submodule_and_refuses_a_missing_name_as_python_
     let program = String::from_utf8_lossy(&transpiled.stdout).into_owned();
     // the laziness is the thing under test, so its absence must not pass silently
     assert!(
-        program.contains("_lazy_attr(\"urllib\", \"parse\")"),
+        program.contains("_lazy_from(_by_lazy, \"urllib\", {\"parse\": \"parse\"})"),
         "{program}"
     );
     fs::write(dir.path().join("prog.py"), &program).unwrap();
@@ -6672,9 +6673,9 @@ fn a_built_package_runs_off_one_copy_of_the_runtime() {
         !one.contains("def _checked_cast("),
         "and does not define it as well:\n{one}"
     );
-    // a helper reached through the lazy-import proxy is a proxy call on every use
+    // a deferred helper would be an attribute read on every use
     assert!(
-        !one.contains("_lazy_attr(\"app._by_runtime\""),
+        !one.contains("\"app._by_runtime\""),
         "the runtime import is eager:\n{one}"
     );
     // the lowering asks for helpers in two places — `cast!` during the AST rewrite, the

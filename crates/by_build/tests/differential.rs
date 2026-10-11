@@ -11562,6 +11562,24 @@ fn a_float_module_imports_without_any_extra_runtime_module() {
 }
 
 #[test]
+fn a_compiled_function_reads_a_name_its_module_imports_with_from() {
+    // below 3.15 the lazy-import polyfill defers a `from` import by binding nothing where
+    // it is written, and a compiled function reads the module's globals by name. so the
+    // fallback a compiled module embeds keeps its `from` imports ordinary ones
+    agree(
+        "fromglobal",
+        "\
+from json import dumps
+from os.path import basename as base
+
+def f(a: int) -> str:
+    return dumps([a]) + base('/x/y')
+",
+        &["m.f(1)"],
+    );
+}
+
+#[test]
 fn a_compiled_function_is_a_c_function_object() {
     // one of the few places the two builds are *meant* to differ: a natively
     // compiled function is a builtin, not a python function. recorded in
@@ -22840,10 +22858,64 @@ def widened(value: object) -> str:
             // the class reports the module it was written in, not `builtins`
             "(m.Node.__module__, m.Keyed.__module__)",
             "(m.Node.__name__, m.Node.__qualname__)",
-            // an imported base reaches this module as a lazy proxy, so `__mro_entries__`
-            // is what turns it into the class — and python records what was written
-            "repr(m.Node.__orig_bases__)",
+            // an imported base is the class itself, with no `__mro_entries__` to
+            // record what was written in its place
+            "'__orig_bases__' in vars(m.Node)",
         ],
+    );
+}
+
+#[test]
+fn a_class_on_a_base_that_stands_for_others_agrees() {
+    // a base that is not a class may stand for a tuple of them through `__mro_entries__`,
+    // which python resolves before it works out a metaclass, recording what was written in
+    // `__orig_bases__`. the checker is shown the class the stand-in stands for, so the class
+    // compiles, and the metaclass here is `ABCMeta`, so the type is built by calling it
+    let Some(compiled) = agree_in(
+        "mroentries",
+        "\
+from abc import ABC
+from typing import TYPE_CHECKING
+
+
+class StandIn:
+    def __mro_entries__(self, bases: tuple[object, ...]) -> tuple[type, ...]:
+        return (ABC,)
+
+
+if TYPE_CHECKING:
+    Base = ABC
+else:
+    Base = StandIn()
+
+
+class Node(Base):
+    def kind(self) -> str:
+        return \"node\"
+",
+        &[
+            "m.Node().kind()",
+            "[base.__name__ for base in m.Node.__mro__]",
+            "type(m.Node.__orig_bases__[0]).__name__",
+            "(type(m.Node).__name__, issubclass(m.Node, __import__('abc').ABC))",
+        ],
+        false,
+        by_irbuild::Language::BasedPython,
+    ) else {
+        return;
+    };
+    // and the class is the one module init built, not the interpreted definition left
+    // standing because the build gave up on it
+    let Some((python, _)) = environment() else {
+        return;
+    };
+    assert_eq!(
+        run(
+            &python,
+            &compiled,
+            "import by_diff_mroentries as m\nprint(type(m.Node.__dict__['kind']).__name__)\n",
+        ),
+        "method_descriptor"
     );
 }
 

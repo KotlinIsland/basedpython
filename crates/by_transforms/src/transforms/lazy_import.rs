@@ -3,10 +3,12 @@
 //! Two emission strategies, chosen by target Python version:
 //!   - **`min_version >= 3.15`** — prepend the `lazy` keyword (PEP 810)
 //!   - **`min_version < 3.15`** — rewrite the statement to call a runtime
-//!     polyfill (`_lazy_module` for module imports, `_lazy_attr` for `from`
-//!     imports). The helpers wrap `importlib.util.LazyLoader` and a small proxy
-//!     class, and live in [`crate::runtime`] with the rest of what the emitted
-//!     python calls
+//!     polyfill. a module import binds `_lazy_module(...)`, a module whose body
+//!     runs on first attribute access. a `from` import binds nothing: it
+//!     registers its names with the module's `_LazyFrom` (`_lazy_from(...)`),
+//!     and every read of one is written as a read through it, which resolves
+//!     the name on first use — see [`deferrable_reads`]. The helpers live in
+//!     [`crate::runtime`] with the rest of what the emitted python calls
 //!
 //! Both modes skip:
 //!   - `from __future__ import ...` — compiler directive
@@ -15,7 +17,8 @@
 //!     bound to `False`
 //!
 //! The polyfill additionally skips forms it can't safely rewrite:
-//!   - relative imports (`from .pkg import x`)
+//!   - a `from` import name whose reads cannot all be rewritten, or which is
+//!     read where only the object bound at the import will do
 //!   - `import a.b` without an alias (binds the top package, which
 //!     `LazyLoader` does not register)
 //!   - bootstrap modules (`sys`, `importlib*`) — the helpers depend on them — and
@@ -27,9 +30,13 @@
 //! A stub defers nothing — see [`Deferral::Never`].
 
 use ruff_diagnostics::{Edit, Fix};
+use ruff_python_ast::visitor::source_order::{
+    SourceOrderVisitor, walk_interpolated_string_element, walk_t_string,
+};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Stmt, StmtImport, StmtImportFrom};
 use ruff_text_size::{Ranged, TextRange, TextSize};
+use std::collections::{HashMap, HashSet};
 
 /// How a module-level import is deferred.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -58,22 +65,26 @@ pub(crate) struct LazyImport<'src> {
     /// registers it at import, so deferring the import defers the conformance
     /// out of existence
     eager: Vec<String>,
-    /// bindings that must be bound to the real object rather than to a proxy.
-    /// cpython's `except` checks that what it catches is a class inheriting
-    /// `BaseException` and never consults `__instancecheck__`, so an exception
-    /// class reached through the proxy raises `TypeError` from the handler; a
-    /// special form, and a name an annotation reads, are told apart by identity
-    /// by whatever reads them — see [`annotation_names`]
+    /// bindings that must be made where the import is written: an exception
+    /// class, a special form, and a name an annotation or a decorator reads — see
+    /// [`ty_python_semantic::SemanticModel::eagerly_imported_names`],
+    /// [`annotation_names`] and [`decorator_names`]
     eager_names: Vec<String>,
     deferral: Deferral,
     pub(crate) edits: Vec<Fix>,
     /// True when at least one statement was rewritten to call
     /// `_lazy_module`; the preamble must define the module helper
     pub(crate) needs_module_helper: bool,
-    /// True when at least one statement was rewritten to call `_lazy_attr`;
-    /// the preamble must define the `_LazyAttr` proxy (and `_lazy_module`,
-    /// which `_lazy_attr` calls)
-    pub(crate) needs_attr_helper: bool,
+    /// the `from` import names [`deferrable_from_imports`] found every read of, and
+    /// whose names may be deferred, by the range of their `ast::Alias`
+    ///
+    /// [`deferrable_from_imports`]: ty_python_semantic::SemanticModel::deferrable_from_imports
+    deferrable: HashSet<TextRange>,
+    /// the name the module's `_LazyFrom` is bound under, which every read of a
+    /// deferred name is written through
+    holder: &'src str,
+    /// each name the walk deferred, with the range of the alias that imports it
+    pub(crate) deferred: Vec<(TextRange, String)>,
     /// True when at least one `from ty_extensions import X` was rewritten to
     /// a `_TyExtMarker` assignment; the preamble must define the marker
     pub(crate) needs_ty_ext_marker: bool,
@@ -90,6 +101,8 @@ impl<'src> LazyImport<'src> {
         deferral: Deferral,
         eager: &[String],
         eager_names: &[String],
+        deferrable: HashSet<TextRange>,
+        holder: &'src str,
     ) -> Self {
         Self {
             source,
@@ -99,7 +112,9 @@ impl<'src> LazyImport<'src> {
             deferral,
             edits: Vec::new(),
             needs_module_helper: false,
-            needs_attr_helper: false,
+            deferrable,
+            holder,
+            deferred: Vec::new(),
             needs_ty_ext_marker: false,
             needs_character_class: false,
         }
@@ -157,8 +172,8 @@ impl<'src> LazyImport<'src> {
 
     /// a module the polyfill leaves eager. the helpers run on `sys` and `importlib`, and
     /// `builtins` is loaded before any module runs, so deferring it defers nothing — while
-    /// its proxy would stand where a lowering reads a builtin under a name of its own, and
-    /// fail an identity test such as `type(x) is str2`
+    /// a lowering's import of a builtin under a name of its own is one of the imports the
+    /// runtime preamble is placed after
     fn is_bootstrap(name: &str) -> bool {
         matches!(name, "sys" | "importlib" | "builtins") || name.starts_with("importlib.")
     }
@@ -243,8 +258,9 @@ impl<'src> LazyImport<'src> {
             .is_some_and(|m| m.id.as_str() == "__future__");
         let is_star = node.names.iter().any(|a| a.name.id.as_str() == "*");
         // `TYPE_CHECKING` is a flag a checker reads statically, not an ordinary
-        // binding: deferring it rebinds the name to a proxy, and the name may
-        // only ever be bound to `False`
+        // binding: deferring it would make each read of it a read through the
+        // module's `_LazyFrom`, and a checker only ever accepts the name bound to
+        // `False`
         let binds_type_checking = node
             .names
             .iter()
@@ -318,6 +334,10 @@ impl<'src> LazyImport<'src> {
         // `lines` the one import line they share is written into
         let mut eager_spellings: Vec<String> = Vec::new();
         let mut eager_line: Option<usize> = None;
+        // the names this statement registers with the module's `_LazyFrom`, as
+        // `(bound, imported)`, and the slot in `lines` the registration goes in
+        let mut registered: Vec<(&str, &str)> = Vec::new();
+        let mut registration_line: Option<usize> = None;
         // whether the statement imported a bare `Character` that contributed no
         // binding line — the import must still be *removed* (the preamble class
         // defines `Character`), so force an empty replacement below
@@ -352,11 +372,26 @@ impl<'src> LazyImport<'src> {
                 }
                 continue;
             }
-            if self.eager_names.iter().any(|eager| eager == bind) {
-                // the proxy cannot stand here, so re-emit the import as written.
-                // ahead of the relative branches: a relative import is the
-                // common shape inside a package, and its exceptions are caught
-                // just the same
+            let eager = self.eager_names.iter().any(|eager| eager == bind);
+            // `from . import x` is no different: `x` is read off the package, and
+            // imported as its submodule only when the package has no `x`
+            if !eager
+                // a name beginning with two underscores could be one the holder's own type
+                // answers, `__doc__` among them, and a read of it inside a class body is
+                // mangled the moment it is written as an attribute
+                && !bind.starts_with("__")
+                && self.deferrable.contains(&alias.range())
+            {
+                if registration_line.is_none() {
+                    registration_line = Some(lines.len());
+                    lines.push(String::new());
+                }
+                registered.push((bind, name));
+                self.deferred.push((alias.range(), bind.to_owned()));
+            } else {
+                // re-emit the import as written: the name is read where only the
+                // object itself will do, or somewhere a read of it cannot be
+                // rewritten
                 let spelling = if bind == name {
                     name.to_owned()
                 } else {
@@ -364,37 +399,30 @@ impl<'src> LazyImport<'src> {
                 };
                 // names that shared one import statement go on writing one line
                 // between them. the line is held at the position of the first of
-                // them, so it keeps its place among the lazy bindings around it
+                // them, so it keeps its place among the deferred names around it
                 if eager_line.is_none() {
                     eager_line = Some(lines.len());
                     lines.push(String::new());
                 }
                 eager_spellings.push(spelling);
-            } else if is_relative && module_part.is_empty() {
-                // `from . import x` — `x` is a submodule of the current
-                // package. Resolve the relative target at runtime
-                self.needs_module_helper = true;
-                let rel = format!("{dots}{name}");
-                lines.push(format!("{bind} = _lazy_module(\"{rel}\", __package__)"));
-            } else if is_relative {
-                // `from .pkg import x` — lazy attribute on the resolved
-                // parent, matching the `from pkg import x` shape
-                self.needs_attr_helper = true;
-                let rel = format!("{dots}{module_part}");
-                lines.push(format!(
-                    "{bind} = _lazy_attr(\"{rel}\", \"{name}\", __package__)"
-                ));
-            } else {
-                self.needs_attr_helper = true;
-                lines.push(format!(
-                    "{bind} = _lazy_attr(\"{module_part}\", \"{name}\")"
-                ));
             }
         }
         if let Some(index) = eager_line {
             lines[index] = format!(
                 "from {dots}{module_part} import {}",
                 eager_spellings.join(", ")
+            );
+        }
+        if let Some(index) = registration_line {
+            let names: Vec<String> = registered
+                .iter()
+                .map(|(bind, name)| format!("\"{bind}\": \"{name}\""))
+                .collect();
+            let package = if is_relative { ", __package__" } else { "" };
+            lines[index] = format!(
+                "_lazy_from({}, \"{dots}{module_part}\", {{{}}}{package})",
+                self.holder,
+                names.join(", ")
             );
         }
         // `character_only` means a bare `Character` import produced no lines but
@@ -409,10 +437,12 @@ impl<'src> LazyImport<'src> {
             }
             return;
         }
-        let indent = self.line_indent(node.range());
-        let separator = format!("\n{indent}");
+        // one line, padded to the statement's height: everything after the
+        // statement keeps the line it had, and the statement can share its line
+        // with others, as `if c: from m import x` does
+        let height = self.source[node.range()].matches('\n').count();
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            lines.join(&separator),
+            format!("{}{}", lines.join("; "), "\n".repeat(height)),
             node.range(),
         )));
     }
@@ -420,11 +450,12 @@ impl<'src> LazyImport<'src> {
 
 /// every name the annotations python keeps for introspection read, strings included
 ///
-/// under the polyfill a `from` import is a proxy, and whatever reads an annotation back is
-/// handed that proxy rather than the object: `dataclasses` tells a `KW_ONLY` pseudo-field
-/// apart by asking whether the annotation *is* `dataclasses.KW_ONLY`, and
-/// `typing.get_type_hints` answers with the proxy, which is not the class to anything
-/// comparing by identity. a name read here is therefore bound eagerly
+/// whatever reads an annotation back reads its names from the module's namespace —
+/// `typing.get_type_hints` evaluates a string annotation against the module's globals, and
+/// `dataclasses` tells a `KW_ONLY` pseudo-field apart by asking whether the annotation *is*
+/// `dataclasses.KW_ONLY` as the class is made. under the polyfill a deferred `from` import
+/// is in that namespace only once something has read it, so a name read here is bound
+/// where the import is written
 ///
 /// the annotations are the ones python evaluates, or keeps as a string to evaluate on
 /// request: a parameter's and a return's, of a `def` at any depth, and a variable's in a
@@ -521,14 +552,14 @@ pub(crate) fn annotation_names(suite: &[Stmt], source: &str) -> Vec<String> {
 ///
 /// A decorator is the other thing read by identity rather than by value. `typing.overload`
 /// says the `def` under it is one arm of an overload set — but only while it *is*
-/// `typing.overload`; reached through the polyfill's proxy it is an unknown callable, and a
-/// checker reading the emitted python sees two ordinary functions with `...` bodies instead
-/// of the overloads the source declared. The same goes for `final`, `abstractmethod`,
+/// `typing.overload`; written as a read through the polyfill's `_LazyFrom` it is an unknown
+/// callable, and a checker reading the emitted python sees two ordinary functions with `...`
+/// bodies instead of the overloads the source declared. The same goes for `final`, `abstractmethod`,
 /// `dataclass` and everything else whose whole meaning is which object it is.
 ///
 /// Binding these eagerly costs no laziness at all: a decorator is applied while the module
-/// is executing, so a proxy standing in for one resolves at import time anyway — the defer
-/// buys nothing and loses the declaration.
+/// is executing, so a deferred one resolves at import time anyway — the defer buys nothing
+/// and loses the declaration
 pub(crate) fn decorator_names(suite: &[Stmt]) -> Vec<String> {
     struct Reads<'n> {
         names: &'n mut Vec<String>,
@@ -572,6 +603,75 @@ pub(crate) fn decorator_names(suite: &[Stmt]) -> Vec<String> {
     names.read
 }
 
+/// the aliases whose names the polyfill may defer, each with every read of the name: the
+/// imports [`deferrable_from_imports`] found every read of, less those with a read whose source
+/// text python keeps — `f"{x=}"` prints the expression as written, and a t-string's
+/// `Interpolation` carries it — since a read written through the module's `_LazyFrom` would
+/// change that text
+///
+/// [`deferrable_from_imports`]: ty_python_semantic::SemanticModel::deferrable_from_imports
+pub(crate) fn deferrable_reads(
+    suite: &[Stmt],
+    imports: Vec<ty_python_semantic::DeferrableImport>,
+) -> HashMap<TextRange, Vec<TextRange>> {
+    #[derive(Default)]
+    struct KeptText {
+        in_t_string: bool,
+        ranges: Vec<TextRange>,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for KeptText {
+        fn visit_t_string(&mut self, t_string: &'a ruff_python_ast::TString) {
+            let outer = std::mem::replace(&mut self.in_t_string, true);
+            walk_t_string(self, t_string);
+            self.in_t_string = outer;
+        }
+
+        fn visit_interpolated_string_element(
+            &mut self,
+            element: &'a ruff_python_ast::InterpolatedStringElement,
+        ) {
+            if let ruff_python_ast::InterpolatedStringElement::Interpolation(interpolation) =
+                element
+                && (self.in_t_string || interpolation.debug_text.is_some())
+            {
+                self.ranges.push(interpolation.range());
+            }
+            // an f-string nested in a t-string's interpolation is part of its text all the same
+            walk_interpolated_string_element(self, element);
+        }
+    }
+
+    let mut kept = KeptText::default();
+    kept.visit_body(suite);
+    imports
+        .into_iter()
+        .filter(|import| {
+            !import
+                .reads
+                .iter()
+                .any(|read| kept.ranges.iter().any(|range| range.contains_range(*read)))
+        })
+        .map(|import| (import.alias, import.reads))
+        .collect()
+}
+
+/// the statements that bind `holder`, the module's `_LazyFrom`, to every name in `names`, and
+/// serve those names to other modules through the module's `__getattr__` and `__dir__`
+///
+/// `globals` is the name the module reads the builtin under
+pub(crate) fn holder_lines(holder: &str, names: &[String], globals: &str) -> String {
+    let names: Vec<String> = names.iter().map(|name| format!("\"{name}\"")).collect();
+    // a one-element tuple needs its comma
+    let trailing = if names.len() == 1 { "," } else { "" };
+    format!(
+        "{holder} = _LazyFrom({globals}(), ({}{trailing}))\n\
+         __getattr__ = {holder}.__by_getattr__\n\
+         __dir__ = {holder}.__by_dir__\n",
+        names.join(", ")
+    )
+}
+
 /// whether `test` is the `TYPE_CHECKING` flag, spelled bare or through the module it
 /// comes from
 fn is_type_checking_test(test: &ruff_python_ast::Expr) -> bool {
@@ -609,8 +709,8 @@ impl<'ast> Visitor<'ast> for LazyImport<'_> {
                 self.at_module_level = outer;
             }
             // an `if TYPE_CHECKING:` body never runs, so an import inside it has
-            // no execution to defer — and deferring it would rebind the name to
-            // a proxy, which is the one thing a type expression cannot read
+            // no execution to defer — and the checker reading the emitted python
+            // needs the name it binds for the type expressions that read it
             Stmt::If(node) if is_type_checking_test(&node.test) => {
                 let outer = std::mem::replace(&mut self.at_module_level, false);
                 walk_stmt(self, stmt);
@@ -622,27 +722,28 @@ impl<'ast> Visitor<'ast> for LazyImport<'_> {
 }
 
 /// The runtime helpers a polyfill-mode lazified module calls, by the name it
-/// calls them under. What each of those needs in turn — the proxy class, the
-/// `sys` binding, the operator forwarding — is settled in [`crate::runtime`],
-/// off the calls in their own bodies.
+/// calls them under. What each of those needs in turn — `_lazy_module`, the
+/// `sys` binding — is settled in [`crate::runtime`], off the calls in their own
+/// bodies
 #[expect(
     clippy::fn_params_excessive_bools,
     reason = "independent which-helpers-are-needed flags, not a state machine"
 )]
 pub(crate) fn polyfill_helpers(
     needs_module: bool,
-    needs_attr: bool,
+    needs_from: bool,
     needs_ty_ext: bool,
     needs_character_class: bool,
 ) -> Vec<crate::runtime::Helper> {
     let mut helpers = Vec::new();
-    // each only where the emitted code names it: a `from` import calls
-    // `_lazy_attr` alone, and what that calls in turn is the runtime's business
+    // each only where the emitted code names it, and what those call in turn
+    // is the runtime's business
     if needs_module {
         helpers.push(crate::runtime::LAZY_MODULE);
     }
-    if needs_attr {
-        helpers.push(crate::runtime::LAZY_ATTR);
+    if needs_from {
+        helpers.push(crate::runtime::LAZY_FROM_HOLDER);
+        helpers.push(crate::runtime::LAZY_FROM);
     }
     if needs_ty_ext {
         helpers.push(crate::runtime::TY_EXT_MARKER);
@@ -703,8 +804,7 @@ mod tests {
 
     #[test]
     fn keyword_type_checking_unchanged() {
-        // deferring the flag would rebind the name to a proxy; a checker only
-        // ever accepts it bound to `False`
+        // a checker only ever accepts the flag bound to `False`
         check(
             "from typing import TYPE_CHECKING\n",
             "from typing import TYPE_CHECKING\n",
@@ -760,8 +860,8 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("def _lazy_module("),
-            "missing _lazy_module helper in:\n{out}"
+            out.contains("def _lazy_module(") || out.contains("class _LazyFrom:"),
+            "missing the polyfill's runtime in:\n{out}"
         );
         assert!(
             out.ends_with(expected_body),
@@ -788,32 +888,6 @@ mod tests {
     }
 
     #[test]
-    fn attr_proxy_is_isinstance_transparent() {
-        // other lowerings (soundness checks, checked casts) pass imported
-        // names as runtime types; the proxy must delegate isinstance/issubclass
-        let out = transpile(
-            "from os.path import basename\n",
-            &Config {
-                lazy_imports: true,
-                ..Config::test_default()
-            },
-        )
-        .unwrap();
-        assert!(
-            out.contains(
-                "def __instancecheck__(self, o): return isinstance(o, self._by_resolve())"
-            ),
-            "proxy must delegate __instancecheck__ in:\n{out}"
-        );
-        assert!(
-            out.contains(
-                "def __subclasscheck__(self, o): return issubclass(o, self._by_resolve())"
-            ),
-            "proxy must delegate __subclasscheck__ in:\n{out}"
-        );
-    }
-
-    #[test]
     fn polyfill_dotted_with_alias() {
         check_polyfill_body("import os.path as p\n", "p = _lazy_module(\"os.path\")\n");
     }
@@ -836,7 +910,7 @@ mod tests {
     fn polyfill_from_import() {
         check_polyfill_body(
             "from os import path\n",
-            "path = _lazy_attr(\"os\", \"path\")\n",
+            "_lazy_from(_by_lazy, \"os\", {\"path\": \"path\"})\n",
         );
     }
 
@@ -844,10 +918,7 @@ mod tests {
     fn polyfill_from_import_multiple() {
         check_polyfill_body(
             "from os import path, getcwd\n",
-            indoc! {"
-                path = _lazy_attr(\"os\", \"path\")
-                getcwd = _lazy_attr(\"os\", \"getcwd\")
-            "},
+            "_lazy_from(_by_lazy, \"os\", {\"path\": \"path\", \"getcwd\": \"getcwd\"})\n",
         );
     }
 
@@ -900,10 +971,10 @@ mod tests {
     }
 
     #[test]
-    fn polyfill_relative_submodule() {
+    fn polyfill_relative_package() {
         check_polyfill_body(
             "from . import x\n",
-            "x = _lazy_module(\".x\", __package__)\n",
+            "_lazy_from(_by_lazy, \".\", {\"x\": \"x\"}, __package__)\n",
         );
     }
 
@@ -911,7 +982,7 @@ mod tests {
     fn polyfill_relative_attr() {
         check_polyfill_body(
             "from .pkg import x\n",
-            "x = _lazy_attr(\".pkg\", \"x\", __package__)\n",
+            "_lazy_from(_by_lazy, \".pkg\", {\"x\": \"x\"}, __package__)\n",
         );
     }
 
@@ -919,7 +990,7 @@ mod tests {
     fn polyfill_relative_double_dot() {
         check_polyfill_body(
             "from .. import x\n",
-            "x = _lazy_module(\"..x\", __package__)\n",
+            "_lazy_from(_by_lazy, \"..\", {\"x\": \"x\"}, __package__)\n",
         );
     }
 
@@ -1019,8 +1090,7 @@ mod tests {
 
     #[test]
     fn polyfill_exception_class_stays_eager() {
-        // cpython's `except` refuses anything that is not a real class
-        // inheriting `BaseException`, so the proxy cannot stand for one
+        // an exception class is bound where it is imported
         let source = indoc! {"
             from json import JSONDecodeError
 
@@ -1030,7 +1100,7 @@ mod tests {
                 except JSONDecodeError:
                     pass
         "};
-        // nothing was deferred, so the proxy runtime is not emitted at all
+        // nothing was deferred, so the polyfill's runtime is not emitted at all
         assert_eq!(transpile_polyfill(source), source);
     }
 
@@ -1039,10 +1109,9 @@ mod tests {
         // the statement is split: only the exception has to be bound for real
         let out = transpile_polyfill("from json import JSONDecodeError, dumps\n");
         assert!(
-            out.ends_with(indoc! {"
-                from json import JSONDecodeError
-                dumps = _lazy_attr(\"json\", \"dumps\")
-            "}),
+            out.ends_with(
+                "from json import JSONDecodeError; _lazy_from(_by_lazy, \"json\", {\"dumps\": \"dumps\"})\n"
+            ),
             "got:\n{out}"
         );
     }
@@ -1059,17 +1128,17 @@ mod tests {
     #[test]
     fn polyfill_special_forms_stay_eager() {
         // a special form is recognised by what it *is*: a checker reading the output
-        // rejects `ClassVar[int]` once `ClassVar` names a variable, and `dataclasses`
-        // tells a bare `ClassVar` or `Final` annotation from a field by identity, which
-        // a proxy does not have. an ordinary function beside them is still deferred
+        // rejects `ClassVar[int]` once `ClassVar` is anything else, and `dataclasses`
+        // tells a bare `ClassVar` or `Final` annotation from a field by identity as the
+        // class is made. an ordinary function beside them is still deferred
         let out = transpile_polyfill(indoc! {"
             from typing import ClassVar, Final, Literal, Annotated as Note, cast
         "});
         assert!(
-            out.ends_with(indoc! {"
-                from typing import ClassVar, Final, Literal, Annotated as Note
-                cast = _lazy_attr(\"typing\", \"cast\")
-            "}),
+            out.ends_with(
+                "from typing import ClassVar, Final, Literal, Annotated as Note; \
+                 _lazy_from(_by_lazy, \"typing\", {\"cast\": \"cast\"})\n"
+            ),
             "got:\n{out}"
         );
     }
@@ -1089,7 +1158,7 @@ mod tests {
             "the enum no longer lowers through ClassVar, got:\n{out}"
         );
         assert!(
-            !out.contains("ClassVar = _lazy_attr"),
+            !out.contains("\"ClassVar\": "),
             "a special form was deferred, got:\n{out}"
         );
         assert!(
@@ -1141,17 +1210,17 @@ mod tests {
             "got:\n{out}"
         );
         assert!(
-            !out.contains("overload = _lazy_attr"),
+            !out.contains("\"overload\": "),
             "the overload declaration was deferred, got:\n{out}"
         );
     }
 
     /// a decorator says what the definition under it *is*, and it says so by identity.
-    /// deferred, `@dataclass` is a proxy a checker reading the emitted python cannot
+    /// deferred, `@dataclass` is a read a checker reading the emitted python cannot
     /// recognize: it read `Row` as an ordinary class and reported `Row("x")` as too many
     /// positional arguments, where the source declares a one-field dataclass. deferring one
-    /// buys nothing either — a decorator is applied while the module executes, so the proxy
-    /// standing in for it resolves at import time regardless
+    /// buys nothing either — a decorator is applied while the module executes, so a
+    /// deferred one resolves at import time regardless
     #[test]
     fn polyfill_a_decorator_stays_eager() {
         let out = transpile_polyfill(indoc! {"
@@ -1161,9 +1230,10 @@ mod tests {
             def f() -> int:
                 return reduce(lambda a, b: a + b, [1, 2], 0)
         "});
-        assert!(out.contains("from functools import cache\n"), "got:\n{out}");
+        assert!(out.contains("from functools import cache; "), "got:\n{out}");
         assert!(
-            out.contains("reduce = _lazy_attr(\"functools\", \"reduce\")"),
+            out.contains("_lazy_from(_by_lazy, \"functools\", {\"reduce\": \"reduce\"})")
+                && out.contains("return _by_lazy.reduce("),
             "a name only called stopped being deferred, got:\n{out}"
         );
     }
@@ -1212,10 +1282,10 @@ mod tests {
                     return dumps(value)
             "},
             indoc! {"
-                dumps = _lazy_attr(\"json\", \"dumps\")
+                _lazy_from(_by_lazy, \"json\", {\"dumps\": \"dumps\"})
 
                 def show(value: int) -> str:
-                    return dumps(value)
+                    return _by_lazy.dumps(value)
             "},
         );
     }
@@ -1230,7 +1300,7 @@ mod tests {
                 value: Fraction = 1
         "});
         assert!(
-            out.contains("Fraction = _lazy_attr(\"fractions\", \"Fraction\")"),
+            out.contains("_lazy_from(_by_lazy, \"fractions\", {\"Fraction\": \"Fraction\"})"),
             "got:\n{out}"
         );
     }
@@ -1238,7 +1308,7 @@ mod tests {
     #[test]
     fn polyfill_an_annotation_under_future_annotations_stays_eager() {
         // every annotation is a string at runtime, and `typing.get_type_hints` evaluates
-        // it against the module's globals, where a proxy would be what it finds
+        // it against the module's globals, where a deferred name is not until it is read
         let out = transpile_polyfill(indoc! {"
             from __future__ import annotations
             from fractions import Fraction
@@ -1249,6 +1319,229 @@ mod tests {
         assert!(
             out.contains("from fractions import Fraction\n"),
             "got:\n{out}"
+        );
+    }
+
+    fn assert_eager(source: &str, out: &str) {
+        assert!(
+            out.contains("from json import dumps") && !out.contains("_by_lazy"),
+            "the import was deferred:\n{source}\n---got---\n{out}"
+        );
+    }
+
+    /// a read reaches the module's binding from any scope that does not bind the name
+    /// itself, and each one is written through the module's `_LazyFrom`
+    #[test]
+    fn polyfill_every_read_of_a_deferred_name_is_written_through_the_holder() {
+        let out = transpile_polyfill(indoc! {r#"
+            from json import dumps
+
+            def nested() -> object:
+                def inner() -> object:
+                    return dumps
+                return inner()
+
+            class Body:
+                value = dumps
+
+            def default(f: object = dumps) -> object:
+                return f
+
+            def reads_global() -> object:
+                global dumps
+                return dumps
+
+            later = lambda: dumps
+            listed = [dumps for _ in range(1)]
+            text = f"{dumps!r:>4}"
+        "#});
+        for read in [
+            "return _by_lazy.dumps\n",
+            "value = _by_lazy.dumps\n",
+            // a default is evaluated per call in `.by`, so it is read in the function
+            "f = _by_lazy.dumps\n",
+            "lambda: _by_lazy.dumps\n",
+            "[_by_lazy.dumps for _ in range(1)]",
+            "f\"{_by_lazy.dumps!r:>4}\"",
+        ] {
+            assert!(out.contains(read), "missing `{read}` in:\n{out}");
+        }
+        assert_eq!(out.matches("_by_lazy.dumps").count(), 7, "{out}");
+    }
+
+    /// anything else that binds the name, anywhere in the module, leaves a read that may find
+    /// either binding, so the import is left as it was written
+    #[test]
+    fn polyfill_a_name_bound_again_stays_eager() {
+        for rebinding in [
+            "dumps = 5",
+            "dumps += 1",
+            "dumps: int = 1",
+            "def dumps() -> None:\n    pass",
+            "class dumps:\n    pass",
+            "for dumps in range(1):\n    pass",
+            "with open(__file__) as dumps:\n    pass",
+            "try:\n    pass\nexcept Exception as dumps:\n    pass",
+            "if (dumps := 1):\n    pass",
+            "print([(dumps := i) for i in range(1)])",
+            "del dumps",
+            "from json import dumps",
+            "def f() -> None:\n    global dumps\n    dumps = 1",
+            "def f() -> None:\n    global dumps\n    del dumps",
+            // a binding that is not a name node: only the scope's own table shows it
+            "def f() -> None:\n    global dumps\n    def dumps() -> None:\n        pass",
+            "def f() -> None:\n    global dumps\n    import json as dumps",
+            "class C:\n    global dumps\n    dumps = 1",
+            "match [1]:\n    case [dumps]:\n        pass",
+        ] {
+            let source = format!("from json import dumps\n{rebinding}\nprint(dumps)\n");
+            assert_eager(&source, &transpile_polyfill(&source));
+        }
+    }
+
+    /// a class body reads a name it binds itself from its own namespace and then the
+    /// module's — never from a function around it — so a read the body has not bound yet
+    /// reads the import, even where an enclosing function binds the name
+    #[test]
+    fn polyfill_a_class_body_read_before_its_own_binding_reads_the_module() {
+        let out = transpile_polyfill(indoc! {"
+            from json import dumps
+
+            def outer() -> object:
+                dumps = 1
+                class Body:
+                    seen = dumps
+                    dumps = 2
+                return Body.seen
+        "});
+        assert!(out.contains("seen = _by_lazy.dumps"), "{out}");
+    }
+
+    /// a read the body has bound on some paths and not on others finds either
+    #[test]
+    fn polyfill_a_class_body_that_may_have_bound_the_name_keeps_it_eager() {
+        let source = indoc! {"
+            from json import dumps
+
+            def flip() -> bool:
+                return True
+
+            class Body:
+                if flip():
+                    dumps = 1
+                seen = dumps
+        "};
+        assert_eager(source, &transpile_polyfill(source));
+    }
+
+    /// `f"{x=}"` prints the expression as written, and a t-string's `Interpolation` keeps
+    /// it, so a read there cannot be written as anything else
+    #[test]
+    fn polyfill_a_name_whose_text_python_keeps_stays_eager() {
+        let source = "from json import dumps\nprint(f\"{dumps=}\")\n";
+        assert_eager(source, &transpile_polyfill(source));
+        let source = "from json import dumps\nprint(t\"{dumps}\")\n";
+        let out = transpile(
+            source,
+            &Config {
+                lazy_imports: true,
+                min_version: PythonVersion::from((3, 14)),
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert_eager(source, &out);
+    }
+
+    /// a name beginning with two underscores could be one the holder's own type answers
+    #[test]
+    fn polyfill_a_name_beginning_with_two_underscores_stays_eager() {
+        let out = transpile_polyfill("from json import __doc__ as __text\nprint(__text)\n");
+        assert!(
+            out.contains("from json import __doc__ as __text\n") && !out.contains("_by_lazy"),
+            "{out}"
+        );
+    }
+
+    /// a star import can bind any name unseen, and a module's own `__getattr__` or
+    /// `__dir__` is where a deferred import would be served from
+    #[test]
+    fn polyfill_a_module_that_could_rebind_a_name_unseen_defers_nothing() {
+        for source in [
+            "from os import *\nfrom json import dumps\nprint(dumps)\n",
+            "from json import dumps\ndef __getattr__(name: str) -> object:\n    return dumps\n",
+            "from json import dumps\ndef __dir__() -> list[str]:\n    return [str(dumps)]\n",
+        ] {
+            assert_eager(source, &transpile_polyfill(source));
+        }
+    }
+
+    /// a deferred name is served to other modules, and declared to the holder so that a read
+    /// before its import has run is the `NameError` python raises
+    #[test]
+    fn polyfill_the_holder_is_made_ahead_of_the_module_body() {
+        let out = transpile_polyfill("\"\"\"doc\"\"\"\nfrom json import dumps, loads as parse\n");
+        let holder = out.find("_by_lazy = _LazyFrom(globals(), (\"dumps\", \"parse\"))\n");
+        let statement = out
+            .find("_lazy_from(_by_lazy, \"json\", {\"dumps\": \"dumps\", \"parse\": \"loads\"})\n");
+        assert!(
+            holder.zip(statement).is_some_and(|(h, s)| h < s),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("__getattr__ = _by_lazy.__by_getattr__\n"),
+            "{out}"
+        );
+        assert!(out.contains("__dir__ = _by_lazy.__by_dir__\n"), "{out}");
+        assert!(out.starts_with("\"\"\"doc\"\"\"\n"), "{out}");
+    }
+
+    /// the replacement keeps the statement's height, so every line after it keeps its number
+    #[test]
+    fn polyfill_a_multi_line_import_keeps_its_height() {
+        let out =
+            transpile_polyfill("from json import (\n    dumps,\n    loads,\n)\nprint(dumps)\n");
+        assert!(
+            out.ends_with(
+                "_lazy_from(_by_lazy, \"json\", {\"dumps\": \"dumps\", \"loads\": \"loads\"})\n\n\n\n\
+                 print(_by_lazy.dumps)\n"
+            ),
+            "got:\n{out}"
+        );
+    }
+
+    /// the module binds `globals` to something of its own, so the holder reads the builtin
+    /// under a name of its own
+    #[test]
+    fn polyfill_the_holder_reads_the_builtin_globals() {
+        let out = transpile_polyfill(
+            "from json import dumps\n\ndef globals() -> int:\n    return 1\n\nprint(dumps)\n",
+        );
+        assert!(
+            out.contains("from builtins import globals as globals2\n")
+                && out.contains("_by_lazy = _LazyFrom(globals2(), (\"dumps\",))"),
+            "got:\n{out}"
+        );
+    }
+
+    /// a type parameter's bound that reads a name of the class it stands in is written ahead
+    /// of the class, as a string `TypeVar` keeps as a forward reference. python evaluates that
+    /// string against the module's namespace when anything evaluates it, so every name it
+    /// reads is bound where it is imported
+    #[test]
+    fn polyfill_a_name_a_written_forward_reference_reads_stays_eager() {
+        let out = transpile_polyfill(indoc! {"
+            from json import JSONDecoder
+
+            class C:
+                class Inner: ...
+                def m[T: dict[JSONDecoder, Inner]](self, x: T) -> T: ...
+        "});
+        assert!(
+            out.contains("bound=\"dict[JSONDecoder, C.Inner]\"")
+                && out.contains("from json import JSONDecoder\n")
+                && !out.contains("\"JSONDecoder\": "),
+            "{out}"
         );
     }
 

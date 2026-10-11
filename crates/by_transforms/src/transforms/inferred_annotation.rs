@@ -376,7 +376,10 @@ mod tests {
         )
         .unwrap();
         assert!(out.contains("decimal = _lazy_module(\"decimal\")"), "{out}");
-        assert!(out.contains("d: \"decimal.Decimal\" = Dec(1)"), "{out}");
+        assert!(
+            out.contains("d: \"decimal.Decimal\" = _by_lazy.Dec(1)"),
+            "{out}"
+        );
         assert!(!out.contains("TYPE_CHECKING"), "{out}");
     }
 

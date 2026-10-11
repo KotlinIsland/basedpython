@@ -57,8 +57,10 @@ fn run_at(
         ..Config::default()
     };
     let transpiled = transpile(program, &config).expect("transpile should succeed");
+    // a deferred `Dec` is read through the module's `_LazyFrom`
+    let dec = if lazy_imports { "_by_lazy.Dec" } else { "Dec" };
     assert!(
-        transpiled.contains(&format!("d: {annotation} = Dec(1)")),
+        transpiled.contains(&format!("d: {annotation} = {dec}(1)")),
         "the annotation names the module:\n{transpiled}"
     );
     let output = Command::new(&interpreter.command)
@@ -187,7 +189,13 @@ fn an_inferred_annotation_adds_no_import_cycle() {
             fs::write(dir.join(relative), transpiled).expect("write module");
         }
         let m = fs::read_to_string(dir.join("m.py")).expect("read m");
-        assert!(m.contains("x: \"x_mod.Thing\" = make()"), "{m}");
+        // a deferred `make` is read through the module's `_LazyFrom`
+        let make = if lazy_imports {
+            "_by_lazy.make"
+        } else {
+            "make"
+        };
+        assert!(m.contains(&format!("x: \"x_mod.Thing\" = {make}()")), "{m}");
         let output = Command::new(&interpreter.command)
             .arg("main.py")
             .current_dir(&dir)
