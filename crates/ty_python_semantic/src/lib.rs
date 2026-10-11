@@ -51,6 +51,7 @@ pub use types::conformance::{ConformanceRegistration, WitnessDispatch, WitnessKi
 pub use types::conversions::{
     ConversionImport, ConversionInfo, ConversionRuntime, DISCARD_ADAPTER,
 };
+pub use types::deferred_imports::DeferrableImport;
 pub use types::extensions::{
     ExtensionAttributeInfo, ExtensionMemberKind, decides_receiver_binding,
     extension_backing_function, extension_backing_functions, extension_member_kind,
