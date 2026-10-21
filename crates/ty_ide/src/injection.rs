@@ -397,7 +397,7 @@ fn content_ranges(
 /// here exactly as it will at runtime. Empty runs are dropped: a blank line
 /// contributes only the newline that follows it, and the range before that
 /// newline is nothing at all.
-fn text_ranges(body: TextRange, source: &str) -> Box<[TextRange]> {
+pub(crate) fn text_ranges(body: TextRange, source: &str) -> Box<[TextRange]> {
     let Some(text) = source.get(body.start().to_usize()..body.end().to_usize()) else {
         return Box::from([body]);
     };

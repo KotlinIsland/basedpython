@@ -94,6 +94,11 @@ impl RequestHandler for TranspileRequestHandler {
 }
 
 impl BackgroundDocumentRequestHandler for TranspileRequestHandler {
+    // the file's text and the project around it, which the server has for a file no editor holds
+    // as much as for a buffer: a client asking about a file nobody opened — an agent through the
+    // editor's MCP server — gets the python it lowers to
+    const ANSWERS_CLOSED_DOCUMENTS: bool = true;
+
     fn document_uri(params: &TranspileParams) -> Cow<'_, Uri> {
         Cow::Borrowed(&params.text_document.uri)
     }

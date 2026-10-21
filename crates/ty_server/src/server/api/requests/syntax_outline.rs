@@ -155,6 +155,11 @@ pub(crate) struct StringPart {
     /// The escape sequences in the literal text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     escapes: Vec<Range>,
+    /// Where the literal's text is written: the runs whose text, joined, is what the literal
+    /// holds — what survives the stripped indentation, without the interpolations. Absent for an
+    /// empty literal.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    text: Vec<Range>,
 }
 
 pub(crate) struct SyntaxOutlineRequestHandler;
@@ -304,6 +309,12 @@ impl Converter<'_> {
                 .iter()
                 .filter_map(|range| self.range(*range))
                 .collect(),
+            // all or nothing: the runs are joined to get the text, and one missing shifts the rest
+            text: string
+                .text
+                .iter()
+                .map(|range| self.range(*range))
+                .collect::<Option<_>>()?,
         })
     }
 }
