@@ -1,0 +1,101 @@
+---
+source: crates/mdtest/src/lib.rs
+expression: snapshot
+---
+
+---
+mdtest name: basedpython_type_guards.md - basedpython: narrowing return annotations - an implementation asserts what the protocol asserts
+mdtest path: crates/ty_python_semantic/resources/mdtest/basedpython_type_guards.md
+---
+
+# Source files
+
+## mdtest_snippet.by
+
+```
+ 1 | from typing import Protocol
+ 2 | 
+ 3 | class Checker(Protocol):
+ 4 |     def check(self, first: int | None, second: int | None) -> asserts first is int: ...
+ 5 | 
+ 6 | class SecondChecker:
+ 7 |     def check(self, first: int | None, second: int | None) -> asserts second is int:
+ 8 |         if second is None:
+ 9 |             raise ValueError()
+10 | 
+11 | class Silent:
+12 |     def check(self, first: int | None, second: int | None) -> None:
+13 |         pass
+14 | 
+15 | def use(checker: Checker): ...
+16 | 
+17 | # error: [invalid-argument-type]
+18 | use(SecondChecker())
+19 | # error: [invalid-argument-type]
+20 | use(Silent())
+21 | class FirstChecker:
+22 |     def check(self, first: int | None, second: int | None) -> asserts first is int and second is int:
+23 |         if first is None or second is None:
+24 |             raise ValueError()
+25 | 
+26 | class TruthyChecker:
+27 |     def check(self, first: int | None, second: int | None) -> asserts first:
+28 |         assert first
+29 | 
+30 | use(FirstChecker())
+31 | # error: [invalid-argument-type]
+32 | use(TruthyChecker())
+```
+
+# Diagnostics
+
+```
+error[invalid-argument-type]: Argument to function `use` is incorrect
+  --> src/mdtest_snippet.by:18:5
+   |
+18 | use(SecondChecker())
+   |     ^^^^^^^^^^^^^^^ Expected `Checker`, found `final SecondChecker`
+info: type `SecondChecker` is not assignable to protocol `Checker`
+info: └── protocol member `check` is incompatible
+info:     └── the function asserts nothing about `first`, where `int` is expected
+info: Function defined here
+  --> src/mdtest_snippet.by:15:5
+   |
+15 | def use(checker: Checker): ...
+   |     ^^^ ---------------- Parameter declared here
+
+```
+
+```
+error[invalid-argument-type]: Argument to function `use` is incorrect
+  --> src/mdtest_snippet.by:20:5
+   |
+20 | use(Silent())
+   |     ^^^^^^^^ Expected `Checker`, found `final Silent`
+info: type `Silent` is not assignable to protocol `Checker`
+info: └── protocol member `check` is incompatible
+info:     └── the function asserts nothing about `first`, where `int` is expected
+info: Function defined here
+  --> src/mdtest_snippet.by:15:5
+   |
+15 | def use(checker: Checker): ...
+   |     ^^^ ---------------- Parameter declared here
+
+```
+
+```
+error[invalid-argument-type]: Argument to function `use` is incorrect
+  --> src/mdtest_snippet.by:32:5
+   |
+32 | use(TruthyChecker())
+   |     ^^^^^^^^^^^^^^^ Expected `Checker`, found `final TruthyChecker`
+info: type `TruthyChecker` is not assignable to protocol `Checker`
+info: └── protocol member `check` is incompatible
+info:     └── the function asserts `first` is truthy, where `int` is expected
+info: Function defined here
+  --> src/mdtest_snippet.by:15:5
+   |
+15 | def use(checker: Checker): ...
+   |     ^^^ ---------------- Parameter declared here
+
+```

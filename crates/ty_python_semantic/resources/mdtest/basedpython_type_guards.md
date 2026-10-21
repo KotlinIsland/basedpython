@@ -834,6 +834,26 @@ def f(check: (x: object) -> (a is int)):
         reveal_type(a)  # revealed: int
 ```
 
+## a narrowing return reads back as the guard it was written as
+
+`TypeIs[int]` does not say which place a predicate narrows, and an assertion returns `None`, so a
+signature shows the guard its return annotation wrote — parenthesized in a callable type, as it is
+written there.
+
+```by
+def is_int_second(first: object, second: object) -> second is int:
+    return isinstance(second, int)
+
+def ensure(x: int | None, y: str | None) -> asserts x is int and not y:
+    if x is None or y:
+        raise ValueError()
+
+def f(check: (first: object, second: object) -> (second is int)):
+    reveal_type(is_int_second)  # revealed: def is_int_second(first: object, second: object) -> second is int
+    reveal_type(check)  # revealed: (first: object, second: object) -> (second is int)
+    reveal_type(ensure)  # revealed: def ensure(x: int | None, y: str | None) -> asserts x is int and not y
+```
+
 ## a callable narrowing another parameter is not such a callable
 
 <!-- snapshot-diagnostics -->
@@ -1000,6 +1020,73 @@ class Sub(Base):
     # error: [invalid-method-override]
     def check(self, first: object, second: object) -> second is int:
         return isinstance(second, int)
+```
+
+## an implementation asserts what the protocol asserts
+
+<!-- snapshot-diagnostics -->
+
+A call through a protocol narrows what the protocol's member asserts, once the call returns, so a
+class standing in for it has to assert the same thing about the same argument. Asserting it about
+another argument leaves the one the caller relies on unchecked.
+
+```by
+from typing import Protocol
+
+class Checker(Protocol):
+    def check(self, first: int | None, second: int | None) -> asserts first is int: ...
+
+class SecondChecker:
+    def check(self, first: int | None, second: int | None) -> asserts second is int:
+        if second is None:
+            raise ValueError()
+
+class Silent:
+    def check(self, first: int | None, second: int | None) -> None:
+        pass
+
+def use(checker: Checker): ...
+
+# error: [invalid-argument-type]
+use(SecondChecker())
+# error: [invalid-argument-type]
+use(Silent())
+```
+
+An assertion at least as narrow is enough, and so is asserting more than the protocol does.
+
+```by
+class FirstChecker:
+    def check(self, first: int | None, second: int | None) -> asserts first is int and second is int:
+        if first is None or second is None:
+            raise ValueError()
+
+class TruthyChecker:
+    def check(self, first: int | None, second: int | None) -> asserts first:
+        assert first
+
+use(FirstChecker())
+# error: [invalid-argument-type]
+use(TruthyChecker())
+```
+
+## a function assigned over a method asserts what the method asserts
+
+A function stored on a subclass under the method's name is an override like a `def` there, but it
+brings its own assertions rather than taking on the method's, so they are compared.
+
+```by
+class Base:
+    def check(self, first: int | None, second: int | None) -> asserts first is int:
+        if first is None:
+            raise ValueError()
+
+def check_second(self: object, first: int | None, second: int | None) -> asserts second is int:
+    if second is None:
+        raise ValueError()
+
+class Sub(Base):
+    check = check_second  # error: [invalid-method-override]
 ```
 
 ## a callable type's predicate is parenthesized

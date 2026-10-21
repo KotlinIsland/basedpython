@@ -380,6 +380,20 @@ class B[**P = ...]: ...
 class C[**P = ()]: ...
 ```
 
+## an unresolved default is reported once
+
+a default naming nothing is an unresolved reference, which says all there is to say about it: what
+the name would have to be is never in question when there is no name
+
+```toml
+[environment]
+python-version = "3.13"
+```
+
+```by
+class A[**Q = Missing]: ...  # error: [unresolved-reference]
+```
+
 ## a class with two packs
 
 every keyword argument names a field of a class's first pack, so no specialization spells a second

@@ -1068,7 +1068,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                     _ => false,
                 };
-                if same_kind {
+                // a name that resolves to nothing is already reported as unresolved. a `ParamSpec`
+                // default keeps the second report upstream makes for it
+                if same_kind || (kind.is_keyword_variadic() && ty.is_unknown()) {
                     return;
                 }
             }
