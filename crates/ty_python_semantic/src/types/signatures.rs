@@ -21,7 +21,7 @@ use itertools::{Either, EitherOrBoth, Itertools};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec_inline};
 
-use super::{DynamicType, Type, TypeVarVariance, UnionType, semantic_index};
+use super::{DynamicType, IntersectionType, Type, TypeVarVariance, UnionType, semantic_index};
 use crate::types::UnpackedKwargs;
 use crate::types::callable::{CallableTypeKind, walk_callable_type};
 use crate::types::constraints::{
@@ -770,6 +770,32 @@ impl<'db> NarrowingGuardKind<'db> {
             NarrowingGuardKind::Predicate | NarrowingGuardKind::InferredPredicate { .. } => None,
         }
     }
+
+    /// What an assertion guard claims about its place, in words: `truthy`, `` `int` ``, `` not
+    /// `str` ``. `None` for a predicate, which claims nothing once the call returns.
+    pub(crate) fn assertion_claim(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<String> {
+        Some(match self {
+            NarrowingGuardKind::Asserts { is_positive: true } => "truthy".to_string(),
+            NarrowingGuardKind::Asserts { is_positive: false } => "falsy".to_string(),
+            NarrowingGuardKind::AssertsType {
+                is_positive: true,
+                ty,
+            } => format!("`{}`", ty.display(db, env)),
+            NarrowingGuardKind::AssertsType {
+                is_positive: false,
+                ty,
+            } => format!("not `{}`", ty.display(db, env)),
+            // an assertion recovered from a body says what that body established, which is a type
+            NarrowingGuardKind::InferredAssertion { ty } => format!("`{}`", ty.display(db, env)),
+            NarrowingGuardKind::Predicate | NarrowingGuardKind::InferredPredicate { .. } => {
+                return None;
+            }
+        })
+    }
 }
 
 impl<'db> NarrowingGuard<'db> {
@@ -1246,25 +1272,29 @@ impl<'db> Signature<'db> {
                 None => NarrowedArgument::Nothing,
             });
         };
-        Some(
-            match self
-                .parameters
-                .iter()
-                .enumerate()
-                .find(|(_, parameter)| parameter.name() == Some(&guard.name))
-            {
-                Some((index, parameter)) => {
-                    NarrowedArgument::of_parameter(index, parameter, &guard.members)
-                }
-                None if guard.root_is_first_parameter => NarrowedArgument::Receiver {
-                    members: &guard.members,
-                },
-                None => NarrowedArgument::Place {
-                    name: &guard.name,
-                    members: &guard.members,
-                },
+        Some(self.guarded_argument(guard))
+    }
+
+    /// basedpython: what a call through this signature reaches with `guard`, which names a
+    /// parameter of it, the receiver it was bound to, or a place in the calling scope
+    fn guarded_argument<'a>(&'a self, guard: &'a NarrowingGuard<'db>) -> NarrowedArgument<'a> {
+        match self
+            .parameters
+            .iter()
+            .enumerate()
+            .find(|(_, parameter)| parameter.name() == Some(&guard.name))
+        {
+            Some((index, parameter)) => {
+                NarrowedArgument::of_parameter(index, parameter, &guard.members)
+            }
+            None if guard.root_is_first_parameter => NarrowedArgument::Receiver {
+                members: &guard.members,
             },
-        )
+            None => NarrowedArgument::Place {
+                name: &guard.name,
+                members: &guard.members,
+            },
+        }
     }
 
     /// Returns the binding referenced by a direct `P.args` or `P.kwargs` variadic parameter.
@@ -3453,6 +3483,75 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         self.check_tuple_spec_pair(db, &target_tuple, &source_tuple)
     }
 
+    /// basedpython: whether `source` establishes everything `target` asserts.
+    ///
+    /// an assertion narrows its place once the call returns, so a caller calling through `target`
+    /// relies on each place it names being narrowed at least that far. the function actually
+    /// called has to assert something about the same argument, and what it establishes there —
+    /// every assertion it makes about it at once — has to be the narrower type
+    fn check_assertion_pair(
+        &self,
+        db: &'db dyn Db,
+        source: &Signature<'db>,
+        target: &Signature<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        let env = self.env;
+        if target.deferred_assertions.is_none()
+            && !target
+                .narrowing_guards
+                .iter()
+                .any(|guard| guard.kind.is_assertion())
+        {
+            return self.always();
+        }
+        let target_guards = target.all_narrowing_guards(db);
+        let source_guards = source.all_narrowing_guards(db);
+        let mut result = self.always();
+        for target_guard in target_guards.iter() {
+            let Some(asserted) = target_guard.kind.asserted_type(db, env) else {
+                continue;
+            };
+            let place = target.guarded_argument(target_guard);
+            let matching: Vec<&NarrowingGuard<'db>> = source_guards
+                .iter()
+                .filter(|source_guard| {
+                    source_guard.kind.is_assertion()
+                        && place.is_narrowed_by(&source.guarded_argument(source_guard))
+                })
+                .collect();
+            let established = matching
+                .iter()
+                .filter_map(|source_guard| source_guard.kind.asserted_type(db, env))
+                .reduce(|left, right| IntersectionType::from_two_elements(db, env, left, right));
+            let holds = established.is_some_and(|established| {
+                !result
+                    .intersect(
+                        db,
+                        self.constraints,
+                        self.check_type_pair(db, established, asserted),
+                    )
+                    .is_never_satisfied(db, env)
+            });
+            if !holds {
+                if let Some(context) = self.report_context() {
+                    context.push(ErrorContext::WeakerAssertion {
+                        place: place.to_string(),
+                        source: matching
+                            .iter()
+                            .filter_map(|source_guard| source_guard.kind.assertion_claim(db, env))
+                            .collect(),
+                        target: target_guard
+                            .kind
+                            .assertion_claim(db, env)
+                            .unwrap_or_default(),
+                    });
+                }
+                return self.never();
+            }
+        }
+        result
+    }
+
     fn check_paramspec_return_pair(
         &self,
         db: &'db dyn Db,
@@ -3826,6 +3925,16 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
             }
             result.intersect(db, self.constraints, self.never());
             return_type_checks = false;
+        }
+
+        if return_type_checks {
+            let assertions = self.check_assertion_pair(db, source, target);
+            if result
+                .intersect(db, self.constraints, assertions)
+                .is_never_satisfied(db, env)
+            {
+                return_type_checks = false;
+            }
         }
 
         // basedpython: a variadic parameter that takes whole repetitions of several types,

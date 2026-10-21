@@ -39,7 +39,7 @@ error[invalid-argument-type]: Argument to function `want_second` is incorrect
   --> src/mdtest_snippet.by:11:13
    |
 11 | want_second(is_int_first)
-   |             ^^^^^^^^^^^^ Expected `(first: object, second: object) -> TypeIs[int]`, found `def is_int_first(first: object, second: object) -> TypeIs[int]`
+   |             ^^^^^^^^^^^^ Expected `(first: object, second: object) -> (second is int)`, found `def is_int_first(first: object, second: object) -> first is int`
 info: the return type narrows `first`, where `second` is expected
 info: Function defined here
  --> src/mdtest_snippet.by:1:5
@@ -54,7 +54,7 @@ error[invalid-argument-type]: Argument to function `want_first` is incorrect
   --> src/mdtest_snippet.by:17:16
    |
 17 |     want_first(second_checker)
-   |                ^^^^^^^^^^^^^^ Expected `(first: object, second: object) -> TypeIs[int]`, found `(first: object, second: object) -> TypeIs[int]`
+   |                ^^^^^^^^^^^^^^ Expected `(first: object, second: object) -> (first is int)`, found `(first: object, second: object) -> (second is int)`
 info: the return type narrows `second`, where `first` is expected
 info: Function defined here
   --> src/mdtest_snippet.by:12:5

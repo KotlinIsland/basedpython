@@ -327,22 +327,10 @@ fn check_assertion_established<'db>(
         definition.map_or_else(outer, |definition| binding_type(db, definition))
     };
 
-    let claim = match guard.kind {
-        NarrowingGuardKind::Asserts { is_positive: true } => "truthy".to_string(),
-        NarrowingGuardKind::Asserts { is_positive: false } => "falsy".to_string(),
-        NarrowingGuardKind::AssertsType {
-            is_positive: true,
-            ty,
-        } => format!("`{}`", ty.display(db, env)),
-        NarrowingGuardKind::AssertsType {
-            is_positive: false,
-            ty,
-        } => format!("not `{}`", ty.display(db, env)),
-        // an assertion recovered from a body says what that body established, which is a type
-        NarrowingGuardKind::InferredAssertion { ty } => format!("`{}`", ty.display(db, env)),
-        // a predicate narrows where the call is tested rather than once it returns, so there is
-        // no assertion for a body to establish
-        NarrowingGuardKind::Predicate | NarrowingGuardKind::InferredPredicate { .. } => return,
+    // a predicate narrows where the call is tested rather than once it returns, so there is no
+    // assertion for a body to establish
+    let Some(claim) = guard.kind.assertion_claim(db, env) else {
+        return;
     };
 
     // a member is read off whatever the place above it holds, so rebinding that place leaves what

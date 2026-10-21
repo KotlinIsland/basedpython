@@ -28,7 +28,8 @@ use crate::types::function::{FunctionType, OverloadLiteral};
 use crate::types::generics::{GenericContext, Specialization};
 use crate::types::protocol_class::{InlineProtocolMemberForm, ProtocolInterface};
 use crate::types::signatures::{
-    CallableSignature, Parameter, Parameters, ParametersKind, Signature,
+    CallableSignature, NarrowingGuard, NarrowingGuardKind, Parameter, Parameters, ParametersKind,
+    Signature,
 };
 use crate::types::tuple::{RepeatedUnit, TupleSpec, VariableLengthTuple, VariableSegment};
 use crate::types::typevar::{BoundTypeVarIdentity, BoundTypeVarInstance};
@@ -3582,6 +3583,7 @@ impl<'db> Signature<'db> {
             generic_context: self.generic_context.as_ref(),
             parameters: self.parameters(),
             return_ty: self.return_ty,
+            narrowing_guards: &self.narrowing_guards,
             db,
             env,
             settings,
@@ -3594,6 +3596,9 @@ pub(crate) struct DisplaySignature<'a, 'db> {
     generic_context: Option<&'a GenericContext<'db>>,
     parameters: &'a Parameters<'db>,
     return_ty: Type<'db>,
+    /// basedpython: the guards the return annotation wrote, which name the place a `TypeIs`
+    /// narrows and the places an assertion narrows
+    narrowing_guards: &'a [NarrowingGuard<'db>],
     db: &'db dyn Db,
     env: &'a ProgramEnvironment<'db>,
     settings: DisplaySettings<'db>,
@@ -3711,6 +3716,47 @@ impl<'db> FmtDetailed<'db> for DisplaySignature<'_, 'db> {
         // `def f()` and `def f() -> None` are the same declaration. A callable *type* has no
         // such default and always states what it returns, or `() -> None` would read as `()`
         let omit_none_return = is_declaration && self.return_ty.is_none(self.db);
+        if !self.settings.hide_return_type && basedpython_display_enabled() {
+            // basedpython: a narrowing return reads back as the guard that wrote it, since the
+            // `TypeIs[int]` python spells it with does not say which place it narrows, and an
+            // assertion's `None` says nothing at all
+            let assertions: Vec<_> = self
+                .narrowing_guards
+                .iter()
+                .filter(|guard| guard.is_written_assertion())
+                .collect();
+            if !assertions.is_empty() {
+                f.write_str(" -> asserts ")?;
+                for (index, guard) in assertions.into_iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(" and ")?;
+                    }
+                    self.fmt_assertion(guard, &settings, &mut f)?;
+                }
+                return self.close_top(&mut f);
+            }
+            if let Type::TypeIs(type_is) = self.return_ty
+                && type_is.place_name(db).is_none()
+                && let Some(guard) = self
+                    .narrowing_guards
+                    .iter()
+                    .find(|guard| matches!(guard.kind, NarrowingGuardKind::Predicate))
+            {
+                // a callable type's return binds tighter than a comparison, so its predicate is
+                // parenthesized, as it is written
+                f.write_str(if is_declaration { " -> " } else { " -> (" })?;
+                fmt_guard_place(guard, &mut f)?;
+                f.write_str(" is ")?;
+                type_is
+                    .type_argument(db)
+                    .display_with(db, env, settings.singleline())
+                    .fmt_detailed(&mut f)?;
+                if !is_declaration {
+                    f.write_char(')')?;
+                }
+                return self.close_top(&mut f);
+            }
+        }
         if !self.settings.hide_return_type && !omit_none_return {
             f.write_str(" -> ")?;
 
@@ -3734,12 +3780,54 @@ impl<'db> FmtDetailed<'db> for DisplaySignature<'_, 'db> {
             }
         }
 
+        self.close_top(&mut f)
+    }
+}
+
+impl<'db> DisplaySignature<'_, 'db> {
+    fn close_top(&self, f: &mut TypeWriter<'_, '_, 'db>) -> fmt::Result {
         if self.parameters.is_top() {
             f.write_str("]")?;
         }
-
         Ok(())
     }
+
+    /// basedpython: one written assertion, as the return annotation spells it after `asserts`
+    fn fmt_assertion(
+        &self,
+        guard: &NarrowingGuard<'db>,
+        settings: &DisplaySettings<'db>,
+        f: &mut TypeWriter<'_, '_, 'db>,
+    ) -> fmt::Result {
+        match guard.kind {
+            NarrowingGuardKind::Asserts { is_positive } => {
+                if !is_positive {
+                    f.write_str("not ")?;
+                }
+                fmt_guard_place(guard, f)
+            }
+            NarrowingGuardKind::AssertsType { is_positive, ty } => {
+                fmt_guard_place(guard, f)?;
+                f.write_str(if is_positive { " is " } else { " is not " })?;
+                ty.display_with(self.db, self.env, settings.singleline())
+                    .fmt_detailed(f)
+            }
+            NarrowingGuardKind::Predicate
+            | NarrowingGuardKind::InferredPredicate { .. }
+            | NarrowingGuardKind::InferredAssertion { .. } => Ok(()),
+        }
+    }
+}
+
+/// basedpython: the place a guard narrows, `x` or `self.data`
+fn fmt_guard_place(guard: &NarrowingGuard<'_>, f: &mut TypeWriter<'_, '_, '_>) -> fmt::Result {
+    f.set_invalid_type_annotation();
+    f.write_str(&guard.name)?;
+    for member in &guard.members {
+        f.write_char('.')?;
+        f.write_str(member)?;
+    }
+    Ok(())
 }
 
 impl Display for DisplaySignature<'_, '_> {

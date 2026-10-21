@@ -178,6 +178,13 @@ pub(crate) enum ErrorContext<'db> {
         source: String,
         target: String,
     },
+    /// basedpython: `target` asserts something about a place that `source` does not establish:
+    /// it asserts nothing about it, or the claims in `source`, which together are not as narrow
+    WeakerAssertion {
+        place: String,
+        source: Vec<String>,
+        target: String,
+    },
     IncompatibleParameterTypes {
         source: Type<'db>,
         target: Type<'db>,
@@ -547,6 +554,22 @@ impl<'db> ErrorContext<'db> {
             ),
             Self::NarrowsAnotherArgument { source, target } => {
                 format!("the return type narrows {source}, where {target} is expected")
+            }
+            Self::WeakerAssertion {
+                place,
+                source,
+                target,
+            } => {
+                if source.is_empty() {
+                    format!(
+                        "the function asserts nothing about {place}, where {target} is expected"
+                    )
+                } else {
+                    format!(
+                        "the function asserts {place} is {source}, where {target} is expected",
+                        source = source.join(" and ")
+                    )
+                }
             }
             Self::IncompatibleParameterTypes {
                 source,
