@@ -6292,7 +6292,7 @@ def clamp(value: int) -> int:
 
         assert_eq!(
             test.function_scoped_names(&tokens),
-            ["value@46", "result@67", "value@80", "result@101"]
+            ["value@48", "result@72", "value@85", "result@110"]
         );
     }
 
@@ -6345,9 +6345,9 @@ def f(subject: object):
             [
                 "subject@59",
                 "inner@124",
-                "subject@151",
-                "first@175",
-                "rest@183"
+                "subject@154",
+                "first@177",
+                "rest@185"
             ]
         );
     }
@@ -6368,6 +6368,8 @@ def outer():
         nonlocal count
         global total
         count = total
+        total = count
+        count = total
 "#,
         );
 
@@ -6375,7 +6377,15 @@ def outer():
 
         assert_eq!(
             test.function_scoped_names(&tokens),
-            ["x@27", "x@32", "count@71", "count@114", "count@143"]
+            [
+                "x@28",
+                "x@34",
+                "count@67",
+                "count@111",
+                "count@146",
+                "count@176",
+                "count@190",
+            ]
         );
     }
 

@@ -461,7 +461,9 @@ fn unused_name(db: &dyn Db, file: ProgramFile<'_>, name: String) -> String {
     if !bound.contains(name.as_str()) {
         return name;
     }
-    (2..)
+    // the module binds `bound.len()` names, so one of the `bound.len() + 1` suffixes
+    // from 2 is free
+    (2..=bound.len() + 2)
         .map(|suffix| format!("{name}_{suffix}"))
         .find(|candidate| !bound.contains(candidate.as_str()))
         .unwrap_or(name)
@@ -811,7 +813,10 @@ class TestShapes:
                 "from geometry import perimeter\n\ndef test_perimeter() -> None: ...\n\ndef test_perimeter_2() -> None: ...\n",
             )
             .build();
-        assert_snapshot!(test.subject_tests(), @"");
+        assert_snapshot!(test.subject_tests(), @"
+
+        new test test_perimeter_3 added in /tests/test_geometry.py importing perimeter from geometry
+        ");
     }
 
     #[test]
