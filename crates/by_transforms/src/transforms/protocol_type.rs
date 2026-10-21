@@ -205,12 +205,18 @@ impl<'src> ProtocolTypeLowering<'src> {
                     let Some(name) = named.target.as_name_expr() else {
                         continue;
                     };
-                    let ty = self.render_type(&named.value);
-                    members.push(format!(
-                        "{name}: {ty}",
-                        name = name.id,
-                        ty = quote_forward_ref(&ty)
-                    ));
+                    let ty = quote_forward_ref(&self.render_type(&named.value));
+                    // a member that only has to be readable is a getter-only property,
+                    // which is how a protocol class body says read-only
+                    members.push(if named.is_let {
+                        let property = self.written.builtin("property");
+                        format!(
+                            "@{property}\n    def {name}(self) -> {ty}: ...",
+                            name = name.id
+                        )
+                    } else {
+                        format!("{name}: {ty}", name = name.id)
+                    });
                 }
                 Expr::ProtocolMethod(method) => match self.render_method(method) {
                     Some(rendered) => members.push(rendered),
@@ -542,6 +548,23 @@ mod tests {
                     a: "int"
                     def m(self) -> "str": ...
                 def f(x: _Protocol_66269af6) -> None: ...
+            "#},
+        );
+    }
+
+    #[test]
+    fn a_let_member_is_a_getter_only_property() {
+        check(
+            indoc! {"
+                def f(x: protocol(let a: int; b: str)) -> None: ...
+            "},
+            indoc! {r#"
+                from typing import Protocol
+                class _Protocol_4e1bfe56(Protocol):
+                    @property
+                    def a(self) -> "int": ...
+                    b: "str"
+                def f(x: _Protocol_4e1bfe56) -> None: ...
             "#},
         );
     }

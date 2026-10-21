@@ -342,6 +342,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             optional_vars: Some(
@@ -417,6 +418,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             optional_vars: Some(
@@ -1623,6 +1625,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             optional_vars: None,

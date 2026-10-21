@@ -1736,6 +1736,15 @@ fn test_inline_protocol_type() {
     insta::assert_debug_snapshot!(parsed.syntax());
 }
 
+/// `let a: T` is a read-only member, a member may still be named `let`, and a soft keyword names
+/// a member like any other name
+#[test]
+fn test_inline_protocol_let_member() {
+    let source = "a: protocol(let a: int; let: str; let match: int; type: str)\n";
+    let parsed = parse_basedpython_module(source);
+    insta::assert_debug_snapshot!(parsed.syntax());
+}
+
 #[test]
 fn test_inline_protocol_keyword_pack() {
     let source = "a: protocol(**Kwargs)\n";

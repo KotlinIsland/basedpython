@@ -419,6 +419,7 @@ impl<'db> Visitor<'db> for WalrusFinder<'_, 'db> {
             ast::Expr::Named(ast::ExprNamed {
                 target,
                 value: _,
+                is_let: _,
                 range: _,
                 node_index: _,
             }) => {

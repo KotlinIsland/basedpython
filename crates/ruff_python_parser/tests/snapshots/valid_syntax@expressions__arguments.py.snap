@@ -1223,6 +1223,7 @@ Module(
                                                         ),
                                                     },
                                                 ),
+                                                is_let: false,
                                             },
                                         ),
                                     },
@@ -1363,6 +1364,7 @@ Module(
                                                     ),
                                                 },
                                             ),
+                                            is_let: false,
                                         },
                                     ),
                                 ],
@@ -1419,6 +1421,7 @@ Module(
                                                             ),
                                                         },
                                                     ),
+                                                    is_let: false,
                                                 },
                                             ),
                                             generators: [

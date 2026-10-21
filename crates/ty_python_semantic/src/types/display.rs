@@ -3025,6 +3025,11 @@ impl<'db> FmtDetailed<'db> for DisplayInlineProtocol<'_, 'db> {
                     ty.display_with(self.db, env, self.settings.clone())
                         .fmt_detailed(f)?;
                 }
+                Some(InlineProtocolMemberForm::ReadOnlyAttribute(ty)) => {
+                    write!(f, "let {}: ", member.name())?;
+                    ty.display_with(self.db, env, self.settings.clone())
+                        .fmt_detailed(f)?;
+                }
                 // `new` rejected an interface with such a member
                 None => return Err(fmt::Error),
             }

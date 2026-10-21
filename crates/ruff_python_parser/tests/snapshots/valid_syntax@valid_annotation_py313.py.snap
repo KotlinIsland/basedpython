@@ -44,6 +44,7 @@ Module(
                                     ),
                                 },
                             ),
+                            is_let: false,
                         },
                     ),
                     value: None,

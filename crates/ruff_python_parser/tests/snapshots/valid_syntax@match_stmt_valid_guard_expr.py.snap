@@ -62,6 +62,7 @@ Module(
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ),

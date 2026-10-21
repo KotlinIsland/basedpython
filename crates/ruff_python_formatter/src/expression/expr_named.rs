@@ -16,6 +16,8 @@ impl FormatNodeRule<ExprNamed> for FormatExprNamed {
         let ExprNamed {
             target,
             value,
+            // an inline protocol is formatted verbatim, so its members never reach here
+            is_let: _,
             range: _,
             node_index: _,
         } = item;

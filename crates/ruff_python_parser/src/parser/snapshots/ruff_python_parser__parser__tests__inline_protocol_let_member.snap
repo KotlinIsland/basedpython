@@ -1,0 +1,128 @@
+---
+source: crates/ruff_python_parser/src/parser/tests.rs
+expression: parsed.syntax()
+---
+ModModule {
+    node_index: NodeIndex(None),
+    range: 0..61,
+    body: [
+        AnnAssign(
+            StmtAnnAssign {
+                node_index: NodeIndex(None),
+                range: 0..60,
+                decorator_list: [],
+                target: Name(
+                    ExprName {
+                        node_index: NodeIndex(None),
+                        range: 0..1,
+                        id: Name("a"),
+                        ctx: Store,
+                    },
+                ),
+                annotation: ProtocolType(
+                    ExprProtocolType {
+                        node_index: NodeIndex(None),
+                        range: 3..60,
+                        members: [
+                            Named(
+                                ExprNamed {
+                                    node_index: NodeIndex(None),
+                                    range: 12..22,
+                                    target: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 16..17,
+                                            id: Name("a"),
+                                            ctx: Invalid,
+                                        },
+                                    ),
+                                    value: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 19..22,
+                                            id: Name("int"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                    is_let: true,
+                                },
+                            ),
+                            Named(
+                                ExprNamed {
+                                    node_index: NodeIndex(None),
+                                    range: 24..32,
+                                    target: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 24..27,
+                                            id: Name("let"),
+                                            ctx: Invalid,
+                                        },
+                                    ),
+                                    value: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 29..32,
+                                            id: Name("str"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                    is_let: false,
+                                },
+                            ),
+                            Named(
+                                ExprNamed {
+                                    node_index: NodeIndex(None),
+                                    range: 34..48,
+                                    target: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 38..43,
+                                            id: Name("match"),
+                                            ctx: Invalid,
+                                        },
+                                    ),
+                                    value: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 45..48,
+                                            id: Name("int"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                    is_let: true,
+                                },
+                            ),
+                            Named(
+                                ExprNamed {
+                                    node_index: NodeIndex(None),
+                                    range: 50..59,
+                                    target: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 50..54,
+                                            id: Name("type"),
+                                            ctx: Invalid,
+                                        },
+                                    ),
+                                    value: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 56..59,
+                                            id: Name("str"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                    is_let: false,
+                                },
+                            ),
+                        ],
+                    },
+                ),
+                value: None,
+                simple: true,
+                is_context: false,
+            },
+        ),
+    ],
+}

@@ -46,6 +46,7 @@ ModModule {
                                             ctx: Load,
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             Named(
@@ -68,6 +69,7 @@ ModModule {
                                             ctx: Load,
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                         ],

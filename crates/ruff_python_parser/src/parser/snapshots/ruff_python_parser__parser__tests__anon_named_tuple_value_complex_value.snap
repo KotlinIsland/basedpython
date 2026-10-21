@@ -76,6 +76,7 @@ ModModule {
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             Named(
@@ -111,6 +112,7 @@ ModModule {
                                             optional: false,
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                         ],

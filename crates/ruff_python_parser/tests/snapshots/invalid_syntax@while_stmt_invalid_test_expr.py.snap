@@ -148,6 +148,7 @@ Module(
                                     ),
                                 },
                             ),
+                            is_let: false,
                         },
                     ),
                     body: [],

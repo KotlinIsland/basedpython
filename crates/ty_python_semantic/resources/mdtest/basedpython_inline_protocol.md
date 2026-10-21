@@ -19,6 +19,24 @@ def f(x: protocol(a: int; b: str)) -> None:
     reveal_type(x.b)  # revealed: str
 ```
 
+### Read-only data members
+
+`let a: T` declares a member that only has to be readable, as a getter-only property does in a
+protocol class body. It reads back as `T`, and it cannot be assigned through the protocol
+
+```by
+def f(x: protocol(let a: int)) -> None:
+    reveal_type(x.a)  # revealed: int
+    x.a = 1  # error: [invalid-assignment]
+```
+
+A member that is itself named `let` is still written `let: T`
+
+```by
+def f(x: protocol(let: int)) -> None:
+    reveal_type(x.let)  # revealed: int
+```
+
 ### Method members
 
 A method member's first parameter is the receiver — a parameter *name*, not a type — so it is bound
@@ -108,6 +126,33 @@ def f(x: protocol(a: int)) -> None: ...
 
 def g(y: protocol(a: int)) -> None:
     f(y)
+```
+
+### A read-only member accepts a narrower attribute
+
+A mutable member is invariant: the argument's attribute has to be exactly the declared type, since a
+write through the protocol could store any value of that type. A `let` member is only read, so an
+attribute of any narrower type satisfies it, and so does a property
+
+```by
+class Narrower:
+    a: bool
+
+class Property:
+    @property
+    def a(self) -> int:
+        return 1
+
+def mutable(x: protocol(a: int)) -> None: ...
+def read_only(x: protocol(let a: int)) -> None: ...
+
+read_only(Narrower())
+read_only(Property())
+
+# error: [invalid-argument-type] "Argument to function `mutable` is incorrect"
+mutable(Narrower())
+# error: [invalid-argument-type] "Argument to function `mutable` is incorrect"
+mutable(Property())
 ```
 
 ### A protocol with fewer members accepts one with more
@@ -331,8 +376,8 @@ def f(x: protocol(**int)) -> None: ...
 A synthesized protocol reads back as the members it declares.
 
 ```by
-def f(x: protocol(a: int; def m(self) -> str)) -> None:
-    reveal_type(x)  # revealed: protocol(a: int; def m(self) -> str)
+def f(x: protocol(a: int; let b: str; def m(self) -> str)) -> None:
+    reveal_type(x)  # revealed: protocol(a: int; let b: str; def m(self) -> str)
 ```
 
 ## `protocol` is a soft keyword
