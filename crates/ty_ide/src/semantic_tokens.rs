@@ -6781,7 +6781,7 @@ extension str(Show):
         "show" @ 81..85: Method [definition]
         "self" @ 86..90: SelfParameter [definition]
         "str" @ 95..98: Class
-        "self" @ 115..119: Parameter
+        "self" @ 115..119: SelfParameter
         "#);
     }
 

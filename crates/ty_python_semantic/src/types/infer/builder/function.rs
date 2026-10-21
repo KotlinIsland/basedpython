@@ -2454,19 +2454,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let class_definition = self.index.expect_single_definition(class);
         let class_literal = original_class_type(db, class_definition)?;
 
-        // basedpython: an extension method's `self` is the *extended* type,
-        // specialized at the extension's view of its type parameters — not a
-        // `Self` typevar of the synthetic extension class (whose own body holds
-        // only the extension members)
+        // basedpython: an extension of something that is not a class extends nothing, and
+        // `invalid-extension` has already said so, so its `self` is left gradual
         if let ClassLiteral::Static(static_literal) = class_literal
             && static_literal.is_extension(db)
         {
-            let body_view = extensions::body_view_class(db, static_literal)?;
-            return Some(if is_classmethod || function_name == "__new__" {
-                SubclassOfType::from(db, env, SubclassOfInner::Class(body_view))
-            } else {
-                Type::instance(db, env, body_view)
-            });
+            extensions::body_view_class(db, static_literal)?;
         }
 
         let typing_self = typing_self(db, self.scope(), Some(method_definition), class_literal);

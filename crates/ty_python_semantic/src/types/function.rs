@@ -1292,21 +1292,17 @@ impl<'db> OverloadLiteral<'db> {
             let class_def = index.expect_single_definition(class_node);
             let class_literal = original_class_type(db, class_def)?;
 
-            // basedpython: an extension method's `self` is the *extended* type,
-            // specialized at the extension's view of its type parameters. the
-            // receiver's own type arguments are substituted in when the member
-            // is resolved on a receiver, exactly like ordinary generic members
-            if let ClassLiteral::Static(static_literal) = class_literal
-                && static_literal.is_extension(db)
-            {
-                let body_view = crate::types::extensions::body_view_class(db, static_literal)?;
-                return Some(if self.takes_implicit_class_receiver(db) {
-                    SubclassOfType::from(db, env, SubclassOfInner::Class(body_view))
-                } else {
-                    Type::instance(db, env, body_view)
-                });
-            }
-
+            // basedpython: an extension method's `self` is a `Self` bounded by the
+            // *extended* type (see `typing_self`), so it always needs the typevar. an
+            // extension of something that is not a class extends nothing, and `invalid-extension`
+            // has already said so, so its `self` is left gradual
+            let class_is_extension = match class_literal {
+                ClassLiteral::Static(static_literal) if static_literal.is_extension(db) => {
+                    crate::types::extensions::body_view_class(db, static_literal)?;
+                    true
+                }
+                _ => false,
+            };
             let class_is_generic = class_literal.generic_context(db).is_some();
             let class_is_fallback = class_literal
                 .known(db)
@@ -1328,7 +1324,11 @@ impl<'db> OverloadLiteral<'db> {
             //   - The class cannot be a "fallback class". A fallback class is used like a mixin,
             //     and so we need specialization inference to determine the "real" class that the
             //     fallback is augmenting. (See KnownClass::is_fallback_class for more details.)
-            if method_has_explicit_self || class_is_generic || class_is_fallback {
+            if method_has_explicit_self
+                || class_is_generic
+                || class_is_fallback
+                || class_is_extension
+            {
                 let scope_id = definition.scope(db);
                 let typevar_binding_context = Some(definition);
                 let index = semantic_index(db, scope_id.program_file(db));
