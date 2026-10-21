@@ -14,6 +14,7 @@ mod django_template;
 mod doc_highlights;
 mod docstring;
 mod document_symbols;
+mod evaluatable_expression;
 mod find_references;
 mod folding_range;
 mod goto;
@@ -65,6 +66,7 @@ pub use django_template::{
 };
 pub use doc_highlights::document_highlights;
 pub use document_symbols::document_symbols;
+pub use evaluatable_expression::evaluatable_expression;
 pub use find_references::find_references;
 pub use folding_range::{FoldingRange, FoldingRangeKind, folding_ranges};
 pub use goto::{goto_declaration, goto_definition, goto_type_definition};
