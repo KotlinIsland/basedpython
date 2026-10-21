@@ -1,6 +1,6 @@
 //! checker/runtime divergence harness.
 //!
-//! every `.by` code block in the basedpython mdtests that the checker accepts
+//! every `.by` code block in the mdtests that the checker accepts
 //! (no `# error:` or `# snapshot` assertions) must also transpile and *execute*
 //! cleanly: the mdtest framework verifies ty's diagnostics, this test verifies
 //! the runtime half of the contract. divergences of the form "checks clean but crashes at
@@ -18,6 +18,10 @@
 //! differently, or no longer checks. it sees only what this corpus exercises: an import read
 //! only by a lowering, in a checker-clean block of a single file. a multi-file section is not
 //! run, so a read across modules is out of its reach, as is any lowering no such block makes
+//!
+//! each block runs as a program of its own, where mdtest checks the blocks of a
+//! section as one file, so a block that builds on an earlier one in its section
+//! repeats what it needs of it
 
 use std::fs;
 use std::io::Write;
@@ -85,13 +89,23 @@ fn python_version(python: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-/// Extract the `by` fenced code blocks of a markdown file, in order, with a flag
-/// for blocks living in a multi-file section (one that declares companion
-/// modules via a `` `name.py`: `` marker) — those import section-local modules
-/// and cannot run standalone.
-fn by_blocks(markdown: &str) -> Vec<(String, bool)> {
+/// a `by` fenced code block of an mdtest file
+#[derive(Debug, PartialEq)]
+struct Block {
+    source: String,
+    /// whether the block lives in a multi-file section (one that declares
+    /// companion modules via a `` `name.py`: `` marker). those import
+    /// section-local modules and cannot run standalone
+    multi_file: bool,
+    /// the text of the heading the block is under
+    heading: String,
+}
+
+/// extract the `by` fenced code blocks of a markdown file, in order
+fn by_blocks(markdown: &str) -> Vec<Block> {
     let mut blocks: Vec<(String, usize)> = Vec::new();
     let mut multi_file_sections: Vec<usize> = Vec::new();
+    let mut headings: Vec<String> = vec![String::new()];
     let mut section = 0usize;
     // the backtick run of the fence currently open, if any. every fence is
     // tracked, not just the `by` ones: a `# error:` comment at column 0 inside a
@@ -126,6 +140,7 @@ fn by_blocks(markdown: &str) -> Vec<(String, bool)> {
         }
         if line.starts_with('#') {
             section += 1;
+            headings.push(line.trim_start_matches('#').trim().to_owned());
         }
         // a companion-module marker: `` `pylib.py`: `` ahead of its fence
         if trimmed.starts_with('`')
@@ -138,7 +153,11 @@ fn by_blocks(markdown: &str) -> Vec<(String, bool)> {
     }
     blocks
         .into_iter()
-        .map(|(b, s)| (b, multi_file_sections.contains(&s)))
+        .map(|(source, section)| Block {
+            source,
+            multi_file: multi_file_sections.contains(&section),
+            heading: headings[section].clone(),
+        })
         .collect()
 }
 
@@ -293,6 +312,43 @@ fn unused_import_leg(
     })
 }
 
+/// the sections whose checker-clean blocks do not run, each with the reason, keyed
+/// by mdtest file (relative to the mdtest directory) and heading text
+///
+/// each entry is a known divergence that is not fixed yet. a block that is not
+/// meant to run as a program has no place here: it is written to run, or asserts
+/// the diagnostic that leaves its runtime behaviour unspecified. an entry that no
+/// longer matches a checker-clean block fails the test, so the list cannot
+/// outlive its reasons
+const EXCLUDED: &[(&str, &str, &str)] = &[(
+    "abstract.md",
+    "abstract methods are tracked",
+    "ty does not report instantiating a class that leaves an abstract method \
+         unimplemented (the block's `TODO`), so the block checks clean and python raises \
+         `TypeError` at the instantiation",
+)];
+
+/// every mdtest under `dir`, at any depth, in a stable order
+fn markdown_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("mdtest dir") {
+            let path = entry.expect("mdtest dir entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+            {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
 /// Stub `reveal_type` (an mdtest debugging device with no runtime binding)
 /// after the `__future__` import, which must stay first.
 fn with_reveal_stub(transpiled: &str) -> String {
@@ -351,6 +407,14 @@ fn clean_mdtest_blocks_run() {
         .output()
         .is_ok_and(|o| o.status.success());
 
+    // the django mdtests run their models against the framework; skip their
+    // blocks when it isn't installed, and run them locally against an
+    // interpreter that has django to enforce the contract
+    let has_django = Command::new(&python)
+        .args(["-c", "import django"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
     // the pytest divergence suite drives real pytest over the transpiled output
     // (each block re-invokes `pytest.main` on itself under `__main__`); skip its
     // blocks when pytest isn't installed, and run them locally against an
@@ -387,19 +451,8 @@ fn clean_mdtest_blocks_run() {
         .is_ok_and(|o| o.status.success());
 
     let dir = mdtest_dir();
-    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
-        .expect("mdtest dir")
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                && p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("basedpython_"))
-        })
-        .collect();
-    files.sort();
-    assert!(!files.is_empty(), "no basedpython mdtests found in {dir:?}");
+    let files = markdown_files(&dir);
+    assert!(!files.is_empty(), "no mdtests found in {dir:?}");
 
     // gather every runnable block up front — skipping ones with expected
     // diagnostics (only checker-clean blocks carry the contract) or that import
@@ -421,6 +474,7 @@ fn clean_mdtest_blocks_run() {
         (!has_templatelib).then_some("string.templatelib"),
         (!has_pydantic).then_some("pydantic"),
         (!has_sqlalchemy).then_some("sqlalchemy"),
+        (!has_django).then_some("django"),
         (!has_pytest).then_some("pytest"),
         (!has_basedpython_ui).then_some("basedpython_ui"),
         Some("ty_extensions"),
@@ -430,19 +484,45 @@ fn clean_mdtest_blocks_run() {
     .collect();
 
     let mut items: Vec<(String, usize, String)> = Vec::new();
+    let mut excluded_seen = vec![false; EXCLUDED.len()];
     for file in &files {
-        let name = file.file_name().unwrap().to_string_lossy().into_owned();
+        let name = file
+            .strip_prefix(&dir)
+            .expect("an mdtest is under the mdtest directory")
+            .to_string_lossy()
+            .replace('\\', "/");
         let markdown = fs::read_to_string(file).expect("read mdtest");
-        for (i, (block, multi_file)) in by_blocks(&markdown).into_iter().enumerate() {
-            if has_expected_diagnostics(&block) || multi_file {
+        for (i, block) in by_blocks(&markdown).into_iter().enumerate() {
+            if has_expected_diagnostics(&block.source) || block.multi_file {
                 continue;
             }
-            if unavailable.iter().any(|module| block.contains(module)) {
+            if let Some(excluded) = EXCLUDED
+                .iter()
+                .position(|(file, heading, _)| *file == name && *heading == block.heading)
+            {
+                excluded_seen[excluded] = true;
                 continue;
             }
-            items.push((name.clone(), i, block));
+            if unavailable
+                .iter()
+                .any(|module| block.source.contains(module))
+            {
+                continue;
+            }
+            items.push((name.clone(), i, block.source));
         }
     }
+    let stale: Vec<String> = EXCLUDED
+        .iter()
+        .zip(&excluded_seen)
+        .filter(|(_, seen)| !**seen)
+        .map(|((file, heading, _), _)| format!("{file}: {heading}"))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "an excluded section no longer holds a checker-clean block; remove it from `EXCLUDED`:\n{}",
+        stale.join("\n")
+    );
     let total = items.len();
     assert!(total > 0, "no checker-clean by blocks found");
 
@@ -505,6 +585,9 @@ fn clean_mdtest_blocks_run() {
                     if !has_sqlalchemy && transpiled.contains("sqlalchemy") {
                         continue;
                     }
+                    if !has_django && transpiled.contains("django") {
+                        continue;
+                    }
                     if !has_pytest && transpiled.contains("pytest") {
                         continue;
                     }
@@ -513,7 +596,7 @@ fn clean_mdtest_blocks_run() {
                     }
                     let py = tmp.path().join(format!(
                         "{}_{i}.py",
-                        name.trim_end_matches(".md").replace('-', "_")
+                        name.trim_end_matches(".md").replace(['-', '/'], "_")
                     ));
                     fs::write(&py, with_reveal_stub(&transpiled)).unwrap();
                     let run = Command::new(&python)
@@ -527,7 +610,7 @@ fn clean_mdtest_blocks_run() {
                         ));
                         continue;
                     }
-                    let key = format!("{}_{i}", name.trim_end_matches(".md").replace('-', "_"));
+                    let key = format!("{}_{i}", name.trim_end_matches(".md").replace(['-', '/'], "_"));
                     if let Some(divergence) =
                         unused_import_leg(block, &version, &python, tmp.path(), &key)
                     {
@@ -573,7 +656,11 @@ f()
     let blocks = by_blocks(markdown);
     assert_eq!(
         blocks,
-        vec![("from m import f\nf()\n".to_string(), true)],
+        vec![Block {
+            source: "from m import f\nf()\n".to_string(),
+            multi_file: true,
+            heading: "a section".to_string(),
+        }],
         "the block belongs to the marker's section"
     );
 }
@@ -599,12 +686,17 @@ from m import f
 print(1)
 ```
 ";
+    let block = |source: &str, multi_file: bool, heading: &str| Block {
+        source: source.to_string(),
+        multi_file,
+        heading: heading.to_string(),
+    };
     assert_eq!(
         by_blocks(markdown),
         vec![
-            ("def f() -> None: ...\n".to_string(), true),
-            ("from m import f\n".to_string(), true),
-            ("print(1)\n".to_string(), false),
+            block("def f() -> None: ...\n", true, "multi-file"),
+            block("from m import f\n", true, "multi-file"),
+            block("print(1)\n", false, "standalone"),
         ]
     );
 }

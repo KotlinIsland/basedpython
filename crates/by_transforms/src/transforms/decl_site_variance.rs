@@ -1,8 +1,8 @@
 //! AST pass: strips the def-site keywords a type-parameter declaration writes
-//! ahead of its name — `out` / `in` / `in out` in `class C[out T]`, and
-//! `reified` in `def f[reified T]`. both are preserved on the AST node and
-//! consumed by ty's type checker directly — this only deletes surface bytes so
-//! output is valid Python.
+//! ahead of its name — `out` / `in` / `in out` in `class C[out T]` and
+//! `type A[out T] = ...`, and `reified` in `def f[reified T]`. both are
+//! preserved on the AST node and consumed by ty's type checker directly — this
+//! only deletes surface bytes so output is valid Python.
 //!
 //! also strips the lower end of a basedpython bound range (`class C[T: int..object]`), which
 //! ty enforces from the AST node; python bounds only have an upper end
@@ -123,6 +123,7 @@ impl<'ast> Visitor<'ast> for State<'_> {
         let type_params = match stmt {
             Stmt::ClassDef(c) => c.type_params.as_deref(),
             Stmt::FunctionDef(f) => f.type_params.as_deref(),
+            Stmt::TypeAlias(a) => a.type_params.as_deref(),
             _ => None,
         };
 
@@ -200,6 +201,31 @@ mod tests {
     #[test]
     fn invariant_typevar_untouched() {
         check_py312("class C[T]: ...\n", "class C[T]: ...\n");
+    }
+
+    #[test]
+    fn strips_on_type_alias() {
+        check_py312(
+            "type Pinned[in out T] = list[T]\ntype Alias[out T: int..object] = list[T]\n",
+            "type Pinned[T] = list[T]\ntype Alias[T: object] = list[T]\n",
+        );
+    }
+
+    #[test]
+    fn strips_on_type_alias_under_polyfill() {
+        let config = Config {
+            min_version: PythonVersion::PY311,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile("type Alias[out T] = list[T]\n", &config).unwrap(),
+            indoc! {"
+                from typing import TypeVar
+                from typing_extensions import TypeAliasType
+                _T = TypeVar(\"_T\", covariant=True)
+                Alias = TypeAliasType(\"Alias\", list[_T], type_params=(_T,))
+            "},
+        );
     }
 
     #[test]
