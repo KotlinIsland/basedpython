@@ -1084,14 +1084,15 @@ impl ClassIr {
     }
 
     /// whether the twin's `class` statement records the class it bound, after its
-    /// decorators, for that check to read the class against
+    /// decorators, for module init to read the class against
     ///
     /// a `data class` is the one class whose twin is not what its statement built: the
     /// `@dataclass` the transpiler wrote makes it again and writes every dunder it
     /// generates, so the body the statement left says nothing about which of those the
-    /// module body wrote over afterwards
+    /// module body wrote over afterwards — and the class it built is not what its name
+    /// holds, so it says nothing about whether the module body wrote over the name either
     pub fn records_what_it_bound(&self) -> bool {
-        self.dataclass && self.checked_after_the_body()
+        self.dataclass && self.exported
     }
 
     /// the methods python reaches by name, through the method table

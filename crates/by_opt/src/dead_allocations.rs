@@ -12,16 +12,182 @@
 //! runs to a fixpoint: the tuple goes first, and its two boxed elements are only
 //! unread once it has.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use by_ir::function::{Function, ModuleIr};
 use by_ir::ops::{Op, RegisterId, Value};
+use by_ir::rtype::{Primitive, RType};
 
 pub(crate) fn run(module: &mut ModuleIr) {
     for function in module.all_functions_mut() {
+        unbox_unread_tuples(function);
         // bounded by the op count: every round removes at least one op, or stops
         while drop_unread(function) {}
     }
+}
+
+/// what [`unbox_unread_tuples`] writes into one register: the type of the struct, and each
+/// display rewritten, by block and op index
+type Rewrite = (RType, Vec<(usize, usize, Op)>);
+
+/// hold a tuple nothing reads as the struct of its unboxed elements rather than as an
+/// object built from their boxes
+///
+/// a tuple nothing reads is still a holder of what it was built from: a name keeps it
+/// until it is rebound, and letting it go lets its elements go last to first. that is all
+/// of it a program can see, and a fixed-length tuple held as a struct does exactly the
+/// same — it holds a reference per element and releases them last to first — without an
+/// allocation for the tuple or for a box per element. `pair = (whole, part)` over two
+/// `int`s, with its reads folded into reads of the elements, is the shape: an `int`
+/// subclass with a `__del__` can see when the tuple goes, so the tuple cannot simply go,
+/// but nothing can see what the tuple is.
+///
+/// every write of the register has to be such a display, each with the same element
+/// types, because the register takes the struct's type. an element is taken from its box
+/// only where the box is in the same block with nothing writing the boxed register between
+/// the two, so the struct holds the value the box was made from
+fn unbox_unread_tuples(function: &mut Function) {
+    let mut mentioned: HashSet<RegisterId> = HashSet::new();
+    for block in &function.blocks {
+        for op in &block.ops {
+            for operand in op.operands() {
+                if let Value::Register(id) = operand {
+                    mentioned.insert(*id);
+                }
+            }
+            mentioned.extend(op.unbinds());
+            mentioned.extend(op.loop_cursor());
+        }
+        for operand in block.terminator.operands() {
+            if let Value::Register(id) = operand {
+                mentioned.insert(*id);
+            }
+        }
+    }
+    for default in function.defaults.iter().flatten() {
+        if let Value::Register(id) = default {
+            mentioned.insert(*id);
+        }
+    }
+
+    // each candidate's rewritten displays, by block and op index, and the element types
+    // they all agree on — `None` once a write disagrees or cannot be rewritten
+    let mut rewrites: BTreeMap<RegisterId, Option<Rewrite>> = BTreeMap::new();
+    for (block_index, block) in function.blocks.iter().enumerate() {
+        for (op_index, op) in block.ops.iter().enumerate() {
+            let Some(dest) = op.dest() else {
+                continue;
+            };
+            if function.param_count > dest.index()
+                || mentioned.contains(&dest)
+                || function.register(dest).is_none_or(|decl| {
+                    decl.may_be_unassigned
+                        || !matches!(decl.ty, RType::OBJECT | RType::Primitive(Primitive::Tuple))
+                })
+            {
+                continue;
+            }
+            let rewritten = match op {
+                Op::BuildTuple { items, moves, .. } => {
+                    unboxed_display(function, &block.ops[..op_index], dest, items, moves)
+                }
+                _ => None,
+            };
+            let entry = rewrites
+                .entry(dest)
+                .or_insert_with(|| Some((RType::OBJECT, Vec::new())));
+            match (entry.as_mut(), rewritten) {
+                (Some((ty, ops)), Some((element_types, rewritten))) => {
+                    if ops.is_empty() {
+                        *ty = element_types;
+                    } else if *ty != element_types {
+                        *entry = None;
+                        continue;
+                    }
+                    ops.push((block_index, op_index, rewritten));
+                }
+                _ => *entry = None,
+            }
+        }
+    }
+    for (register, rewrite) in rewrites {
+        let Some((ty, ops)) = rewrite else {
+            continue;
+        };
+        if ops.is_empty() {
+            continue;
+        }
+        for (block_index, op_index, op) in ops {
+            function.blocks[block_index].ops[op_index] = op;
+        }
+        if let Some(decl) = function.registers.get_mut(register.index()) {
+            decl.ty = ty;
+        }
+    }
+}
+
+/// a tuple display written into `dest` as the struct of its elements, each box among them
+/// replaced by what it boxed, with the struct's type; `None` where nothing was a box
+fn unboxed_display(
+    function: &Function,
+    before: &[Op],
+    dest: RegisterId,
+    items: &[Value],
+    moves: &BTreeSet<usize>,
+) -> Option<(RType, Op)> {
+    let mut unboxed = Vec::with_capacity(items.len());
+    let mut kept_moves = BTreeSet::new();
+    let mut any = false;
+    for (index, item) in items.iter().enumerate() {
+        let boxed = match item {
+            Value::Register(id) => boxed_in_block(before, *id),
+            _ => None,
+        };
+        match boxed {
+            Some(src) => {
+                unboxed.push(src.clone());
+                any = true;
+            }
+            None => {
+                if moves.contains(&index) {
+                    kept_moves.insert(index);
+                }
+                unboxed.push(item.clone());
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    let types = unboxed
+        .iter()
+        .map(|item| function.value_type(item))
+        .collect::<Option<Vec<_>>>()?;
+    Some((
+        RType::Tuple(types.into()),
+        Op::TupleBuild {
+            dest,
+            items: unboxed,
+            moves: kept_moves,
+        },
+    ))
+}
+
+/// what `register` boxes, where the last write of it among `before` is a box and nothing
+/// after that box writes the boxed register
+fn boxed_in_block(before: &[Op], register: RegisterId) -> Option<&Value> {
+    let at = before.iter().rposition(|op| op.dest() == Some(register))?;
+    let Op::Box { src, .. } = &before[at] else {
+        return None;
+    };
+    if let Value::Register(source) = src
+        && before[at + 1..]
+            .iter()
+            .any(|op| op.dest() == Some(*source) || op.unbinds() == Some(*source))
+    {
+        return None;
+    }
+    Some(src)
 }
 
 /// whether an op does nothing but compute the value it names
@@ -139,9 +305,10 @@ fn drop_unread(function: &mut Function) -> bool {
 ///
 /// a representation with no object reference in it is one, and so is an object every
 /// write of which boxes such a value, or builds a tuple of them. that is `pair` in
-/// `pair = (whole, part)` over two `int`s, once its reads have been folded into reads
-/// of the elements. a tagged `int` counts as having no finalizer, as it does for the
-/// release pass
+/// `pair = (whole, part)` over two `float`s, once its reads have been folded into reads
+/// of the elements. a tagged `int` is not one: the object behind its pointer can be an
+/// `int` subclass with a `__del__`, and a tuple of two of them lets go of the second
+/// first
 fn finalizer_free(function: &Function) -> HashSet<RegisterId> {
     let mut free: HashSet<RegisterId> = function
         .registers
@@ -245,13 +412,13 @@ mod tests {
     }
 
     #[test]
-    fn a_name_nothing_reads_holding_only_ints_goes() {
-        // `pair = (whole, part)` over two `int`s, with its reads folded into reads of
-        // the elements: letting go of a tuple of boxed ints runs nothing, so when it
+    fn a_name_nothing_reads_holding_only_floats_goes() {
+        // `pair = (whole, part)` over two `float`s, with its reads folded into reads of
+        // the elements: letting go of a tuple of boxed floats runs nothing, so when it
         // happens cannot be told apart, and the tuple and both boxes go
-        let mut builder = FunctionBuilder::new("f", RType::INT);
-        let whole = builder.param("whole", RType::INT);
-        let part = builder.param("part", RType::INT);
+        let mut builder = FunctionBuilder::new("f", RType::FLOAT);
+        let whole = builder.param("whole", RType::FLOAT);
+        let part = builder.param("part", RType::FLOAT);
         let first = builder.temp(RType::OBJECT);
         let second = builder.temp(RType::OBJECT);
         let pair = builder.local("pair".to_string(), RType::OBJECT);
@@ -274,6 +441,103 @@ mod tests {
         super::run(&mut module);
 
         assert!(module.functions[0].blocks[0].ops.is_empty());
+    }
+
+    #[test]
+    fn a_name_nothing_reads_holding_ints_is_held_as_their_struct() {
+        // `pair = (whole, part)` over two `int`s, with its reads folded into reads of
+        // the elements: the name still holds both until it goes, and holding them as a
+        // struct of the two lets them go in the same order with nothing allocated
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let whole = builder.param("whole", RType::INT);
+        let part = builder.param("part", RType::INT);
+        let first = builder.temp(RType::OBJECT);
+        let second = builder.temp(RType::OBJECT);
+        let pair = builder.local("pair".to_string(), RType::OBJECT);
+        builder.push(Op::Box {
+            dest: first,
+            src: Value::Register(whole),
+        });
+        builder.push(Op::Box {
+            dest: second,
+            src: Value::Register(part),
+        });
+        builder.push(Op::BuildTuple {
+            dest: pair,
+            items: vec![Value::Register(first), Value::Register(second)],
+            moves: [0, 1].into_iter().collect(),
+        });
+        builder.terminate(Terminator::Return(Value::Register(whole)));
+
+        let mut module = module(builder.finish());
+        super::run(&mut module);
+
+        let function = &module.functions[0];
+        assert_eq!(
+            function.blocks[0].ops,
+            [Op::TupleBuild {
+                dest: pair,
+                items: vec![Value::Register(whole), Value::Register(part)],
+                moves: BTreeSet::new(),
+            }]
+        );
+        assert_eq!(
+            function.registers[pair.index()].ty,
+            RType::Tuple(Box::new([RType::INT, RType::INT]))
+        );
+        assert_eq!(by_ir::verify::verify(function), Ok(()));
+    }
+
+    #[test]
+    fn a_tuple_read_after_it_is_built_keeps_its_boxes() {
+        let mut builder = FunctionBuilder::new("f", RType::OBJECT);
+        let whole = builder.param("whole", RType::INT);
+        let first = builder.temp(RType::OBJECT);
+        let pair = builder.local("pair".to_string(), RType::OBJECT);
+        builder.push(Op::Box {
+            dest: first,
+            src: Value::Register(whole),
+        });
+        builder.push(Op::BuildTuple {
+            dest: pair,
+            items: vec![Value::Register(first)],
+            moves: BTreeSet::new(),
+        });
+        builder.terminate(Terminator::Return(Value::Register(pair)));
+
+        let mut module = module(builder.finish());
+        super::run(&mut module);
+
+        assert!(matches!(
+            module.functions[0].blocks[0].ops[1],
+            Op::BuildTuple { .. }
+        ));
+        assert_eq!(
+            module.functions[0].registers[pair.index()].ty,
+            RType::OBJECT
+        );
+    }
+
+    #[test]
+    fn a_tuple_nothing_reads_holding_ints_stays() {
+        // `ints(f)` thrown away, where `ints` answers `(f(1), f(2))` as two `int`s: either
+        // can be an `int` subclass with a `__del__`, and the tuple is what lets them go
+        // last to first rather than each after its own last read
+        let mut builder = FunctionBuilder::new("f", RType::INT);
+        let first = builder.param("first", RType::INT);
+        let second = builder.param("second", RType::INT);
+        let pair = builder.temp(RType::Tuple(Box::new([RType::INT, RType::INT])));
+        builder.push(Op::TupleBuild {
+            dest: pair,
+            items: vec![Value::Register(first), Value::Register(second)],
+            moves: BTreeSet::new(),
+        });
+        builder.terminate(Terminator::Return(Value::Register(first)));
+
+        let mut module = module(builder.finish());
+        super::run(&mut module);
+
+        assert_eq!(module.functions[0].blocks[0].ops.len(), 1);
     }
 
     #[test]

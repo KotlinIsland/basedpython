@@ -310,6 +310,26 @@ impl Verifier<'_> {
         });
     }
 
+    /// an operation answering with the type object of a class, or building an instance of
+    /// one, must name a class the module emits
+    ///
+    /// codegen reaches that class's type through the module, so a name it does not find
+    /// there leaves the destination unwritten — a register every later read takes for a
+    /// value. a function verified on its own has no module to ask
+    fn expect_emitted_class(&mut self, block: BlockId, class: &str, what: &str) {
+        if let Some(module) = self.module
+            && !module
+                .classes
+                .iter()
+                .any(|candidate| candidate.name == class)
+        {
+            self.error(
+                Some(block),
+                format!("{what} names `{class}`, which this module does not emit"),
+            );
+        }
+    }
+
     /// a call's arguments must have the representations the callee declares
     ///
     /// codegen emits the call as a plain C call, so a mismatch here is a mismatch the
@@ -1477,9 +1497,13 @@ impl Verifier<'_> {
                     },
                     "an allocation",
                 );
+                self.expect_emitted_class(block, class, "an allocation");
             }
             Op::MakeClosure {
-                dest, class, env, ..
+                dest,
+                class,
+                method,
+                env,
             } => {
                 self.expect(
                     block,
@@ -1491,6 +1515,22 @@ impl Verifier<'_> {
                     "a closure's environment",
                 );
                 self.expect_dest(block, *dest, &RType::OBJECT, "a closure");
+                // codegen builds the function from the nested method's own spec
+                if let Some(module) = self.module
+                    && !module
+                        .classes
+                        .iter()
+                        .filter(|candidate| candidate.name == *class)
+                        .flat_map(|owner| &owner.methods)
+                        .any(|candidate| candidate.name == *method && candidate.nested.is_some())
+                {
+                    self.error(
+                        Some(block),
+                        format!(
+                            "a closure names `{class}.{method}`, which this module does not emit as a nested function"
+                        ),
+                    );
+                }
             }
             Op::LoadGlobal { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "a global read");
@@ -1536,8 +1576,9 @@ impl Verifier<'_> {
             // no type to check: the destination keeps whatever representation it was
             // declared with, and the deletion only puts it back to unbound
             Op::DeleteLocal { .. } => {}
-            Op::LoadClass { dest, .. } => {
+            Op::LoadClass { dest, class } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "a class read");
+                self.expect_emitted_class(block, class, "a class read");
             }
             Op::ImportModule { dest, .. } => {
                 self.expect_dest(block, *dest, &RType::OBJECT, "an import");
@@ -2753,6 +2794,30 @@ mod tests {
         };
         let errors = verify(&f).unwrap_err();
         assert!(errors.iter().any(|e| e.message.contains("past the end")));
+    }
+
+    #[test]
+    fn a_class_read_must_name_a_class_the_module_emits() {
+        // codegen finds the type object through the module, and a class it does not find
+        // would leave the destination unwritten
+        let mut reader = add();
+        reader.registers.push(temp(RType::OBJECT));
+        reader.blocks[0].ops.insert(
+            0,
+            Op::LoadClass {
+                dest: RegisterId(3),
+                class: "Ghost".to_string(),
+            },
+        );
+        assert_eq!(verify(&reader), Ok(()));
+        let mut module = ModuleIr::new("m");
+        module.functions.push(reader);
+        let errors = verify_module(&module).unwrap_err();
+        assert!(
+            errors.iter().any(|error| error.message
+                == "a class read names `Ghost`, which this module does not emit"),
+            "{errors:?}"
+        );
     }
 
     #[test]

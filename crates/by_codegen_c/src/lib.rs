@@ -3294,34 +3294,6 @@ fn emit_class_members(module: &ModuleIr, class: &ClassIr) -> String {
     out
 }
 
-/// whether this class or an in-module base of it carries a class decorator
-///
-/// the base chain, because an instance discipline is not a per-class answer: a subclass
-/// allocates and frees instances of a shape its base decided.
-///
-/// a `data class` rung does not count. `@dataclass(slots=True)` is the twin's innermost
-/// decorator, so every decorator written above it is handed a class whose instances have
-/// no dict in python either
-fn decorated_chain(module: &ModuleIr, class: &ClassIr) -> bool {
-    let mut current = class;
-    // bounded by the class count, for the reason `inherits_layout` gives
-    for _ in 0..=module.classes.len() {
-        if !current.decorators.is_empty() && !current.dataclass {
-            return true;
-        }
-        match current
-            .base
-            .as_ref()
-            .and_then(ClassBase::in_module)
-            .and_then(|name| class_named(module, name))
-        {
-            Some(next) => current = next,
-            None => return false,
-        }
-    }
-    false
-}
-
 /// whether an emitted instance keeps a `__dict__` of its own
 ///
 /// python gives an instance somewhere to put a name its class never mentioned, and an
@@ -3336,11 +3308,11 @@ fn decorated_chain(module: &ModuleIr, class: &ClassIr) -> bool {
 /// right — a compiled class that accepted what its twin refuses would be a divergence in
 /// the other direction.
 ///
-/// a class decorator is a second reason, and an older one. what a decorator hands back
-/// is often code it *generated* from what it read — `@dataclass` writes an `__init__`
-/// that assigns one attribute per annotation — and that code is ordinary python which
-/// assumes an ordinary instance, so on a bare layout every assignment fell off and
-/// `E(3)` raised.
+/// a class decorator is handed the class the `class` statement made, so it is no reason
+/// of its own. what one hands back is often code it *generated* from what it read —
+/// `@dataclass` writes an `__init__` that assigns one attribute per annotation — and that
+/// code assumes an ordinary instance, which is one with a dict unless every rung declares
+/// `__slots__`. one that does has no dict in python either, whatever decorates it.
 ///
 /// the dict is a word in the class's own struct, at an offset the type names through a
 /// `__dictoffset__` member. that is what lets a call site ask whether an instance shadows
@@ -3359,7 +3331,7 @@ fn instance_dict(module: &ModuleIr, class: &ClassIr) -> bool {
     class.exported
         && heap_type(class)
         && !inherits_layout(module, class)
-        && (decorated_chain(module, class) || !slots_declared_throughout(module, class))
+        && !slots_declared_throughout(module, class)
 }
 
 /// whether this class's spec tells the type where an instance keeps its dict or its
@@ -4272,6 +4244,15 @@ fn carried_off_the_body(class: &ClassIr) -> (Vec<&str>, usize) {
 /// the class in this module named `name`, when it has one
 fn class_named<'a>(module: &'a ModuleIr, name: &str) -> Option<&'a ClassIr> {
     module.classes.iter().find(|class| class.name == name)
+}
+
+/// what an operation naming a class this module does not emit is written as
+///
+/// the verifier refuses such an operation, so nothing should reach this. emitting nothing
+/// would leave the destination unwritten and every later read of it a read of garbage,
+/// so the C refuses to preprocess instead
+fn unemitted_class(name: &str, what: &str) -> String {
+    format!("#error \"{what} names `{name}`, which this module does not emit\"\n")
 }
 
 /// whether `name` is a dunder, which is the shape of every name an emitted type can
@@ -9011,12 +8992,8 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             class,
             fields,
         } => {
-            let Some(owner) = module
-                .classes
-                .iter()
-                .find(|candidate| candidate.name == *class)
-            else {
-                return String::new();
+            let Some(owner) = class_named(module, class) else {
+                return unemitted_class(class, "an allocation");
             };
             let struct_name = owner.struct_name(module.name.dotted());
             let type_name = owner.type_name(module.name.dotted());
@@ -9238,10 +9215,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             method,
             env,
         } => {
-            let Some(nested) = module
-                .classes
-                .iter()
-                .find(|candidate| candidate.name == *class)
+            let Some(nested) = class_named(module, class)
                 .and_then(|owner| {
                     owner
                         .methods
@@ -9250,7 +9224,7 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
                 })
                 .filter(|nested| nested.nested.is_some())
             else {
-                return String::new();
+                return unemitted_class(&format!("{class}.{method}"), "a nested function");
             };
             let made = format!(
                 "By_MakeFunction(&{}_spec, (PyObject *)({}))",
@@ -9371,12 +9345,8 @@ fn emit_op(module: &ModuleIr, function: &Function, op: &Op, error_target: ErrorE
             out
         }
         Op::LoadClass { dest, class } => {
-            let Some(owner) = module
-                .classes
-                .iter()
-                .find(|candidate| candidate.name == *class)
-            else {
-                return String::new();
+            let Some(owner) = class_named(module, class) else {
+                return unemitted_class(class, "a class read");
             };
             let type_name = owner.type_name(module.name.dotted());
             assign_owned(
@@ -11656,16 +11626,16 @@ fn emit_install_verification(module: &ModuleIr) -> String {
 
 /// whether init has an exit that leaves the *whole* module interpreted
 ///
-/// two things can refuse in a way init cannot go on from — see the layout guard in
-/// [`emit_module_init`]: a class built ahead of everything else, and a class the module body
-/// changed after its statement in a way the type replacing it cannot answer for. a module
-/// with neither installs its classes or fails the import, and never quietly stands down
-/// entire
+/// three things can refuse in a way init cannot go on from — see the layout guard in
+/// [`emit_module_init`]: a class built ahead of everything else, a class the module body
+/// changed after its statement in a way the type replacing it cannot answer for, and a
+/// class whose name the module body wrote over. a module with no class in the namespace
+/// installs its functions or fails the import, and never quietly stands down entire
 fn stands_the_module_down(module: &ModuleIr) -> bool {
     module
         .classes
         .iter()
-        .any(|class| built_ahead(module, class) || class.checked_after_the_body())
+        .any(|class| built_ahead(module, class) || class.exported)
 }
 
 /// what compiled code reaches on `class` with no lookup at all, by the name the class
@@ -11854,6 +11824,18 @@ fn emit_module_init(module: &ModuleIr) -> String {
             i32::from(class.records_what_it_bound())
         ));
     }
+    // and every class the module body wrote its name over after the statement: compiled
+    // code reaches the class without going through the name, so installing the type over
+    // the write would throw the write away — see `By_ClassNameMoved`. a write the source
+    // spells out is declined at build time, and this is the one for the shapes no reading
+    // of it can see: `globals()[name] = v`, a helper handed `globals()`, a star import
+    for class in module.classes.iter().filter(|class| class.exported) {
+        conditions.push(format!(
+            "By_ClassNameMoved(by_statements, by_bound, dict, {}, {})",
+            c_string(&class.name),
+            i32::from(class.records_what_it_bound())
+        ));
+    }
     // whether the fallback source has to be run with its class bodies captured. the
     // capture costs a dict copy per class the body writes, so a module with nothing to
     // take out of one runs its body the plain way. a decorated method is taken out of a
@@ -11862,9 +11844,9 @@ fn emit_module_init(module: &ModuleIr) -> String {
     // named by the one list, so this asks that rather than repeating it
     let captures_bodies = module.classes.iter().any(|class| class.exported);
     let release_bodies = if captures_bodies {
-        "    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n    Py_XDECREF(by_bound);\n"
+        "    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n    Py_XDECREF(by_bound);\n    Py_CLEAR(by_ran);\n"
     } else {
-        ""
+        "    Py_CLEAR(by_ran);\n"
     };
     // an exit that leaves the module interpreted never installs a native, so the
     // installer the twin defined has nothing to do — and it must not be left standing
@@ -12044,21 +12026,24 @@ fn emit_module_init(module: &ModuleIr) -> String {
             );
         }
         // the definition still standing under the name, paired with the forwarder built
-        // for that name. a name the body went on to rebind to something that is not a
-        // function is not a definition this replaced, and is left unpaired rather than
-        // paired against whatever is there
+        // for that name. a name the body went on to write over is not a definition this
+        // replaced, and is left unpaired rather than paired against whatever is there
         //
         // both halves are borrowed: `dict` holds the definition until the install at the
         // end of init, and `by_built` holds the forwarder for at least as long
+        let published: Vec<&str> = module
+            .shims
+            .as_ref()
+            .map(|shims| shims.functions.iter().map(String::as_str).collect())
+            .unwrap_or_default();
         for (at, name) in forwarder_twins.iter().enumerate() {
             let slot = classes + at;
+            let Some(stands) = published.iter().position(|published| published == name) else {
+                continue;
+            };
             let _ = writeln!(
                 forwarder_record,
-                "    by_twin[{slot}] = PyDict_GetItemString(dict, {name});\n\
-                 \x20   if (by_twin[{slot}] == NULL) PyErr_Clear();\n\
-                 \x20   if (by_twin[{slot}] != NULL && !PyFunction_Check(by_twin[{slot}])) {{\n\
-                 \x20       by_twin[{slot}] = NULL;\n\
-                 \x20   }}\n\
+                "    by_twin[{slot}] = by_stands[{stands}] ? PyDict_GetItemString(dict, {name}) : NULL;\n\
                  \x20   Py_XINCREF(by_twin[{slot}]);\n\
                  \x20   if (by_twin[{slot}] != NULL) {{\n\
                  \x20       by_type[{slot}] = By_BuiltForwarder(by_built, {name});\n\
@@ -12658,18 +12643,23 @@ fn emit_module_init(module: &ModuleIr) -> String {
 
     // the body is run either way; what a class-level constant needs is what each `class`
     // statement wrote *before* its own decorators, which only the capturing run keeps
+    //
+    // `by_ran` is the code object the body ran, which is what says which function each
+    // `def` statement made — see `By_DefinitionCodes`
     let run_body = if captures_bodies {
         "\x20   PyObject *by_bodies = NULL;\n\
          \x20   PyObject *by_statements = NULL;\n\
          \x20   PyObject *by_bound = NULL;\n\
+         \x20   PyObject *by_ran = NULL;\n\
          \x20   if (by_fallback_source[0] != '\\0') {\n\
-         \x20       by_bodies = By_RunModuleBody(&by_fallback, dict, &by_statements, &by_bound);\n\
+         \x20       by_bodies = By_RunModuleBody(&by_fallback, dict, &by_statements, &by_bound, &by_ran);\n\
          \x20       if (by_bodies == NULL) return -1;\n\
          \x20   }\n"
             .to_string()
     } else {
-        "\x20   if (by_fallback_source[0] != '\\0') {\n\
-         \x20       PyObject *result = By_ExecModuleBody(&by_fallback, dict);\n\
+        "\x20   PyObject *by_ran = NULL;\n\
+         \x20   if (by_fallback_source[0] != '\\0') {\n\
+         \x20       PyObject *result = By_ExecModuleBody(&by_fallback, dict, &by_ran);\n\
          \x20       if (result == NULL) return -1;\n\
          \x20       Py_DECREF(result);\n\
          \x20   }\n"
@@ -12826,33 +12816,54 @@ fn emit_module_init(module: &ModuleIr) -> String {
     // does with the definitions' own names — a class decorator resolved out of the
     // namespace above all — and before the natives and before the decorators, which is
     // where they always went. `By_BuildForwarders` says why the two moments differ
+    //
+    // whether each definition is still what its name holds is asked first, before init
+    // does anything with the names itself: `by_stands` says which forwarders are bound
+    // and which sites may ever go native — see `By_DefinitionStanding`
     let (build_forwarders, install_forwarders) = match &module.shims {
         Some(shims) => (
             format!(
-                "    PyObject *by_built = By_BuildForwarders(module, dict, by_forwarded, {}, {});\n\
+                "    char by_stands[{count}];\n\
+                 \x20   {{ PyObject *by_definitions = By_DefinitionCodes(by_ran);\n\
+                 \x20     Py_CLEAR(by_ran);\n\
+                 \x20     if (by_definitions == NULL) return -1;\n\
+                 {stands}\
+                 \x20     Py_DECREF(by_definitions); }}\n\
+                 \x20   PyObject *by_built = By_BuildForwarders(module, dict, by_forwarded, {count}, {installer});\n\
                  \x20   if (by_built == NULL) return -1;\n",
-                shims.functions.len(),
-                c_string(&shims.installer)
+                count = shims.functions.len(),
+                installer = c_string(&shims.installer),
+                stands = shims.functions.iter().enumerate().fold(
+                    String::new(),
+                    |mut stands, (at, name)| {
+                        let _ = writeln!(
+                            stands,
+                            "      by_stands[{at}] = By_DefinitionStanding(dict, {}, by_definitions) != NULL;",
+                            c_string(name)
+                        );
+                        stands
+                    }
+                ),
             ),
             format!(
-                "    {{ int by_installed = By_InstallForwarders(dict, by_built, by_forwarded, {}, {});\n\
+                "    {{ int by_installed = By_InstallForwarders(dict, by_built, by_forwarded, {}, {}, by_stands);\n\
                  \x20     Py_DECREF(by_built);\n\
                  \x20     if (by_installed < 0) return -1; }}\n{}",
                 shims.functions.len(),
                 c_string(&shims.installer),
-                shims
-                    .functions
-                    .iter()
-                    .fold(String::new(), |mut arms, name| {
+                shims.functions.iter().enumerate().fold(
+                    String::new(),
+                    |mut arms, (at, name)| {
                         let _ = writeln!(
                             arms,
-                            "    if (By_ArmFunctionSite(&{}, dict, {}, {}) < 0) return -1;",
+                            "    if (By_ArmFunctionSite(&{}, dict, {}, {}, by_stands[{at}]) < 0) return -1;",
                             function_site(name),
                             c_string(name),
                             i32::from(asks_whether_it_stands(module, name))
                         );
                         arms
-                    })
+                    }
+                )
             ),
         ),
         None => (String::new(), String::new()),
@@ -14214,7 +14225,7 @@ mod tests {
     /// installed nothing
     fn refuses_whole_module(type_name: &str) -> String {
         format!(
-            "if ({type_name} == NULL) {{\n    by_record_interpreted();\n    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n    Py_XDECREF(by_bound);\n    return 0;\n    }}"
+            "if ({type_name} == NULL) {{\n    by_record_interpreted();\n    Py_XDECREF(by_bodies);\n    Py_XDECREF(by_statements);\n    Py_XDECREF(by_bound);\n    Py_CLEAR(by_ran);\n    return 0;\n    }}"
         )
     }
 
@@ -14993,7 +15004,10 @@ mod tests {
         let c = emit_module(&module);
         // the natives must be installed from the exec slot, not from m_methods,
         // or the interpreted definitions would overwrite them
-        assert!(c.contains("By_ExecModuleBody(&by_fallback, dict)"), "{c}");
+        assert!(
+            c.contains("By_ExecModuleBody(&by_fallback, dict, &by_ran)"),
+            "{c}"
+        );
         assert!(
             c.contains("PyModule_AddFunctions(module, by_methods)"),
             "{c}"
@@ -15362,6 +15376,24 @@ mod tests {
         assert!(
             !return_block.contains("Py_XDECREF(r0);"),
             "the return path should skip it: {return_block}"
+        );
+    }
+
+    #[test]
+    fn a_class_read_of_a_class_the_module_does_not_emit_refuses_to_compile() {
+        // the verifier refuses this before codegen sees it. writing nothing would leave
+        // `r0` unassigned and the return reading whatever the stack held
+        let mut builder = FunctionBuilder::new("f", RType::OBJECT);
+        let class = builder.temp(RType::OBJECT);
+        builder.push(Op::LoadClass {
+            dest: class,
+            class: "Ghost".to_string(),
+        });
+        builder.terminate(Terminator::Return(Value::Register(class)));
+        let c = emit_module(&module_with(builder.finish()));
+        assert!(
+            c.contains("#error \"a class read names `Ghost`, which this module does not emit\"\n"),
+            "{c}"
         );
     }
 

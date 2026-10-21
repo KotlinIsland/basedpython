@@ -221,11 +221,11 @@ fn release_temporaries(function: &mut Function) {
 
 /// the places this pass may release: those of temporaries that own one reference apiece
 ///
-/// a tagged `int` is one of them. its short case owns nothing at all and its overflow
-/// case owns exactly one `PyLongObject`, and an `int` has no finalizer, so nothing about
-/// *when* it is let go of is observable — what is observable is that the register is left
-/// holding a reference until the next write of it, and the release that write makes then
-/// reads a value from whichever trip round the loop wrote it last
+/// a tagged `int` is one of them. its short case owns nothing at all and its pointer case
+/// owns exactly one object, which can be an `int` subclass with a `__del__` — so it is let
+/// go of after its last read, which is where python drops a temporary, rather than left
+/// holding a reference until the next write of the register, whose release would then
+/// read a value from whichever trip round the loop wrote it last
 fn candidates(function: &Function) -> HashSet<Place> {
     // a loop's cursor is read and written by the operation that advances it, outside
     // the operands this pass follows, so it is never offered

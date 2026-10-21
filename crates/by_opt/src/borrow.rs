@@ -1318,10 +1318,10 @@ mod tests {
     }
 
     #[test]
-    fn a_named_int_destination_borrows_an_element() {
-        // an `int` has no finalizer, so when python lets go of what the name held is
-        // not something a program can see, and `part` in `head, part = split(s)` may
-        // hold its element on loan from the tuple
+    fn a_named_int_destination_does_not_borrow_an_element() {
+        // `part` in `head, part = split(s)` can hold an `int` subclass with a `__del__`,
+        // which python lets go of when the name goes. on loan from the tuple it would go
+        // when the tuple did, after the last read of `part`
         let mut builder = FunctionBuilder::new("f", RType::INT);
         let text = builder.param("s", RType::STR);
         let pair = builder.temp(RType::Tuple(Box::new([RType::STR, RType::INT])));
@@ -1348,7 +1348,7 @@ mod tests {
         builder.terminate(Terminator::Return(Value::Register(sum)));
         let mut m = module(builder.finish());
         run(&mut m);
-        assert!(m.functions[0].registers[part.index()].borrowed);
+        assert!(!m.functions[0].registers[part.index()].borrowed);
         assert_eq!(verify(&m.functions[0]), Ok(()));
     }
 
