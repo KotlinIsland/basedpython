@@ -38,6 +38,7 @@ mod completions;
 mod configuration;
 mod data_flow;
 mod django_templates;
+mod evaluatable_expression;
 mod file_watching;
 mod folding_range;
 mod goto_definition;

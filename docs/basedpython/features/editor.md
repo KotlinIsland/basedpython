@@ -591,6 +591,36 @@ between:
     bind — a global it only reads, an attribute it never assigns — is a value
     nothing in that scope can vouch for
 
+## the expression under the cursor
+
+a debugger's value tooltip, and *Evaluate Expression* or *Quick Evaluate* with
+nothing selected, start from the expression the cursor is on. which expression
+that is depends on the code rather than the characters: on `d` in
+`a.b[c].d + compute(len(c))` it is `a.b[c].d`, on `b` it is `a.b`, and on `c`
+it is `c`. the editor asks with `by/evaluatableExpression`:
+
+```json
+{
+  "textDocument": { "uri": "file:///src/main.by" },
+  "position": { "line": 1, "character": 19 },
+  "calls": false
+}
+```
+
+and the answer is the expression's `range`, or `null` where the position is not
+on a name an expression ends with: a literal, an operator, a keyword, a comment,
+or a name that a `def`, a class, an import or a keyword argument declares. a
+parameter's name is the parameter. the program the debugger is stopped in is
+python, so in a `.by` file an expression python would not read the same way,
+like `user?.name`, is `null` too
+
+`calls` says whether the expression may call anything, which is the difference
+between hovering a name and asking for an evaluation. on `compute` the answer is
+`compute` when it may not and `compute(len(c))` when it may, and a reference
+whose value comes out of a call, like `make().d`, is answered only when it may.
+reading an attribute or an item is answered either way, as every python
+debugger's value tooltip does
+
 ## renaming a module
 
 renaming `util.by` to `helpers.by` renames the module `alpha.util`, and every
