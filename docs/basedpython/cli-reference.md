@@ -94,6 +94,34 @@ layout
 it is a flag rather than something inferred because only the caller knows which
 of the two directories they mean, and the program's name does not say
 
+`--coverage PATH` measures which lines the program runs, with coverage.py, and
+writes them to `PATH` as an LCOV report — the format an editor's gutter,
+`genhtml` and CI coverage services all read. coverage.py measures the python the
+program actually ran, so the report is mapped back before it is written: a
+transpiled module is reported against its `.by` file, a `.by` line counting as
+covered when any statement transpiled from it ran, and a `.py` the build carries
+over is reported against the file in the project rather than the staged copy
+that ran. that holds for a module a test runner compiled itself, rewriting its
+assertions, as much as for one python imported
+
+```console
+$ by run --coverage coverage.lcov --in-build pytest
+```
+
+coverage.py has to be installed in the interpreter the program runs on: without
+it the program is not started, and the error names that interpreter. the project's own
+coverage.py configuration (`[tool.coverage]`, `.coveragerc`) applies, except that
+no `.coverage` data file is written: the report is the result. its `source`,
+`include` and `omit` name the project's files as they are in the project, with
+`--in-build` too, since every module runs as the file it was written as. the one
+exception is a module a test runner compiled itself, which runs as the staged
+copy it compiled: a `source` or an `omit` naming it does not reach it. a `.by`
+module under `source` that never ran is reported as not run, as coverage.py
+reports a `.py` that never ran. a program that
+leaves without returning to `by run` — `os._exit` — leaves no report, and
+`--compiled` cannot be combined with it, since a native module runs no python
+lines to measure
+
 the emitted code targets that interpreter's version by default. an explicit
 `--min-version` wins, but must not exceed the interpreter — `by run` refuses
 rather than emit code the interpreter cannot parse. an interpreter *older* than
