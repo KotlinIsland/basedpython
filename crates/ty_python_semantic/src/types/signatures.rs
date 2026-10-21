@@ -7505,7 +7505,7 @@ impl<'db> ParameterDefault<'db> {
     heap_size=ruff_memory_usage::heap_size
 )]
 fn parameter_default_type<'db>(db: &'db dyn Db, parameter: Definition<'db>) -> Type<'db> {
-    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node, _)) =
         parameter.kind(db)
     else {
         return Type::unknown();
@@ -7534,7 +7534,7 @@ fn parameter_default_type<'db>(db: &'db dyn Db, parameter: Definition<'db>) -> T
 /// call that leaves the argument out receives
 #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
 pub(crate) fn is_placeholder_default<'db>(db: &'db dyn Db, parameter: Definition<'db>) -> bool {
-    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node, _)) =
         parameter.kind(db)
     else {
         return false;
@@ -7773,7 +7773,7 @@ fn parameter_declared_type<'db>(
     db: &'db dyn Db,
     parameter: Definition<'db>,
 ) -> Option<(Definition<'db>, Type<'db>)> {
-    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node, _)) =
         parameter.kind(db)
     else {
         return None;

@@ -1335,6 +1335,10 @@ pub(crate) fn run_against_source<'a>(
         config.min_version >= ruff_python_ast::PythonVersion::PY38,
     );
     let written = written.with_lowerings(&underscore_lowerings);
+    ctx.errors.extend(repeated_underscore::refused_reads(
+        parsed_handle.suite(),
+        &semantic_model,
+    ));
 
     // resolve symbolic operations in type positions (`1 + 1` → `Literal[2]`)
     // up front, from the original parse where `typeof` operands are still

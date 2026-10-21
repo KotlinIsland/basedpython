@@ -1532,14 +1532,17 @@ def f(a: str, /, b: str, c: int = 1, *args, d: int = 2, **kwargs):
             .unwrap();
         assert_matches!(
             args_binding.kind(&db),
-            DefinitionKind::Parameter(ParameterDefinitionNodeKind::VariadicPositionalParameter(_))
+            DefinitionKind::Parameter(ParameterDefinitionNodeKind::VariadicPositionalParameter(
+                _,
+                _
+            ))
         );
         let kwargs_binding = use_def
             .first_public_binding(function_table.symbol_id("kwargs").expect("symbol exists"))
             .unwrap();
         assert_matches!(
             kwargs_binding.kind(&db),
-            DefinitionKind::Parameter(ParameterDefinitionNodeKind::VariadicKeywordParameter(_))
+            DefinitionKind::Parameter(ParameterDefinitionNodeKind::VariadicKeywordParameter(_, _))
         );
     }
 
@@ -1575,7 +1578,7 @@ def f(a: str, /, b: str, c: int = 1, *args, d: int = 2, **kwargs):
                 DefinitionKind::LambdaParameter(LambdaParameterDefinitionNodeKind {
                     index: _,
                     lambda: _,
-                    parameter: ParameterDefinitionNodeKind::Parameter(_)
+                    parameter: ParameterDefinitionNodeKind::Parameter(_, _)
                 })
             );
         }
@@ -1587,7 +1590,7 @@ def f(a: str, /, b: str, c: int = 1, *args, d: int = 2, **kwargs):
             DefinitionKind::LambdaParameter(LambdaParameterDefinitionNodeKind {
                 index: 3,
                 lambda: _,
-                parameter: ParameterDefinitionNodeKind::VariadicPositionalParameter(_)
+                parameter: ParameterDefinitionNodeKind::VariadicPositionalParameter(_, _)
             })
         );
         let kwargs_binding = use_def
@@ -1598,7 +1601,7 @@ def f(a: str, /, b: str, c: int = 1, *args, d: int = 2, **kwargs):
             DefinitionKind::LambdaParameter(LambdaParameterDefinitionNodeKind {
                 index: 5,
                 lambda: _,
-                parameter: ParameterDefinitionNodeKind::VariadicKeywordParameter(_)
+                parameter: ParameterDefinitionNodeKind::VariadicKeywordParameter(_, _)
             })
         );
     }

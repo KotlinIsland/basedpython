@@ -1846,7 +1846,7 @@ mod tests {
     fn a_default_guard_names_the_renamed_parameter() {
         let out = check(indoc! {"
             def f(_: list[int] = [], _: list[int] = []) -> int:
-                return len(_)
+                return 0
         "});
         assert!(out.contains("if _ is _MISSING"), "got:\n{out}");
         assert!(

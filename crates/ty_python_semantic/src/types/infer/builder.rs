@@ -107,7 +107,8 @@ use crate::types::diagnostic::{
     report_match_pattern_against_non_runtime_checkable_protocol,
     report_match_pattern_against_typed_dict, report_mismatched_type_name,
     report_possibly_missing_attribute, report_possibly_unresolved_reference,
-    report_restricted_constructor, report_too_many_positional_patterns_for_class_pattern,
+    report_repeated_underscore_read, report_restricted_constructor,
+    report_too_many_positional_patterns_for_class_pattern,
     report_unfilled_decoration_context_parameters, report_unplaceable_starred_class_pattern,
     report_unsound_assignment, report_unsound_yield, report_unspecialized_reified_call,
     report_unspecialized_reified_construction, report_unsupported_augmented_assignment,
@@ -145,6 +146,7 @@ use crate::types::regex;
 use crate::types::reified_infer;
 use crate::types::repeated_underscore::{
     LoweredParameters, WrittenNames, lower_repeated_underscores, parameter_slots,
+    repeated_underscore_read,
 };
 use crate::types::runtime_reads::{ReifiedGeneric, RuntimeReadSite};
 use crate::types::set_theoretic::RecursivelyDefined;
@@ -1631,7 +1633,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 self.infer_comprehension_definition(comprehension, definition);
             }
             DefinitionKind::Parameter(
-                ParameterDefinitionNodeKind::VariadicPositionalParameter(parameter),
+                ParameterDefinitionNodeKind::VariadicPositionalParameter(parameter, _),
             ) => {
                 self.infer_variadic_positional_parameter_definition(
                     parameter.node(self.module()),
@@ -1640,6 +1642,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             DefinitionKind::Parameter(ParameterDefinitionNodeKind::VariadicKeywordParameter(
                 parameter,
+                _,
             )) => {
                 self.infer_variadic_keyword_parameter_definition(
                     parameter.node(self.module()),
@@ -1648,6 +1651,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(
                 parameter_with_default,
+                _,
             )) => {
                 self.infer_parameter_definition(
                     parameter_with_default.node(self.module()),
@@ -1657,7 +1661,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             DefinitionKind::LambdaParameter(LambdaParameterDefinitionNodeKind {
                 index,
                 lambda,
-                parameter: ParameterDefinitionNodeKind::VariadicPositionalParameter(parameter),
+                parameter: ParameterDefinitionNodeKind::VariadicPositionalParameter(parameter, _),
             }) => {
                 self.infer_variadic_positional_lambda_parameter_definition(
                     *index,
@@ -1667,7 +1671,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 );
             }
             DefinitionKind::LambdaParameter(LambdaParameterDefinitionNodeKind {
-                parameter: ParameterDefinitionNodeKind::VariadicKeywordParameter(parameter),
+                parameter: ParameterDefinitionNodeKind::VariadicKeywordParameter(parameter, _),
                 ..
             }) => {
                 self.infer_variadic_keyword_lambda_parameter_definition(
@@ -1678,7 +1682,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             DefinitionKind::LambdaParameter(LambdaParameterDefinitionNodeKind {
                 index,
                 lambda,
-                parameter: ParameterDefinitionNodeKind::Parameter(parameter_with_default),
+                parameter: ParameterDefinitionNodeKind::Parameter(parameter_with_default, _),
             }) => {
                 self.infer_lambda_parameter_definition(
                     *index,
@@ -6341,6 +6345,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             ast::Expr::Name(name) => {
                 let previous_value = self.infer_name_load(name, TypeContext::default());
                 self.check_underscore_name_load(name);
+                let previous_value = self.check_repeated_underscore_read(name, previous_value);
                 self.store_expression_type(target, previous_value);
                 Ok(previous_value)
             }
@@ -14700,6 +14705,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             ExprContext::Load => {
                 let ty = self.infer_name_load(name, tcx);
                 self.check_underscore_name_load(name);
+                let ty = self.check_repeated_underscore_read(name, ty);
                 // basedpython: a `type def` has no runtime existence — the
                 // declaration is erased when transpiling — so naming one in a value
                 // position would emit python that raises `NameError`
@@ -15633,6 +15639,26 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 attr.as_str(),
             )
         });
+    }
+
+    /// basedpython: report a read of `_` that may read one of a parameter list's repeated
+    /// `_`s, which python and ty bind to different parameters, and give the type the read
+    /// `name` has, given that ty resolved it to `ty`
+    ///
+    /// a refused read has no one meaning, so it is `Unknown` rather than whichever `_` ty took
+    /// it to be: what it goes on to be used in is not checked against a parameter python never
+    /// binds there
+    fn check_repeated_underscore_read(&self, name: &ast::ExprName, ty: Type<'db>) -> Type<'db> {
+        let Some(read) = repeated_underscore_read(
+            self.db(),
+            self.program_environment(),
+            self.program_file(),
+            name,
+        ) else {
+            return ty;
+        };
+        report_repeated_underscore_read(&self.context, name, &read);
+        Type::unknown()
     }
 
     /// basedpython: reports a read of the name `name` when a leading underscore

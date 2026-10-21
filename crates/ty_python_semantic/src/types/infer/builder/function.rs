@@ -2023,11 +2023,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ));
             }
 
-            self.add_declaration_with_binding(
-                parameter.into(),
-                definition,
-                &DeclaredAndInferredType::are_the_same_type(declared_ty),
-            );
+            self.add_parameter(parameter.into(), definition, declared_ty);
         } else if let Some(function) = self.enclosing_trailing_lambda() {
             // basedpython: the implicit `it` parameter of a trailing lambda
             // block is context-typed from the called expression — the sole
@@ -2217,11 +2213,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 _ => Type::homogeneous_tuple(db, self.program_environment(), annotated_type),
             };
 
-            self.add_declaration_with_binding(
-                parameter.into(),
-                definition,
-                &DeclaredAndInferredType::are_the_same_type(ty),
-            );
+            self.add_parameter(parameter.into(), definition, ty);
         } else {
             let inferred_ty =
                 Type::homogeneous_tuple(db, self.program_environment(), Type::unknown());
@@ -2569,11 +2561,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     &[KnownClass::Str.to_instance(db, env), annotated_type],
                 )
             };
-            self.add_declaration_with_binding(
-                parameter.into(),
-                definition,
-                &DeclaredAndInferredType::are_the_same_type(ty),
-            );
+            self.add_parameter(parameter.into(), definition, ty);
         } else {
             let inferred_ty = KnownClass::Dict.to_specialized_instance(
                 db,
@@ -2583,6 +2571,33 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             self.add_binding(parameter.into(), definition)
                 .insert(self, inferred_ty);
+        }
+    }
+
+    /// bind a parameter to `ty`, which is also the declared type of the parameter's name when the
+    /// parameter is a declaration
+    ///
+    /// basedpython: an annotated parameter is one unless its name is not its own. a parameter
+    /// list that repeats `_` lowers each `_` to a parameter of its own name, so none of their
+    /// annotations declares the `_` the body binds
+    fn add_parameter(
+        &mut self,
+        node: AnyNodeRef<'ast>,
+        definition: Definition<'db>,
+        ty: Type<'db>,
+    ) {
+        if definition
+            .kind(self.db())
+            .category(self.context.in_stub(), self.module())
+            .is_declaration()
+        {
+            self.add_declaration_with_binding(
+                node,
+                definition,
+                &DeclaredAndInferredType::are_the_same_type(ty),
+            );
+        } else {
+            self.add_binding(node, definition).insert(self, ty);
         }
     }
 
@@ -2626,21 +2641,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         // basedpython typed lambdas (`lambda (a: int) -> int: ...`) make the
         // parameter a `DeclarationAndBinding` because the annotation is set,
-        // matching annotated function parameters. The plain `add_binding`
-        // path looks up `declarations_by_binding` which is only populated for
-        // pure bindings — for declared+bound parameters we go through
-        // `add_declaration_with_binding` instead, otherwise the lookup
-        // panics with "no entry found for key".
-        if parameter.annotation.is_some() {
-            self.add_declaration_with_binding(
-                parameter.into(),
-                definition,
-                &DeclaredAndInferredType::are_the_same_type(ty),
-            );
-        } else {
-            self.add_binding(parameter.into(), definition)
-                .insert(self, ty);
-        }
+        // matching annotated function parameters
+        self.add_parameter(parameter.into(), definition, ty);
     }
 
     /// Set initial declared/inferred types for a `*args` variadic positional parameter
@@ -2664,19 +2666,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::Dynamic(DynamicType::UnknownLambdaParameter),
             )
         };
-        // see `infer_lambda_parameter_definition` — annotated `*args` is a
-        // `DeclarationAndBinding`, which doesn't populate
-        // `declarations_by_binding`, so `add_binding` would panic
-        if parameter.annotation.is_some() {
-            self.add_declaration_with_binding(
-                parameter.into(),
-                definition,
-                &DeclaredAndInferredType::are_the_same_type(ty),
-            );
-        } else {
-            self.add_binding(parameter.into(), definition)
-                .insert(self, ty);
-        }
+        self.add_parameter(parameter.into(), definition, ty);
     }
 
     /// Set initial declared/inferred types for a `**kwargs` keyword-variadic parameter
@@ -2697,16 +2687,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             ],
         );
 
-        if parameter.annotation.is_some() {
-            self.add_declaration_with_binding(
-                parameter.into(),
-                definition,
-                &DeclaredAndInferredType::are_the_same_type(inferred_ty),
-            );
-        } else {
-            self.add_binding(parameter.into(), definition)
-                .insert(self, inferred_ty);
-        }
+        self.add_parameter(parameter.into(), definition, inferred_ty);
     }
 
     /// Returns the annotated type of the lambda parameter at the given index in the provided

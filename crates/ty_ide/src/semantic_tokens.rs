@@ -941,7 +941,7 @@ impl<'db> SemanticTokenVisitor<'db> {
             | DefinitionKind::TypeMatchCapture(_) => {
                 Some((SemanticTokenType::TypeParameter, modifiers))
             }
-            DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(parameter)) => {
+            DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(parameter, _)) => {
                 let parsed = parsed_module(db, definition.python_file(db));
                 let ty = parameter.node(&parsed.load(db)).inferred_type(&model);
 
