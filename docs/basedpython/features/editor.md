@@ -463,6 +463,49 @@ it is not a `textDocument/codeLens`, since a client that draws lenses asks for
 them again only when their own document changes. like the other document
 requests it takes `textHash`
 
+## tests and what they test
+
+`by/testSubjects` and `by/subjectTests` answer an editor's *go to test subject*
+and *go to test*. a test exercises what it calls, as call hierarchy sees a call:
+a function or a method called by name or as an attribute, or a class
+constructed. which declarations are tests is pytest's collection, as
+`by/testItems` reports it. nothing goes by file names: `test_circle.by` tests
+whatever it calls, wherever that is, and the tests of a class are found whatever
+their files are called
+
+`by/testSubjects` takes a position in a test, in a class tests are collected
+under, or anywhere else in a module tests are collected from, standing for that
+test, every test under the class, or every test in the module. it answers the
+project's own functions, methods and classes those tests call, each once, in the
+order they are first called: not what is declared in a test module or a
+`conftest`, and nothing outside the project. each item has its `name` within its
+module with the classes it is declared in (`Circle.area`), its `kind`, its
+`module`, and its `uri`, `range` and `selectionRange`. the answer is `null` for
+a document no test is collected from
+
+`by/subjectTests` takes a position in a function, a method or a class, or
+anywhere else in a module, which stands for every function and class it
+declares; a class stands for itself and its methods. it answers the collected
+tests that call it, as items named by their pytest node id after the file
+(`TestCircle::test_radius`), by file and then in source order, and `newTest`,
+where a test of it would go: `test_` and the last part of its module's name, in
+the directory most of the project's test modules are in, or in `tests` under the
+project root when there are none. a test module of that name there already is
+the one, whether it is `.by` or `.py`; a new one is written in what the subject's
+file is. `newTest` says whether that module `exists`, the `module` to import
+from, the name to `import` (absent for a module, which a test imports whole), a
+`testName` the module does not define already, and for a module that exists the
+`importEdits` that import the name into it, none when it does already. `newTest`
+is `null` for a test module, or a module with no name to import it by. like the
+other document requests both take `textHash`, and with it answer a document the
+client has not opened from the file on disk
+
+`by/moduleName` takes the `uri` of a file or a directory and answers the dotted
+name it is imported by, from the search path it is under: a src-layout
+project's `src/shapes/circle.by` is `shapes.circle`, and `src/shapes` and
+`src/shapes/__init__.by` are both `shapes`. it is `null` for a path no module is
+imported from, and for a file that resolution would never reach
+
 ## the whole project's diagnostics
 
 with `diagnosticMode` set to `workspace`, the server checks every file in the

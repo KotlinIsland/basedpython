@@ -60,6 +60,7 @@ mod semantic_tokens;
 mod signature_help;
 mod super_members;
 mod syntax_outline;
+mod test_subjects;
 mod transpile;
 mod type_hierarchy;
 mod usage_counts;
