@@ -88,10 +88,56 @@ assert f(2) == 2
 print("ok")
 "#;
 
+/// the `super` keyword is the builtin, in a module that binds the name for itself and in a
+/// method with a parameter of that name
+const SUPER_BINDING: &str = r#"
+from typing import override
+
+class Base:
+    def m(self, n: int) -> int:
+        return n
+
+super = 5
+
+class Sub(Base):
+    @override
+    def m(self, n: int) -> int:
+        return super.m(n) + super[Base].m(n) + 1
+
+class Param(Base):
+    def p(self, super: int) -> int:
+        return super.m(super)
+
+def read() -> object:
+    return super
+
+assert Sub().m(1) == 3, Sub().m(1)
+assert Param().p(4) == 4
+assert read() === 5
+print("ok")
+"#;
+
+/// `JustFloat` is the builtin `float` at runtime, so `get_type_hints` reads the builtin, even
+/// where the module binds `float` before importing it
+const JUST_FLOAT: &str = r#"
+import builtins
+import typing
+
+float = int
+from ty_extensions import JustFloat
+
+def f(x: JustFloat): ...
+
+assert typing.get_type_hints(f)["x"] === builtins.float, typing.get_type_hints(f)
+print("ok")
+"#;
+
 fn run_at(interpreter: &Interpreter, target: PythonVersion) {
     run_program_at(PROGRAM, interpreter, target);
     run_program_at(MODULE_BINDING, interpreter, target);
     run_program_at(GLOBAL_REBINDING, interpreter, target);
+    run_program_at(SUPER_BINDING, interpreter, target);
+    run_program_at(JUST_FLOAT, interpreter, target);
 }
 
 fn run_program_at(program: &str, interpreter: &Interpreter, target: PythonVersion) {

@@ -81,6 +81,7 @@ pub(crate) mod static_resource;
 pub(crate) mod string_tag;
 pub(crate) mod super_keyword;
 pub(crate) mod symbolic_type_op;
+pub(crate) mod synthesized_types;
 pub(crate) mod template_expression;
 pub(crate) mod template_type;
 pub(crate) mod top_star;

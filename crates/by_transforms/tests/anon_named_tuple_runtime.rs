@@ -58,6 +58,38 @@ assert [x.name for x in xs] == ["dee"], "list"
 print("ok")
 "#;
 
+/// the checker takes a plain tuple for the named tuple wherever one is expected — not only
+/// in a return or an annotated assignment, but as a call's argument, a parameter's default, a
+/// later assignment to a declared name, a dict's value, under a union, and inside another such
+/// tuple — so each is one at runtime too, or the field access the checker passed raises
+/// `AttributeError`
+const EXPECTED_PROGRAM: &str = r#"
+def f(v: (p: int, q: int)) -> int:
+    return v.p
+
+def g(v: (p: int, q: int) = (1, 2)) -> int:
+    return v.q
+
+def h() -> (p: int, q: int) | None:
+    return (3, 4)
+
+def nested(v: (inner: (a: int, b: int), q: int)) -> int:
+    return v.inner.b
+
+x: (p: int, q: int)
+x = (5, 6)
+d: dict[str, (p: int, q: int)] = {"k": (7, 8)}
+
+assert f((1, 2)) == 1, "argument"
+assert f(v=(9, 0)) == 9, "keyword argument"
+assert g() == 2, "default"
+assert h()?.q == 4, "union return"
+assert x.q == 6, "declared"
+assert d["k"].p == 7, "dict value"
+assert nested(((1, 2), 3)) == 2, "nested"
+print("ok")
+"#;
+
 /// both spellings of a construction against the same annotation build the one
 /// class the transpiler emits, and that class's fields carry the *declared*
 /// types — which is why the checker gives the named spelling the declared shape
@@ -267,6 +299,11 @@ fn anon_named_tuple_field_types_run() {
 #[test]
 fn a_plain_tuple_under_an_alias_is_coerced() {
     run(ALIAS_PROGRAM);
+}
+
+#[test]
+fn a_plain_tuple_is_the_named_tuple_wherever_one_is_expected() {
+    run(EXPECTED_PROGRAM);
 }
 
 #[test]

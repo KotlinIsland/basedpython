@@ -75,7 +75,7 @@ impl TypeAwarePass for InitMethod<'_> {
             written: self.written,
             quotes: self.quotes,
             types,
-            symbolic_substitutions: ctx.symbolic_substitutions.clone(),
+            type_substitutions: ctx.type_substitutions.clone(),
             module_private: types.private_module_symbols().into_iter().collect(),
             config: &self.config,
             edits: RefCell::new(Vec::new()),
@@ -147,10 +147,10 @@ struct State<'src> {
     /// where a synthesized protocol's member types are written as strings
     quotes: &'src WrittenQuotes,
     types: &'src dyn TypeInfo,
-    /// `(range, rendered)` for every symbolic fold in the module. the `__init__`
-    /// line is fresh output, so a fold inside a parameter annotation is dropped
-    /// unless it is spliced in here
-    symbolic_substitutions: Vec<(TextRange, String)>,
+    /// `(range, rendered)` for every type expression already lowered to a fixed spelling: a
+    /// symbolic fold, a synthesized type's class. the `__init__` line is fresh output, so one
+    /// inside a parameter annotation is dropped unless it is spliced in here
+    type_substitutions: Vec<(TextRange, String)>,
     /// the module-level names the module declares `private`
     module_private: HashSet<String>,
     config: &'src Config,
@@ -232,7 +232,7 @@ impl State<'_> {
         };
         renames.visit_expr(ann);
         let substitutions: Vec<(TextRange, String)> = self
-            .symbolic_substitutions
+            .type_substitutions
             .iter()
             .filter(|(range, _)| ann.range().contains_range(*range))
             .cloned()

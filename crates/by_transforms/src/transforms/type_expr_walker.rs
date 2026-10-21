@@ -107,6 +107,16 @@ pub(crate) trait TypeExprVisitor {
     /// told ahead of each root the walk visits what kind of root it is, which holds
     /// for everything nested inside it
     fn enter_root(&mut self, _kind: RootKind) {}
+
+    /// whether the walk descends into a type one lowering writes whole, rather than stopping
+    /// at it — see [`wholly_lowered_interior`]
+    fn descends_into_wholly_lowered(&self) -> bool {
+        false
+    }
+
+    /// told of each type expression once everything the walk descended into below it has
+    /// been visited, for a visitor that needs the inside of a type before the type itself
+    fn leave(&mut self, _expr: &Expr) {}
 }
 
 /// walk every type-position expression in `stmts`. `types` enables detection
@@ -162,6 +172,53 @@ pub(crate) fn walk_one_type_expr_with(
     walker.visit_type_expr(expr, TypePos::Root);
 }
 
+/// the type positions directly inside `expr` when it is a type expression one lowering writes
+/// whole — a tuple type or an anonymous named tuple, a callable arrow, an inline protocol, a dict
+/// literal type — and `None` for any other expression
+///
+/// the walk stops at each of these, so that no narrow edit lands inside a span one wide edit
+/// replaces. a visitor whose findings that lowering writes itself, wherever they are, reads the
+/// positions inside one instead: a symbolic fold, which every such lowering writes in place of
+/// the operation
+fn wholly_lowered_interior(expr: &Expr) -> Option<Vec<&Expr>> {
+    // a field, member or parameter label is a name, not a type
+    fn labelled(expr: &Expr) -> &Expr {
+        match expr {
+            Expr::Named(named) => named.value.as_ref(),
+            expr => expr,
+        }
+    }
+    Some(match expr {
+        Expr::Tuple(tuple) => tuple
+            .elts
+            .iter()
+            .map(|element| match element {
+                Expr::Starred(starred) => starred.value.as_ref(),
+                element => labelled(element),
+            })
+            .collect(),
+        Expr::CallableType(callable) => callable
+            .receiver
+            .as_deref()
+            .into_iter()
+            .chain(callable.args.iter().map(labelled))
+            .chain(std::iter::once(callable.returns.as_ref()))
+            .collect(),
+        Expr::ProtocolType(protocol) => protocol
+            .members
+            .iter()
+            .filter_map(|member| match member {
+                Expr::Named(named) => Some(named.value.as_ref()),
+                Expr::ProtocolMethod(method) => Some(method.signature.as_ref()),
+                // a `**Kwargs` pack splices fields in, and is no type of its own
+                _ => None,
+            })
+            .collect(),
+        Expr::Dict(dict) => dict.items.iter().map(|item| &item.value).collect(),
+        _ => return None,
+    })
+}
+
 struct TypePosWalker<'a> {
     types: Option<&'a dyn TypeInfo>,
     claimed: &'a [TextRange],
@@ -189,12 +246,21 @@ impl TypePosWalker<'_> {
             return;
         }
         self.descend_into_type_expr(expr);
+        self.visitor.leave(expr);
     }
 
     /// recurse into sub-positions of a type expression. the walker knows the
     /// shape of `BinOp` (`|` / `&`), `UnaryOp` (`not`), and `Subscript`
     /// (generic + special forms `Annotated` / `Callable` / `Literal`)
     fn descend_into_type_expr(&mut self, expr: &Expr) {
+        if self.visitor.descends_into_wholly_lowered()
+            && let Some(interior) = wholly_lowered_interior(expr)
+        {
+            for position in interior {
+                self.visit_type_expr(position, TypePos::Nested);
+            }
+            return;
+        }
         match expr {
             Expr::BinOp(b) if matches!(b.op, Operator::BitOr | Operator::BitAnd) => {
                 self.visit_type_expr(&b.left, TypePos::Nested);

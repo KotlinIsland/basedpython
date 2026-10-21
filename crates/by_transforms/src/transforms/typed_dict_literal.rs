@@ -29,24 +29,17 @@
 //!
 //! field types are emitted as forward references — see `Shape::class_def`
 
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::hash::Hash;
 
-use indexmap::IndexMap;
-use ruff_diagnostics::{Edit, Fix};
-use ruff_python_ast::{Expr, ModModule, Operator, Stmt};
+use ruff_python_ast::{Expr, ModModule, Operator};
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_text_size::Ranged;
 
-use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
-
 use super::ast_driver::{AstPass, PassContext};
-use super::callable::CallableSyntax;
 use super::quotes::WrittenQuotes;
 use super::repeated_underscore::WrittenNames;
-use crate::config::Config;
-use crate::type_info::TypeInfo;
+use super::synthesized_types::{Namer, SynthesizedKind};
 
 /// Sorted list of `(field_name, type_source)` pairs identifying a unique
 /// shape. Sorted so that `{"a": int, "b": str}` and `{"b": str, "a": int}`
@@ -54,14 +47,14 @@ use crate::type_info::TypeInfo;
 /// basedpython `**: T` marker; when `None` the dict is closed (no extra keys
 /// allowed).
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-struct Shape {
+pub(crate) struct Shape {
     fields: Vec<(String, String)>,
     extra_items: Option<String>,
 }
 
 impl Shape {
     /// the name of the class declaring this shape, one the module has no other use of
-    fn class_name(&self, written: WrittenNames) -> String {
+    pub(crate) fn class_name(&self, written: WrittenNames) -> String {
         written.synthesized_class("_TypedDict_", self)
     }
 
@@ -70,10 +63,9 @@ impl Shape {
     ///
     /// every field type is written as a string. the hoisted classes are emitted in the
     /// preamble, ahead of everything the module defines, and a shape can name a class declared
-    /// later or a type parameter that only exists inside the generic class the literal was
-    /// written in. neither resolves where the class lands, and `TypedDict` evaluates its
+    /// later. that does not resolve where the class lands, and `TypedDict` evaluates its
     /// class-body annotations eagerly, so every field is a forward reference
-    fn class_def(&self, name: &str, typed_dict: &str, quotes: &WrittenQuotes) -> String {
+    pub(crate) fn class_def(&self, name: &str, typed_dict: &str, quotes: &WrittenQuotes) -> String {
         let bases = match &self.extra_items {
             Some(ty) => format!("{typed_dict}, extra_items={}", quotes.quote(ty)),
             None => format!("{typed_dict}, closed=True"),
@@ -95,322 +87,160 @@ impl Shape {
     }
 }
 
-pub(crate) struct TypedDictLiteral<'src> {
-    source: &'src str,
-    written: WrittenNames<'src>,
-    /// where the field types are written as strings
-    quotes: &'src WrittenQuotes,
-    edits: Vec<Fix>,
-    errors: Vec<String>,
-    /// Insertion-ordered map of shape → synthesized class name so emitted
-    /// classes follow dependency order (inner-before-outer)
-    shapes: IndexMap<Shape, String>,
-    /// Source range of every typed-dict literal we've assigned a class to.
-    /// Used when rendering an outer dict's body to substitute nested dict
-    /// spans with their class names.
-    range_to_class: Vec<(ruff_text_size::TextRange, String)>,
-    needs_import: bool,
-    /// the `(module, name)` of each name a field type this pass writes itself reads: the
-    /// `Literal` of a promoted literal type, the `Intersection` of an intersection
-    field_imports: BTreeSet<(&'static str, &'static str)>,
-    /// set when a nested `T??` field needs the runtime `Optional[...]` wrapper
-    needs_optional_runtime: bool,
-    /// the shared type-expression lowerer, which prints every field type this pass does
-    /// not take apart itself. the class is hoisted out of the statement the field type
-    /// was written in, so no other pass's edit reaches the field
-    callable: CallableSyntax<'src>,
+/// The shape of a dict literal type, or `None` when the dict has any
+/// non-string-literal key, any unpacked item that is neither the basedpython
+/// `**: T` extra-items marker nor a `**Kwargs` pack splice, or any field name
+/// that isn't a valid Python identifier — those cases are left for the user to
+/// spell with the functional `TypedDict()` form instead.
+pub(crate) fn shape(namer: &mut Namer, dict: &ruff_python_ast::ExprDict) -> Option<Shape> {
+    // an empty dict literal `{}` is a valid annotation: a TypedDict with no
+    // fields. it still needs to be hoisted so the surface annotation lands
+    // on a real class name instead of leaving `{}` raw in python output
+    let mut fields = Vec::with_capacity(dict.items.len());
+    let mut extra_items: Option<String> = None;
+    for item in &dict.items {
+        let Some(key_expr) = item.key.as_ref() else {
+            // `**: T` is encoded as `key = None, value = Starred(Starred(T))`
+            let Expr::Starred(outer) = &item.value else {
+                // `{**Kwargs}` splices a keyword-variadic pack. its fields are
+                // only known once the enclosing class is specialized, and python
+                // erases type arguments anyway, so the shape lowers to a
+                // `TypedDict` that admits the pack's keys as extra items
+                if matches!(&item.value, Expr::Name(_)) && extra_items.is_none() {
+                    extra_items = Some(namer.written.builtin("object"));
+                    continue;
+                }
+                return None;
+            };
+            let Expr::Starred(inner) = outer.value.as_ref() else {
+                return None;
+            };
+            if extra_items.is_some() {
+                return None;
+            }
+            extra_items = Some(field_type(namer, &inner.value));
+            continue;
+        };
+        let Expr::StringLiteral(s) = key_expr else {
+            namer.errors.push(format!(
+                "typed-dict literal field key must be a string literal, got `{}`",
+                namer.src(key_expr.range())
+            ));
+            return None;
+        };
+        let name = s.value.to_str().to_owned();
+        if !is_identifier(&name) {
+            namer.errors.push(format!(
+                "typed-dict literal field name `{name}` is not a valid Python identifier"
+            ));
+            return None;
+        }
+        if fields.iter().any(|(n, _): &(String, String)| n == &name) {
+            namer
+                .errors
+                .push(format!("duplicate typed-dict literal field `{name}`"));
+            return None;
+        }
+        let type_source = field_type(namer, &item.value);
+        fields.push((name, type_source));
+    }
+    fields.sort_by(|a, b| a.0.cmp(&b.0));
+    Some(Shape {
+        fields,
+        extra_items,
+    })
 }
 
-impl<'src> TypedDictLiteral<'src> {
-    fn new(
-        source: &'src str,
-        written: WrittenNames<'src>,
-        quotes: &'src WrittenQuotes,
-        config: &Config,
-        types: &'src dyn TypeInfo,
-    ) -> Self {
-        Self {
-            source,
-            written,
-            quotes,
-            callable: CallableSyntax::new(source, written, quotes, config).with_types(types),
-            edits: Vec::new(),
-            errors: Vec::new(),
-            shapes: IndexMap::new(),
-            range_to_class: Vec::new(),
-            needs_import: false,
-            field_imports: BTreeSet::new(),
-            needs_optional_runtime: false,
-        }
+/// A field's type as python source, reading the type parameters of the generics around it by
+/// the names they have where the class is declared.
+fn field_type(namer: &mut Namer, expr: &Expr) -> String {
+    let rendered = render_field_type(namer, expr);
+    namer.read_type_parameters(expr.range(), &rendered)
+}
+
+/// Render a field's type expression as Python source, applying
+/// basedpython type-form lowerings (literal-type promotion, parenthesized
+/// tuple types, intersection) recursively, and writing every type the walk
+/// already named — a nested typed dict, an anonymous named tuple, an inline
+/// protocol — as its class.
+fn render_field_type(namer: &mut Namer, expr: &Expr) -> String {
+    if let Some(name) = namer.substitution_for(expr.range()) {
+        return name;
     }
-
-    fn class_defs(&self) -> String {
-        let mut out = String::new();
-        let typed_dict = self.written.imported("typing_extensions", "TypedDict");
-        for (shape, name) in &self.shapes {
-            out.push_str(&shape.class_def(name, &typed_dict, self.quotes));
-            out.push('\n');
+    match expr {
+        Expr::BinOp(b) if matches!(b.op, Operator::BitOr) => render_union(namer, expr),
+        Expr::BinOp(b) if matches!(b.op, Operator::BitAnd) => {
+            let parts = flatten_bitand(expr);
+            let rendered: Vec<String> = parts.iter().map(|p| render_field_type(namer, p)).collect();
+            namer.imports.insert(("ty_extensions", "Intersection"));
+            format!(
+                "{}[{}]",
+                namer.written.imported("ty_extensions", "Intersection"),
+                rendered.join(", ")
+            )
         }
-        out
-    }
-
-    /// Render `range`'s source, substituting any nested typed-dict literal
-    /// span with its synthesized class name.
-    fn render_subbed(&self, range: ruff_text_size::TextRange) -> String {
-        use ruff_text_size::TextSize;
-        let mut subs: Vec<(ruff_text_size::TextRange, &str)> = self
-            .range_to_class
-            .iter()
-            .filter(|(r, _)| r.start() >= range.start() && r.end() <= range.end())
-            .map(|(r, n)| (*r, n.as_str()))
-            .collect();
-        subs.sort_by_key(|(r, _)| r.start());
-
-        let mut out = String::new();
-        let mut cursor: TextSize = range.start();
-        for (sub_range, replacement) in subs {
-            if sub_range.start() < cursor {
-                continue;
-            }
-            out.push_str(&self.source[usize::from(cursor)..usize::from(sub_range.start())]);
-            out.push_str(replacement);
-            cursor = sub_range.end();
+        Expr::Tuple(t) if t.parenthesized && !t.elts.is_empty() => {
+            let parts: Vec<String> = t.elts.iter().map(|e| render_field_type(namer, e)).collect();
+            format!("{}[{}]", namer.written.builtin("tuple"), parts.join(", "))
         }
-        out.push_str(&self.source[usize::from(cursor)..usize::from(range.end())]);
-        out
-    }
-
-    /// Try to extract a shape from a dict literal. Returns `None` when the
-    /// dict has any non-string-literal key, any unpacked item that is neither
-    /// the basedpython `**: T` extra-items marker nor a `**Kwargs` pack
-    /// splice, or any field name that isn't a valid Python identifier — those
-    /// cases are left for the user to spell with the functional `TypedDict()`
-    /// form instead.
-    fn extract_shape(&mut self, dict: &ruff_python_ast::ExprDict) -> Option<Shape> {
-        // an empty dict literal `{}` is a valid annotation: a TypedDict with no
-        // fields. it still needs to be hoisted so the surface annotation lands
-        // on a real class name instead of leaving `{}` raw in python output
-        let mut fields = Vec::with_capacity(dict.items.len());
-        let mut extra_items: Option<String> = None;
-        for item in &dict.items {
-            let Some(key_expr) = item.key.as_ref() else {
-                // `**: T` is encoded as `key = None, value = Starred(Starred(T))`
-                let Expr::Starred(outer) = &item.value else {
-                    // `{**Kwargs}` splices a keyword-variadic pack. its fields are
-                    // only known once the enclosing class is specialized, and python
-                    // erases type arguments anyway, so the shape lowers to a
-                    // `TypedDict` that admits the pack's keys as extra items
-                    if matches!(&item.value, Expr::Name(_)) && extra_items.is_none() {
-                        extra_items = Some(self.written.builtin("object"));
-                        continue;
-                    }
-                    return None;
-                };
-                let Expr::Starred(inner) = outer.value.as_ref() else {
-                    return None;
-                };
-                if extra_items.is_some() {
-                    return None;
+        // `T?` → `T | None` (nested `T??` → `Optional[T | None]`) so an
+        // optional field type composes instead of leaking `?`
+        Expr::UnaryOp(u) if matches!(u.op, ruff_python_ast::UnaryOp::Optional) => {
+            let mut depth: usize = 1;
+            let mut inner: &Expr = u.operand.as_ref();
+            while let Expr::UnaryOp(u2) = inner {
+                if u2.op != ruff_python_ast::UnaryOp::Optional {
+                    break;
                 }
-                extra_items = Some(self.render_field_type(&inner.value));
-                continue;
-            };
-            let Expr::StringLiteral(s) = key_expr else {
-                self.errors.push(format!(
-                    "typed-dict literal field key must be a string literal, got `{}`",
-                    &self.source[usize::from(key_expr.range().start())
-                        ..usize::from(key_expr.range().end())]
-                ));
-                return None;
-            };
-            let name = s.value.to_str().to_owned();
-            if !is_identifier(&name) {
-                self.errors.push(format!(
-                    "typed-dict literal field name `{name}` is not a valid Python identifier"
-                ));
-                return None;
+                depth += 1;
+                inner = u2.operand.as_ref();
             }
-            if fields.iter().any(|(n, _): &(String, String)| n == &name) {
-                self.errors
-                    .push(format!("duplicate typed-dict literal field `{name}`"));
-                return None;
+            let inner_str = render_field_type(namer, inner);
+            if depth >= 2 {
+                namer.needs_optional_runtime = true;
             }
-            let type_source = self.render_field_type(&item.value);
-            fields.push((name, type_source));
+            format!(
+                "{}{inner_str} | None{}",
+                "Optional[".repeat(depth - 1),
+                "]".repeat(depth - 1)
+            )
         }
-        fields.sort_by(|a, b| a.0.cmp(&b.0));
-        Some(Shape {
-            fields,
-            extra_items,
-        })
+        _ if is_literal_value(expr) => {
+            namer.imports.insert(("typing", "Literal"));
+            format!(
+                "{}[{}]",
+                namer.written.imported("typing", "Literal"),
+                namer.src(expr.range())
+            )
+        }
+        _ => namer.lower(expr),
     }
+}
 
-    /// Render a field's type expression as Python source, applying
-    /// basedpython type-form lowerings (literal-type promotion, parenthesized
-    /// tuple types, intersection) recursively. Falls back to source text for
-    /// untouched expressions.
-    fn render_field_type(&mut self, expr: &Expr) -> String {
-        // nested typed-dict literals get substituted with their synthesized
-        // class names via `range_to_class`
-        if let Some(name) = self
-            .range_to_class
-            .iter()
-            .find(|(r, _)| *r == expr.range())
-            .map(|(_, n)| n.clone())
-        {
-            return name;
+/// Render a `|` union, grouping consecutive bare literal arms into a
+/// single `Literal[…]` subscript.
+fn render_union(namer: &mut Namer, expr: &Expr) -> String {
+    let parts = flatten_bitor(expr);
+    let mut out_groups: Vec<String> = Vec::new();
+    let mut pending_list: Vec<String> = Vec::new();
+    let literal = namer.written.imported("typing", "Literal");
+    let flush = |pending: &mut Vec<String>, out: &mut Vec<String>| {
+        if !pending.is_empty() {
+            out.push(format!("{literal}[{}]", pending.join(", ")));
+            pending.clear();
         }
-        match expr {
-            Expr::BinOp(b) if matches!(b.op, Operator::BitOr) => self.render_union(expr),
-            Expr::BinOp(b) if matches!(b.op, Operator::BitAnd) => {
-                let parts = flatten_bitand(expr);
-                let rendered: Vec<String> =
-                    parts.iter().map(|p| self.render_field_type(p)).collect();
-                self.field_imports.insert(("ty_extensions", "Intersection"));
-                format!(
-                    "{}[{}]",
-                    self.written.imported("ty_extensions", "Intersection"),
-                    rendered.join(", ")
-                )
-            }
-            Expr::Tuple(t) if t.parenthesized && !t.elts.is_empty() => {
-                let parts: Vec<String> = t.elts.iter().map(|e| self.render_field_type(e)).collect();
-                format!("{}[{}]", self.written.builtin("tuple"), parts.join(", "))
-            }
-            // `T?` → `T | None` (nested `T??` → `Optional[T | None]`) so an
-            // optional field type composes instead of leaking `?`
-            Expr::UnaryOp(u) if matches!(u.op, ruff_python_ast::UnaryOp::Optional) => {
-                let mut depth: usize = 1;
-                let mut inner: &Expr = u.operand.as_ref();
-                while let Expr::UnaryOp(u2) = inner {
-                    if u2.op != ruff_python_ast::UnaryOp::Optional {
-                        break;
-                    }
-                    depth += 1;
-                    inner = u2.operand.as_ref();
-                }
-                let inner_str = self.render_field_type(inner);
-                if depth >= 2 {
-                    self.needs_optional_runtime = true;
-                }
-                format!(
-                    "{}{inner_str} | None{}",
-                    "Optional[".repeat(depth - 1),
-                    "]".repeat(depth - 1)
-                )
-            }
-            _ if is_literal_value(expr) => {
-                self.field_imports.insert(("typing", "Literal"));
-                format!(
-                    "{}[{}]",
-                    self.written.imported("typing", "Literal"),
-                    self.render_subbed(expr.range())
-                )
-            }
-            _ => self.callable.lower_type_expr(expr),
-        }
-    }
-
-    /// Render a `|` union, grouping consecutive bare literal arms into a
-    /// single `Literal[…]` subscript.
-    fn render_union(&mut self, expr: &Expr) -> String {
-        let parts = flatten_bitor(expr);
-        let mut out_groups: Vec<String> = Vec::new();
-        let mut pending_list: Vec<String> = Vec::new();
-        let literal = self.written.imported("typing", "Literal");
-        let flush = |pending: &mut Vec<String>, out: &mut Vec<String>| {
-            if !pending.is_empty() {
-                out.push(format!("{literal}[{}]", pending.join(", ")));
-                pending.clear();
-            }
-        };
-        for p in parts {
-            if is_literal_value(p) {
-                self.field_imports.insert(("typing", "Literal"));
-                pending_list.push(self.render_subbed(p.range()));
-            } else {
-                flush(&mut pending_list, &mut out_groups);
-                out_groups.push(self.render_field_type(p));
-            }
-        }
-        flush(&mut pending_list, &mut out_groups);
-        out_groups.join(" | ")
-    }
-
-    fn class_name_for(&mut self, shape: Shape, source_range: ruff_text_size::TextRange) -> String {
-        let name = if let Some(existing) = self.shapes.get(&shape) {
-            existing.clone()
+    };
+    for p in parts {
+        if is_literal_value(p) {
+            namer.imports.insert(("typing", "Literal"));
+            pending_list.push(namer.src(p.range()).to_owned());
         } else {
-            let n = shape.class_name(self.written);
-            self.shapes.insert(shape, n.clone());
-            n
-        };
-        self.range_to_class.push((source_range, name.clone()));
-        self.callable.add_substitution(source_range, name.clone());
-        name
-    }
-
-    fn rewrite_dict_in_annotation(&mut self, dict: &ruff_python_ast::ExprDict) {
-        let Some(shape) = self.extract_shape(dict) else {
-            return;
-        };
-        let class_name = self.class_name_for(shape, dict.range());
-        self.needs_import = true;
-        self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            class_name,
-            dict.range(),
-        )));
-    }
-
-    /// Recursively descend into an annotation, rewriting any contained dict
-    /// literals. Walks structurally relevant containers (`BinOp`, Subscript,
-    /// parenthesized Tuple, `BoolOp`) so that `dict[str, {"k": int}]`,
-    /// `{"k": int} | None`, etc. all lower correctly.
-    fn visit_annotation(&mut self, expr: &Expr) {
-        match expr {
-            Expr::Dict(d) => {
-                // Walk children first so nested dicts register before the
-                // outer renders its field types.
-                for item in &d.items {
-                    self.visit_annotation(&item.value);
-                }
-                self.rewrite_dict_in_annotation(d);
-            }
-            Expr::BinOp(b) => {
-                self.visit_annotation(&b.left);
-                self.visit_annotation(&b.right);
-            }
-            Expr::Subscript(s) => {
-                self.visit_annotation(&s.slice);
-            }
-            Expr::Tuple(t) => {
-                for elt in &t.elts {
-                    self.visit_annotation(elt);
-                }
-            }
-            Expr::List(l) => {
-                for elt in &l.elts {
-                    self.visit_annotation(elt);
-                }
-            }
-            // `**: T` marker is `Starred(Starred(T))`; recurse so nested dict
-            // literals inside an extra-items type are registered too
-            Expr::Starred(s) => {
-                self.visit_annotation(&s.value);
-            }
-            _ => {}
+            flush(&mut pending_list, &mut out_groups);
+            out_groups.push(render_field_type(namer, p));
         }
     }
-}
-
-impl TypeExprVisitor for TypedDictLiteral<'_> {
-    fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
-        // `visit_annotation` is a deep recursive rewriter (it knows about
-        // BinOp, Subscript, Tuple, List, Starred, Dict). emit edits, stop
-        // the walker from descending further to avoid double-processing
-        self.visit_annotation(expr);
-        Recurse::Stop
-    }
+    flush(&mut pending_list, &mut out_groups);
+    out_groups.join(" | ")
 }
 
 /// True when `expr` is a basedpython "bare literal" eligible for promotion to
@@ -471,110 +301,28 @@ fn flatten_bitand(expr: &Expr) -> Vec<&Expr> {
     out
 }
 
-impl AstPass for TypedDictLiteralPass<'_> {
+impl AstPass for TypedDictLiteralPass {
     fn lowering(&self) -> Option<super::ast_driver::Lowering> {
         Some(super::ast_driver::Lowering::TypedDictLiteral)
     }
 
-    /// a typed dict type it replaces moves into a class, whose field types the shared
-    /// type-expression lowerer prints, a `typeof` among them
+    /// a typed dict type it replaces moves into a class, whose field types the synthesized
+    /// type namer prints
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
-        &[
-            super::ast_driver::Lowering::Callable,
-            super::ast_driver::Lowering::OptionalType,
-            super::ast_driver::Lowering::LiteralType,
-            super::ast_driver::Lowering::JustFloat,
-            super::ast_driver::Lowering::DynamicKeyword,
-            super::ast_driver::Lowering::FloatConst,
-            super::ast_driver::Lowering::Typeof,
-        ]
+        super::synthesized_types::CLASS_BODY
     }
 
     fn run(&self, _module: &mut ModModule, ctx: &mut PassContext) {
-        let mut inner = TypedDictLiteral::new(
-            self.source,
-            self.written,
-            self.quotes,
-            &self.config,
-            self.types,
-        );
-        // the module as parsed, not the one the passes before this rewrote: the type
-        // information the field lowerer asks is about those nodes, and the edits are keyed
-        // on the source ranges both share
-        walk_type_positions(self.suite, None, &mut inner);
-        for (module, name) in &inner.field_imports {
-            ctx.required_imports
-                .push(self.written.import_from(module, &[name]));
-        }
-        if inner.needs_optional_runtime {
-            ctx.runtime.insert(crate::runtime::OPTIONAL);
-        }
-        if inner.needs_import {
-            // synthesized classes use `closed=True` / `extra_items=T` (PEP 728),
-            // which the stdlib `typing.TypedDict` rejects on every released
-            // python. source from `typing_extensions` so the generated class
-            // body actually executes at runtime
-            ctx.required_imports.push(
-                self.written
-                    .import_from("typing_extensions", &["TypedDict"]),
-            );
-            // synthesized class defs are raw multi-line python source. push
-            // them into required_imports as a single non-`from` line so
-            // merge_from_imports leaves them untouched and they end up in
-            // the preamble verbatim
-            // the field lowerer's own classes come first: a field type may name one
-            let defs = format!("{}{}", inner.callable.class_defs(), inner.class_defs());
-            if !defs.is_empty() {
-                ctx.required_imports
-                    .push(defs.trim_end_matches('\n').to_owned());
-            }
-        }
-        let (imports, helpers) = inner.callable.take_requirements();
-        ctx.required_imports.extend(imports);
-        ctx.runtime.extend(helpers);
-        for fix in inner.edits {
-            for edit in fix.edits() {
-                let range = edit.range();
-                let repl = edit.content().unwrap_or_default().to_owned();
-                ctx.text_edits.push((range, repl));
-            }
-        }
-        ctx.errors.extend(inner.errors);
-    }
-}
-
-/// AST-pass wrapper around [`TypedDictLiteral`] that surfaces the imports its
-/// field types read back to the driver, so they are emitted alongside the
-/// synthesized class definitions
-pub(crate) struct TypedDictLiteralPass<'src> {
-    source: &'src str,
-    written: WrittenNames<'src>,
-    quotes: &'src WrittenQuotes,
-    config: Config,
-    /// the module as parsed, which is what `types` answers for
-    suite: &'src [Stmt],
-    types: &'src dyn TypeInfo,
-}
-
-impl<'src> TypedDictLiteralPass<'src> {
-    pub(crate) fn new(
-        source: &'src str,
-        written: WrittenNames<'src>,
-        quotes: &'src WrittenQuotes,
-        config: Config,
-        suite: &'src [Stmt],
-        types: &'src dyn TypeInfo,
-    ) -> Self {
-        Self {
-            source,
-            written,
-            quotes,
-            config,
-            suite,
-            types,
+        // the class each one names, and the declarations, come from the namer's one walk over
+        // the module as parsed, which named every kind of synthesized type together
+        for (range, name) in ctx.synthesized.of_kind(SynthesizedKind::TypedDict) {
+            ctx.text_edits.push((range, name));
         }
     }
 }
+
+/// replaces each typed dict literal type with the `TypedDict` class it names
+pub(crate) struct TypedDictLiteralPass;
 
 #[cfg(test)]
 mod tests {
@@ -586,6 +334,32 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// the class is declared at module scope, so a field naming a type parameter reads it by
+    /// the name the generic declares it under there: the polyfill's `_T`, or the parameter
+    /// read off the generic it belongs to where the list stays native
+    #[test]
+    fn a_type_parameter_field_reads_the_declared_name() {
+        let source = indoc! {"
+            class K[T]:
+                def get(self) -> {\"a\": T}: ...
+            type F[U] = {\"b\": U}
+        "};
+        let out = transpile(source, &Config::test_default()).unwrap();
+        assert!(
+            out.contains("    a: \"_T\"\n") && out.contains("    b: \"_U\"\n"),
+            "got:\n{out}"
+        );
+        let config = Config {
+            min_version: crate::PythonVersion::PY313,
+            ..Config::test_default()
+        };
+        let out = transpile(source, &config).unwrap();
+        assert!(
+            out.contains("    a: \"K.__type_params__[0]\"\n"),
+            "got:\n{out}"
         );
     }
 

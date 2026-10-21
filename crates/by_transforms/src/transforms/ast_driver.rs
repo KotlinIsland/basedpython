@@ -48,9 +48,10 @@ use super::{
     overload, parametric_is, postfix_await, propagate, properties, protocol_type, raises_clause,
     reified_class, reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel,
     some_ctor, soundness, statement_expression, static_resource, string_tag, super_keyword,
-    symbolic_type_op, template_expression, template_type, top_star, trailing_lambda, tuple_index,
-    type_fn, type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword,
-    unique_loop_bindings, unpack, use_site_variance, visibility_rename,
+    symbolic_type_op, synthesized_types, template_expression, template_type, top_star,
+    trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
+    typed_lambda, typeof_keyword, unique_loop_bindings, unpack, use_site_variance,
+    visibility_rename,
 };
 use crate::Config;
 use crate::source_map::Replacement;
@@ -210,11 +211,16 @@ pub(crate) struct PassContext {
     /// type-expression lowerer rewrites as part of that form. Every other `typeof`
     /// is lowered in the syntax tree, and only there
     pub(crate) structural_typeof_ranges: Vec<TextRange>,
-    /// The same operations as `(range, rendered)` pairs. A pass that replaces a
-    /// whole statement subsumes any fold inside it — skipping is not enough, the
-    /// rendered text has to be spliced into the replacement or the operation is
-    /// re-emitted from source and reaches the runtime
-    pub(crate) symbolic_substitutions: Vec<(TextRange, String)>,
+    /// Every type expression already lowered to a fixed spelling, as `(range, rendered)`
+    /// pairs: the operations above, and each type the
+    /// [synthesized type namer](super::synthesized_types) gave a class. A pass that replaces a
+    /// type or a statement whole subsumes any of them inside it — skipping is not enough, the
+    /// rendered text has to be spliced into the replacement or the source is re-emitted and
+    /// reaches the runtime
+    pub(crate) type_substitutions: Vec<(TextRange, String)>,
+    /// The class each synthesized type of the module names, named in one walk so that each
+    /// kind can name the others inside it
+    pub(crate) synthesized: std::rc::Rc<super::synthesized_types::SynthesizedTypes>,
     /// where python refuses an assignment expression in the module the type-aware
     /// passes walk, which every pass binding a temporary asks
     pub(crate) walrus_regions: super::walrus_scope::WalrusRegions,
@@ -1358,8 +1364,37 @@ pub(crate) fn run_against_source<'a>(
     );
     let symbolic_imports = std::mem::take(&mut symbolic_folds.imports);
     ctx.claimed_type_op_ranges = symbolic_folds.claimed_ranges();
-    ctx.symbolic_substitutions = symbolic_folds.substitutions();
+    ctx.type_substitutions = symbolic_folds.substitutions();
     let symbolic_pass = symbolic_type_op::SymbolicTypeOp::new(symbolic_folds);
+
+    // every class a type expression lowers to — a typed dict literal, an anonymous named tuple,
+    // an inline protocol — is named in one walk, innermost first, since each kind declares the
+    // others nested inside it as its field types. the passes lowering each kind write the names,
+    // and so does every other lowering that prints a type with one inside it
+    let synthesized = synthesized_types::SynthesizedTypes::name_all(
+        source_ref,
+        written,
+        quotes,
+        &semantic_model,
+        config,
+        parsed_handle.suite(),
+        &ctx.type_substitutions,
+        &ctx.claimed_type_op_ranges,
+    );
+    ctx.type_substitutions.extend(synthesized.substitutions());
+    ctx.required_imports
+        .extend(synthesized.imports.iter().cloned());
+    if !synthesized.declarations.is_empty() {
+        // one entry, so the sort of the imports cannot part a class from the ones it reads. one
+        // trailing newline is kept, for the blank line between the classes and the module
+        ctx.required_imports.push(format!(
+            "{}\n",
+            synthesized.declarations.trim_end_matches('\n')
+        ));
+    }
+    ctx.runtime.extend(synthesized.helpers.iter().copied());
+    ctx.errors.extend(synthesized.errors.iter().cloned());
+    ctx.synthesized = std::rc::Rc::new(synthesized);
 
     // a `typeof` nested under a structural type-form (`&` / `or` / `not` / an
     // arrow) belongs to the type-expression lowerer's wide edit; the fold
@@ -1472,14 +1507,7 @@ pub(crate) fn run_against_source<'a>(
         config.clone(),
         unpack::collect_type_subscripts(parsed_handle.suite(), &semantic_model),
     );
-    let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass::new(
-        source_ref,
-        written,
-        quotes,
-        config.clone(),
-        parsed_handle.suite(),
-        &semantic_model,
-    );
+    let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass;
     let just_float_pass = just_float::JustFloatPass::new(written);
     let float_const_pass = float_const::FloatConstPass::new();
     let kw_subscript_pass =
@@ -1507,8 +1535,7 @@ pub(crate) fn run_against_source<'a>(
         literal_types::LiteralTypePass::new(source_ref, written, config.float_literals);
     let callable_pass =
         callable::CallableSyntaxPass::new(source_ref, written, quotes, config.clone());
-    let protocol_type_pass =
-        protocol_type::ProtocolTypePass::new(source_ref, written, quotes, config.clone());
+    let protocol_type_pass = protocol_type::ProtocolTypePass;
     let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref, &comments);
     let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);
     let flexible_keyword_pass = flexible_keyword::FlexibleKeywordPass;
@@ -1539,7 +1566,7 @@ pub(crate) fn run_against_source<'a>(
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
     let anon_named_tuple_pass =
-        anon_named_tuple::AnonNamedTuplePass::new(source_ref, written, quotes, config.clone());
+        anon_named_tuple::AnonNamedTuplePass::new(source_ref, written, config.clone());
 
     // Order matters: passes that read source ranges via `text_edits` mode
     // must run BEFORE passes that mutate the AST (which zero source ranges
@@ -2606,16 +2633,6 @@ mod subsumed_lowerings {
     /// pass's name: the test of the pass's own that shows it, or why it holds
     const SHOWN_ELSEWHERE: &[(&str, Lowering, &str)] = &[
         (
-            "TupleLiteralTypePass",
-            Lowering::SymbolicTypeOp,
-            "nested_in_subscript",
-        ),
-        (
-            "CallableSyntaxPass",
-            Lowering::SymbolicTypeOp,
-            "tuple_repetition_unpacked_in_tuple_type",
-        ),
-        (
             "GenericPolyfillPass",
             Lowering::MatchType,
             "polyfilled_match_type_lowers_to_object",
@@ -2782,6 +2799,12 @@ mod subsumed_lowerings {
                 Some("(int) ->"),
             ),
             (Lowering::Typeof, "typeof y", "TypeOf[y]", Some("typeof")),
+            (
+                Lowering::SymbolicTypeOp,
+                "1 + 1",
+                "Literal[2]",
+                Some("1 + 1"),
+            ),
         ];
         leaves
             .into_iter()
@@ -2847,6 +2870,7 @@ mod subsumed_lowerings {
             Lowering::DynamicKeyword,
             Lowering::FloatConst,
             Lowering::Typeof,
+            Lowering::SymbolicTypeOp,
         ];
         // the class is hoisted ahead of the module's own bindings, so a field reading one —
         // the `y` a `typeof` names — is written as a forward reference
@@ -2883,6 +2907,57 @@ mod subsumed_lowerings {
             "def f(x: (protocol(a: int)) -> str) -> None: ...\n",
             &["Callable[[_Protocol_"],
             &["protocol("],
+        ));
+        // each kind of synthesized type, nested in a construct that writes a type whole, is
+        // written as its class there
+        let synthesized = [
+            Lowering::AnonNamedTuple,
+            Lowering::ProtocolType,
+            Lowering::TypedDictLiteral,
+        ];
+        let unwritten = ["(p: int", "protocol(n", "{\"k\""];
+        cases.push(case(
+            "TupleLiteralTypePass",
+            &synthesized,
+            "def f(x: (int, (p: int), protocol(n: int), {\"k\": int})) -> None: ...\n",
+            &[
+                "tuple[int, _AnonNamedTuple_",
+                ", _Protocol_",
+                ", _TypedDict_",
+            ],
+            &unwritten,
+        ));
+        cases.push(case(
+            "CallableSyntaxPass",
+            &[Lowering::AnonNamedTuple, Lowering::TypedDictLiteral],
+            "def f(x: ((p: int), {\"k\": int}) -> str) -> None: ...\n",
+            &["Callable[[_AnonNamedTuple_", ", _TypedDict_"],
+            &unwritten,
+        ));
+        cases.push(case(
+            "AnonNamedTuplePass",
+            &synthesized,
+            "def f(x: (a: (p: int), b: protocol(n: int), c: {\"k\": int})) -> None: ...\n",
+            &["a: _AnonNamedTuple_", "b: _Protocol_", "c: _TypedDict_"],
+            &unwritten,
+        ));
+        cases.push(case(
+            "ProtocolTypePass",
+            &synthesized,
+            "def f(x: protocol(a: (p: int); b: protocol(n: int); c: {\"k\": int})) -> None: ...\n",
+            &[
+                "a: \"_AnonNamedTuple_",
+                "b: \"_Protocol_",
+                "c: \"_TypedDict_",
+            ],
+            &unwritten,
+        ));
+        cases.push(case(
+            "TypedDictLiteralPass",
+            &synthesized,
+            "def f(x: {\"a\": (p: int), \"b\": protocol(n: int), \"c\": {\"k\": int}}) -> None: ...\n",
+            &["a: \"_AnonNamedTuple_", "b: \"_Protocol_", "c: \"_TypedDict_"],
+            &unwritten,
         ));
         cases
     }

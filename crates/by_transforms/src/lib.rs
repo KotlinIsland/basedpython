@@ -637,9 +637,10 @@ fn line_count(s: &str) -> usize {
     newline_count(s) + usize::from(!(s.is_empty() || s.ends_with('\n')))
 }
 
-/// Re-runs the anon-named-tuple lowering on post-transform output to catch
-/// expressions that other transforms (e.g. the PEP-695 polyfill) copied
-/// verbatim from the source after the original pass ran
+/// Re-runs the synthesized-type lowerings on post-transform output to catch the
+/// types other transforms (e.g. the PEP-695 polyfill) copied verbatim from the
+/// source after the original passes ran, and the anonymous named tuple value
+/// forms among them
 fn run_anon_named_tuple_cleanup(
     mut source: String,
     written: WrittenNames,
@@ -669,13 +670,14 @@ enum CleanupRound {
 
 /// one round of [`run_anon_named_tuple_cleanup`] over `source`
 ///
-/// the only syntax the round lowers is an anonymous named tuple form and an inline protocol,
-/// and the only other thing it does is construct each plain tuple literal the checker reads as
-/// an anonymous named tuple. the checker makes that type only from a form the parser flags
-/// (`DynamicNamedTupleAnchor::Anonymous`), and the round's db reads nothing but `source` and
-/// the vendored stubs, none of which spells one (`vendored_stubs_spell_no_anonymous_named_tuple`
-/// checks that). so a `source` that spells neither has nothing to lower or construct, and the
-/// round leaves it before building a db
+/// the only basedpython-only syntax the round lowers is an anonymous named tuple form and an
+/// inline protocol — a typed dict literal type is a python dict display, which the round writes
+/// as its class only beside one of those — and the only other thing it does is construct each
+/// plain tuple literal the checker reads as an anonymous named tuple. the checker makes that
+/// type only from a form the parser flags (`DynamicNamedTupleAnchor::Anonymous`), and the
+/// round's db reads nothing but `source` and the vendored stubs, none of which spells one
+/// (`vendored_stubs_spell_no_anonymous_named_tuple` checks that). so a `source` that spells
+/// neither has nothing to lower or construct, and the round leaves it before building a db
 fn run_cleanup_round(
     source: &str,
     written: WrittenNames,
@@ -703,13 +705,25 @@ fn run_cleanup_round(
         ty_python_semantic::Db::program_file(&db, file),
     );
 
-    let mut anon = transforms::anon_named_tuple::AnonNamedTuple::new(
+    let synthesized = std::rc::Rc::new(transforms::synthesized_types::SynthesizedTypes::name_all(
         src,
         written,
         quotes,
         &model,
-        config.clone(),
+        config,
         module.suite(),
+        &[],
+        &[],
+    ));
+    if let Some(err) = synthesized.errors.first() {
+        return Err(err.clone());
+    }
+    let mut anon = transforms::anon_named_tuple::AnonNamedTuple::new(
+        src,
+        written,
+        &model,
+        config.clone(),
+        synthesized.clone(),
     );
     for stmt in module.suite() {
         anon.visit_stmt(stmt);
@@ -718,52 +732,57 @@ fn run_cleanup_round(
     if let Some(err) = anon.errors.first() {
         return Err(err.clone());
     }
-    let protocol =
-        transforms::protocol_type::cleanup(src, written, quotes, &model, module.suite(), config)?;
 
-    if anon.edits.is_empty() && !anon.needs_import && protocol.is_none() {
+    if anon.edits.is_empty() && !anon.needs_import && synthesized.is_empty() {
         return Ok(CleanupRound::Unchanged);
     }
+    // an earlier run over the pre-splice source already emitted a class (and its
+    // imports) for a type whose edit an AST pass then re-rendered away, so only what
+    // the spliced output is actually missing gets prepended. matched as a run of
+    // whole lines: a bare `contains` would let `from typing import ProtocolFoo`
+    // suppress the `Protocol` import that is needed
     let mut preamble = String::new();
+    let source_lines: Vec<&str> = source.lines().collect();
+    let push_missing = |preamble: &mut String, entry: &str| {
+        let entry_lines: Vec<&str> = entry.lines().collect();
+        let present = !entry_lines.is_empty()
+            && source_lines
+                .windows(entry_lines.len())
+                .any(|window| window == entry_lines.as_slice());
+        if !present {
+            preamble.push_str(entry);
+            preamble.push('\n');
+        }
+    };
     if anon.needs_import {
-        // an earlier run over the pre-splice source already emitted a class
-        // (and its imports) for an anon-NT whose edit an AST pass then
-        // re-rendered away, so only what the spliced output is actually
-        // missing gets prepended. matched as a run of whole lines, the way
-        // the inline-protocol cleanup does
-        let source_lines: Vec<&str> = source.lines().collect();
-        let push_missing = |preamble: &mut String, entry: &str| {
-            let entry_lines: Vec<&str> = entry.lines().collect();
-            let present = !entry_lines.is_empty()
-                && source_lines
-                    .windows(entry_lines.len())
-                    .any(|window| window == entry_lines.as_slice());
-            if !present {
-                preamble.push_str(entry);
-                preamble.push('\n');
-            }
-        };
         push_missing(
             &mut preamble,
             &written.import_from("typing", &["NamedTuple"]),
         );
-        let (imports, helpers) = anon.callable.take_requirements();
-        for line in imports
-            .into_iter()
-            .chain(runtime_entries(config, &helpers, source))
-        {
-            push_missing(&mut preamble, line.trim_end_matches('\n'));
-        }
-        for defs in [anon.callable.class_defs().to_owned(), anon.class_defs()] {
-            for class_def in defs.split_inclusive("\n\n") {
-                push_missing(&mut preamble, class_def.trim_end_matches('\n'));
-            }
+    }
+    for line in synthesized.imports.iter().cloned().chain(runtime_entries(
+        config,
+        &synthesized.helpers,
+        source,
+    )) {
+        push_missing(&mut preamble, line.trim_end_matches('\n'));
+    }
+    for defs in [synthesized.declarations.clone(), anon.class_defs()] {
+        for class_def in defs.split_inclusive("\n\n") {
+            push_missing(&mut preamble, class_def.trim_end_matches('\n'));
         }
     }
     let mut edits = anon.edits;
-    if let Some((protocol_edits, protocol_preamble)) = protocol {
-        preamble.push_str(&protocol_preamble);
-        edits.extend(protocol_edits);
+    for kind in [
+        transforms::synthesized_types::SynthesizedKind::TypedDict,
+        transforms::synthesized_types::SynthesizedKind::Protocol,
+    ] {
+        edits.extend(
+            synthesized
+                .of_kind(kind)
+                .into_iter()
+                .map(|(range, name)| Fix::safe_edit(Edit::range_replacement(name, range))),
+        );
     }
 
     let (body, _) = apply_transforms_once(src, edits);
@@ -947,6 +966,7 @@ fn run_lazy_import_phase(
         &eager_names,
         deferrable.keys().copied().collect(),
         &holder,
+        written,
     );
     for stmt in module.suite() {
         lazy.visit_stmt(stmt);
@@ -977,6 +997,12 @@ fn run_lazy_import_phase(
     }
 
     let (mut body, _) = apply_transforms_once(src, edits);
+    // a builtin the module binds for itself is read under a name of the lowering's own, which
+    // is imported ahead of everything
+    let builtins = written.builtin_imports(&body, config.min_version.minor);
+    if !builtins.is_empty() {
+        body = splice_preamble(&body, &format!("{}\n", builtins.join("\n")));
+    }
     // phase 0 already gave the module the helpers *it* needed. where that was an import of the
     // runtime written beside it, the helpers this phase needs belong on that same line rather
     // than on a second one naming the same module

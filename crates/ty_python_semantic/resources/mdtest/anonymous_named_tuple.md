@@ -97,8 +97,12 @@ c: (name: str, age: int) = (name=1, age=1)
 
 ### Plain tuple literal assigns to anonymous named tuple parameter
 
+A plain tuple standing where an anonymous named tuple is expected is checked against its fields, and
+is that named tuple, so its fields are read by name.
+
 ```by
-def f(x: (name: str, age: int)) -> None: ...
+def f(x: (name: str, age: int)) -> str:
+    return x.name
 
 f(("asdf", 1))
 ```

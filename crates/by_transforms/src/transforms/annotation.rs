@@ -45,10 +45,11 @@ pub(crate) struct TupleLiteralType<'src> {
     /// dedicated passes' edits inside it are dropped — without this an element
     /// would reach the output as surface syntax
     leaves: RefCell<CallableSyntax<'src>>,
-    /// the operations `symbolic_type_op` folded, with their rendered types. our
-    /// replacement covers a folded operation nested inside a tuple type, so it
-    /// has to carry the fold rather than re-emit the operation
-    symbolic_substitutions: &'src [(TextRange, String)],
+    /// the type expressions already lowered to a fixed spelling — an operation
+    /// `symbolic_type_op` folded, a synthesized type's class. our replacement
+    /// covers one nested inside a tuple type, so it has to carry that spelling
+    /// rather than re-emit the source
+    type_substitutions: &'src [(TextRange, String)],
     edits: Vec<Fix>,
     templates: Vec<(TextRange, Vec<Fragment>)>,
 }
@@ -60,10 +61,10 @@ impl<'src> TupleLiteralType<'src> {
         quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         config: &Config,
-        symbolic_substitutions: &'src [(TextRange, String)],
+        type_substitutions: &'src [(TextRange, String)],
     ) -> Self {
         let mut leaves = CallableSyntax::new(source, written, quotes, config).with_types(types);
-        for (range, rendered) in symbolic_substitutions {
+        for (range, rendered) in type_substitutions {
             leaves.add_substitution(*range, rendered.clone());
         }
         Self {
@@ -73,7 +74,7 @@ impl<'src> TupleLiteralType<'src> {
             min_version: config.min_version,
             needs_unpack_import: Cell::new(false),
             leaves: RefCell::new(leaves),
-            symbolic_substitutions,
+            type_substitutions,
             edits: Vec::new(),
             templates: Vec::new(),
         }
@@ -174,7 +175,7 @@ impl<'src> TupleLiteralType<'src> {
             // folded to
             Expr::BinOp(b)
                 if let Some((_, rendered)) = self
-                    .symbolic_substitutions
+                    .type_substitutions
                     .iter()
                     .find(|(range, _)| *range == b.range()) =>
             {
@@ -442,14 +443,14 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let symbolic_substitutions = ctx.symbolic_substitutions.clone();
+        let type_substitutions = ctx.type_substitutions.clone();
         let mut inner = TupleLiteralType::new(
             self.source,
             self.written,
             self.quotes,
             types,
             &self.config,
-            &symbolic_substitutions,
+            &type_substitutions,
         );
         walk_type_positions(stmts, Some(types), &mut inner);
         ctx.template_edits.append(&mut inner.templates);

@@ -34,14 +34,14 @@ source (.by)
   │     └─ rewrite `from typing import X` to `from typing_extensions import X`
   │        when X is not yet stdlib at the configured min Python version
   │
-  ├─ phase 2b  anon-named-tuple cleanup
-  │     └─ re-run `anon_named_tuple` and the inline-protocol lowering on the
-  │        post-lowering output to catch spans copied verbatim by other transforms
-  │        (e.g. the PEP-695 polyfill). bounded to a few iterations. an output that
-  │        spells no anonymous named tuple and no inline protocol is passed over
-  │        after a parse, without a db or any type inference: the checker makes an
-  │        anonymous named tuple type only from such a form, so no plain tuple in
-  │        it can need constructing as one
+  ├─ phase 2b  synthesized-type cleanup
+  │     └─ re-run the synthesized-type lowerings on the post-lowering output to
+  │        catch a typed dict, anonymous named tuple or inline protocol copied
+  │        verbatim by other transforms (e.g. the PEP-695 polyfill). bounded to a
+  │        few iterations. an output that spells no anonymous named tuple and no
+  │        inline protocol is passed over after a parse, without a db or any type
+  │        inference: the checker makes an anonymous named tuple type only from
+  │        such a form, so no plain tuple in it can need constructing as one
   │
   ├─ phase 2c  lazy-import marking
   │     └─ lower imports to the `lazy` keyword (3.15+) or a runtime polyfill
@@ -207,6 +207,16 @@ and gets the single-file db: correct, just blind past the file
 - **`TypeAwarePass`** — reads the shared `SemanticModel` and emits sub-statement
     text edits keyed by `TextRange`. it never mutates the AST, because
     `inferred_type` binds to the exact parsed node identities
+
+a typed dict literal, an anonymous named tuple type and an inline protocol each
+lower to a class, and each can be the type of another's field, so their classes
+are named before any pass runs, in one walk that names a type only once every type
+inside it has its class (`transforms/synthesized_types.rs`). each class body is
+printed through one type-expression lowerer that writes the classes named so far,
+and the classes are declared in the order they were named, so each comes after
+every class it reads. the passes lowering each kind write those names, and every
+other pass that prints a type expression whole is handed them alongside the
+symbolic folds, as `type_substitutions`
 
 order matters: passes that target the same offset rely on a fixed sequence
 (e.g. `type_is` before `identity_swap`, `coalesce` before `none_chain`). the

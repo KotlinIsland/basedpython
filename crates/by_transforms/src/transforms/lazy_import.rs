@@ -93,6 +93,10 @@ pub(crate) struct LazyImport<'src> {
     /// (`class Character(str)`) that the grapheme accessors construct, so the
     /// preamble must define the real class rather than the marker
     pub(crate) needs_character_class: bool,
+    /// the names `JustFloat` / `JustComplex` are bound to at runtime: the builtin `float` /
+    /// `complex`, under a name of its own where the module binds the builtin's
+    builtin_float: String,
+    builtin_complex: String,
 }
 
 impl<'src> LazyImport<'src> {
@@ -103,8 +107,11 @@ impl<'src> LazyImport<'src> {
         eager_names: &[String],
         deferrable: HashSet<TextRange>,
         holder: &'src str,
+        written: super::repeated_underscore::WrittenNames,
     ) -> Self {
         Self {
+            builtin_float: written.builtin("float"),
+            builtin_complex: written.builtin("complex"),
             source,
             at_module_level: true,
             eager: eager.to_vec(),
@@ -284,7 +291,15 @@ impl<'src> LazyImport<'src> {
             return;
         }
 
-        if self.deferral == Deferral::Keyword {
+        // `ty_extensions` exists only for a checker, so its names are bound to their runtime
+        // stand-ins below however the other imports are deferred: a `lazy` import of it fails
+        // as soon as anything reads one of them — `typing.get_type_hints` on an annotation
+        let is_ty_extensions = node.level == 0
+            && node
+                .module
+                .as_ref()
+                .is_some_and(|m| m.id.as_str() == "ty_extensions");
+        if self.deferral == Deferral::Keyword && !is_ty_extensions {
             if is_future || is_star {
                 if node.is_lazy {
                     self.strip_lazy_keyword(node.range());
@@ -363,8 +378,8 @@ impl<'src> LazyImport<'src> {
                 // runtime value is the builtin, so `get_type_hints` (and thus
                 // pydantic / dataclasses schema generation) resolves them
                 match name {
-                    "JustFloat" => lines.push(format!("{bind} = float")),
-                    "JustComplex" => lines.push(format!("{bind} = complex")),
+                    "JustFloat" => lines.push(format!("{bind} = {}", self.builtin_float)),
+                    "JustComplex" => lines.push(format!("{bind} = {}", self.builtin_complex)),
                     _ => {
                         self.needs_ty_ext_marker = true;
                         lines.push(format!("{bind} = _TyExtMarker"));
@@ -983,6 +998,32 @@ mod tests {
         assert!(
             out.contains("JustComplex = complex"),
             "JustComplex should bind to the builtin, got:\n{out}"
+        );
+    }
+
+    /// `ty_extensions` exists only for a checker, so where the other imports are made `lazy`
+    /// its names are still bound to their stand-ins: a deferred import of it fails the first
+    /// time an annotation naming one is read
+    #[test]
+    fn ty_ext_names_are_bound_where_imports_are_keyword_lazy() {
+        let out = transpile("a: float\nb: not int\n", &cfg_315()).unwrap();
+        assert!(
+            out.contains("JustFloat = float")
+                && out.contains("Not = _TyExtMarker")
+                && !out.contains("ty_extensions"),
+            "got:\n{out}"
+        );
+    }
+
+    /// where the module binds `float` itself, `JustFloat` is bound to the builtin, read under
+    /// a name of its own
+    #[test]
+    fn ty_ext_just_float_binds_to_the_builtin_the_module_rebinds() {
+        let out = transpile_polyfill("float = int\nfrom ty_extensions import JustFloat\n");
+        assert!(
+            out.contains("from builtins import float as float2\n")
+                && out.contains("JustFloat = float2\n"),
+            "got:\n{out}"
         );
     }
 
