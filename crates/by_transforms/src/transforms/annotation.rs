@@ -1,16 +1,16 @@
 use std::cell::{Cell, RefCell};
 
 use ruff_diagnostics::{Edit, Fix};
-use ruff_python_ast::{Expr, PythonVersion, Stmt};
+use ruff_python_ast::{Expr, ExprSubscript, ExprTuple, PythonVersion, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::Config;
-use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::transforms::callable::CallableSyntax;
 use crate::transforms::optional_type;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
-    Recurse, RootKind, TypeExprVisitor, TypePos, walk_type_positions,
+    Recurse, RootKind, TypeExprVisitor, TypePos, callable_parameter_type, walk_type_positions,
 };
 use crate::type_info::TypeInfo;
 
@@ -49,6 +49,7 @@ pub(crate) struct TupleLiteralType<'src> {
     /// has to carry the fold rather than re-emit the operation
     symbolic_substitutions: &'src [(TextRange, String)],
     edits: Vec<Fix>,
+    templates: Vec<(TextRange, Vec<Fragment>)>,
 }
 
 impl<'src> TupleLiteralType<'src> {
@@ -72,6 +73,7 @@ impl<'src> TupleLiteralType<'src> {
             leaves: RefCell::new(leaves),
             symbolic_substitutions,
             edits: Vec::new(),
+            templates: Vec::new(),
         }
     }
 
@@ -196,19 +198,7 @@ impl<'src> TupleLiteralType<'src> {
                 // parameter list, not a tuple type. Lower to `Callable[[int,
                 // str], R]` (list form) so the runtime / type-checker reads
                 // it as parameters
-                let is_callable_subscript = matches!(s.value.as_ref(),
-                    Expr::Name(n) if n.id.as_str() == "Callable"
-                ) || matches!(s.value.as_ref(),
-                    Expr::Attribute(a) if a.attr.id.as_str() == "Callable"
-                );
-                if is_callable_subscript
-                    && let Expr::Tuple(slice_tuple) = s.slice.as_ref()
-                    && !slice_tuple.parenthesized
-                    && slice_tuple.elts.len() == 2
-                    && let (Some(params_expr), Some(returns_expr)) =
-                        (slice_tuple.elts.first(), slice_tuple.elts.get(1))
-                    && let Expr::Tuple(params_tuple) = params_expr
-                    && params_tuple.parenthesized
+                if let Some((params_tuple, returns_expr)) = callable_tuple_parameters(self.types, s)
                 {
                     let params_str = params_tuple
                         .elts
@@ -275,19 +265,12 @@ impl<'src> TupleLiteralType<'src> {
     /// - `*: T` / `*name: T`   → dropped (Callable list has no variadic)
     /// - `**: T` / `**name: T` → dropped
     fn lower_callable_param(&self, elt: &Expr) -> String {
-        match elt {
-            Expr::Named(named) => {
-                if matches!(named.target.as_ref(), Expr::Starred(_)) {
-                    return String::new();
-                }
-                self.transform_annotation(&named.value)
-                    .unwrap_or_else(|| self.fallback_src(&named.value))
-            }
-            Expr::Starred(_) => String::new(),
-            _ => self
-                .transform_annotation(elt)
-                .unwrap_or_else(|| self.fallback_src(elt)),
-        }
+        callable_parameter_type(elt)
+            .map(|ty| {
+                self.transform_annotation(ty)
+                    .unwrap_or_else(|| self.fallback_src(ty))
+            })
+            .unwrap_or_default()
     }
 
     /// Lowers one element of a parameter-shape tuple to a Python type
@@ -382,6 +365,26 @@ impl TypeExprVisitor for TupleLiteralType<'_> {
         if matches!(expr, Expr::Starred(_)) {
             return Recurse::Descend;
         }
+        // basedpython: `Callable[(int, name: str), R]` writes the parameter list as a tuple. it
+        // becomes python's list, with each parameter's type passed through where it stands, so
+        // whatever lowers a parameter — a tuple type of its own, a forward reference quoted —
+        // composes inside the list
+        if let Expr::Subscript(s) = expr
+            && let Some((parameters, _)) = callable_tuple_parameters(self.types, s)
+        {
+            self.templates
+                .push((parameters.range(), callable_parameter_list(parameters)));
+            return Recurse::Descend;
+        }
+        // a generic's type arguments are lowered one by one, each where it stands, so a
+        // pass that writes one of them whole, a forward reference quoted where python reads
+        // it lazily, wraps that argument's lowering rather than landing inside a rewrite of
+        // the whole subscript. `X[()]` is python's spelling already
+        if let Expr::Subscript(s) = expr
+            && !matches!(s.slice.as_ref(), Expr::Tuple(t) if t.parenthesized && t.elts.is_empty())
+        {
+            return Recurse::Descend;
+        }
         // `transform_annotation` is a deep recursive rewriter that produces
         // a single replacement string for the whole expression. emit the
         // edit at the expression's range and tell the walker to stop —
@@ -439,6 +442,7 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
             &symbolic_substitutions,
         );
         walk_type_positions(stmts, Some(types), &mut inner);
+        ctx.template_edits.append(&mut inner.templates);
         for fix in inner.edits {
             for edit in fix.edits() {
                 let range = edit.range();
@@ -463,6 +467,44 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
         let (imports, helpers) = leaves.take_requirements();
         ctx.required_imports.extend(imports);
         ctx.runtime.extend(helpers);
+    }
+}
+
+/// `(int, name: str)`, a `Callable` parameter list written as a tuple, as python's list
+/// `[int, str]`, each parameter's type passed through where it stands
+fn callable_parameter_list(parameters: &ExprTuple) -> Vec<Fragment> {
+    let mut fragments = vec![Fragment::Lit("[".to_owned())];
+    for (index, ty) in parameters
+        .elts
+        .iter()
+        .filter_map(callable_parameter_type)
+        .enumerate()
+    {
+        if index > 0 {
+            fragments.push(Fragment::Lit(", ".to_owned()));
+        }
+        fragments.push(Fragment::Src(ty.range()));
+    }
+    fragments.push(Fragment::Lit("]".to_owned()));
+    fragments
+}
+
+/// the parameters and return of `Callable[(int, str), R]`, where basedpython writes the
+/// parameter list as a tuple. which value is `Callable` is the checker's answer, however it is
+/// spelled
+fn callable_tuple_parameters<'a>(
+    types: &dyn TypeInfo,
+    subscript: &'a ExprSubscript,
+) -> Option<(&'a ExprTuple, &'a Expr)> {
+    if types.is_callable_form(&subscript.value)
+        && let Expr::Tuple(slice_tuple) = subscript.slice.as_ref()
+        && !slice_tuple.parenthesized
+        && let [Expr::Tuple(params_tuple), returns_expr] = slice_tuple.elts.as_slice()
+        && params_tuple.parenthesized
+    {
+        Some((params_tuple, returns_expr))
+    } else {
+        None
     }
 }
 
@@ -748,6 +790,55 @@ mod tests {
         check(
             "from typing import Callable\na: Callable[(int, str), int]\n",
             "from typing import Callable\na: Callable[[int, str], int]\n",
+        );
+    }
+
+    /// `Callable` is recognised by what the name is bound to, so an alias and a
+    /// reassignment read their tuple as the parameter list too
+    #[test]
+    fn callable_under_another_name_reads_its_tuple_as_parameters() {
+        check(
+            indoc! {"
+                import typing
+                from typing import Callable as Fn
+                C = typing.Callable
+                a: Fn[(int, str), bool]
+                b: C[(int, str), bool]
+            "},
+            indoc! {"
+                import typing
+                from typing import Callable as Fn
+                C = typing.Callable
+                a: Fn[[int, str], bool]
+                b: C[[int, str], bool]
+            "},
+        );
+    }
+
+    #[test]
+    fn collections_abc_callable_reads_its_tuple_as_parameters() {
+        check(
+            "from collections.abc import Callable\na: Callable[(int, str), bool]\n",
+            "from collections.abc import Callable\na: Callable[[int, str], bool]\n",
+        );
+    }
+
+    /// a class of the program's own that happens to be named `Callable` is an
+    /// ordinary generic, whose tuple argument is a tuple type
+    #[test]
+    fn a_class_named_callable_keeps_its_tuple_argument() {
+        check(
+            indoc! {"
+                class Callable[A, B]: ...
+                a: Callable[(int, str), bool]
+            "},
+            indoc! {"
+                from typing import TypeVar, Generic
+                _A = TypeVar(\"_A\")
+                _B = TypeVar(\"_B\")
+                class Callable(Generic[_A, _B]): ...
+                a: Callable[tuple[int, str], bool]
+            "},
         );
     }
 

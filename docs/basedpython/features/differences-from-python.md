@@ -107,9 +107,10 @@ x: "Foo"
 ```
 
 python reads that as a deferred reference to the name `Foo`; basedpython reads
-it as the string-literal type. there is no manual forward-reference syntax
-because none is needed — the transpiler
-[quotes a self-reference for you](forward-references.md) when the
+it as the string-literal type, in an annotation or a type argument
+(`list["a"]()`) alike. there is no manual forward-reference syntax because none
+is needed — the transpiler
+[quotes a forward reference for you](forward-references.md) when the
 runtime requires it
 
 ### `float` means `float`

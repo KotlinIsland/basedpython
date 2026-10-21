@@ -530,6 +530,12 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// is a stub file but we're still in a non-deferred region.
     deferred_state: DeferredExpressionState,
 
+    /// basedpython: the state a specialization written as a value is itself evaluated in, while
+    /// its type arguments are inferred as deferred (see `infer_subscript_load`). what is a value
+    /// inside them, `Literal[E.A]` or the metadata of `Annotated[T, m]`, python still evaluates
+    /// where it is written, so it is inferred in this state instead
+    specialization_evaluation_state: Option<DeferredExpressionState>,
+
     /// For decorated function or class definitions, the type before applying decorators.
     undecorated_type: Option<Type<'db>>,
 
@@ -675,6 +681,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return_types_and_ranges: vec![],
             called_functions: FxIndexSet::default(),
             deferred_state: DeferredExpressionState::None,
+            specialization_evaluation_state: None,
             expressions: FxHashMap::default(),
             comparison_truthiness: FxHashMap::default(),
             expression_cache: None,
@@ -1217,6 +1224,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.deferred_state = state;
         }
         previous
+    }
+
+    /// infers what is a value inside a specialization's type arguments in the state the
+    /// specialization itself is evaluated in, when those arguments are being read as deferred
+    fn infer_as_evaluated<T>(&mut self, infer: impl FnOnce(&mut Self) -> T) -> T {
+        let Some(state) = self.specialization_evaluation_state.take() else {
+            return infer(self);
+        };
+        let previous = self.replace_deferred_state(state);
+        let result = infer(self);
+        self.deferred_state = previous;
+        self.specialization_evaluation_state = Some(state);
+        result
     }
 
     /// Returns `true` if `expr` is a call to a known diagnostic function
@@ -4811,6 +4831,37 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     fn infer_assignment_deferred(&mut self, target: &ast::Expr, value: &'ast ast::Expr) {
+        // basedpython: the type expressions a typing construct takes as call arguments —
+        // `TypeVar("T", bound=F)` — are read as deferred, as an annotation is, so they may name
+        // a class the module binds further on: the transpiler writes such a name as the forward
+        // reference python reads lazily. the bases of `type("C", bases, ns)` are classes the
+        // call needs, so they are not
+        let deferred_form = if self.is_basedpython_file()
+            && let ast::Expr::Call(call) = value
+            && let callee = self
+                .try_expression_type(&call.func)
+                .unwrap_or_else(|| self.infer_expression(&call.func, TypeContext::default()))
+            && let Some(form) = CallTypeForm::of(self.db(), callee)
+        {
+            Some((form, call))
+        } else {
+            None
+        };
+        let previous_deferred_state = deferred_form
+            .is_some()
+            .then(|| self.replace_deferred_state(DeferredExpressionState::Deferred));
+        self.infer_assignment_deferred_impl(target, value);
+        if let Some(previous) = previous_deferred_state {
+            self.deferred_state = previous;
+        }
+        if let Some((form, call)) = deferred_form {
+            for argument in form.type_expressions(&call.arguments) {
+                self.store_type_expression_flags(argument, TypeExpressionFlags::READ_DEFERRED);
+            }
+        }
+    }
+
+    fn infer_assignment_deferred_impl(&mut self, target: &ast::Expr, value: &'ast ast::Expr) {
         let db = self.db();
         let env = self.program_environment();
         // Infer deferred bounds/constraints/defaults of a legacy TypeVar / ParamSpec / NewType,
@@ -17113,6 +17164,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             reachability_cache: _,
             typevar_binding_context: _,
             deferred_state: _,
+            specialization_evaluation_state: _,
             called_functions,
             index: _,
             region: _,
@@ -17185,6 +17237,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             slice_materialization: _,
             typevar_binding_context: _,
             deferred_state: _,
+            specialization_evaluation_state: _,
             index: _,
             region: _,
         } = self;
@@ -17313,6 +17366,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             discards_dict_key_assignments: _,
             typevar_binding_context: _,
             deferred_state: _,
+            specialization_evaluation_state: _,
             index: _,
             region: _,
             cycle_recovery: _,
@@ -17377,6 +17431,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             slice_materialization: _,
             typevar_binding_context: _,
             deferred_state: _,
+            specialization_evaluation_state: _,
             index: _,
             region: _,
             return_types_and_ranges: _,
@@ -17540,6 +17595,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             slice_materialization: _,
             typevar_binding_context: _,
             deferred_state: _,
+            specialization_evaluation_state: _,
             called_functions: _,
             index: _,
             region: _,
@@ -17597,6 +17653,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             index,
             cycle_recovery,
             deferred_state,
+            specialization_evaluation_state,
             typevar_binding_context,
             ref expression_cache,
             ref reachability_cache,
@@ -17648,6 +17705,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Ensure the speculative builder has the same inference context as the current one.
         builder.cycle_recovery = cycle_recovery;
         builder.deferred_state = deferred_state;
+        builder.specialization_evaluation_state = specialization_evaluation_state;
         builder.typevar_binding_context = typevar_binding_context;
         builder.context.inference_flags = self.inference_flags();
         builder.expression_cache.clone_from(expression_cache);
@@ -17709,6 +17767,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             reachability_cache: _,
             typevar_binding_context: _,
             deferred_state: _,
+            specialization_evaluation_state: _,
             called_functions,
             index: _,
             region: _,

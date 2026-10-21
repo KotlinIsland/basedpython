@@ -39,11 +39,12 @@ reveal_type(a["k"])  # revealed: list[A]
 
 ## direct base self-reference is still an error
 
-a bare self-reference as a direct base is a genuine runtime error; the transpiler doesn't auto-quote
-it, and ty reports the cyclic inheritance
+a bare base is resolved where it is written, since the class is built on the object itself, so the
+`A` not yet bound there is an unresolved reference, as python's `NameError` for it shows. a type
+argument inside a base (`class A(list[A])`) is a forward reference the transpiler quotes
 
 ```by
-class A(A):  # error: [cyclic-class-definition]
+class A(A):  # error: [unresolved-reference]
     pass
 ```
 
@@ -52,4 +53,38 @@ class A(A):  # error: [cyclic-class-definition]
 ```by
 class A(list[B]):  # error: [unresolved-reference]
     pass
+```
+
+## a cycle across modules is a cyclic definition
+
+each base is bound where it is written, by an import of the other module, so the cycle is between
+two classes rather than a name read before it is bound
+
+`cycle_a.by`:
+
+```by
+from cycle_b import B
+
+class A(B):  # error: [cyclic-class-definition]
+    pass
+```
+
+`cycle_b.by`:
+
+```by
+from cycle_a import A
+
+class B(A):  # error: [cyclic-class-definition]
+    pass
+```
+
+## a cycle in a stub is a cyclic definition
+
+a stub is never run, so its bases are read as deferred and may name a class defined further down
+
+`cycle_stub.byi`:
+
+```byi
+class C(D): ...  # error: [cyclic-class-definition]
+class D(C): ...  # error: [cyclic-class-definition]
 ```

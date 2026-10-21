@@ -68,9 +68,17 @@ the output reports the argument as invalid
 ## scope
 
 promotion fires only in syntactic type contexts: annotations, return types,
-type aliases, and generic subscript slices whose target is a type. value
-expressions are untouched. `Annotated[T, metadata]` does not treat its
-metadata slice as a type context, so literal metadata is preserved
+type aliases, and the type arguments of a generic, written as a value or not.
+`list["a"]()` is a list of the string `"a"`, transpiled to
+`list[Literal["a"]]()`, where python would read `"a"` as a forward reference
+to a name `a`. a forward reference is written as the bare name, which the
+transpiler quotes where python needs it (see
+[forward references](forward-references.md#outside-an-annotation))
+
+value expressions are untouched, and so is a subscript that looks a value up
+rather than naming a generic: `Colour["Red"]` on an enum keeps its string.
+`Annotated[T, metadata]` does not treat its metadata slice as a type context,
+so literal metadata is preserved
 
 ## polyfill
 

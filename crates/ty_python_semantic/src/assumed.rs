@@ -474,16 +474,22 @@ pub(crate) fn seeded_place<'db>(
     scope: ScopeId<'db>,
     place_expr: PlaceExprRef,
 ) -> Option<Type<'db>> {
-    scope.program(db).assumptions(db)?;
-    let seeds = seeds(db, scope);
-    if seeds.is_empty() {
+    let assumptions = scope.program(db).assumptions(db)?;
+    let index = semantic_index(db, scope.program_file(db));
+    let table = index.place_table(scope.file_scope_id(db));
+    let place_id = table.place_id(place_expr)?;
+    // only a place the debugger observed can have a seed, and that is asked before the seeds are
+    // built: building them types every observation, and typing an enum member reads its class's
+    // bases, which are name loads in this same scope — `class Color(Enum)` loading `Enum` would
+    // otherwise wait on the seeds it is part of building
+    if !assumptions
+        .observations(db)
+        .iter()
+        .any(|observation| place_id_of(table, &observation.name) == Some(place_id))
+    {
         return None;
     }
-    let index = semantic_index(db, scope.program_file(db));
-    let place_id = index
-        .place_table(scope.file_scope_id(db))
-        .place_id(place_expr)?;
-    seeds.get(&place_id).copied()
+    seeds(db, scope).get(&place_id).copied()
 }
 
 /// whether a use is at or below the line the program is stopped on

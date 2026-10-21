@@ -97,6 +97,14 @@ bitflags::bitflags! {
 
         /// The expression refers to a `TypeVarTuple` without unpacking it.
         const INVALID_BARE_TYPE_VAR_TUPLE = 1 << 2;
+
+        /// basedpython: a type expression python evaluates where it stands, which inference
+        /// reads as deferred all the same, as it does an annotation: the type arguments of a
+        /// specialization written as a value (`list[F]()`), and a type-expression argument of
+        /// a typing construct assigned to a name (`T = TypeVar("T", bound=F)`). a name in one
+        /// may be bound only further on, and the transpiler writes it as the forward reference
+        /// python reads lazily
+        const READ_DEFERRED = 1 << 3;
     }
 }
 

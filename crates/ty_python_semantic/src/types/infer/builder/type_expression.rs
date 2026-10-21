@@ -4559,13 +4559,22 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         &mut self,
         parameters: &'param ast::Expr,
     ) -> Result<Type<'db>, Vec<&'param ast::Expr>> {
+        // a literal's parameters are values python evaluates where they are written, an enum
+        // member's class included
+        self.infer_as_evaluated(|builder| builder.infer_literal_parameter_type_impl(parameters))
+    }
+
+    fn infer_literal_parameter_type_impl<'param>(
+        &mut self,
+        parameters: &'param ast::Expr,
+    ) -> Result<Type<'db>, Vec<&'param ast::Expr>> {
         let db = self.db();
         let env = self.program_environment();
         let ty = match parameters {
             ast::Expr::Subscript(ast::ExprSubscript { value, slice, .. }) => {
                 let value_ty = self.infer_expression(value, TypeContext::default());
                 if matches!(value_ty, Type::SpecialForm(SpecialFormType::Literal)) {
-                    let ty = self.infer_literal_parameter_type(slice)?;
+                    let ty = self.infer_literal_parameter_type_impl(slice)?;
 
                     // This branch deals with annotations such as `Literal[Literal[1]]`.
                     // Here, we store the type for the inner `Literal[1]` expression:
@@ -4582,7 +4591,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 let mut errors = vec![];
                 let mut builder = UnionBuilder::new(db, env);
                 for elt in tuple {
-                    match self.infer_literal_parameter_type(elt) {
+                    match self.infer_literal_parameter_type_impl(elt) {
                         Ok(ty) => {
                             builder = builder.add(ty);
                         }

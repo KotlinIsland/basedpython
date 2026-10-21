@@ -46,13 +46,60 @@ in its lowered form (`"Tree | None"`, `"Callable[[Tree], None]"`)
 a name that is already bound is left alone, as is a local variable's
 annotation, which python never evaluates
 
-a class's *subscript bases* evaluate while the class is being built, and so do
-value-position subscripts in its body (`list[Tree]()`). a self-reference there
-is quoted where it stands: `class Tree(list["Tree"])`. a direct base —
-`class A(A)` — is *not* quoted. that is always a runtime error, and quoting it
-would only mask the bug. method *bodies* are not rewritten either: by the time
-a body runs, the class is bound, and quoting would produce a string instead of
-a value
+method *bodies* are not rewritten: by the time a body runs, the class is bound,
+and quoting would produce a string instead of a value
+
+## outside an annotation
+
+a type written as a value can name a later class too, wherever python only
+records it as a type: the type arguments of a generic (`list[Tree]()`,
+`Alias = dict[str, Tree]`, a base `Node[Tree]`), and the types a typing
+construct assigned to a name takes as arguments (`TypeVar`, `NewType`, the
+functional `NamedTuple` and `TypedDict`). a type argument that names one is
+quoted whole, as an annotation is, with whatever it lowers to inside the quote:
+
+```by
+from typing import Callable, TypeVar
+
+registry = dict[str, Plugin]()
+Handler = Callable[[Plugin], None]
+P = TypeVar("P", bound=Plugin)
+
+
+class Plugin: ...
+```
+
+python evaluates these where they stand, on every version, so the reference is
+quoted where it is written:
+
+```python
+from typing import Callable, TypeVar
+
+registry = dict[str, "Plugin"]()
+Handler = Callable[["Plugin"], None]
+P = TypeVar("P", bound="Plugin")
+
+
+class Plugin: ...
+```
+
+a string there is a [literal type](literal-types.md), as it is in an
+annotation, so you write the forward reference as the bare name and never as a
+string
+
+some positions python reads as an object rather than as a type, and a quote
+cannot stand in for one. a name not bound by then is an `unresolved-reference`
+there:
+
+- a base itself: `class A(A)`, or `class Bar(Plugin)` above `Plugin`. its type
+    arguments are quoted as above (`class Tree(list[Tree])`)
+- a keyword the class is built with, such as `metaclass=Meta`. a `TypedDict`'s
+    `extra_items=` is a type, and is quoted as above
+- the type arguments of a [reified](reified-class-generics.md) class, which keeps
+    them as runtime values, wherever it stands: `list[Box[Plugin]]` too
+- the type an `is`, `cast!` or `cast?` checks for, and the type `cast` reads
+- a value inside a type: the arguments of `Literal[…]` (an enum member) and
+    the metadata of `Annotated[…]`
 
 ## why automatic
 
@@ -66,9 +113,17 @@ transpiler quotes exactly the references that need it
 in python a string annotation is a forward reference. in basedpython a string
 in an annotation is a [literal type](literal-types.md), so
 `by transpile --reverse` writes each one as the expression it spells:
-`-> "Tree"` becomes `-> Tree`, and `"Tree | None"` becomes `Tree?`. the
-arguments of `Literal[…]` and the metadata of `Annotated[…]` are values, and
-stay strings
+`-> "Tree"` becomes `-> Tree`, and `"Tree | None"` becomes `Tree?`. the same
+goes for a string outside an annotation that names a type: `List["Tree"]`
+becomes `List[Tree]`, and `TypeVar("T", bound="Tree")` becomes
+`TypeVar("T", bound=Tree)`. the arguments of `Literal[…]` and the metadata of
+`Annotated[…]` are values, and stay strings, as does a subscript that is a
+lookup rather than a generic (`Colour["Red"]` on an enum)
+
+the type `cast` reads is read where it is written, so it has no spelling for a
+class defined further down: `cast("Later", o)` above `class Later` comes back
+as `cast(Later, o)`, which the checker reports as an `unresolved-reference`.
+move the cast below the class
 
 ## when quoting is skipped
 
@@ -82,5 +137,5 @@ evaluated eagerly. it is skipped when:
     opted into the blanket injection, or target a version below 3.10, which
     always gets it
 
-a subscript base evaluates eagerly on every target, so its self-reference is
-quoted either way
+a type outside an annotation evaluates where it stands on every target, so a
+forward reference in one is quoted either way

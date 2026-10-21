@@ -132,6 +132,7 @@ fn run_context_sensitive_phase<'a>(
         return std::borrow::Cow::Borrowed(source);
     }
     let model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
+    model.infer_in_check_order();
     transforms::context_sensitive::qualify(source, parsed.suite(), &model)
 }
 
@@ -159,6 +160,7 @@ fn run_erased_union_phase<'a>(
         return std::borrow::Cow::Borrowed(source);
     }
     let model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
+    model.infer_in_check_order();
     transforms::erased_union::reify(source, parsed.suite(), &model, config.min_version)
 }
 
@@ -258,12 +260,7 @@ fn transpile_with_report(
     let unchanged = !reified_changed
         && !qualified_changed
         && matches!(enum_lowered.output, std::borrow::Cow::Borrowed(_));
-    let transforms::ast_driver::Phase0 {
-        source,
-        errors: ast_errors,
-        forward_reference_reads,
-        ..
-    } = transforms::ast_driver::run_against_source(
+    let (source, ast_errors, _phase0_map) = transforms::ast_driver::run_against_source(
         source,
         written_names,
         config,
@@ -302,15 +299,11 @@ fn transpile_with_report(
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
     let (final_output, requirements) = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, written_names, config)?;
-    // a forward reference a lowering wrote as a string reads its names when python evaluates
-    // it, against the module's namespace, so those are bound where they are imported
-    let mut eager_names = model.eagerly_imported_names();
-    eager_names.extend(forward_reference_reads);
     let final_output = run_lazy_import_phase(
         final_output,
         config,
         &model.eagerly_imported_modules(),
-        &eager_names,
+        &model.eagerly_imported_names(),
     )?;
     let final_output = run_version_polyfill_phase(final_output, config);
 
@@ -515,16 +508,9 @@ pub fn transpile_typed_with_report(
     // single-file db cannot resolve the modules that declare the conformances
     let eager_model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
     let eager_imports = eager_model.eagerly_imported_modules();
-    let mut eager_names = eager_model.eagerly_imported_names();
-    let transforms::ast_driver::Phase0 {
-        source: spliced,
-        errors: ast_errors,
-        line_map: phase0_map,
-        forward_reference_reads,
-    } = transforms::ast_driver::run_against_source(working_source, written_names, config, project);
-    // a forward reference a lowering wrote as a string reads its names when python evaluates
-    // it, against the module's namespace, so those are bound where they are imported
-    eager_names.extend(forward_reference_reads);
+    let eager_names = eager_model.eagerly_imported_names();
+    let (spliced, ast_errors, phase0_map) =
+        transforms::ast_driver::run_against_source(working_source, written_names, config, project);
     if let Some(first) = ast_errors.first() {
         return Err(first.clone().into());
     }
