@@ -527,11 +527,17 @@ pub(crate) fn body_parameter_constraints<'db>(
         .map(|returns| crate::types::definition_expression_type(db, function, returns));
 
     // a name bound more than once cannot stand for one value: which of them a later use is
-    // about is not a question this can answer
+    // about is not a question this can answer. a `global` or `nonlocal` name is bound in
+    // another scope, whose uses of it this walk does not see
     let place_table = index.place_table(body_scope.file_scope_id(db));
     let single_bindings: FxHashSet<Name> = place_table
         .symbols()
-        .filter(|symbol| symbol.is_bound() && !symbol.is_reassigned())
+        .filter(|symbol| {
+            symbol.is_bound()
+                && !symbol.is_reassigned()
+                && !symbol.is_global()
+                && !symbol.is_nonlocal()
+        })
         .map(|symbol| symbol.name().clone())
         .collect();
 
@@ -566,6 +572,13 @@ pub(crate) fn body_parameter_constraints<'db>(
     collector.visit_body(&node.body);
 
     let mut uses = collector.uses;
+    // a local a nested scope reads is handed on to that scope, and what the nested scope does
+    // with it — return it, store it — is out of this walk's sight
+    for (local, path) in &collector.locals {
+        if collector.captured.contains(local) {
+            uses.entry(path.clone()).or_default().handed_on = true;
+        }
+    }
     apply_asserted_local_types(
         db,
         env,
@@ -873,6 +886,8 @@ struct PathUses<'db> {
     value: Vec<Type<'db>>,
     /// whether the body did something with this value that no requirement can state
     unstatable: bool,
+    /// whether the body handed this value on rather than discarding it (see [`Sink::Anything`])
+    handed_on: bool,
 }
 
 /// What one member of the value at a path was used for.
@@ -881,23 +896,16 @@ struct MemberUses<'db> {
     /// the parameters of every call the body made through this member. a member nothing called
     /// has none, and is asked for as a plain attribute
     calls: Vec<Parameters<'db>>,
-    /// how the body got to the member, which decides what its value reads back as when nothing
-    /// in the body says what that value is
+    /// how the body got to the member, which decides what becomes of the requirement when
+    /// something the program states rules it out
     reach: MemberReach,
 }
 
 /// How a body reached a member: by writing its name, or through the syntax the member is the
 /// meaning of.
 ///
-/// This decides only what the member's value reads back as when nothing else says. A member the
-/// body *named* reads back as `object`: the requirement is that it exist, and `object` is what a
-/// value nothing was required of has to be.
-///
-/// A member reached through syntax reads back as `Unknown` instead. Recording a requirement is
-/// about what the *call site* has to supply, and it should not change what the body itself reads.
-/// `x[k]`, `x - 1` and the element of `for _ in x` all read as `Unknown` before any of this, and
-/// answering `object` there hands a body that used to check a run of errors about a value the
-/// analysis never learned anything about.
+/// a requirement reached through syntax gives way to what the program states, and one the body
+/// named stands — see [`WhenContradicted`].
 #[derive(Copy, Clone, Default, PartialEq, Eq)]
 enum MemberReach {
     /// `x.foo`, `x.foo()`
@@ -1009,6 +1017,11 @@ fn path_bounds<'db>(
     uses: FxHashMap<MemberPath<'db>, PathUses<'db>>,
     unstatable: &mut Vec<Definition<'db>>,
 ) -> Vec<(Definition<'db>, Requirement<'db>)> {
+    let handed_on: FxHashSet<MemberPath<'db>> = uses
+        .iter()
+        .filter(|(_, path_uses)| path_uses.handed_on)
+        .map(|(path, _)| path.clone())
+        .collect();
     let mut uses: Vec<_> = uses.into_iter().collect();
     uses.sort_by_key(|(path, _)| std::cmp::Reverse(path.members.len()));
 
@@ -1030,16 +1043,26 @@ fn path_bounds<'db>(
         let mut through_syntax = Vec::new();
         for (name, uses) in path_uses.members {
             // a member the body never constrained is one nothing is known about, and the
-            // way to say that is a gradual type. `object` would be a stronger claim than
-            // the source made — it does not describe the value, it forbids every use of
+            // way to say that is usually a gradual type. `object` would be a stronger claim
+            // than the source made — it does not describe the value, it forbids every use of
             // it, and that travels: the member's type becomes the function's own return
             // type, so an unannotated helper's result reached callers unusable. reading
             // `yaml.safe_load(fp)` as `object` made `config["plugins"]` an error, and no
             // annotation could take it back — `object` is not assignable to `dict`
-            let value = resolved
-                .get(&path.member(&name))
-                .copied()
-                .unwrap_or_else(Type::unknown);
+            //
+            // an attribute whose value the body only ever discarded or tested is the
+            // exception: nothing the function produces can carry its type anywhere, so
+            // `object` is exactly what the body asked of it — `_ = x.foo` asks only that
+            // `foo` be readable. a method's result stays gradual even then, since a call
+            // statement whose result is not gradual is one `unused-return-value` reports
+            let member_path = path.member(&name);
+            let value = resolved.get(&member_path).copied().unwrap_or_else(|| {
+                if uses.calls.is_empty() && !handed_on.contains(&member_path) {
+                    Type::object()
+                } else {
+                    Type::unknown()
+                }
+            });
             let member = if uses.calls.is_empty() {
                 InlineProtocolMember::ReadOnlyAttribute(value)
             } else {
@@ -1184,7 +1207,8 @@ fn record_captured_names(stmt: &Stmt, into: &mut FxHashSet<Name>) {
 }
 
 fn record_captured_names_in_expr(expr: &Expr, into: &mut FxHashSet<Name>) {
-    walk_expr(&mut CapturedNames(into), expr);
+    // visited rather than walked, so a body that is itself a name, `lambda: y`, is recorded
+    CapturedNames(into).visit_expr(expr);
 }
 
 /// What the place a value is being read into says the value has to be.
@@ -1196,10 +1220,15 @@ fn record_captured_names_in_expr(expr: &Expr, into: &mut FxHashSet<Name>) {
 /// costs a bound rather than inventing a requirement that does not hold.
 #[derive(Debug, Clone, Copy)]
 enum Sink<'db> {
-    /// the place takes whatever it is handed — an expression statement's value, a `bool` test, an
-    /// argument to a parameter typed `object` — so nothing about it has to be recorded for the
-    /// body to go on checking
+    /// the place takes whatever it is handed — an argument to a parameter typed `object`, the
+    /// value of an inferred return — so nothing about it has to be recorded for the body to go on
+    /// checking. the value is still handed on, so its type can reach something the function
+    /// produces
     Anything,
+    /// the place takes whatever it is handed and keeps none of it — an expression statement's
+    /// value, a `bool` test, a local that carries the value's uses itself. nothing the function
+    /// produces can depend on the value's type
+    Discarded,
     /// the place says what it holds, and says it in something a call site could be asked for
     Required(Type<'db>),
 }
@@ -1467,11 +1496,9 @@ where
         self.reads_into(expr, Sink::Anything);
     }
 
-    /// Say that each of `exprs` sits in a position that asks nothing.
-    fn all_accounted_for<'e>(&mut self, exprs: impl IntoIterator<Item = &'e Expr>) {
-        for expr in exprs {
-            self.accounted_for(expr);
-        }
+    /// say that `expr`'s position asks nothing of the value written there, and keeps none of it
+    fn discarded(&mut self, expr: &Expr) {
+        self.reads_into(expr, Sink::Discarded);
     }
 
     /// Whether `call` still binds when the argument written at `range` is `object`.
@@ -1597,8 +1624,10 @@ where
         parts: impl IntoIterator<Item = &'e Expr>,
         sink: Option<Sink<'db>>,
     ) {
-        if matches!(sink, Some(Sink::Anything)) {
-            self.all_accounted_for(parts);
+        if let Some(sink @ (Sink::Anything | Sink::Discarded)) = sink {
+            for part in parts {
+                self.reads_into(part, sink);
+            }
         }
     }
 
@@ -1902,7 +1931,7 @@ where
             // the value of an expression statement is thrown away, so the statement asks nothing
             // of it
             Stmt::Expr(expr) => {
-                self.accounted_for(&expr.value);
+                self.discarded(&expr.value);
                 walk_stmt(self, stmt);
             }
 
@@ -1915,7 +1944,7 @@ where
                     && self.bind_local(target, path)
                 {
                     // the name carries every use below it, so the assignment itself asks nothing
-                    self.accounted_for(&assign.value);
+                    self.discarded(&assign.value);
                 }
                 for target in &assign.targets {
                     match target {
@@ -2029,24 +2058,24 @@ where
 
             // a test is read for its truth, which every object answers
             Stmt::If(if_stmt) => {
-                self.accounted_for(&if_stmt.test);
+                self.discarded(&if_stmt.test);
                 for clause in &if_stmt.elif_else_clauses {
                     if let Some(test) = &clause.test {
-                        self.accounted_for(test);
+                        self.discarded(test);
                     }
                 }
                 walk_stmt(self, stmt);
             }
 
             Stmt::While(while_stmt) => {
-                self.accounted_for(&while_stmt.test);
+                self.discarded(&while_stmt.test);
                 walk_stmt(self, stmt);
             }
 
             Stmt::Assert(assert) => {
-                self.accounted_for(&assert.test);
+                self.discarded(&assert.test);
                 if let Some(message) = assert.msg.as_deref() {
-                    self.accounted_for(message);
+                    self.discarded(message);
                 }
                 walk_stmt(self, stmt);
             }
@@ -2074,6 +2103,11 @@ where
         // a sink belongs to the expression it was set for; whatever is nested inside it is
         // read into somewhere else, or nowhere
         let sink = self.sinks.remove(&expr.range());
+        if matches!(sink, Some(Sink::Anything))
+            && let Some(path) = self.path(expr)
+        {
+            self.uses.entry(path).or_default().handed_on = true;
+        }
         match sink {
             Some(Sink::Required(required)) => {
                 // a name that stands for a tracked value carries the requirement itself. a value
@@ -2089,7 +2123,7 @@ where
                     self.mark_narrowed(expr);
                 }
             }
-            Some(Sink::Anything) => {}
+            Some(Sink::Anything | Sink::Discarded) => {}
             // nothing above accounted for this expression, so whatever tracked value it reads was
             // used in a way this analysis cannot state
             None => self.cannot_state(expr),
@@ -2297,7 +2331,7 @@ where
             }
 
             Expr::If(ternary) => {
-                self.accounted_for(&ternary.test);
+                self.discarded(&ternary.test);
                 self.hands_on(&ternary.body, sink);
                 self.hands_on(&ternary.orelse, sink);
             }
