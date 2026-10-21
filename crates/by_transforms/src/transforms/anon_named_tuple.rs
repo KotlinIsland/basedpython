@@ -43,6 +43,7 @@ use ty_python_semantic::AnonNamedTupleId;
 
 use crate::transforms::callable::CallableSyntax;
 use crate::transforms::generics::PolyfilledTypeParams;
+use crate::transforms::quotes::WrittenQuotes;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::type_info::{AnonNamedTupleConstruction, AnonNamedTupleField, TypeInfo};
 
@@ -98,6 +99,8 @@ impl Shape {
 pub(crate) struct AnonNamedTuple<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    /// where a field type naming something the module binds is written as a string
+    quotes: &'src WrittenQuotes,
     types: &'src dyn TypeInfo,
     config: crate::Config,
     /// One lowerer drives every field type in the run, so its imports and the
@@ -171,6 +174,7 @@ impl<'src> AnonNamedTuple<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         config: crate::Config,
         stmts: &[Stmt],
@@ -179,8 +183,9 @@ impl<'src> AnonNamedTuple<'src> {
             polyfilled: PolyfilledTypeParams::decide(source, written, stmts, &config),
             source,
             written,
+            quotes,
             types,
-            callable: CallableSyntax::new(source, written, &config).with_types(types),
+            callable: CallableSyntax::new(source, written, quotes, &config).with_types(types),
             config,
             edits: Vec::new(),
             shapes: indexmap::IndexMap::new(),
@@ -231,7 +236,7 @@ impl<'src> AnonNamedTuple<'src> {
         // as one
         let forward = renamed != lowered || self.reads_a_module_binding(expr);
         if forward && !lowered.is_empty() {
-            super::auto_quote::quoted_text(&renamed)
+            self.quotes.quote(&renamed)
         } else {
             renamed
         }
@@ -693,6 +698,7 @@ impl<'ast> Visitor<'ast> for AnonNamedTuple<'_> {
 pub(crate) struct AnonNamedTuplePass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     config: crate::Config,
 }
 
@@ -700,11 +706,13 @@ impl<'src> AnonNamedTuplePass<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         config: crate::Config,
     ) -> Self {
         Self {
             source,
             written,
+            quotes,
             config,
         }
     }
@@ -735,8 +743,14 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         types: &dyn TypeInfo,
         ctx: &mut super::ast_driver::PassContext,
     ) {
-        let mut inner =
-            AnonNamedTuple::new(self.source, self.written, types, self.config.clone(), stmts);
+        let mut inner = AnonNamedTuple::new(
+            self.source,
+            self.written,
+            self.quotes,
+            types,
+            self.config.clone(),
+            stmts,
+        );
         inner.annotations_evaluated = ctx.annotations_evaluated;
         for stmt in stmts {
             inner.visit_stmt(stmt);

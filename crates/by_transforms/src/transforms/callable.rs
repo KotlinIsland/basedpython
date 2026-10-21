@@ -33,6 +33,7 @@ use ruff_text_size::{Ranged, TextRange};
 use super::ast_driver::{Lowering, PassContext, TypeAwarePass};
 use super::intersection::{collect_intersect, collect_union, is_intersection_node};
 use super::just_float::rewrite_type_expr_with_imports;
+use super::quotes::WrittenQuotes;
 use super::repeated_underscore::{WrittenNames, lowered_callable_parameters};
 use super::type_expr_walker::RootKind;
 use crate::config::{Config, FloatLiteralLowering};
@@ -59,6 +60,8 @@ pub(crate) struct CallableSyntax<'src> {
     source: &'src str,
     /// the module as written, whose names a repeated `_` is numbered around
     written: WrittenNames<'src>,
+    /// where the synthesized protocols' member types are written as strings
+    quotes: &'src WrittenQuotes,
     types: Option<&'src (dyn TypeInfo + 'src)>,
     /// ranges already folded by `symbolic_type_op` (e.g. `1 + typeof d` →
     /// `Literal[3]`). a claimed sub-expression is opaque here: descending into
@@ -115,10 +118,16 @@ struct ProtocolShape {
 }
 
 impl<'src> CallableSyntax<'src> {
-    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: &Config) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
+        config: &Config,
+    ) -> Self {
         Self {
             source,
             written,
+            quotes,
             types: None,
             claimed_ranges: &[],
             owned_typeof: None,
@@ -516,7 +525,7 @@ impl<'src> CallableSyntax<'src> {
                         },
                         _ => name.to_string(),
                     };
-                    let ty = quote_forward_ref(&self.rewrite_or_leaf(&named.value));
+                    let ty = self.quotes.quote(&self.rewrite_or_leaf(&named.value));
                     parts.push(format!("{name}: {ty}"));
                 }
                 Expr::Starred(s) => match s.value.as_ref() {
@@ -526,7 +535,7 @@ impl<'src> CallableSyntax<'src> {
                         // members are emitted one by one
                         match self.unpacked_kwargs(&inner.value) {
                             Some(UnpackedKwargsLowering::TypedDict) => {
-                                let ty = quote_forward_ref(&format!(
+                                let ty = self.quotes.quote(&format!(
                                     "{}[{}]",
                                     self.written.imported("typing", "Unpack"),
                                     self.rewrite_or_leaf(&inner.value)
@@ -544,11 +553,11 @@ impl<'src> CallableSyntax<'src> {
                                 }
                                 for (name, member_ty) in members {
                                     parts
-                                        .push(format!("{name}: {}", quote_forward_ref(&member_ty)));
+                                        .push(format!("{name}: {}", self.quotes.quote(&member_ty)));
                                 }
                             }
                             Some(UnpackedKwargsLowering::ParameterPack) | None => {
-                                let ty = quote_forward_ref(&self.rewrite_or_leaf(&inner.value));
+                                let ty = self.quotes.quote(&self.rewrite_or_leaf(&inner.value));
                                 parts.push(format!("**kwargs: {ty}"));
                             }
                         }
@@ -561,12 +570,13 @@ impl<'src> CallableSyntax<'src> {
                         let unpacks = self.is_unpacked_variadic(&s.value);
                         let inner = self.rewrite_or_leaf(&s.value);
                         let ty =
-                            quote_forward_ref(&if unpacks { format!("*{inner}") } else { inner });
+                            self.quotes
+                                .quote(&if unpacks { format!("*{inner}") } else { inner });
                         parts.push(format!("*args: {ty}"));
                     }
                 },
                 _ => {
-                    let ty = quote_forward_ref(&self.rewrite_or_leaf(arg));
+                    let ty = self.quotes.quote(&self.rewrite_or_leaf(arg));
                     parts.push(format!("{}: {ty}", names[i]));
                 }
             }
@@ -648,11 +658,11 @@ impl<'src> CallableSyntax<'src> {
                     format!(
                         "{}: {}",
                         receiver_parameter_name(ct),
-                        quote_forward_ref(&rendered)
+                        self.quotes.quote(&rendered)
                     )
                 });
                 let params = self.render_protocol_params(ct, false, "self", implicit_receiver);
-                let returns = quote_forward_ref(&self.render_return(ct));
+                let returns = self.quotes.quote(&self.render_return(ct));
                 let shape = ProtocolShape { params, returns };
                 Some(self.class_name_for(shape))
             }
@@ -899,13 +909,6 @@ impl<'src> CallableSyntax<'src> {
     }
 }
 
-/// render a synthesized annotation as a forward-reference string literal so it
-/// is never evaluated at class-body time (the hoisted protocol class precedes
-/// the definitions its annotations mention)
-fn quote_forward_ref(ty: &str) -> String {
-    format!("\"{}\"", ty.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
 /// The synthesized name of a receiver parameter in a protocol `__call__`. The
 /// receiver is unnamed in the surface syntax, so any name works — but a callable
 /// may itself declare a parameter called `_receiver`, and two parameters of the
@@ -965,16 +968,18 @@ fn is_named(expr: &Expr, ident: &str) -> bool {
 /// rendering path, which is what lets one wide edit carry rewrites it subsumes.
 ///
 /// `root` says where the text is written, which decides how a union in it is spelled
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn lower_type_expr_full(
     source: &str,
     written: WrittenNames,
+    quotes: &WrittenQuotes,
     types: &dyn TypeInfo,
     expr: &Expr,
     substitutions: &[(TextRange, String)],
     config: &Config,
     root: RootKind,
 ) -> Option<String> {
-    let mut inner = CallableSyntax::new(source, written, config).with_types(types);
+    let mut inner = CallableSyntax::new(source, written, quotes, config).with_types(types);
     inner.set_evaluated(root == RootKind::Evaluated);
     for (range, name) in substitutions {
         inner.add_substitution(*range, name.clone());
@@ -1091,14 +1096,21 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
 pub(crate) struct CallableSyntaxPass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     config: Config,
 }
 
 impl<'src> CallableSyntaxPass<'src> {
-    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: Config) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
+        config: Config,
+    ) -> Self {
         Self {
             source,
             written,
+            quotes,
             config,
         }
     }
@@ -1167,7 +1179,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
         // `required_imports` / `edits` uses below
         let claimed = ctx.claimed_type_op_ranges.clone();
         let structural_typeof = ctx.structural_typeof_ranges.clone();
-        let mut inner = CallableSyntax::new(self.source, self.written, &self.config)
+        let mut inner = CallableSyntax::new(self.source, self.written, self.quotes, &self.config)
             .with_types(types)
             .with_claimed_ranges(&claimed)
             .with_owned_typeof(&structural_typeof);

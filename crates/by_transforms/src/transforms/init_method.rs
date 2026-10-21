@@ -34,6 +34,7 @@ use super::callable::lower_type_expr_full;
 use super::mutable_defaults::{
     DefaultMarkers, define_markers, parameter_guards, undeclarable_error,
 };
+use super::quotes::WrittenQuotes;
 use super::repeated_underscore::WrittenNames;
 use super::source_util::{PrologueStatement, body_prologue, first_body_statement};
 use super::type_expr_walker::RootKind;
@@ -44,6 +45,7 @@ use crate::type_info::TypeInfo;
 pub(crate) struct InitMethod<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     markers: &'src DefaultMarkers,
     config: Config,
 }
@@ -52,12 +54,14 @@ impl<'src> InitMethod<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         markers: &'src DefaultMarkers,
         config: Config,
     ) -> Self {
         Self {
             source,
             written,
+            quotes,
             markers,
             config,
         }
@@ -69,6 +73,7 @@ impl TypeAwarePass for InitMethod<'_> {
         let mut state = State {
             source: self.source,
             written: self.written,
+            quotes: self.quotes,
             types,
             symbolic_substitutions: ctx.symbolic_substitutions.clone(),
             module_private: types.private_module_symbols().into_iter().collect(),
@@ -131,7 +136,7 @@ fn literal_text(frags: &[Fragment]) -> String {
         .iter()
         .map(|frag| match frag {
             Fragment::Lit(lit) => lit.as_str(),
-            Fragment::Src(_) => "",
+            Fragment::Src(_) | Fragment::Quote(_) => "",
         })
         .collect()
 }
@@ -139,6 +144,8 @@ fn literal_text(frags: &[Fragment]) -> String {
 struct State<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    /// where a synthesized protocol's member types are written as strings
+    quotes: &'src WrittenQuotes,
     types: &'src dyn TypeInfo,
     /// `(range, rendered)` for every symbolic fold in the module. the `__init__`
     /// line is fresh output, so a fold inside a parameter annotation is dropped
@@ -234,6 +241,7 @@ impl State<'_> {
         lower_type_expr_full(
             self.source,
             self.written,
+            self.quotes,
             self.types,
             ann,
             &substitutions,

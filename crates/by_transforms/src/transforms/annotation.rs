@@ -8,6 +8,7 @@ use crate::Config;
 use crate::transforms::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::transforms::callable::CallableSyntax;
 use crate::transforms::optional_type;
+use crate::transforms::quotes::WrittenQuotes;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::{
     Recurse, RootKind, TypeExprVisitor, TypePos, callable_parameter_type, walk_type_positions,
@@ -56,11 +57,12 @@ impl<'src> TupleLiteralType<'src> {
     fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         config: &Config,
         symbolic_substitutions: &'src [(TextRange, String)],
     ) -> Self {
-        let mut leaves = CallableSyntax::new(source, written, config).with_types(types);
+        let mut leaves = CallableSyntax::new(source, written, quotes, config).with_types(types);
         for (range, rendered) in symbolic_substitutions {
             leaves.add_substitution(*range, rendered.clone());
         }
@@ -408,14 +410,21 @@ impl TypeExprVisitor for TupleLiteralType<'_> {
 pub(crate) struct TupleLiteralTypePass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     config: Config,
 }
 
 impl<'src> TupleLiteralTypePass<'src> {
-    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: Config) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
+        config: Config,
+    ) -> Self {
         Self {
             source,
             written,
+            quotes,
             config,
         }
     }
@@ -437,6 +446,7 @@ impl TypeAwarePass for TupleLiteralTypePass<'_> {
         let mut inner = TupleLiteralType::new(
             self.source,
             self.written,
+            self.quotes,
             types,
             &self.config,
             &symbolic_substitutions,

@@ -2018,6 +2018,7 @@ mod tests {
                     .map(|fragment| match fragment {
                         Fragment::Lit(text) => text.clone(),
                         Fragment::Src(range) => source[*range].to_string(),
+                        Fragment::Quote(quoted) => source[quoted.range()].to_string(),
                     })
                     .collect()
             })
@@ -2071,6 +2072,7 @@ mod tests {
                     .map(|fragment| match fragment {
                         Fragment::Lit(text) => text.clone(),
                         Fragment::Src(range) => source[*range].to_string(),
+                        Fragment::Quote(quoted) => source[quoted.range()].to_string(),
                     })
                     .collect()
             })

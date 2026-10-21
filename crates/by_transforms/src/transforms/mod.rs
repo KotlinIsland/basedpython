@@ -64,6 +64,7 @@ pub(crate) mod propagate;
 pub(crate) mod properties;
 pub(crate) mod protocol_type;
 pub(crate) mod python_scopes;
+pub(crate) mod quotes;
 pub(crate) mod raises_clause;
 pub(crate) mod reified_class;
 pub(crate) mod reified_generic;

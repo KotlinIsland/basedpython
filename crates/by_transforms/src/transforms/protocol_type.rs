@@ -43,6 +43,7 @@ use crate::type_info::TypeInfo;
 
 use super::ast_driver::{PassContext, TypeAwarePass};
 use super::callable::CallableSyntax;
+use super::quotes::WrittenQuotes;
 use super::repeated_underscore::{WrittenNames, protocol_method_receiver};
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping};
 
@@ -78,6 +79,7 @@ impl Shape {
 pub(crate) struct ProtocolTypePass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     config: crate::Config,
 }
 
@@ -85,11 +87,13 @@ impl<'src> ProtocolTypePass<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         config: crate::Config,
     ) -> Self {
         Self {
             source,
             written,
+            quotes,
             config,
         }
     }
@@ -98,6 +102,8 @@ impl<'src> ProtocolTypePass<'src> {
 struct ProtocolTypeLowering<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    /// where the member types are written as strings
+    quotes: &'src WrittenQuotes,
     /// One lowerer drives every member type in the run, so its imports and the
     /// `_Callable_*` classes it synthesizes can be collected at the end. The
     /// `callable` pass deliberately does not descend into an inline protocol,
@@ -119,6 +125,7 @@ impl<'src> ProtocolTypeLowering<'src> {
     fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         claimed: &'src [TextRange],
         config: &Config,
@@ -126,7 +133,8 @@ impl<'src> ProtocolTypeLowering<'src> {
         Self {
             source,
             written,
-            callable: CallableSyntax::new(source, written, config)
+            quotes,
+            callable: CallableSyntax::new(source, written, quotes, config)
                 .with_types(types)
                 .with_claimed_ranges(claimed),
             edits: Vec::new(),
@@ -192,7 +200,7 @@ impl<'src> ProtocolTypeLowering<'src> {
         let line = format!(
             "def {name}({params}) -> {returns}: ...",
             name = method.name.id,
-            returns = quote_forward_ref(&returns),
+            returns = self.quotes.quote(&returns),
         );
         Some(self.apply_typevar_renames(method.range(), &line))
     }
@@ -205,7 +213,7 @@ impl<'src> ProtocolTypeLowering<'src> {
                     let Some(name) = named.target.as_name_expr() else {
                         continue;
                     };
-                    let ty = quote_forward_ref(&self.render_type(&named.value));
+                    let ty = self.quotes.quote(&self.render_type(&named.value));
                     // a member that only has to be readable is a getter-only property,
                     // which is how a protocol class body says read-only
                     members.push(if named.is_let {
@@ -318,11 +326,6 @@ impl TypeExprVisitor for ProtocolTypeLowering<'_> {
     }
 }
 
-/// Wrap a rendered member type in a forward-reference string.
-fn quote_forward_ref(ty: &str) -> String {
-    format!("\"{}\"", ty.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
 /// Lowers inline protocols that appear in a value position (`x = protocol(a:
 /// int)`). `protocol(...)` is never valid python wherever it appears, so it has
 /// to be replaced everywhere, not just in the annotation slots the type-position
@@ -376,12 +379,13 @@ impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for TypevarScopeWalker<'_> {
 fn lower<'src>(
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     types: &'src dyn TypeInfo,
     claimed: &'src [TextRange],
     stmts: &[Stmt],
     config: &crate::Config,
 ) -> ProtocolTypeLowering<'src> {
-    let mut inner = ProtocolTypeLowering::new(source, written, types, claimed, config);
+    let mut inner = ProtocolTypeLowering::new(source, written, quotes, types, claimed, config);
     let polyfilled = super::generics::PolyfilledTypeParams::decide(source, written, stmts, config);
     {
         let mut walker = TypevarScopeWalker {
@@ -410,11 +414,12 @@ fn lower<'src>(
 pub(crate) fn cleanup(
     source: &str,
     written: WrittenNames,
+    quotes: &WrittenQuotes,
     types: &dyn TypeInfo,
     stmts: &[Stmt],
     config: &crate::Config,
 ) -> Result<Option<(Vec<Fix>, String)>, String> {
-    let mut inner = lower(source, written, types, &[], stmts, config);
+    let mut inner = lower(source, written, quotes, types, &[], stmts, config);
     if let Some(error) = inner.errors.first() {
         return Err(error.clone());
     }
@@ -479,6 +484,7 @@ impl TypeAwarePass for ProtocolTypePass<'_> {
         let mut inner = lower(
             self.source,
             self.written,
+            self.quotes,
             types,
             &claimed,
             stmts,

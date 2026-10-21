@@ -27,6 +27,58 @@ use interpreters::Interpreter;
 /// a soundness check in a function on a class the module imports further down is made once
 /// the import has run. the import is deferred, so the name is not in the module's namespace
 /// then, and the check asks the module's `_LazyFrom` whether its statement has run
+/// a forward reference the transpiler quotes in a type argument whose generic comes from a
+/// sibling module. the quote reads `JSONDecoder` when something asks for the type, against the
+/// module's namespace, so the import is bound where it is written however the module that
+/// declares `Box` is resolved
+const QUOTED_THROUGH_A_SIBLING: &[(&str, &str)] = &[
+    (
+        "/by_boxes_mod.by",
+        r#"
+class Box[T]:
+    pass
+"#,
+    ),
+    (
+        "/main.by",
+        r#"
+import typing
+from json import JSONDecoder
+from by_boxes_mod import Box
+
+Alias = Box[F | JSONDecoder]
+
+def h(x: Alias):
+    pass
+
+class F:
+    pass
+
+hints = typing.get_type_hints(h)
+assert typing.get_args(hints["x"]) == (F | JSONDecoder,), hints
+print("ok")
+"#,
+    ),
+];
+
+/// the classes a lowering hoists ahead of the module write a field type naming one of the
+/// module's imports as a string, which reads the import when something asks for the field's
+/// type, so the import is bound where it is written
+const HOISTED_FIELDS: &str = r#"
+import typing
+from json import JSONDecoder, JSONEncoder
+
+Pair = list[(first: JSONDecoder, count: int)]
+Shaped = list[protocol(encoder: JSONEncoder)]
+
+def hints(alias: object) -> dict[str, object]:
+    return typing.get_type_hints(typing.get_args(alias)[0])
+
+assert hints(Pair)["first"] == JSONDecoder, hints(Pair)
+assert hints(Shaped)["encoder"] == JSONEncoder, hints(Shaped)
+print("ok")
+"#;
+
 const ONCE_BOUND: &[(&str, &str)] = &[
     (
         "/by_once_mod.by",
@@ -1005,6 +1057,50 @@ fn a_check_on_a_deferred_class_is_made_once_its_import_has_run() {
         let relative = path.trim_start_matches('/').replace(".by", ".py");
         fs::write(dir.join(relative), transpiled).expect("write module");
     }
+    run_main(&python, &dir);
+}
+
+/// transpile each of `files` against a project db holding all of them, into `case`'s directory
+fn build_project(case: &str, files: &[(&str, &str)]) -> PathBuf {
+    let mut db = TestDb::new(ProjectMetadata::new(
+        ruff_python_ast::name::Name::new_static(""),
+        SystemPathBuf::from("/"),
+    ));
+    db.init_program().expect("program init failed");
+    for (path, source) in files {
+        db.write_file(path, source).expect("write file failed");
+    }
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(case);
+    // a stale directory from an earlier run would mask a transpile failure
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create case dir");
+    for (path, _) in files {
+        let file = system_path_to_file(&db, path).expect("file not in db");
+        let transpiled = transpile_typed(&db, file, &Config::default(), None)
+            .unwrap_or_else(|error| panic!("transpile of {path} should succeed: {error}"));
+        let relative = path.trim_start_matches('/').replace(".by", ".py");
+        fs::write(dir.join(relative), transpiled).expect("write module");
+    }
+    dir
+}
+
+#[test]
+fn a_hoisted_class_s_quoted_field_binds_what_it_reads() {
+    let Some(python) = python() else {
+        return;
+    };
+    let dir = build_case("lazy_hoisted_fields", &[("main", HOISTED_FIELDS)]);
+    run_main(&python, &dir);
+}
+
+#[test]
+fn a_quote_in_a_type_argument_of_a_sibling_module_s_generic_binds_what_it_reads() {
+    let Some(python) = python() else {
+        return;
+    };
+    let dir = build_project("lazy_quoted_through_a_sibling", QUOTED_THROUGH_A_SIBLING);
+    let main = fs::read_to_string(dir.join("main.py")).expect("read main");
+    assert!(main.contains("Box[\"F | JSONDecoder\"]"), "{main}");
     run_main(&python, &dir);
 }
 

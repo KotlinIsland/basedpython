@@ -34,6 +34,7 @@ use ruff_python_parser::parse_unchecked_source;
 use ruff_source_file::LineEnding;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
+use super::quotes::WrittenQuotes;
 use super::source_util::preamble_offset;
 use super::{
     annotation, anon_named_tuple, auto_quote, build_stamps, callable, character_type, checked_cast,
@@ -82,6 +83,37 @@ pub(crate) enum SemanticSource<'p> {
 pub(crate) enum Fragment {
     Lit(String),
     Src(TextRange),
+    /// a passthrough written as a string, the forward reference python reads lazily: a
+    /// type expression, with whatever lowers inside it lowered too. what it lowered to is
+    /// recorded, so the names it reads are bound where they are imported. only
+    /// [`WrittenQuotes::quote_span`](super::quotes::WrittenQuotes::quote_span) makes one
+    Quote(super::quotes::QuotedSpan),
+}
+
+impl Fragment {
+    /// the source span this fragment passes through, quoted or not
+    fn passthrough(&self) -> Option<TextRange> {
+        match self {
+            Fragment::Lit(_) => None,
+            Fragment::Src(span) => Some(*span),
+            Fragment::Quote(quoted) => Some(quoted.range()),
+        }
+    }
+}
+
+/// a string delimiter `text` does not already use, to write it as a string literal of
+/// python's that holds exactly `text`
+fn quote_delimiter(text: &str) -> &'static str {
+    ["\"", "'", "\"\"\"", "'''"]
+        .into_iter()
+        .find(|delimiter| {
+            !text.contains(delimiter)
+                && delimiter
+                    .chars()
+                    .next()
+                    .is_none_or(|quote| !text.ends_with(quote))
+        })
+        .unwrap_or("\"")
 }
 
 /// Mutable state shared across every pass during a single transpile.
@@ -385,10 +417,7 @@ enum SubPatch {
 /// whether a template spanning `start..end` only wraps it: its one passthrough
 /// is the whole span, and everything else it emits is text around it
 fn is_wrapper(frags: &[Fragment], start: usize, end: usize) -> bool {
-    let mut passthroughs = frags.iter().filter_map(|frag| match frag {
-        Fragment::Src(range) => Some(range),
-        Fragment::Lit(_) => None,
-    });
+    let mut passthroughs = frags.iter().filter_map(Fragment::passthrough);
     passthroughs
         .next()
         .is_some_and(|range| usize::from(range.start()) == start && usize::from(range.end()) == end)
@@ -427,16 +456,12 @@ fn template_claimees(
             // a boundary insertion at a passthrough's end is left to
             // `apply_within`'s `include_end`, which knows whether an adjacent
             // span will re-emit it
-            let in_src = frags.iter().any(|frag| match frag {
-                Fragment::Lit(_) => false,
-                Fragment::Src(span) => {
-                    let (span_start, span_end) =
-                        (usize::from(span.start()), usize::from(span.end()));
-                    s >= span_start
-                        && e <= span_end
-                        && !(matches!(all[m].2, SubPatch::Relocating(_))
-                            && (s, e) == (span_start, span_end))
-                }
+            let in_src = frags.iter().filter_map(Fragment::passthrough).any(|span| {
+                let (span_start, span_end) = (usize::from(span.start()), usize::from(span.end()));
+                s >= span_start
+                    && e <= span_end
+                    && !(matches!(all[m].2, SubPatch::Relocating(_))
+                        && (s, e) == (span_start, span_end))
             });
             in_own || in_src
         })
@@ -463,6 +488,8 @@ fn rewrites_covered_source(range: TextRange, frags: &[Fragment], source: &str) -
     for frag in frags {
         let piece = match frag {
             Fragment::Lit(text) => text.as_str(),
+            // a quote writes delimiters no source has there
+            Fragment::Quote(_) => return true,
             Fragment::Src(span) => {
                 match source.get(usize::from(span.start())..usize::from(span.end())) {
                     Some(text) => text,
@@ -486,6 +513,7 @@ fn rewrites_covered_source(range: TextRange, frags: &[Fragment], source: &str) -
 /// is charged to that offset in the line table: a hoisted `def` header, an
 /// injected keyword argument, a `nonlocal` line — none of them has a line of
 /// its own, and the construct the edit rewrites is the one they stand for.
+#[expect(clippy::too_many_arguments)]
 fn materialize_fragments(
     out: &mut Replacement,
     frags: &[Fragment],
@@ -494,10 +522,31 @@ fn materialize_fragments(
     contained: &[usize],
     anchor: usize,
     emitted: &mut [bool],
+    record_quote: &dyn Fn(&str),
 ) {
     for (i, frag) in frags.iter().enumerate() {
         match frag {
             Fragment::Lit(s) => out.push_generated(s, anchor),
+            Fragment::Quote(quoted_span) => {
+                let span = quoted_span.range();
+                let mut quoted = Replacement::default();
+                apply_within(
+                    &mut quoted,
+                    source,
+                    usize::from(span.start()),
+                    usize::from(span.end()),
+                    all,
+                    contained,
+                    true,
+                    emitted,
+                    record_quote,
+                );
+                record_quote(quoted.text());
+                let delimiter = quote_delimiter(quoted.text());
+                out.push_generated(delimiter, anchor);
+                out.append(&quoted);
+                out.push_generated(delimiter, anchor);
+            }
             Fragment::Src(span) => {
                 // a zero-width insertion at this span's end is normally deferred
                 // to the *next* `Src` span (which re-emits it at its start), so
@@ -520,6 +569,7 @@ fn materialize_fragments(
                     contained,
                     include_end,
                     emitted,
+                    record_quote,
                 );
             }
         }
@@ -545,6 +595,7 @@ fn apply_within(
     contained: &[usize],
     include_end: bool,
     emitted: &mut [bool],
+    record_quote: &dyn Fn(&str),
 ) {
     let mut cursor = s0;
     let mut k = 0;
@@ -570,7 +621,7 @@ fn apply_within(
                     .copied()
                     .filter(|&m| all[m].0 >= s && all[m].1 <= e && all[m].0 != e)
                     .collect();
-                materialize_fragments(out, frags, source, all, &inner, s, emitted);
+                materialize_fragments(out, frags, source, all, &inner, s, emitted, record_quote);
             }
         }
         cursor = cursor.max(e);
@@ -594,6 +645,7 @@ fn splice(
     sub_edits: Vec<(usize, usize, SubPatch)>,
     origins: Vec<Vec<usize>>,
     authors: &[Author],
+    record_quote: &dyn Fn(&str),
 ) -> (Vec<(usize, usize, Replacement)>, Vec<String>) {
     let mut edits: Vec<(usize, usize, Replacement)> = Vec::new();
     let mut emitted = vec![false; sub_edits.len()];
@@ -731,6 +783,7 @@ fn splice(
                                 &contained,
                                 start,
                                 &mut emitted,
+                                record_quote,
                             );
                         }
                     }
@@ -762,6 +815,7 @@ fn splice(
                     &contained,
                     start,
                     &mut emitted,
+                    record_quote,
                 );
                 out
             }
@@ -1181,6 +1235,7 @@ fn merge_from_imports(lines: Vec<String>) -> (Vec<String>, Vec<String>) {
 pub(crate) fn run_against_source<'a>(
     source: &'a str,
     written: repeated_underscore::WrittenNames,
+    quotes: &WrittenQuotes,
     config: &Config,
     project: SemanticSource<'_>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>) {
@@ -1373,9 +1428,14 @@ pub(crate) fn run_against_source<'a>(
     );
     let unique_loop_bindings_pass =
         unique_loop_bindings::UniqueLoopBindingsPass::new(source_ref, config.unique_loop_bindings);
-    let auto_quote_pass = auto_quote::AutoQuote::new(source_ref);
-    let init_method_pass =
-        init_method::InitMethod::new(source_ref, written, &default_markers, config.clone());
+    let auto_quote_pass = auto_quote::AutoQuote { quotes };
+    let init_method_pass = init_method::InitMethod::new(
+        source_ref,
+        written,
+        quotes,
+        &default_markers,
+        config.clone(),
+    );
     let properties_pass = properties::PropertiesPass::new(
         source_ref,
         written,
@@ -1415,6 +1475,7 @@ pub(crate) fn run_against_source<'a>(
     let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass::new(
         source_ref,
         written,
+        quotes,
         config.clone(),
         parsed_handle.suite(),
         &semantic_model,
@@ -1441,12 +1502,13 @@ pub(crate) fn run_against_source<'a>(
     );
     let template_type_pass = template_type::TemplateTypePass { written };
     let tuple_types_pass =
-        annotation::TupleLiteralTypePass::new(source_ref, written, config.clone());
+        annotation::TupleLiteralTypePass::new(source_ref, written, quotes, config.clone());
     let literal_types_pass =
         literal_types::LiteralTypePass::new(source_ref, written, config.float_literals);
-    let callable_pass = callable::CallableSyntaxPass::new(source_ref, written, config.clone());
+    let callable_pass =
+        callable::CallableSyntaxPass::new(source_ref, written, quotes, config.clone());
     let protocol_type_pass =
-        protocol_type::ProtocolTypePass::new(source_ref, written, config.clone());
+        protocol_type::ProtocolTypePass::new(source_ref, written, quotes, config.clone());
     let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref, &comments);
     let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);
     let flexible_keyword_pass = flexible_keyword::FlexibleKeywordPass;
@@ -1456,12 +1518,10 @@ pub(crate) fn run_against_source<'a>(
     let optional_type_pass =
         optional_type::OptionalTypePass::new(source_ref, written, config.min_version);
     let runtime_union_pass = runtime_union::RuntimeUnionPass::new(written, config.min_version);
-    let generics_pass = generics::GenericPolyfillPass::new(source_ref, written, config.clone());
+    let generics_pass =
+        generics::GenericPolyfillPass::new(source_ref, written, quotes, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, written, config);
-    let checked_cast_pass = checked_cast::CheckedCastPass {
-        source: source_ref,
-        written,
-    };
+    let checked_cast_pass = checked_cast::CheckedCastPass { written, quotes };
     let module_api_pass = module_api::ModuleApiPass::new(source_ref);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let if_let_pass = if_let::IfLetPass::new(source_ref);
@@ -1479,7 +1539,7 @@ pub(crate) fn run_against_source<'a>(
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
     let anon_named_tuple_pass =
-        anon_named_tuple::AnonNamedTuplePass::new(source_ref, written, config.clone());
+        anon_named_tuple::AnonNamedTuplePass::new(source_ref, written, quotes, config.clone());
 
     // Order matters: passes that read source ranges via `text_edits` mode
     // must run BEFORE passes that mutate the AST (which zero source ranges
@@ -2139,7 +2199,13 @@ pub(crate) fn run_against_source<'a>(
             )
         }))
         .collect();
-    let (spliced, lost) = splice(source_ref, sub_edits, origins, &authorship.authors);
+    let (spliced, lost) = splice(
+        source_ref,
+        sub_edits,
+        origins,
+        &authorship.authors,
+        &|quoted| quotes.record(quoted),
+    );
     edits.extend(spliced);
     ctx.errors.extend(lost);
     // line table for the spliced body, built from the ascending edit list
@@ -2276,7 +2342,7 @@ mod driver_tests {
             SubPatch::Text(edit.1.to_owned()),
         ));
         let origins = vec![Vec::new(); sub_edits.len()];
-        splice(source, sub_edits, origins, &[]).1
+        splice(source, sub_edits, origins, &[], &|_| {}).1
     }
 
     /// the call of `stmt`, an assignment of one
@@ -2379,6 +2445,7 @@ mod driver_tests {
             sub_edits,
             vec![vec![0], vec![1]],
             &[writer, inserter],
+            &|_| {},
         )
         .1
     }
@@ -2428,7 +2495,7 @@ mod driver_tests {
             (6, 7, SubPatch::Text(" | None".to_owned())),
         ];
         let authors = [author(None, &[]), author(Some(Lowering::OptionalType), &[])];
-        let errors = splice(source, sub_edits, vec![vec![0], vec![1]], &authors).1;
+        let errors = splice(source, sub_edits, vec![vec![0], vec![1]], &authors, &|_| {}).1;
         assert_eq!(errors, Vec::<String>::new());
     }
 
@@ -2438,6 +2505,7 @@ mod driver_tests {
         let (out, _, _) = run_against_source(
             src,
             repeated_underscore::WrittenNames::new(src),
+            &WrittenQuotes::default(),
             &Config::test_default(),
             SemanticSource::Fresh(ruff_python_ast::PythonVersion::latest_ty()),
         );
@@ -2480,7 +2548,16 @@ mod driver_tests {
             Fragment::Lit("Y".to_owned()),
         ];
         let mut out = Replacement::default();
-        materialize_fragments(&mut out, &frags, source, &all, &[0], 0, &mut [false]);
+        materialize_fragments(
+            &mut out,
+            &frags,
+            source,
+            &all,
+            &[0],
+            0,
+            &mut [false],
+            &|_| {},
+        );
         assert_eq!(out.text(), "[1])Y");
     }
 
@@ -2496,7 +2573,16 @@ mod driver_tests {
             Fragment::Src(TextRange::new(TextSize::from(3u32), TextSize::from(4u32))),
         ];
         let mut out = Replacement::default();
-        materialize_fragments(&mut out, &frags, source, &all, &[0], 0, &mut [false]);
+        materialize_fragments(
+            &mut out,
+            &frags,
+            source,
+            &all,
+            &[0],
+            0,
+            &mut [false],
+            &|_| {},
+        );
         assert_eq!(out.text(), "[1])W");
     }
 }

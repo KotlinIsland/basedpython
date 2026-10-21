@@ -8,6 +8,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::config::Config;
 use crate::transforms::callable::lower_type_expr_full;
+use crate::transforms::quotes::WrittenQuotes;
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::type_expr_walker::RootKind;
 use crate::type_info::TypeInfo;
@@ -21,6 +22,8 @@ use ruff_python_ast::PythonVersion;
 pub(crate) struct GenericPolyfill<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    /// where a bound read through the classes it stands in is written as a string
+    quotes: &'src WrittenQuotes,
     types: &'src dyn TypeInfo,
     config: Config,
     edits: Vec<Fix>,
@@ -208,9 +211,11 @@ struct ProcessedTypeParams {
 }
 
 impl<'src> GenericPolyfill<'src> {
+    #[expect(clippy::too_many_arguments)]
     fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         config: Config,
         symbolic_substitutions: Vec<(TextRange, String)>,
@@ -221,6 +226,7 @@ impl<'src> GenericPolyfill<'src> {
         Self {
             source,
             written,
+            quotes,
             types,
             config,
             edits: Vec::new(),
@@ -427,6 +433,7 @@ impl<'src> GenericPolyfill<'src> {
         let rendered = lower_type_expr_full(
             self.source,
             self.written,
+            self.quotes,
             self.types,
             default,
             &self.subsume_within(default.range()),
@@ -483,12 +490,13 @@ impl<'src> GenericPolyfill<'src> {
     ) -> ProcessedTypeParams {
         // a bound that reads a class's name through the class is written ahead of the class,
         // so it is a string, which `TypeVar` keeps as a forward reference
+        let quotes = self.quotes;
         let through_classes = |text: String| {
             let read_through = apply_renames_to_rendered(&text, qualified);
             if read_through == text {
                 text
             } else {
-                super::source_util::python_string_literal(&read_through)
+                quotes.quote(&read_through)
             }
         };
         let mut generic_args: Vec<String> = Vec::new();
@@ -579,6 +587,7 @@ impl<'src> GenericPolyfill<'src> {
                                 lower_type_expr_full(
                                     self.source,
                                     self.written,
+                                    self.quotes,
                                     self.types,
                                     bound,
                                     &self.subsume_within(bound.range()),
@@ -1086,6 +1095,7 @@ impl<'src> GenericPolyfill<'src> {
         let value_src = lower_type_expr_full(
             self.source,
             self.written,
+            self.quotes,
             self.types,
             &alias.value,
             &substitutions,
@@ -2054,14 +2064,21 @@ fn names_read(expr: &Expr) -> Vec<&str> {
 pub(crate) struct GenericPolyfillPass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     config: Config,
 }
 
 impl<'src> GenericPolyfillPass<'src> {
-    pub(crate) fn new(source: &'src str, written: WrittenNames<'src>, config: Config) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
+        config: Config,
+    ) -> Self {
         Self {
             source,
             written,
+            quotes,
             config,
         }
     }
@@ -2097,6 +2114,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
         let mut inner = GenericPolyfill::new(
             self.source,
             self.written,
+            self.quotes,
             types,
             self.config.clone(),
             ctx.symbolic_substitutions.clone(),

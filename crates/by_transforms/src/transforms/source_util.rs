@@ -36,13 +36,11 @@ pub(crate) fn standalone_expression(source: &str, range: TextRange) -> Vec<Fragm
 
 /// [`standalone_expression`] as text, for a pass that writes its edits as text
 pub(crate) fn standalone_expression_text(source: &str, range: TextRange) -> String {
-    standalone_expression(source, range)
-        .iter()
-        .map(|fragment| match fragment {
-            Fragment::Lit(text) => text.as_str(),
-            Fragment::Src(span) => &source[*span],
-        })
-        .collect()
+    if source[range].contains(['\n', '\r']) {
+        format!("({})", &source[range])
+    } else {
+        source[range].to_owned()
+    }
 }
 
 /// Whether `expr`, written as it is, has to be parenthesized to stand as one argument

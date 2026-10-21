@@ -548,6 +548,33 @@ pub(crate) fn annotation_names(suite: &[Stmt], source: &str) -> Vec<String> {
     names.read
 }
 
+/// every name the type expressions in `quotes` read: the forward references the lowering
+/// wrote as strings, each by the text inside its quotes
+///
+/// python evaluates such a string against the module's namespace whenever something asks for
+/// the type, so a name in it is bound where it is imported. the lowering records each quote as
+/// it writes it, with whatever lowered inside it lowered, so a name a lowering wrote into one —
+/// a hoisted class, a `typing` form — is read as surely as one the source spelled. a string
+/// inside the type, a literal's, is a value and names nothing
+pub(crate) fn forward_reference_names(quotes: &[String]) -> Vec<String> {
+    struct Names(Vec<String>);
+    impl<'a> Visitor<'a> for Names {
+        fn visit_expr(&mut self, expr: &'a ruff_python_ast::Expr) {
+            if let ruff_python_ast::Expr::Name(name) = expr {
+                self.0.push(name.id.to_string());
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut names = Names(Vec::new());
+    for quote in quotes {
+        if let Ok(parsed) = ruff_python_parser::parse_expression(quote) {
+            names.visit_expr(parsed.expr());
+        }
+    }
+    names.0
+}
+
 /// The names every decorator in `suite` reads, which are bound eagerly.
 ///
 /// A decorator is the other thing read by identity rather than by value. `typing.overload`
@@ -1554,6 +1581,25 @@ mod tests {
         assert!(
             out.contains("_lazy_from(_by_lazy, \"json\", {\"JSONDecoder\": \"JSONDecoder\"})"),
             "{out}"
+        );
+    }
+
+    /// every name a recorded quote reads is collected, and a string inside one is a value
+    #[test]
+    fn forward_reference_names_reads_every_name_a_quote_reads() {
+        let quotes = [
+            "A".to_owned(),
+            "B | None".to_owned(),
+            "Callable[[C], D]".to_owned(),
+            "tuple[E, Literal[\"NotAName\"]]".to_owned(),
+            "not an expression(".to_owned(),
+        ];
+        let mut names = super::forward_reference_names(&quotes);
+        names.sort();
+        names.dedup();
+        assert_eq!(
+            names,
+            ["A", "B", "C", "Callable", "D", "E", "Literal", "tuple"]
         );
     }
 
