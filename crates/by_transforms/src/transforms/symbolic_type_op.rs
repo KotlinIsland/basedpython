@@ -32,9 +32,7 @@ use ruff_text_size::{Ranged, TextRange};
 use super::ast_driver::{AstPass, PassContext};
 use super::literal_types::float_literal_spelling;
 use super::repeated_underscore::WrittenNames;
-use super::type_expr_walker::{
-    Recurse, TypeExprVisitor, TypePos, walk_one_type_expr, walk_type_positions,
-};
+use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 use crate::PythonVersion;
 use crate::config::FloatLiteralLowering;
 use crate::type_info::TypeInfo;
@@ -115,6 +113,12 @@ struct FoldCollector<'a> {
 }
 
 impl TypeExprVisitor for FoldCollector<'_> {
+    /// a type one lowering writes whole writes the folds found inside it too: `(str, *(int,
+    /// str) * n)`, `((int, str) * 2) -> str`, `{"a": 1 + 1}`
+    fn descends_into_wholly_lowered(&self) -> bool {
+        true
+    }
+
     fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
         // which nodes are symbolic operations to fold:
         // - binary ops other than `|` (union) and `&` (intersection), which
@@ -158,19 +162,6 @@ impl TypeExprVisitor for FoldCollector<'_> {
             // type parameter's bound — python cannot express the dependency on `T`, and
             // the bound's member type is the guarantee every specialization satisfies
             Expr::Attribute(_) => self.types.is_attribute_type(expr),
-            // the shared walker stops at a tuple type, which `annotation` lowers as a
-            // whole, carrying the folds found inside it: `(str, *(int, str) * n)`
-            Expr::Tuple(tuple) if !tuple.is_anon_named_tuple => {
-                for element in &tuple.elts {
-                    let element = match element {
-                        Expr::Starred(starred) => starred.value.as_ref(),
-                        Expr::Named(named) => named.value.as_ref(),
-                        element => element,
-                    };
-                    walk_one_type_expr(element, self);
-                }
-                return Recurse::Stop;
-            }
             _ => false,
         };
         if !foldable {
@@ -735,6 +726,38 @@ mod tests {
                 x: tuple[bytes, Unpack[tuple[int | str, ...]], bytes]
             "},
         );
+    }
+
+    /// a callable arrow is lowered whole, by one wide edit, and the fold inside it is written
+    /// there
+    #[test]
+    fn a_fold_inside_a_callable_arrow() {
+        check(
+            "x: ((int, str) * 2) -> 1 + 1\n",
+            indoc! {"
+                from typing import Callable, Literal
+                x: Callable[[tuple[int, str, int, str]], Literal[2]]
+            "},
+        );
+    }
+
+    /// the types a synthesized class declares are written in its body, which no edit of the
+    /// annotation reaches, so a fold among them is written there by the class
+    #[test]
+    fn a_fold_inside_a_synthesized_class() {
+        for (source, field) in [
+            ("x: (n: int) -> 1 + 1\n", "-> \"Literal[2]\""),
+            ("x: protocol(n: 1 + 1)\n", "    n: \"Literal[2]\"\n"),
+            ("x: protocol(def m(self) -> 1 + 1)\n", "-> \"Literal[2]\""),
+            ("x: {\"n\": 1 + 1}\n", "    n: \"Literal[2]\"\n"),
+            ("x: (n: 1 + 1, m: int)\n", "    n: Literal[2]\n"),
+        ] {
+            let out = transpile(source, &Config::test_default()).unwrap();
+            assert!(
+                out.contains(field) && !out.contains("1 + 1"),
+                "{source}got:\n{out}"
+            );
+        }
     }
 
     #[test]

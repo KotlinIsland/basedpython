@@ -23,6 +23,16 @@ method context (it pulls the enclosing class from the `__class__` cell), so
 `super.x` outside a method is a runtime error — exactly like the python it
 lowers to
 
+the keyword is the base of an attribute access, and it is the builtin `super`
+there even where the module binds the name to something else. read anywhere
+else, `super` is the name as python reads it:
+
+```by
+class B(A):
+    def f(self, super: int):
+        super.greet(super)  # the builtin's `greet`, passed the parameter
+```
+
 ## targeted form — `super[T].x`
 
 `super[T].x` resolves `x` against the MRO entry that **precedes** `T` in the

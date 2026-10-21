@@ -4,10 +4,11 @@
 //! Each unique shape (field-name + field-type-source tuple) is hoisted to a
 //! single class definition and reused across all occurrences. Identical shapes
 //! across the module collapse to one class so structural equivalence is
-//! preserved at the type level.
-//!
-//! a plain tuple literal the checker reads as an instance of an anonymous named
-//! tuple — one standing wherever one is expected — is constructed as its class
+//! preserved at the type level. The type forms are named by
+//! [`synthesized_types`](super::synthesized_types), with the other kinds of type
+//! that lower to a class; this pass writes those names, the value forms
+//! `(name=v, ...)`, and a call of the class around each plain tuple literal the
+//! checker took for one.
 //!
 //! Example:
 //! ```by
@@ -36,15 +37,13 @@ use std::fmt::Write as _;
 use std::hash::Hash;
 
 use ruff_diagnostics::{Edit, Fix};
-use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt};
+use ruff_python_ast::Expr;
+use ruff_python_ast::visitor::{Visitor, walk_expr};
 use ruff_text_size::Ranged;
 use ty_python_semantic::AnonNamedTupleId;
 
-use crate::transforms::callable::CallableSyntax;
-use crate::transforms::generics::PolyfilledTypeParams;
-use crate::transforms::quotes::WrittenQuotes;
 use crate::transforms::repeated_underscore::WrittenNames;
+use crate::transforms::synthesized_types::{Namer, SynthesizedKind, SynthesizedTypes};
 use crate::type_info::{AnonNamedTupleConstruction, AnonNamedTupleField, TypeInfo};
 
 /// Synthetic field name for the i-th positional element of a mixed
@@ -76,18 +75,18 @@ fn first_duplicate_name(fields: &[(String, String)]) -> Option<&str> {
 
 /// One anonymous named tuple shape: ordered list of `(field_name, type_source)`.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
-struct Shape {
+pub(crate) struct Shape {
     fields: Vec<(String, String)>,
 }
 
 impl Shape {
     /// the name of the class declaring this shape, one the module has no other use of
-    fn class_name(&self, written: WrittenNames) -> String {
+    pub(crate) fn class_name(&self, written: WrittenNames) -> String {
         written.synthesized_class("_AnonNamedTuple_", self)
     }
 
     /// the class declaring this shape as `name`, `typing.NamedTuple` written as `named_tuple`
-    fn class_def(&self, name: &str, named_tuple: &str) -> String {
+    pub(crate) fn class_def(&self, name: &str, named_tuple: &str) -> String {
         let mut out = format!("class {name}({named_tuple}):\n");
         for (field_name, field_type) in &self.fields {
             let _ = writeln!(out, "    {field_name}: {field_type}");
@@ -96,30 +95,110 @@ impl Shape {
     }
 }
 
+/// The shape of a type-form anonymous named tuple (`(name: T, ...)`), each field's type
+/// lowered through the synthesized type namer, which writes a nested typed dict, inline
+/// protocol or named tuple as its class. Positional fields (bare type expressions like `int` in
+/// `(int, name: str)`) are assigned synthetic names `arg0`, `arg1`, … `NamedTuple` disallows
+/// leading-underscore field names, so `argN` is used.
+///
+/// Returns `Err(message)` on hard structural failure (duplicate field
+/// name; collision between a user-named field and a synthetic positional
+/// name). Returns `Ok(None)` only when this isn't an anon-NT type tuple
+/// at all (so the caller can ignore it).
+pub(crate) fn type_shape(
+    namer: &mut Namer,
+    tuple: &ruff_python_ast::ExprTuple,
+) -> Result<Option<Shape>, String> {
+    if !tuple.is_anon_named_tuple {
+        return Ok(None);
+    }
+    let mut fields = Vec::with_capacity(tuple.elts.len());
+    for (i, elt) in tuple.elts.iter().enumerate() {
+        let (name, type_source) = match elt {
+            Expr::Named(named) => {
+                let Expr::Name(name_expr) = named.target.as_ref() else {
+                    return Err(format!(
+                        "anonymous named tuple field name must be an identifier, got `{}`",
+                        namer.src(named.target.range())
+                    ));
+                };
+                let name = name_expr.id.as_str().to_owned();
+                (name, field_type(namer, &named.value))
+            }
+            other => (synth_pos_name(i), field_type(namer, other)),
+        };
+        fields.push((name, type_source));
+    }
+    if let Some(dup) = first_duplicate_name(&fields) {
+        return Err(format!(
+            "anonymous named tuple `{}` has duplicate field name `{}` \
+             (positional fields are assigned synthetic names `arg0`, `arg1`, …; \
+             rename the colliding field)",
+            namer.src(tuple.range()),
+            dup,
+        ));
+    }
+    Ok(Some(Shape { fields }))
+}
+
+/// A field's type as python source.
+///
+/// The class body is hoisted to module scope, ahead of everything the module binds, the generics
+/// polyfill's declarations among them, so a field naming one of those — a type parameter read
+/// by the name the polyfill declares it under, a class defined further down — is a forward
+/// reference there, and the annotation is written as a string.
+fn field_type(namer: &mut Namer, expr: &Expr) -> String {
+    let lowered = namer.lower(expr);
+    let renamed = namer.read_type_parameters(expr.range(), &lowered);
+    let forward = renamed != lowered || reads_a_module_binding(namer.types(), expr);
+    if forward && !lowered.is_empty() {
+        namer.quotes.quote(&renamed)
+    } else {
+        renamed
+    }
+}
+
+/// whether `expr` reads a name the module binds
+fn reads_a_module_binding(types: &dyn TypeInfo, expr: &Expr) -> bool {
+    struct Finder<'a> {
+        types: &'a dyn TypeInfo,
+        found: bool,
+    }
+    impl<'ast> Visitor<'ast> for Finder<'_> {
+        fn visit_expr(&mut self, expr: &'ast Expr) {
+            if let Expr::Name(name) = expr
+                && self.types.is_bound_globally(&name.id)
+            {
+                self.found = true;
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut finder = Finder {
+        types,
+        found: false,
+    };
+    finder.visit_expr(expr);
+    finder.found
+}
+
 pub(crate) struct AnonNamedTuple<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
-    /// where a field type naming something the module binds is written as a string
-    quotes: &'src WrittenQuotes,
     types: &'src dyn TypeInfo,
     config: crate::Config,
-    /// One lowerer drives every field type in the run, so its imports and the
-    /// classes it synthesizes can be collected at the end. A hoisted class body
-    /// leaves the statement the field type was written in, so no sibling
-    /// transform's edit reaches it — the field type has to be lowered here or
-    /// the surface syntax lands in the output verbatim
-    pub(crate) callable: CallableSyntax<'src>,
+    /// every type form's class, named together with the other kinds of synthesized type, whose
+    /// shapes a value form or a coerced tuple of the same shape reuses
+    synthesized: std::rc::Rc<SynthesizedTypes>,
     pub(crate) edits: Vec<Fix>,
     /// Insertion-ordered map of shape → synthesized class name. Visitor
     /// processes nested anonymous-named-tuple expressions before their
     /// containing expression (post-order), so a class is defined before
     /// any later class that references it as a field type
     shapes: indexmap::IndexMap<Shape, String>,
-    /// Source range of every anonymous-named-tuple expression we've assigned
-    /// a synthesized class to (both top-level rewrites and nested ones inside
-    /// other anon-NT field types). Used when rendering a class body to
-    /// substitute inner anon-NT source spans with their class names so the
-    /// emitted `NamedTuple` definition is valid Python.
+    /// Source range of every synthesized type, of whichever kind, and of every value form,
+    /// with the class it names. A value form's arguments are copied from source, so a type
+    /// among them is written as its class.
     ///
     /// Stored as a `Vec` (`TextRange` isn't `Ord`) and walked linearly when
     /// rendering. Inserts append; `render_subbed_value` skips entries that don't
@@ -143,18 +222,6 @@ pub(crate) struct AnonNamedTuple<'src> {
     typing_imports: std::cell::RefCell<std::collections::BTreeSet<String>>,
     /// whether python evaluates the synthesized class's field annotations as it is made
     annotations_evaluated: bool,
-    /// Stack of typevar rename maps (`T` → `_T`) accumulated as the visitor
-    /// descends into PEP 695 generics. Synthesized `NamedTuple` class bodies
-    /// are hoisted to module scope, but the original source text references
-    /// the *unmangled* typevar names. Applying these renames at field-type
-    /// rendering keeps the synthesized class's field annotations pointing at
-    /// the same module-level `_T = TypeVar("_T")` that the generics polyfill
-    /// emits, instead of leaving an unbound `T`.
-    ///
-    /// A list kept as native PEP 695 syntax isn't renamed, so it pushes no frame.
-    typevar_rename_stack: Vec<HashMap<String, String>>,
-    /// the name the generics polyfill declares each type parameter under
-    polyfilled: PolyfilledTypeParams,
     /// the class emitted for each anonymous named tuple the checker identifies, so
     /// that every type form it reads as one type, and every plain tuple literal it
     /// reads as an instance of it, names one class
@@ -174,43 +241,41 @@ impl<'src> AnonNamedTuple<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
-        quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         config: crate::Config,
-        stmts: &[Stmt],
+        synthesized: std::rc::Rc<SynthesizedTypes>,
     ) -> Self {
         Self {
-            polyfilled: PolyfilledTypeParams::decide(source, written, stmts, &config),
             source,
             written,
-            quotes,
             types,
-            callable: CallableSyntax::new(source, written, quotes, &config).with_types(types),
             config,
             edits: Vec::new(),
-            shapes: indexmap::IndexMap::new(),
-            range_to_class: Vec::new(),
+            shapes: synthesized.named_tuples().clone(),
+            // every synthesized type, of whichever kind, is written as its class wherever source
+            // text this copies into the output holds one
+            range_to_class: synthesized.substitutions().collect(),
+            identity_classes: synthesized.named_tuple_identities().collect(),
+            synthesized,
             range_to_value_render: Vec::new(),
             needs_import: false,
             type_only_imports: std::cell::RefCell::default(),
             typing_imports: std::cell::RefCell::default(),
             annotations_evaluated: false,
-            typevar_rename_stack: Vec::new(),
-            identity_classes: HashMap::new(),
             constructions: Vec::new(),
             errors: Vec::new(),
         }
     }
 
-    /// Returns the synthesized class definitions to prepend to the module body,
-    /// in deterministic order. Each shape's field types are rendered from the
-    /// original source text with any nested anonymous-named-tuple regions
-    /// substituted with their synthesized class names so the emitted
-    /// `NamedTuple` definitions are valid Python.
+    /// Returns the class definitions of the shapes only a value form or a coerced tuple has, in
+    /// deterministic order: the synthesized type namer declares every type form's class.
     pub(crate) fn class_defs(&self) -> String {
         let mut out = String::new();
         let named_tuple = self.written.imported("typing", "NamedTuple");
         for (shape, name) in &self.shapes {
+            if self.synthesized.named_tuples().contains_key(shape) {
+                continue;
+            }
             out.push_str(&shape.class_def(name, &named_tuple));
             out.push('\n');
         }
@@ -221,81 +286,10 @@ impl<'src> AnonNamedTuple<'src> {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
-    /// Lower a field's type expression to python source.
-    ///
-    /// The synthesized class body is hoisted out of the statement the field type
-    /// was written in, so a sibling transform's edit never reaches it. Driving
-    /// the shared type-expression lowerer here is what keeps `dynamic`, `T?`,
-    /// `typeof x`, a callable arrow and a nested anonymous named tuple from
-    /// reaching the output as surface syntax.
-    fn render_field_type(&mut self, expr: &Expr) -> String {
-        let lowered = self.callable.lower_type_expr(expr);
-        let renamed = self.apply_typevar_renames(&lowered);
-        // the class is hoisted ahead of everything the module binds, a renamed typevar
-        // among them, so a field naming one is a forward reference there and is quoted
-        // as one
-        let forward = renamed != lowered || self.reads_a_module_binding(expr);
-        if forward && !lowered.is_empty() {
-            self.quotes.quote(&renamed)
-        } else {
-            renamed
-        }
-    }
-
-    /// whether `expr` reads a name the module binds
-    fn reads_a_module_binding(&self, expr: &Expr) -> bool {
-        struct Finder<'a> {
-            types: &'a dyn TypeInfo,
-            found: bool,
-        }
-        impl<'ast> Visitor<'ast> for Finder<'_> {
-            fn visit_expr(&mut self, expr: &'ast Expr) {
-                if let Expr::Name(name) = expr
-                    && self.types.is_bound_globally(&name.id)
-                {
-                    self.found = true;
-                }
-                walk_expr(self, expr);
-            }
-        }
-        let mut finder = Finder {
-            types: self.types,
-            found: false,
-        };
-        finder.visit_expr(expr);
-        finder.found
-    }
-
-    /// Active typevar rename map, flattened from the stack with inner scopes
-    /// shadowing outer ones. Empty when not inside a generic scope or when
-    /// `min_version` is 3.12+ (where PEP 695 stays native and no renames
-    /// are emitted).
-    fn active_typevar_renames(&self) -> HashMap<String, String> {
-        let mut out = HashMap::new();
-        for frame in &self.typevar_rename_stack {
-            out.extend(frame.clone());
-        }
-        out
-    }
-
-    /// Substitute every word-boundary occurrence of a typevar name in
-    /// `text` with its mangled module-scope counterpart. Operates on the
-    /// rendered field-type string so the synthesized `NamedTuple` class
-    /// references the renamed `_T` instead of the original `T`.
-    fn apply_typevar_renames(&self, text: &str) -> String {
-        let renames = self.active_typevar_renames();
-        let borrowed: HashMap<&str, &str> = renames
-            .iter()
-            .map(|(from, to)| (from.as_str(), to.as_str()))
-            .collect();
-        super::source_util::rename_identifiers(text, &borrowed)
-    }
-
-    /// Render `range`'s source with every anonymous named tuple inside it
-    /// substituted: a value form by its constructor call, a type form by its
-    /// class name. Used when an outer anon-NT *value* form is rendering its
-    /// argument list — a nested value form there must call its inner
-    /// constructor, not just reference the inner class.
+    /// Render `range`'s source with each value form inside it written as its constructor call,
+    /// and each synthesized type as its class. Used when an outer anon-NT *value* form
+    /// is rendering its argument list — a nested value form there must call
+    /// its inner constructor, not just reference the inner class.
     fn render_subbed_value(&self, range: ruff_text_size::TextRange) -> String {
         // Combine value-form constructor calls (preferred) with class-name
         // subs for any nested *type* form in the same range. Value renders
@@ -339,54 +333,8 @@ impl<'src> AnonNamedTuple<'src> {
         out
     }
 
-    /// Build a shape from a type-form anonymous named tuple
-    /// (`(name: T, ...)`). Field types come from source text. Positional
-    /// fields (bare type expressions like `int` in `(int, name: str)`) are
-    /// assigned synthetic names `arg0`, `arg1`, … `NamedTuple` disallows
-    /// leading-underscore field names, so `argN` is used.
-    ///
-    /// Returns `Err(message)` on hard structural failure (duplicate field
-    /// name; collision between a user-named field and a synthetic positional
-    /// name). Returns `Ok(None)` only when this isn't an anon-NT type tuple
-    /// at all (so the caller can ignore it).
-    fn extract_type_shape(
-        &mut self,
-        tuple: &ruff_python_ast::ExprTuple,
-    ) -> Result<Option<Shape>, String> {
-        if !tuple.is_anon_named_tuple {
-            return Ok(None);
-        }
-        let mut fields = Vec::with_capacity(tuple.elts.len());
-        for (i, elt) in tuple.elts.iter().enumerate() {
-            let (name, type_source) = match elt {
-                Expr::Named(named) => {
-                    let Expr::Name(name_expr) = named.target.as_ref() else {
-                        return Err(format!(
-                            "anonymous named tuple field name must be an identifier, got `{}`",
-                            self.src(named.target.range())
-                        ));
-                    };
-                    let name = name_expr.id.as_str().to_owned();
-                    (name, self.render_field_type(&named.value))
-                }
-                other => (synth_pos_name(i), self.render_field_type(other)),
-            };
-            fields.push((name, type_source));
-        }
-        if let Some(dup) = first_duplicate_name(&fields) {
-            return Err(format!(
-                "anonymous named tuple `{}` has duplicate field name `{}` \
-                 (positional fields are assigned synthetic names `arg0`, `arg1`, …; \
-                 rename the colliding field)",
-                self.src(tuple.range()),
-                dup,
-            ));
-        }
-        Ok(Some(Shape { fields }))
-    }
-
     /// Build a shape from a value-form anonymous named tuple
-    /// (`(name=v, ...)`). Same conventions as `extract_type_shape`; field
+    /// (`(name=v, ...)`). Same conventions as [`type_shape`]; field
     /// types come from ty's promoted (literal-stripped) inference.
     ///
     /// Returns `Err(message)` on hard structural failure, and on a field whose value has no
@@ -464,42 +412,25 @@ impl<'src> AnonNamedTuple<'src> {
         Ok(Some(Shape { fields }))
     }
 
-    fn class_name_for(
-        &mut self,
-        shape: Shape,
-        source_range: ruff_text_size::TextRange,
-        id: Option<AnonNamedTupleId>,
-    ) -> String {
-        let name = if let Some(existing) = id.and_then(|id| self.identity_classes.get(&id)) {
-            existing.clone()
-        } else {
-            let name = self.shape_class_name(shape);
-            if let Some(id) = id {
-                self.identity_classes.insert(id, name.clone());
-            }
-            name
-        };
-        // Track this anon-NT's source range → class name so any *outer* anon-NT
+    fn class_name_for(&mut self, shape: Shape, source_range: ruff_text_size::TextRange) -> String {
+        let name = self.shape_class_name(shape);
+        // Track this anon-NT's source range → class name so any *outer* value form
         // that contains this one can substitute its source span when rendering
-        // its own field types in the synthesized class body. the lowerer needs
-        // the same table so an outer field type resolves a nested anon-NT at any
-        // depth, not only when it is the whole field type
+        // its own arguments
         self.range_to_class.push((source_range, name.clone()));
-        self.callable.add_substitution(source_range, name.clone());
         name
     }
 
+    /// a type form is replaced with the class the synthesized type namer gave it, which also
+    /// reported any shape that could not be declared
     fn rewrite_type_form(&mut self, tuple: &ruff_python_ast::ExprTuple) {
-        let shape = match self.extract_type_shape(tuple) {
-            Ok(Some(shape)) => shape,
-            Ok(None) => return,
-            Err(msg) => {
-                self.errors.push(msg);
-                return;
-            }
+        let Some(class_name) = self
+            .synthesized
+            .class_at(tuple.range(), SynthesizedKind::NamedTuple)
+            .map(str::to_owned)
+        else {
+            return;
         };
-        let id = self.types.anon_named_tuple_id(tuple);
-        let class_name = self.class_name_for(shape, tuple.range(), id);
         self.needs_import = true;
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
             class_name,
@@ -528,9 +459,7 @@ impl<'src> AnonNamedTuple<'src> {
             };
             value_args.push(self.render_subbed_value(value_expr.range()));
         }
-        // a value form is left out of the checker's identities: its class is the one
-        // its own field values make, which a type form's need not be
-        let class_name = self.class_name_for(shape, tuple.range(), None);
+        let class_name = self.class_name_for(shape, tuple.range());
         self.needs_import = true;
         let constructor_call = format!("{class_name}({})", value_args.join(", "));
         self.range_to_value_render
@@ -539,31 +468,6 @@ impl<'src> AnonNamedTuple<'src> {
             constructor_call,
             tuple.range(),
         )));
-    }
-
-    /// Push the typevar rename frame the generics polyfill gives a `[T, U, ...]`
-    /// type-parameter list. Returns whether a frame was pushed so the caller
-    /// knows to pop. No-op (returns false) for a list kept as native syntax
-    fn push_typevar_scope_from(&mut self, tp: Option<&ruff_python_ast::TypeParams>) -> bool {
-        let Some(frame) = tp.and_then(|tp| self.polyfilled.hoisted_renames(tp)) else {
-            return false;
-        };
-        if frame.is_empty() {
-            return false;
-        }
-        self.typevar_rename_stack.push(frame);
-        true
-    }
-
-    /// Look up the synthesized class name for a nested anon-NT value tuple
-    /// that's already been processed. Relies on the post-order visit:
-    /// children are rewritten first, so by the time the outer extracts its
-    /// shape, the inner's class name is already in `range_to_class`.
-    fn shape_for_value_tuple(&self, inner: &ruff_python_ast::ExprTuple) -> Option<String> {
-        self.range_to_class
-            .iter()
-            .find(|(r, _)| *r == inner.range())
-            .map(|(_, n)| n.clone())
     }
 
     /// the name of the class declaring `shape`, one class per shape
@@ -643,6 +547,17 @@ impl<'src> AnonNamedTuple<'src> {
         self.identity_classes.insert(target.id, class_name.clone());
         Ok(class_name)
     }
+
+    /// Look up the synthesized class name for a nested anon-NT value tuple
+    /// that's already been processed. Relies on the post-order visit:
+    /// children are rewritten first, so by the time the outer extracts its
+    /// shape, the inner's class name is already in `range_to_class`.
+    fn shape_for_value_tuple(&self, inner: &ruff_python_ast::ExprTuple) -> Option<String> {
+        self.range_to_class
+            .iter()
+            .find(|(r, _)| *r == inner.range())
+            .map(|(_, n)| n.clone())
+    }
 }
 
 /// a plain tuple literal to build as an anonymous named tuple
@@ -653,19 +568,6 @@ struct PendingConstruction {
 }
 
 impl<'ast> Visitor<'ast> for AnonNamedTuple<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        let type_params = match stmt {
-            Stmt::FunctionDef(func) => func.type_params.as_deref(),
-            Stmt::ClassDef(cls) => cls.type_params.as_deref(),
-            _ => None,
-        };
-        let pushed = self.push_typevar_scope_from(type_params);
-        walk_stmt(self, stmt);
-        if pushed {
-            self.typevar_rename_stack.pop();
-        }
-    }
-
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Expr::Tuple(tuple) = expr {
             if tuple.is_anon_named_tuple || tuple.is_anon_named_tuple_value {
@@ -698,7 +600,6 @@ impl<'ast> Visitor<'ast> for AnonNamedTuple<'_> {
 pub(crate) struct AnonNamedTuplePass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
-    quotes: &'src WrittenQuotes,
     config: crate::Config,
 }
 
@@ -706,13 +607,11 @@ impl<'src> AnonNamedTuplePass<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
-        quotes: &'src WrittenQuotes,
         config: crate::Config,
     ) -> Self {
         Self {
             source,
             written,
-            quotes,
             config,
         }
     }
@@ -723,18 +622,10 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         Some(super::ast_driver::Lowering::AnonNamedTuple)
     }
 
-    /// a named tuple type it replaces moves into a class, whose field types the shared
-    /// type-expression lowerer prints, a `typeof` among them
+    /// a named tuple type it replaces moves into a class, whose field types the synthesized
+    /// type namer prints
     fn subsumes(&self) -> &'static [super::ast_driver::Lowering] {
-        &[
-            super::ast_driver::Lowering::Callable,
-            super::ast_driver::Lowering::OptionalType,
-            super::ast_driver::Lowering::LiteralType,
-            super::ast_driver::Lowering::JustFloat,
-            super::ast_driver::Lowering::DynamicKeyword,
-            super::ast_driver::Lowering::FloatConst,
-            super::ast_driver::Lowering::Typeof,
-        ]
+        super::synthesized_types::CLASS_BODY
     }
 
     fn run(
@@ -746,10 +637,9 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         let mut inner = AnonNamedTuple::new(
             self.source,
             self.written,
-            self.quotes,
             types,
             self.config.clone(),
-            stmts,
+            ctx.synthesized.clone(),
         );
         inner.annotations_evaluated = ctx.annotations_evaluated;
         for stmt in stmts {
@@ -762,18 +652,13 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         if inner.needs_import {
             ctx.required_imports
                 .push(self.written.import_from("typing", &["NamedTuple"]));
-            // the field lowerer's own classes come first: a field type may name
-            // one. they go in as a single entry so the sort below cannot part
-            // them from the classes that reference them
-            let defs = format!("{}{}", inner.callable.class_defs(), inner.class_defs());
+            // one entry, so the sort of the imports cannot part the classes from each other
+            let defs = inner.class_defs();
             if !defs.is_empty() {
                 let trimmed = defs.trim_end_matches('\n');
                 ctx.required_imports.push(format!("{trimmed}\n"));
             }
         }
-        let (imports, helpers) = inner.callable.take_requirements();
-        ctx.required_imports.extend(imports);
-        ctx.runtime.extend(helpers);
         ctx.type_only_imports.extend(inner.type_only_imports.take());
         ctx.required_imports.extend(inner.typing_imports.take());
         for fix in std::mem::take(&mut inner.edits) {
@@ -886,6 +771,14 @@ mod tests {
                 class F: ...
             "},
         );
+    }
+
+    /// a type alias's own parameter is declared by the polyfill below the class, so the field
+    /// reads it by that name, as a forward reference
+    #[test]
+    fn a_field_of_a_generic_alias_reads_the_declared_name() {
+        let out = transpile("type H[T] = (p: T, q: int)\n", &Config::test_default()).unwrap();
+        assert!(out.contains("    p: \"_T\"\n    q: int\n"), "got:\n{out}");
     }
 
     /// the synthesized class body leaves the statement the field type was
@@ -1538,6 +1431,57 @@ mod tests {
         assert_eq!(occurrences, 1, "expected single class def, got: {out}");
     }
 
+    /// a plain tuple the checker took for an anonymous named tuple is one wherever it stands: a
+    /// call's argument, a parameter's default, an assignment to a declared name, a dict's value,
+    /// under a union. left a plain tuple, `x.name` is an `AttributeError` on a file the checker
+    /// passed
+    #[test]
+    fn a_plain_tuple_is_coerced_wherever_the_checker_expects_the_named_tuple() {
+        let out = transpile(
+            indoc! {"
+                def foo(x: (name: str, age: int) = (\"d\", 0)) -> None: ...
+                foo((\"asdf\", 1))
+                foo(x=(\"b\", 2))
+                y: (name: str, age: int)
+                y = (\"c\", 3)
+                z: dict[str, (name: str, age: int)] = {\"k\": (\"e\", 4)}
+                w: (name: str, age: int) | None = (\"f\", 5)
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        for coerced in [
+            "x = _AnonNamedTuple_7bfb4772(\"d\", 0)",
+            "foo(_AnonNamedTuple_7bfb4772(\"asdf\", 1))",
+            "foo(x=_AnonNamedTuple_7bfb4772(\"b\", 2))",
+            "y = _AnonNamedTuple_7bfb4772(\"c\", 3)",
+            "{\"k\": _AnonNamedTuple_7bfb4772(\"e\", 4)}",
+            "= _AnonNamedTuple_7bfb4772(\"f\", 5)",
+        ] {
+            assert!(out.contains(coerced), "{coerced} in:\n{out}");
+        }
+    }
+
+    /// an assignment's target is no value, whatever the value assigned to it is
+    #[test]
+    fn a_tuple_target_is_not_coerced() {
+        let out = transpile(
+            indoc! {"
+                def f(p: (a: int, b: int)) -> int:
+                    (x, y) = p
+                    for (u, v) in [p]:
+                        pass
+                    return x
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("    (x, y) = p\n") && out.contains("    for (u, v) in [p]:\n"),
+            "got: {out}"
+        );
+    }
+
     #[test]
     fn a_plain_tuple_argument_is_built_as_its_parameter() {
         let out = transpile(
@@ -1571,6 +1515,20 @@ mod tests {
         .unwrap();
         assert_eq!(out.matches("(NamedTuple):").count(), 1, "got: {out}");
         assert!(out.contains("take(_AnonNamedTuple_"), "got: {out}");
+    }
+
+    /// a plain tuple the checker did not take for an anonymous named tuple stays one
+    #[test]
+    fn a_plain_tuple_the_checker_does_not_coerce_stays_plain() {
+        let out = transpile(
+            indoc! {"
+                def foo(x: tuple[str, int]) -> None: ...
+                foo((\"asdf\", 1))
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(out.contains("foo((\"asdf\", 1))"), "got: {out}");
     }
 
     #[test]

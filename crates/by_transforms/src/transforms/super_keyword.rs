@@ -5,6 +5,13 @@
 //! - `super[T].x`    → `super(<C>.__mro__[<C>.__mro__.index(<T>) - 1], <self>).x`
 //!   where `<C>` is the enclosing class name and `<self>` is the first
 //!   parameter name of the enclosing method.
+//!
+//! the keyword is always the builtin `super`, so in a module that binds the name `super`
+//! itself — a parameter, a global — the call reads the builtin under a name of its own
+//! ([`WrittenNames::builtin`]). zero-argument `super()` only works under the name `super`,
+//! which is what has the compiler give the method its `__class__` cell, so the bare form
+//! is then spelled out with the arguments it stands for: `__class__`, which itself has the
+//! compiler make the cell, and the method's first parameter.
 
 use std::cell::RefCell;
 
@@ -29,6 +36,7 @@ impl AstPass for SuperKeyword<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let state = State {
             written: self.written,
+            builtin_super: self.written.builtin("super"),
             edits: RefCell::new(Vec::new()),
             class_stack: RefCell::new(Vec::new()),
             self_stack: RefCell::new(Vec::new()),
@@ -43,6 +51,8 @@ impl AstPass for SuperKeyword<'_> {
 
 struct State<'src> {
     written: WrittenNames<'src>,
+    /// the name the builtin `super` is read by
+    builtin_super: String,
     edits: RefCell<Vec<(TextRange, String)>>,
     class_stack: RefCell<Vec<String>>,
     self_stack: RefCell<Vec<String>>,
@@ -59,6 +69,21 @@ fn first_param_name(
         .first()
         .or_else(|| params.args.first())
         .map(|p| crate::python_parameter_name(params, &p.parameter, written).to_string())
+}
+
+impl State<'_> {
+    /// the builtin `super` called with the arguments the bare keyword stands for
+    fn bare(&self) -> String {
+        if self.builtin_super == "super" {
+            return "super()".to_owned();
+        }
+        match self.self_stack.borrow().last() {
+            Some(receiver) => format!("{}(__class__, {receiver})", self.builtin_super),
+            // a function with no parameter to read the receiver from fails as zero-argument
+            // `super()` does there, raising `RuntimeError`
+            None => format!("{}()", self.builtin_super),
+        }
+    }
 }
 
 impl<'ast> Visitor<'ast> for &State<'_> {
@@ -103,8 +128,10 @@ impl<'ast> Visitor<'ast> for &State<'_> {
                 .cloned()
                 .unwrap_or_else(|| "self".to_owned());
             let target_src = render_expr(&s.slice);
-            let replacement =
-                format!("super({cls}.__mro__[{cls}.__mro__.index({target_src}) - 1], {self_name})");
+            let replacement = format!(
+                "{}({cls}.__mro__[{cls}.__mro__.index({target_src}) - 1], {self_name})",
+                self.builtin_super
+            );
             self.edits.borrow_mut().push((s.range(), replacement));
             return;
         }
@@ -115,13 +142,15 @@ impl<'ast> Visitor<'ast> for &State<'_> {
             self.visit_arguments(&call.arguments);
             return;
         }
-        if let Expr::Name(n) = expr
+        // the keyword is the base of an attribute access, `super.x`, where the checker reads
+        // it as one. read anywhere else, `super` is the name it is bound to, as it is there
+        if let Expr::Attribute(attribute) = expr
+            && let Expr::Name(n) = attribute.value.as_ref()
             && n.id.as_str() == "super"
             && matches!(n.ctx, ExprContext::Load)
         {
-            self.edits
-                .borrow_mut()
-                .push((n.range(), "super()".to_owned()));
+            self.edits.borrow_mut().push((n.range(), self.bare()));
+            return;
         }
         walk_expr(self, expr);
     }
@@ -259,6 +288,53 @@ mod tests {
                 def __init__(self, super: list[str] | None) -> None:
                     self.super
         "});
+    }
+
+    /// the keyword is the builtin wherever the module binds the name to something else
+    #[test]
+    fn a_module_binding_super_still_calls_the_builtin() {
+        check(
+            indoc! {"
+                super = 5
+
+                class C(A, B):
+                    def f(this):
+                        super.x
+                        super[B].y
+            "},
+            indoc! {"
+                from builtins import super as super2
+                super = 5
+
+                class C(A, B):
+                    def f(this):
+                        super2(__class__, this).x
+                        super2(C.__mro__[C.__mro__.index(B) - 1], this).y
+            "},
+        );
+    }
+
+    /// read where it is not an attribute's base, `super` is the name the checker reads it as:
+    /// the builtin class, or the parameter that binds the name
+    #[test]
+    fn super_read_as_a_value_is_the_name() {
+        check(
+            indoc! {"
+                class A(B):
+                    def f(self, super: B):
+                        return super.g(super)
+                    def h(self):
+                        return super
+            "},
+            indoc! {"
+                from builtins import super as super2
+                class A(B):
+                    def f(self, super: B):
+                        return super2(__class__, self).g(super)
+                    def h(self):
+                        return super
+            "},
+        );
     }
 
     #[test]

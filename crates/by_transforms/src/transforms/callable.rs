@@ -40,8 +40,9 @@ use crate::config::{Config, FloatLiteralLowering};
 use crate::type_info::{TypeInfo, UnpackedKwargsLowering};
 
 /// the lowerings [`CallableSyntax::lower_type_expr`] writes itself, wherever it prints a type
-/// expression, a symbolic fold among them when it is handed the fold as a substitution. a
-/// pass that prints one through it in place of the source writes these too
+/// expression, a symbolic fold and a synthesized type's class among them when it is handed the
+/// [`type_substitutions`](super::ast_driver::PassContext::type_substitutions). a pass that
+/// prints one through it in place of the source writes these too
 pub(crate) const TYPE_EXPRESSION: &[Lowering] = &[
     Lowering::Callable,
     Lowering::OptionalType,
@@ -50,6 +51,9 @@ pub(crate) const TYPE_EXPRESSION: &[Lowering] = &[
     Lowering::DynamicKeyword,
     Lowering::FloatConst,
     Lowering::SymbolicTypeOp,
+    Lowering::AnonNamedTuple,
+    Lowering::ProtocolType,
+    Lowering::TypedDictLiteral,
 ];
 
 #[expect(
@@ -160,7 +164,7 @@ impl<'src> CallableSyntax<'src> {
     }
 
     /// The name a substitution assigned to exactly `range`, if any.
-    fn substitution_for(&self, range: TextRange) -> Option<&str> {
+    pub(crate) fn substitution_for(&self, range: TextRange) -> Option<&str> {
         self.substitutions
             .iter()
             .find(|(candidate, _)| *candidate == range)
@@ -1065,6 +1069,11 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
         {
             return crate::transforms::type_expr_walker::Recurse::Stop;
         }
+        // a type another lowering replaces whole — a fold, a synthesized type's class — is
+        // that lowering's own edit, which a wider edit of ours writes where it covers it
+        if self.substitution_for(expr.range()).is_some() {
+            return crate::transforms::type_expr_walker::Recurse::Stop;
+        }
         // a generic's type arguments are lowered one by one, each where it stands, so a
         // pass that writes one of them whole, a forward reference quoted where python reads
         // it lazily, wraps that argument's lowering rather than landing inside a rewrite of
@@ -1157,7 +1166,7 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
     }
 
     /// a type expression it replaces is printed by the shared lowerer, which writes every
-    /// leaf inside it too, an inline protocol as the name of the class it hoists to, a
+    /// leaf inside it too, a synthesized type as the name of the class it hoists to, a
     /// union the runtime evaluates in the spelling the target can run, and an operation
     /// `symbolic_type_op` folded as the fold
     fn subsumes(&self) -> &'static [Lowering] {
@@ -1169,6 +1178,8 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             Lowering::DynamicKeyword,
             Lowering::FloatConst,
             Lowering::ProtocolType,
+            Lowering::AnonNamedTuple,
+            Lowering::TypedDictLiteral,
             Lowering::RuntimeUnion,
             Lowering::SymbolicTypeOp,
         ]
@@ -1183,9 +1194,9 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             .with_types(types)
             .with_claimed_ranges(&claimed)
             .with_owned_typeof(&structural_typeof);
-        // a fold inside a callable type this pass replaces is written as the fold; one
-        // it does not replace keeps its own edit
-        for (range, rendered) in &ctx.symbolic_substitutions {
+        // a fold or a synthesized type inside a callable type this pass replaces is written as
+        // the fold or the class; one it does not replace keeps its own edit
+        for (range, rendered) in &ctx.type_substitutions {
             inner.add_substitution(*range, rendered.clone());
         }
         crate::transforms::type_expr_walker::walk_type_positions_skipping(

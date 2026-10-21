@@ -61,9 +61,10 @@ pub(crate) struct GenericPolyfill<'src> {
     /// (`class Owner[T]: def narrow[U: T]`), and that name is mangled by the enclosing
     /// list, not by the one being processed
     enclosing_renames: Vec<HashMap<String, String>>,
-    /// `(range, rendered)` for every symbolic fold in the module. A fold inside a
-    /// statement this pass replaces wholesale is dropped unless spliced in here
-    symbolic_substitutions: Vec<(TextRange, String)>,
+    /// `(range, rendered)` for every type expression already lowered to a fixed spelling: a
+    /// symbolic fold, a synthesized type's class. One inside a statement this pass replaces
+    /// wholesale is dropped unless spliced in here
+    type_substitutions: Vec<(TextRange, String)>,
     /// text edits earlier passes already emitted. one of these covering a type
     /// expression hides the source bytes our typevar rename would have patched
     /// — the arrow lowering's `(T) -> R` → `Callable[[T], R]` is the common case
@@ -218,7 +219,7 @@ impl<'src> GenericPolyfill<'src> {
         quotes: &'src WrittenQuotes,
         types: &'src dyn TypeInfo,
         config: Config,
-        symbolic_substitutions: Vec<(TextRange, String)>,
+        type_substitutions: Vec<(TextRange, String)>,
         pending_edits: Vec<(TextRange, String)>,
         decided: PolyfilledTypeParams,
     ) -> Self {
@@ -239,7 +240,7 @@ impl<'src> GenericPolyfill<'src> {
             generic_class_renames: HashMap::new(),
             enclosing_renames: Vec::new(),
             private_aliases: HashMap::new(),
-            symbolic_substitutions,
+            type_substitutions,
             pending_edits,
             superseded: Vec::new(),
             statement_prefixes: Vec::new(),
@@ -248,7 +249,8 @@ impl<'src> GenericPolyfill<'src> {
 
     /// take over every rewrite that already exists inside `range`, so that a
     /// replacement covering `range` can carry them: the symbolic folds
-    /// (`Dim + 1` → `int`) and the text edits earlier passes queued
+    /// (`Dim + 1` → `int`), the synthesized types' classes, and the text edits earlier passes
+    /// queued
     /// (`kw_subscript`'s positional rebuild, `unpack`'s `Unpack[…]`). without
     /// the second group a keyword subscript or a variadic inside a polyfilled
     /// `type` alias value or a type-parameter bound reaches the output in its
@@ -260,7 +262,7 @@ impl<'src> GenericPolyfill<'src> {
     /// span would delete those edits without reinstating them
     fn subsume_within(&mut self, range: TextRange) -> Vec<(TextRange, String)> {
         let mut within: Vec<(TextRange, String)> = self
-            .symbolic_substitutions
+            .type_substitutions
             .iter()
             .filter(|(folded, _)| range.contains_range(*folded))
             .cloned()
@@ -269,14 +271,18 @@ impl<'src> GenericPolyfill<'src> {
         // `Unpack[` replacement plus a `]` insertion — so it has to come along
         // too, or the subsumed rewrite arrives half-applied
         for (pending, text) in &self.pending_edits {
-            if range.contains_range(*pending)
-                && !within
-                    .iter()
-                    .any(|(seen, seen_text)| seen == pending && seen_text == text)
+            if !range.contains_range(*pending) {
+                continue;
+            }
+            // a pending edit writing what a substitution already carries — a synthesized type
+            // replaced by its class — is carried by the substitution, and superseded all the same
+            if !within
+                .iter()
+                .any(|(seen, seen_text)| seen == pending && seen_text == text)
             {
                 within.push((*pending, text.clone()));
-                self.superseded.push(*pending);
             }
+            self.superseded.push(*pending);
         }
         within
     }
@@ -2117,7 +2123,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
             self.quotes,
             types,
             self.config.clone(),
-            ctx.symbolic_substitutions.clone(),
+            ctx.type_substitutions.clone(),
             ctx.text_edits.clone(),
             PolyfilledTypeParams::decide(self.source, self.written, stmts, &self.config),
         );

@@ -62,15 +62,19 @@ a pack that hasn't been specialized yet shows as the pending splice — `{"tag":
 ## lowering
 
 each shape is hoisted to one module-level `TypedDict` class. those classes land ahead of
-everything the module defines, and a field can name a class declared later or a type parameter
-that only exists inside the generic class the literal was written in, so field types are emitted
-as forward references:
+everything the module defines, and a field can name a class declared later, so field types are
+emitted as forward references:
 
 ```python
 class _TypedDict_<hash>(TypedDict, closed=True):
     name: "str"
     age: "int"
 ```
+
+a field naming a type parameter of the generic the literal was written in reads that parameter
+from module scope, where `typing.get_type_hints` resolves it, and a field whose type is another
+typed dict literal, an [anonymous named tuple](anonymous-named-tuple.md) or an
+[inline protocol](inline-protocol.md) names that type's class
 
 a `{**Kwargs}` splice has no fields to erase to — they are only known at the specialization site,
 and python erases type arguments anyway — so it lowers to `extra_items="object"`
