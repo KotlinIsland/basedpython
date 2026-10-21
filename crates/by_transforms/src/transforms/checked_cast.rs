@@ -51,6 +51,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::parametric_is::{PredicateRuntime, ProbeStrictness, build_predicate};
+use super::quotes::WrittenQuotes;
 use super::repeated_underscore::WrittenNames;
 use crate::type_info::{CastCheck, SoundnessCheck, TypeInfo};
 
@@ -115,9 +116,11 @@ impl Helper {
 }
 
 struct CastLower<'a> {
-    source: &'a str,
     types: &'a dyn TypeInfo,
     written: WrittenNames<'a>,
+    /// where a `typing.cast` target that names something not bound there is written as a
+    /// string
+    quotes: &'a WrittenQuotes,
     /// the name `typing.cast` is written under
     cast: String,
     edits: Vec<(TextRange, Vec<Fragment>)>,
@@ -127,11 +130,11 @@ struct CastLower<'a> {
 }
 
 impl<'a> CastLower<'a> {
-    fn new(source: &'a str, types: &'a dyn TypeInfo, written: WrittenNames<'a>) -> Self {
+    fn new(types: &'a dyn TypeInfo, written: WrittenNames<'a>, quotes: &'a WrittenQuotes) -> Self {
         Self {
-            source,
             types,
             written,
+            quotes,
             cast: written.imported("typing", "cast"),
             edits: Vec::new(),
             used: BTreeSet::new(),
@@ -204,7 +207,7 @@ impl<'a> CastLower<'a> {
             let first = if self.types.reads_names_bound_where_written(type_arg) {
                 vec![Fragment::Src(type_arg.range())]
             } else {
-                super::auto_quote::quoted(self.source, type_arg.range())
+                vec![self.quotes.quote_span(type_arg.range())]
             };
             (helper, first, vec![Fragment::Src(value_range)])
         } else {
@@ -254,8 +257,8 @@ impl<'ast> Visitor<'ast> for CastLower<'_> {
 }
 
 pub(crate) struct CheckedCastPass<'src> {
-    pub(crate) source: &'src str,
     pub(crate) written: WrittenNames<'src>,
+    pub(crate) quotes: &'src WrittenQuotes,
 }
 
 impl TypeAwarePass for CheckedCastPass<'_> {
@@ -283,7 +286,7 @@ impl TypeAwarePass for CheckedCastPass<'_> {
     }
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = CastLower::new(self.source, types, self.written);
+        let mut inner = CastLower::new(types, self.written, self.quotes);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }

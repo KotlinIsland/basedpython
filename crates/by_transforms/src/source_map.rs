@@ -65,13 +65,28 @@ impl Replacement {
         if start >= end {
             return;
         }
+        self.push_copied(&source[start..end], start);
+    }
+
+    /// Append `text`, copied from the source at `start`.
+    fn push_copied(&mut self, text: &str, start: usize) {
         let continues = self.runs.last().is_some_and(|&(at, origin)| {
             matches!(origin, Origin::Copied(from) if from + (self.text.len() - at) == start)
         });
         if !continues {
             self.runs.push((self.text.len(), Origin::Copied(start)));
         }
-        self.text.push_str(&source[start..end]);
+        self.text.push_str(text);
+    }
+
+    /// Append `other`, run by run, so each keeps where it came from.
+    pub(crate) fn append(&mut self, other: &Replacement) {
+        for (text, origin) in other.runs() {
+            match origin {
+                Origin::Generated(anchor) => self.push_generated(text, anchor),
+                Origin::Copied(start) => self.push_copied(text, start),
+            }
+        }
     }
 
     /// The replacement text.

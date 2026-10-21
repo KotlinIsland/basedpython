@@ -22,6 +22,7 @@ pub mod entry_point {
     };
 }
 
+use transforms::quotes::WrittenQuotes;
 use transforms::repeated_underscore::{CodeNames, PrivateNames, SynthesizedClasses};
 
 use std::collections::{BTreeSet, HashSet};
@@ -252,6 +253,7 @@ fn transpile_with_report(
         ty_python_semantic::extension_backing_functions(&local_db, local_file),
     );
     let synthesized_classes = SynthesizedClasses::default();
+    let quotes = WrittenQuotes::default();
     let written_names = written_names
         .with_private(&private_names)
         .with_synthesized(&synthesized_classes);
@@ -263,6 +265,7 @@ fn transpile_with_report(
     let (source, ast_errors, _phase0_map) = transforms::ast_driver::run_against_source(
         source,
         written_names,
+        &quotes,
         config,
         if unchanged {
             transforms::ast_driver::SemanticSource::Project(&local_db, local_file)
@@ -298,12 +301,13 @@ fn transpile_with_report(
 
     // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
     let (final_output, requirements) = run_import_redirect_phase(output, config);
-    let final_output = run_anon_named_tuple_cleanup(final_output, written_names, config)?;
+    let final_output = run_anon_named_tuple_cleanup(final_output, written_names, &quotes, config)?;
     let final_output = run_lazy_import_phase(
         final_output,
         config,
         &model.eagerly_imported_modules(),
         &model.eagerly_imported_names(),
+        &quotes.texts(),
     )?;
     let final_output = run_version_polyfill_phase(final_output, config);
 
@@ -473,6 +477,7 @@ pub fn transpile_typed_with_report(
         ty_python_semantic::extension_backing_functions(db, file),
     );
     let synthesized_classes = SynthesizedClasses::default();
+    let quotes = WrittenQuotes::default();
     let written_names = written_names
         .with_private(&private_names)
         .with_synthesized(&synthesized_classes);
@@ -509,8 +514,13 @@ pub fn transpile_typed_with_report(
     let eager_model = ty_python_semantic::SemanticModel::new(db, db.program_file(file));
     let eager_imports = eager_model.eagerly_imported_modules();
     let eager_names = eager_model.eagerly_imported_names();
-    let (spliced, ast_errors, phase0_map) =
-        transforms::ast_driver::run_against_source(working_source, written_names, config, project);
+    let (spliced, ast_errors, phase0_map) = transforms::ast_driver::run_against_source(
+        working_source,
+        written_names,
+        &quotes,
+        config,
+        project,
+    );
     if let Some(first) = ast_errors.first() {
         return Err(first.clone().into());
     }
@@ -551,8 +561,14 @@ pub fn transpile_typed_with_report(
     }
 
     let (final_output, requirements) = run_import_redirect_phase(output, config);
-    let final_output = run_anon_named_tuple_cleanup(final_output, written_names, config)?;
-    let final_output = run_lazy_import_phase(final_output, config, &eager_imports, &eager_names)?;
+    let final_output = run_anon_named_tuple_cleanup(final_output, written_names, &quotes, config)?;
+    let final_output = run_lazy_import_phase(
+        final_output,
+        config,
+        &eager_imports,
+        &eager_names,
+        &quotes.texts(),
+    )?;
     let final_output = run_version_polyfill_phase(final_output, config);
 
     // phases 1-2c only prepend preambles at the top and edit within lines, so
@@ -627,6 +643,7 @@ fn line_count(s: &str) -> usize {
 fn run_anon_named_tuple_cleanup(
     mut source: String,
     written: WrittenNames,
+    quotes: &WrittenQuotes,
     config: &Config,
 ) -> Result<String, String> {
     use ruff_python_ast::visitor::Visitor;
@@ -648,6 +665,7 @@ fn run_anon_named_tuple_cleanup(
         let mut anon = transforms::anon_named_tuple::AnonNamedTuple::new(
             src,
             written,
+            quotes,
             &model,
             config.clone(),
             module.suite(),
@@ -659,8 +677,14 @@ fn run_anon_named_tuple_cleanup(
         if let Some(err) = anon.errors.first() {
             return Err(err.clone());
         }
-        let protocol =
-            transforms::protocol_type::cleanup(src, written, &model, module.suite(), config)?;
+        let protocol = transforms::protocol_type::cleanup(
+            src,
+            written,
+            quotes,
+            &model,
+            module.suite(),
+            config,
+        )?;
 
         if anon.edits.is_empty() && !anon.needs_import && protocol.is_none() {
             return Ok(source);
@@ -768,8 +792,10 @@ fn run_import_redirect_phase(source: String, config: &Config) -> (String, Runtim
 ///
 /// `eager_names` names the *bindings* that must be bound to the real object where
 /// the import is written: what `except` catches, a special form, and a name an
-/// annotation or a decorator reads, whose readers look them up in the module's
-/// namespace or tell them apart by identity as the module is executing
+/// annotation, a decorator or a forward reference written as a string reads, whose
+/// readers look them up in the module's namespace or tell them apart by identity as
+/// the module is executing. `quotes` are the type expressions inside the forward
+/// references the lowering wrote as strings, recorded as it wrote them
 ///
 /// A stub defers nothing: it is never executed, and deferring its imports would
 /// hand a checker a call result where the stub declares a module or a class
@@ -778,6 +804,7 @@ fn run_lazy_import_phase(
     config: &Config,
     eager: &[String],
     eager_names: &[String],
+    quotes: &[String],
 ) -> Result<String, String> {
     if !config.lazy_imports {
         return Ok(source);
@@ -804,6 +831,7 @@ fn run_lazy_import_phase(
         module.suite(),
         src,
     ));
+    eager_names.extend(transforms::lazy_import::forward_reference_names(quotes));
     eager_names.extend(transforms::lazy_import::decorator_names(module.suite()));
 
     let deferral = if config.is_stub {

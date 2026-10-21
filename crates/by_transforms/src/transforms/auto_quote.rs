@@ -48,17 +48,12 @@ use ruff_python_ast::{AnyParameterRef, Expr, ExprName, Stmt, TypeParams};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::quotes::WrittenQuotes;
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_one_type_expr_with};
 use crate::type_info::TypeInfo;
 
 pub(crate) struct AutoQuote<'src> {
-    source: &'src str,
-}
-
-impl<'src> AutoQuote<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
-        Self { source }
-    }
+    pub(crate) quotes: &'src WrittenQuotes,
 }
 
 impl TypeAwarePass for AutoQuote<'_> {
@@ -70,14 +65,14 @@ impl TypeAwarePass for AutoQuote<'_> {
 
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut walk = Walk {
-            source: self.source,
+            quotes: self.quotes,
             types,
             quote_annotations: ctx.annotations_evaluated,
             edits: Vec::new(),
         };
         walk.block(stmts, Scope::Module);
         let mut deferred = DeferredReads {
-            source: self.source,
+            quotes: self.quotes,
             types,
             edits: walk.edits,
         };
@@ -97,7 +92,7 @@ enum Scope {
 }
 
 struct Walk<'a> {
-    source: &'a str,
+    quotes: &'a WrittenQuotes,
     types: &'a dyn TypeInfo,
     quote_annotations: bool,
     edits: Vec<(TextRange, Vec<Fragment>)>,
@@ -170,7 +165,7 @@ impl Walk<'_> {
         let types = self.types;
         let is_forward = |name: &ExprName| types.is_forward_reference(name) == Some(true);
         let mut quoter = Quoter {
-            source: self.source,
+            quotes: self.quotes,
             is_forward: &is_forward,
             edits: &mut self.edits,
             skip_root: false,
@@ -189,7 +184,7 @@ impl Walk<'_> {
 /// written — a base itself, a reified class's type arguments, the type an `is` tests for — is
 /// left alone, and a name in it that is not yet bound stays the error the checker reports
 struct DeferredReads<'a> {
-    source: &'a str,
+    quotes: &'a WrittenQuotes,
     types: &'a dyn TypeInfo,
     /// every quote written so far, the annotations' included: nothing inside one is evaluated
     /// where it stands any more
@@ -210,7 +205,7 @@ impl DeferredReads<'_> {
         let types = self.types;
         let is_forward = |name: &ExprName| types.is_forward_reference(name) == Some(true);
         let mut quoter = Quoter {
-            source: self.source,
+            quotes: self.quotes,
             is_forward: &is_forward,
             edits: &mut self.edits,
             skip_root,
@@ -270,7 +265,7 @@ impl<'a> Visitor<'a> for DeferredReads<'_> {
 
 /// quotes the forward references in one type expression
 struct Quoter<'a> {
-    source: &'a str,
+    quotes: &'a WrittenQuotes,
     is_forward: &'a dyn Fn(&ExprName) -> bool,
     edits: &'a mut Vec<(TextRange, Vec<Fragment>)>,
     /// the root is the specialization whose type arguments are deferred, which is
@@ -322,40 +317,9 @@ impl Quoter<'_> {
     }
 
     fn quote(&mut self, range: TextRange) {
-        self.edits.push((range, quoted(self.source, range)));
+        self.edits
+            .push((range, vec![self.quotes.quote_span(range)]));
     }
-}
-
-/// `range` of `source` wrapped in quotes, as one template passing the source through so
-/// the lowerings inside it land between the quotes. the delimiter is one the source it
-/// wraps does not already use
-pub(crate) fn quoted(source: &str, range: TextRange) -> Vec<Fragment> {
-    let delimiter = delimiter_for(&source[range]);
-    vec![
-        Fragment::Lit(delimiter.to_owned()),
-        Fragment::Src(range),
-        Fragment::Lit(delimiter.to_owned()),
-    ]
-}
-
-/// `text`, a lowered type expression, written as the forward reference python reads lazily
-pub(crate) fn quoted_text(text: &str) -> String {
-    let delimiter = delimiter_for(text);
-    format!("{delimiter}{text}{delimiter}")
-}
-
-/// a string delimiter `text` does not already use
-fn delimiter_for(text: &str) -> &'static str {
-    ["\"", "'", "\"\"\"", "'''"]
-        .into_iter()
-        .find(|delimiter| {
-            !text.contains(delimiter)
-                && delimiter
-                    .chars()
-                    .next()
-                    .is_none_or(|quote| !text.ends_with(quote))
-        })
-        .unwrap_or("\"")
 }
 
 #[cfg(test)]

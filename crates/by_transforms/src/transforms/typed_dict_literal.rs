@@ -27,7 +27,7 @@
 //! b: _TypedDict_<hash2>
 //! ```
 //!
-//! field types are emitted as forward references — see [`quote_type`]
+//! field types are emitted as forward references — see `Shape::class_def`
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -43,6 +43,7 @@ use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_posit
 
 use super::ast_driver::{AstPass, PassContext};
 use super::callable::CallableSyntax;
+use super::quotes::WrittenQuotes;
 use super::repeated_underscore::WrittenNames;
 use crate::config::Config;
 use crate::type_info::TypeInfo;
@@ -66,9 +67,15 @@ impl Shape {
 
     /// the class declaring this shape as `name`, `typing_extensions.TypedDict` written as
     /// `typed_dict`
-    fn class_def(&self, name: &str, typed_dict: &str) -> String {
+    ///
+    /// every field type is written as a string. the hoisted classes are emitted in the
+    /// preamble, ahead of everything the module defines, and a shape can name a class declared
+    /// later or a type parameter that only exists inside the generic class the literal was
+    /// written in. neither resolves where the class lands, and `TypedDict` evaluates its
+    /// class-body annotations eagerly, so every field is a forward reference
+    fn class_def(&self, name: &str, typed_dict: &str, quotes: &WrittenQuotes) -> String {
         let bases = match &self.extra_items {
-            Some(ty) => format!("{typed_dict}, extra_items={}", quote_type(ty)),
+            Some(ty) => format!("{typed_dict}, extra_items={}", quotes.quote(ty)),
             None => format!("{typed_dict}, closed=True"),
         };
         let mut out = format!("class {name}({bases}):\n");
@@ -82,38 +89,17 @@ impl Shape {
             // attribute annotations. Such typed dicts are still valid
             // (TypedDict's functional form supports them), but we leave
             // them un-rewritten and let the user fall back to that form.
-            let _ = writeln!(out, "    {field_name}: {}", quote_type(field_type));
+            let _ = writeln!(out, "    {field_name}: {}", quotes.quote(field_type));
         }
         out
     }
 }
 
-/// Wrap a rendered field type in a string annotation.
-///
-/// The hoisted classes are emitted in the preamble, ahead of everything the
-/// module defines, and a shape can name a class declared later or a type
-/// parameter that only exists inside the generic class the literal was written
-/// in. Neither resolves where the class lands, and `TypedDict` evaluates its
-/// class-body annotations eagerly, so every field is a forward reference.
-fn quote_type(type_source: &str) -> String {
-    let mut out = String::with_capacity(type_source.len() + 2);
-    out.push('"');
-    for c in type_source.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
 pub(crate) struct TypedDictLiteral<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    /// where the field types are written as strings
+    quotes: &'src WrittenQuotes,
     edits: Vec<Fix>,
     errors: Vec<String>,
     /// Insertion-ordered map of shape → synthesized class name so emitted
@@ -139,13 +125,15 @@ impl<'src> TypedDictLiteral<'src> {
     fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         config: &Config,
         types: &'src dyn TypeInfo,
     ) -> Self {
         Self {
             source,
             written,
-            callable: CallableSyntax::new(source, written, config).with_types(types),
+            quotes,
+            callable: CallableSyntax::new(source, written, quotes, config).with_types(types),
             edits: Vec::new(),
             errors: Vec::new(),
             shapes: IndexMap::new(),
@@ -160,7 +148,7 @@ impl<'src> TypedDictLiteral<'src> {
         let mut out = String::new();
         let typed_dict = self.written.imported("typing_extensions", "TypedDict");
         for (shape, name) in &self.shapes {
-            out.push_str(&shape.class_def(name, &typed_dict));
+            out.push_str(&shape.class_def(name, &typed_dict, self.quotes));
             out.push('\n');
         }
         out
@@ -503,7 +491,13 @@ impl AstPass for TypedDictLiteralPass<'_> {
     }
 
     fn run(&self, _module: &mut ModModule, ctx: &mut PassContext) {
-        let mut inner = TypedDictLiteral::new(self.source, self.written, &self.config, self.types);
+        let mut inner = TypedDictLiteral::new(
+            self.source,
+            self.written,
+            self.quotes,
+            &self.config,
+            self.types,
+        );
         // the module as parsed, not the one the passes before this rewrote: the type
         // information the field lowerer asks is about those nodes, and the edits are keyed
         // on the source ranges both share
@@ -555,6 +549,7 @@ impl AstPass for TypedDictLiteralPass<'_> {
 pub(crate) struct TypedDictLiteralPass<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
+    quotes: &'src WrittenQuotes,
     config: Config,
     /// the module as parsed, which is what `types` answers for
     suite: &'src [Stmt],
@@ -565,6 +560,7 @@ impl<'src> TypedDictLiteralPass<'src> {
     pub(crate) fn new(
         source: &'src str,
         written: WrittenNames<'src>,
+        quotes: &'src WrittenQuotes,
         config: Config,
         suite: &'src [Stmt],
         types: &'src dyn TypeInfo,
@@ -572,6 +568,7 @@ impl<'src> TypedDictLiteralPass<'src> {
         Self {
             source,
             written,
+            quotes,
             config,
             suite,
             types,
