@@ -194,9 +194,15 @@ fn keyword_at(tokens: &Tokens, offset: TextSize) -> Option<TextRange> {
         .map(Ranged::range)
 }
 
-struct OutlineBuilder<'a> {
+pub(crate) struct OutlineBuilder<'a> {
     source: &'a str,
     tokens: &'a Tokens,
+}
+
+impl<'a> OutlineBuilder<'a> {
+    pub(crate) fn new(source: &'a str, tokens: &'a Tokens) -> Self {
+        Self { source, tokens }
+    }
 }
 
 impl OutlineBuilder<'_> {
@@ -230,7 +236,7 @@ impl OutlineBuilder<'_> {
     }
 
     /// The clauses of `stmt` without their bodies' outlines, which is all a family needs.
-    fn clause_heads<'s>(&self, stmt: &'s Stmt) -> Vec<ClauseHead<'s>> {
+    pub(crate) fn clause_heads<'s>(&self, stmt: &'s Stmt) -> Vec<ClauseHead<'s>> {
         let mut heads = Vec::new();
         match stmt {
             Stmt::If(if_stmt) => {
@@ -529,11 +535,11 @@ impl OutlineBuilder<'_> {
     }
 }
 
-struct ClauseHead<'s> {
-    keyword: Option<TextRange>,
-    colon: Option<TextRange>,
-    range: TextRange,
-    body: &'s [Stmt],
+pub(crate) struct ClauseHead<'s> {
+    pub(crate) keyword: Option<TextRange>,
+    pub(crate) colon: Option<TextRange>,
+    pub(crate) range: TextRange,
+    pub(crate) body: &'s [Stmt],
 }
 
 /// A block enclosing the statement being looked at, as a `return` or a `break` sees it.

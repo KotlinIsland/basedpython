@@ -155,6 +155,20 @@ pub(super) fn request(req: server::Request) -> Task {
                 BackgroundSchedule::LatencySensitive,
             )
         }
+        // Both answer a key just pressed, and what they answer is applied to the text only if
+        // nothing has been typed since: a slow answer is a dropped one. Each is a parse or two.
+        requests::OnTypeFormattingRequestHandler::METHOD => {
+            background_document_request_task::<requests::OnTypeFormattingRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
+        requests::CompleteStatementRequestHandler::METHOD => {
+            background_document_request_task::<requests::CompleteStatementRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         requests::ExplainTranspilationHandler::METHOD => background_document_request_task::<
             requests::ExplainTranspilationHandler,
         >(req, BackgroundSchedule::Worker),
