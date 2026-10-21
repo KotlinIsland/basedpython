@@ -1857,6 +1857,20 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             // this has to precede the source arm: a source that is itself a deferral is
             // exactly the interesting case, and reducing it first would compare `int`
             // against `int` and always agree
+            //
+            // a union or intersection source is taken apart first, so each element is
+            // compared on its own: `(I + 1) & ~AlwaysFalsy` (what `i + 1 or ...` narrows
+            // to) names the same value as `I + 1`, but flattened whole it is one opaque atom
+            (Type::Union(union), Type::Deferred(target_deferred))
+                if target_deferred.is_checked(db) =>
+            {
+                self.check_source_union(db, union, target)
+            }
+            (Type::Intersection(intersection), Type::Deferred(target_deferred))
+                if target_deferred.is_checked(db) =>
+            {
+                self.check_source_intersection(db, intersection, target)
+            }
             (_, Type::Deferred(target_deferred)) if target_deferred.is_checked(db) => {
                 let names_another_value =
                     !any_over_type(db, env, source, false, |ty| ty.is_dynamic())

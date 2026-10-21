@@ -302,6 +302,29 @@ def not_that_value[I: int](i: I) -> (I + 1) | None:
     return i
 ```
 
+## a narrowed value still names the same value
+
+`i + 1 or i + 2` narrows its left arm to `(I + 1) & ~AlwaysFalsy`: the same value, known to be
+truthy. each element of an intersection or a union is compared on its own, so the narrowing does not
+hide which value the left arm names
+
+```by
+def either[I: int](i: I) -> (I + 1) | (I + 2):
+    return i + 1 or i + 2
+
+def truthy[I: int](i: I) -> I + 1:
+    if result := i + 1:
+        return result
+    return i + 1
+
+def some_parameter(a: some int) -> a + 1 | a + 2:
+    return a + 1 or a + 2
+
+def still_not_that_value[I: int](i: I) -> I + 1:
+    # error: [invalid-return-type]
+    return i or i + 1
+```
+
 ## a gradual value still satisfies a symbolic return type
 
 `Unknown` stands for anything, including the value the annotation names — rejecting it would make an
