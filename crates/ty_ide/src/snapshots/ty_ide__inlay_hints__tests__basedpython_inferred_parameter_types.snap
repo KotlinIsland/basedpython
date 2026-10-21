@@ -1,0 +1,21 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_parameter_types: true, ..InlayHintSettings::none() })"
+---
+
+def read(a[: some protocol(let foo: object)]):
+    _ = a.foo
+
+def called(a[: some protocol(def size(self, /) -> int)], b[: some int]=1):
+    x: int = a.size()
+    return b
+
+def untouched(a):
+    pass
+
+def annotated(a: int):
+    _ = a.real
+
+class C:
+    def m(self, a[: some protocol(let foo: object)]):
+        _ = a.foo
