@@ -1600,7 +1600,7 @@ impl PolyfilledTypeParams {
 
     /// what each parameter of `type_params` is renamed to, or `None` when the list is kept as
     /// native syntax
-    fn renames(
+    pub(crate) fn renames(
         &self,
         type_params: &ruff_python_ast::TypeParams,
     ) -> Option<HashMap<String, String>> {

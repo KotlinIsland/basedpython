@@ -2,17 +2,19 @@
 
 use crate::transforms::repeated_underscore::WrittenNames;
 use crate::transforms::trailing_lambda::RECEIVER_PARAMETER;
+use ruff_db::parsed::parsed_module;
 use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::{
     Expr, ExprCall, ExprName, ExprRef, Parameter, ParameterWithDefault, Stmt, StmtClassDef,
     StmtFunctionDef,
 };
 use ruff_python_parser::parse_expression;
-use ruff_text_size::TextRange;
+use ruff_text_size::{Ranged, TextRange};
 use ty_python_core::scope::ScopeKind;
-use ty_python_core::{global_scope, place_table, semantic_index};
+use ty_python_core::{global_scope, place_table, semantic_index, use_def_map};
 use ty_python_semantic::types::call_type_forms::CallTypeForm;
 use ty_python_semantic::types::exceptions::RaisesRuntimeTarget;
+use ty_python_semantic::types::ide_support::BaseTypeArgument;
 use ty_python_semantic::types::repeated_underscore::{UnderscoreLowering, UnderscoreRefusal};
 use ty_python_semantic::types::{
     DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
@@ -53,6 +55,15 @@ pub(crate) enum UnpackedKwargsLowering {
     Protocol(Vec<(String, String)>),
 }
 
+/// basedpython: one inferred argument of a base's subscript, spelled for the emitted file
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SpelledBaseArgument {
+    /// an ordinary type argument
+    Type(SynthesizedType),
+    /// the argument of a `*Ts` that is no fixed number of types, written unpacked
+    Unpacked(SynthesizedType),
+}
+
 /// A type spelled as source for the *emitted* file, with the imports that spelling needs.
 /// Produced by [`spell_for_python`], which never returns one whose text names something the
 /// output cannot resolve
@@ -64,6 +75,10 @@ pub(crate) struct SynthesizedType {
     pub(crate) modules: Vec<String>,
     /// `typing` names the file does not already bind
     pub(crate) typing_names: Vec<&'static str>,
+    /// whether the text names something not yet bound where it is written: a class the module
+    /// binds further down, or the class being defined, or one nested in it. evaluated there it
+    /// raises, so it is written as a string
+    pub(crate) forward: bool,
 }
 
 impl SynthesizedType {
@@ -119,7 +134,7 @@ impl SynthesizedType {
     /// [`PassContext::annotations_evaluated`]: crate::transforms::ast_driver::PassContext::annotations_evaluated
     pub(crate) fn annotation_in(&self, written: WrittenNames, evaluated: bool) -> String {
         let text = self.text_in(written);
-        if evaluated && !self.modules.is_empty() {
+        if evaluated && (!self.modules.is_empty() || self.forward) {
             crate::transforms::source_util::string_repr(&text)
         } else {
             text
@@ -752,6 +767,16 @@ pub(crate) trait TypeInfo {
     /// (annotated assignment becomes a field) and enums (bare assignment is a
     /// member). the inferred-annotation transform must leave these alone
     fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool;
+
+    /// basedpython: the type arguments each generic base `class_def` writes without them is
+    /// inherited at, solved from the members the class body overrides — `class B(A): x = 1`
+    /// inherits `A[int]`. each entry is the base expression's range and one spelling per
+    /// argument, or `None` when python cannot spell one of them where the base is written
+    fn inferred_base_type_arguments(
+        &self,
+        class_def: &StmtClassDef,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Vec<(TextRange, Option<Vec<SpelledBaseArgument>>)>;
 
     /// basedpython: the name of the backing function `member` of the extension `class_def`
     /// declares lowers to, the name every call of it is rewritten to call. `None` when
@@ -1573,6 +1598,40 @@ impl TypeInfo for SemanticModel<'_> {
             })
     }
 
+    fn inferred_base_type_arguments(
+        &self,
+        class_def: &StmtClassDef,
+        min_version: ruff_python_ast::PythonVersion,
+    ) -> Vec<(TextRange, Option<Vec<SpelledBaseArgument>>)> {
+        let db = self.db();
+        let env = self.program_environment();
+        ty_python_semantic::types::ide_support::inferred_base_type_arguments(self, class_def)
+            .into_iter()
+            .map(|(range, arguments)| {
+                // a base is evaluated where it is written, so that is where its arguments have
+                // to resolve
+                let base = class_def.bases().iter().find(|base| base.range() == range);
+                let spelled = arguments
+                    .into_iter()
+                    .map(|argument| {
+                        let (ty, unpacked) = match argument {
+                            BaseTypeArgument::Type(ty) => (ty, false),
+                            BaseTypeArgument::Unpacked(ty) => (ty, true),
+                        };
+                        let spelled =
+                            spell_for_python(db, &env, self, ty, min_version, false, base)?;
+                        Some(if unpacked {
+                            SpelledBaseArgument::Unpacked(spelled)
+                        } else {
+                            SpelledBaseArgument::Type(spelled)
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>();
+                (range, spelled)
+            })
+            .collect()
+    }
+
     fn extension_backing_function(&self, class_def: &StmtClassDef, member: &str) -> Option<String> {
         let class = class_def.inferred_type(self)?.as_class_literal()?;
         ty_python_semantic::extension_backing_function(self.db(), class, member)
@@ -1680,10 +1739,19 @@ fn spell_for_python<'db>(
         .filter_map(|name| typing_name(name, literal))
         .collect();
 
+    let forward = spelling.reads_nested_class
+        || written_at.is_some_and(|anchor| {
+            read.iter().any(|name| {
+                !modules.contains(name)
+                    && !typing_names.contains(&name.as_str())
+                    && reads_module_name_before_bound(model, name, anchor)
+            })
+        });
     let spelled = SynthesizedType {
         text,
         modules,
         typing_names,
+        forward,
     };
     resolvable_in_output(
         model,
@@ -1694,6 +1762,40 @@ fn spell_for_python<'db>(
         written_at,
     )
     .then_some(spelled)
+}
+
+/// whether `name`, read at `anchor`, means a module-level name the module has not bound yet
+/// when python evaluates `anchor`: one whose every binding is a statement that ends after it,
+/// such as the class whose header `anchor` is part of. a name an enclosing scope binds — the
+/// type parameter of a generic class, read in its header — is not the module's
+fn reads_module_name_before_bound(model: &SemanticModel<'_>, name: &str, anchor: &Expr) -> bool {
+    let db = model.db();
+    let file = model.program_file();
+    let index = semantic_index(db, file);
+    let Some(scope_id) = index.try_expression_scope_id(anchor) else {
+        return false;
+    };
+    let global = global_scope(db, file);
+    let bound_in_enclosing = index
+        .ancestor_scopes(scope_id)
+        .map(|(ancestor, _)| ancestor.to_scope_id(db, file))
+        .filter(|scope| *scope != global)
+        .any(|scope| {
+            place_table(db, scope)
+                .symbol_by_name(name)
+                .is_some_and(ty_python_core::symbol::Symbol::is_bound)
+        });
+    if bound_in_enclosing {
+        return false;
+    }
+    let Some(symbol) = place_table(db, global).symbol_id(name) else {
+        return false;
+    };
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    !use_def_map(db, global)
+        .reachable_symbol_bindings(symbol)
+        .filter_map(|binding| binding.binding.definition())
+        .any(|definition| definition.full_range(db, &module).range().end() <= anchor.start())
 }
 
 /// the `typing` name `name` is, when ty's display writes it for a special form rather than

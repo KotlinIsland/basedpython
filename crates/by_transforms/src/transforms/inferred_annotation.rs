@@ -185,6 +185,27 @@ mod tests {
         );
     }
 
+    /// a class nested in another class of the same module is reached through the outer one,
+    /// which is still being made where a class-body annotation is evaluated, so the annotation
+    /// is a string rather than an import of the module it is written in
+    #[test]
+    fn a_nested_class_is_reached_through_its_outer_class() {
+        check(
+            indoc! {"
+                class D:
+                    class Inner: ...
+
+                    x = Inner()
+            "},
+            indoc! {r#"
+                class D:
+                    class Inner: ...
+
+                    x: "D.Inner" = Inner()
+            "#},
+        );
+    }
+
     /// `var` and a modifier chain declare no type, so the member is the bare assignment
     /// it lowers to and gets the same annotation
     #[test]

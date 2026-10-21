@@ -224,6 +224,7 @@ on
 | `inheritedParameterDefaults` | the [default](inherited-defaults.md) it takes from that method  |
 | `inferredReturnTypes`        | the return type of a `def` that leaves it out                   |
 | `inferredParameterTypes`     | the `some` bound an unannotated parameter takes from its body   |
+| `inferredBaseTypeArguments`  | the type arguments a generic base takes from its overrides      |
 | `propertyTypes`              | the type a [property](properties.md) leaves to its accessors    |
 | `implicitArguments`          | the [context arguments](context-parameters.md) a call fills     |
 | `enumValues`                 | the value an [enum](enums.md) member takes implicitly           |

@@ -41,15 +41,15 @@ use super::{
     decl_site_variance, decorated_binding, decorator_keyword, dedent_string, destructure,
     django_lookup, dynamic_keyword, empty_declarations, export_import, extension, flexible_keyword,
     float_const, force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap,
-    if_let, implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float,
-    kw_subscript, literal_string, literal_types, local_once, main_function, match_type, modifiers,
-    module_api, mutable_defaults, none_chain, optional_type, overload, parametric_is,
-    postfix_await, propagate, properties, protocol_type, raises_clause, reified_class,
-    reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel, some_ctor,
-    soundness, statement_expression, static_resource, string_tag, super_keyword, symbolic_type_op,
-    template_expression, template_type, top_star, trailing_lambda, tuple_index, type_fn, type_is,
-    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings,
-    unpack, use_site_variance, visibility_rename,
+    if_let, implicit_receiver, implicit_typing, inferred_annotation, inferred_base_arguments,
+    init_method, just_float, kw_subscript, literal_string, literal_types, local_once,
+    main_function, match_type, modifiers, module_api, mutable_defaults, none_chain, optional_type,
+    overload, parametric_is, postfix_await, propagate, properties, protocol_type, raises_clause,
+    reified_class, reified_generic, repeated_underscore, return_value_use, runtime_union, sentinel,
+    some_ctor, soundness, statement_expression, static_resource, string_tag, super_keyword,
+    symbolic_type_op, template_expression, template_type, top_star, trailing_lambda, tuple_index,
+    type_fn, type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword,
+    unique_loop_bindings, unpack, use_site_variance, visibility_rename,
 };
 use crate::Config;
 use crate::source_map::Replacement;
@@ -1415,6 +1415,11 @@ pub(crate) fn run_against_source<'a>(
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let inferred_annotation_pass =
         inferred_annotation::InferredAnnotationPass::new(written, config.min_version);
+    let inferred_base_arguments_pass = inferred_base_arguments::InferredBaseArgumentsPass::new(
+        source_ref,
+        written,
+        config.clone(),
+    );
     let template_type_pass = template_type::TemplateTypePass { written };
     let tuple_types_pass =
         annotation::TupleLiteralTypePass::new(source_ref, written, config.clone());
@@ -1675,6 +1680,10 @@ pub(crate) fn run_against_source<'a>(
         // (`class A: a = 1` → `a: int = 1`); a zero-width insertion at the
         // target name, disjoint from the value-position lowerings above
         &inferred_annotation_pass,
+        // write the type arguments a generic base takes from the class body
+        // (`class B(A)` → `class B(A[int])`); a zero-width insertion after the
+        // base expression
+        &inferred_base_arguments_pass,
         // an f-string in a type position replaces its whole span with the
         // python spelling of the type ty resolved it to. it runs before the
         // type-position passes below so its wide edit claims the holes, whose

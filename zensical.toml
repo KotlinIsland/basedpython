@@ -173,6 +173,7 @@ features = [
     { "decorated function parameters" = "features/decorated-parameters.md" },
     { "decorating anything" = "features/decorate-anything.md" },
     { "inherited default values" = "features/inherited-defaults.md" },
+    { "inferred base type arguments" = "features/inferred-base-arguments.md" },
   ] },
   { "expressions and statements" = [
     { "context-sensitive resolution" = "features/context-sensitive-resolution.md" },
