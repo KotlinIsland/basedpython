@@ -2762,11 +2762,22 @@ mod subsumed_lowerings {
             Lowering::FloatConst,
             Lowering::Typeof,
         ];
+        // the class is hoisted ahead of the module's own bindings, so a field reading one —
+        // the `y` a `typeof` names — is written as a forward reference
+        let (reads_binding, reads_none): (Vec<Lowering>, Vec<Lowering>) = fields
+            .iter()
+            .partition(|lowering| **lowering == Lowering::Typeof);
         cases.extend(leaves(
             "AnonNamedTuplePass",
-            &fields,
+            &reads_none,
             |leaf| format!("def f(x: (a: {leaf}, b: str)) -> None: ..."),
             |lowered| format!("a: {lowered}"),
+        ));
+        cases.extend(leaves(
+            "AnonNamedTuplePass",
+            &reads_binding,
+            |leaf| format!("def f(x: (a: {leaf}, b: str)) -> None: ..."),
+            |lowered| format!("a: \"{lowered}\""),
         ));
         cases.extend(leaves(
             "ProtocolTypePass",

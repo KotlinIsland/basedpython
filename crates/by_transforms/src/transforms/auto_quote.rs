@@ -330,8 +330,23 @@ impl Quoter<'_> {
 /// the lowerings inside it land between the quotes. the delimiter is one the source it
 /// wraps does not already use
 pub(crate) fn quoted(source: &str, range: TextRange) -> Vec<Fragment> {
-    let text = &source[range];
-    let delimiter = ["\"", "'", "\"\"\"", "'''"]
+    let delimiter = delimiter_for(&source[range]);
+    vec![
+        Fragment::Lit(delimiter.to_owned()),
+        Fragment::Src(range),
+        Fragment::Lit(delimiter.to_owned()),
+    ]
+}
+
+/// `text`, a lowered type expression, written as the forward reference python reads lazily
+pub(crate) fn quoted_text(text: &str) -> String {
+    let delimiter = delimiter_for(text);
+    format!("{delimiter}{text}{delimiter}")
+}
+
+/// a string delimiter `text` does not already use
+fn delimiter_for(text: &str) -> &'static str {
+    ["\"", "'", "\"\"\"", "'''"]
         .into_iter()
         .find(|delimiter| {
             !text.contains(delimiter)
@@ -340,12 +355,7 @@ pub(crate) fn quoted(source: &str, range: TextRange) -> Vec<Fragment> {
                     .next()
                     .is_none_or(|quote| !text.ends_with(quote))
         })
-        .unwrap_or("\"");
-    vec![
-        Fragment::Lit(delimiter.to_owned()),
-        Fragment::Src(range),
-        Fragment::Lit(delimiter.to_owned()),
-    ]
+        .unwrap_or("\"")
 }
 
 #[cfg(test)]

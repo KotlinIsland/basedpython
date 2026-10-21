@@ -226,13 +226,39 @@ impl<'src> AnonNamedTuple<'src> {
     fn render_field_type(&mut self, expr: &Expr) -> String {
         let lowered = self.callable.lower_type_expr(expr);
         let renamed = self.apply_typevar_renames(&lowered);
-        // a renamed typevar is declared below the hoisted class, so the annotation
-        // must stay a string
-        if renamed != lowered && !lowered.is_empty() {
-            format!("\"{renamed}\"")
+        // the class is hoisted ahead of everything the module binds, a renamed typevar
+        // among them, so a field naming one is a forward reference there and is quoted
+        // as one
+        let forward = renamed != lowered || self.reads_a_module_binding(expr);
+        if forward && !lowered.is_empty() {
+            super::auto_quote::quoted_text(&renamed)
         } else {
             renamed
         }
+    }
+
+    /// whether `expr` reads a name the module binds
+    fn reads_a_module_binding(&self, expr: &Expr) -> bool {
+        struct Finder<'a> {
+            types: &'a dyn TypeInfo,
+            found: bool,
+        }
+        impl<'ast> Visitor<'ast> for Finder<'_> {
+            fn visit_expr(&mut self, expr: &'ast Expr) {
+                if let Expr::Name(name) = expr
+                    && self.types.is_bound_globally(&name.id)
+                {
+                    self.found = true;
+                }
+                walk_expr(self, expr);
+            }
+        }
+        let mut finder = Finder {
+            types: self.types,
+            found: false,
+        };
+        finder.visit_expr(expr);
+        finder.found
     }
 
     /// Active typevar rename map, flattened from the stack with inner scopes
@@ -825,6 +851,29 @@ mod tests {
         );
     }
 
+    /// the class is hoisted ahead of everything the module binds, so a field naming
+    /// one of those is a forward reference there, and is quoted as one
+    #[test]
+    fn a_field_naming_a_module_binding_is_quoted() {
+        check(
+            indoc! {"
+                x: list[(a: F, b: int)] = []
+                Alias = list[(a: F, b: int)]
+                class F: ...
+            "},
+            indoc! {"
+                from typing import NamedTuple
+                class _AnonNamedTuple_58e90127(NamedTuple):
+                    a: \"F\"
+                    b: int
+
+                x: \"list[_AnonNamedTuple_58e90127]\" = []
+                Alias = list[\"_AnonNamedTuple_58e90127\"]
+                class F: ...
+            "},
+        );
+    }
+
     /// the synthesized class body leaves the statement the field type was
     /// written in, so nothing else lowers it — `dynamic` reaching the output
     /// verbatim is a `NameError` at import, and a wrapped type is a syntax error
@@ -854,7 +903,8 @@ mod tests {
             1,
             "expected a single class def, got: {out}"
         );
-        assert!(out.contains("    m: TypeOf[b]"), "got: {out}");
+        // `b` is bound below the hoisted class, so the field reads it as a forward reference
+        assert!(out.contains("    m: \"TypeOf[b]\""), "got: {out}");
     }
 
     #[test]
