@@ -176,7 +176,7 @@ fn a_forward_reference_under_the_future_import_is_not_quoted() {
 /// than when the module first reads it, since a quote is evaluated against the module's
 /// namespace
 const OUTSIDE_AN_ANNOTATION: &str = r#"
-from typing import Callable, NamedTuple, TypeVar, Union, get_args
+from typing import Callable, NamedTuple, TypeVar, Union, get_args, get_type_hints
 
 items = list[Later]()
 Alias = dict[str, Later]
@@ -192,7 +192,9 @@ MaybeList = list[Later?]
 maybes = list[Later?]()
 HandlerList = list[(Later) -> None]
 Method = list[int.() -> Later]
+Fields = list[(first: Later, count: int)]
 TupleParams = Callable[(Later, int), Later]
+annotated: list[(first: Later, count: int)] = []
 
 
 class Base[S]: ...
@@ -234,6 +236,8 @@ assert resolve(get_args(HandlerList)[0]) == Callable[[Later], None], get_args(Ha
 assert resolve(get_args(Method)[0]) == Callable[[int], Later], get_args(Method)
 params, returns = get_args(TupleParams)
 assert [resolve(params[0]), params[1], resolve(returns)] == [Later, int, Later], get_args(TupleParams)
+fields = resolve(get_args(Fields)[0])
+assert get_type_hints(fields) == {"first": Later, "count": int}, get_type_hints(fields)
 print("ok")
 "#;
 

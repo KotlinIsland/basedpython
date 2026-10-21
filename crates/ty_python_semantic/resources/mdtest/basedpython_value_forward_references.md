@@ -124,6 +124,21 @@ def use(both: Both, returns: Returns):
 class F: ...
 ```
 
+## an anonymous named tuple may name a later class
+
+its class is written ahead of everything the module binds, so a field naming a later class is a
+forward reference there
+
+```by
+Fields = list[(first: F, count: int)]
+fields: list[(first: F, count: int)] = []
+
+def use(entries: Fields):
+    reveal_type(entries[0].first)  # revealed: F
+
+class F: ...
+```
+
 ## a typing construct's type arguments may name a later class
 
 ```by
