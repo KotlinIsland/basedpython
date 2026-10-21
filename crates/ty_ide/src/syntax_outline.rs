@@ -24,6 +24,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::Db;
 use crate::comma_list::comma_lists;
+use crate::injection::text_ranges;
 
 /// The block structure and string literals of one file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +122,14 @@ pub struct OutlineString {
     /// The escape sequences in the literal text. A backslash Python does not recognise is still
     /// reported, as two characters: Python keeps it verbatim, and that is worth seeing.
     pub escapes: Vec<TextRange>,
+    /// Where the literal's text is written, in source order: the runs whose text, joined, is what
+    /// the literal holds — what survives the indentation basedpython strips, without the
+    /// interpolations, escapes still as written.
+    ///
+    /// The body between the quotes when nothing is stripped and nothing is interpolated. An editor
+    /// that puts another language into a string it was not told about needs exactly this: the
+    /// characters that make up the string's text, and a place in the file for each.
+    pub text: Vec<TextRange>,
 }
 
 /// The outline of `file`.
@@ -763,12 +772,65 @@ impl StringCollector<'_> {
             }
         }
 
+        let text = Self::text(
+            range,
+            flags,
+            stripped_indent.is_some(),
+            &interpolations,
+            self.source,
+        );
+
         self.strings.push(OutlineString {
             range,
             stripped_indent,
             interpolations,
             escapes,
+            text,
         });
+    }
+
+    /// See [`OutlineString::text`]. `stripped` says whether basedpython dedents this literal,
+    /// whose runs are then the ones the dedent leaves, by [`text_ranges`] — the rule the
+    /// language-injection fragments are reported by, so a string reads the same either way.
+    fn text(
+        range: TextRange,
+        flags: AnyStringFlags,
+        stripped: bool,
+        interpolations: &[TextRange],
+        source: &str,
+    ) -> Vec<TextRange> {
+        let start = range.start() + flags.opener_len();
+        let closer = if flags.is_unclosed() {
+            TextSize::default()
+        } else {
+            flags.closer_len()
+        };
+        let end = range.end().checked_sub(closer).unwrap_or(start).max(start);
+        let body = TextRange::new(start, end);
+        let runs = if stripped {
+            text_ranges(body, source).into_vec()
+        } else {
+            vec![body]
+        };
+
+        // An interpolation is an expression rather than text, so each run is cut around it.
+        let mut text = Vec::with_capacity(runs.len());
+        for run in runs {
+            let mut from = run.start();
+            for interpolation in interpolations {
+                if interpolation.end() <= from || interpolation.start() >= run.end() {
+                    continue;
+                }
+                if interpolation.start() > from {
+                    text.push(TextRange::new(from, interpolation.start()));
+                }
+                from = from.max(interpolation.end());
+            }
+            if from < run.end() {
+                text.push(TextRange::new(from, run.end()));
+            }
+        }
+        text
     }
 
     /// The literal text of `elements`, and the top-level interpolations among them. A format
@@ -1009,6 +1071,22 @@ mod tests {
         out
     }
 
+    /// Every string part's text runs, each in brackets.
+    fn texts(path: &str, source: &str) -> String {
+        let test = test(path, source);
+        let file = test.program_file(test.cursor.file).python_file(&test.db);
+        let outline = syntax_outline(&test.db, file);
+        let text = test.cursor.source.as_str();
+        let mut out = String::new();
+        for string in &outline.strings {
+            for run in &string.text {
+                write!(out, "[{}]", text[run.to_std_range()].replace('\n', "⏎")).unwrap();
+            }
+            out.push('\n');
+        }
+        out
+    }
+
     /// The keywords that light up with the one under `<CURSOR>`, or `none`.
     fn family(source: &str) -> String {
         let test = test("main.by", source);
@@ -1224,6 +1302,44 @@ def f():
 \"b\"
 b\"\"\"⏎        a⏎        \"\"\"
 f\"\"\"⏎        {x}⏎        \"\"\" strips 8 interpolation `{x}`
+"
+        );
+    }
+
+    /// A string's text is what the program holds, so it is the body less what basedpython
+    /// strips and less the interpolations, which are expressions. Each literal of an
+    /// implicit concatenation is its own part with its own text, and is not dedented.
+    #[test]
+    fn the_text_is_what_survives_the_dedent_and_the_interpolations() {
+        assert_eq!(
+            texts(
+                "main.by",
+                "\
+def f():
+    plain = \"a\\tb\"
+    page = \"\"\"
+        <div>
+
+          <p>hi</p>
+        </div>
+        \"\"\"
+    query = f\"\"\"
+        SELECT {cols}
+        FROM t{n}x
+        \"\"\"
+    joined = \"\"\"
+        a
+        \"\"\" \"b\"
+    empty = \"\"
+"
+            ),
+            "\
+[a\\tb]
+[<div>⏎][⏎][  <p>hi</p>⏎][</div>]
+[SELECT ][⏎][FROM t][x]
+[⏎        a⏎        ]
+[b]
+
 "
         );
     }

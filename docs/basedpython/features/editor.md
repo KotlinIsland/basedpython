@@ -412,6 +412,16 @@ deleted, each line of a kept suite dedented — so the caret stays where it was 
 the text. the lines of a string literal that spans several lines are left as they
 are, because their indentation is part of the string
 
+## semantic tokens
+
+besides the standard modifiers, a token can carry `functionScope`: the name is
+bound in the scope of a function, a lambda or a comprehension — a parameter or a
+local, as against a module global or a class attribute. it is the binding that
+decides, not where the name is written: a global read inside a function is not
+marked, a `nonlocal` name is, and an assignment expression in a comprehension at
+the top of a module binds a global. an editor that colours each local by its name
+("rainbow" highlighting) reads it off this modifier
+
 ## keyword highlighting
 
 `textDocument/documentHighlight` on a keyword answers the keywords that belong
@@ -765,10 +775,15 @@ the build wrote
 to serve features from: it is what an editor needs to type in an
 indentation-delimited language — which line opens a suite, where a compound
 statement ends, what a string literal's escapes and interpolations are, and how
-much indentation a triple-quoted string has stripped. it also carries the name
-each `def` and `class` declares and a `def`'s parameter names, and the elements of
-every comma-separated list of two or more — what an editor moves an argument among,
-or tracks a declaration being renamed by
+much indentation a triple-quoted string has stripped. each string part also says
+where its *text* is: the runs of the file whose text, joined, is what the literal
+holds — one per line of a dedented string, past the indentation, and around the
+interpolations of an f-string. that is what an editor needs to put another
+language into a string it was not told about, with a place in the file for every
+character of the fragment. the outline also carries the name each `def` and
+`class` declares and a `def`'s parameter names, and the elements of every
+comma-separated list of two or more — what an editor moves an argument among, or
+tracks a declaration being renamed by
 
 `.by` test files are collected under the same names as python ones — `test_*.by`
 and `*_test.by` — because a `.by` transpiles to the `.py` of the same stem, and
@@ -783,7 +798,7 @@ counted as one `\n`, written as sixteen lowercase hex digits. for a notebook cel
 that is the cell's own text. the request is then answered about that text and no
 other. when the server already holds it — the open buffer, or for
 `by/syntaxOutline`, `by/injections`, `by/superMembers`,
-`by/documentSuperMembers`, `textDocument/semanticTokens/full` and
+`by/documentSuperMembers`, `by/transpile`, `textDocument/semanticTokens/full` and
 `textDocument/documentSymbol` the file on disk of a document the client has not
 opened — it answers at once; otherwise the
 request waits for the `didOpen`, `didChange` or file write that brings the text,

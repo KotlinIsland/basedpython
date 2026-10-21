@@ -54,6 +54,7 @@ use toml_parser::parser::{Event, EventKind};
 use ty_project::script_tag;
 use ty_python_core::ProgramFile;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
+use ty_python_core::scope::ScopeKind;
 use ty_python_semantic::{
     HasType, ImportAliasResolution, ResolvedDefinition, SemanticModel, definitions_for_attribute,
     definitions_for_imported_symbol,
@@ -163,6 +164,12 @@ bitflags! {
         /// produced for django templates, where it separates a builtin tag or
         /// filter from one the project registered.
         const DEFAULT_LIBRARY = 1 << 4;
+        /// The name is bound in the scope of a function, a lambda or a
+        /// comprehension: a parameter or a local, as against a module global or
+        /// a class attribute. An editor colours these per name — "rainbow"
+        /// highlighting — which only reads well for names that live and die with
+        /// one call.
+        const FUNCTION_SCOPE = 1 << 5;
     }
 }
 
@@ -183,6 +190,7 @@ impl SemanticTokenModifier {
             "async",
             "documentation",
             "defaultLibrary",
+            "functionScope",
         ]
     }
 }
@@ -689,16 +697,19 @@ impl<'db> SemanticTokenVisitor<'db> {
 
     /// A name a pattern binds. basedpython's match types match on *types*, so a capture
     /// there declares a type variable the case body is written in terms of.
-    fn add_capture_token(&mut self, range: TextRange) {
+    fn add_capture_token(&mut self, name: &ast::Identifier) {
         let (token_type, modifiers) = if self.in_match_type {
             (
                 SemanticTokenType::TypeParameter,
                 SemanticTokenModifier::DEFINITION,
             )
         } else {
-            (SemanticTokenType::Variable, SemanticTokenModifier::empty())
+            (
+                SemanticTokenType::Variable,
+                self.binding_scope_modifiers(name),
+            )
         };
-        self.add_token(range, token_type, modifiers);
+        self.add_token(name.range(), token_type, modifiers);
     }
 
     /// basedpython: highlight the `let` of an `if let <pattern> := <subject>:`
@@ -819,17 +830,84 @@ impl<'db> SemanticTokenVisitor<'db> {
             ty_python_semantic::ImportAliasResolution::ResolveAliases,
         );
 
-        if let Some(definition) = definition {
-            let name_str = name.id.as_str();
-            if let Some(classification) = self.classify_from_definition(definition, name_str) {
-                return Some(classification);
+        let name_str = name.id.as_str();
+        let (token_type, mut modifiers) = definition
+            .and_then(|definition| self.classify_from_definition(definition, name_str))
+            .or_else(|| {
+                // Fall back to type-based classification.
+                let ty = name.inferred_type(self.model).unwrap_or(Type::unknown());
+                self.classify_from_type_and_name_str(ty, name_str)
+            })?;
+
+        if self.binds_in_function_scope(name, definition) {
+            modifiers |= SemanticTokenModifier::FUNCTION_SCOPE;
+        }
+        Some((token_type, modifiers))
+    }
+
+    /// Whether `name` is bound in a function's, a lambda's or a comprehension's
+    /// scope, given the definition it resolves to. See
+    /// [`SemanticTokenModifier::FUNCTION_SCOPE`].
+    fn binds_in_function_scope(
+        &self,
+        name: &ast::ExprName,
+        resolved: Option<Definition<'db>>,
+    ) -> bool {
+        let db = self.model.db();
+        let binding = match resolved {
+            // resolved through an import to where another module defines it: the
+            // name here is bound by the import, which is the scope it lives in
+            Some(definition) if definition.program_file(db) != self.model.program_file() => {
+                definition_for_name(
+                    self.model,
+                    name,
+                    ty_python_semantic::ImportAliasResolution::PreserveAliases,
+                )
+            }
+            resolved => resolved,
+        };
+        binding.is_some_and(|definition| self.is_function_scoped(definition))
+    }
+
+    /// Whether `definition` binds its name in a function's, a lambda's or a
+    /// comprehension's scope.
+    fn is_function_scoped(&self, definition: Definition<'db>) -> bool {
+        let db = self.model.db();
+        match definition.scope(db).scope(db).kind() {
+            ScopeKind::Function | ScopeKind::Lambda => true,
+            // an assignment expression in a comprehension binds in the scope around
+            // the comprehension, which at the top of a module is the module's
+            ScopeKind::Comprehension => {
+                !matches!(definition.kind(db), DefinitionKind::NamedExpression(_))
+                    || !definition.place(db).as_symbol().is_some_and(|symbol| {
+                        ty_python_core::semantic_index(db, definition.program_file(db))
+                            .symbol_resolves_to_global_scope(symbol, definition.file_scope(db))
+                    })
+            }
+            ScopeKind::Module | ScopeKind::Class | ScopeKind::TypeParams | ScopeKind::TypeAlias => {
+                false
             }
         }
+    }
 
-        // Fall back to type-based classification.
-        let ty = name.inferred_type(self.model).unwrap_or(Type::unknown());
-        let name_str = name.id.as_str();
-        self.classify_from_type_and_name_str(ty, name_str)
+    /// The modifiers of the name a binding statement introduces without an
+    /// expression of its own — an `except ... as` name, a pattern's capture —
+    /// read off the definitions the semantic index keys on `node`.
+    fn binding_scope_modifiers<'a>(
+        &self,
+        node: impl Into<ast::AnyNodeRef<'a>>,
+    ) -> SemanticTokenModifier {
+        let db = self.model.db();
+        let index = ty_python_core::semantic_index(db, self.model.program_file());
+        let in_function = index
+            .try_definitions(node.into())
+            .and_then(|definitions| definitions.first().copied())
+            .is_some_and(|definition| self.is_function_scoped(definition));
+        if in_function {
+            SemanticTokenModifier::FUNCTION_SCOPE
+        } else {
+            SemanticTokenModifier::empty()
+        }
     }
 
     fn classify_from_definition(
@@ -1280,10 +1358,12 @@ impl<'db> SemanticTokenVisitor<'db> {
                 );
             }
 
+            // a parameter is always bound in the scope of the function or lambda
+            // that declares it
             self.add_token(
                 parameter.name.range(),
                 token_type,
-                SemanticTokenModifier::DEFINITION,
+                SemanticTokenModifier::DEFINITION | SemanticTokenModifier::FUNCTION_SCOPE,
             );
 
             // Handle parameter type annotations
@@ -1466,7 +1546,7 @@ impl<'db> SemanticTokenVisitor<'db> {
             } else if binds_parameter {
                 Some((
                     SemanticTokenType::Parameter,
-                    SemanticTokenModifier::DEFINITION,
+                    SemanticTokenModifier::DEFINITION | SemanticTokenModifier::FUNCTION_SCOPE,
                 ))
             } else {
                 None
@@ -1891,12 +1971,13 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 }
             }
             ast::Stmt::Nonlocal(nonlocal_stmt) => {
-                // Handle nonlocal statements - classify identifiers as variables
+                // Handle nonlocal statements - classify identifiers as variables,
+                // which a `nonlocal` always finds in an enclosing function
                 for identifier in &nonlocal_stmt.names {
                     self.add_token(
                         identifier.range(),
                         SemanticTokenType::Variable,
-                        SemanticTokenModifier::empty(),
+                        SemanticTokenModifier::FUNCTION_SCOPE,
                     );
                 }
             }
@@ -2002,7 +2083,8 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                                 self.add_token(
                                     name.range(),
                                     SemanticTokenType::Variable,
-                                    SemanticTokenModifier::DEFINITION,
+                                    SemanticTokenModifier::DEFINITION
+                                        | self.binding_scope_modifiers(except_handler),
                                 );
                             }
                             self.visit_body(&except_handler.body);
@@ -2086,7 +2168,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 // a place named by a narrowing return annotation classifies as the
                 // parameter it refers to, which no binding in this scope resolves
                 if let Some(token_type) = self.guard_place_classification(name) {
-                    self.add_token(name, token_type, SemanticTokenModifier::empty());
+                    self.add_token(name, token_type, SemanticTokenModifier::FUNCTION_SCOPE);
                 } else if let Some((token_type, mut modifiers)) = self.classify_name(name) {
                     if self.in_target_creating_definition && name.ctx.is_store() {
                         modifiers |= SemanticTokenModifier::DEFINITION;
@@ -2513,7 +2595,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.add_token(
                         name.range(),
                         SemanticTokenType::Variable,
-                        SemanticTokenModifier::empty(),
+                        self.binding_scope_modifiers(handler),
                     );
                 }
 
@@ -2533,7 +2615,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
 
                 // Now add the "as" variable name token
                 if let Some(name) = &pattern_as.name {
-                    self.add_capture_token(name.range());
+                    self.add_capture_token(name);
                 }
             }
             ast::Pattern::MatchMapping(pattern_mapping) => {
@@ -2554,7 +2636,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 });
 
                 if let Some(rest_name) = rest_before_keys {
-                    self.add_capture_token(rest_name.range());
+                    self.add_capture_token(rest_name);
                 }
 
                 for (key, nested_pattern) in
@@ -2565,13 +2647,13 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 }
 
                 if let Some(rest_name) = rest_after_keys {
-                    self.add_capture_token(rest_name.range());
+                    self.add_capture_token(rest_name);
                 }
             }
             ast::Pattern::MatchStar(pattern_star) => {
                 // Just the one ident here
                 if let Some(rest_name) = &pattern_star.name {
-                    self.add_capture_token(rest_name.range());
+                    self.add_capture_token(rest_name);
                 }
             }
             _ => {
@@ -6188,6 +6270,115 @@ class C:
         "#);
     }
 
+    /// A parameter, and a name a function binds, are marked as living in the function;
+    /// a module global is not, even where a function reads it, and neither is a class
+    /// attribute.
+    #[test]
+    fn function_scope_marks_parameters_and_locals() {
+        let test = SemanticTokenTest::new(
+            r#"
+limit = 10
+
+class Box:
+    size = 1
+
+def clamp(value: int) -> int:
+    result = min(value, limit)
+    return result
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_eq!(
+            test.function_scoped_names(&tokens),
+            ["value@46", "result@67", "value@80", "result@101"]
+        );
+    }
+
+    /// A lambda's parameters and a comprehension's variables are the lambda's and the
+    /// comprehension's own, wherever they are written.
+    #[test]
+    fn function_scope_marks_lambda_parameters_and_comprehension_variables() {
+        let test = SemanticTokenTest::new(
+            r#"
+double = lambda n: n * 2
+squares = [k * k for k in range(3)]
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_eq!(
+            test.function_scoped_names(&tokens),
+            ["n@17", "n@20", "k@37", "k@41", "k@47"]
+        );
+    }
+
+    /// The names a statement binds without an expression of its own — an `except ...
+    /// as` and a pattern's capture — are local where the statement is in a function and
+    /// global where it is not.
+    #[test]
+    fn function_scope_follows_where_a_handler_or_pattern_binds() {
+        let test = SemanticTokenTest::new(
+            r#"
+try:
+    pass
+except ValueError as outer:
+    pass
+
+def f(subject: object):
+    try:
+        pass
+    except ValueError as inner:
+        pass
+    match subject:
+        case [first, *rest]:
+            pass
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_eq!(
+            test.function_scoped_names(&tokens),
+            [
+                "subject@59",
+                "inner@124",
+                "subject@151",
+                "first@175",
+                "rest@183"
+            ]
+        );
+    }
+
+    /// An assignment expression in a comprehension binds in the scope around the
+    /// comprehension (PEP 572), which at the top of a module is the module's. A
+    /// `nonlocal` name is the enclosing function's, and a `global` one is not a local.
+    #[test]
+    fn function_scope_follows_assignment_expressions_global_and_nonlocal() {
+        let test = SemanticTokenTest::new(
+            r#"
+total = 0
+found = [last := x for x in range(3)]
+
+def outer():
+    count = 0
+    def inner():
+        nonlocal count
+        global total
+        count = total
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_eq!(
+            test.function_scoped_names(&tokens),
+            ["x@27", "x@32", "count@71", "count@114", "count@143"]
+        );
+    }
+
     #[test]
     fn augmented_assignment() {
         let test = SemanticTokenTest::new(
@@ -8085,6 +8276,20 @@ x = cast(int, "")
             )
         }
 
+        /// The tokens marked `functionScope`, each as its text and start offset.
+        fn function_scoped_names(&self, tokens: &SemanticTokens) -> Vec<String> {
+            let source = ruff_db::source::source_text(&self.db, self.file);
+            tokens
+                .iter()
+                .filter(|token| {
+                    token
+                        .modifiers
+                        .contains(SemanticTokenModifier::FUNCTION_SCOPE)
+                })
+                .map(|token| format!("{}@{}", &source[token.range()], u32::from(token.start())))
+                .collect()
+        }
+
         /// Helper function to convert semantic tokens to a snapshot-friendly text format
         fn to_snapshot(&self, tokens: &SemanticTokens) -> String {
             use std::fmt::Write;
@@ -8093,25 +8298,27 @@ x = cast(int, "")
 
             for token in tokens.iter() {
                 let token_text = &source[token.range()];
-                let modifiers_text = if token.modifiers.is_empty() {
+                // `functionScope` is left out: it is on every parameter and local, and the
+                // tests that are about it say so with `function_scoped_names`
+                let mut mods = Vec::new();
+                if token.modifiers.contains(SemanticTokenModifier::DEFINITION) {
+                    mods.push("definition");
+                }
+                if token.modifiers.contains(SemanticTokenModifier::READONLY) {
+                    mods.push("readonly");
+                }
+                if token.modifiers.contains(SemanticTokenModifier::ASYNC) {
+                    mods.push("async");
+                }
+                if token
+                    .modifiers
+                    .contains(SemanticTokenModifier::DOCUMENTATION)
+                {
+                    mods.push("documentation");
+                }
+                let modifiers_text = if mods.is_empty() {
                     String::new()
                 } else {
-                    let mut mods = Vec::new();
-                    if token.modifiers.contains(SemanticTokenModifier::DEFINITION) {
-                        mods.push("definition");
-                    }
-                    if token.modifiers.contains(SemanticTokenModifier::READONLY) {
-                        mods.push("readonly");
-                    }
-                    if token.modifiers.contains(SemanticTokenModifier::ASYNC) {
-                        mods.push("async");
-                    }
-                    if token
-                        .modifiers
-                        .contains(SemanticTokenModifier::DOCUMENTATION)
-                    {
-                        mods.push("documentation");
-                    }
                     format!(" [{}]", mods.join(", "))
                 };
 
