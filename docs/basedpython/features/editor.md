@@ -390,6 +390,28 @@ a split list ends with a comma, which tells a formatter it is meant to stay spli
 and a joined one loses it unless it is a tuple of one. a list with a comment in it
 is refused, since joining would put what follows the comment inside it
 
+## unwrap and remove
+
+`by/unwrap` answers what an editor's *unwrap/remove* offers around a range, innermost
+first: each `if`, loop, `try` or `with` around it can be replaced by one of its
+suites, dedented to where the statement stood, and each `elif`, `else`, `except` or
+`finally` the range is in can be removed. a `try` unwraps into the path that raises
+nothing — its suite, then its `else`, then its `finally`
+
+these change what a program does, which is what they are asked for, so they are
+not refused for that. they are refused when the result would not say what it seems
+to: a loop whose body `break`s or `continue`s does not unwrap, since the jump would
+leave some other loop or none, a `try` keeps an `except` or a `finally`, and a
+`try` with a `finally` does not unwrap when its suite can `return`, `raise`,
+`break` or `continue`, since the `finally` would no longer run after it. comments
+after a kept suite's last statement go with the suite
+
+each option comes with the range it rewrites and the ranges of it that stay, for an
+editor to mark the one selected, and its edits are many small ones — the header
+deleted, each line of a kept suite dedented — so the caret stays where it was in
+the text. the lines of a string literal that spans several lines are left as they
+are, because their indentation is part of the string
+
 ## keyword highlighting
 
 `textDocument/documentHighlight` on a keyword answers the keywords that belong

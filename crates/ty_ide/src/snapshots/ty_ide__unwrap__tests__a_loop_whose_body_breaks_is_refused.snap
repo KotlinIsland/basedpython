@@ -1,0 +1,9 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\nfor a in b:\n    if a:\n        <CURSOR>break\n\")"
+---
+Unwrap 'if...' keeps ["break"]
+for a in b:
+    break
+---
+Unwrap 'for...': refused (`break` in the loop's body would no longer leave this loop)

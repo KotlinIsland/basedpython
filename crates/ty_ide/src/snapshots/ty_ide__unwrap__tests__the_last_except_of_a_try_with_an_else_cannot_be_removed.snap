@@ -1,0 +1,5 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\ntry:\n    a()\nexcept E:\n    <CURSOR>b()\nelse:\n    c()\n\")"
+---
+Remove 'except...': refused (a `try` with an `else` needs an `except`)

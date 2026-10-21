@@ -231,6 +231,12 @@ pub(super) fn request(req: server::Request) -> Task {
         requests::ModuleNameHandler::METHOD => {
             background_request_task::<requests::ModuleNameHandler>(req, BackgroundSchedule::Worker)
         }
+        // The user invoked Unwrap/Remove and waits on a progress for the answer.
+        requests::UnwrapRequestHandler::METHOD => background_document_request_task::<
+            requests::UnwrapRequestHandler,
+        >(
+            req, BackgroundSchedule::LatencySensitive
+        ),
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),

@@ -1,0 +1,8 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\ntry:\n    <CURSOR>a()\nexcept E:\n    b()\nelse:\n    c()\nfinally:\n    d()\n\")"
+---
+Unwrap 'try...' keeps ["a()", "c()", "d()"]
+a()
+c()
+d()

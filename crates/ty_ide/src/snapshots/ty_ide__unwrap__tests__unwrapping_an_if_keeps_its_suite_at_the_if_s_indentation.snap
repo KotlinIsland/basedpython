@@ -1,0 +1,12 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\ndef f():\n    if x:\n        # why\n        a = 1<CURSOR>\n        b(\n            2,\n        )\n    else:\n        c()\n    d()\n\")"
+---
+Unwrap 'if...' keeps ["# why\n        a = 1\n        b(\n            2,\n        )"]
+def f():
+    # why
+    a = 1
+    b(
+        2,
+    )
+    d()

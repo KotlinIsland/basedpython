@@ -46,6 +46,7 @@ mod symbols;
 mod syntax_outline;
 mod test_links;
 mod type_hierarchy;
+mod unwrap;
 mod usage_counts;
 mod workspace_symbols;
 
@@ -115,6 +116,7 @@ pub use ty_python_semantic::types::ide_support::InheritedMethodKind;
 pub use type_hierarchy::{
     TypeHierarchyItem, prepare_type_hierarchy, type_hierarchy_subtypes, type_hierarchy_supertypes,
 };
+pub use unwrap::{UnwrapOption, unwrap_options};
 pub use usage_counts::{
     DeclarationKind, DeclarationUsages, UsageCountKinds, document_usage_counts,
 };

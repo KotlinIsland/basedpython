@@ -1,0 +1,9 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\ntry:\n    def g():\n        return 1\n    <CURSOR>a()\nfinally:\n    d()\n\")"
+---
+Unwrap 'try...' keeps ["def g():\n        return 1\n    a()", "d()"]
+def g():
+    return 1
+a()
+d()
