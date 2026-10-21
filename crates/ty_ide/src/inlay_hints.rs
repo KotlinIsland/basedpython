@@ -27,11 +27,12 @@ use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     InferredInvalidations, InferredStateReads, InlayHintCallArgumentDetails, StateRead, WriteSite,
     hintable_parameter_type, implicit_enum_member_value, inferred_derived_dependencies,
-    inferred_invalidations, inferred_override, inferred_property_type, inferred_raises,
-    inferred_return_annotation, inferred_state_reads, inferred_type_param_variance,
-    inherited_parameter_annotation, inherited_parameter_default, inlay_hint_call_argument_details,
-    is_composable_function, is_reveal_type_function, is_union_special_form, numeric_promotion,
-    parameter_stability, trailing_lambda_implicit_parameters, type_parameter_names,
+    inferred_invalidations, inferred_override, inferred_parameter_bound, inferred_property_type,
+    inferred_raises, inferred_return_annotation, inferred_state_reads,
+    inferred_type_param_variance, inherited_parameter_annotation, inherited_parameter_default,
+    inlay_hint_call_argument_details, is_composable_function, is_reveal_type_function,
+    is_union_special_form, numeric_promotion, parameter_stability,
+    trailing_lambda_implicit_parameters, type_parameter_names,
 };
 use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail, TypeDisplayDetails};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
@@ -489,6 +490,26 @@ impl InlayHint {
         }
     }
 
+    /// basedpython: the bound recovered for an unannotated parameter, as the
+    /// `some` annotation that would declare it
+    fn inferred_parameter_bound(
+        db: &dyn Db,
+        env: &ProgramEnvironment<'_>,
+        position: TextSize,
+        bound: Type,
+    ) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::InferredParameterType,
+            label: InlayHintLabel {
+                parts: vec![format!(": some {}", bound.display(db, env)).into()],
+            },
+            padding_left: false,
+            padding_right: false,
+            text_edits: vec![],
+        }
+    }
+
     /// the type of a place the source leaves unannotated — a parameter, or a
     /// basedpython property declaration — shown where the annotation would be
     /// written
@@ -535,6 +556,8 @@ pub enum InlayHintKind {
     PropertyType,
     /// basedpython: the return type of a `def` that leaves its annotation out
     InferredReturnType,
+    /// basedpython: the bound an unannotated parameter of a `def` takes from its body
+    InferredParameterType,
     CallArgumentName,
     /// basedpython: a function's inferred exception set
     Raises,
@@ -583,6 +606,7 @@ impl InlayHintKind {
             | InlayHintKind::InheritedParameterType
             | InlayHintKind::PropertyType
             | InlayHintKind::InferredReturnType
+            | InlayHintKind::InferredParameterType
             // basedpython: an inferred exception set is a type, like a return type
             | InlayHintKind::Raises
             | InlayHintKind::Variance
@@ -659,6 +683,7 @@ hint_switches!(InlayHintKind, enabled, set_enabled, {
     InheritedParameterType => inherited_parameter_types = "inheritedParameterTypes",
     PropertyType => property_types = "propertyTypes",
     InferredReturnType => inferred_return_types = "inferredReturnTypes",
+    InferredParameterType => inferred_parameter_types = "inferredParameterTypes",
     CallArgumentName => call_argument_names = "callArgumentNames",
     Raises => inferred_raises = "inferredRaises",
     Variance => inferred_variance = "inferredVariance",
@@ -1024,6 +1049,15 @@ pub struct InlayHintSettings {
     /// ```
     pub inferred_return_types: bool,
 
+    /// basedpython: whether to show the bound recovered for an unannotated
+    /// parameter of a `def` from what its body does with it
+    ///
+    /// ```by
+    /// def f(a": some protocol(let foo: object)"):
+    ///     _ = a.foo
+    /// ```
+    pub inferred_parameter_types: bool,
+
     /// basedpython: whether to show the type a property declaration leaves to its
     /// accessors.
     ///
@@ -1097,6 +1131,7 @@ impl InlayHintSettings {
             inherited_parameter_types: false,
             inherited_parameter_defaults: false,
             inferred_return_types: false,
+            inferred_parameter_types: false,
             property_types: false,
             implicit_arguments: false,
             enum_values: false,
@@ -1127,6 +1162,7 @@ impl InlayHintSettings {
             inherited_parameter_types,
             inherited_parameter_defaults,
             inferred_return_types,
+            inferred_parameter_types,
             property_types,
             implicit_arguments,
             enum_values,
@@ -1154,6 +1190,7 @@ impl InlayHintSettings {
             || inherited_parameter_types
             || inherited_parameter_defaults
             || inferred_return_types
+            || inferred_parameter_types
             || property_types
             || implicit_arguments
             || enum_values
@@ -1185,6 +1222,7 @@ impl Default for InlayHintSettings {
             inherited_parameter_types: true,
             inherited_parameter_defaults: true,
             inferred_return_types: true,
+            inferred_parameter_types: true,
             property_types: true,
             implicit_arguments: true,
             enum_values: true,
@@ -2091,6 +2129,32 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         ));
     }
 
+    /// basedpython: hint the bound an unannotated parameter of a `def` takes from
+    /// what its body does with it, as the `some` annotation that would declare it
+    fn add_inferred_parameter_type(&mut self, parameter: &ast::Parameter) {
+        let env = &self.model.program_environment();
+        // a `.py` file has no `some` to write the bound with
+        if !self.settings.enabled(InlayHintKind::InferredParameterType)
+            || !self.is_basedpython()
+            || self.in_lambda
+            || parameter.annotation.is_some()
+            || parameter.range().is_empty()
+        {
+            return;
+        }
+
+        let Some(bound) = inferred_parameter_bound(&self.model, parameter) else {
+            return;
+        };
+
+        self.push(InlayHint::inferred_parameter_bound(
+            self.db,
+            env,
+            parameter.name.range().end(),
+            bound,
+        ));
+    }
+
     /// basedpython: hint the default a parameter takes from the method its `def`
     /// overrides, where the parameter's own default would be written.
     fn add_inherited_parameter_default(&mut self, parameter: &ast::ParameterWithDefault) {
@@ -2389,6 +2453,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
             self.add_implicit_self(parameter);
             self.add_lambda_parameter_type(parameter);
             self.add_inherited_parameter_type(parameter);
+            self.add_inferred_parameter_type(parameter);
         }
 
         source_order::walk_parameter(self, parameter);
@@ -3231,6 +3296,9 @@ Source with applied edits:
 
             class Child(Base):
                 def f(self, a) -> None: ...
+
+            def reads(a):
+                _ = a.foo
 
             reveal_type(x)
 
@@ -12796,6 +12864,39 @@ def each(fn: (int) -> None) -> None:
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             inferred_return_types: true,
             inferred_raises: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// an unannotated parameter is bounded by what its body does with it, and
+    /// the bound is shown as the `some` annotation that would declare it. a
+    /// parameter the body asks nothing of, an annotated one and a method's
+    /// receiver get no hint
+    #[test]
+    fn basedpython_inferred_parameter_types() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def read(a):
+                _ = a.foo
+
+            def called(a, b=1):
+                x: int = a.size()
+                return b
+
+            def untouched(a):
+                pass
+
+            def annotated(a: int):
+                _ = a.real
+
+            class C:
+                def m(self, a):
+                    _ = a.foo
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_parameter_types: true,
             ..InlayHintSettings::none()
         }));
     }

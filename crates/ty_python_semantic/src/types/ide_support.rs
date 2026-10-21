@@ -3417,6 +3417,35 @@ pub fn inherited_parameter_annotation<'db>(
     (!ty.is_unknown() && !ty.is_inferred_parameter_hole(db)).then_some(ty)
 }
 
+/// basedpython: the bound an unannotated parameter of a `def` takes from what its body does with
+/// it — the `some` hole an inferred signature opens for it
+///
+/// `None` when the parameter's type comes from anywhere else (an annotation, the method it
+/// overrides, an implicit receiver), and when its body asked nothing of it, since a hole with a
+/// gradual bound says nothing a reader could use
+pub fn inferred_parameter_bound<'db>(
+    model: &SemanticModel<'db>,
+    parameter: &ast::Parameter,
+) -> Option<Type<'db>> {
+    let db = model.db();
+    let index = semantic_index(db, db.program_file(model.file()));
+    let definition = index.try_definition(parameter)?;
+    let function = nearest_enclosing_function(db, index, definition.scope(db))?;
+
+    let signature = function.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public);
+    let Type::TypeVar(hole) =
+        declared_parameter(model, definition, signature, parameter)?.annotated_type()
+    else {
+        return None;
+    };
+    if !Type::TypeVar(hole).is_inferred_parameter_hole(db) {
+        return None;
+    }
+    hole.typevar(db)
+        .upper_bound(db, &model.program_environment())
+        .filter(|bound| !bound.is_dynamic())
+}
+
 /// basedpython: the default a parameter takes from the method its `def` overrides, written the
 /// way a signature writes it.
 ///
