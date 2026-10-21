@@ -250,6 +250,19 @@ pub(super) fn request(req: server::Request) -> Task {
                 BackgroundSchedule::LatencySensitive,
             )
         }
+        // asked as text is copied and pasted, with the user waiting on the paste to settle
+        requests::CopiedImportsRequestHandler::METHOD => {
+            background_document_request_task::<requests::CopiedImportsRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
+        requests::PastedImportsRequestHandler::METHOD => {
+            background_document_request_task::<requests::PastedImportsRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         requests::PrepareTypeHierarchyRequestHandler::METHOD => background_document_request_task::<
             requests::PrepareTypeHierarchyRequestHandler,
         >(

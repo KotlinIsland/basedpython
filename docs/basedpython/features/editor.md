@@ -564,6 +564,33 @@ end of the body for a position in the header, and replace a body that is only
 range in the text the edits leave behind, which is where the user goes next. it
 is `null` when none of the names is a method the class could override
 
+## imports
+
+an `unresolved-reference` is offered an import for every module with a member
+of that name. when there is exactly one, its quick fix carries
+`{"unambiguousImport": true}` in its `data`: nothing is left to choose, so an
+editor may add it as the code is typed, the way IDEs add unambiguous imports on
+the fly. `isPreferred` does not say this — every import that resolves a name is
+preferred, since each properly fixes the diagnostic — and the mark changes
+nothing for a client that does not read it
+
+code copied from one module and pasted into another needs the imports it was
+written against. `by/copiedImports` takes the copied text and the position in
+the document it was copied from, one piece per caret, and answers each name the
+text uses that the document's global scope binds there: `name`, the absolute
+`module`, and the `member` imported from it, absent when the name is the module.
+a name the text binds itself, a local of the scope it came from, and a builtin
+are not answered. it takes the text rather than a range because a cut takes the
+text out of the document, while the scope it was cut from still binds what its
+names meant. `by/pastedImports` takes those imports, the document they were
+pasted into and the range the paste now occupies, and answers the ones whose name
+is not bound in the scope the paste landed in, with edits that add all of them.
+a name bound there to something else is left alone, and so is an import of the
+document's own module or of a module it cannot resolve. the edits of some of the
+imports are not some of the edits — two imports from one module go into one
+statement — so a client that lets its user choose asks again with the ones
+chosen. both take `textHash`
+
 ## the whole project's diagnostics
 
 with `diagnosticMode` set to `workspace`, the server checks every file in the

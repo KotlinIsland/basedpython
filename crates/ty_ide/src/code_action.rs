@@ -29,6 +29,11 @@ pub struct QuickFix {
     /// A dependency for the client to have `uv` add, for a fix that no edit can
     /// carry out on its own because it has to reach the environment.
     pub add_dependency: Option<AddDependency>,
+    /// The fix is the one import that resolves an unresolved name: no other module
+    /// has a member of that name, so nothing is left to choose. An editor may add an
+    /// import like this one as the user types, without asking, as IDEs do for
+    /// unambiguous imports.
+    pub unambiguous_import: bool,
 }
 
 /// An edit and the file it applies to.
@@ -52,6 +57,7 @@ impl QuickFix {
             preferred,
             create: None,
             add_dependency: None,
+            unambiguous_import: false,
         }
     }
 }
@@ -120,11 +126,19 @@ fn unresolved_fixes(
     let parsed = parsed_module(db, file.python_file(db)).load(db);
     let node = covering_node(parsed.syntax().into(), diagnostic_range).node();
     let symbol = &node.expr_name()?.id;
-    Some(
-        completion::unresolved_fixes(db, file, &parsed, symbol, node)
-            .into_iter()
-            .map(move |import| QuickFix::new(import.label, file.file(db), vec![import.edit], true)),
-    )
+    let fixes = completion::unresolved_fixes(db, file, &parsed, symbol, node);
+    // every qualification names a module one of the imports imports from, so a
+    // single import is a single thing the name can mean
+    let unambiguous = fixes.imports.len() == 1;
+    let imports = fixes.imports.into_iter().map(move |import| QuickFix {
+        unambiguous_import: unambiguous,
+        ..QuickFix::new(import.label, file.file(db), vec![import.edit], true)
+    });
+    let qualifications = fixes
+        .qualifications
+        .into_iter()
+        .map(move |import| QuickFix::new(import.label, file.file(db), vec![import.edit], true));
+    Some(imports.chain(qualifications))
 }
 
 #[cfg(test)]
@@ -807,6 +821,7 @@ mod tests {
         2 | dt.timedelta(days=1)
           | ^^
         help: This is a preferred code action
+        help: This is the only import that resolves the name
           |
         1 + import datetime as dt
         2 |
@@ -902,6 +917,7 @@ mod tests {
         2 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
         help: This is a preferred code action
+        help: This is the only import that resolves the name
           |
         1 + from importlib.abc import ExecutionLoader
         2 |
@@ -940,6 +956,7 @@ mod tests {
         3 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
         help: This is a preferred code action
+        help: This is the only import that resolves the name
           |
         1 + from importlib.abc import ExecutionLoader
         2 |
@@ -975,6 +992,7 @@ mod tests {
         3 | ExecutionLoader
           | ^^^^^^^^^^^^^^^
         help: This is a preferred code action
+        help: This is the only import that resolves the name
           |
         1 + from importlib.abc import ExecutionLoader
         2 |
@@ -1090,6 +1108,13 @@ mod tests {
                     diagnostic.sub(SubDiagnostic::new(
                         ruff_db::diagnostic::SubDiagnosticSeverity::Help,
                         "This is a preferred code action",
+                    ));
+                }
+
+                if action.unambiguous_import {
+                    diagnostic.sub(SubDiagnostic::new(
+                        ruff_db::diagnostic::SubDiagnosticSeverity::Help,
+                        "This is the only import that resolves the name",
                     ));
                 }
 

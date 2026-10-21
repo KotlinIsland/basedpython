@@ -50,6 +50,7 @@ mod inlay_hints;
 mod named_text;
 mod notebook;
 mod override_members;
+mod pasted_imports;
 mod program_model;
 mod project_server;
 mod publish_diagnostics;

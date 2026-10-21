@@ -130,6 +130,8 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
                         )])
                     });
 
+                    let data = QuickFixData::of(&action);
+
                     // an action that installs something reaches past the files
                     // the editor can edit, so it asks the server to run the
                     // command instead. the client runs a command after the edit
@@ -162,7 +164,7 @@ impl BackgroundDocumentRequestHandler for CodeActionRequestHandler {
                         is_preferred: Some(action.preferred),
                         command,
                         disabled: None,
-                        data: None,
+                        data,
                         tags: None,
                     }));
                 }
@@ -304,6 +306,36 @@ pub(crate) struct RefactorData {
     pub(crate) version: crate::document::DocumentVersion,
     pub(crate) refactor: String,
     pub(crate) range: types::Range,
+}
+
+/// What a quick fix's `data` tells a client about it, beyond what the protocol's own
+/// fields can say.
+///
+/// `isPreferred` cannot say that a fix may be applied without asking: every import
+/// that resolves a name is preferred, since each one properly addresses the
+/// diagnostic, and a client's "auto fix" still asks which when there are several.
+/// `unambiguousImport` is the narrower claim an editor needs before it adds an
+/// import as the user types: this is the only import that resolves the name.
+///
+/// Sent only on a fix that has something to say, and never on one that is resolved:
+/// a quick fix always carries its edit, so a client has no `codeAction/resolve` to
+/// send it back in.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuickFixData {
+    unambiguous_import: bool,
+}
+
+impl QuickFixData {
+    fn of(action: &ty_ide::QuickFix) -> Option<serde_json::Value> {
+        if !action.unambiguous_import {
+            return None;
+        }
+        serde_json::to_value(QuickFixData {
+            unambiguous_import: true,
+        })
+        .ok()
+    }
 }
 
 /// Whether a client that asked only for `only` wants actions of `kind`: a

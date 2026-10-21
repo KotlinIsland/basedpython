@@ -1044,6 +1044,7 @@ pub(crate) fn code_actions(
             preferred: true,
             create: Some(destination),
             add_dependency: None,
+            unambiguous_import: false,
         });
     }
 
@@ -1059,6 +1060,7 @@ pub(crate) fn code_actions(
         preferred: false,
         create: None,
         add_dependency: None,
+        unambiguous_import: false,
     });
 
     actions
