@@ -417,6 +417,78 @@ def f(x):
     reveal_type(x.name)  # revealed: Unknown
 ```
 
+### an attribute whose value is only discarded reads back as `object`
+
+the exception is an attribute the body reads only to throw the value away or to test it. nothing the
+function produces can carry that value's type anywhere, so `object` claims no more than the body
+asked for: that the attribute can be read
+
+```by
+def discarded(x):
+    _ = x.name
+
+def statement(x):
+    x.name
+
+def tested(x):
+    if x.name:
+        pass
+
+reveal_type(discarded)  # revealed: def discarded(x: some protocol(let name: object))
+reveal_type(statement)  # revealed: def statement(x: some protocol(let name: object))
+reveal_type(tested)  # revealed: def tested(x: some protocol(let name: object))
+```
+
+a value the body hands on — returned, or passed as an argument — can reach what the function
+produces, so it stays gradual
+
+```by
+def returned(x):
+    return x.name
+
+def passed(x):
+    print(x.name)
+
+reveal_type(returned)  # revealed: def returned(x: some protocol(let name: Unknown)) -> Unknown
+reveal_type(passed)  # revealed: def passed(x: some protocol(let name: Unknown))
+```
+
+a local is a place the value is handed to as well when a nested function or a lambda reads it, or
+when it is a global: what happens to it there is out of the body's sight
+
+```by
+def closed_over(x):
+    y = x.name
+    def inner():
+        return y
+    return inner
+
+def in_a_lambda(x):
+    y = x.name
+    return lambda: y
+
+stored: object = None
+
+def stored_globally(x):
+    global stored
+    stored = x.name
+
+# revealed: def closed_over(x: some protocol(let name: Unknown)) -> def inner() -> Unknown
+reveal_type(closed_over)
+reveal_type(in_a_lambda)  # revealed: def in_a_lambda(x: some protocol(let name: Unknown)) -> (() -> Unknown)
+reveal_type(stored_globally)  # revealed: def stored_globally(x: some protocol(let name: Unknown))
+```
+
+a method's result stays gradual even when the call is a statement of its own. an `object` result
+there is one `unused-return-value` would report, about a value the source never said anything about
+
+```by
+def closed(x):
+    x.close()
+
+reveal_type(closed)  # revealed: def closed(x: some protocol(def close(self, /) -> Unknown))
+```
+
 ### a requirement another requirement already meets is left out
 
 `int` has the `__mul__` the body needs, so intersecting the two would only cost the body the `int`
