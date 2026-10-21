@@ -107,6 +107,17 @@ the module to python's loader. a `.by` saved over during the run is caught when 
 names the one generated line that `.by` line was written as, or no line when
 there was more than one
 
+the loader that does this is python's own source loader with that one method
+replaced, not a wrapper around it. python removes its import machinery from a
+traceback raised while a module is imported, but only when nothing stands between
+that machinery and the module's code, and a wrapper's `exec_module` did: a module
+that failed as it was imported showed `<frozen importlib._bootstrap>` three times
+and the shim once above the line that failed, in every traceback no excepthook
+rewrites. it now shows what python shows for a program it runs itself, the line
+that imported and the line that failed. a module some other loader stands behind
+— a test runner that rewrites assertions — keeps that loader, which python calls
+directly; only its `__file__` is set, as the module is created
+
 both tables are keyed by the generated path exactly as the map spells it. the
 shim resolves symlinks before matching a frame's filename against it — a
 temporary tree under `/tmp` on macOS is reached by a different path than the one

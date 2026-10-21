@@ -2530,6 +2530,66 @@ main()
 }
 
 #[test]
+fn run_traceback_of_a_failed_import_shows_no_import_machinery() {
+    // python removes its own import machinery from a traceback raised while a
+    // module is imported, so that what shows is the line that imported and the
+    // line that failed. a module `by run` imports has to come out the same: the
+    // traceback is formatted by `traceback.print_exc`, which no excepthook sees
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("broken.by"),
+        "\
+table = {'a': 1}
+print(table['missing'])
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import traceback
+
+try:
+    import broken
+except KeyError:
+    traceback.print_exc()
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let frames: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.trim_start().starts_with("File "))
+        .collect();
+    assert_eq!(
+        frames.len(),
+        2,
+        "the importing line and the failing one:\n{stderr}"
+    );
+    assert!(
+        frames[0].contains("main.by") && frames[0].contains("line 4"),
+        "{stderr}"
+    );
+    assert!(
+        frames[1].contains("broken.by") && frames[1].contains("line 2"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn run_sourcemap_digests_match_the_files_they_describe() {
     // `SOURCEMAP` describes a pair of files, and a consumer that reports a `.by`
     // line from it is trusting that both are still the ones it was built from.

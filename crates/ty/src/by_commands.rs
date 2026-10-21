@@ -2131,11 +2131,18 @@ class _ByLoader:
     when the run ends. The `.by` the module was written as is the answer to every
     question those paths are asked, so it is what the module reports.
 
-    A module python's own loader would compile is compiled by `_by_code` instead,
-    under the `.by` path and lines. One any other loader stands behind — a test
-    runner that rewrites assertions as it compiles — is left to it, and only its
+    This is the loader of a module some other loader stands behind — a test runner
+    that rewrites assertions as it compiles. It is left to that loader, and only its
     `__file__` moves; its frames are rewritten to `.by` lines when they reach the
-    excepthook.
+    excepthook. A module python's own loader would compile gets `_BySourceLoader`.
+
+    `__file__` is set as the module is created, and `exec_module` is not wrapped:
+    the inner loader's own is the one python calls. A wrapper's frame between
+    python's import machinery and the module's code is what kept python from
+    removing that machinery's frames from a traceback raised while importing — a
+    module that failed as it was imported showed `<frozen importlib._bootstrap>`
+    three times and this file once, above the line that failed. The cost is a
+    reload, which sets `__file__` back to the staged path and is not seen here.
     """
 
     def __init__(self, inner, by_path):
@@ -2143,30 +2150,47 @@ class _ByLoader:
         self._by_path = by_path
 
     def create_module(self, spec):
-        return self._by_inner.create_module(spec)
-
-    def get_code(self, fullname):
-        if type(self._by_inner) is importlib.machinery.SourceFileLoader:
-            code = _by_code(self._by_inner.get_filename(fullname))
-            if code is not None:
-                return code
-        return self._by_inner.get_code(fullname)
-
-    def exec_module(self, module):
+        # python sets `__file__` on the module only when it has none
+        module = self._by_inner.create_module(spec)
+        if module is None:
+            module = types.ModuleType(spec.name)
         module.__file__ = self._by_path
-        if type(self._by_inner) is importlib.machinery.SourceFileLoader:
-            code = _by_code(self._by_inner.get_filename(module.__name__))
-            if code is not None:
-                exec(code, module.__dict__)
-                return
-        self._by_inner.exec_module(module)
+        return module
 
     def __getattr__(self, name):
         return getattr(self._by_inner, name)
 
 
+class _BySourceLoader(importlib.machinery.SourceFileLoader):
+    """The loader of a staged module python's own loader would load.
+
+    It compiles the module with `_by_code`, under the `.by` path and lines, and
+    names the `.by` as `__file__`, like `_ByLoader`. It is python's own source
+    loader rather than a wrapper around one, so that executing the module is
+    python's own `exec_module`, whose frames python removes from a traceback raised
+    while importing: what a failed import shows is the line that imported and the
+    line that failed, as it is for a program python runs itself.
+    """
+
+    def __init__(self, fullname, path, by_path):
+        super().__init__(fullname, path)
+        self._by_path = by_path
+
+    def get_code(self, fullname):
+        # python's `exec_module` asks for the code of the module it is about to
+        # run, which is in `sys.modules` by then — on an import and on a reload,
+        # which sets `__file__` back to the staged path just before
+        module = sys.modules.get(fullname)
+        if module is not None and getattr(module, "__loader__", None) is self:
+            module.__file__ = self._by_path
+        code = _by_code(self.get_filename(fullname))
+        if code is not None:
+            return code
+        return super().get_code(fullname)
+
+
 class _ByFinder:
-    """Puts a `_ByLoader` on every staged module, whoever ends up finding it."""
+    """Puts a loader of its own on every staged module, whoever ends up finding it."""
 
     def find_spec(self, fullname, path=None, target=None):
         for finder in sys.meta_path:
@@ -2179,7 +2203,9 @@ class _ByFinder:
             if spec is None:
                 continue
             by_path = _by_source_of(getattr(spec, "origin", None))
-            if by_path is not None and spec.loader is not None:
+            if by_path is not None and type(spec.loader) is importlib.machinery.SourceFileLoader:
+                spec.loader = _BySourceLoader(spec.loader.name, spec.loader.path, by_path)
+            elif by_path is not None and spec.loader is not None:
                 spec.loader = _ByLoader(spec.loader, by_path)
             return spec
         return None
