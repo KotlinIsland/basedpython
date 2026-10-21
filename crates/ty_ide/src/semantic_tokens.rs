@@ -397,6 +397,9 @@ const PRIVATE_TYPE_ALIAS: &[&str] = &["private"];
 /// The keyword introducing an inline protocol type, written ahead of its members.
 const INLINE_PROTOCOL: &[&str] = &["protocol"];
 
+/// the keyword of a read-only inline protocol member, `protocol(let a: int)`
+const INLINE_PROTOCOL_LET: &[&str] = &["let"];
+
 /// basedpython's postfix `await`, written after the awaited expression.
 const POSTFIX_AWAIT: &[&str] = &["await"];
 
@@ -2140,6 +2143,15 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                         // a data member declares a member of the protocol, not a
                         // parameter
                         member => {
+                            if let Expr::Named(named) = member
+                                && named.is_let
+                            {
+                                self.add_consumed_keywords(
+                                    named.start(),
+                                    named.target.start(),
+                                    INLINE_PROTOCOL_LET,
+                                );
+                            }
                             self.visit_parameter_field(member, SemanticTokenType::Variable);
                         }
                     }
@@ -7510,6 +7522,24 @@ def both[reified in out T]() -> None: ...
         "str" @ 45..48: Class
         "None" @ 53..57: BuiltinConstant
         "None" @ 63..67: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_inline_protocol_let_member() {
+        let test = SemanticTokenTest::new_by("def f(x: protocol(let a: int; b: str)): ...\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 4..5: Function [definition]
+        "x" @ 6..7: Parameter [definition]
+        "protocol" @ 9..17: Keyword
+        "let" @ 18..21: Keyword
+        "a" @ 22..23: Variable [definition]
+        "int" @ 25..28: Class
+        "b" @ 30..31: Variable [definition]
+        "str" @ 33..36: Class
         "#);
     }
 

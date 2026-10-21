@@ -3,6 +3,9 @@
 # verbatim from source rather than being rebuilt from the AST
 
 type Data = protocol(a: int; b: str)
+type ReadOnly = protocol(let a: int; b: str)
+# a member that is itself named `let`
+type NamedLet = protocol(let: int)
 type Method = protocol(def f(self) -> int)
 type Mixed = protocol(a: int; def f(self, x: str) -> bool)
 type Pack = protocol(**Kwargs)

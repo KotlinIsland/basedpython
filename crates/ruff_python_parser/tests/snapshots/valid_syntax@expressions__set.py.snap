@@ -346,6 +346,7 @@ Module(
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ],
@@ -392,6 +393,7 @@ Module(
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                                 NumberLiteral(
@@ -447,6 +449,7 @@ Module(
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ],

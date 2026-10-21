@@ -10295,6 +10295,10 @@ pub struct ExprNamed {
     pub range: ruff_text_size::TextRange,
     pub target: Box<Expr>,
     pub value: Box<Expr>,
+    /// basedpython: when true, this is a data member of an inline
+    /// protocol type written `let name: T`, which only has to be readable. a member written `name: T` is a
+    /// mutable attribute, as in a protocol class body. always false outside an inline protocol
+    pub is_let: bool,
 }
 
 /// See also [BinOp](https://docs.python.org/3/library/ast.html#ast.BinOp)
@@ -10721,9 +10725,10 @@ pub struct ExprCallableType {
 /// `protocol(a: int; b: str; def f(self) -> int; **Kwargs)`.
 ///
 /// Each member of `members` is one of:
-/// - `Expr::Named` — a data member `a: int`, where `target` is the member name
-///   (an `Expr::Name` with `ExprContext::Invalid`, since the name is a label and
-///   neither a binding nor a reference) and `value` is its type expression,
+/// - `Expr::Named` — a data member `a: int`, or a read-only one `let a: int`
+///   (see [`ExprNamed::is_let`](crate::ExprNamed::is_let)), where `target` is the
+///   member name (an `Expr::Name` with `ExprContext::Invalid`, since the name is a
+///   label and neither a binding nor a reference) and `value` is its type expression,
 /// - `Expr::ProtocolMethod` — a method member `def f(self) -> int`,
 /// - `Expr::Starred(Expr::Starred(..))` — a `**Kwargs` keyword-pack unpack,
 ///   matching the `**` encoding used by dict-literal types and callable arrows.
@@ -11523,6 +11528,7 @@ impl ExprNamed {
         let ExprNamed {
             target,
             value,
+            is_let: _,
             range: _,
             node_index: _,
         } = self;

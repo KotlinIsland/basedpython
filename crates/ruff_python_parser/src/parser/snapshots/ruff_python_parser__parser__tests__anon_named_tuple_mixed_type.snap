@@ -52,6 +52,7 @@ ModModule {
                                             ctx: Load,
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                         ],

@@ -144,6 +144,12 @@ pub(super) const fn starts_statement_expression(kind: TokenKind) -> bool {
 /// meaning of `!=` inside a field depend on the whitespace around it. `f"{a!=b}"` is a
 /// comparison and has to stay one, and python's grammar has no other place where a space
 /// decides which operator was written.
+/// whether a token can name an inline protocol member: a name, or a soft keyword such as `match`
+/// or `type`, which is a name everywhere its keyword meaning does not apply
+fn is_member_name(kind: TokenKind) -> bool {
+    kind == TokenKind::Name || kind.is_soft_keyword()
+}
+
 fn force_unwrap_before_debug_equal() -> ParseErrorType {
     ParseErrorType::BasedPythonOnly(
         "`!=` is the comparison operator inside a replacement field too, so a `!` written \
@@ -1882,6 +1888,7 @@ impl<'src> Parser<'src> {
                 self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
             let field_range = self.node_range(field_start);
             Expr::Named(ast::ExprNamed {
+                is_let: false,
                 target: Box::new(Expr::Name(target_name)),
                 value: Box::new(inner.expr),
                 range: field_range,
@@ -1952,6 +1959,7 @@ impl<'src> Parser<'src> {
                         .parse_conditional_expression_or_higher_impl(ExpressionContext::default());
                     let field_range = parser.node_range(field_start);
                     parser.expr_scratch.push(Expr::Named(ast::ExprNamed {
+                        is_let: false,
                         target: Box::new(Expr::Name(target_name)),
                         value: Box::new(inner.expr),
                         range: field_range,
@@ -3620,10 +3628,20 @@ impl<'src> Parser<'src> {
         {
             return false;
         }
-        match self.peek_nth(1).0 {
+        let (first, first_range) = self.peek_nth(1);
+        match first {
             TokenKind::Def => true,
             TokenKind::DoubleStar => self.options.is_basedpython,
-            TokenKind::Name => self.peek_nth(2).0 == TokenKind::Colon,
+            first if is_member_name(first) => match self.peek_nth(2).0 {
+                TokenKind::Colon => true,
+                // `protocol(let a: T)`
+                second if is_member_name(second) => {
+                    self.options.is_basedpython
+                        && self.src_text(first_range) == "let"
+                        && self.peek_nth(3).0 == TokenKind::Colon
+                }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -3755,11 +3773,19 @@ impl<'src> Parser<'src> {
                     node_index: AtomicNodeIndex::NONE,
                 })
             } else {
-                if !(self.at(TokenKind::Name) && self.peek() == TokenKind::Colon) {
+                // `let name: T` is a read-only member. a member that is itself named `let` is
+                // still `let: T`, since the keyword is followed by a name rather than a `:`
+                let is_let = self.at(TokenKind::Name)
+                    && self.src_text(self.current_token_range()) == "let"
+                    && is_member_name(self.peek());
+                if is_let {
+                    self.bump(TokenKind::Name);
+                }
+                if !(is_member_name(self.current_token_kind()) && self.peek() == TokenKind::Colon) {
                     self.add_error(
                         ParseErrorType::BasedPythonOnly(
-                            "expected a protocol member: `name: T`, `def name(...) -> T`, \
-                             or `**Pack`"
+                            "expected a protocol member: `name: T`, `let name: T`, \
+                             `def name(...) -> T`, or `**Pack`"
                                 .to_string(),
                         ),
                         self.current_token_range(),
@@ -3779,6 +3805,7 @@ impl<'src> Parser<'src> {
                 Expr::Named(ast::ExprNamed {
                     target: Box::new(Expr::Name(target)),
                     value: Box::new(value),
+                    is_let,
                     range: self.node_range(member_start),
                     node_index: AtomicNodeIndex::NONE,
                 })
@@ -4262,6 +4289,7 @@ impl<'src> Parser<'src> {
                 let inner = self.parse_conditional_expression_or_higher_impl(field_context);
                 let field_range = self.node_range(field_start);
                 elts.push(Expr::Named(ast::ExprNamed {
+                    is_let: false,
                     target: Box::new(Expr::Name(target_name)),
                     value: Box::new(inner.expr),
                     range: field_range,
@@ -4289,6 +4317,7 @@ impl<'src> Parser<'src> {
                 let inner = self.parse_conditional_expression_or_higher_impl(field_context);
                 let field_range = self.node_range(field_start);
                 elts.push(Expr::Named(ast::ExprNamed {
+                    is_let: false,
                     target: Box::new(Expr::Name(target_name)),
                     value: Box::new(inner.expr),
                     range: field_range,
@@ -4464,6 +4493,7 @@ impl<'src> Parser<'src> {
                     self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
                 let field_range = self.node_range(field_start);
                 elts.push(Expr::Named(ast::ExprNamed {
+                    is_let: false,
                     target: Box::new(Expr::Name(target_name)),
                     value: Box::new(inner.expr),
                     range: field_range,
@@ -4613,6 +4643,7 @@ impl<'src> Parser<'src> {
                         node_index: AtomicNodeIndex::NONE,
                     });
                     elts.push(Expr::Named(ast::ExprNamed {
+                        is_let: false,
                         target: Box::new(Expr::Starred(ast::ExprStarred {
                             value: Box::new(anonymous),
                             ctx: ExprContext::Load,
@@ -4649,6 +4680,7 @@ impl<'src> Parser<'src> {
                 );
                 let starred_range = TextRange::new(field_start, target_name.range.end());
                 elts.push(Expr::Named(ast::ExprNamed {
+                    is_let: false,
                     target: Box::new(Expr::Starred(ast::ExprStarred {
                         value: Box::new(Expr::Name(target_name)),
                         ctx: ExprContext::Load,
@@ -4712,6 +4744,7 @@ impl<'src> Parser<'src> {
                             node_index: AtomicNodeIndex::NONE,
                         });
                         elts.push(Expr::Named(ast::ExprNamed {
+                            is_let: false,
                             target: Box::new(outer_starred),
                             value: Box::new(inner.expr),
                             range: target_range,
@@ -4745,6 +4778,7 @@ impl<'src> Parser<'src> {
                         .parse_conditional_expression_or_higher_impl(ExpressionContext::default());
                     let field_range = self.node_range(field_start);
                     elts.push(Expr::Named(ast::ExprNamed {
+                        is_let: false,
                         target: Box::new(Expr::Name(target_name)),
                         value: Box::new(inner.expr),
                         range: field_range,
@@ -5310,6 +5344,7 @@ impl<'src> Parser<'src> {
         self.add_unsupported_syntax_error(UnsupportedSyntaxErrorKind::Walrus, range);
 
         ast::ExprNamed {
+            is_let: false,
             target: Box::new(target),
             value: Box::new(value.expr),
             range,

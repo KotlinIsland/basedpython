@@ -460,6 +460,7 @@ Module(
                                     ctx: Load,
                                 },
                             ),
+                            is_let: false,
                         },
                     ),
                     body: [
@@ -502,6 +503,7 @@ Module(
                                                 ctx: Load,
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ),

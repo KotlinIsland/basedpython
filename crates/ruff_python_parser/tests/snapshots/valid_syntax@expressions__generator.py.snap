@@ -495,6 +495,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             generators: [

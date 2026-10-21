@@ -8724,11 +8724,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     };
                     members.push((method.name.id.clone(), member));
                 }
-                // `a: int` — a data member, mutable as in a protocol class body
+                // `a: int` — a data member, mutable as in a protocol class body, and
+                // `let a: int` — one that only has to be readable
                 ast::Expr::Named(named) => {
                     let ty = self.infer_type_expression(&named.value);
                     if let Some(name) = named.target.as_name_expr() {
-                        members.push((name.id.clone(), InlineProtocolMember::Attribute(ty)));
+                        let member = if named.is_let {
+                            InlineProtocolMember::ReadOnlyAttribute(ty)
+                        } else {
+                            InlineProtocolMember::Attribute(ty)
+                        };
+                        members.push((name.id.clone(), member));
                     }
                 }
                 other => {
@@ -10435,6 +10441,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             node_index: _,
             target,
             value,
+            is_let: _,
         } = named;
 
         let add = self.add_binding(named.target.as_ref().into(), definition);

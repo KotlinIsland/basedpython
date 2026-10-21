@@ -2448,6 +2448,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
             Expr::Named(ast::ExprNamed {
                 target,
                 value,
+                is_let: _,
                 range: _,
                 node_index: _,
             }) => {

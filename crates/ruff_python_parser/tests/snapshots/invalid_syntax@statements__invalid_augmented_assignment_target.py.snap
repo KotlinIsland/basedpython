@@ -76,6 +76,7 @@ Module(
                                     ),
                                 },
                             ),
+                            is_let: false,
                         },
                     ),
                     op: Add,

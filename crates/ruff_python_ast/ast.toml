@@ -389,7 +389,13 @@ custom_source_order = true
 
 [Expr.nodes.ExprNamed]
 doc = "See also [NamedExpr](https://docs.python.org/3/library/ast.html#ast.NamedExpr)"
-fields = [{ name = "target", type = "Expr" }, { name = "value", type = "Expr" }]
+fields = [
+  { name = "target", type = "Expr" },
+  { name = "value", type = "Expr" },
+  { name = "is_let", type = "bool", doc = """basedpython: when true, this is a data member of an inline
+protocol type written `let name: T`, which only has to be readable. a member written `name: T` is a
+mutable attribute, as in a protocol class body. always false outside an inline protocol""" },
+]
 
 [Expr.nodes.ExprBinOp]
 doc = "See also [BinOp](https://docs.python.org/3/library/ast.html#ast.BinOp)"
@@ -702,9 +708,10 @@ doc = """basedpython inline protocol type expression:
 `protocol(a: int; b: str; def f(self) -> int; **Kwargs)`.
 
 Each member of `members` is one of:
-- `Expr::Named` — a data member `a: int`, where `target` is the member name
-  (an `Expr::Name` with `ExprContext::Invalid`, since the name is a label and
-  neither a binding nor a reference) and `value` is its type expression,
+- `Expr::Named` — a data member `a: int`, or a read-only one `let a: int`
+  (see [`ExprNamed::is_let`](crate::ExprNamed::is_let)), where `target` is the
+  member name (an `Expr::Name` with `ExprContext::Invalid`, since the name is a
+  label and neither a binding nor a reference) and `value` is its type expression,
 - `Expr::ProtocolMethod` — a method member `def f(self) -> int`,
 - `Expr::Starred(Expr::Starred(..))` — a `**Kwargs` keyword-pack unpack,
   matching the `**` encoding used by dict-literal types and callable arrows."""

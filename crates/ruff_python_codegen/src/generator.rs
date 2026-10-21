@@ -1237,6 +1237,8 @@ impl<'a> Generator<'a> {
                 named @ ast::ExprNamed {
                     target,
                     value,
+                    // an inline protocol member is rendered by `ProtocolType`
+                    is_let: _,
                     range: _,
                     node_index: _,
                 },
@@ -1821,6 +1823,9 @@ impl<'a> Generator<'a> {
                     // a data member is `Named`, whose default rendering is the
                     // walrus `target := value` rather than the `name: type` label form
                     if let Expr::Named(named) = member {
+                        if named.is_let {
+                            self.p("let ");
+                        }
                         self.unparse_expr(&named.target, precedence::MAX);
                         self.p(": ");
                         self.unparse_expr(&named.value, precedence::EXPR);

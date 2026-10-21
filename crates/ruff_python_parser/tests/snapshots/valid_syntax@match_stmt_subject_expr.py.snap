@@ -35,6 +35,7 @@ Module(
                                     ),
                                 },
                             ),
+                            is_let: false,
                         },
                     ),
                     cases: [
@@ -93,6 +94,7 @@ Module(
                                     ),
                                 },
                             ),
+                            is_let: false,
                         },
                     ),
                     cases: [

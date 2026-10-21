@@ -1342,7 +1342,7 @@ def f(x, y: object):
     if hasattr(y, "a"):
         x.b(y)
 
-# revealed: def f(x: some protocol(def b(self, protocol(a: object), /) -> Unknown), y: object)
+# revealed: def f(x: some protocol(def b(self, protocol(let a: object), /) -> Unknown), y: object)
 reveal_type(f)
 ```
 

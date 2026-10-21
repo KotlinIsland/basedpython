@@ -282,6 +282,7 @@ where
             Expr::Named(ast::ExprNamed {
                 target,
                 value,
+                is_let: _,
                 range: _,
                 node_index: _,
             }) => any_over_expr(target, &mut *func) || any_over_expr(value, &mut *func),

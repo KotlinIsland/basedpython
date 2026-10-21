@@ -145,6 +145,7 @@ ModModule {
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ],

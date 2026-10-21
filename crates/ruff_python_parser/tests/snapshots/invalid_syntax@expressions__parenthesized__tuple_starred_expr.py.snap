@@ -633,6 +633,7 @@ Module(
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                                 Name(
@@ -671,6 +672,7 @@ Module(
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ],

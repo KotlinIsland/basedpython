@@ -872,6 +872,7 @@ pub struct ExprBoolOp<'a> {
 pub struct ExprNamed<'a> {
     target: Box<ComparableExpr<'a>>,
     value: Box<ComparableExpr<'a>>,
+    is_let: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1159,11 +1160,13 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
             ast::Expr::Named(ast::ExprNamed {
                 target,
                 value,
+                is_let,
                 range: _,
                 node_index: _,
             }) => Self::NamedExpr(ExprNamed {
                 target: target.into(),
                 value: value.into(),
+                is_let: *is_let,
             }),
             ast::Expr::BinOp(ast::ExprBinOp {
                 left,

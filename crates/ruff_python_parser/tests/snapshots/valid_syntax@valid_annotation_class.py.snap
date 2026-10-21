@@ -46,6 +46,7 @@ Module(
                                                 ctx: Load,
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ],

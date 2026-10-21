@@ -9,7 +9,21 @@ def render(x: protocol(name: str; def greet(self, who: str) -> str)) -> str:
 ```
 
 `name: T` declares a data member and `def name(...) -> T` declares a method
-member. a method member's first parameter is the receiver, so it binds away on
+member. `let name: T` declares a read-only data member, which only has to be
+readable — an attribute of any narrower type satisfies it, and so does a
+property, while a plain `name: T` asks for an attribute of exactly `T` that can
+be assigned:
+
+```by
+class Point:
+    x: bool
+
+def show(p: protocol(let x: int)) -> None: ...
+
+show(Point())  # ok — a `bool` attribute can be read as an `int`
+```
+
+a method member's first parameter is the receiver, so it binds away on
 access — that is what distinguishes it from a data member whose type happens to
 be a callable:
 

@@ -460,7 +460,7 @@ def checked(a: A):
     return a
 
 def f(x: A):
-    reveal_type(checked)  # revealed: def checked(a: A) -> A & protocol(b: int)
+    reveal_type(checked)  # revealed: def checked(a: A) -> A & protocol(let b: int)
     reveal_type(checked(x).b)  # revealed: int
 ```
 
@@ -480,7 +480,7 @@ def checked(o: Outer):
     return o
 
 def f(x: Outer):
-    reveal_type(checked)  # revealed: def checked(o: Outer) -> Outer & protocol(inner: protocol(b: str))
+    reveal_type(checked)  # revealed: def checked(o: Outer) -> Outer & protocol(let inner: protocol(let b: str))
     reveal_type(checked(x).inner.b)  # revealed: str
 ```
 
@@ -534,7 +534,7 @@ def checked(o: Outer):
     return o.b
 
 def f(x: Outer):
-    reveal_type(checked)  # revealed: def checked(o: Outer) -> Inner & protocol(c: int)
+    reveal_type(checked)  # revealed: def checked(o: Outer) -> Inner & protocol(let c: int)
 ```
 
 ## a type is handed back by a `type def`, not a value
@@ -569,7 +569,7 @@ def checked(a: A | None):
     return a
 
 def f(x: A | None):
-    reveal_type(checked)  # revealed: def checked(a: A | None) -> A & protocol(b: int)
+    reveal_type(checked)  # revealed: def checked(a: A | None) -> A & protocol(let b: int)
 ```
 
 ## a body that returns nothing asserts what it establishes

@@ -40,6 +40,7 @@ Module(
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                                 NumberLiteral(
@@ -93,6 +94,7 @@ Module(
                                             ctx: Load,
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             generators: [

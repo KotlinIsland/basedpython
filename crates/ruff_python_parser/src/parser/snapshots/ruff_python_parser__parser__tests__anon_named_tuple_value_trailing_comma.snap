@@ -59,6 +59,7 @@ ModModule {
                                             },
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             Named(
@@ -82,6 +83,7 @@ ModModule {
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                         ],

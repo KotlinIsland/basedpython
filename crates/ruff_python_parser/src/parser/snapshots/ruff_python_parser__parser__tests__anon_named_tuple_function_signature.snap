@@ -61,6 +61,7 @@ ModModule {
                                                                 ctx: Load,
                                                             },
                                                         ),
+                                                        is_let: false,
                                                     },
                                                 ),
                                                 Named(
@@ -83,6 +84,7 @@ ModModule {
                                                                 ctx: Load,
                                                             },
                                                         ),
+                                                        is_let: false,
                                                     },
                                                 ),
                                             ],
@@ -131,6 +133,7 @@ ModModule {
                                                 ctx: Load,
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                                 Named(
@@ -153,6 +156,7 @@ ModModule {
                                                 ctx: Load,
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ],

@@ -328,6 +328,7 @@ Module(
                                                         range: 156..159,
                                                     },
                                                 ),
+                                                is_let: false,
                                             },
                                         ),
                                     ],

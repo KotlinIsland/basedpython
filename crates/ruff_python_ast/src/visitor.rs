@@ -423,6 +423,7 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
         Expr::Named(ast::ExprNamed {
             target,
             value,
+            is_let: _,
             range: _,
             node_index: _,
         }) => {

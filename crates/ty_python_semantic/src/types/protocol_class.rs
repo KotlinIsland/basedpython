@@ -559,6 +559,8 @@ pub(super) enum InlineProtocolMemberForm<'db> {
     Method(Type<'db>),
     /// `name: T`
     Attribute(Type<'db>),
+    /// `let name: T`
+    ReadOnlyAttribute(Type<'db>),
 }
 
 impl get_size2::GetSize for ProtocolInterface<'_> {}
@@ -2223,7 +2225,12 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
                 Some(InlineProtocolMemberForm::Attribute(member.ty()))
             }
             ProtocolMemberKind::Property {
-                read: Some(read), ..
+                read: Some(read),
+                write: None,
+            } => Some(InlineProtocolMemberForm::ReadOnlyAttribute(read.ty())),
+            ProtocolMemberKind::Property {
+                read: Some(read),
+                write: Some(_),
             } => Some(InlineProtocolMemberForm::Attribute(read.ty())),
             // a `classmethod` / `staticmethod` member has no inline spelling
             ProtocolMemberKind::Method(

@@ -39,6 +39,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             generators: [
@@ -122,6 +123,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             generators: [
@@ -206,6 +208,7 @@ Module(
                                                 ),
                                             },
                                         ),
+                                        is_let: false,
                                     },
                                 ),
                             ),
@@ -308,6 +311,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             generators: [
@@ -391,6 +395,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             generators: [
@@ -480,6 +485,7 @@ Module(
                                                         ),
                                                     },
                                                 ),
+                                                is_let: false,
                                             },
                                         ),
                                     ],
@@ -567,6 +573,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             generators: [
@@ -696,6 +703,7 @@ Module(
                                             ),
                                         },
                                     ),
+                                    is_let: false,
                                 },
                             ),
                             generators: [
@@ -830,6 +838,7 @@ Module(
                                                         ),
                                                     },
                                                 ),
+                                                is_let: false,
                                             },
                                         ),
                                         Named(
@@ -853,6 +862,7 @@ Module(
                                                         ),
                                                     },
                                                 ),
+                                                is_let: false,
                                             },
                                         ),
                                     ],
