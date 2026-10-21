@@ -62,6 +62,7 @@ mod super_members;
 mod syntax_outline;
 mod transpile;
 mod type_hierarchy;
+mod usage_counts;
 mod will_rename_files;
 mod workspace_folders;
 
