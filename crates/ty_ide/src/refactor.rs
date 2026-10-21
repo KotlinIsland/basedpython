@@ -24,6 +24,7 @@ mod hazards;
 mod inline_variable;
 mod names;
 mod return_annotation;
+mod split_join;
 mod text;
 
 use ruff_db::files::File;
@@ -48,6 +49,8 @@ pub enum RefactorKind {
     AddReturnAnnotation,
     ConvertToDataClass,
     ConvertFromDataClass,
+    SplitList,
+    JoinList,
 }
 
 impl RefactorKind {
@@ -59,6 +62,8 @@ impl RefactorKind {
         RefactorKind::AddReturnAnnotation,
         RefactorKind::ConvertToDataClass,
         RefactorKind::ConvertFromDataClass,
+        RefactorKind::SplitList,
+        RefactorKind::JoinList,
     ];
 
     /// The LSP code action kind the refactoring is offered as.
@@ -71,6 +76,8 @@ impl RefactorKind {
             RefactorKind::AddReturnAnnotation => "refactor.rewrite.returnAnnotation",
             RefactorKind::ConvertToDataClass => "refactor.rewrite.toDataClass",
             RefactorKind::ConvertFromDataClass => "refactor.rewrite.fromDataClass",
+            RefactorKind::SplitList => "refactor.rewrite.splitList",
+            RefactorKind::JoinList => "refactor.rewrite.joinList",
         }
     }
 
@@ -85,6 +92,8 @@ impl RefactorKind {
             RefactorKind::AddReturnAnnotation => "add-return-annotation",
             RefactorKind::ConvertToDataClass => "convert-to-data-class",
             RefactorKind::ConvertFromDataClass => "convert-from-data-class",
+            RefactorKind::SplitList => "split-list",
+            RefactorKind::JoinList => "join-list",
         }
     }
 
@@ -200,6 +209,8 @@ impl<'db> RefactorContext<'db> {
             RefactorKind::ConvertFromDataClass => {
                 data_class::plan(self, range, data_class::Direction::FromDataClass)
             }
+            RefactorKind::SplitList => split_join::plan(self, range, split_join::Direction::Split),
+            RefactorKind::JoinList => split_join::plan(self, range, split_join::Direction::Join),
         }
     }
 }

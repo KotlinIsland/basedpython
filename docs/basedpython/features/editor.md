@@ -348,6 +348,8 @@ one that asks while the caret moves is only offered what applies
 | add return annotation   | `refactor.rewrite.returnAnnotation` | a `def` header with no `->`       |
 | convert to data class   | `refactor.rewrite.toDataClass`      | a class header                    |
 | convert from data class | `refactor.rewrite.fromDataClass`    | a `data class` header             |
+| put on separate lines   | `refactor.rewrite.splitList`        | a list not yet one element a line |
+| put on one line         | `refactor.rewrite.joinList`         | a list spread over several lines  |
 
 moving an expression can change when it runs, so that is what most refusals are
 about. a value with an effect is only inlined into a single read in the very next
@@ -379,6 +381,14 @@ defers sending the edit, not working it out: whether a refactoring applies is
 decided by working out the rewrite, so the actions a `textDocument/codeAction`
 reply offers have each been computed to answer it. send `only` to narrow that —
 a request that does not ask for `refactor` kinds does no refactoring work at all
+
+putting a list on separate lines, or on one, rewrites the innermost list with
+brackets of its own around the caret — a call's arguments, a definition's
+parameters, a display's elements — and only the text between its elements. an
+element is a node of the parse, so a lambda among the arguments keeps its commas.
+a split list ends with a comma, which tells a formatter it is meant to stay split,
+and a joined one loses it unless it is a tuple of one. a list with a comment in it
+is refused, since joining would put what follows the comment inside it
 
 ## keyword highlighting
 
@@ -714,7 +724,7 @@ instead, from the same reading the transpiler and the checker use:
 | `by/testItems`     | the tests pytest collects from a document, with their node ids              |
 | `by/runModules`    | the modules `by run` can be given, and the one `run.main` names             |
 | `by/buildOutput`   | where a project's build writes, and which output came from which source     |
-| `by/syntaxOutline` | a document's suites, clause keywords, call statements and string parts      |
+| `by/syntaxOutline` | a document's suites, clause keywords, declared names, lists and strings     |
 
 `by/buildOutput` maps both ways: given a `.by` it names the file the build writes
 it to, given a file in the build directory it names the source. the path inside
@@ -733,7 +743,10 @@ the build wrote
 to serve features from: it is what an editor needs to type in an
 indentation-delimited language — which line opens a suite, where a compound
 statement ends, what a string literal's escapes and interpolations are, and how
-much indentation a triple-quoted string has stripped
+much indentation a triple-quoted string has stripped. it also carries the name
+each `def` and `class` declares and a `def`'s parameter names, and the elements of
+every comma-separated list of two or more — what an editor moves an argument among,
+or tracks a declaration being renamed by
 
 `.by` test files are collected under the same names as python ones — `test_*.by`
 and `*_test.by` — because a `.by` transpiles to the `.py` of the same stem, and
