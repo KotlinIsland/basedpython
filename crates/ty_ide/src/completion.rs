@@ -2811,6 +2811,17 @@ pub(crate) struct ImportEdit {
     pub edit: Edit,
 }
 
+/// The fixes that would resolve an unresolved name, by how each one does it.
+pub(crate) struct UnresolvedFixes {
+    /// Imports that bind the name: one for each module with a member of that name, and the
+    /// import of a module under the common alias the name is, like `import numpy as np`.
+    pub imports: Vec<ImportEdit>,
+    /// Rewrites of the name into an attribute of a module the file imports already, like
+    /// `re.search` for `search` when the file has `import re`. Each names a module one of
+    /// [`Self::imports`] imports from too.
+    pub qualifications: Vec<ImportEdit>,
+}
+
 /// Get fixes that would resolve an unresolved reference
 pub(crate) fn unresolved_fixes<'db>(
     db: &'db dyn Db,
@@ -2818,8 +2829,7 @@ pub(crate) fn unresolved_fixes<'db>(
     parsed: &ParsedModuleRef,
     symbol: &str,
     node: AnyNodeRef,
-) -> Vec<ImportEdit> {
-    let mut results = Vec::new();
+) -> UnresolvedFixes {
     let query = UserQuery::exactly(symbol);
     let ctx = CollectionContext::none();
 
@@ -2843,7 +2853,7 @@ pub(crate) fn unresolved_fixes<'db>(
         },
         &mut completions,
     );
-    results.extend(completions.into_imports());
+    let mut imports = completions.into_imports();
 
     // Request qualifications we could apply to the symbol to make it resolve
     let mut completions = Completions::new(db, file, ctx, query);
@@ -2858,13 +2868,16 @@ pub(crate) fn unresolved_fixes<'db>(
         },
         &mut completions,
     );
-    results.extend(completions.into_qualifications(node.range()));
+    let qualifications = completions.into_qualifications(node.range());
 
     // an unresolved `np` is the name a common alias would have bound, so offer to write the
     // import that binds it — the same one the completions above `np.` carry
-    results.extend(alias_import(db, file, &importer, &members, symbol));
+    imports.extend(alias_import(db, file, &importer, &members, symbol));
 
-    results
+    UnresolvedFixes {
+        imports,
+        qualifications,
+    }
 }
 
 /// The import that would bind `symbol`, when it is a common alias of a module the project has.

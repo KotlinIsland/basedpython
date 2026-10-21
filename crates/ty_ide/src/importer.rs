@@ -152,11 +152,7 @@ impl<'a> Importer<'a> {
             self.file.resolver_environment(self.db),
         );
         let request = request.avoid_conflicts(self.db, importing_file, members);
-        let mut symbol_text: Box<str> = request
-            .member
-            .or(request.asname)
-            .unwrap_or(request.module)
-            .into();
+        let mut symbol_text: Box<str> = request.symbol_text().into();
         let Some(response) = self.find(importing_file, &request, members.at) else {
             let insertion = if let Some(future) = self.find_last_future_import(members.at) {
                 Insertion::end_of_statement(future.stmt, self.source, self.stylist)
@@ -206,17 +202,18 @@ impl<'a> Importer<'a> {
                 let module = alias.asname.as_ref().unwrap_or(&alias.name).as_str();
                 ImportAction {
                     import: None,
-                    symbol_text: format!("{module}.{symbol_text}").into(),
+                    symbol_text: format!("{module}.{member}").into(),
                 }
             }
             ImportResponseKind::Partial(ast) => {
+                let imported = request.imported_member();
                 let import = if let Some(insertion) =
                     Insertion::existing_import(response.import.stmt, self.tokens)
                 {
-                    insertion.into_edit(member)
+                    insertion.into_edit(&imported)
                 } else {
                     Insertion::end_of_statement(response.import.stmt, self.source, self.stylist)
-                        .into_edit(&format!("from {} import {member}", request.module))
+                        .into_edit(&format!("from {} import {imported}", request.module))
                 };
                 ImportAction {
                     import: Some(import),
@@ -386,7 +383,7 @@ impl<'ast> MembersInScope<'ast> {
         importing_file: ImportingFile<'_>,
         request: &ImportRequest<'_>,
     ) -> bool {
-        let symbol_text = request.member.or(request.asname).unwrap_or(request.module);
+        let symbol_text = request.symbol_text();
         let Some(member) = self.find_member(symbol_text) else {
             return false;
         };
@@ -562,7 +559,15 @@ impl<'ast> AstImportKind<'ast> {
                 let kind = ast
                     .names
                     .iter()
-                    .find(|alias| alias.name.as_str() == "*" || alias.name.as_str() == member)
+                    .find(|alias| match request.asname {
+                        // `from x import y` binds `y`, not the `z` that was asked for
+                        Some(asname) => {
+                            alias.name.as_str() == member
+                                && alias.asname.as_ref().map(ast::Identifier::as_str)
+                                    == Some(asname)
+                        }
+                        None => alias.name.as_str() == "*" || alias.name.as_str() == member,
+                    })
                     .map(|alias| ImportResponseKind::Unqualified { ast, alias })
                     .unwrap_or_else(|| ImportResponseKind::Partial(ast));
                 Some(kind)
@@ -582,10 +587,8 @@ pub(crate) struct ImportRequest<'a> {
     /// When `member` is absent, then this request reflects an import
     /// of the module itself. i.e., `import module`.
     member: Option<&'a str>,
-    /// The name to bind the module to (e.g., `np`, in `import numpy as np`).
-    ///
-    /// Only a request for a module itself carries one, since that is the
-    /// only import an alias is asked for today.
+    /// The name to bind the module or member to (e.g., `np`, in `import
+    /// numpy as np`, or `PP` in `from pathlib import PurePath as PP`).
     asname: Option<&'a str>,
     /// The preferred style to use when importing the symbol (e.g.,
     /// `import foo` or `from foo import bar`).
@@ -626,6 +629,33 @@ impl<'a> ImportRequest<'a> {
             asname: None,
             style: ImportStyle::ImportFrom,
             force_style: false,
+        }
+    }
+
+    /// Create a new [`ImportRequest`] from a module and member, bound
+    /// under a name of its own, as in `from pathlib import PurePath as PP`.
+    ///
+    /// If `module` has no existing imports, the symbol should be
+    /// imported using the `import from` statement.
+    pub(crate) fn import_from_as(module: &'a str, member: &'a str, asname: &'a str) -> Self {
+        Self {
+            asname: Some(asname),
+            ..Self::import_from(module, member)
+        }
+    }
+
+    /// The text the requested symbol is referred to by once it is
+    /// imported as asked: its alias, the member, or the module.
+    fn symbol_text(&self) -> &'a str {
+        self.asname.or(self.member).unwrap_or(self.module)
+    }
+
+    /// The member as a `from ... import` lists it: `member`, or
+    /// `member as asname`.
+    fn imported_member(&self) -> String {
+        match (self.member, self.asname) {
+            (Some(member), Some(asname)) => format!("{member} as {asname}"),
+            (member, _) => member.unwrap_or(self.module).to_string(),
         }
     }
 
@@ -678,6 +708,12 @@ impl<'a> ImportRequest<'a> {
                 ..self
             };
         };
+        // a member asked for under an alias can only be imported by a
+        // `from ... import ... as ...`, so there is no other style to fall
+        // back on: whoever asks for an alias has chosen the name it binds
+        if self.asname.is_some() {
+            return self;
+        }
         match (members.map.get(self.module), members.map.get(member)) {
             // Neither symbol exists, so we can just proceed as
             // normal.
@@ -742,8 +778,8 @@ impl<'a> ImportRequest<'a> {
 impl std::fmt::Display for ImportRequest<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match (&self.style, self.member) {
-            (ImportStyle::ImportFrom, Some(member)) => {
-                write!(f, "from {} import {member}", self.module)
+            (ImportStyle::ImportFrom, Some(_)) => {
+                write!(f, "from {} import {}", self.module, self.imported_member())
             }
             _ => {
                 write!(f, "import {}", self.module)?;

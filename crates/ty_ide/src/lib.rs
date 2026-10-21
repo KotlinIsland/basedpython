@@ -30,6 +30,7 @@ mod inlay_hints;
 mod markup;
 mod module_rename;
 mod override_members;
+mod pasted_imports;
 mod refactor;
 mod references;
 mod rename;
@@ -88,6 +89,7 @@ pub use override_members::{
     ClassMembersToOverride, MemberOverrides, MemberToOverride, members_to_override,
     override_members,
 };
+pub use pasted_imports::{CopiedCode, CopiedImport, PastedImports, copied_imports, pasted_imports};
 pub use refactor::{Refactor, RefactorKind, RefactorOffer, refactor, refactors};
 pub use references::ReferencesMode;
 pub use rename::{PreparedRename, can_rename, invalid_new_name, prepare_rename, rename};

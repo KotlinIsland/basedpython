@@ -81,6 +81,7 @@ pub(crate) fn code_actions(db: &dyn Db, file: File, range: TextRange) -> Vec<Qui
                     preferred,
                     create: None,
                     add_dependency: Some(add),
+                    unambiguous_import: false,
                 });
             }
 
@@ -94,6 +95,7 @@ pub(crate) fn code_actions(db: &dyn Db, file: File, range: TextRange) -> Vec<Qui
                 preferred,
                 create: None,
                 add_dependency: None,
+                unambiguous_import: false,
             })
         })
         .collect()
