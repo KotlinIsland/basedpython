@@ -61,7 +61,9 @@ expression: initialization_result
         "refactor.extract.function",
         "refactor.rewrite.returnAnnotation",
         "refactor.rewrite.toDataClass",
-        "refactor.rewrite.fromDataClass"
+        "refactor.rewrite.fromDataClass",
+        "refactor.rewrite.splitList",
+        "refactor.rewrite.joinList"
       ],
       "resolveProvider": true
     },
@@ -113,7 +115,8 @@ expression: initialization_result
           "readonly",
           "async",
           "documentation",
-          "defaultLibrary"
+          "defaultLibrary",
+          "functionScope"
         ]
       },
       "range": true,
