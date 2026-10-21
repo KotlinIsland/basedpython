@@ -822,21 +822,27 @@ impl<'db> ExtensionApplication<'db> {
     /// substitute this application's type arguments into a member's type: first
     /// the extension's own bracket typevars (matched to the extended type's
     /// parameters by name), then the extended class's typevars the member's
-    /// signature reuses directly
+    /// signature reuses directly. both are a member projection like a declared
+    /// member's, so they also rewrite the bound of the method's `Self`
     fn apply(
         &self,
         db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
         extension: StaticClassLiteral<'db>,
         member: Type<'db>,
     ) -> Type<'db> {
         let mut member = member;
         if let Some(context) = extension.generic_context(db) {
-            member = member.apply_specialization(
+            member = member.apply_optional_owner_specialization_to_member(
                 db,
-                context.specialize(db, self.bracket_substitution.clone()),
+                Some(context.specialize(db, self.bracket_substitution.clone())),
             );
         }
-        member.apply_optional_specialization(db, self.receiver_specialization)
+        member.apply_projected_optional_owner_specialization_to_member(
+            db,
+            env,
+            self.receiver_specialization,
+        )
     }
 }
 
@@ -959,7 +965,7 @@ fn applicable_member<'db>(
     if let Some(application) = extension_applies(db, env, extension, receiver_class) {
         let member = own_member(db, extension, name)?;
         return Some(ApplicableMember {
-            member: application.apply(db, extension, member),
+            member: application.apply(db, env, extension, member),
             conformed_as: None,
         });
     }
@@ -968,7 +974,7 @@ fn applicable_member<'db>(
     let application = applied_at(db, env, extension, target, conformed)?;
     let member = own_member(db, extension, name)?;
     Some(ApplicableMember {
-        member: application.apply(db, extension, member),
+        member: application.apply(db, env, extension, member),
         conformed_as: Some(conformed),
     })
 }

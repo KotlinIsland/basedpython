@@ -18,15 +18,53 @@ names = ["a", "b"]
 reveal_type(names.second())  # revealed: str
 ```
 
-## `self` in the body is the extended type
+## `self` in the body is `Self`, bounded by the extended type
+
+`self` is typed the way it is in a method the class declares itself: as `Self`, whose bound is the
+extended type. everything the extended type has is available on it
 
 ```by
 extension list:
     def first_or(self, default: Element) -> Element:
-        reveal_type(self)  # revealed: list[Element@list]
+        reveal_type(self)  # revealed: Self@first_or
         if len(self) > 0:
             return self[0]
         return default
+```
+
+so a method that hands back `self` hands back the receiver's own type, including a subclass and the
+receiver's type arguments
+
+```by
+class Shape: ...
+class Square(Shape): ...
+
+extension Shape:
+    def itself(self):
+        return self
+
+reveal_type(Shape().itself())  # revealed: Shape
+reveal_type(Square().itself())  # revealed: Square
+
+extension list:
+    def same(self):
+        return self
+
+reveal_type([1].same())  # revealed: list[int]
+```
+
+a conditional extension's `Self` is bounded by the extended type at its bracket bound, and a
+subclass of the extended type is still the receiver it hands back
+
+```by
+class Flags[T](list[T]): ...
+
+extension list[Element: int]:
+    def same_ints(self):
+        return self
+
+reveal_type(Flags[bool]().same_ints())  # revealed: Flags[bool]
+reveal_type([True].same_ints())  # revealed: list[bool]
 ```
 
 ## a method may declare its own fresh type parameters
@@ -230,6 +268,15 @@ the extended name must resolve to a class
 extension missing:  # error: [invalid-extension]
     def m(self) -> int:
         return 0
+```
+
+such an extension extends nothing, so its `self` is gradual rather than a source of further errors
+
+```by
+extension absent:  # error: [invalid-extension]
+    def m(self):
+        reveal_type(self)  # revealed: Unknown
+        return self.anything
 ```
 
 bracket parameters must reuse names the extended type declares
