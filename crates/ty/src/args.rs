@@ -177,6 +177,13 @@ pub(crate) enum Command {
         /// `package <name>` for every top-level package that came out.
         #[arg(long)]
         print_manifest: bool,
+        /// The format to print the build's diagnostics in, as `by check` takes it.
+        ///
+        /// They go to stderr whatever the format, among the lines saying what
+        /// the build wrote, so a structured format is what lets a CI job or an
+        /// editor read them out of the rest.
+        #[arg(long, env = EnvVars::TY_OUTPUT_FORMAT)]
+        output_format: Option<OutputFormat>,
         #[command(flatten)]
         lowering: LoweringArgs,
     },

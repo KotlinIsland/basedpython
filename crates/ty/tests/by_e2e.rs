@@ -3017,6 +3017,64 @@ fn build_renders_parse_error_and_aborts() {
     );
 }
 
+/// `--output-format` puts each diagnostic on a line of its own, apart from the lines saying what
+/// the build wrote, and drops the count, which is a sentence for a person
+#[test]
+fn build_prints_its_diagnostics_in_the_format_asked_for() {
+    let dir = Scratch::new("build_output_format");
+    fs::create_dir_all(&*dir).unwrap();
+    fs::write(dir.join("main.by"), "x: int = \"nope\"\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .args(["build", "--output-format", "github"])
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        !output.status.success(),
+        "a diagnostic still fails the build"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let diagnostics: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("::"))
+        .collect();
+    assert_eq!(diagnostics.len(), 1, "one line per diagnostic:\n{stderr}");
+    assert!(
+        diagnostics[0].starts_with("::error title=ty (invalid-assignment),file=")
+            && diagnostics[0].contains("main.by,line=1,col=10,"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("main.by -> "), "{stderr}");
+    assert!(!stderr.contains("Found 1 diagnostic"), "{stderr}");
+    // the output is written whatever the format
+    assert!(dir.join("build").join("main.py").exists());
+}
+
+/// the format is read from `TY_OUTPUT_FORMAT` too, as `by check` reads it
+#[test]
+fn build_reads_the_output_format_from_the_environment() {
+    let dir = Scratch::new("build_output_format_env");
+    fs::create_dir_all(&*dir).unwrap();
+    fs::write(dir.join("main.by"), "x: int = \"nope\"\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .env(EnvVars::BY_NO_PROJECT_SERVER, "1")
+        .env(EnvVars::TY_OUTPUT_FORMAT, "concise")
+        .arg("build")
+        .current_dir(&*dir)
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("main.by:1:10: error[invalid-assignment] "),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn run_refuses_to_execute_on_check_errors() {
     // a program that fails `by check` must never execute — here `T` cannot be
