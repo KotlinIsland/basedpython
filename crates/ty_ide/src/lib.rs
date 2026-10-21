@@ -8,6 +8,7 @@ mod all_symbols;
 mod call_hierarchy;
 mod code_action;
 mod common_aliases;
+mod complete_statement;
 mod completion;
 mod data_flow;
 mod django_template;
@@ -29,6 +30,7 @@ mod injection;
 mod inlay_hints;
 mod markup;
 mod module_rename;
+mod on_type_formatting;
 mod override_members;
 mod pasted_imports;
 mod refactor;
@@ -53,6 +55,7 @@ pub use call_hierarchy::incoming_calls::{IncomingCall, incoming_calls};
 pub use call_hierarchy::outgoing_calls::{OutgoingCall, outgoing_calls};
 pub use call_hierarchy::{CallHierarchyItem, prepare_call_hierarchy};
 pub use code_action::{FileEdit, QuickFix, code_actions};
+pub use complete_statement::{CompletedStatement, StatementEdit, complete_statement};
 pub use completion::{
     Completion, CompletionCapabilities, CompletionCommand, CompletionInsertTextFormat,
     CompletionKind, CompletionSettings, completion,
@@ -85,6 +88,7 @@ pub use markup::MarkupKind;
 pub use module_rename::{
     FileMove, ModuleRenameEdits, SkipReason, SkippedImport, module_rename_edits,
 };
+pub use on_type_formatting::{Reindent, on_type_formatting};
 pub use override_members::{
     ClassMembersToOverride, MemberOverrides, MemberToOverride, members_to_override,
     override_members,

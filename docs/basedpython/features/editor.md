@@ -389,6 +389,78 @@ the pairing is read off the parse tree, so `match = 1` is an assignment and
 nothing lights up on it. a position that is not a keyword is answered the way it
 always was
 
+## typing a clause
+
+a clause that continues a compound statement — `elif`, `else`, `except`,
+`finally`, a further `case` — belongs at the indentation of the clause it
+continues, and an editor starts a new line at the indentation of the body it
+closes. the server advertises `textDocument/onTypeFormatting` with `:` as its
+trigger, and answers the `:` that finishes such a header with the edit that
+moves the clause out:
+
+```by
+for item in items:
+    if item:
+        handle(item)
+        else:   # typed here, moved out to the `if` when the `:` goes in
+```
+
+the statement it moves to is the innermost one still open above the line that
+can take that clause next and is not indented deeper than the line already is.
+a clause is only ever moved out, so an `else:` typed at the loop's column stays
+with the loop, and an `if` that already has its `else` is passed over. which
+statements are open is read from a parse of the text above the line alone,
+since the clause itself is a syntax error until it is where it belongs. a `:`
+that does not end the header — in a slice, a dict or a lambda — and
+`case: int = 1`, an annotated variable called `case`, are answered with no edit
+
+## completing a statement
+
+`by/completeStatement` finishes the statement at a position and starts the line
+after it, which is what an editor's *complete current statement* does:
+
+```json
+{
+  "textDocument": { "uri": "file:///src/main.by" },
+  "position": { "line": 1, "character": 10 },
+  "options": { "tabSize": 4, "insertSpaces": true },
+  "textHash": "…"
+}
+```
+
+a single-quoted string left open on the line is closed, the brackets left open
+on it are closed innermost first, a clause header gets its `:` — and a `def`
+its `()` — and a clause that continues a compound statement is moved out the
+way typing its `:` moves it. a statement carried on to lines below that parse,
+such as a call spread over several lines, is completed where it ends rather
+than on the line asked about; a bracket the following lines do not close is
+closed where it was left open. the new line goes inside the suite a header
+opens, at the indentation of the suite's statements when it has some already
+and one level deeper than the header otherwise, and after any other statement
+at the statement's own indentation. `options` says what one level is, the way
+`textDocument/onTypeFormatting` does: `tabSize` spaces, or a tab
+
+the reply is the edits, against the document as it was asked about, and where
+the caret goes in the document as the edits leave it:
+
+```json
+{
+  "edits": [
+    {
+      "range": {
+        "start": { "line": 1, "character": 10 },
+        "end": { "line": 1, "character": 10 }
+      },
+      "newText": "):\n        "
+    }
+  ],
+  "caret": { "line": 2, "character": 8 }
+}
+```
+
+like the other document requests it takes `textHash`, and it is `null` when
+language services are off
+
 ## go to super
 
 `textDocument/implementation` on a method goes down, to the methods that

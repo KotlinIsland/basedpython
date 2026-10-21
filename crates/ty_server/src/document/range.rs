@@ -228,7 +228,7 @@ fn u32_index_to_usize(index: u32) -> usize {
     usize::try_from(index).expect("u32 fits in usize")
 }
 
-fn text_size_to_lsp_position(
+pub(crate) fn text_size_to_lsp_position(
     offset: TextSize,
     text: &str,
     index: &LineIndex,

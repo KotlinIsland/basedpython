@@ -1,9 +1,10 @@
 use lsp_types::{
     self as types, ClientCapabilities, CodeActionKind, CodeActionOptions, CompletionOptions,
-    DiagnosticOptions, DiagnosticProvider, InlayHintOptions, MarkupKind, NotebookCellLanguage,
-    NotebookDocumentFilterWithCells, NotebookSelector, RenameOptions, Save, SaveOptions,
-    SemanticTokensLegend, SemanticTokensOptions, ServerCapabilities, SignatureHelpOptions,
-    TextDocumentSyncKind, TextDocumentSyncOptions, WorkDoneProgressOptions,
+    DiagnosticOptions, DiagnosticProvider, DocumentOnTypeFormattingOptions, InlayHintOptions,
+    MarkupKind, NotebookCellLanguage, NotebookDocumentFilterWithCells, NotebookSelector,
+    RenameOptions, Save, SaveOptions, SemanticTokensLegend, SemanticTokensOptions,
+    ServerCapabilities, SignatureHelpOptions, TextDocumentSyncKind, TextDocumentSyncOptions,
+    WorkDoneProgressOptions,
 };
 use std::str::FromStr;
 
@@ -605,6 +606,13 @@ pub(crate) fn server_capabilities(
         code_lens_provider: Some(types::CodeLensOptions {
             resolve_provider: Some(false),
             work_done_progress_options: WorkDoneProgressOptions::default(),
+        }),
+        // `:` ends a clause header, which is when a clause that continues a compound statement —
+        // `else`, `except`, a further `case` — is moved out to that statement. No other character
+        // finishes something whose layout the parser decides.
+        document_on_type_formatting_provider: Some(DocumentOnTypeFormattingOptions {
+            first_trigger_character: ":".to_string(),
+            more_trigger_character: None,
         }),
         selection_range_provider: Some(true.into()),
         folding_range_provider: Some(true.into()),
