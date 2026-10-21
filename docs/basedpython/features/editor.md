@@ -432,6 +432,37 @@ overrides, and `by/superMembers` still answers one. like the other document
 requests it takes `textHash`, and answers a document the client has not opened
 from the file on disk
 
+## usage counts
+
+`by/documentUsageCounts` answers, for a whole document, how many places use
+each of its declarations and how many classes subclass it or members override
+it: what an editor draws above each one as "3 usages" or "2 overrides". the
+declarations are the document's outline at the depth a reader scans a module
+at — its classes and functions, and the methods and properties of those
+classes. a dunder is left out, being called by the language rather than by
+name, and so is an `extension` block, which names a class it does not declare
+
+each declaration comes with its `name`, its `kind` (`class`, `function` or
+`method`), its whole `range` from its first decorator, its `selectionRange` on
+its name, and the counts named in the request's `counts`:
+
+| count             | what it is                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `references`      | the places `textDocument/references` finds from the name, the declaration not among them    |
+| `implementations` | of a class or a method, what `textDocument/implementation` finds from the name, less itself |
+
+so the count is the number of places the click on it goes to, when a client
+sends that request from the name. a method with implementations is marked
+`abstract` when it is an `@abstractmethod` or a protocol member with no body,
+so that what overrides it implements it. each count is a search of the
+workspace per declaration, and a count not named is not worked out
+
+a count depends on every file of the workspace, and the server announces no
+change to it: a client asks again after any document of the workspace changes.
+it is not a `textDocument/codeLens`, since a client that draws lenses asks for
+them again only when their own document changes. like the other document
+requests it takes `textHash`
+
 ## the whole project's diagnostics
 
 with `diagnosticMode` set to `workspace`, the server checks every file in the

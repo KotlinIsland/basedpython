@@ -40,6 +40,7 @@ mod super_members;
 mod symbols;
 mod syntax_outline;
 mod type_hierarchy;
+mod usage_counts;
 mod workspace_symbols;
 
 pub use add_dependency::{AddDependency, DependencyTarget};
@@ -98,6 +99,9 @@ pub use syntax_outline::{
 };
 pub use type_hierarchy::{
     TypeHierarchyItem, prepare_type_hierarchy, type_hierarchy_subtypes, type_hierarchy_supertypes,
+};
+pub use usage_counts::{
+    DeclarationKind, DeclarationUsages, UsageCountKinds, document_usage_counts,
 };
 pub use workspace_symbols::{WorkspaceSymbolInfo, workspace_symbols};
 

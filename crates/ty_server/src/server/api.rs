@@ -223,6 +223,11 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        requests::DocumentUsageCountsRequestHandler::METHOD => background_document_request_task::<
+            requests::DocumentUsageCountsRequestHandler,
+        >(
+            req, BackgroundSchedule::Worker
+        ),
         requests::PrepareTypeHierarchyRequestHandler::METHOD => background_document_request_task::<
             requests::PrepareTypeHierarchyRequestHandler,
         >(
