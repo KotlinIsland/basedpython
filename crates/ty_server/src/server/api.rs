@@ -208,6 +208,15 @@ pub(super) fn request(req: server::Request) -> Task {
                 BackgroundSchedule::LatencySensitive,
             )
         }
+        requests::TestSubjectsRequestHandler::METHOD => background_document_request_task::<
+            requests::TestSubjectsRequestHandler,
+        >(req, BackgroundSchedule::Worker),
+        requests::SubjectTestsRequestHandler::METHOD => background_document_request_task::<
+            requests::SubjectTestsRequestHandler,
+        >(req, BackgroundSchedule::Worker),
+        requests::ModuleNameHandler::METHOD => {
+            background_request_task::<requests::ModuleNameHandler>(req, BackgroundSchedule::Worker)
+        }
         requests::SuperMembersRequestHandler::METHOD => background_document_request_task::<
             requests::SuperMembersRequestHandler,
         >(req, BackgroundSchedule::Worker),
