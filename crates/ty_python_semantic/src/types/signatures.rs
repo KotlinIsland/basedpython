@@ -195,15 +195,19 @@ impl<'db> CallableSignature<'db> {
         Self::single(Signature::bottom())
     }
 
-    pub(crate) fn cycle_initial(
-        db: &'db dyn Db,
-        env: &ProgramEnvironment<'db>,
-        id: salsa::Id,
-    ) -> Self {
-        Self::single(Signature::new(
-            Parameters::bottom(),
-            Type::divergent(id).bottom_materialization(db, env),
-        ))
+    /// the signature a function has while the cycle computing it is still in progress
+    ///
+    /// basedpython: its return type is the cycle's own unmaterialized marker, the same value
+    /// [`inferred_return_type`](crate::types::inferred_signature::inferred_return_type) starts
+    /// from. a body that calls its own function reaches the return type through whichever of the
+    /// two queries the cycle re-enters first, and that depends on where checking started: a call
+    /// from the module body enters through this signature, a check of the function's own body
+    /// through the return type. upstream starts this one from a bottom-materialized marker, which
+    /// behaves as `Never` and so drops out of the first union it meets — and with it the only
+    /// record that the return type was defined in terms of itself. a float doubled on every round
+    /// then never widens, and the query iterates until salsa gives up
+    pub(crate) fn cycle_initial(id: salsa::Id) -> Self {
+        Self::single(Signature::new(Parameters::bottom(), Type::divergent(id)))
     }
 
     fn is_cycle_initial(&self) -> bool {

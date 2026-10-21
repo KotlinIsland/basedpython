@@ -1228,6 +1228,39 @@ def check():
     reveal_type(rec())  # revealed: float
 ```
 
+## a float literal a recursive function recomputes from itself, called from the module body
+
+The answer does not depend on where checking starts. A call from the module body asks for `rec`'s
+signature before anything has looked at `rec`'s body, so the body's own call to `rec` re-enters the
+signature rather than the return type. While the signature is still being worked out it returns the
+same marker the return type starts from, so the union still records that it is defined in terms of
+itself, and its literals are given up after a few rounds.
+
+```by
+from typing import reveal_type
+
+def rec(n: int):
+    return 0.1 if n == 0 else min(0.1, rec(n - 1) * 2)
+
+reveal_type(rec(3))  # revealed: float
+```
+
+## a float literal a recursive method recomputes from itself
+
+A method that calls itself through `self` reaches its own signature the same way, wherever checking
+starts.
+
+```by
+from typing import reveal_type
+
+class Doubler:
+    def rec(self, n: int):
+        return 0.1 if n == 0 else self.rec(n - 1) * 2
+
+def check():
+    reveal_type(Doubler().rec(3))  # revealed: float
+```
+
 ## a complex literal a loop recomputes from itself
 
 Complex literals fold the same way and are held the same way, so they need the same bound.

@@ -17,7 +17,7 @@ reveal_type(a)  # revealed: 1
 
 ```by
 class C:
-    x: str
+    x: str = ""
 
 c: C = C()
 

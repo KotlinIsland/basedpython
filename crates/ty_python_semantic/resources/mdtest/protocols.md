@@ -8103,7 +8103,7 @@ protocol Named(Sized):
     name: str
 
 class Person:
-    name: str
+    name: str = "Ada"
     def __len__(self) -> int:
         return 0
 

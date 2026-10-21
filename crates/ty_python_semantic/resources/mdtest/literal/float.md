@@ -59,7 +59,7 @@ def f(nan: float.nan) -> None:
 
 ```by
 def f() -> float.inf:
-    raise NotImplementedError
+    return float("inf")
 
 reveal_type(f())  # revealed: inf
 ```
