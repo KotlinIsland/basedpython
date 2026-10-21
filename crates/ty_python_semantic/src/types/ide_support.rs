@@ -29,7 +29,9 @@ use crate::types::list_members::all_end_of_scope_members;
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::overrides::{OverriddenDeclaration, OverrideStep, overridden_declarations};
 use crate::types::receivers;
-use crate::types::repeated_underscore::{UnderscoreLowering, UnderscoreRefusal};
+use crate::types::repeated_underscore::{
+    RepeatedUnderscoreRead, UnderscoreLowering, UnderscoreRefusal, repeated_underscore_read,
+};
 use crate::types::signatures::{
     Parameter, ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
     is_placeholder_default,
@@ -3778,7 +3780,7 @@ fn inherited_expression<'db>(
     db: &'db dyn Db,
     definition: Definition<'db>,
 ) -> Option<InheritedExpression<'db>> {
-    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node, _)) =
         definition.kind(db)
     else {
         return None;
@@ -4096,6 +4098,35 @@ pub fn repeated_underscore_lowering(
         .last_definition
         .repeated_underscores(db)
         .clone()
+}
+
+/// basedpython: whether the body of `function` refers to the `_` its parameters bind — reads
+/// or deletes it, or holds a scope that reads it from the function or declares it `nonlocal`
+pub fn refers_to_own_underscore(
+    model: &SemanticModel<'_>,
+    function: &ast::StmtFunctionDef,
+) -> bool {
+    let db = model.db();
+    let index = semantic_index(db, db.program_file(model.file()));
+    index
+        .try_node_scope(NodeWithScopeRef::Function(function))
+        .is_some_and(|scope| {
+            crate::types::repeated_underscore::refers_to_own_underscore(index, scope)
+        })
+}
+
+/// basedpython: whether `name` is a read of `_` that may read one of a parameter list's
+/// repeated `_`s — the read ty reports, and the transpiler refuses
+pub fn repeated_underscore_read_of(
+    model: &SemanticModel<'_>,
+    name: &ast::ExprName,
+) -> Option<RepeatedUnderscoreRead> {
+    repeated_underscore_read(
+        model.db(),
+        &model.program_environment(),
+        model.program_file(),
+        name,
+    )
 }
 
 /// basedpython: the return type recovered for a `def` that leaves its annotation out.

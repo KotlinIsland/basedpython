@@ -285,7 +285,7 @@ pub(crate) fn inferred_parameter_default<'db>(
     parameter: Definition<'db>,
 ) -> Option<Type<'db>> {
     let env = &ProgramEnvironment::from_definition(parameter);
-    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node, _)) =
         parameter.kind(db)
     else {
         return None;
@@ -1181,7 +1181,7 @@ fn comparison_dunder(op: ast::CmpOp) -> Option<&'static str> {
 
 /// The name a parameter definition binds.
 fn parameter_definition_name<'db>(db: &'db dyn Db, parameter: Definition<'db>) -> Option<Name> {
-    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node, _)) =
         parameter.kind(db)
     else {
         return None;

@@ -599,7 +599,7 @@ impl<'db> CalleeResolver<'_, 'db> {
         parameter: &ParameterDefinitionNodeKind,
     ) -> Option<Resolved<'db>> {
         let db = self.db;
-        let ParameterDefinitionNodeKind::Parameter(parameter) = parameter else {
+        let ParameterDefinitionNodeKind::Parameter(parameter, _) = parameter else {
             return None;
         };
         let file = definition.program_file(db);

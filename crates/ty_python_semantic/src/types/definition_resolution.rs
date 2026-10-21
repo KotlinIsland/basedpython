@@ -473,12 +473,12 @@ fn declared_annotation<'a>(
     match definition.kind(db) {
         DefinitionKind::Parameter(parameter) => match parameter {
             ty_python_core::definition::ParameterDefinitionNodeKind::VariadicPositionalParameter(
-                parameter,
+                parameter, _
             )
             | ty_python_core::definition::ParameterDefinitionNodeKind::VariadicKeywordParameter(
-                parameter,
+                parameter, _
             ) => parameter.node(parsed).annotation.as_deref(),
-            ty_python_core::definition::ParameterDefinitionNodeKind::Parameter(parameter) => {
+            ty_python_core::definition::ParameterDefinitionNodeKind::Parameter(parameter, _) => {
                 parameter.node(parsed).parameter.annotation.as_deref()
             }
         },

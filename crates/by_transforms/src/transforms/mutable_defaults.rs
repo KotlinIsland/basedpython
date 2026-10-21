@@ -66,7 +66,7 @@ use ruff_python_ast::{Expr, ParameterWithDefault, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::repeated_underscore::{WrittenNames, reads_underscore, rebound_underscore};
+use super::repeated_underscore::{WrittenNames, rebound_underscore};
 use super::source_util::{
     PrologueStatement, body_prologue, first_body_statement, python_string_literal,
     standalone_expression,
@@ -94,10 +94,11 @@ pub(crate) enum Guard {
         /// the name the builtin `TypeError` is written under
         type_error: String,
     },
-    /// bind `_` to the parameter that was the first `_`, for a body that reads it. a
+    /// bind `_` to the parameter that was the first `_`, for a body that refers to it. a
     /// repeated `_` that takes its name from an overridden method leaves no parameter
-    /// named `_`, and a read of `_` is the first one's value — after its default is
-    /// settled, so this comes after the guards above
+    /// named `_`, and a read of `_` is the first one's value, a `del _` deletes it and a
+    /// nested `nonlocal _` finds it — after its default is settled, so this comes after the
+    /// guards above
     Rebind { parameter: String },
 }
 
@@ -426,7 +427,7 @@ pub(crate) fn parameter_guards(
     }
     if !is_stub
         && let Some(parameter) = rebound_underscore(params, written_names)
-        && reads_underscore(&f.body)
+        && types.refers_to_own_underscore(f)
     {
         guards.push(Guard::Rebind {
             parameter: parameter.to_string(),

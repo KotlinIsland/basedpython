@@ -9,16 +9,35 @@
 //!
 //! what each parameter is called in the python, and how many of them a call reaches by
 //! position alone, is decided here once — for ty's signature of the definition and for the
-//! transpiler's output alike
+//! transpiler's output alike. so is which reads of `_` are refused: python binds the name to
+//! one of the parameters and ty to another, so a read of a repeated `_` has no one meaning
 
 use std::collections::HashSet;
 
+use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
 use ruff_python_stdlib::identifiers::is_identifier_continuation;
-use ty_python_core::{FileScopeId, SemanticIndex};
+use ty_python_core::definition::{
+    Definition, DefinitionKind, DefinitionState, LambdaParameterDefinitionNodeKind, ParameterName,
+};
+use ty_python_core::place::PlaceExpr;
+use ty_python_core::scope::NodeWithScopeKind;
+use ty_python_core::symbol::Symbol;
+use ty_python_core::{
+    BindingWithConstraintsIterator, FileScopeId, ProgramFile, SemanticIndex, semantic_index,
+    use_def_map,
+};
 
+use crate::place::{
+    ConsideredDefinitions, RequiresExplicitReExport, place_by_id, place_from_bindings,
+};
+use crate::place_load::{
+    PlaceLoadMode, PlaceLoadResolutionStep, PlaceLoadSourceKind, resolve_place_load,
+};
+use crate::reachability::evaluate_reachability_with_cache;
 use crate::types::signatures::Parameter;
+use crate::{Db, ProgramEnvironment};
 
 /// the names a module spells anywhere in the text its author wrote — every run of
 /// identifier characters, in code, strings and comments alike
@@ -592,17 +611,36 @@ fn inherited_names<'a>(
 /// whether a parameter named `name` would change what the body of the function whose
 /// scope is `scope` reads: the body mentions the name itself, or a scope nested in it reads
 /// the name without binding it, which python resolves through the function
-///
-/// a nested scope that binds the name reads its own, but one nested in *that* is still
-/// asked, which can only answer yes where the answer did not matter
 pub(crate) fn reads_from_enclosing_scope(
     index: &SemanticIndex,
     scope: FileScopeId,
     name: &str,
 ) -> bool {
-    if index.place_table(scope).symbol_by_name(name).is_some() {
-        return true;
-    }
+    index.place_table(scope).symbol_by_name(name).is_some()
+        || read_by_nested_scope(index, scope, name)
+}
+
+/// whether the body of the function whose scope is `scope` refers to the `_` its parameters
+/// bind: it reads or deletes `_` itself, or a scope nested in it reads `_` without binding
+/// it or declares it `nonlocal`
+///
+/// an override's `_`s take the names of the method it overrides, so the python binds `_` on
+/// entry for such a body, to the first of them. without it, a nested `nonlocal _` has no
+/// binding to find and python rejects the module
+pub(crate) fn refers_to_own_underscore(index: &SemanticIndex, scope: FileScopeId) -> bool {
+    index
+        .place_table(scope)
+        .symbol_by_name("_")
+        .is_some_and(Symbol::is_used)
+        || read_by_nested_scope(index, scope, "_")
+}
+
+/// whether a scope nested in `scope` reads `name` without binding it, or declares it
+/// `nonlocal`, which python resolves through `scope`
+///
+/// a nested scope that binds the name reads its own, but one nested in *that* is still
+/// asked, which can only answer yes where the answer did not matter
+fn read_by_nested_scope(index: &SemanticIndex, scope: FileScopeId, name: &str) -> bool {
     let mut pending: Vec<FileScopeId> = index.child_scopes(scope).map(|(id, _)| id).collect();
     while let Some(scope) = pending.pop() {
         if let Some(symbol) = index.place_table(scope).symbol_by_name(name)
@@ -614,6 +652,171 @@ pub(crate) fn reads_from_enclosing_scope(
         pending.extend(index.child_scopes(scope).map(|(id, _)| id));
     }
     false
+}
+
+/// a read of `_` that may read one of a parameter list's repeated `_`s
+///
+/// python binds `_` to one of them and ty to another, the lowering keeping the first `_`
+/// and ty's bindings reaching the read from the last, so the read is refused rather than
+/// answered two ways:
+///
+/// ```by
+/// def f(_: int, _: str) -> str:
+///     return _  # python returns the `int`
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepeatedUnderscoreRead {
+    /// the `def` the parameters belong to, `None` for a lambda
+    function: Option<Name>,
+}
+
+impl RepeatedUnderscoreRead {
+    /// what is wrong, in the words a diagnostic and a transpile error both use
+    pub fn message(&self) -> String {
+        match &self.function {
+            Some(function) => format!("reading a repeated `_` parameter of `{function}`"),
+            None => "reading a repeated `_` parameter of a lambda".to_owned(),
+        }
+    }
+
+    /// how to write the definition so it is accepted
+    pub fn help(&self) -> &'static str {
+        "several parameters are named `_`, so a read cannot say which: give the one the body \
+         reads a name of its own"
+    }
+}
+
+/// whether `name`, a read in `file`, may read one of a parameter list's repeated `_`s, and
+/// whose they are when it does
+///
+/// the read is resolved the way inference resolves it: from the bindings that reach it,
+/// outward through every scope the name is free in, until a source binds it on every path.
+/// a read that only a rebinding of `_` reaches reads that rebinding, and is accepted, and so
+/// is a read the parser wrote: the `self._ = _` an `init(let _: int, let _: int)` stands for
+/// reads each parameter by the name the lowering gives it
+///
+/// `del _` is not a read. it takes no value, and leaves the name unbound in either answer
+pub(crate) fn repeated_underscore_read<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: ProgramFile<'db>,
+    name: &ast::ExprName,
+) -> Option<RepeatedUnderscoreRead> {
+    if name.id != "_" || !file.file(db).source_type(db).is_basedpython() {
+        return None;
+    }
+    let index = semantic_index(db, file);
+    let expr = ast::ExprRef::Name(name);
+    // a name the index never saw has no reaching bindings to resolve: one parsed out of a
+    // string annotation is such
+    let scope = index.try_expression_scope_id(&expr)?.to_scope_id(db, file);
+    index.try_use_id(expr)?;
+    let module = parsed_module(db, file.python_file(db)).load(db);
+    if module
+        .generated_names()
+        .get(name.range, name.id.clone())
+        .is_some()
+    {
+        return None;
+    }
+
+    let resolution = resolve_place_load(
+        db,
+        index,
+        scope,
+        PlaceExpr::from_expr_name(name),
+        PlaceLoadMode::AtExpression(expr),
+    );
+    for step in resolution {
+        match step {
+            PlaceLoadResolutionStep::Source(source) => {
+                let bound = match source.kind {
+                    PlaceLoadSourceKind::Bindings(bindings) => {
+                        if let Some(read) = repeated_parameter_in(db, &module, bindings.clone()) {
+                            return Some(read);
+                        }
+                        place_from_bindings(db, env, bindings)
+                            .place
+                            .is_definitely_bound()
+                    }
+                    PlaceLoadSourceKind::DefinitionsFromOwningScope { scope, id } => {
+                        let bindings = use_def_map(db, scope).reachable_bindings(id);
+                        if let Some(read) = repeated_parameter_in(db, &module, bindings) {
+                            return Some(read);
+                        }
+                        place_by_id(
+                            db,
+                            scope,
+                            id,
+                            RequiresExplicitReExport::No,
+                            ConsideredDefinitions::AllReachable,
+                        )
+                        .place
+                        .is_definitely_bound()
+                    }
+                    // a value a debugger read out of the frame is the one the read has
+                    PlaceLoadSourceKind::Observed(_) => true,
+                    // a name python supplies without a binding is no parameter, and none of
+                    // them is a `_`, so the sources after it are asked as inference asks them
+                    PlaceLoadSourceKind::Implicit(_) => false,
+                };
+                if bound {
+                    return None;
+                }
+            }
+            PlaceLoadResolutionStep::MemberResolutionCondition(_) => {}
+            PlaceLoadResolutionStep::Exhausted(_) => return None,
+        }
+    }
+    None
+}
+
+/// the repeated `_`s whose parameter definition is among `bindings`, when one is and may be
+/// reached
+fn repeated_parameter_in<'db>(
+    db: &'db dyn Db,
+    module: &ParsedModuleRef,
+    bindings: BindingWithConstraintsIterator<'_, 'db>,
+) -> Option<RepeatedUnderscoreRead> {
+    let predicates = bindings.predicates();
+    let reachability_constraints = bindings.reachability_constraints();
+    bindings
+        .filter(|binding| {
+            !evaluate_reachability_with_cache(
+                db,
+                None,
+                reachability_constraints,
+                predicates,
+                binding.reachability_constraint,
+            )
+            .is_always_false()
+        })
+        .find_map(|binding| match binding.binding {
+            DefinitionState::Defined(definition) => repeated_parameter(db, module, definition),
+            _ => None,
+        })
+}
+
+/// the parameter list `definition` is a repeated `_` of, when it is one
+fn repeated_parameter<'db>(
+    db: &'db dyn Db,
+    module: &ParsedModuleRef,
+    definition: Definition<'db>,
+) -> Option<RepeatedUnderscoreRead> {
+    let (DefinitionKind::Parameter(parameter)
+    | DefinitionKind::LambdaParameter(LambdaParameterDefinitionNodeKind { parameter, .. })) =
+        definition.kind(db)
+    else {
+        return None;
+    };
+    if parameter.name() != ParameterName::RepeatedUnderscore {
+        return None;
+    }
+    let function = match definition.scope(db).node(db) {
+        NodeWithScopeKind::Function(function) => Some(function.node(module).name.id.clone()),
+        _ => None,
+    };
+    Some(RepeatedUnderscoreRead { function })
 }
 
 /// the name each of `parameters`, a parameter list written as each one's slot and source

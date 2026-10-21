@@ -7,7 +7,7 @@ use ruff_python_ast::find_node::covering_node;
 use ruff_python_ast::helpers::is_untyped_declaration_marker;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::traversal::suite;
-use ruff_python_ast::{self as ast, AnyNodeRef, Expr};
+use ruff_python_ast::{self as ast, AnyNodeRef, Expr, PySourceType};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use smallvec::SmallVec;
 
@@ -613,35 +613,37 @@ pub(crate) struct ComprehensionDefinitionNodeRef<'ast, 'db> {
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) enum ParameterDefinitionNodeRef<'ast> {
-    VariadicPositionalParameter(&'ast ast::Parameter),
-    VariadicKeywordParameter(&'ast ast::Parameter),
-    Parameter(&'ast ast::ParameterWithDefault),
+    VariadicPositionalParameter(&'ast ast::Parameter, ParameterName),
+    VariadicKeywordParameter(&'ast ast::Parameter, ParameterName),
+    Parameter(&'ast ast::ParameterWithDefault, ParameterName),
 }
 
 impl ParameterDefinitionNodeRef<'_> {
     fn into_owned(self, parsed: &ParsedModuleRef) -> ParameterDefinitionNodeKind {
         match self {
-            Self::VariadicPositionalParameter(parameter) => {
-                ParameterDefinitionNodeKind::VariadicPositionalParameter(AstNodeRef::new(
-                    parsed, parameter,
-                ))
+            Self::VariadicPositionalParameter(parameter, name) => {
+                ParameterDefinitionNodeKind::VariadicPositionalParameter(
+                    AstNodeRef::new(parsed, parameter),
+                    name,
+                )
             }
-            Self::VariadicKeywordParameter(parameter) => {
-                ParameterDefinitionNodeKind::VariadicKeywordParameter(AstNodeRef::new(
-                    parsed, parameter,
-                ))
+            Self::VariadicKeywordParameter(parameter, name) => {
+                ParameterDefinitionNodeKind::VariadicKeywordParameter(
+                    AstNodeRef::new(parsed, parameter),
+                    name,
+                )
             }
-            Self::Parameter(parameter) => {
-                ParameterDefinitionNodeKind::Parameter(AstNodeRef::new(parsed, parameter))
+            Self::Parameter(parameter, name) => {
+                ParameterDefinitionNodeKind::Parameter(AstNodeRef::new(parsed, parameter), name)
             }
         }
     }
 
     fn key(self) -> DefinitionNodeKey {
         match self {
-            Self::VariadicPositionalParameter(node) => node.into(),
-            Self::VariadicKeywordParameter(node) => node.into(),
-            Self::Parameter(node) => (&node.parameter).into(),
+            Self::VariadicPositionalParameter(node, _) => node.into(),
+            Self::VariadicKeywordParameter(node, _) => node.into(),
+            Self::Parameter(node, _) => (&node.parameter).into(),
         }
     }
 }
@@ -1396,54 +1398,96 @@ impl<'db> ComprehensionDefinitionKind<'db> {
     }
 }
 
+/// basedpython: whether the name a parameter binds in its function's body is the parameter's alone
+#[derive(Clone, Copy, Debug, PartialEq, Eq, get_size2::GetSize)]
+pub enum ParameterName {
+    /// the name is the parameter's alone, as every parameter's name is in python, so the
+    /// parameter's annotation declares the name's type
+    Own,
+    /// the parameter is one of several written `_`. the lowering gives each of them a name of
+    /// its own, so the `_` the body binds is none of theirs and has no declared type, and
+    /// `_ = 5` there is checked against none of their annotations:
+    ///
+    /// ```by
+    /// def f(_: int, _: str) -> None:
+    ///     _ = 5  # an undeclared local, as in `def f(_: int, _2: str, /)`
+    /// ```
+    RepeatedUnderscore,
+}
+
+impl ParameterName {
+    /// the name a parameter written as `name` binds, in a list of parameters that
+    /// [`repeats_underscore`] or not
+    pub(crate) fn new(name: &str, repeats_underscore: bool) -> Self {
+        if repeats_underscore && name == "_" {
+            Self::RepeatedUnderscore
+        } else {
+            Self::Own
+        }
+    }
+}
+
+/// whether `parameters` writes `_` more than once, which basedpython allows and python refuses
+pub(crate) fn repeats_underscore(parameters: &ast::Parameters, source_type: PySourceType) -> bool {
+    source_type.is_basedpython()
+        && parameters
+            .iter()
+            .filter(|parameter| parameter.name() == "_")
+            .nth(1)
+            .is_some()
+}
+
 #[derive(Clone, Debug, get_size2::GetSize)]
 pub enum ParameterDefinitionNodeKind {
-    VariadicPositionalParameter(AstNodeRef<ast::Parameter>),
-    VariadicKeywordParameter(AstNodeRef<ast::Parameter>),
-    Parameter(AstNodeRef<ast::ParameterWithDefault>),
+    VariadicPositionalParameter(AstNodeRef<ast::Parameter>, ParameterName),
+    VariadicKeywordParameter(AstNodeRef<ast::Parameter>, ParameterName),
+    Parameter(AstNodeRef<ast::ParameterWithDefault>, ParameterName),
 }
 
 impl ParameterDefinitionNodeKind {
     fn target_range(&self, module: &ParsedModuleRef) -> TextRange {
         match self {
-            Self::VariadicPositionalParameter(parameter) => parameter.node(module).name.range(),
-            Self::VariadicKeywordParameter(parameter) => parameter.node(module).name.range(),
-            Self::Parameter(parameter) => parameter.node(module).parameter.name.range(),
+            Self::VariadicPositionalParameter(parameter, _) => parameter.node(module).name.range(),
+            Self::VariadicKeywordParameter(parameter, _) => parameter.node(module).name.range(),
+            Self::Parameter(parameter, _) => parameter.node(module).parameter.name.range(),
         }
     }
 
     fn full_range(&self, module: &ParsedModuleRef) -> TextRange {
         match self {
-            Self::VariadicPositionalParameter(parameter) => parameter.node(module).range(),
-            Self::VariadicKeywordParameter(parameter) => parameter.node(module).range(),
-            Self::Parameter(parameter) => parameter.node(module).parameter.range(),
+            Self::VariadicPositionalParameter(parameter, _) => parameter.node(module).range(),
+            Self::VariadicKeywordParameter(parameter, _) => parameter.node(module).range(),
+            Self::Parameter(parameter, _) => parameter.node(module).parameter.range(),
+        }
+    }
+
+    /// whether the name the parameter binds in the body is the parameter's alone
+    pub fn name(&self) -> ParameterName {
+        match self {
+            Self::VariadicPositionalParameter(_, name)
+            | Self::VariadicKeywordParameter(_, name)
+            | Self::Parameter(_, name) => *name,
         }
     }
 
     fn category(&self, module: &ParsedModuleRef) -> DefinitionCategory {
-        match self {
-            // a parameter always binds a value, but is only a declaration if annotated
-            Self::VariadicPositionalParameter(parameter)
-            | Self::VariadicKeywordParameter(parameter) => {
-                if parameter.node(module).annotation.is_some() {
-                    DefinitionCategory::DeclarationAndBinding
-                } else {
-                    DefinitionCategory::Binding
-                }
+        // a parameter always binds a value, but is only a declaration if annotated, and the
+        // name it binds is its own. presence of a default is irrelevant
+        let annotated = match self {
+            Self::VariadicPositionalParameter(parameter, _)
+            | Self::VariadicKeywordParameter(parameter, _) => {
+                parameter.node(module).annotation.is_some()
             }
-            // presence of a default is irrelevant, same logic as for a no-default parameter
-            Self::Parameter(parameter_with_default) => {
-                if parameter_with_default
-                    .node(module)
-                    .parameter
-                    .annotation
-                    .is_some()
-                {
-                    DefinitionCategory::DeclarationAndBinding
-                } else {
-                    DefinitionCategory::Binding
-                }
-            }
+            Self::Parameter(parameter_with_default, _) => parameter_with_default
+                .node(module)
+                .parameter
+                .annotation
+                .is_some(),
+        };
+        if annotated && self.name() == ParameterName::Own {
+            DefinitionCategory::DeclarationAndBinding
+        } else {
+            DefinitionCategory::Binding
         }
     }
 }

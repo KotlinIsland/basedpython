@@ -85,11 +85,11 @@ fn parameter_is_context(kind: &DefinitionKind<'_>, parsed: &ParsedModuleRef) -> 
         return false;
     };
     match parameter {
-        ParameterDefinitionNodeKind::VariadicPositionalParameter(parameter)
-        | ParameterDefinitionNodeKind::VariadicKeywordParameter(parameter) => {
+        ParameterDefinitionNodeKind::VariadicPositionalParameter(parameter, _)
+        | ParameterDefinitionNodeKind::VariadicKeywordParameter(parameter, _) => {
             parameter.node(parsed).is_context
         }
-        ParameterDefinitionNodeKind::Parameter(parameter) => {
+        ParameterDefinitionNodeKind::Parameter(parameter, _) => {
             parameter.node(parsed).parameter.is_context
         }
     }

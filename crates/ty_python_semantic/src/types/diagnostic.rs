@@ -24,7 +24,7 @@ use crate::types::infer::UnsupportedComparisonError;
 use crate::types::overrides::MethodKind;
 use crate::types::protocol_class::ProtocolMember;
 use crate::types::reified_infer::{ErasedTargetReason, ReifiedInferenceError};
-use crate::types::repeated_underscore::UnderscoreRefusal;
+use crate::types::repeated_underscore::{RepeatedUnderscoreRead, UnderscoreRefusal};
 use crate::types::runtime_reads::RuntimeReadCheck;
 use crate::types::special_form::TypeQualifier;
 use crate::types::string_annotation::{
@@ -601,7 +601,7 @@ declare_lint! {
 declare_lint! {
     #[doc = include_str!("../../resources/lint_docs/invalid-repeated-underscore.md")]
     pub(crate) static INVALID_REPEATED_UNDERSCORE = {
-        summary: "detects a repeated `_` parameter the lowering has no python spelling for",
+        summary: "detects a repeated `_` parameter the lowering has no python spelling for, or a read of one",
         status: LintStatus::stable("0.0.83"),
         default_level: Level::Error,
         ty_compat: TyCompat::BasedPython,
@@ -4875,14 +4875,17 @@ fn assignment_declaration_annotation<'db>(
             assignment.annotation(context.module()),
             DeclarationKind::Regular,
         )),
-        DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(parameter)) => parameter
-            .node(context.module())
-            .parameter
-            .annotation
-            .as_deref()
-            .map(|annotation| (annotation, DeclarationKind::Regular)),
+        DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(parameter, _)) => {
+            parameter
+                .node(context.module())
+                .parameter
+                .annotation
+                .as_deref()
+                .map(|annotation| (annotation, DeclarationKind::Regular))
+        }
         DefinitionKind::Parameter(ParameterDefinitionNodeKind::VariadicPositionalParameter(
             parameter,
+            _,
         )) => parameter
             .node(context.module())
             .annotation
@@ -4890,6 +4893,7 @@ fn assignment_declaration_annotation<'db>(
             .map(|annotation| (annotation, DeclarationKind::VariadicParameter)),
         DefinitionKind::Parameter(ParameterDefinitionNodeKind::VariadicKeywordParameter(
             parameter,
+            _,
         )) => parameter
             .node(context.module())
             .annotation
@@ -6363,6 +6367,20 @@ pub(super) fn report_invalid_repeated_underscore(
     };
     let mut diagnostic = builder.into_diagnostic(refusal.message());
     diagnostic.help(refusal.help());
+}
+
+/// basedpython: report a read of `_` that may read one of a parameter list's repeated `_`s —
+/// see [`RepeatedUnderscoreRead`]. the transpiler refuses the same read
+pub(super) fn report_repeated_underscore_read(
+    context: &InferContext,
+    name: &ast::ExprName,
+    read: &RepeatedUnderscoreRead,
+) {
+    let Some(builder) = context.report_lint(&INVALID_REPEATED_UNDERSCORE, name) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(read.message());
+    diagnostic.help(read.help());
 }
 
 /// basedpython: what is wrong with a `decorator def` the lowering cannot expand.

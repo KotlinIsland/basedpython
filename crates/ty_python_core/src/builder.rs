@@ -43,8 +43,8 @@ use crate::definition::{
     ImportFromDefinitionNodeRef, ImportFromSubmoduleDefinitionNodeRef,
     LambdaParameterDefinitionNodeRef, LoopHeaderDefinitionNodeRef, LoopStmtRef,
     MatchPatternDefinitionNodeRef, NestedBindingExecution, NestedBindingsDefinitionKind,
-    ParameterDefinitionNodeRef, StarImportDefinitionNodeRef, TypeMatchCaptureDefinitionNodeRef,
-    WithItemDefinitionNodeRef,
+    ParameterDefinitionNodeRef, ParameterName, StarImportDefinitionNodeRef,
+    TypeMatchCaptureDefinitionNodeRef, WithItemDefinitionNodeRef, repeats_underscore,
 };
 use crate::expression::{Expression, ExpressionKind};
 use crate::fluid::{FluidUse, FluidUseRole};
@@ -4319,8 +4319,12 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
     }
 
     fn declare_parameters(&mut self, parameters: &'ast ast::Parameters) {
+        let repeats_underscore = repeats_underscore(parameters, self.source_type);
+        let name = |parameter: &ast::Parameter| {
+            ParameterName::new(parameter.name.as_str(), repeats_underscore)
+        };
         for parameter in parameters.iter_non_variadic_params() {
-            self.declare_parameter(parameter);
+            self.declare_parameter(parameter, name(&parameter.parameter));
         }
         if let Some(vararg) = parameters.vararg.as_ref() {
             let symbol = self.add_symbol(vararg.name.id().clone());
@@ -4329,7 +4333,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 .mark_parameter();
             self.add_definition(
                 symbol.into(),
-                ParameterDefinitionNodeRef::VariadicPositionalParameter(vararg),
+                ParameterDefinitionNodeRef::VariadicPositionalParameter(vararg, name(vararg)),
             );
         }
         if let Some(kwarg) = parameters.kwarg.as_ref() {
@@ -4339,17 +4343,21 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 .mark_parameter();
             self.add_definition(
                 symbol.into(),
-                ParameterDefinitionNodeRef::VariadicKeywordParameter(kwarg),
+                ParameterDefinitionNodeRef::VariadicKeywordParameter(kwarg, name(kwarg)),
             );
         }
     }
 
-    fn declare_parameter(&mut self, parameter: &'ast ast::ParameterWithDefault) {
+    fn declare_parameter(
+        &mut self,
+        parameter: &'ast ast::ParameterWithDefault,
+        name: ParameterName,
+    ) {
         let symbol = self.add_symbol(parameter.name().id().clone());
 
         let definition = self.add_definition(
             symbol.into(),
-            ParameterDefinitionNodeRef::Parameter(parameter),
+            ParameterDefinitionNodeRef::Parameter(parameter, name),
         );
 
         self.current_place_table_mut()
@@ -4368,13 +4376,17 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         parameters: &'ast ast::Parameters,
         lambda: &'ast ast::ExprLambda,
     ) {
+        let repeats_underscore = repeats_underscore(parameters, self.source_type);
+        let name = |parameter: &ast::Parameter| {
+            ParameterName::new(parameter.name.as_str(), repeats_underscore)
+        };
         let mut index = 0;
         for parameter in &parameters.posonlyargs {
-            self.declare_lambda_parameter(index, parameter, lambda);
+            self.declare_lambda_parameter(index, parameter, name(&parameter.parameter), lambda);
             index += 1;
         }
         for parameter in &parameters.args {
-            self.declare_lambda_parameter(index, parameter, lambda);
+            self.declare_lambda_parameter(index, parameter, name(&parameter.parameter), lambda);
             index += 1;
         }
         if let Some(vararg) = parameters.vararg.as_ref() {
@@ -4387,13 +4399,16 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 LambdaParameterDefinitionNodeRef {
                     index,
                     lambda,
-                    parameter: ParameterDefinitionNodeRef::VariadicPositionalParameter(vararg),
+                    parameter: ParameterDefinitionNodeRef::VariadicPositionalParameter(
+                        vararg,
+                        name(vararg),
+                    ),
                 },
             );
             index += 1;
         }
         for parameter in &parameters.kwonlyargs {
-            self.declare_lambda_parameter(index, parameter, lambda);
+            self.declare_lambda_parameter(index, parameter, name(&parameter.parameter), lambda);
             index += 1;
         }
         if let Some(kwarg) = parameters.kwarg.as_ref() {
@@ -4406,7 +4421,10 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 LambdaParameterDefinitionNodeRef {
                     index,
                     lambda,
-                    parameter: ParameterDefinitionNodeRef::VariadicKeywordParameter(kwarg),
+                    parameter: ParameterDefinitionNodeRef::VariadicKeywordParameter(
+                        kwarg,
+                        name(kwarg),
+                    ),
                 },
             );
         }
@@ -4416,6 +4434,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         &mut self,
         index: usize,
         parameter: &'ast ast::ParameterWithDefault,
+        name: ParameterName,
         lambda: &'ast ast::ExprLambda,
     ) {
         let symbol = self.add_symbol(parameter.name().id().clone());
@@ -4425,7 +4444,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             LambdaParameterDefinitionNodeRef {
                 index,
                 lambda,
-                parameter: ParameterDefinitionNodeRef::Parameter(parameter),
+                parameter: ParameterDefinitionNodeRef::Parameter(parameter, name),
             },
         );
 

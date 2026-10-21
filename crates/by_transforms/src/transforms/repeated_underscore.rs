@@ -10,8 +10,9 @@
 //!
 //! which names and where the `/` goes is ty's answer, the one its signature of the
 //! definition is built from (`ty_python_semantic::types::repeated_underscore`), so a
-//! call ty accepts is one the python accepts. a shape ty refuses is refused here too.
-//! references to `_` inside the body are left alone and resolve to the first parameter
+//! call ty accepts is one the python accepts. a shape ty refuses is refused here too, and
+//! so is a read of `_` that may be one of the repeated parameters: python binds the name to
+//! the first of them and ty to the last
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -88,6 +89,52 @@ pub(crate) fn collect(suite: &[Stmt], types: &dyn TypeInfo, slash: bool) -> Unde
     };
     collector.visit_body(suite);
     collector.lowerings
+}
+
+/// a refusal for every read of `_` in `suite` that may read one of a parameter list's
+/// repeated `_`s — ty's answer, the one it reports, so the two cannot disagree. python binds
+/// `_` to the first of them and ty to the last, so the read has no one meaning to lower
+pub(crate) fn refused_reads(suite: &[Stmt], types: &dyn TypeInfo) -> Vec<String> {
+    struct Reads<'a> {
+        types: &'a dyn TypeInfo,
+        refusals: Vec<String>,
+    }
+    impl Reads<'_> {
+        fn ask(&mut self, name: &ruff_python_ast::ExprName) {
+            if name.id == "_"
+                && let Some(read) = self.types.repeated_underscore_read(name)
+            {
+                self.refusals
+                    .push(format!("{}: {}", read.message(), read.help()));
+            }
+        }
+    }
+    impl Visitor<'_> for Reads<'_> {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            // `_ += 1` reads `_` before it binds it
+            if let Stmt::AugAssign(node) = stmt
+                && let Expr::Name(name) = node.target.as_ref()
+            {
+                self.ask(name);
+            }
+            visit_walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Name(name) = expr
+                && name.ctx.is_load()
+            {
+                self.ask(name);
+            }
+            visit_walk_expr(self, expr);
+        }
+    }
+    let mut reads = Reads {
+        types,
+        refusals: Vec::new(),
+    };
+    reads.visit_body(suite);
+    reads.refusals
 }
 
 /// ty's answer for every parameter list in `suite` that repeats `_`, for a native build of
@@ -839,36 +886,6 @@ pub(crate) fn rebound_underscore(parameters: &Parameters, written: WrittenNames)
         .filter(|name| name != "_")
 }
 
-/// whether `body` reads `_`, anywhere in it
-pub(crate) fn reads_underscore(body: &[Stmt]) -> bool {
-    struct Reads {
-        found: bool,
-    }
-    impl Visitor<'_> for Reads {
-        fn visit_stmt(&mut self, stmt: &Stmt) {
-            if let Stmt::AugAssign(node) = stmt
-                && matches!(node.target.as_ref(), Expr::Name(name) if name.id == "_")
-            {
-                self.found = true;
-            }
-            visit_walk_stmt(self, stmt);
-        }
-
-        fn visit_expr(&mut self, expr: &Expr) {
-            if let Expr::Name(name) = expr
-                && name.id == "_"
-                && !name.ctx.is_store()
-            {
-                self.found = true;
-            }
-            visit_walk_expr(self, expr);
-        }
-    }
-    let mut reads = Reads { found: false };
-    reads.visit_body(body);
-    reads.found
-}
-
 pub(crate) struct RepeatedUnderscore<'src> {
     source: &'src str,
     written: WrittenNames<'src>,
@@ -1212,8 +1229,8 @@ mod tests {
     #[test]
     fn two_underscores() {
         check(
-            "def f(_, _):\n    print(_)\n",
-            "def f(_, _2, /):\n    print(_)\n",
+            "def f(_, _):\n    print(1)\n",
+            "def f(_, _2, /):\n    print(1)\n",
         );
     }
 
@@ -1221,8 +1238,8 @@ mod tests {
     #[test]
     fn three_underscores() {
         check(
-            "def g(_, _, _, x):\n    return _\n",
-            "def g(_, _2, _3, /, x):\n    return _\n",
+            "def g(_, _, _, x):\n    return x\n",
+            "def g(_, _2, _3, /, x):\n    return x\n",
         );
     }
 
@@ -1234,8 +1251,8 @@ mod tests {
     #[test]
     fn nested_function() {
         check(
-            "def outer(_, _):\n    def inner(_, _):\n        return _\n    return _\n",
-            "def outer(_, _2, /):\n    def inner(_, _2, /):\n        return _\n    return _\n",
+            "def outer(_, _):\n    def inner(_, _):\n        return 1\n    return inner\n",
+            "def outer(_, _2, /):\n    def inner(_, _2, /):\n        return 1\n    return inner\n",
         );
     }
 
@@ -1277,8 +1294,8 @@ mod tests {
     #[test]
     fn vararg_underscore() {
         check(
-            "def f(a, _, *_):\n    return _\n",
-            "def f(a, _, *_2):\n    return _\n",
+            "def f(a, _, *_):\n    return a\n",
+            "def f(a, _, *_2):\n    return a\n",
         );
     }
 
@@ -1346,8 +1363,8 @@ mod tests {
     #[test]
     fn existing_collision() {
         check(
-            "def f(_, _2, _, /):\n    return _\n",
-            "def f(_, _2, _3, /):\n    return _\n",
+            "def f(_, _2, _, /):\n    return _2\n",
+            "def f(_, _2, _3, /):\n    return _2\n",
         );
     }
 
@@ -1408,10 +1425,10 @@ mod tests {
         );
     }
 
-    /// no parameter is named `_` once they take the base's names, so a body that reads `_`
-    /// is handed the first of them, as it was before
+    /// no parameter is named `_` once they take the base's names, so a body that unbinds
+    /// `_` is handed the first of them to unbind
     #[test]
-    fn an_override_that_reads_underscore_binds_it() {
+    fn an_override_that_deletes_underscore_binds_it() {
         check(
             indoc! {"
                 class A:
@@ -1420,7 +1437,8 @@ mod tests {
 
                 class B(A):
                     override def f(self, _: int, _: int) -> int:
-                        return _
+                        del _
+                        return 1
             "},
             indoc! {"
                 from typing_extensions import override
@@ -1432,35 +1450,75 @@ mod tests {
                     @override
                     def f(self, x: int, y: int) -> int:
                         _ = x
-                        return _
+                        del _
+                        return 1
+            "},
+        );
+    }
+
+    /// a nested function that declares `_` `nonlocal` refers to the override's `_` even when
+    /// it only writes it, so the override binds `_` for it to find
+    #[test]
+    fn an_override_whose_nested_function_declares_underscore_nonlocal_binds_it() {
+        check(
+            indoc! {"
+                class A:
+                    def f(self, x: int, y: int) -> int:
+                        return x
+
+                class B(A):
+                    override def f(self, _: int, _: int) -> int:
+                        def g():
+                            nonlocal _
+                            _ = 1
+                        g()
+                        return 1
+            "},
+            indoc! {"
+                from typing_extensions import override
+                class A:
+                    def f(self, x: int, y: int) -> int:
+                        return x
+
+                class B(A):
+                    @override
+                    def f(self, x: int, y: int) -> int:
+                        _ = x
+                        def g():
+                            nonlocal _
+                            _ = 1
+                        g()
+                        return 1
             "},
         );
     }
 
     /// a base that repeats `_` numbers its own, and the override takes those names. its
-    /// first is `_`, which the body's `_` already reads
+    /// first is `_`, so nothing has to bind `_` in the body
     #[test]
     fn an_override_of_numbered_underscores_keeps_them() {
         check(
             indoc! {"
                 class A:
                     def f(self, _: int, _: int) -> int:
-                        return _
+                        return 1
 
                 class B(A):
                     override def f(self, _: int, _: int) -> int:
-                        return _
+                        del _
+                        return 2
             "},
             indoc! {"
                 from typing_extensions import override
                 class A:
                     def f(self, _: int, _2: int, /) -> int:
-                        return _
+                        return 1
 
                 class B(A):
                     @override
                     def f(self, _: int, _2: int, /) -> int:
-                        return _
+                        del _
+                        return 2
             "},
         );
     }
@@ -1477,7 +1535,7 @@ mod tests {
 
                 class B(A):
                     override def f(self, _: int, _: int) -> int:
-                        return _
+                        return 1
             "},
             indoc! {"
                 from typing_extensions import override
@@ -1488,8 +1546,7 @@ mod tests {
                 class B(A):
                     @override
                     def f(self, x: int, _: int) -> int:
-                        _ = x
-                        return _
+                        return 1
             "},
         );
     }
@@ -1512,6 +1569,105 @@ mod tests {
             "}),
             "a repeated `_` parameter named `x` shadows a `x` the body reads in `f`: the \
              parameter takes its name from the method it overrides; rename the `x` the body reads"
+        );
+    }
+
+    /// python binds `_` to the first of the parameters and ty to the last, so a read the
+    /// parameters may reach is refused, through ty's answer, wherever it is
+    #[test]
+    fn a_read_of_a_repeated_underscore_is_refused() {
+        let refusal = "reading a repeated `_` parameter of `f`: several parameters are named `_`, \
+                       so a read cannot say which: give the one the body reads a name of its own";
+        assert_eq!(
+            refused("def f(_: int, _: str) -> str:\n    return _\n"),
+            refusal
+        );
+        assert_eq!(
+            refused("def f(_: int, _: int) -> None:\n    _ += 1\n"),
+            refusal
+        );
+        assert_eq!(
+            refused(indoc! {"
+                def f(_: int, _: int) -> None:
+                    def g() -> int:
+                        return _
+            "}),
+            refusal
+        );
+        assert_eq!(
+            refused("f = lambda _, _: _\n"),
+            "reading a repeated `_` parameter of a lambda: several parameters are named `_`, \
+             so a read cannot say which: give the one the body reads a name of its own"
+        );
+        assert_eq!(
+            refused(indoc! {"
+                class A:
+                    def f(self, x: int, y: int) -> int:
+                        return x
+
+                class B(A):
+                    override def f(self, _: int, _: int) -> int:
+                        return _
+            "}),
+            refusal
+        );
+    }
+
+    /// a read only a binding the body makes reaches reads that binding, and `del _` reads
+    /// no value, so neither is refused
+    #[test]
+    fn a_read_of_a_rebound_underscore_is_kept() {
+        check(
+            "def f(_: int, _: int) -> int:\n    _ = 5\n    return _\n",
+            "def f(_: int, _2: int, /) -> int:\n    _ = 5\n    return _\n",
+        );
+        check(
+            "def f(_: int, _: int) -> None:\n    del _\n",
+            "def f(_: int, _2: int, /) -> None:\n    del _\n",
+        );
+    }
+
+    /// none of the parameters declares the `_` the body binds, so every way of writing it is
+    /// left as written: a local the python binds over the first parameter
+    #[test]
+    fn a_write_to_a_repeated_underscore_is_kept() {
+        check(
+            indoc! {"
+                def f(_: int, _: str) -> int:
+                    _ = 1
+                    a, _ = 1, 2
+                    for _ in range(3):
+                        pass
+                    with open(\"x\") as _:
+                        pass
+                    if (_ := 3) > 0:
+                        return _
+                    def g() -> int:
+                        nonlocal _
+                        _ = 7
+                        return _
+                    return g()
+
+                h = lambda _, _: (_ := 9)
+            "},
+            indoc! {"
+                def f(_: int, _2: str, /) -> int:
+                    _ = 1
+                    a, _ = 1, 2
+                    for _ in range(3):
+                        pass
+                    with open(\"x\") as _:
+                        pass
+                    if (_ := 3) > 0:
+                        return _
+                    def g() -> int:
+                        nonlocal _
+                        _ = 7
+                        return _
+                    return g()
+
+                h = lambda _, _2, /: (_ := 9)
+            "},
         );
     }
 }

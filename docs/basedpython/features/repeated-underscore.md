@@ -138,6 +138,48 @@ scope, so an override whose body reads one is refused as
 
 ## reading `_`
 
-references to `_` in the body resolve to the first `_` parameter. in an override
-that took its names from the base, the first of them is bound to `_` at the start
-of the body, so a read of `_` still finds it
+the `_`s are there to be ignored. python keeps only one parameter under the name
+`_`, so a read of `_` could mean any of them, and reading one is an
+`invalid-repeated-underscore` error:
+
+```by
+def pick(_: int, _: str) -> str:
+    return _  # error
+```
+
+name the parameter you want to read instead. this covers every read the
+parameters may reach: in the body, in `_ += 1`, and in a nested function, lambda
+or comprehension that reads `_` from the function around it. an override is no
+exception, though its `_`s take the base's names in the python
+
+a read of `_` that the body has bound again on every path to it reads that
+binding, and is fine:
+
+```by
+def count(_: int, _: int) -> int:
+    _ = 0
+    return _
+```
+
+so is `del _`, which reads no value, and a single `_` parameter, which is read
+like any other parameter
+
+## writing `_`
+
+each `_` becomes a parameter of its own name in the python, so none of their
+annotations is the type of the `_` the body binds. a write to `_` is checked
+against none of them: it is an ordinary local variable, and a read that only the
+write reaches has the type of the value written:
+
+```by
+def first(_: int, _: str) -> int:
+    _ = 5  # not checked against `int` or `str`
+    return _
+```
+
+the same goes for every other way of binding `_`: unpacking, `for _ in`, `:=`,
+`with ... as _`, and a nested function's `nonlocal _`. `_ += 1` is no write of
+this kind, since it reads `_` first, and is an error like any other read
+
+an annotation the body writes for `_` declares it, as it would any local, so a
+write after `_: bytes = b""` has to be a `bytes`

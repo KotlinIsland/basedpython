@@ -624,7 +624,8 @@ fn fixture_request_for_parameter<'db>(
     db: &'db dyn Db,
     definition: Definition<'db>,
 ) -> Option<FixtureRequest<'db>> {
-    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(_)) = definition.kind(db)
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(_, _)) =
+        definition.kind(db)
     else {
         return None;
     };

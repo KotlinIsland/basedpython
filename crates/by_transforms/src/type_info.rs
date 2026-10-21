@@ -16,7 +16,9 @@ use ty_python_semantic::RuntimeSpelling;
 use ty_python_semantic::types::call_type_forms::CallTypeForm;
 use ty_python_semantic::types::exceptions::RaisesRuntimeTarget;
 use ty_python_semantic::types::ide_support::BaseTypeArgument;
-use ty_python_semantic::types::repeated_underscore::{UnderscoreLowering, UnderscoreRefusal};
+use ty_python_semantic::types::repeated_underscore::{
+    RepeatedUnderscoreRead, UnderscoreLowering, UnderscoreRefusal,
+};
 use ty_python_semantic::types::{
     DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
@@ -817,6 +819,16 @@ pub(crate) trait TypeInfo {
         function: &StmtFunctionDef,
     ) -> Option<Result<UnderscoreLowering, UnderscoreRefusal>>;
 
+    /// whether `name` reads `_` where one of a parameter list's repeated `_`s may be the
+    /// binding it reads — ty's answer, which it reports and the lowering refuses
+    fn repeated_underscore_read(&self, name: &ExprName) -> Option<RepeatedUnderscoreRead>;
+
+    /// basedpython: whether the body of `function` refers to the `_` its parameters bind —
+    /// reads or deletes it, or holds a scope that reads it from the function or declares it
+    /// `nonlocal`. the bindings ty sees answer it, so a binding the python needs is never left
+    /// out
+    fn refers_to_own_underscore(&self, function: &StmtFunctionDef) -> bool;
+
     /// whether adding a type annotation to a bare `name = value` assignment in
     /// `class_def`'s body would change the class's runtime semantics — true for
     /// dataclass-like classes, framework models, `NamedTuple`s, `TypedDict`s
@@ -1499,6 +1511,14 @@ impl TypeInfo for LoweringModel<'_> {
         function: &StmtFunctionDef,
     ) -> Option<Result<UnderscoreLowering, UnderscoreRefusal>> {
         ty_python_semantic::types::ide_support::repeated_underscore_lowering(self, function)
+    }
+
+    fn repeated_underscore_read(&self, name: &ExprName) -> Option<RepeatedUnderscoreRead> {
+        ty_python_semantic::types::ide_support::repeated_underscore_read_of(self, name)
+    }
+
+    fn refers_to_own_underscore(&self, function: &StmtFunctionDef) -> bool {
+        ty_python_semantic::types::ide_support::refers_to_own_underscore(self, function)
     }
 
     fn reads_names_bound_where_written(&self, expr: &Expr) -> bool {

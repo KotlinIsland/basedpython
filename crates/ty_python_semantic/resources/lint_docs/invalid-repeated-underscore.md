@@ -1,6 +1,7 @@
 ## What it does
 
-Checks for a parameter list that repeats `_` in a shape the lowering has no python spelling for.
+Checks for a parameter list that repeats `_` in a shape the lowering has no python spelling for, and
+for a read of `_` that may be one of those parameters.
 
 ## Why is this bad?
 
@@ -54,4 +55,23 @@ class Override(Base):
     # error: [invalid-method-override]
     override def f(self, _: int, _: int) -> int:
         return x
+```
+
+Python binds `_` to only one of the parameters, the first, while ty reads a body as binding each `_`
+in turn. A read of `_` would mean a different parameter to each, so it is reported, wherever the
+parameters may be the binding it reads — in the body, in a nested function, lambda or comprehension,
+and in `_ += 1`:
+
+```by
+def first(_: int, _: str) -> str:
+    # error: [invalid-repeated-underscore]
+    return _
+```
+
+A read that only a binding the body makes reaches reads that binding, and `del _` reads no value:
+
+```by
+def rebound(_: int, _: int) -> int:
+    _ = 5
+    return _
 ```
