@@ -1591,6 +1591,9 @@ f = outer(int)
 - `__defaults__` and `__kwdefaults__` can be read and not written, and `__code__` is the
     interpreted definition's code object, which the compiled function does not run
 
+what is said of 3.13 here holds of 3.11 and 3.12 as well, where a function has no
+`__type_params__` at all
+
 evaluating the annotations where the `def` stands is a python call, which made a closure
 with annotations cost about 3,400 more instructions to make on 3.13 than one without —
 the price of a `def` inside a loop. what the `def` takes now is the values alone, so an
@@ -1611,6 +1614,72 @@ def outer():
 
 f = outer()  # python 3.13: prints `y`; compiled: prints nothing
 f.__annotations__  # compiled: prints `y`
+```
+
+### python 3.11 and 3.12
+
+a compiled module answers as the interpreter it was built for answers, on every supported
+version — 3.11, 3.12, 3.13 and 3.14. where python itself changed between them, the
+generated `==` of a data class, the wording of an error, how an async generator's
+awaitables refuse a second caller, a `throw` into a delegation, it is the running
+version's rule that is followed. what is left is listed here.
+
+a class that keeps fields of its own past a base's instance is built by appending
+storage to that base's layout, and the way to ask where appended storage is, PEP 697,
+is 3.12's. below 3.12 such a class has no construction, and the module holding it stands
+down whole at import: every class and function in it is the interpreted definition, and
+it answers as python does, at python's speed:
+
+```python
+class Failure(Exception):
+    def __init__(self, reason: str) -> None:
+        Exception.__init__(self, reason)
+        self.reason = reason  # a field past `Exception`'s instance
+
+
+def count(xs: list[int]) -> int:
+    return len(xs)  # on 3.11, interpreted along with `Failure`
+```
+
+python 3.11 counts a call into a builtin against the recursion limit, on every call site
+the interpreter has not yet specialised, where 3.12 counts it against the C stack alone.
+a compiled module takes the frames python's own functions, methods and `==` take, and
+none for its calls into builtins, so a recursion that goes round through one — a key
+function, a callback, `functools.reduce` — reaches the limit later on 3.11 than python
+does from a cold call site:
+
+```python
+import functools
+
+
+def fold(n: int) -> int:
+    if n == 0:
+        return 0
+    return functools.reduce(lambda acc, x: acc + fold(x), [n - 1], 1)
+
+
+# from another module, on 3.11
+sys.setrecursionlimit(100)
+mod.fold(33)  # python: RecursionError; compiled: 33
+```
+
+python's own answer moves with how warm the call site is, so there is no one depth to
+match; counting each such call would put a cost on every call into a builtin
+
+a data class's `==` compares two tuples of its fields below 3.13, and a tuple finds two
+identical objects equal without asking them. a `float` field is kept as a number rather
+than as the object it was given, so two instances sharing one NaN object are unequal
+where python finds the one object in both. a field of any other type is kept as its
+object, and an instance compared with itself is equal on both:
+
+```python
+frozen data class Reading:
+    value: float
+
+
+# from another module, on 3.11 or 3.12
+nan = float("nan")
+mod.Reading(nan) == mod.Reading(nan)  # python: True; compiled: False
 ```
 
 ## debugging and inspection

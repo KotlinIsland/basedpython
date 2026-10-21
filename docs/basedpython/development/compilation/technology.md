@@ -219,6 +219,13 @@ and `by.h` restates it as an `#error` for a compile that did not come through
 wording of the unbound-local error now, one `By_IterSend`, and the match-shape tests
 stand unguarded
 
+above the floor, every version is supported: 3.11, 3.12, 3.13 and 3.14, and the
+free-threaded builds of the last two. ci runs the backend's whole suite against each of
+them. a compiled module answers as the interpreter it was built for answers, so where
+python changed between those versions the emitted C follows the running one, and the few
+places it cannot are declined there or written down in
+[runtime.md](runtime.md#python-311-and-312)
+
 ### an artefact is pinned to one minor version, and says so itself
 
 taking the full API means the runtime header reads layouts that move between
