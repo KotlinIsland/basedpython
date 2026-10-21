@@ -2,6 +2,7 @@ use crate::Db;
 use crate::ProgramEnvironment;
 use crate::reified::{UnansweredReason, reified_class_reads};
 use crate::types::diagnostic::{INVALID_VARIANCE_DECLARATION, REIFIED_WITHOUT_RECEIVER};
+use crate::types::infer::TypeExpressionFlags;
 use crate::types::{
     CallArguments, ClassLiteralFlags, DataclassFlags, DataclassParams, KnownClass,
     KnownInstanceType, SpecialFormType, StaticClassLiteral, SubclassOfType, Type, TypeContext,
@@ -115,8 +116,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         self.report_reified_class_errors(class);
 
         if class.arguments.is_some() {
-            let defer_class_args = self.in_stub() || self.is_basedpython_file();
-            let previous_deferred_state = self.replace_deferred_state(defer_class_args.into());
+            let defer_bases = self.reads_bases_deferred(class);
+            let previous_deferred_state = self.replace_deferred_state(defer_bases.into());
 
             // PEP 695 class headers are inferred in the type-parameter scope, before the completed
             // class type is available. Infer the bases first because `extra_items=T` is an
@@ -125,8 +126,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             let mut is_typed_dict = false;
 
             for base in class.bases() {
-                let ty = if let Some(ty) =
-                    self.infer_parameter_shape_class_base(base, defer_class_args)
+                let ty = if let Some(ty) = self.infer_parameter_shape_class_base(base, defer_bases)
                 {
                     ty
                 } else if let ast::Expr::Starred(starred) = base {
@@ -144,9 +144,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 };
             }
 
+            self.replace_deferred_state(self.in_stub().into());
             for keyword in class.keywords() {
                 if is_typed_dict && keyword.arg.as_deref() == Some("extra_items") {
-                    self.infer_extra_items_kwarg(&keyword.value);
+                    self.infer_typed_dict_extra_items(&keyword.value);
                 } else {
                     self.infer_expression(&keyword.value, TypeContext::default());
                 }
@@ -527,10 +528,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // if there are type parameters, then the keywords and bases are within that scope
         // and we don't need to run inference here
         if type_params.is_none() {
-            // In stub files (and basedpython files, where self-refs are auto-quoted by the
-            // transpiler), keyword values may reference names that are defined later.
-            let defer_class_args = self.in_stub() || self.is_basedpython_file();
-            let previous_deferred_state = self.replace_deferred_state(defer_class_args.into());
+            // a keyword is an object the class is built with, read where it is written as a
+            // base is, except in a stub, which is never run
+            let previous_deferred_state = self.replace_deferred_state(self.in_stub().into());
             for keyword in class_node.keywords() {
                 if keyword.arg.as_deref() != Some("extra_items") {
                     self.infer_expression(&keyword.value, TypeContext::default());
@@ -539,7 +539,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             self.deferred_state = previous_deferred_state;
 
             // Inference of bases deferred in stubs/basedpython, or if any are string literals.
-            if defer_class_args
+            if self.in_stub()
+                || self.is_basedpython_file()
                 || class_node
                     .bases()
                     .iter()
@@ -615,13 +616,39 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         Some(base_ty)
     }
 
+    /// a `TypedDict`'s `extra_items=`, which is a type expression. in a basedpython file it is
+    /// read as deferred, as an annotation is, though python evaluates it as the class is built,
+    /// so the transpiler writes a forward reference in it as one python reads lazily
+    fn infer_typed_dict_extra_items(&mut self, value: &ast::Expr) {
+        let previous_deferred_state =
+            self.replace_deferred_state((self.in_stub() || self.is_basedpython_file()).into());
+        self.infer_extra_items_kwarg(value);
+        self.deferred_state = previous_deferred_state;
+        if self.is_basedpython_file() {
+            self.store_type_expression_flags(value, TypeExpressionFlags::READ_DEFERRED);
+        }
+    }
+
+    /// whether a class's bases are read as deferred rather than where they are written
+    ///
+    /// a base is the object the class is built on, so outside a stub it is read where it is
+    /// written, and a name not yet bound there is unresolved, as python's `NameError` for it is
+    ///
+    /// a basedpython base's type arguments are deferred all the same, as every specialization
+    /// written as a value is — see `infer_subscript_load`. the protocols a basedpython extension
+    /// lists (`extension str(Show)`) are not bases: the conformance check reads them, and reports
+    /// one declared below the extension itself, as `invalid-conformance`
+    fn reads_bases_deferred(&self, class: &ast::StmtClassDef) -> bool {
+        self.in_stub() || class.is_extension()
+    }
+
     pub(super) fn infer_class_deferred(
         &mut self,
         definition: Definition<'db>,
         class: &ast::StmtClassDef,
     ) {
         let previous_typevar_binding_context = self.typevar_binding_context.replace(definition);
-        let defer_class_args = self.in_stub() || self.is_basedpython_file();
+        let defer_bases = self.reads_bases_deferred(class);
         // resolve bases with `IN_TYPE_EXPRESSION` set so the basedpython
         // `dynamic` keyword resolves to `Any` in a base list (`class C(dynamic)`),
         // matching the transpiler's `dynamic → Any` rewrite. only `dynamic` name
@@ -632,12 +659,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             .replace(InferenceFlags::IN_TYPE_EXPRESSION, true);
         for base in class.bases() {
             if self
-                .infer_parameter_shape_class_base(base, defer_class_args)
+                .infer_parameter_shape_class_base(base, defer_bases)
                 .is_some()
             {
                 continue;
             }
-            if defer_class_args {
+            if defer_bases {
                 self.infer_expression_with_state(
                     base,
                     TypeContext::default(),
@@ -658,8 +685,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             if original_class_type(self.db(), definition)
                 .is_some_and(|class_literal| class_literal.is_typed_dict(self.db()))
             {
-                self.infer_extra_items_kwarg(&extra_items_keyword.value);
-            } else if defer_class_args {
+                self.infer_typed_dict_extra_items(&extra_items_keyword.value);
+            } else if self.in_stub() {
                 self.infer_expression_with_state(
                     &extra_items_keyword.value,
                     TypeContext::default(),

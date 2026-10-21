@@ -408,6 +408,25 @@ extension Widget(Show):
 class Widget: ...
 ```
 
+## a conformance declared above the protocol it names is reported
+
+the protocol is named where the conformance registers itself, so it has to be declared first too
+
+```by
+# error: [invalid-conformance] "`Show` is declared after this conformance"
+extension str(Show):
+    override def show(self) -> str:
+        return self
+
+protocol Show:
+    def show(self) -> str
+
+def render(value: Show) -> str:
+    return value.show()
+
+render("hi")
+```
+
 ## a conformance's own member overrides the interface's default
 
 ```by

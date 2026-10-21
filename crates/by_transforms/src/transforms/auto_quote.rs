@@ -21,25 +21,34 @@
 //! ([`crate::annotations_evaluated`]): on python >= 3.14 they are deferred
 //! natively (PEP 649), and a `from __future__ import annotations` — written by
 //! the user, opted into, or written for a target below 3.10 — defers every one,
-//! where a quote would reach `__annotations__` as a string inside a string. a class
-//! *base*, and a value-position subscript in a class body (`list[A]()`),
-//! evaluates while the class is being built on every version, so a
-//! self-reference there is always quoted. a direct base (`class A(A):`) is
-//! left alone — that is a runtime error regardless of quoting
+//! where a quote would reach `__annotations__` as a string inside a string
+//!
+//! the checker reads two more kinds of type expression as deferred, though python
+//! evaluates them where they stand on every version: the type arguments of a
+//! specialization written as a value (`list[F]()`, `Alias = dict[str, F]`, a base
+//! `Foo[F]`), and the type arguments of a typing construct assigned to a name
+//! (`T = TypeVar("T", bound=F)`). which ones it read that way is its answer
+//! ([`TypeInfo::is_read_deferred`]), and a forward reference in one is quoted too:
+//!
+//! `a = list[F](); class F: ...` → `a = list["F"]()`
+//!
+//! a position the checker reads where it is written — a base itself
+//! (`class A(A)`), a reified class's type arguments — reports a name not yet bound
+//! there, and is left alone
 //!
 //! an annotation holding a forward reference is quoted whole, as one wrapper
 //! template passing its source through. no lowering reaches past the annotation
 //! it lowers, so whatever the annotation becomes — a callable arrow, a `T?`, a
 //! renamed type parameter, even when a lowering rewrites the whole annotation
-//! as text — ends up between the quotes. a base or a value-position subscript
-//! cannot be a string, so there only the self-reference itself is quoted
+//! as text — ends up between the quotes. a specialization cannot be a string, so
+//! there only the type arguments holding a reference are quoted
 
-use ruff_python_ast::visitor::{Visitor, walk_expr};
-use ruff_python_ast::{AnyParameterRef, Expr, ExprName, Stmt, StmtClassDef};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
+use ruff_python_ast::{AnyParameterRef, Expr, ExprName, Stmt, TypeParams};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_one_type_expr};
+use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_one_type_expr_with};
 use crate::type_info::TypeInfo;
 
 pub(crate) struct AutoQuote<'src> {
@@ -67,7 +76,15 @@ impl TypeAwarePass for AutoQuote<'_> {
             edits: Vec::new(),
         };
         walk.block(stmts, Scope::Module);
-        ctx.template_edits.extend(walk.edits);
+        let mut deferred = DeferredReads {
+            source: self.source,
+            types,
+            edits: walk.edits,
+        };
+        for stmt in stmts {
+            deferred.visit_stmt(stmt);
+        }
+        ctx.template_edits.extend(deferred.edits);
     }
 }
 
@@ -95,7 +112,7 @@ impl Walk<'_> {
 
     fn stmt(&mut self, stmt: &Stmt, scope: Scope) {
         match stmt {
-            Stmt::ClassDef(class) => self.class(class),
+            Stmt::ClassDef(class) => self.block(&class.body, Scope::Class),
             Stmt::FunctionDef(function) => {
                 if self.quote_annotations {
                     for parameter in function
@@ -162,44 +179,92 @@ impl Walk<'_> {
             quoter.quote(annotation.range());
         }
     }
+}
 
-    /// a class's bases and the value-position subscripts in its body run while
-    /// the class is being built, whatever the version, and the class's own name
-    /// is not bound until it is
-    fn class(&mut self, class: &StmtClassDef) {
-        let class_name = class.name.id.as_str();
-        let is_self = |name: &ExprName| name.id.as_str() == class_name;
-        if let Some(arguments) = &class.arguments {
-            for base in &arguments.args {
-                // a direct `class A(A)` base must not be quoted — that would
-                // mask a runtime error rather than fix it
-                let mut quoter = Quoter {
-                    source: self.source,
-                    is_forward: &is_self,
-                    edits: &mut self.edits,
-                    skip_root: true,
-                };
-                walk_one_type_expr(base, &mut quoter);
+/// quotes the forward references in what the checker reads as deferred though python
+/// evaluates it where it stands: the type arguments of a specialization written as a value
+/// (`list[F]()`, `Alias = dict[str, F]`, a base `Foo[F]`), and the type-expression arguments of
+/// a typing construct assigned to a name (`T = TypeVar("T", bound=F)`). which those are is the
+/// checker's answer ([`TypeInfo::is_read_deferred`]), so a position it reads where it is
+/// written — a base itself, a reified class's type arguments, the type an `is` tests for — is
+/// left alone, and a name in it that is not yet bound stays the error the checker reports
+struct DeferredReads<'a> {
+    source: &'a str,
+    types: &'a dyn TypeInfo,
+    /// every quote written so far, the annotations' included: nothing inside one is evaluated
+    /// where it stands any more
+    edits: Vec<(TextRange, Vec<Fragment>)>,
+}
+
+impl DeferredReads<'_> {
+    fn quoted_already(&self, range: TextRange) -> bool {
+        self.edits
+            .iter()
+            .any(|(quoted, _)| quoted.contains_range(range))
+    }
+
+    /// quotes the type expression `expr` whole if it holds a forward reference. with
+    /// `skip_root`, `expr` is the specialization, which is evaluated where it stands, and each
+    /// of its type arguments is quoted that way instead
+    fn quote_forward_references(&mut self, expr: &Expr, skip_root: bool) {
+        let types = self.types;
+        let is_forward = |name: &ExprName| types.is_forward_reference(name) == Some(true);
+        let mut quoter = Quoter {
+            source: self.source,
+            is_forward: &is_forward,
+            edits: &mut self.edits,
+            skip_root,
+        };
+        walk_one_type_expr_with(expr, Some(self.types), &mut quoter);
+    }
+}
+
+impl<'a> Visitor<'a> for DeferredReads<'_> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        match stmt {
+            // a `type` statement's value is evaluated lazily, and the type parameters are the
+            // generics polyfill's to write
+            Stmt::TypeAlias(_) => {}
+            // a `TypedDict`'s `extra_items=` is a type expression python evaluates as the class
+            // is built
+            Stmt::ClassDef(class) => {
+                for keyword in class.keywords() {
+                    if self.types.is_read_deferred(&keyword.value) {
+                        self.quote_forward_references(&keyword.value, false);
+                    }
+                }
+                walk_stmt(self, stmt);
             }
+            _ => walk_stmt(self, stmt),
         }
-        for stmt in &class.body {
-            let value = match stmt {
-                Stmt::Expr(node) => Some(node.value.as_ref()),
-                Stmt::Assign(node) => Some(node.value.as_ref()),
-                Stmt::AnnAssign(node) => node.value.as_deref(),
-                _ => None,
-            };
-            if let Some(value) = value {
-                let mut quoter = Quoter {
-                    source: self.source,
-                    is_forward: &is_self,
-                    edits: &mut self.edits,
-                    skip_root: false,
-                };
-                quoter.value_subscripts(value);
+    }
+
+    // an annotation is quoted whole where python evaluates it, and is never evaluated
+    // elsewhere
+    fn visit_annotation(&mut self, _expr: &'a Expr) {}
+
+    fn visit_type_params(&mut self, _type_params: &'a TypeParams) {}
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if self.quoted_already(expr.range()) {
+            return;
+        }
+        match expr {
+            Expr::Subscript(subscript) if self.types.is_read_deferred(&subscript.slice) => {
+                self.quote_forward_references(expr, true);
             }
+            Expr::Call(call) => {
+                for argument in self.types.call_type_expression_arguments(call) {
+                    if self.types.is_read_deferred(argument) {
+                        self.quote_forward_references(argument, false);
+                    }
+                }
+            }
+            _ => {}
         }
-        self.block(&class.body, Scope::Class);
+        // what a quote left out may hold more: the metadata of an `Annotated`, a call's
+        // other arguments
+        walk_expr(self, expr);
     }
 }
 
@@ -208,38 +273,23 @@ struct Quoter<'a> {
     source: &'a str,
     is_forward: &'a dyn Fn(&ExprName) -> bool,
     edits: &'a mut Vec<(TextRange, Vec<Fragment>)>,
-    /// when walking a class base, the root expression must not be quoted even
-    /// if it's a bare self-reference — that would mask the runtime error
+    /// the root is the specialization whose type arguments are deferred, which is
+    /// evaluated where it stands itself
     skip_root: bool,
 }
 
 impl TypeExprVisitor for Quoter<'_> {
+    /// a type expression holding a forward reference is quoted whole, so whatever it lowers
+    /// to — a callable arrow, a `T?`, a tuple type, a literal type — ends up between the
+    /// quotes. quoting one name inside it would leave the construct around it evaluated
     fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
         if std::mem::take(&mut self.skip_root) {
-            return match expr {
-                Expr::Subscript(_) | Expr::BinOp(_) => Recurse::Descend,
-                _ => Recurse::Stop,
-            };
+            return Recurse::Descend;
         }
-        if !self.contains_forward_reference(expr) {
-            return Recurse::Stop;
+        if self.contains_forward_reference(expr) {
+            self.quote(expr.range());
         }
-        match expr {
-            Expr::Tuple(_) => Recurse::Descend,
-            // a generic whose base is not itself a forward reference: quote the
-            // references inside its arguments at their own level
-            Expr::Subscript(subscript) if !self.contains_forward_reference(&subscript.value) => {
-                Recurse::Descend
-            }
-            // a union is quoted whole: quoting one arm alone would evaluate
-            // `str | NoneType` at runtime. anything else that holds a reference
-            // — a name, a generic rooted at one, an arrow type — is quoted whole
-            // as the reference it is
-            _ => {
-                self.quote(expr.range());
-                Recurse::Stop
-            }
-        }
+        Recurse::Stop
     }
 }
 
@@ -269,20 +319,6 @@ impl Quoter<'_> {
         };
         finder.visit_expr(expr);
         finder.found
-    }
-
-    /// `list[A]()` and similar — quote a self-reference inside a value-position
-    /// subscript on the LHS of a call. doesn't descend into call arguments
-    fn value_subscripts(&mut self, expr: &Expr) {
-        match expr {
-            Expr::Subscript(subscript) => {
-                walk_one_type_expr(subscript.slice.as_ref(), self);
-                self.value_subscripts(&subscript.value);
-            }
-            Expr::Call(call) => self.value_subscripts(&call.func),
-            Expr::Attribute(attribute) => self.value_subscripts(&attribute.value),
-            _ => {}
-        }
     }
 
     fn quote(&mut self, range: TextRange) {
@@ -388,8 +424,280 @@ mod tests {
     #[test]
     fn nested_self_reference() {
         check(
+            indoc! {"
+                class Node[T]: ...
+                class Tree(Node[Tree]): ...
+            "},
+            indoc! {"
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\")
+                class Node(Generic[_T]): ...
+                class Tree(Node[\"Tree\"]): ...
+            "},
+        );
+    }
+
+    /// what the checker cannot resolve it cannot read as a specialization, so a
+    /// name in its subscript is left as it is
+    #[test]
+    fn an_unresolved_generic_quotes_nothing() {
+        check(
             "class Tree(Node[Tree]): ...\n",
-            "class Tree(Node[\"Tree\"]): ...\n",
+            "class Tree(Node[Tree]): ...\n",
+        );
+    }
+
+    /// a specialization written as a value reads its type arguments when it runs,
+    /// so a class defined further down is quoted wherever one stands
+    #[test]
+    fn a_later_class_in_a_value_specialization_is_quoted() {
+        check(
+            indoc! {"
+                from typing import Callable, Union
+                items = list[F]()
+                Alias = dict[str, F]
+                Maybe = Union[F, None]
+                Handler = Callable[[F], F]
+                nested = dict[str, list[F | None]]()
+                class F: ...
+            "},
+            indoc! {"
+                from typing import Callable, Union
+                items = list[\"F\"]()
+                Alias = dict[str, \"F\"]
+                Maybe = Union[\"F\", None]
+                Handler = Callable[[\"F\"], \"F\"]
+                nested = dict[str, \"list[F | None]\"]()
+                class F: ...
+            "},
+        );
+    }
+
+    /// a base's type arguments are a specialization like any other
+    #[test]
+    fn a_later_class_in_a_base_type_argument_is_quoted() {
+        check(
+            indoc! {"
+                class Base[T]: ...
+                class Bar(Base[F]): ...
+                class F: ...
+            "},
+            indoc! {"
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\")
+                class Base(Generic[_T]): ...
+                class Bar(Base[\"F\"]): ...
+                class F: ...
+            "},
+        );
+    }
+
+    /// the types a typing construct assigned to a name takes as call arguments
+    #[test]
+    fn a_later_class_in_a_typing_construct_is_quoted() {
+        check(
+            indoc! {"
+                from typing import NamedTuple, NewType, TypedDict, TypeVar
+                T = TypeVar(\"T\", bound=list[F])
+                Id = NewType(\"Id\", F)
+                Pair = NamedTuple(\"Pair\", [(\"first\", F)])
+                Movie = TypedDict(\"Movie\", {\"lead\": F})
+                class F: ...
+            "},
+            indoc! {"
+                from typing import NamedTuple, NewType, TypedDict, TypeVar
+                T = TypeVar(\"T\", bound=\"list[F]\")
+                Id = NewType(\"Id\", \"F\")
+                Pair = NamedTuple(\"Pair\", [(\"first\", \"F\")])
+                Movie = TypedDict(\"Movie\", {\"lead\": \"F\"})
+                class F: ...
+            "},
+        );
+    }
+
+    /// a type argument holding a reference is quoted whole, so the tuple type it
+    /// lowers to is inside the quote
+    #[test]
+    fn a_tuple_type_argument_is_quoted_whole() {
+        check(
+            indoc! {"
+                from typing import TypeVar
+                Pairs = list[(F, int)]
+                T = TypeVar(\"T\", bound=(F, int))
+                class F: ...
+            "},
+            indoc! {"
+                from typing import TypeVar
+                Pairs = list[\"tuple[F, int]\"]
+                T = TypeVar(\"T\", bound=\"tuple[F, int]\")
+                class F: ...
+            "},
+        );
+    }
+
+    /// a `Callable` parameter list written as a tuple becomes python's list, and
+    /// each parameter holding a reference is quoted on its own, as a parameter of
+    /// a list is
+    #[test]
+    fn a_callable_tuple_parameter_list_quotes_each_parameter() {
+        check(
+            indoc! {"
+                from typing import Callable
+                Both = Callable[(F, int), F]
+                Returns = Callable[(int, str), F]
+                Nested = list[Callable[(F, int), bool]]
+                class F: ...
+            "},
+            indoc! {"
+                from typing import Callable
+                Both = Callable[[\"F\", int], \"F\"]
+                Returns = Callable[[int, str], \"F\"]
+                Nested = list[\"Callable[[F, int], bool]\"]
+                class F: ...
+            "},
+        );
+    }
+
+    /// basedpython type syntax around a reference lowers inside the quote
+    #[test]
+    fn a_basedpython_type_argument_is_quoted_with_its_lowering() {
+        check(
+            indoc! {"
+                Maybe = list[F?]
+                Handler = list[(F) -> None]
+                Method = list[int.() -> F]
+                class F: ...
+            "},
+            indoc! {"
+                from typing import Callable
+                Maybe = list[\"F | None\"]
+                Handler = list[\"Callable[[F], None]\"]
+                Method = list[\"Callable[[int], F]\"]
+                class F: ...
+            "},
+        );
+    }
+
+    /// a `TypedDict`'s `extra_items=` is a type python evaluates as the class is
+    /// built, and a keyword like `metaclass=` is an object it is built with
+    #[test]
+    fn extra_items_is_quoted_and_a_metaclass_is_not() {
+        check(
+            indoc! {"
+                from typing_extensions import TypedDict
+                class Movie(TypedDict, extra_items=F): ...
+                class Meta(type): ...
+                class Plain(metaclass=Meta): ...
+                class F: ...
+            "},
+            indoc! {"
+                from typing_extensions import TypedDict
+                class Movie(TypedDict, extra_items=\"F\"): ...
+                class Meta(type): ...
+                class Plain(metaclass=Meta): ...
+                class F: ...
+            "},
+        );
+    }
+
+    /// a string in a type argument is a literal type, and lands in the quote
+    /// with the reference beside it
+    #[test]
+    fn a_literal_type_beside_a_quoted_reference_is_lowered_inside_the_quote() {
+        check(
+            indoc! {"
+                items = list[\"a\" | F]()
+                class F: ...
+            "},
+            indoc! {"
+                from typing import Literal
+                items = list['Literal[\"a\"] | F']()
+                class F: ...
+            "},
+        );
+    }
+
+    /// the specialization itself is evaluated where it stands, so a generic bound
+    /// only on some paths, which counts as a forward reference, is left as it is
+    #[test]
+    fn a_possibly_unbound_generic_is_not_quoted() {
+        check(
+            indoc! {"
+                import sys
+                if len(sys.argv) > 0:
+                    Box = list
+                items = Box[F]()
+                class F: ...
+            "},
+            indoc! {"
+                import sys
+                if len(sys.argv) > 0:
+                    Box = list
+                items = Box[\"F\"]()
+                class F: ...
+            "},
+        );
+    }
+
+    /// a specialization inside a reference already quoted is quoted with it,
+    /// and not a second time inside the quote
+    #[test]
+    fn a_specialization_inside_a_quote_is_not_quoted_again() {
+        check(
+            indoc! {"
+                from typing import Annotated
+                items = list[F | Annotated[int, dict[str, G]()]]()
+                class F: ...
+                class G: ...
+            "},
+            indoc! {"
+                from typing import Annotated
+                items = list[\"F | Annotated[int, dict[str, G]()]\"]()
+                class F: ...
+                class G: ...
+            "},
+        );
+    }
+
+    /// a type argument is quoted whole, as an annotation is, so the metadata of
+    /// an `Annotated` in it is read with it
+    #[test]
+    fn an_annotated_type_argument_is_quoted_whole() {
+        check(
+            indoc! {"
+                from typing import Annotated
+                items = list[Annotated[F, len]]()
+                class F: ...
+            "},
+            indoc! {"
+                from typing import Annotated
+                items = list[\"Annotated[F, len]\"]()
+                class F: ...
+            "},
+        );
+    }
+
+    /// a name a function binds further down is a forward reference within it,
+    /// and one the module binds is bound by the time the function runs
+    #[test]
+    fn a_function_body_quotes_only_its_own_later_names() {
+        check(
+            indoc! {"
+                def f():
+                    x = list[G]()
+                    y = list[F]()
+                    G = int
+                    return x, y
+                class F: ...
+            "},
+            indoc! {"
+                def f():
+                    x = list[\"G\"]()
+                    y = list[F]()
+                    G = int
+                    return x, y
+                class F: ...
+            "},
         );
     }
 
@@ -405,7 +713,7 @@ mod tests {
     fn self_ref_in_nested_subscript() {
         check(
             "class A(dict[str, list[A]]): ...\n",
-            "class A(dict[str, list[\"A\"]]): ...\n",
+            "class A(dict[str, \"list[A]\"]): ...\n",
         );
     }
 

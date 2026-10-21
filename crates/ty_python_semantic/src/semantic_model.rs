@@ -20,6 +20,7 @@ use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::place::imported_symbol;
 use crate::place::{builtins_module_scope, implicit_builtins_symbol_scope};
 use crate::types::AnonNamedTupleClass;
+use crate::types::TypeExpressionFlags;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::implicit_names::implicit_name;
 use crate::types::list_members::{all_members, all_reachable_members};
@@ -27,7 +28,8 @@ use crate::types::runtime_spelling::RuntimeSite;
 use crate::types::{
     ClassPatternPositionalResult, ClassPatternPositionalSource, CycleDetector, ProgramEnvironment,
     SpecialFormType, Type, TypeQualifiers, binding_type, class_pattern_positional_result,
-    class_pattern_positional_sources, infer_complete_scope_types, inferred_declaration,
+    class_pattern_positional_sources, infer_complete_scope_types, infer_scope_types,
+    inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::node_key::NodeKey;
@@ -67,6 +69,21 @@ impl<'db> SemanticModel<'db> {
 
     pub fn db(&self) -> &'db dyn Db {
         self.db
+    }
+
+    /// basedpython: infers every scope of the file, each before the scopes inside it, as
+    /// checking the file does. a reader about to ask for the types of most of the file asks
+    /// this first: a scope inferred before the scope around it reads that scope's names
+    /// before that scope has inferred the conditions deciding whether they are bound there,
+    /// and each of those conditions is then inferred inside the inference of the next
+    pub fn infer_in_check_order(&self) {
+        let index = semantic_index(self.db, self.file);
+        for scope in index.scope_ids() {
+            // a scope that takes type context is inferred inside the scope around it
+            if !scope.accepts_type_context(self.db) {
+                infer_scope_types(self.db, scope, crate::types::TypeContext::default());
+            }
+        }
     }
 
     pub fn file(&self) -> File {
@@ -964,21 +981,42 @@ impl<'db> SemanticModel<'db> {
     }
 
     /// basedpython: whether subscripting `value` specializes it, so that the checker infers
-    /// the slice as type expressions: a generic class, `tuple`, `type`, a generic alias or a
-    /// special form. a class that is not generic is subscripted through its metaclass's
-    /// `__getitem__` or its `__class_getitem__` — `Colour["Red"]` looks an enum member up —
-    /// and a slice read there is a value. `false` for a value the checker could not resolve
+    /// the slice as type expressions — the same answer inference acts on (see
+    /// `types::subscript::specializes_on_subscript`). `false` for a value the checker could
+    /// not resolve
     pub fn subscript_specializes(&self, value: &Expr) -> bool {
-        let db = self.db;
-        match value.inferred_type(self) {
-            Some(Type::ClassLiteral(class)) => {
-                class.generic_context(db).is_some()
-                    || class.is_tuple(db)
-                    || class.is_known(db, crate::types::KnownClass::Type)
-            }
-            Some(Type::GenericAlias(_) | Type::SpecialForm(_) | Type::KnownInstance(_)) => true,
-            _ => false,
-        }
+        value
+            .inferred_type(self)
+            .is_some_and(|ty| crate::types::subscript::specializes_on_subscript(self.db, ty))
+    }
+
+    /// basedpython: whether `expr` is `typing.Callable` or `collections.abc.Callable`, whatever
+    /// name it is reached by — an alias (`from typing import Callable as Fn`), an assignment
+    /// (`C = typing.Callable`) — and not a class of the program's own that is named `Callable`
+    pub fn is_callable_form(&self, expr: &Expr) -> bool {
+        matches!(
+            expr.inferred_type(self),
+            Some(Type::SpecialForm(
+                SpecialFormType::TypingCallable | SpecialFormType::CollectionsAbcCallable
+            ))
+        )
+    }
+
+    /// basedpython: whether inference reads the type expression `expr` as deferred, as it
+    /// does an annotation, though python evaluates it where it stands — the slice of a
+    /// specialization written as a value (`list[F]()`), or a type-expression argument of a
+    /// typing construct assigned to a name (`TypeVar("T", bound=F)`). a name in one may be
+    /// bound only further on, and the transpiler writes it as the forward reference python
+    /// reads lazily
+    pub fn is_read_deferred(&self, expr: &Expr) -> bool {
+        let file = self.program_file();
+        let index = semantic_index(self.db, file);
+        let Some(file_scope) = index.try_expression_scope_id(&ast::ExprRef::from(expr)) else {
+            return false;
+        };
+        infer_complete_scope_types(self.db, file_scope.to_scope_id(self.db, file))
+            .type_expression_flags(expr)
+            .contains(TypeExpressionFlags::READ_DEFERRED)
     }
 
     /// basedpython: whether an attribute access resolves through an *implicit

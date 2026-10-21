@@ -270,6 +270,10 @@ pub(crate) trait TypeInfo {
     /// whether `annotation` declares a PEP 613 type alias, whose value is a type expression
     fn is_type_alias_annotation(&self, annotation: &Expr) -> bool;
 
+    /// whether `expr` is `typing.Callable` or `collections.abc.Callable`, however it is spelled
+    /// — see [`SemanticModel::is_callable_form`]
+    fn is_callable_form(&self, expr: &Expr) -> bool;
+
     /// the arguments of `call` that are type expressions, because the call is one of the
     /// typing constructs that spells a type through a call — `NewType("D", int)`,
     /// `TypeVar("T", bound=int)`, the functional `NamedTuple` and `TypedDict`
@@ -479,6 +483,11 @@ pub(crate) trait TypeInfo {
     /// it is written, as it does before 3.14 without `from __future__ import
     /// annotations`. `None` when ty did not index the name
     fn is_forward_reference(&self, name: &ExprName) -> Option<bool>;
+
+    /// whether the checker reads the type expression `expr` as deferred though python evaluates
+    /// it where it stands, so that a name in it may be a forward reference — see
+    /// [`SemanticModel::is_read_deferred`]
+    fn is_read_deferred(&self, expr: &Expr) -> bool;
 
     /// whether every name `expr` reads holds, where it is written, the binding the checker
     /// resolved when the program runs, so `expr` can be written into code that runs there
@@ -917,6 +926,10 @@ impl TypeInfo for SemanticModel<'_> {
         SemanticModel::is_type_alias_annotation(self, annotation)
     }
 
+    fn is_callable_form(&self, expr: &Expr) -> bool {
+        SemanticModel::is_callable_form(self, expr)
+    }
+
     fn call_type_expression_arguments<'ast>(&self, call: &'ast ExprCall) -> Vec<&'ast Expr> {
         call.func
             .inferred_type(self)
@@ -1249,6 +1262,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn is_forward_reference(&self, name: &ExprName) -> Option<bool> {
         SemanticModel::is_forward_reference(self, name)
+    }
+
+    fn is_read_deferred(&self, expr: &Expr) -> bool {
+        SemanticModel::is_read_deferred(self, expr)
     }
 
     fn class_body_member_name(&self, name: &ExprName) -> Option<String> {

@@ -5,7 +5,7 @@ use ruff_python_ast::{self as ast, ArgOrKeyword, ExprContext, ParameterBorrow};
 use ruff_text_size::Ranged;
 use ty_module_resolver::file_to_module;
 
-use super::TypeInferenceBuilder;
+use super::{DeferredExpressionState, TypeInferenceBuilder};
 use crate::place::{DefinedPlace, Definedness, Place};
 use crate::types::call::Argument;
 use crate::types::call::CallErrorKind;
@@ -483,13 +483,27 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // let the `None` ride out to the end of the chain
         let (value_ty, in_chain) = self.basedpython_chain_receiver(&subscript.value, value_ty);
 
-        // If we have an implicit type alias like `MyList = list[T]`, and if `MyList` is being
-        // used in another implicit type alias like `Numbers = MyList[int]`, then we infer the
-        // right hand side as a value expression, and need to handle the specialization here.
-        if value_ty.is_generic_alias() {
-            return Ok(self.infer_explicit_type_alias_specialization(subscript, value_ty, false));
+        // basedpython: the type arguments of a specialization written as a value — `list[F]()`,
+        // `Alias = dict[str, F]`, `Foo[F]` among a class's bases — are read as deferred, as an
+        // annotation is, so they may name a class the module binds further on: the transpiler
+        // writes such a name as the forward reference python reads lazily
+        let defer = self.is_basedpython_file()
+            && crate::types::subscript::defers_type_arguments(self.db(), value_ty);
+        let previous_states = defer.then(|| {
+            let evaluated = self.replace_deferred_state(DeferredExpressionState::Deferred);
+            let previous_evaluation = self.specialization_evaluation_state.replace(evaluated);
+            (evaluated, previous_evaluation)
+        });
+        let loaded = self.infer_subscript_load_specialization(subscript, value_ty, tcx);
+        if let Some((evaluated, previous_evaluation)) = previous_states {
+            self.deferred_state = evaluated;
+            self.specialization_evaluation_state = previous_evaluation;
+            self.store_type_expression_flags(&*subscript.slice, TypeExpressionFlags::READ_DEFERRED);
         }
-        let loaded = self.infer_subscript_load_impl(value_ty, subscript, tcx);
+        let loaded = match loaded {
+            Ok(loaded) => loaded,
+            Err(specialized) => return Ok(specialized),
+        };
         let ty = loaded.unwrap_or_else(|recovery_ty| recovery_ty);
 
         // `m[1]` goes through `Match.__getitem__`, whose stub can only say
@@ -500,6 +514,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let ty = self.basedpython_chain_result(subscript, ty, in_chain);
         loaded.map(|_| ty).map_err(|_| ty)
+    }
+
+    /// the subscript `value_ty[...]` loads: `Err` with the result of re-specializing an implicit
+    /// type alias, which is final, or `Ok` with the ordinary subscript's
+    fn infer_subscript_load_specialization(
+        &mut self,
+        subscript: &ast::ExprSubscript,
+        value_ty: Type<'db>,
+        tcx: TypeContext<'db>,
+    ) -> Result<Result<Type<'db>, Type<'db>>, Type<'db>> {
+        // If we have an implicit type alias like `MyList = list[T]`, and if `MyList` is being
+        // used in another implicit type alias like `Numbers = MyList[int]`, then we infer the
+        // right hand side as a value expression, and need to handle the specialization here.
+        if value_ty.is_generic_alias() {
+            return Err(self.infer_explicit_type_alias_specialization(subscript, value_ty, false));
+        }
+        Ok(self.infer_subscript_load_impl(value_ty, subscript, tcx))
     }
 
     /// The type of `m[key]` for a `re.Match` whose capture groups are known.
@@ -936,12 +967,26 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     .replace(InferenceFlags::DISABLE_INT_FLOAT_SPECIAL_CASE, true)
             });
 
-        let result = self.infer_explicit_callable_specialization(
-            subscript,
-            value_ty,
-            generic_context,
-            specialize,
-        );
+        // a reified class keeps its type arguments as runtime values, so they are read where
+        // they are written even inside a specialization whose type arguments are deferred:
+        // `list[Box[F]]` hands `Box` the object `F`, not a forward reference to it
+        let result = if crate::types::subscript::defers_type_arguments(db, value_ty) {
+            self.infer_explicit_callable_specialization(
+                subscript,
+                value_ty,
+                generic_context,
+                specialize,
+            )
+        } else {
+            self.infer_as_evaluated(|builder| {
+                builder.infer_explicit_callable_specialization(
+                    subscript,
+                    value_ty,
+                    generic_context,
+                    specialize,
+                )
+            })
+        };
 
         if let Some(previously_disabled_int_float_special_case) =
             previously_disabled_int_float_special_case
@@ -3159,9 +3204,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .context
             .inference_flags
             .replace(InferenceFlags::IN_TYPE_ALIAS, false);
-        for metadata_element in &arguments[1..] {
-            self.infer_expression(metadata_element, TypeContext::default());
-        }
+        self.infer_as_evaluated(|builder| {
+            for metadata_element in &arguments[1..] {
+                builder.infer_expression(metadata_element, TypeContext::default());
+            }
+        });
         self.context
             .inference_flags
             .set(InferenceFlags::IN_TYPE_ALIAS, previous_in_type_alias);

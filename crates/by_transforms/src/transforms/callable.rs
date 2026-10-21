@@ -1060,6 +1060,16 @@ impl crate::transforms::type_expr_walker::TypeExprVisitor for CallableSyntax<'_>
         {
             return crate::transforms::type_expr_walker::Recurse::Stop;
         }
+        // a generic's type arguments are lowered one by one, each where it stands, so a
+        // pass that writes one of them whole, a forward reference quoted where python reads
+        // it lazily, wraps that argument's lowering rather than landing inside a rewrite of
+        // the whole subscript. a `typeof` and a decorated type are syntax of their own
+        if let Expr::Subscript(s) = expr
+            && !s.is_typeof
+            && !s.is_type_decoration
+        {
+            return crate::transforms::type_expr_walker::Recurse::Descend;
+        }
         // `rewrite` is the single type-expression lowerer — it owns every
         // structural type-form (callable arrows, `&` / `and`, `or`, `not`,
         // `typeof`, subscripts) and composes leaves through `lower_leaf`. it

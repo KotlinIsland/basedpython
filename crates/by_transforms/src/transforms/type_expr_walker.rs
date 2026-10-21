@@ -145,8 +145,17 @@ pub(crate) fn walk_type_positions_skipping(
 /// callers that already know the expression is in a type position (e.g.
 /// `generics.rs` re-rewriting the body of a polyfilled type alias)
 pub(crate) fn walk_one_type_expr(expr: &Expr, visitor: &mut dyn TypeExprVisitor) {
+    walk_one_type_expr_with(expr, None, visitor);
+}
+
+/// [`walk_one_type_expr`], with `types` to tell which value is `Callable`
+pub(crate) fn walk_one_type_expr_with(
+    expr: &Expr,
+    types: Option<&dyn TypeInfo>,
+    visitor: &mut dyn TypeExprVisitor,
+) {
     let mut walker = TypePosWalker {
-        types: None,
+        types,
         claimed: &[],
         visitor,
     };
@@ -220,7 +229,7 @@ impl TypePosWalker<'_> {
                     }
                     return;
                 }
-                if name_matches(&s.value, "Callable") {
+                if self.is_callable(&s.value) {
                     self.descend_callable(&s.slice);
                     return;
                 }
@@ -263,18 +272,38 @@ impl TypePosWalker<'_> {
         self.visit_type_expr(slice, TypePos::Nested);
     }
 
+    /// whether `value` is `Callable`: the checker's answer where the walk has one, and the
+    /// spelling where it has none
+    fn is_callable(&self, value: &Expr) -> bool {
+        match self.types {
+            Some(types) => types.is_callable_form(value),
+            None => name_matches(value, "Callable"),
+        }
+    }
+
     fn descend_callable(&mut self, slice: &Expr) {
         // `Callable[[P1, P2], R]` — slice is an unparenthesized 2-tuple
         // `(List[P1, P2], R)`. fall back to generic descent for any other
         // shape (e.g. `Callable[..., R]`, `Callable[P, R]` with ParamSpec)
         if let Expr::Tuple(t) = slice {
             if !t.parenthesized && t.elts.len() == 2 {
-                if let Expr::List(pl) = &t.elts[0] {
-                    for p in &pl.elts {
-                        self.visit_type_expr(p, TypePos::CallableParam);
+                match &t.elts[0] {
+                    Expr::List(pl) => {
+                        for p in &pl.elts {
+                            self.visit_type_expr(p, TypePos::CallableParam);
+                        }
                     }
-                } else {
-                    self.visit_type_expr(&t.elts[0], TypePos::Nested);
+                    // basedpython: `Callable[(int, name: str), R]` writes the parameter list
+                    // as a tuple, which lowers to python's list. each parameter's type is a
+                    // type position of its own; a variadic one has no place in the list
+                    Expr::Tuple(pt) if pt.parenthesized => {
+                        for p in &pt.elts {
+                            if let Some(ty) = callable_parameter_type(p) {
+                                self.visit_type_expr(ty, TypePos::CallableParam);
+                            }
+                        }
+                    }
+                    params => self.visit_type_expr(params, TypePos::Nested),
                 }
                 self.visit_type_expr(&t.elts[1], TypePos::Nested);
                 return;
@@ -480,6 +509,17 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
             return;
         }
         walk_expr(self, expr);
+    }
+}
+
+/// the type of one parameter of a `Callable` parameter list written as a tuple, or `None` for
+/// a variadic one, which python's list form has no place for: `int` for `int` and `name: int`
+pub(crate) fn callable_parameter_type(parameter: &Expr) -> Option<&Expr> {
+    match parameter {
+        Expr::Named(named) if matches!(named.target.as_ref(), Expr::Starred(_)) => None,
+        Expr::Named(named) => Some(&named.value),
+        Expr::Starred(_) => None,
+        parameter => Some(parameter),
     }
 }
 

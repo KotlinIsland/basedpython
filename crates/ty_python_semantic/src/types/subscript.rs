@@ -27,6 +27,43 @@ use super::{
     TypeVarBoundOrConstraints, TypedDictType, UnionBuilder, UnsafeUnionType, todo_type,
 };
 
+/// basedpython: whether subscripting a value of type `ty` specializes it, so that its slice
+/// holds type arguments, which inference reads as type expressions: a generic class, `tuple`,
+/// `type`, a generic alias or a special form. a class that is not generic is subscripted
+/// through its metaclass's `__getitem__` or its `__class_getitem__` — `Colour["Red"]` looks an
+/// enum member up — and its slice is a value
+pub(crate) fn specializes_on_subscript<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    match ty {
+        Type::ClassLiteral(class) => {
+            class.generic_context(db).is_some()
+                || class.is_tuple(db)
+                || class.is_known(db, KnownClass::Type)
+        }
+        Type::GenericAlias(_) | Type::SpecialForm(_) | Type::KnownInstance(_) => true,
+        _ => false,
+    }
+}
+
+/// basedpython: whether the type arguments subscripting a value of type `ty` are read as
+/// deferred in a `.by` file, as an annotation is: a name in them may be one the module binds
+/// only further on, and the transpiler writes it as the forward reference python reads lazily
+///
+/// a reified class keeps its type arguments as runtime values, which a forward reference
+/// cannot stand in for, so its are read where they are written
+pub(crate) fn defers_type_arguments<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    if !specializes_on_subscript(db, ty) {
+        return false;
+    }
+    match ty {
+        Type::ClassLiteral(class) => !class.generic_context(db).is_some_and(|context| {
+            context
+                .variables(db)
+                .any(|typevar| typevar.is_reified_class_typevar(db))
+        }),
+        _ => true,
+    }
+}
+
 /// basedpython: whether subscripting a value of type `ty` is a runtime
 /// `__getitem__` call rather than a type specialization.
 ///
