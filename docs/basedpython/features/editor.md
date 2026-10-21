@@ -491,6 +491,13 @@ the build follows the *module* tree, not the directory tree, so a src-layout
 project's `src/pkg/main.by` is `build/pkg/main.py` — which is why this is the
 build's answer rather than a path an editor can assemble
 
+an editor that runs the build itself, for a *build project* action, takes the
+build's diagnostics from its output rather than reading them as prose:
+`by build --output-format github`, or `TY_OUTPUT_FORMAT=github` in the build's
+environment as `by check` reads it, prints each diagnostic on a line of its own,
+with its file, place and severity as named fields, among the lines saying what
+the build wrote
+
 `by/syntaxOutline` answers one document whole, on every revision the client wants
 to serve features from: it is what an editor needs to type in an
 indentation-delimited language — which line opens a suite, where a compound

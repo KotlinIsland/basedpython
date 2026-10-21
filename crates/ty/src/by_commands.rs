@@ -14,6 +14,7 @@ use ruff_db::diagnostic::{
 use ruff_db::files::system_path_to_file;
 use ruff_db::system::{OsSystem, SystemPath};
 use ruff_text_size::TextRange;
+use ty_project::metadata::options::OutputFormat;
 use ty_project::{Db, ProjectDatabase, ProjectMetadata};
 use ty_site_packages::{PythonEnvironment, SysPrefixPathOrigin};
 use ty_static::EnvVars;
@@ -241,6 +242,7 @@ pub(crate) fn cmd_run(
     let status = render_check_and_transpile(
         &db,
         &handles,
+        OutputFormat::Full,
         &mut Emit {
             config: &config,
             gate: CheckGate::AllErrors,
@@ -936,6 +938,7 @@ pub(crate) fn cmd_build(
     lowering: &LoweringArgs,
     out: Option<&Path>,
     print_manifest: bool,
+    output_format: OutputFormat,
 ) -> anyhow::Result<ExitStatus> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let mut config = version_config(min_version, &cwd)?;
@@ -963,6 +966,7 @@ pub(crate) fn cmd_build(
     let status = render_check_and_transpile(
         &db,
         &handles,
+        output_format,
         &mut Emit {
             config: &config,
             gate: CheckGate::ParseErrorsOnly,
@@ -1272,6 +1276,7 @@ pub(crate) fn cmd_compile(
     let transpiled = render_check_and_transpile(
         &db,
         &transpilable,
+        OutputFormat::Full,
         &mut Emit {
             config: &tree_config,
             gate: CheckGate::ParseErrorsOnly,
@@ -1724,6 +1729,7 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
     render_check_and_transpile(
         &db,
         &handles,
+        OutputFormat::Full,
         &mut Emit {
             config,
             gate: CheckGate::ParseErrorsOnly,
@@ -2312,12 +2318,13 @@ fn compilable_files(root: &Path) -> Vec<PathBuf> {
 fn render_check_and_transpile(
     db: &ProjectDatabase,
     handles: &[(PathBuf, ruff_db::files::File)],
+    format: OutputFormat,
     emit: &mut Emit<'_>,
     consume: impl FnMut(&Transpiled<'_>) -> anyhow::Result<()>,
 ) -> anyhow::Result<ExitStatus> {
     let emitted = by_stage::emit::check_and_transpile(db, handles, emit, consume)?;
     if !emitted.diagnostics.is_empty() {
-        render_diagnostics(db, &emitted.diagnostics)?;
+        render_diagnostics_as(format, db, &emitted.diagnostics)?;
     }
     Ok(if emitted.ok {
         ExitStatus::Success
@@ -2328,14 +2335,28 @@ fn render_check_and_transpile(
     })
 }
 
-/// Render diagnostics to stderr in the same format as `by check`. The
+/// [`render_diagnostics_as`] in the full format, which every command but
+/// `build` prints its diagnostics in.
+fn render_diagnostics(db: &ProjectDatabase, diagnostics: &[Diagnostic]) -> anyhow::Result<()> {
+    render_diagnostics_as(OutputFormat::Full, db, diagnostics)
+}
+
+/// Render diagnostics to stderr in `format`, as `by check` renders it. The
 /// transpiled output goes to stdout, so diagnostics belong on stderr to keep
 /// the two streams separable.
+///
+/// The count is a sentence for a person, so a format made for a program goes
+/// without it, as `by check`'s does.
 #[allow(clippy::print_stderr)]
-fn render_diagnostics(db: &ProjectDatabase, diagnostics: &[Diagnostic]) -> anyhow::Result<()> {
+fn render_diagnostics_as(
+    format: OutputFormat,
+    db: &ProjectDatabase,
+    diagnostics: &[Diagnostic],
+) -> anyhow::Result<()> {
     use std::io::Write as _;
 
     let display_config = DisplayDiagnosticConfig::new("ty")
+        .format(format.into())
         .color(colored::control::SHOULD_COLORIZE.should_colorize())
         .context(0);
     let mut stderr = std::io::stderr().lock();
@@ -2344,6 +2365,9 @@ fn render_diagnostics(db: &ProjectDatabase, diagnostics: &[Diagnostic]) -> anyho
         "{}",
         DisplayDiagnostics::new(db, &display_config, diagnostics)
     )?;
+    if !format.is_human_readable() {
+        return Ok(());
+    }
     let n = diagnostics.len();
     writeln!(
         stderr,

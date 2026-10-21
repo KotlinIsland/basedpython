@@ -313,7 +313,16 @@ by build [OPTIONS]
 </dd><dt id="by-build--min-version"><a href="#by-build--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on [default: the project's configured python version]</p>
 </dd><dt id="by-build--no-unique-loop-bindings"><a href="#by-build--no-unique-loop-bindings"><code>--no-unique-loop-bindings</code></a></dt><dd><p>leave a closure made inside a loop sharing the loop's one binding, as python does, instead of binding the values of the iteration it was made in</p>
 </dd><dt id="by-build--out"><a href="#by-build--out"><code>--out</code></a>, <code>-o</code> <i>dir</i></dt><dd><p>Where to write the output [default: <code>build</code> in the project root, or <code>dist</code> with <code>--wheels</code>]</p>
-</dd><dt id="by-build--print-manifest"><a href="#by-build--print-manifest"><code>--print-manifest</code></a></dt><dd><p>Report what the build read and produced, as <code>&lt;kind&gt; &lt;value&gt;</code> lines.</p>
+</dd><dt id="by-build--output-format"><a href="#by-build--output-format"><code>--output-format</code></a> <i>output-format</i></dt><dd><p>The format to print the build's diagnostics in, as <code>by check</code> takes it.</p>
+<p>They go to stderr whatever the format, among the lines saying what the build wrote, so a structured format is what lets a CI job or an editor read them out of the rest.</p>
+<p>May also be set with the <code>TY_OUTPUT_FORMAT</code> environment variable.</p><p>Possible values:</p>
+<ul>
+<li><code>full</code>:  Print diagnostics verbosely, with context and helpful hints (default)</li>
+<li><code>concise</code>:  Print diagnostics concisely, one per line</li>
+<li><code>gitlab</code>:  Print diagnostics in the JSON format expected by GitLab Code Quality reports</li>
+<li><code>github</code>:  Print diagnostics in the format used by GitHub Actions workflow error annotations</li>
+<li><code>junit</code>:  Print diagnostics as a JUnit-style XML report</li>
+</ul></dd><dt id="by-build--print-manifest"><a href="#by-build--print-manifest"><code>--print-manifest</code></a></dt><dd><p>Report what the build read and produced, as <code>&lt;kind&gt; &lt;value&gt;</code> lines.</p>
 <p><code>input &lt;path&gt;</code> for every file the project is made of — what a source distribution has to carry to rebuild into the same thing — and <code>package &lt;name&gt;</code> for every top-level package that came out.</p>
 </dd><dt id="by-build--runtime-raises-checks"><a href="#by-build--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-build--soundness"><a href="#by-build--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>

@@ -161,6 +161,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
             wheels,
             out,
             print_manifest,
+            output_format,
             lowering,
         } => {
             if wheels {
@@ -171,6 +172,7 @@ fn run_command(command: Command) -> anyhow::Result<ExitStatus> {
                     &lowering,
                     out.as_deref(),
                     print_manifest,
+                    output_format.map(Into::into).unwrap_or_default(),
                 )
             }
         }
