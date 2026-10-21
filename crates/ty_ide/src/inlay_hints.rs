@@ -25,14 +25,14 @@ use ty_python_semantic::reified::{
 };
 use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
-    InferredInvalidations, InferredStateReads, InlayHintCallArgumentDetails, StateRead, WriteSite,
-    hintable_parameter_type, implicit_enum_member_value, inferred_derived_dependencies,
-    inferred_invalidations, inferred_override, inferred_parameter_bound, inferred_property_type,
-    inferred_raises, inferred_return_annotation, inferred_state_reads,
-    inferred_type_param_variance, inherited_parameter_annotation, inherited_parameter_default,
-    inlay_hint_call_argument_details, is_composable_function, is_reveal_type_function,
-    is_union_special_form, numeric_promotion, parameter_stability,
-    trailing_lambda_implicit_parameters, type_parameter_names,
+    BaseTypeArgument, InferredInvalidations, InferredStateReads, InlayHintCallArgumentDetails,
+    StateRead, WriteSite, hintable_parameter_type, implicit_enum_member_value,
+    inferred_base_type_arguments, inferred_derived_dependencies, inferred_invalidations,
+    inferred_override, inferred_parameter_bound, inferred_property_type, inferred_raises,
+    inferred_return_annotation, inferred_state_reads, inferred_type_param_variance,
+    inherited_parameter_annotation, inherited_parameter_default, inlay_hint_call_argument_details,
+    is_composable_function, is_reveal_type_function, is_union_special_form, numeric_promotion,
+    parameter_stability, trailing_lambda_implicit_parameters, type_parameter_names,
 };
 use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail, TypeDisplayDetails};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
@@ -490,6 +490,34 @@ impl InlayHint {
         }
     }
 
+    /// basedpython: the type arguments a generic base takes from the class
+    /// body, where they would be written
+    fn inferred_base_type_arguments(
+        db: &dyn Db,
+        env: &ProgramEnvironment<'_>,
+        position: TextSize,
+        arguments: &[BaseTypeArgument],
+    ) -> Self {
+        let arguments = arguments
+            .iter()
+            .map(|argument| match argument {
+                BaseTypeArgument::Type(ty) => ty.display(db, env).to_string(),
+                BaseTypeArgument::Unpacked(ty) => format!("*{}", ty.display(db, env)),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        Self {
+            position,
+            kind: InlayHintKind::InferredBaseTypeArguments,
+            label: InlayHintLabel {
+                parts: vec![format!("[{arguments}]").into()],
+            },
+            padding_left: false,
+            padding_right: false,
+            text_edits: vec![],
+        }
+    }
+
     /// basedpython: the bound recovered for an unannotated parameter, as the
     /// `some` annotation that would declare it
     fn inferred_parameter_bound(
@@ -558,6 +586,8 @@ pub enum InlayHintKind {
     InferredReturnType,
     /// basedpython: the bound an unannotated parameter of a `def` takes from its body
     InferredParameterType,
+    /// basedpython: the type arguments a generic base takes from the class body
+    InferredBaseTypeArguments,
     CallArgumentName,
     /// basedpython: a function's inferred exception set
     Raises,
@@ -607,6 +637,7 @@ impl InlayHintKind {
             | InlayHintKind::PropertyType
             | InlayHintKind::InferredReturnType
             | InlayHintKind::InferredParameterType
+            | InlayHintKind::InferredBaseTypeArguments
             // basedpython: an inferred exception set is a type, like a return type
             | InlayHintKind::Raises
             | InlayHintKind::Variance
@@ -684,6 +715,7 @@ hint_switches!(InlayHintKind, enabled, set_enabled, {
     PropertyType => property_types = "propertyTypes",
     InferredReturnType => inferred_return_types = "inferredReturnTypes",
     InferredParameterType => inferred_parameter_types = "inferredParameterTypes",
+    InferredBaseTypeArguments => inferred_base_type_arguments = "inferredBaseTypeArguments",
     CallArgumentName => call_argument_names = "callArgumentNames",
     Raises => inferred_raises = "inferredRaises",
     Variance => inferred_variance = "inferredVariance",
@@ -1058,6 +1090,15 @@ pub struct InlayHintSettings {
     /// ```
     pub inferred_parameter_types: bool,
 
+    /// basedpython: whether to show the type arguments a generic base written
+    /// without them takes from the members the class body overrides
+    ///
+    /// ```by
+    /// class B(A"[int]"):
+    ///     x = 1
+    /// ```
+    pub inferred_base_type_arguments: bool,
+
     /// basedpython: whether to show the type a property declaration leaves to its
     /// accessors.
     ///
@@ -1132,6 +1173,7 @@ impl InlayHintSettings {
             inherited_parameter_defaults: false,
             inferred_return_types: false,
             inferred_parameter_types: false,
+            inferred_base_type_arguments: false,
             property_types: false,
             implicit_arguments: false,
             enum_values: false,
@@ -1163,6 +1205,7 @@ impl InlayHintSettings {
             inherited_parameter_defaults,
             inferred_return_types,
             inferred_parameter_types,
+            inferred_base_type_arguments,
             property_types,
             implicit_arguments,
             enum_values,
@@ -1191,6 +1234,7 @@ impl InlayHintSettings {
             || inherited_parameter_defaults
             || inferred_return_types
             || inferred_parameter_types
+            || inferred_base_type_arguments
             || property_types
             || implicit_arguments
             || enum_values
@@ -1223,6 +1267,7 @@ impl Default for InlayHintSettings {
             inherited_parameter_defaults: true,
             inferred_return_types: true,
             inferred_parameter_types: true,
+            inferred_base_type_arguments: true,
             property_types: true,
             implicit_arguments: true,
             enum_values: true,
@@ -2129,6 +2174,29 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         ));
     }
 
+    /// basedpython: hint the type arguments each generic base a class writes
+    /// without them takes from the members its body overrides, after the base
+    fn add_inferred_base_type_arguments(&mut self, class: &ast::StmtClassDef) {
+        let env = &self.model.program_environment();
+        if !self
+            .settings
+            .enabled(InlayHintKind::InferredBaseTypeArguments)
+        {
+            return;
+        }
+        for (base, arguments) in inferred_base_type_arguments(&self.model, class) {
+            if self.range.intersect(base).is_none() {
+                continue;
+            }
+            self.push(InlayHint::inferred_base_type_arguments(
+                self.db,
+                env,
+                base.end(),
+                &arguments,
+            ));
+        }
+    }
+
     /// basedpython: hint the bound an unannotated parameter of a `def` takes from
     /// what its body does with it, as the `some` annotation that would declare it
     fn add_inferred_parameter_type(&mut self, parameter: &ast::Parameter) {
@@ -2400,6 +2468,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                     class.inferred_type(model)
                 });
                 self.add_inferred_class_reification(class);
+                self.add_inferred_base_type_arguments(class);
 
                 // a `case` variant is a member declaration with nowhere to write
                 // a value, so it goes after the name — `case Red 1, Green 2`
@@ -3299,6 +3368,12 @@ Source with applied edits:
 
             def reads(a):
                 _ = a.foo
+
+            class Held[T]:
+                x: T
+
+            class HeldInt(Held):
+                x = 1
 
             reveal_type(x)
 
@@ -12864,6 +12939,34 @@ def each(fn: (int) -> None) -> None:
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             inferred_return_types: true,
             inferred_raises: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// a generic base written without type arguments takes them from the
+    /// members the class body overrides, and they are shown where they would be
+    /// written. a base written with its arguments, and one the body does not
+    /// solve, get no hint
+    #[test]
+    fn basedpython_inferred_base_type_arguments() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A[T]:
+                x: T
+
+            class B(A):
+                x = 1
+
+            class C(A[object]):
+                x = 1
+
+            class D(A):
+                y = 1
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_base_type_arguments: true,
             ..InlayHintSettings::none()
         }));
     }

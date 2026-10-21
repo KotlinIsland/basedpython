@@ -67,12 +67,13 @@ use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, NodeIndex};
 use ruff_text_size::{Ranged, TextRange};
 use ty_python_core::definition::Definition;
-use ty_python_core::scope::ScopeId;
+use ty_python_core::scope::{FileScopeId, ScopeId};
 use ty_python_core::{ProgramFile, place_table, use_def_map};
 
 mod dynamic_literal;
 mod enum_literal;
 mod implicit_attributes;
+mod inferred_base;
 mod known;
 mod named_tuple;
 mod slots;
@@ -3349,7 +3350,21 @@ impl<'db> QualifiedClassName<'db> {
     /// `m` inside the namespace of a class `C` in the module `a.b` would return
     /// `["a", "b", "C", "<locals of function 'm'>"]`.
     pub(super) fn components_excluding_self(&self) -> Vec<String> {
-        let (file, file_scope_id, skip_count) = match self.class {
+        let (file, file_scope_id, skip_count) = self.enclosing_scope();
+        display::qualified_name_components_from_scope(self.db, file, file_scope_id, skip_count)
+    }
+
+    /// basedpython: [`Self::components_excluding_self`] without the module: the path to this
+    /// class from the top of its own file. `["C"]` for a class `D` nested in a class `C`
+    pub(super) fn components_within_file(&self) -> Vec<String> {
+        let (file, file_scope_id, skip_count) = self.enclosing_scope();
+        display::scope_name_components(self.db, file, file_scope_id, skip_count)
+    }
+
+    /// the scope the class is defined in, and how many scopes to skip to step out of the class
+    /// itself
+    fn enclosing_scope(&self) -> (ProgramFile<'db>, FileScopeId, usize) {
+        match self.class {
             ClassLiteral::Static(class) => {
                 let body_scope = class.body_scope(self.db);
                 // Skip the class body scope itself.
@@ -3377,9 +3392,7 @@ impl<'db> QualifiedClassName<'db> {
                 let scope = enum_lit.scope(self.db);
                 (scope.program_file(self.db), scope.file_scope_id(self.db), 0)
             }
-        };
-
-        display::qualified_name_components_from_scope(self.db, file, file_scope_id, skip_count)
+        }
     }
 }
 

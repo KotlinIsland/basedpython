@@ -39,6 +39,7 @@ pub(crate) mod if_let;
 pub(crate) mod implicit_receiver;
 pub(crate) mod implicit_typing;
 pub(crate) mod inferred_annotation;
+pub(crate) mod inferred_base_arguments;
 pub(crate) mod init_method;
 pub(crate) mod intersection;
 pub(crate) mod just_float;

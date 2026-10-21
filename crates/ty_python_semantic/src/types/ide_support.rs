@@ -9,7 +9,8 @@ use crate::types::EnumLiteralType;
 use crate::types::call::bind::CheckTypesMode;
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
 use crate::types::class::{
-    DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor, type_as_abstract_method,
+    DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor, expanded_class_base_entries,
+    type_as_abstract_method,
 };
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::context_sensitive::for_each_candidate;
@@ -3415,6 +3416,74 @@ pub fn inherited_parameter_annotation<'db>(
 
     let ty = matched.annotated_type();
     (!ty.is_unknown() && !ty.is_inferred_parameter_hole(db)).then_some(ty)
+}
+
+/// basedpython: one argument of a base's subscript as a class header writes it
+#[derive(Debug, Clone)]
+pub enum BaseTypeArgument<'db> {
+    /// the argument of an ordinary type parameter, `int` in `A[int]`
+    Type(Type<'db>),
+    /// the argument of a `*Ts` that is no fixed number of types, written unpacked:
+    /// `A[*tuple[int, ...]]`
+    Unpacked(Type<'db>),
+}
+
+/// basedpython: the type arguments each generic base `class_def` writes without them is inherited
+/// at, solved from the members the class body overrides — `class B(A): x = 1` inherits `A[int]`
+///
+/// each entry is the base expression's range and the arguments as the subscript writes them, in
+/// the order the base declares its type parameters. a `*Ts` that is a fixed number of types is
+/// written as those types, one argument each. a base written with its arguments, or whose
+/// arguments the body does not solve, has no entry
+pub fn inferred_base_type_arguments<'db>(
+    model: &SemanticModel<'db>,
+    class_def: &ast::StmtClassDef,
+) -> Vec<(TextRange, Vec<BaseTypeArgument<'db>>)> {
+    let db = model.db();
+    let index = semantic_index(db, db.program_file(model.file()));
+    let definition = index.expect_single_definition(class_def);
+    let Some(ClassLiteral::Static(class)) = original_class_type(db, definition) else {
+        return Vec::new();
+    };
+    let inherited = class.explicit_bases(db);
+    expanded_class_base_entries(db, class.known(db), class_def, definition)
+        .into_iter()
+        .zip(inherited)
+        .filter_map(|(entry, inherited)| {
+            if entry.ty() == *inherited {
+                return None;
+            }
+            let Type::GenericAlias(alias) = inherited else {
+                return None;
+            };
+            let specialization = alias.specialization(db);
+            let mut arguments = Vec::new();
+            for (typevar, argument) in specialization
+                .generic_context(db)
+                .variables(db)
+                .zip(specialization.types(db))
+            {
+                if !typevar.is_typevartuple(db) {
+                    arguments.push(BaseTypeArgument::Type(*argument));
+                    continue;
+                }
+                match argument
+                    .exact_tuple_instance_spec(db)
+                    .as_deref()
+                    .and_then(|spec| spec.as_fixed_length().cloned())
+                {
+                    Some(fixed) => arguments.extend(
+                        fixed
+                            .all_elements()
+                            .iter()
+                            .map(|element| BaseTypeArgument::Type(*element)),
+                    ),
+                    None => arguments.push(BaseTypeArgument::Unpacked(*argument)),
+                }
+            }
+            Some((entry.source_node().range(), arguments))
+        })
+        .collect()
 }
 
 /// basedpython: the bound an unannotated parameter of a `def` takes from what its body does with

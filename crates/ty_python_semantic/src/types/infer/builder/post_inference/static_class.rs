@@ -342,7 +342,15 @@ pub(crate) fn check_static_class_definitions<'db>(
     for (i, entry) in expanded_base_entries.iter().enumerate() {
         let source_node = entry.source_node();
         let base_class = entry.ty();
-        report_missing_type_arguments(context, base_class, source_node);
+        // basedpython: a base whose type arguments the class body solves is inherited
+        // specialized, and the bases the class sees are exactly its expanded entries
+        let arguments_inferred = class
+            .explicit_bases(db)
+            .get(i)
+            .is_some_and(|inherited| *inherited != base_class);
+        if !arguments_inferred {
+            report_missing_type_arguments(context, base_class, source_node);
+        }
 
         if class_kind == Some(CodeGeneratorKind::NamedTuple)
             && !matches!(

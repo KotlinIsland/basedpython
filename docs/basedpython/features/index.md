@@ -164,6 +164,7 @@ the forms a class, function or binding can take
 - [decorated function parameters](decorated-parameters.md)
 - [decorating anything](decorate-anything.md)
 - [inherited default values](inherited-defaults.md)
+- [inferred base type arguments](inferred-base-arguments.md)
 
 </div>
 

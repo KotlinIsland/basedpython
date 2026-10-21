@@ -4471,6 +4471,18 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         )
     }
 
+    /// [`Self::infer`] for an `actual` that sits in a position of variance `polarity`: a covariant
+    /// position bounds the formal's type variables from below, a contravariant one from above,
+    /// and an invariant one exactly
+    pub(crate) fn infer_with_polarity(
+        &mut self,
+        formal: Type<'db>,
+        actual: Type<'db>,
+        polarity: TypeVarVariance,
+    ) -> Result<(), SpecializationError<'db>> {
+        self.infer_map_impl(formal, actual, polarity, &mut FxHashSet::default())
+    }
+
     fn infer_map_impl(
         &mut self,
         formal: Type<'db>,

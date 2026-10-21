@@ -571,6 +571,9 @@ impl std::ops::DerefMut for TypeDetailGuard<'_, '_, '_, '_> {
 enum QualificationLevel {
     ModuleName,
     FileAndLineNumber,
+    /// basedpython: the class's path inside its own file, `Outer.Inner`, for a spelling that is
+    /// written in that same file
+    WithinFile,
 }
 
 impl QualificationLevel {
@@ -979,6 +982,10 @@ pub struct SourceSpelling {
     /// the names of the classes [`Self::text`] writes bare, each read nowhere in it but as
     /// that class
     pub bare_classes: Vec<String>,
+    /// whether [`Self::text`] reaches a class nested in another class of the same file through
+    /// the outer one, `Outer.Inner`. such a path names the outer class, which is unbound while
+    /// it is being made, so it resolves only where it is not evaluated as it is written
+    pub reads_nested_class: bool,
 }
 
 /// Collects every class a type names, so each can be spelled for a particular file.
@@ -1064,9 +1071,27 @@ impl<'db> Type<'db> {
 
         let classes = collector.classes.borrow();
         let mut qualified = FxHashMap::default();
+        let mut reads_nested_class = false;
         for class in classes.iter().copied() {
             let name = class.name(db);
-            if !file_binds_class(db, env, file, name, class) {
+            if file_binds_class(db, env, file, name, class) {
+                continue;
+            }
+            // a class of this very file that the file does not bind by name is nested in
+            // another of its classes, and is reached through it rather than by importing the
+            // module the spelling is written in
+            if class.file(db) == file.file(db) {
+                if !class
+                    .qualified_name(db)
+                    .components_within_file()
+                    .iter()
+                    .all(|component| ruff_python_stdlib::identifiers::is_identifier(component))
+                {
+                    return None;
+                }
+                reads_nested_class = true;
+                qualified.insert(&**name, QualificationLevel::WithinFile);
+            } else {
                 qualified.insert(&**name, QualificationLevel::ModuleName);
             }
         }
@@ -1075,7 +1100,10 @@ impl<'db> Type<'db> {
         // its module just as much
         let mut modules = std::collections::BTreeSet::new();
         for class in classes.iter().copied() {
-            if !qualified.contains_key(&**class.name(db)) {
+            if !matches!(
+                qualified.get(&**class.name(db)),
+                Some(QualificationLevel::ModuleName)
+            ) {
                 continue;
             }
             let module = importable_module_of(db, env, class)?;
@@ -1135,6 +1163,7 @@ impl<'db> Type<'db> {
             text: self.display_with(db, env, settings).to_string(),
             modules: modules.into_iter().collect(),
             bare_classes,
+            reads_nested_class,
         })
     }
 }
@@ -1244,6 +1273,21 @@ pub(super) fn qualified_name_components_from_scope(
     file_scope_id: FileScopeId,
     skip_count: usize,
 ) -> Vec<String> {
+    let mut name_parts = scope_name_components(db, file, file_scope_id, skip_count);
+    if let Some(module) = file_to_module(db, file.resolver_file(db)) {
+        name_parts.insert(0, public_module_name(db, &module).to_string());
+    }
+    name_parts
+}
+
+/// basedpython: the components of a name inside its own file, outermost first: each class and
+/// function it is nested in, without the module the file is
+pub(super) fn scope_name_components(
+    db: &dyn Db,
+    file: ProgramFile<'_>,
+    file_scope_id: FileScopeId,
+    skip_count: usize,
+) -> Vec<String> {
     let module_ast = parsed_module(db, file.python_file(db)).load(db);
     let index = semantic_index(db, file);
 
@@ -1268,10 +1312,6 @@ pub(super) fn qualified_name_components_from_scope(
             }
             _ => {}
         }
-    }
-
-    if let Some(module) = file_to_module(db, file.resolver_file(db)) {
-        name_parts.push(public_module_name(db, &module).to_string());
     }
 
     name_parts.reverse();
@@ -1342,11 +1382,19 @@ impl<'db> FmtDetailed<'db> for ClassDisplay<'_, 'db> {
         let qualification_level = self.settings.qualified.get(&**self.class.name(self.db));
 
         let ty = Type::ClassLiteral(self.class);
-        if qualification_level.is_some() {
-            let qualified_name = self.class.qualified_name(self.db);
-            write!(f.with_type(ty), "{qualified_name}")?;
-        } else {
-            write!(f.with_type(ty), "{}", self.class.name(self.db))?;
+        match qualification_level {
+            Some(QualificationLevel::WithinFile) => {
+                let mut f = f.with_type(ty);
+                for parent in self.class.qualified_name(self.db).components_within_file() {
+                    write!(f, "{parent}.")?;
+                }
+                f.write_str(self.class.name(self.db))?;
+            }
+            Some(_) => {
+                let qualified_name = self.class.qualified_name(self.db);
+                write!(f.with_type(ty), "{qualified_name}")?;
+            }
+            None => write!(f.with_type(ty), "{}", self.class.name(self.db))?,
         }
 
         if qualification_level == Some(&QualificationLevel::FileAndLineNumber) {

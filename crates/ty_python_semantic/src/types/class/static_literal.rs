@@ -14,6 +14,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::RefCell;
 
 use super::implicit_attributes::implicit_attribute_names;
+use super::inferred_base::inferred_base_specialization;
 use crate::{
     Db, FxIndexMap, FxIndexSet, TypeQualifiers,
     place::{
@@ -801,10 +802,24 @@ impl<'db> StaticClassLiteral<'db> {
 
             let class_definition =
                 semantic_index(db, program_file).expect_single_definition(class_stmt);
+            let is_basedpython = class.file(db).source_type(db).is_basedpython();
             let mut bases: Vec<Type<'db>> =
                 expanded_class_base_entries(db, class.known(db), class_stmt, class_definition)
                     .into_iter()
                     .map(ExpandedClassBaseEntry::ty)
+                    .map(|base| {
+                        // basedpython: a generic base written without type arguments is
+                        // inherited at the ones the class body's overrides solve for
+                        if is_basedpython
+                            && let Type::ClassLiteral(ClassLiteral::Static(literal)) = base
+                            && let Some(specialization) =
+                                inferred_base_specialization(db, class, literal)
+                        {
+                            Type::from(literal.apply_specialization(db, |_| specialization))
+                        } else {
+                            base
+                        }
+                    })
                     .collect();
 
             // basedpython `enum class Foo` and `protocol Foo` parse to a class with a
