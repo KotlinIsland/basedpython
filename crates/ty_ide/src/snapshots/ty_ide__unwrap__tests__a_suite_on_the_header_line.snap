@@ -1,0 +1,6 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"if x: a(); <CURSOR>b()\\n\")"
+---
+Unwrap 'if...' keeps ["a(); b()"]
+a(); b()

@@ -1,0 +1,14 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\nif x:\n    a()\nelif y:\n    b()\nelse:\n    <CURSOR>c()\nd()\n\")"
+---
+Unwrap 'else...' keeps ["c()"]
+c()
+d()
+---
+Remove 'else...' keeps []
+if x:
+    a()
+elif y:
+    b()
+d()

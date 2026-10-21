@@ -1,0 +1,9 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\nif x:\n    <CURSOR>a()\n\n    # keep this\nelse:\n    b()\nc()\n\")"
+---
+Unwrap 'if...' keeps ["a()\n\n    # keep this"]
+a()
+
+# keep this
+c()

@@ -1,0 +1,5 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"if x:\\n    a(<CURSOR>\\n\")"
+---
+refused: the file has syntax errors

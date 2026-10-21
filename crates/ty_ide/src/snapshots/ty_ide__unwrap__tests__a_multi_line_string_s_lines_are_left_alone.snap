@@ -1,0 +1,9 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\nwith open(p) as f:\n    text = \\\"\\\"\\\"\n    keep\n\\\"\\\"\\\"<CURSOR>\n    g(text)\n\")"
+---
+Unwrap 'with...' keeps ["text = \"\"\"\n    keep\n\"\"\"\n    g(text)"]
+text = """
+    keep
+"""
+g(text)

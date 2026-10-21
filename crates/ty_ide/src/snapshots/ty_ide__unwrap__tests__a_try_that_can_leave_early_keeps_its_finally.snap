@@ -1,0 +1,5 @@
+---
+source: crates/ty_ide/src/unwrap.rs
+expression: "unwrap(\"\\\ndef f():\n    try:\n        if x:\n            return 1\n        <CURSOR>a()\n    finally:\n        d()\n\")"
+---
+Unwrap 'try...': refused (`return` would no longer run the `finally` suite)
