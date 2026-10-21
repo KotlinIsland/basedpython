@@ -32,16 +32,18 @@ use crate::types::receivers;
 use crate::types::repeated_underscore::{UnderscoreLowering, UnderscoreRefusal};
 use crate::types::signatures::{
     Parameter, ParameterKind, ParametersKind, ReturnCallableTypeVarScope, Signature,
+    is_placeholder_default,
 };
 use crate::types::{
-    CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType, KnownClass, KnownFunction,
-    KnownUnion, PropertyAccessorRole, SpecialFormType, Type, TypeContext,
-    TypeVarBoundOrConstraints, TypeVarVariance, binding_type,
+    BoundTypeVarInstance, CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType,
+    KnownClass, KnownFunction, KnownUnion, PropertyAccessorRole, SpecialFormType, Type,
+    TypeContext, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, binding_type,
 };
 use crate::{Db, HasDefinition, HasType, ProgramEnvironment, SemanticModel};
 use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr};
 use ruff_python_ast::{self as ast, AnyNodeRef, name::Name};
 use ruff_python_stdlib::identifiers::is_mangled_private;
 use ruff_text_size::{Ranged, TextRange};
@@ -49,8 +51,8 @@ use rustc_hash::FxHashSet;
 use ty_module_resolver::{
     ImportingFile, Module, ModuleName, ResolverFile, resolve_module_confident,
 };
-use ty_python_core::definition::{Definition, DefinitionKind};
-use ty_python_core::scope::{FileScopeId, ScopeId};
+use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
+use ty_python_core::scope::{FileScopeId, NodeWithScopeRef, ScopeId};
 use ty_python_core::symbol::ScopedSymbolId;
 use ty_python_core::{ProgramFile, attribute_scopes, semantic_index, use_def_map};
 
@@ -98,13 +100,44 @@ pub fn definitions_for_name<'db>(
     node: AnyNodeRef<'_>,
     alias_resolution: ImportAliasResolution,
 ) -> Vec<ResolvedDefinition<'db>> {
-    let db = model.db();
-    let env = model.program_environment();
-
     // Get the scope for this name expression
     let Some(scope) = model.scope(node) else {
         return vec![];
     };
+    definitions_for_name_in_scope(model, scope, name_str, node, alias_resolution)
+}
+
+/// basedpython: what `name_str` means read in the body of `class`, through any import of it: what
+/// a default expression of one of its methods reads
+pub fn definitions_for_name_in_class_body<'db>(
+    model: &SemanticModel<'db>,
+    class: &ast::StmtClassDef,
+    name_str: &str,
+) -> Vec<ResolvedDefinition<'db>> {
+    let Some(scope) = semantic_index(model.db(), model.program_file())
+        .try_node_scope(NodeWithScopeRef::Class(class))
+    else {
+        return vec![];
+    };
+    definitions_for_name_in_scope(
+        model,
+        scope,
+        name_str,
+        class.into(),
+        ImportAliasResolution::ResolveAliases,
+    )
+}
+
+/// what `name_str`, read in `scope` at `node`, means
+fn definitions_for_name_in_scope<'db>(
+    model: &SemanticModel<'db>,
+    scope: FileScopeId,
+    name_str: &str,
+    node: AnyNodeRef<'_>,
+    alias_resolution: ImportAliasResolution,
+) -> Vec<ResolvedDefinition<'db>> {
+    let db = model.db();
+    let env = model.program_environment();
 
     // basedpython: inside a trailing lambda block whose callback declares a
     // receiver, the receiver outranks every binding outside the block, so it is
@@ -3348,6 +3381,473 @@ pub fn overridable_members<'db>(
         }
     }
     members
+}
+
+/// basedpython: the module `name` is taken from when, written bare in a type expression of
+/// `file`, it means what defines `ty`: a name the language makes available in a `.by` file
+/// without an import, as it does `typing`'s `Iterator`, so that writing `ty` there needs no import
+/// unless the file binds `name` to something else
+pub fn implicit_type_name_module<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    file: ProgramFile<'db>,
+    name: &str,
+    ty: Type<'db>,
+) -> Option<&'static str> {
+    if !file.file(db).source_type(db).is_basedpython() {
+        return None;
+    }
+    let implicit = implicit_name(name)?;
+    if !implicit.position.admits(true) {
+        return None;
+    }
+    let Place::Defined(member) = implicit.resolve(db, env).place else {
+        return None;
+    };
+    let definition = member.ty.definition(db, env)?;
+    if Some(definition) != ty.definition(db, env) {
+        return None;
+    }
+    implicit
+        .resolving_module(db, env)
+        .map(ty_module_resolver::KnownModule::as_str)
+}
+
+/// basedpython: how a method is reached, which is how a declaration of it says so: `class def`
+/// for a classmethod, `static def` for a staticmethod
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InheritedMethodKind {
+    Instance,
+    Class,
+    Static,
+}
+
+/// basedpython: a method a class inherits and does not define itself, with everything a
+/// declaration overriding it has to say
+#[derive(Debug, Clone)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the method"
+)]
+pub struct InheritedMethod<'db> {
+    /// the method's name
+    pub name: Name,
+    /// the name of the superclass the class inherits it from: the first in its MRO to bind
+    /// the name
+    pub superclass_name: Name,
+    /// the module that declares the superclass, when a module name reaches it
+    pub superclass_module: Option<ModuleName>,
+    /// an instance of the superclass, specialized the way the class specializes it: what a
+    /// static method, which has no `super` to call it through, names it by
+    pub superclass_instance: Type<'db>,
+    /// whether it is abstract where the class inherits it from, and so left for the class to
+    /// implement: what `abstract-instantiation` counts as abstract
+    pub is_abstract: bool,
+    pub kind: InheritedMethodKind,
+    /// whether it is an `async def` whose call returns a coroutine, which an override awaits.
+    /// an async generator is not one: an override returns the generator its call returns
+    pub is_async: bool,
+    /// whether it is `protected`, which an override has to say again: a plain declaration over
+    /// an inherited `protected` member is `invalid-override-visibility`
+    pub is_protected: bool,
+    /// its signature as the class inherits it, specialized the way the class specializes the
+    /// superclass. one per overload for an overloaded method, otherwise one
+    pub signatures: Vec<InheritedSignature<'db>>,
+    /// whether it is overloaded, so that [`Self::signatures`] are its overloads
+    pub is_overloaded: bool,
+}
+
+/// basedpython: one signature of an [`InheritedMethod`], in the parts a declaration writes
+#[derive(Debug, Clone)]
+pub struct InheritedSignature<'db> {
+    /// the type parameters the signature declares itself, in order. empty when it declares
+    /// none, and when it declares one a header cannot write with a name alone: a `ParamSpec` or a
+    /// variadic pack, whose annotations then go unwritten too
+    pub type_params: Vec<InheritedTypeParam<'db>>,
+    pub parameters: Vec<InheritedParameter<'db>>,
+    /// what it returns. `None` when nothing is worth writing: it returns `None`, which a
+    /// basedpython `def` that leaves out its return annotation already says, or nothing is known
+    pub returns: Option<Type<'db>>,
+    /// whether it is known to return `None`, so that a call to it has nothing to pass on
+    pub returns_none: bool,
+}
+
+/// basedpython: a type parameter an [`InheritedSignature`] declares
+#[derive(Debug, Clone)]
+pub struct InheritedTypeParam<'db> {
+    /// the type parameter itself, which the signature's types name
+    pub typevar: BoundTypeVarInstance<'db>,
+    pub name: Name,
+    /// the upper bound it is declared with, if any
+    pub bound: Option<Type<'db>>,
+    /// the constraints it is declared with, if any
+    pub constraints: Vec<Type<'db>>,
+}
+
+/// basedpython: which of python's parameter kinds an [`InheritedParameter`] is
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InheritedParameterKind {
+    PositionalOnly,
+    PositionalOrKeyword,
+    Variadic,
+    KeywordOnly,
+    KeywordVariadic,
+}
+
+/// basedpython: a parameter of an [`InheritedSignature`]
+#[derive(Debug, Clone)]
+pub struct InheritedParameter<'db> {
+    pub kind: InheritedParameterKind,
+    pub name: Name,
+    /// the type it is annotated with. `None` for the receiver, whose type is implicit, and for a
+    /// parameter whose annotation is nothing a declaration could write: none at all, the
+    /// anonymous type parameter an unannotated basedpython parameter opens, or a starred pack
+    pub annotation: Option<Type<'db>>,
+    /// the default it is declared with, if any
+    pub default: Option<InheritedDefault<'db>>,
+}
+
+/// basedpython: the default of an [`InheritedParameter`]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InheritedDefault<'db> {
+    /// a value, written the way a signature writes it: `1`, `"a"`, `None`. an override that
+    /// leaves it out inherits it
+    Value(String),
+    /// an expression rather than a value: `[]`, `make()`. basedpython re-evaluates it on every
+    /// call, so there is no value to inherit and an override has to write it out
+    Expression(InheritedExpression<'db>),
+    /// a default that cannot be written: one with no source, a stub's `...` placeholder, or an
+    /// expression reading a name that means nothing where it is written
+    Unwritable,
+}
+
+/// basedpython: a default expression an override writes out, which it has to write so that each
+/// name it reads means what it means where the overridden method is declared
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InheritedExpression<'db> {
+    /// as its source writes it
+    pub text: String,
+    /// the names it reads from the scope it is evaluated in, in source order. a name a lambda or
+    /// a comprehension in it binds is its own, and is not one of them
+    pub names: Vec<InheritedExpressionName<'db>>,
+}
+
+/// basedpython: a name an [`InheritedExpression`] reads
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InheritedExpressionName<'db> {
+    /// where it is in [`InheritedExpression::text`]
+    pub range: TextRange,
+    pub name: Name,
+    /// what it means where the expression is written, through any import of it
+    pub definitions: Vec<ResolvedDefinition<'db>>,
+}
+
+/// basedpython: the methods `class` inherits without defining them, each with what a declaration
+/// overriding it has to say, in MRO order of the superclass each is inherited from
+///
+/// these are the members an editor offers to override or implement. a method is left out when
+/// it cannot be overridden: a `final` one, and a `private` one, which python mangles into a name
+/// of its own. so are the constructors and the methods they call (`__init__`, `__new__`,
+/// `__post_init__`, `__init_subclass__`), which basedpython declares with `init` and which the
+/// override checks do not hold to what they override. members other than methods are not
+/// offered: an attribute or a property is declared with syntax of its own. unlike
+/// [`overridable_members`], `object`'s methods are offered: `__eq__`, `__hash__` and `__repr__`
+/// are overridden all the time
+///
+/// a method is abstract when the nearest declaration of it in the MRO is abstract, which is when
+/// `abstract-instantiation` says the class leaves it unimplemented
+pub fn inherited_methods<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    class: ClassLiteral<'db>,
+) -> Vec<InheritedMethod<'db>> {
+    let class_type = class.identity_specialization(db);
+    let unimplemented = class_type.abstract_methods(db);
+    let mut seen: FxHashSet<Name> = FxHashSet::default();
+    let mut methods = Vec::new();
+
+    // the MRO opens with the class itself, whose names seed `seen`: a name it binds is not one
+    // it inherits, and after that the first superclass to bind a name is the one it is inherited
+    // from
+    for (depth, superclass) in class_type
+        .iter_mro(db)
+        .filter_map(ClassBase::into_class)
+        .enumerate()
+    {
+        let Some((literal, _)) = superclass.static_class_literal(db) else {
+            continue;
+        };
+        for member in all_end_of_scope_members(db, literal.body_scope(db)) {
+            let name = member.member.name;
+            if !seen.insert(name.clone())
+                || depth == 0
+                || is_constructor_like_method(&name)
+                || is_mangled_private(&name)
+            {
+                continue;
+            }
+            let Place::Defined(defined) = superclass
+                .own_class_member(db, env, None, &name)
+                .inner
+                .place
+            else {
+                continue;
+            };
+            let Type::FunctionLiteral(function) = defined.ty else {
+                continue;
+            };
+            if function.has_known_decorator(db, FunctionDecorators::FINAL)
+                || function.has_known_decorator(db, FunctionDecorators::PRIVATE)
+            {
+                continue;
+            }
+            let kind = if function.is_staticmethod(db) {
+                InheritedMethodKind::Static
+            } else if function.is_classmethod(db) {
+                InheritedMethodKind::Class
+            } else {
+                InheritedMethodKind::Instance
+            };
+            let (overloads, _) = function.overloads_and_implementation(db);
+            let signature = function.signature(db);
+            // an `async def` that yields is an async generator, whose call returns the generator
+            // rather than a coroutine
+            let is_async = function.literal(db).last_definition.header(db).is_async
+                && signature.overloads.iter().all(|signature| {
+                    signature
+                        .return_ty
+                        .known_specialization(db, env, KnownClass::CoroutineType)
+                        .is_some()
+                });
+            methods.push(InheritedMethod {
+                is_abstract: unimplemented.contains_key(&name),
+                superclass_name: literal.name(db).clone(),
+                superclass_module: ty_module_resolver::file_to_module(
+                    db,
+                    literal.program_file(db).resolver_file(db),
+                )
+                .map(|module| module.name(db).clone()),
+                superclass_instance: Type::instance(db, env, superclass),
+                kind,
+                is_async,
+                is_protected: function.has_known_decorator(db, FunctionDecorators::PROTECTED),
+                is_overloaded: !overloads.is_empty() && signature.overloads.len() > 1,
+                signatures: signature
+                    .overloads
+                    .iter()
+                    .map(|signature| inherited_signature(db, env, signature, is_async))
+                    .collect(),
+                name,
+            });
+        }
+    }
+    methods
+}
+
+/// `signature` in the parts a declaration writes. an `async def`'s signature returns the coroutine
+/// a call makes, and its declaration writes what the coroutine returns
+fn inherited_signature<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    signature: &Signature<'db>,
+    is_async: bool,
+) -> InheritedSignature<'db> {
+    let mut type_params = Vec::new();
+    for variable in signature
+        .generic_context
+        .iter()
+        .flat_map(|context| context.variables(db))
+    {
+        let typevar = variable.typevar(db);
+        match variable.kind(db) {
+            // the receiver's `Self` is implicit, and an unannotated parameter's anonymous
+            // type parameter is never written
+            TypeVarKind::TypingSelf | TypeVarKind::Pep613Alias | TypeVarKind::InferredParameter => {
+            }
+            TypeVarKind::LegacyTypeVar | TypeVarKind::Pep695TypeVar => {
+                let (bound, constraints) = match typevar.bound_or_constraints(db, env) {
+                    Some(TypeVarBoundOrConstraints::UpperBound(bound)) => (Some(bound), Vec::new()),
+                    Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
+                        (None, constraints.elements(db).to_vec())
+                    }
+                    None => (None, Vec::new()),
+                };
+                type_params.push(InheritedTypeParam {
+                    typevar: variable,
+                    name: typevar.name(db).clone(),
+                    bound,
+                    constraints,
+                });
+            }
+            // a `ParamSpec` or a variadic pack: a header cannot declare one by its name alone,
+            // and an annotation naming one is then left out rather than written wrong
+            _ => {
+                type_params.clear();
+                break;
+            }
+        }
+    }
+
+    let parameters = signature
+        .parameters()
+        .iter()
+        .filter_map(|parameter| {
+            let (kind, default) = match parameter.kind() {
+                ParameterKind::PositionalOnly { .. } => {
+                    (InheritedParameterKind::PositionalOnly, true)
+                }
+                ParameterKind::PositionalOrKeyword { .. } => {
+                    (InheritedParameterKind::PositionalOrKeyword, true)
+                }
+                ParameterKind::Variadic { .. } => (InheritedParameterKind::Variadic, false),
+                ParameterKind::KeywordOnly { .. } => (InheritedParameterKind::KeywordOnly, true),
+                ParameterKind::KeywordVariadic { .. } => {
+                    (InheritedParameterKind::KeywordVariadic, false)
+                }
+            };
+            // a list that repeats `_` is written with the `_`s its author wrote
+            let name = if parameter.is_repeated_underscore() {
+                Name::new_static("_")
+            } else {
+                parameter.name()?.clone()
+            };
+            let annotated = parameter.annotated_type();
+            let annotation = (parameter.should_annotation_be_displayed()
+                && !parameter.has_starred_annotation()
+                && !annotated.is_unknown()
+                && !annotated.is_inferred_parameter_hole(db))
+            .then_some(annotated);
+            let default = default
+                .then(|| parameter.default_type(db))
+                .flatten()
+                .map(|default| inherited_default(db, env, parameter, default));
+            Some(InheritedParameter {
+                kind,
+                name,
+                annotation,
+                default,
+            })
+        })
+        .collect();
+
+    let returns = if is_async
+        && let Some(coroutine) =
+            signature
+                .return_ty
+                .known_specialization(db, env, KnownClass::CoroutineType)
+        && let [_, _, returned] = coroutine.types(db)
+    {
+        *returned
+    } else {
+        signature.return_ty
+    };
+    InheritedSignature {
+        type_params,
+        parameters,
+        returns: (!returns.is_none(db) && !returns.is_unknown()).then_some(returns),
+        returns_none: returns.is_none(db),
+    }
+}
+
+/// how `parameter`, whose default is of type `default`, says its default
+fn inherited_default<'db>(
+    db: &'db dyn Db,
+    env: &ProgramEnvironment<'db>,
+    parameter: &Parameter<'db>,
+    default: Type<'db>,
+) -> InheritedDefault<'db> {
+    let Some(definition) = parameter.definition() else {
+        return default
+            .display_default_value(db, env)
+            .map_or(InheritedDefault::Unwritable, InheritedDefault::Value);
+    };
+    // a stub's `...` stands in for a value it does not say
+    if is_placeholder_default(db, definition) {
+        return InheritedDefault::Unwritable;
+    }
+    if let Some(value) = default.display_default_value(db, env) {
+        return InheritedDefault::Value(value);
+    }
+    inherited_expression(db, definition)
+        .map_or(InheritedDefault::Unwritable, InheritedDefault::Expression)
+}
+
+/// the default expression of the parameter `definition` declares, with what each name it reads
+/// means where it is written; `None` when it has none, or reads a name that means nothing there
+fn inherited_expression<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> Option<InheritedExpression<'db>> {
+    let DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(node)) =
+        definition.kind(db)
+    else {
+        return None;
+    };
+    let module = parsed_module(db, definition.python_file(db)).load(db);
+    let expression = node.node(&module).default()?;
+    let program_file = definition.program_file(db);
+    let model = SemanticModel::new(db, program_file);
+    // a name bound in a scope that is not this one or one around it is bound by a lambda or a
+    // comprehension in the expression
+    let evaluated_in = model.scope(expression.into())?;
+    let index = semantic_index(db, program_file);
+    let around: FxHashSet<FileScopeId> = index
+        .ancestor_scopes(evaluated_in)
+        .map(|(scope, _)| scope)
+        .collect();
+
+    let mut names = Vec::new();
+    let mut found = Vec::new();
+    collect_loaded_names(expression, &mut found);
+    for name in found {
+        let definitions = definitions_for_name(
+            &model,
+            name.id.as_str(),
+            name.into(),
+            ImportAliasResolution::ResolveAliases,
+        );
+        if definitions.is_empty() {
+            return None;
+        }
+        let is_own = definitions.iter().all(|resolved| {
+            matches!(
+                resolved,
+                ResolvedDefinition::Definition(bound)
+                    if bound.program_file(db) == program_file
+                        && !around.contains(&bound.file_scope(db))
+            )
+        });
+        if is_own {
+            continue;
+        }
+        names.push(InheritedExpressionName {
+            range: name.range() - expression.start(),
+            name: name.id.clone(),
+            definitions,
+        });
+    }
+    Some(InheritedExpression {
+        text: source_text(db, definition.file(db))[expression.range()].to_string(),
+        names,
+    })
+}
+
+/// the names `expression` reads, in source order
+fn collect_loaded_names<'a>(expression: &'a ast::Expr, names: &mut Vec<&'a ast::ExprName>) {
+    struct Names<'a, 'n> {
+        names: &'n mut Vec<&'a ast::ExprName>,
+    }
+    impl<'a> SourceOrderVisitor<'a> for Names<'a, '_> {
+        fn visit_expr(&mut self, expression: &'a ast::Expr) {
+            if let ast::Expr::Name(name) = expression
+                && name.ctx.is_load()
+            {
+                self.names.push(name);
+            }
+            walk_expr(self, expression);
+        }
+    }
+    Names { names }.visit_expr(expression);
 }
 
 /// basedpython: the parameters a trailing lambda block binds implicitly, each as

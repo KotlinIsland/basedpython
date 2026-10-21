@@ -237,6 +237,19 @@ pub(super) fn request(req: server::Request) -> Task {
         >(
             req, BackgroundSchedule::Worker
         ),
+        // both are asked by someone waiting on a shortcut they pressed
+        requests::OverridableMembersRequestHandler::METHOD => {
+            background_document_request_task::<requests::OverridableMembersRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
+        requests::OverrideMembersRequestHandler::METHOD => {
+            background_document_request_task::<requests::OverrideMembersRequestHandler>(
+                req,
+                BackgroundSchedule::LatencySensitive,
+            )
+        }
         requests::PrepareTypeHierarchyRequestHandler::METHOD => background_document_request_task::<
             requests::PrepareTypeHierarchyRequestHandler,
         >(

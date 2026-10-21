@@ -31,7 +31,7 @@ use crate::types::signatures::{
     CallableSignature, Parameter, Parameters, ParametersKind, Signature,
 };
 use crate::types::tuple::{RepeatedUnit, TupleSpec, VariableLengthTuple, VariableSegment};
-use crate::types::typevar::BoundTypeVarIdentity;
+use crate::types::typevar::{BoundTypeVarIdentity, BoundTypeVarInstance};
 use crate::types::visibility::private_symbols;
 use crate::types::visitor::TypeVisitor;
 use crate::types::{
@@ -167,9 +167,34 @@ pub struct DisplaySettings<'db> {
     /// it, but emitting one as python would evaluate `_I + 1` on a `TypeVar` object at
     /// import time.
     reduce_symbolic_operations: bool,
+    /// Type parameters that the place a type is written declares, or is inside the scope of, each
+    /// with the name it is written by there, which an annotation there can hold. Any other type
+    /// variable is shown with the scope that binds it, which no annotation can.
+    type_params_in_scope: Rc<FxHashMap<BoundTypeVarIdentity<'db>, ast::name::Name>>,
 }
 
 impl<'db> DisplaySettings<'db> {
+    /// Write each type parameter in `params` by the name it comes with, as an annotation in its
+    /// scope does. Two type parameters can share a name, so each is told apart by which one it
+    /// is rather than by what it is called.
+    #[must_use]
+    pub fn with_type_params_in_scope(
+        &self,
+        db: &'db dyn Db,
+        params: impl IntoIterator<Item = (BoundTypeVarInstance<'db>, ast::name::Name)>,
+    ) -> Self {
+        let mut in_scope = (*self.type_params_in_scope).clone();
+        in_scope.extend(
+            params
+                .into_iter()
+                .map(|(param, name)| (param.identity(db), name)),
+        );
+        Self {
+            type_params_in_scope: Rc::new(in_scope),
+            ..self.clone()
+        }
+    }
+
     /// basedpython: name the type parameter each type argument fills.
     #[must_use]
     pub fn with_named_type_arguments(&self) -> Self {
@@ -2258,6 +2283,14 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'_, 'db> {
                     }
                 }
             },
+            Type::TypeVar(bound_typevar)
+                if let Some(name) = self
+                    .settings
+                    .type_params_in_scope
+                    .get(&bound_typevar.identity(db)) =>
+            {
+                f.with_type(self.ty).write_str(name)
+            }
             Type::TypeVar(bound_typevar) => {
                 f.set_invalid_type_annotation();
                 write!(

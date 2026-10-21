@@ -103,14 +103,21 @@ impl ImplicitName {
         db: &'db dyn Db,
         env: &ProgramEnvironment<'db>,
     ) -> Option<ScopeId<'db>> {
-        self.modules
-            .iter()
-            .find(|&&module| {
-                !known_module_symbol(db, env, module, self.member)
-                    .place
-                    .is_undefined()
-            })
-            .and_then(|&module| core_module_scope(db, env, module))
+        self.resolving_module(db, env)
+            .and_then(|module| core_module_scope(db, env, module))
+    }
+
+    /// The module [`ImplicitName::resolve`] takes the member from.
+    pub(crate) fn resolving_module<'db>(
+        self,
+        db: &'db dyn Db,
+        env: &ProgramEnvironment<'db>,
+    ) -> Option<KnownModule> {
+        self.modules.iter().copied().find(|&module| {
+            !known_module_symbol(db, env, module, self.member)
+                .place
+                .is_undefined()
+        })
     }
 }
 

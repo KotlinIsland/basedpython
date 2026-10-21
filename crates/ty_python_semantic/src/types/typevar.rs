@@ -1612,6 +1612,12 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.identity_inner(db)
     }
 
+    /// Whether `self` and `other` are the same occurrence of a typevar: the same typevar bound
+    /// by the same scope, whatever their bounds or constraints have been materialized to.
+    pub fn is_same_occurrence(self, db: &'db dyn Db, other: Self) -> bool {
+        self.identity(db) == other.identity(db)
+    }
+
     pub fn name(self, db: &'db dyn Db) -> &'db Name {
         self.typevar(db).name(db)
     }

@@ -506,6 +506,64 @@ project's `src/shapes/circle.by` is `shapes.circle`, and `src/shapes` and
 `src/shapes/__init__.by` are both `shapes`. it is `null` for a path no module is
 imported from, and for a file that resolution would never reach
 
+## override and implement members
+
+an editor's *override methods* and *implement methods* ask twice: once for what
+the class can override, to let its user pick, and once for the declarations of
+the ones picked. a code action cannot carry that, since its edit is worked out
+before anything is picked
+
+`by/overridableMembers` takes a position in a class — its header, its body, or
+an indented line below its last statement, where a new member would go — and
+answers the class's name and the methods it inherits without defining them, in
+MRO order of the superclass each comes from. each comes with that superclass and
+its module, whether it is `abstract` where it is inherited from (what
+`abstract-instantiation` counts as left unimplemented, so the ones *implement
+methods* offers), whether it is a `method`, a `classMethod` or a `staticMethod`,
+and its `signature`: the declaration that would be written, from its name on.
+`object`'s methods are listed, last; a `final` or `private` method, and the
+constructors and the methods they call, are not. the answer is `null` where
+there is no class, and for a file that is not basedpython
+
+`by/overrideMembers` takes the same position and the names picked, and answers
+the edits that write their declarations, in the order they were listed:
+
+```by
+from pathlib import Path
+
+class Square(Shape):
+    side = 1.0
+
+    override def area(self) -> float:
+        ...
+
+    override def save(self, to: Path):
+        super.save(to)
+```
+
+each is declared `override`, with `class`, `static`, `async` or `protected` when
+the method it overrides is — an async generator is not `async`, and returns the
+generator its call makes — and with the signature the class inherits: a generic
+superclass's type parameters filled in the way the class fills them, a method's
+own type parameter renamed where it would hide one of the class's, an
+overloaded method's overloads one declaration each. a type the file does not
+reach yet is imported, and one it cannot name at all is left out, since a
+parameter left unannotated takes the annotation of the one it overrides. a
+default that is a value is left out of a method with a body for the same
+reason, and one that is an expression is written as its base wrote it, with
+each name in it imported, or written through its module where the file means
+something else by it. the body
+calls the method through `super`, or a static method, which has no `super`,
+through its class's name; a method that is abstract has nothing to call, and
+its body is `...`, which the checker reports until it is written. `-> None` is
+not written
+
+the declarations go after the statement the position is in or follows, or at the
+end of the body for a position in the header, and replace a body that is only
+`pass` or `...`. the answer's `selection` is the first declaration's body as a
+range in the text the edits leave behind, which is where the user goes next. it
+is `null` when none of the names is a method the class could override
+
 ## the whole project's diagnostics
 
 with `diagnosticMode` set to `workspace`, the server checks every file in the

@@ -15,6 +15,7 @@ pub(crate) use location::ToLink;
 pub use notebook::NotebookDocument;
 pub(crate) use range::{
     FileRangeExt, LspRange, PositionExt, RangeExt, TextSizeExt, ToRangeExt, resolve_file_uri_range,
+    text_range_to_lsp_range,
 };
 pub use text_document::TextDocument;
 pub(crate) use text_document::{DocumentVersion, LanguageId};

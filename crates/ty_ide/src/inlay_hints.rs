@@ -27,14 +27,17 @@ use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     BaseTypeArgument, InferredInvalidations, InferredStateReads, InlayHintCallArgumentDetails,
     StateRead, WriteSite, hintable_parameter_type, implicit_enum_member_value,
-    inferred_base_type_arguments, inferred_derived_dependencies, inferred_invalidations,
-    inferred_override, inferred_parameter_bound, inferred_property_type, inferred_raises,
-    inferred_return_annotation, inferred_state_reads, inferred_type_param_variance,
-    inherited_parameter_annotation, inherited_parameter_default, inlay_hint_call_argument_details,
-    is_composable_function, is_reveal_type_function, is_union_special_form, numeric_promotion,
-    parameter_stability, trailing_lambda_implicit_parameters, type_parameter_names,
+    implicit_type_name_module, inferred_base_type_arguments, inferred_derived_dependencies,
+    inferred_invalidations, inferred_override, inferred_parameter_bound, inferred_property_type,
+    inferred_raises, inferred_return_annotation, inferred_state_reads,
+    inferred_type_param_variance, inherited_parameter_annotation, inherited_parameter_default,
+    inlay_hint_call_argument_details, is_composable_function, is_reveal_type_function,
+    is_union_special_form, numeric_promotion, parameter_stability,
+    trailing_lambda_implicit_parameters, type_parameter_names,
 };
-use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail, TypeDisplayDetails};
+use ty_python_semantic::types::{
+    BoundTypeVarInstance, DisplaySettings, Type, TypeDetail, TypeDisplayDetails,
+};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
 
 #[derive(Debug, Clone)]
@@ -64,14 +67,14 @@ impl InlayHint {
         named_type_arguments: bool,
     ) -> Option<Self> {
         let position = expr.range().end();
-        let details = type_display_details(context.db, context.file, ty, named_type_arguments);
+        let details = type_display_details(context.db, context.file, ty, named_type_arguments, &[]);
 
         // Filter out repetitive hints like `x: T = T()`
         if call_matches_name(rhs, &details.label) {
             return None;
         }
 
-        let spelled = spell_type(context, expr.into(), expr.range().start(), &details);
+        let spelled = spell_type(context, expr.into(), expr.range().start(), &details, &[]);
 
         let text_edits = if spelled.editable && allow_edits {
             let mut text_edits = vec![InlayHintTextEdit {
@@ -1277,15 +1280,18 @@ impl Default for InlayHintSettings {
     }
 }
 
-/// `ty` rendered to a string, with the spans of the types that make it up.
+/// `ty` rendered to a string, with the spans of the types that make it up. The
+/// type parameters in `type_params_in_scope` are written by the names they come with.
 fn type_display_details<'db>(
     db: &'db dyn Db,
     file: ProgramFile<'db>,
     ty: Type<'db>,
     named_type_arguments: bool,
+    type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
 ) -> TypeDisplayDetails<'db> {
     let env = ProgramEnvironment::from_file(file);
-    let settings = DisplaySettings::from_possibly_ambiguous_types(db, &env, [ty]);
+    let settings = DisplaySettings::from_possibly_ambiguous_types(db, &env, [ty])
+        .with_type_params_in_scope(db, type_params_in_scope.iter().cloned());
     let settings = if named_type_arguments {
         settings.with_named_type_arguments()
     } else {
@@ -1314,14 +1320,22 @@ struct SpelledType {
     /// Whether the annotation can be written at all: it is valid syntax, and
     /// every type it names can be reached from the file.
     editable: bool,
+    /// The imports this spelling added to the ones the context already held,
+    /// so that a caller dropping the spelling can drop them too.
+    imported: Vec<DynamicallyImportedMember>,
 }
 
 /// Spell `details` for the scope around `scope_node`, importing what it names.
+///
+/// A type parameter in `type_params_in_scope` is written by the name it comes
+/// with, with nothing imported for it: one that what is being written declares
+/// itself, or that a scope around it declares.
 fn spell_type<'db>(
     context: InlayHintImportContext<'_, 'db>,
     scope_node: AnyNodeRef<'_>,
     scope_offset: TextSize,
     details: &TypeDisplayDetails<'db>,
+    type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
 ) -> SpelledType {
     let InlayHintImportContext {
         db,
@@ -1363,6 +1377,13 @@ fn spell_type<'db>(
 
                 // Possibly import the current type and return the qualified name
                 let mut qualified_name = |dynamic_importer: &mut DynamicImporter<'_, 'db>| {
+                    if let Type::TypeVar(typevar) = ty
+                        && type_params_in_scope
+                            .iter()
+                            .any(|(param, _)| param.is_same_occurrence(db, *typevar))
+                    {
+                        return None;
+                    }
                     let type_definition = ty.definition(db, &env)?;
                     let definition = type_definition.definition()?;
 
@@ -1386,6 +1407,12 @@ fn spell_type<'db>(
                         .as_deref()
                         .unwrap_or(&details.label[start..end]);
 
+                    // basedpython: a name a `.by` file reaches without importing it, which is
+                    // imported from the module the language takes it from when the file binds
+                    // the name to something else
+                    let implicit_module =
+                        implicit_type_name_module(db, &env, file, definition_name, *ty);
+
                     let file = definition.program_file(db);
                     let module = file_to_module(db, file.resolver_file(db))?;
 
@@ -1393,7 +1420,7 @@ fn spell_type<'db>(
                         return None;
                     }
 
-                    let module_name = module.name(db).as_str();
+                    let module_name = implicit_module.unwrap_or(module.name(db).as_str());
 
                     dynamic_importer.import_symbol(
                         db,
@@ -1402,6 +1429,7 @@ fn spell_type<'db>(
                         module_name,
                         definition_name,
                         &details.label[start..end],
+                        implicit_module.is_some(),
                     )
                 };
 
@@ -1442,6 +1470,7 @@ fn spell_type<'db>(
         edit_label,
         import_edits: dynamic_importer.text_edits(),
         editable,
+        imported: dynamic_importer.imported_members,
     }
 }
 
@@ -1462,7 +1491,7 @@ pub(crate) fn annotation_for_type<'db>(
     let mut dynamic_imports = FxHashMap::default();
     // a basedpython file writes types in basedpython's own spelling
     with_display_for_file(db, file.file(db), || {
-        let details = type_display_details(db, file, ty, false);
+        let details = type_display_details(db, file, ty, false, &[]);
         let spelled = spell_type(
             InlayHintImportContext {
                 db,
@@ -1473,11 +1502,110 @@ pub(crate) fn annotation_for_type<'db>(
             scope_node,
             scope_offset,
             &details,
+            &[],
         );
         spelled
             .editable
             .then_some((spelled.edit_label, spelled.import_edits))
     })
+}
+
+/// Types written as annotations in one file, importing what they name. See
+/// [`with_annotation_speller`].
+pub(crate) struct AnnotationSpeller<'a, 'db> {
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    importer: &'a Importer<'a>,
+    dynamic_imports: FxHashMap<DynamicallyImportedMember, ImportAction>,
+    import_edits: Vec<InlayHintTextEdit>,
+}
+
+impl<'db> AnnotationSpeller<'_, 'db> {
+    /// `ty` written as an annotation for a position in the scope around
+    /// `scope_node`, or `None` when no annotation the file could hold says it.
+    /// A type parameter in `type_params_in_scope` is written by the name it comes
+    /// with, with nothing imported for it: see [`spell_type`].
+    pub(crate) fn spell(
+        &mut self,
+        scope_node: AnyNodeRef<'_>,
+        scope_offset: TextSize,
+        ty: Type<'db>,
+        type_params_in_scope: &[(BoundTypeVarInstance<'db>, Name)],
+    ) -> Option<String> {
+        let db = self.db;
+        let file = self.file;
+        // a basedpython file writes types in basedpython's own spelling
+        let spelled = with_display_for_file(db, file.file(db), || {
+            let details = type_display_details(db, file, ty, false, type_params_in_scope);
+            spell_type(
+                InlayHintImportContext {
+                    db,
+                    file,
+                    importer: self.importer,
+                    dynamic_imports: &mut self.dynamic_imports,
+                },
+                scope_node,
+                scope_offset,
+                &details,
+                type_params_in_scope,
+            )
+        });
+        if !spelled.editable {
+            // an import is remembered so that a second annotation naming the same
+            // type does not import it again. one remembered for an annotation
+            // that is not written would leave the second without its import
+            for member in &spelled.imported {
+                self.dynamic_imports.remove(member);
+            }
+            return None;
+        }
+        self.import_edits.extend(spelled.import_edits);
+        Some(spelled.edit_label)
+    }
+
+    /// `name`, which `module` binds at its top level, or the module itself when there is no
+    /// `name`, written for a position in the scope around `scope_node` and imported there: by
+    /// its name, or through its module when the file binds the name to something else.
+    pub(crate) fn reference(
+        &mut self,
+        scope_node: AnyNodeRef<'_>,
+        scope_offset: TextSize,
+        module: &str,
+        name: Option<&str>,
+    ) -> String {
+        let mut importer = DynamicImporter::new(
+            self.importer,
+            scope_node,
+            scope_offset,
+            &mut self.dynamic_imports,
+        );
+        let text = importer.import_name(module, name);
+        let edits = importer.text_edits();
+        self.import_edits.extend(edits);
+        text
+    }
+}
+
+/// Runs `spell` with an [`AnnotationSpeller`] for `file`, and answers what it
+/// answered together with the imports the annotations it wrote need, each once.
+pub(crate) fn with_annotation_speller<'db, R>(
+    db: &'db dyn Db,
+    file: ProgramFile<'db>,
+    spell: impl FnOnce(&mut AnnotationSpeller<'_, 'db>) -> R,
+) -> (R, Vec<InlayHintTextEdit>) {
+    let ast = parsed_module(db, file.python_file(db)).load(db);
+    let source = source_text(db, file.file(db));
+    let stylist = Stylist::from_tokens(ast.tokens(), source.as_str());
+    let importer = Importer::new(db, &stylist, file, source.as_str(), &ast);
+    let mut speller = AnnotationSpeller {
+        db,
+        file,
+        importer: &importer,
+        dynamic_imports: FxHashMap::default(),
+        import_edits: Vec::new(),
+    };
+    let answer = spell(&mut speller);
+    (answer, speller.import_edits)
 }
 
 struct InlayHintImportContext<'a, 'db> {
@@ -2900,6 +3028,11 @@ impl<'a, 'db> DynamicImporter<'a, 'db> {
 
     /// Attempts to import a given symbol.
     /// If the symbol in the text edit needs to be qualified, we return the qualified symbol text.
+    ///
+    /// basedpython: `implicit` says the file reaches the symbol by its name without importing
+    /// it, as a `.by` file does `Iterator`, so that it needs no import unless the file binds the
+    /// name to something else.
+    #[expect(clippy::too_many_arguments)]
     fn import_symbol(
         &mut self,
         db: &'db dyn Db,
@@ -2908,6 +3041,7 @@ impl<'a, 'db> DynamicImporter<'a, 'db> {
         module_name: &str,
         symbol_name: &str,
         label_text: &str,
+        implicit: bool,
     ) -> Option<String> {
         use std::collections::hash_map::Entry;
 
@@ -2929,6 +3063,8 @@ impl<'a, 'db> DynamicImporter<'a, 'db> {
             // so we need to qualify this so we don't reference the
             // in scope member.
             is_possibly_qualified_name = true;
+        } else if implicit {
+            return None;
         }
 
         let key = DynamicallyImportedMember {
@@ -2949,9 +3085,42 @@ impl<'a, 'db> DynamicImporter<'a, 'db> {
 
                 self.imported_members.push(key);
 
-                qualified_symbol_text(action).map(str::to_string)
+                // the text the import makes refer to it: the name, or through its module
+                // when the import has to qualify it
+                Some(action.symbol_text().to_string())
             }
-            Entry::Occupied(entry) => qualified_symbol_text(entry.get()).map(str::to_string),
+            Entry::Occupied(entry) => Some(entry.get().symbol_text().to_string()),
+        }
+    }
+
+    /// Imports `symbol_name` from `module_name`, or the module itself when there is no
+    /// `symbol_name`, and returns the text that refers to it. A name the file binds already is
+    /// taken to be something else, which is written through its module instead.
+    fn import_name(&mut self, module_name: &str, symbol_name: Option<&str>) -> String {
+        use std::collections::hash_map::Entry;
+
+        let members = self.members.get_or_insert_with(|| {
+            self.importer
+                .members_in_scope_at(self.scope_node, self.scope_offset)
+        });
+        let key = DynamicallyImportedMember {
+            module: module_name.to_string(),
+            name: symbol_name.unwrap_or_default().to_string(),
+        };
+        match self.dynamic_imports.entry(key.clone()) {
+            Entry::Vacant(entry) => {
+                let request = match symbol_name {
+                    None => ImportRequest::module(module_name),
+                    Some(name) if members.find_member(name).is_some() => {
+                        ImportRequest::import(module_name, name).force()
+                    }
+                    Some(name) => ImportRequest::import_from(module_name, name),
+                };
+                let action = entry.insert(self.importer.import(request, members));
+                self.imported_members.push(key);
+                action.symbol_text().to_string()
+            }
+            Entry::Occupied(entry) => entry.get().symbol_text().to_string(),
         }
     }
 
@@ -2970,15 +3139,6 @@ impl<'a, 'db> DynamicImporter<'a, 'db> {
             })
             .collect()
     }
-}
-
-/// If the import action requires qualifying the symbol (e.g. `import foo` instead of
-/// `from foo import A`), returns the qualified symbol text. Otherwise returns `None`.
-fn qualified_symbol_text(import_action: &ImportAction) -> Option<&str> {
-    if import_action.import().is_some() {
-        return None;
-    }
-    Some(import_action.symbol_text())
 }
 
 #[cfg(test)]
